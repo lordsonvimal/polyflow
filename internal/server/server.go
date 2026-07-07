@@ -31,9 +31,14 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/", http.FileServer(http.Dir("web/dist")))
 }
 
-// Start begins listening on the given port.
+// Start begins listening on the given port (127.0.0.1 only by default).
 func (s *Server) Start(port int) error {
-	addr := fmt.Sprintf(":%d", port)
-	fmt.Printf("polyflow server listening on http://localhost%s\n", addr)
+	return s.StartOn("127.0.0.1", port)
+}
+
+// StartOn listens on an explicit host:port. Use "0.0.0.0" for LAN exposure.
+func (s *Server) StartOn(host string, port int) error {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	fmt.Printf("polyflow server listening on http://localhost:%d\n", port)
 	return http.ListenAndServe(addr, s.mux)
 }
