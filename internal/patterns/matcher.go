@@ -244,7 +244,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 
 		// ID format: service:file:type:name:line  (design doc §SQLite Schema)
-		nodeID := fmt.Sprintf("%s:%s:%s:%s:%d", service, r.File, string(nodeType), r.PatternName, r.Line)
+		// Function/method nodes use the captured name so semantic call edges (which
+		// know only the function name + file + line) can target the same ID.
+		idName := r.PatternName
+		if (nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod) && label != r.PatternName {
+			idName = label
+		}
+		nodeID := fmt.Sprintf("%s:%s:%s:%s:%d", service, r.File, string(nodeType), idName, r.Line)
 
 		// Build meta from all captures
 		meta := make(map[string]string, len(r.Captures))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -243,6 +244,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	var allNodes []graph.Node
 	var allEdges []graph.Edge
 	var totalErrors int
+	var semanticWarnings []string
 
 	bw := graph.NewBatchWriter(store)
 
@@ -253,10 +255,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			if result.Err != nil {
 				totalErrors++
 				_ = store.UpsertParseError(ctx, &graph.ParseError{
-					FilePath:  result.File,
-					Service:   sf.svc.Name,
+					FilePath:   result.File,
+					Service:    sf.svc.Name,
 					ErrorCount: 1,
-					IndexedAt: time.Now().Unix(),
+					IndexedAt:  time.Now().Unix(),
 				})
 				continue
 			}
@@ -281,6 +283,48 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	stopProgress()
 	time.Sleep(300 * time.Millisecond)
 	fmt.Println()
+
+	// Semantic pass: run go/packages + RTA for Go services.
+	// Adds type-resolved call edges on top of tree-sitter nodes.
+	// Falls back gracefully if the service has build errors.
+	fset := token.NewFileSet()
+	for _, sf := range allSvcFiles {
+		analyzer := parser.ServiceAnalyzerFor(sf.svc.Language)
+		if analyzer == nil {
+			continue
+		}
+		absSvcPath, err := filepath.Abs(sf.svc.Path)
+		if err != nil {
+			absSvcPath = sf.svc.Path
+		}
+		fmt.Printf("  Semantic analysis: %s...\n", sf.svc.Name)
+		sem := analyzer.AnalyzeService(absSvcPath, sf.svc.Name, fset)
+		if sem.Warning != "" {
+			fmt.Fprintf(os.Stderr, "  Warning: %s\n", sem.Warning)
+			semanticWarnings = append(semanticWarnings, sem.Warning)
+		} else {
+			bwSem := graph.NewBatchWriter(store)
+			for i := range sem.Edges {
+				e := sem.Edges[i]
+				if err := bwSem.AddEdge(ctx, &e); err != nil {
+					return err
+				}
+				allEdges = append(allEdges, e)
+			}
+			if err := bwSem.Flush(ctx); err != nil {
+				return err
+			}
+			fmt.Printf("  Semantic analysis: %s — %d call edges added\n", sf.svc.Name, len(sem.Edges))
+		}
+	}
+
+	// Store semantic warnings in DB meta so the web UI can surface them.
+	if len(semanticWarnings) > 0 {
+		warningsJSON, _ := json.Marshal(semanticWarnings)
+		_ = store.SetMeta(ctx, "semantic_warnings", string(warningsJSON))
+	} else {
+		_ = store.SetMeta(ctx, "semantic_warnings", "[]")
+	}
 
 	if err := bw.Flush(ctx); err != nil {
 		return err
