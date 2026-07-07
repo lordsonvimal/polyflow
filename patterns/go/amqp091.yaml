@@ -1,0 +1,35 @@
+language: go
+version: "1"
+patterns:
+  - name: amqp_publish
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Publish"))
+        arguments: (argument_list
+          (_) @exchange
+          (_) @routing_key
+          (_) @mandatory
+          (_) @immediate
+          (_) @publishing))
+    captures:
+      - name: exchange
+        role: amqp_exchange
+      - name: routing_key
+        role: amqp_routing_key
+  - name: amqp_consume
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Consume"))
+        arguments: (argument_list
+          (_) @queue
+          (_) @consumer
+          . _*))
+    captures:
+      - name: queue
+        role: amqp_queue
+      - name: consumer
+        role: amqp_consumer_tag

@@ -1,0 +1,34 @@
+language: javascript
+version: "1"
+patterns:
+  - name: axios_request
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @obj
+          (#eq? @obj "axios")
+          property: (property_identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options|request)$"))
+        arguments: (arguments
+          (_) @url . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+  - name: axios_create_instance
+    query: |
+      (variable_declarator
+        name: (identifier) @instance
+        value: (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            (#eq? @obj "axios")
+            property: (property_identifier) @fn
+            (#eq? @fn "create"))
+          arguments: (arguments (_) @config)))
+    captures:
+      - name: instance
+        role: axios_instance
+      - name: config
+        role: axios_config

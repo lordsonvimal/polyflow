@@ -1,0 +1,16 @@
+language: javascript
+version: "1"
+patterns:
+  - name: append_child
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#match? @fn "^(appendChild|prepend|append|insertBefore|replaceChild)$"))
+        arguments: (arguments
+          (_) @child . _*))
+    captures:
+      - name: fn
+        role: dom_tree_method
+      - name: child
+        role: dom_child

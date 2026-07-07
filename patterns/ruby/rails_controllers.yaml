@@ -1,0 +1,30 @@
+language: ruby
+version: "1"
+patterns:
+  - name: controller_action
+    query: |
+      (class
+        name: (constant) @controller
+        superclass: (constant) @parent
+        body: (body_statement
+          (method
+            name: (identifier) @action)))
+    captures:
+      - name: controller
+        role: rails_controller
+      - name: parent
+        role: rails_parent_controller
+      - name: action
+        role: rails_action
+  - name: before_action
+    query: |
+      (call
+        method: (identifier) @fn
+        (#match? @fn "^(before_action|around_action|after_action)$")
+        arguments: (argument_list
+          (simple_symbol) @callback . _*))
+    captures:
+      - name: fn
+        role: action_callback_type
+      - name: callback
+        role: action_callback_name

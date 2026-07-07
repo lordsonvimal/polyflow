@@ -1,0 +1,32 @@
+language: ruby
+version: "1"
+patterns:
+  - name: bunny_publish
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "publish")
+        arguments: (argument_list
+          (_) @payload . _*))
+    captures:
+      - name: payload
+        role: amqp_payload
+  - name: bunny_subscribe
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "subscribe")
+        block: (_) @handler)
+    captures:
+      - name: handler
+        role: amqp_handler
+  - name: bunny_queue_declare
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "queue")
+        arguments: (argument_list
+          (string) @queue_name . _*))
+    captures:
+      - name: queue_name
+        role: amqp_queue

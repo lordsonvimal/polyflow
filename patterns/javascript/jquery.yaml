@@ -1,0 +1,27 @@
+language: javascript
+version: "1"
+patterns:
+  - name: jquery_ajax
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @obj
+          (#match? @obj "^\\$|jQuery$")
+          property: (property_identifier) @fn
+          (#match? @fn "^(ajax|get|post|getJSON|load)$"))
+        arguments: (arguments . (_) @url . _*))
+    captures:
+      - name: fn
+        role: jquery_ajax_method
+      - name: url
+        role: http_url
+  - name: jquery_selector
+    query: |
+      (call_expression
+        function: (identifier) @fn
+        (#match? @fn "^\\$|jQuery$")
+        arguments: (arguments
+          (string) @selector))
+    captures:
+      - name: selector
+        role: jquery_selector

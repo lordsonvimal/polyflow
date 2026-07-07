@@ -1,0 +1,35 @@
+language: ruby
+version: "1"
+patterns:
+  - name: pusher_trigger
+    query: |
+      (call
+        receiver: (identifier) @pusher
+        method: (identifier) @fn
+        (#eq? @fn "trigger")
+        arguments: (argument_list
+          (_) @channel
+          (_) @event
+          (_) @data))
+    captures:
+      - name: channel
+        role: pusher_channel
+      - name: event
+        role: pusher_event
+      - name: data
+        role: pusher_data
+  - name: pusher_trigger_async
+    query: |
+      (call
+        receiver: (identifier) @pusher
+        method: (identifier) @fn
+        (#eq? @fn "trigger_async")
+        arguments: (argument_list
+          (_) @channel
+          (_) @event
+          (_) @data))
+    captures:
+      - name: channel
+        role: pusher_channel
+      - name: event
+        role: pusher_event

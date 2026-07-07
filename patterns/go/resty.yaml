@@ -1,0 +1,30 @@
+language: go
+version: "1"
+patterns:
+  - name: resty_get
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
+        arguments: (argument_list
+          (_) @url))
+    captures:
+      - name: fn
+        role: http_method
+      - name: url
+        role: http_url
+  - name: resty_execute
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Execute"))
+        arguments: (argument_list
+          (_) @method
+          (_) @url))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url

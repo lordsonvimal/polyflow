@@ -1,0 +1,28 @@
+language: ruby
+version: "1"
+patterns:
+  - name: httparty_verb
+    query: |
+      (call
+        receiver: (constant) @cls
+        method: (identifier) @method
+        (#match? @method "^(get|post|put|patch|delete|head|options)$")
+        arguments: (argument_list
+          (_) @url . _*))
+    captures:
+      - name: cls
+        role: httparty_class
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+  - name: httparty_base_uri
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "base_uri")
+        arguments: (argument_list
+          (_) @base_uri))
+    captures:
+      - name: base_uri
+        role: http_base_url

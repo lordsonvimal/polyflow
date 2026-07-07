@@ -1,0 +1,16 @@
+language: javascript
+version: "1"
+patterns:
+  - name: query_selector
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#match? @fn "^(querySelector|querySelectorAll|getElementById|getElementsByClassName|getElementsByTagName)$"))
+        arguments: (arguments
+          (_) @selector))
+    captures:
+      - name: fn
+        role: dom_query_method
+      - name: selector
+        role: dom_selector

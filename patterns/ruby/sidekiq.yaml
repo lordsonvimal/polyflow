@@ -1,0 +1,29 @@
+language: ruby
+version: "1"
+patterns:
+  - name: sidekiq_perform_async
+    query: |
+      (call
+        receiver: (constant) @worker_class
+        method: (identifier) @fn
+        (#match? @fn "^(perform_async|perform_in|perform_at)$")
+        arguments: (argument_list . _*))
+    captures:
+      - name: worker_class
+        role: sidekiq_worker
+      - name: fn
+        role: sidekiq_dispatch_method
+  - name: sidekiq_worker_include
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "include")
+        arguments: (argument_list
+          (scope_resolution
+            scope: (constant) @ns
+            (#eq? @ns "Sidekiq")
+            name: (constant) @mod
+            (#eq? @mod "Worker"))))
+    captures:
+      - name: mod
+        role: sidekiq_worker_mixin

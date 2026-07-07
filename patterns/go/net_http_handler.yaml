@@ -1,0 +1,32 @@
+language: go
+version: "1"
+patterns:
+  - name: http_handle_func
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          field: (field_identifier) @fn
+          (#match? @fn "^HandleFunc$"))
+        arguments: (argument_list
+          (interpreted_string_literal) @path
+          (_) @handler))
+    captures:
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+  - name: http_handle
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Handle"))
+        arguments: (argument_list
+          (interpreted_string_literal) @path
+          (_) @handler))
+    captures:
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref

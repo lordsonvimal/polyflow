@@ -1,0 +1,36 @@
+language: ruby
+version: "1"
+patterns:
+  - name: http_verb_route
+    query: |
+      (call
+        method: (identifier) @method
+        (#match? @method "^(get|post|put|patch|delete|head|options|match)$")
+        arguments: (argument_list
+          (string) @path . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+  - name: resources_route
+    query: |
+      (call
+        method: (identifier) @method
+        (#eq? @method "resources")
+        arguments: (argument_list
+          (simple_symbol) @resource . _*))
+    captures:
+      - name: resource
+        role: rails_resource
+  - name: namespace_route
+    query: |
+      (call
+        method: (identifier) @method
+        (#eq? @method "namespace")
+        arguments: (argument_list
+          (simple_symbol) @ns)
+        block: (_) @block)
+    captures:
+      - name: ns
+        role: route_namespace

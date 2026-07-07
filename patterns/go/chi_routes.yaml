@@ -1,0 +1,34 @@
+language: go
+version: "1"
+patterns:
+  - name: chi_get
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @router
+          field: (field_identifier) @method
+          (#match? @method "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
+        arguments: (argument_list
+          (interpreted_string_literal) @path
+          (_) @handler))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+  - name: chi_route_group
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @method
+          (#eq? @method "Route"))
+        arguments: (argument_list
+          (interpreted_string_literal) @prefix
+          (_) @fn))
+    captures:
+      - name: prefix
+        role: route_prefix
+      - name: fn
+        role: group_fn

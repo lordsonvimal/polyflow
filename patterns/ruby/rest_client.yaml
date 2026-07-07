@@ -1,0 +1,30 @@
+language: ruby
+version: "1"
+patterns:
+  - name: rest_client_verb
+    query: |
+      (call
+        receiver: (scope_resolution
+          scope: (constant) @ns
+          (#eq? @ns "RestClient")
+          name: (constant) @cls)
+        method: (identifier) @method
+        arguments: (argument_list
+          (_) @url . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+  - name: rest_client_resource
+    query: |
+      (call
+        receiver: (constant) @client
+        (#eq? @client "RestClient")
+        method: (identifier) @fn
+        (#eq? @fn "[]")
+        arguments: (argument_list
+          (_) @url))
+    captures:
+      - name: url
+        role: http_url

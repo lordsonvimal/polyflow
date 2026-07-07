@@ -1,0 +1,22 @@
+language: go
+version: "1"
+patterns:
+  - name: go_statement
+    query: |
+      (go_statement
+        (call_expression
+          function: (_) @fn
+          arguments: (_) @args))
+    captures:
+      - name: fn
+        role: goroutine_fn
+  - name: go_func_literal
+    query: |
+      (go_statement
+        (call_expression
+          function: (func_literal
+            parameters: (parameter_list) @params
+            body: (block) @body)))
+    captures:
+      - name: params
+        role: closure_params
