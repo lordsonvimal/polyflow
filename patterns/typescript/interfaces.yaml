@@ -5,7 +5,7 @@ patterns:
     query: |
       (interface_declaration
         name: (type_identifier) @name
-        body: (object_type) @body)
+        body: (interface_body) @body)
     captures:
       - name: name
         role: ts_interface_name
