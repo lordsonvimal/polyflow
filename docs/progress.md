@@ -85,6 +85,8 @@ Connect HTTP clients in one service to HTTP handlers in another:
 
 See: [Cross-Service Linking](./polyflow-design.md#cross-service-linking), [Cross-Service Linking — Constraint-Based Resolver](./polyflow-design.md#cross-service-linking--constraint-based-resolver)
 
+**Implementation plan**: [plans/phase-5-linker.md](./plans/phase-5-linker.md)
+
 ---
 
 ### Phase 6 — HTTP Server + Frontend (complete)
@@ -97,6 +99,8 @@ Server handlers exist and compile; `handleTrace` returns 501. Still needed:
 - `polyflow serve` command: open `SQLiteStore`, call `BuildIndex`, start `Server`
 
 See: [API Endpoints](./polyflow-design.md#api-endpoints), [Flow Tracing UX](./polyflow-design.md#flow-tracing-ux-core-feature)
+
+**Implementation plan**: [plans/phase-6-server-frontend.md](./plans/phase-6-server-frontend.md)
 
 ---
 
@@ -115,6 +119,8 @@ Wire all CLI subcommands to real implementations:
 E2E tests: fixture workspace with sample Go + JS + Ruby services → `polyflow index` → assert node/edge counts, cross-service links, search results.
 
 See: [CLI Commands](./polyflow-design.md#cli-commands), [Testing Strategy](./polyflow-design.md#testing-strategy), [Build Order](./polyflow-design.md#build-order-dependency-driven)
+
+**Implementation plan**: [plans/phase-7-cli-e2e.md](./plans/phase-7-cli-e2e.md)
 
 ---
 
