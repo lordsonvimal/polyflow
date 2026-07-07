@@ -13,9 +13,11 @@ import (
 // ServiceAnalyzer runs whole-service semantic analysis (not per-file).
 // This is used for languages like Go where type-resolved analysis requires
 // loading the full package graph (go/packages).
+// knownNodes is the set of node IDs already written by tree-sitter; the
+// analyzer uses it to resolve SSA functions to existing nodes.
 type ServiceAnalyzer interface {
 	Language() string
-	AnalyzeService(dir, service string, fset *token.FileSet) SemanticResult
+	AnalyzeService(dir, service string, fset *token.FileSet, knownNodes map[string]bool) SemanticResult
 }
 
 // SemanticResult holds the output of a whole-service semantic analysis pass.

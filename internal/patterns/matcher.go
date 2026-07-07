@@ -339,6 +339,9 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	lower := strings.ToLower(patternName)
 
 	switch {
+	// Explicit method declaration — must come before generic "handle" checks.
+	case lower == "method_decl":
+		return graph.NodeTypeMethod, graph.EdgeTypeCalls
 	case strings.Contains(lower, "handler") || strings.Contains(lower, "handle") || strings.Contains(lower, "route"):
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
 	case strings.Contains(lower, "client") ||
