@@ -1,0 +1,22 @@
+package templates
+
+templ UserPage(users []User) {
+    <div id="user-list">
+        <h1>Users</h1>
+        <button data-on-click="@post('/api/users')" class="btn-primary">Create User</button>
+        <a href="/users/list">View all users</a>
+        for _, u := range users {
+            <div class="user-card" id={ "user-" + u.ID }>
+                <span>{ u.Name }</span>
+                <button data-on-click={ "@delete('/api/users/" + u.ID + "')" }>Delete</button>
+            </div>
+        }
+    </div>
+}
+
+templ Header() {
+    <header>
+        <a href="/">Home</a>
+        <a href="/dashboard">Dashboard</a>
+    </header>
+}

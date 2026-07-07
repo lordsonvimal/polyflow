@@ -1,4 +1,4 @@
-.PHONY: web build build-all test lint clean
+.PHONY: web build build-all test test-e2e bench lint clean
 
 BUILD_DIR := dist
 BINARY    := polyflow
@@ -13,6 +13,12 @@ build: web
 test:
 	go test ./... -coverprofile=coverage.out
 	go tool cover -func=coverage.out
+
+test-e2e:
+	go test ./internal/e2e/... -v -count=1
+
+bench:
+	go test ./... -bench=. -benchtime=5s -run=^$
 
 lint:
 	golangci-lint run ./...

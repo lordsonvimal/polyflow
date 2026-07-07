@@ -1,0 +1,29 @@
+name: "e2e-workspace"
+version: "1"
+services:
+  - name: svc-go
+    path: ./svc-go
+    language: go
+    frameworks: [chi]
+  - name: svc-js
+    path: ./svc-js
+    language: javascript
+    frameworks: [axios]
+  - name: svc-ruby
+    path: ./svc-ruby
+    language: ruby
+    frameworks: [rails, faraday]
+  - name: svc-templ
+    path: ./svc-templ
+    language: go
+links:
+  - from: svc-js
+    to: svc-go
+    base_url: "/api"
+index:
+  exclude:
+    - "**/vendor/**"
+    - "**/node_modules/**"
+settings:
+  port: 9400
+  snippet_lines: 30

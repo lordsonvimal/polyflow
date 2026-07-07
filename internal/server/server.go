@@ -3,30 +3,74 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
 // Server is the polyflow HTTP API and UI server.
 type Server struct {
-	db      graph.Store
-	idx     *graph.AdjacencyIndex
-	mux     *http.ServeMux
-	devMode bool
+	db        graph.Store
+	idx       *graph.AdjacencyIndex
+	idxMu     sync.RWMutex
+	mux       *http.ServeMux
+	devMode   bool
+	broadcast chan string
+	clients   map[chan string]struct{}
+	clientsMu sync.Mutex
 }
 
 // New creates a Server backed by the given store and adjacency index.
 func New(db graph.Store, idx *graph.AdjacencyIndex) *Server {
-	s := &Server{db: db, idx: idx, mux: http.NewServeMux()}
+	s := &Server{
+		db:        db,
+		idx:       idx,
+		mux:       http.NewServeMux(),
+		broadcast: make(chan string, 16),
+		clients:   make(map[chan string]struct{}),
+	}
 	s.registerRoutes()
+	go s.fanOut()
 	return s
 }
 
 // NewDev creates a Server with CORS enabled for Vite dev (port 5173).
 func NewDev(db graph.Store, idx *graph.AdjacencyIndex) *Server {
-	s := &Server{db: db, idx: idx, mux: http.NewServeMux(), devMode: true}
+	s := &Server{
+		db:        db,
+		idx:       idx,
+		mux:       http.NewServeMux(),
+		devMode:   true,
+		broadcast: make(chan string, 16),
+		clients:   make(map[chan string]struct{}),
+	}
 	s.registerRoutes()
+	go s.fanOut()
 	return s
+}
+
+// Reload swaps the adjacency index and broadcasts a graph_updated SSE event.
+func (s *Server) Reload(idx *graph.AdjacencyIndex) {
+	s.idxMu.Lock()
+	s.idx = idx
+	s.idxMu.Unlock()
+	select {
+	case s.broadcast <- `{"type":"graph_updated"}`:
+	default:
+	}
+}
+
+func (s *Server) fanOut() {
+	for msg := range s.broadcast {
+		s.clientsMu.Lock()
+		for ch := range s.clients {
+			select {
+			case ch <- msg:
+			default:
+			}
+		}
+		s.clientsMu.Unlock()
+	}
 }
 
 func (s *Server) registerRoutes() {
