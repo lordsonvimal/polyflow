@@ -7,45 +7,71 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
-// ApplyHints uses workspace link hints to annotate or filter edges.
-// Hints have the form "ENV_VAR=http://host:port", which allows the linker
-// to resolve base URLs used in HTTP client calls.
-func ApplyHints(links []workspace.Link, nodes []graph.Node, edges []graph.Edge) []graph.Edge {
+// ApplyHints pre-processes client call nodes using workspace link hints:
+//   - hint (ENV_VAR=URL): annotates matching edges with target_service meta
+//   - base_url: strips the prefix from client node paths so the linker can match them
+func ApplyHints(links []workspace.Link, nodes []graph.Node, edges []graph.Edge) []graph.Node {
 	// Build env-var -> service name map from hints
-	baseURLs := make(map[string]string) // base URL -> service name
+	baseURLs := make(map[string]string) // base URL string -> service name
+	basePaths := make(map[string]string) // from-service+to-service -> base_url prefix to strip
+
 	for _, link := range links {
-		if link.Hint == "" {
-			continue
+		if link.Hint != "" {
+			parts := strings.SplitN(link.Hint, "=", 2)
+			if len(parts) == 2 {
+				baseURLs[parts[1]] = link.To
+			}
 		}
-		// hint format: "ENV_VAR=http://host:port"
-		parts := strings.SplitN(link.Hint, "=", 2)
-		if len(parts) == 2 {
-			baseURLs[parts[1]] = link.To
+		if link.BaseURL != "" {
+			basePaths[link.From+"|"+link.To] = link.BaseURL
 		}
 	}
 
-	// Annotate edges where the client URL matches a known base URL
-	var result []graph.Edge
-	for _, e := range edges {
-		if e.Type == graph.EdgeTypeHTTPCall {
-			for base, svc := range baseURLs {
-				if strings.HasPrefix(e.Label, base) || matchesMeta(e, base) {
-					e.Meta = ensureMeta(e.Meta)
-					e.Meta["target_service"] = svc
-					break
+	// Annotate client nodes with target_service from ENV_VAR hints and strip base_url prefixes
+	result := make([]graph.Node, len(nodes))
+	copy(result, nodes)
+
+	for i := range result {
+		n := &result[i]
+		if n.Type != graph.NodeTypeHTTPClient {
+			continue
+		}
+
+		// Resolve target_service from base URL hint
+		url := ""
+		if n.Meta != nil {
+			url = n.Meta["url"]
+		}
+		for base, svc := range baseURLs {
+			if strings.HasPrefix(url, base) {
+				n.Meta = ensureMeta(n.Meta)
+				n.Meta["target_service"] = svc
+				break
+			}
+		}
+
+		// Strip base_url prefix from path for matching
+		targetSvc := ""
+		if n.Meta != nil {
+			targetSvc = n.Meta["target_service"]
+		}
+		if targetSvc != "" && n.Service != "" {
+			key := n.Service + "|" + targetSvc
+			if prefix, ok := basePaths[key]; ok {
+				if n.Meta != nil {
+					path := n.Meta["path"]
+					if strings.HasPrefix(path, prefix) {
+						n.Meta["path"] = path[len(prefix):]
+						if n.Meta["path"] == "" {
+							n.Meta["path"] = "/"
+						}
+					}
 				}
 			}
 		}
-		result = append(result, e)
 	}
-	return result
-}
 
-func matchesMeta(e graph.Edge, base string) bool {
-	if e.Meta == nil {
-		return false
-	}
-	return strings.HasPrefix(e.Meta["url"], base)
+	return result
 }
 
 func ensureMeta(m map[string]string) map[string]string {
