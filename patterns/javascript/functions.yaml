@@ -1,0 +1,19 @@
+language: javascript
+version: "1"
+patterns:
+  - name: function_decl
+    query: |
+      (function_declaration
+        name: (identifier) @name)
+    captures:
+      - name: name
+        role: func_name
+  - name: arrow_func_var
+    query: |
+      (lexical_declaration
+        (variable_declarator
+          name: (identifier) @name
+          value: (arrow_function)))
+    captures:
+      - name: name
+        role: func_name

@@ -38,8 +38,6 @@ const Graph: Component = () => {
             "target-arrow-color": "#4b5563",
             "target-arrow-shape": "triangle",
             "curve-style": "bezier",
-            "font-size": "8px",
-            label: "data(label)",
           },
         },
         {

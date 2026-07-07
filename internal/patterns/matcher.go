@@ -214,19 +214,33 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	nodes := make([]graph.Node, 0, len(results))
 	var edges []graph.Edge
 
+	// Pass 1: build all nodes.
 	for _, r := range results {
 		nodeType, _ := classifyPattern(r.PatternName)
 
-		// Build label from captures
+		// Build label from captures, preferring the most informative available field.
 		label := r.PatternName
 		if method, ok := r.Captures["method"]; ok {
 			if url, ok2 := r.Captures["url"]; ok2 {
-				label = fmt.Sprintf("%s %s", method, url)
+				label = fmt.Sprintf("%s %s", stripStringLiteral(method), stripStringLiteral(url))
 			} else if path, ok2 := r.Captures["path"]; ok2 {
-				label = fmt.Sprintf("%s %s", method, path)
+				label = fmt.Sprintf("%s %s", stripStringLiteral(method), stripStringLiteral(path))
 			}
+		} else if name, ok := r.Captures["name"]; ok {
+			label = stripStringLiteral(name)
+		} else if url, ok := r.Captures["url"]; ok {
+			label = stripStringLiteral(url)
 		} else if path, ok := r.Captures["path"]; ok {
-			label = path
+			label = stripStringLiteral(path)
+		} else if fn, ok := r.Captures["fn"]; ok {
+			// For goroutine fn captures: use the identifier only, not the full closure body.
+			// If the captured fn spans multiple lines it's a func_literal — label it "func()".
+			fnVal := r.Captures["fn"]
+			if strings.ContainsAny(fnVal, "\n{") {
+				label = "func()"
+			} else {
+				label = stripStringLiteral(fn)
+			}
 		}
 
 		// ID format: service:file:type:name:line  (design doc §SQLite Schema)
@@ -262,6 +276,53 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			Meta:    meta,
 		}
 		nodes = append(nodes, node)
+	}
+
+	// Pass 2: emit caller→callee edges using line-proximity.
+	// For each non-function node, find the closest function/method node defined
+	// in the same file at a line <= this node's line. That is the enclosing function.
+	//
+	// Build a per-file sorted list of (line, nodeID) for function/method nodes.
+	type lineID struct {
+		line int
+		id   string
+	}
+	funcsByFile := make(map[string][]lineID)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, n.ID})
+		}
+	}
+
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			continue
+		}
+		funcs := funcsByFile[n.File]
+		if len(funcs) == 0 {
+			continue
+		}
+		// Find the closest function whose line is <= this node's line.
+		var best *lineID
+		for j := range funcs {
+			f := &funcs[j]
+			if f.line <= n.Line {
+				if best == nil || f.line > best.line {
+					best = f
+				}
+			}
+		}
+		if best == nil {
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:   fmt.Sprintf("calls:%s->%s", best.id, n.ID),
+			From: best.id,
+			To:   n.ID,
+			Type: graph.EdgeTypeCalls,
+		})
 	}
 
 	return nodes, edges
