@@ -220,9 +220,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	start := time.Now()
 
 	// Progress goroutine — cancelled via progressCtx when indexing completes.
+	// progressDone is closed once the goroutine has printed the final line.
 	progressCtx, stopProgress := context.WithCancel(ctx)
 	defer stopProgress()
+	progressDone := make(chan struct{})
 	go func() {
+		defer close(progressDone)
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -236,6 +239,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				bar := progressBar(pct)
 				fmt.Printf("\rIndexing [%s] %d%% (%d/%d files)  ", bar, pct, n, totalFiles)
 			case <-progressCtx.Done():
+				// Print final 100% line before exiting.
+				bar := progressBar(100)
+				fmt.Printf("\rIndexing [%s] 100%% (%d/%d files)  ", bar, totalFiles, totalFiles)
 				return
 			}
 		}
@@ -279,9 +285,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Stop progress display and print final newline.
+	// Stop progress display: cancel the goroutine, wait for it to print 100%, then newline.
 	stopProgress()
-	time.Sleep(300 * time.Millisecond)
+	<-progressDone
 	fmt.Println()
 
 	// Flush all tree-sitter nodes+edges before the semantic pass so FK constraints
