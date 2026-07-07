@@ -5,7 +5,6 @@ patterns:
     query: |
       (call_expression
         function: (selector_expression
-          operand: (identifier) @pkg
           field: (field_identifier) @fn
           (#match? @fn "^HandleFunc$"))
         arguments: (argument_list

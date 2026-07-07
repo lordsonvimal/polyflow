@@ -22,16 +22,30 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	if err != nil {
 		return nil, nil, err
 	}
-	lang := tsLanguage(file)
-	results, err := matcher.Match(lang, file, src)
-	if err != nil {
-		nodes, edges := patterns.MatchToGraph(service, results)
-		setLanguage(nodes, lang)
-		return nodes, edges, err
+
+	grammarLang := tsLanguage(file)
+
+	// For TypeScript files, run both javascript patterns (fetch, axios, etc.)
+	// and typescript-specific patterns (interfaces, type annotations).
+	// JS patterns use the TypeScript grammar since TS is a superset.
+	patternLangs := []string{"javascript"}
+	if grammarLang == "typescript" {
+		patternLangs = append(patternLangs, "typescript")
 	}
-	nodes, edges := patterns.MatchToGraph(service, results)
-	setLanguage(nodes, lang)
-	return nodes, edges, nil
+
+	var allNodes []graph.Node
+	var allEdges []graph.Edge
+	for _, patLang := range patternLangs {
+		results, matchErr := matcher.MatchWithGrammar(patLang, grammarLang, file, src)
+		if matchErr != nil && err == nil {
+			err = matchErr
+		}
+		nodes, edges := patterns.MatchToGraph(service, results)
+		setLanguage(nodes, grammarLang)
+		allNodes = append(allNodes, nodes...)
+		allEdges = append(allEdges, edges...)
+	}
+	return allNodes, allEdges, err
 }
 
 // tsLanguage returns "typescript" for .ts/.tsx files, "javascript" otherwise.

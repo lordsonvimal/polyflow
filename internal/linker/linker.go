@@ -36,6 +36,16 @@ func normalizePath(path string) string {
 	return p
 }
 
+// baseURLFor returns the base_url prefix for a from->to service link, or "".
+func (l *Linker) baseURLFor(fromSvc, toSvc string) string {
+	for _, link := range l.config.Links {
+		if link.From == fromSvc && link.To == toSvc && link.BaseURL != "" {
+			return link.BaseURL
+		}
+	}
+	return ""
+}
+
 // Link attempts to resolve cross-service HTTP connections.
 // It returns synthetic edges connecting client call nodes to handler nodes.
 // Clients whose paths cannot be resolved still produce an edge with confidence "unknown".
@@ -44,9 +54,8 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 		return nil, fmt.Errorf("linker: no workspace config provided")
 	}
 
-	// Build maps for fast lookup: normalized key -> handler node
-	exactHandlers := make(map[string]*graph.Node)    // exact "METHOD /path" -> node
-	normalHandlers := make(map[string]*graph.Node)   // normalized "METHOD /path*" -> node
+	// Index handlers and clients.
+	var handlers []*graph.Node
 	nodeByID := make(map[string]*graph.Node)
 	clients := make([]*graph.Node, 0)
 
@@ -55,10 +64,7 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 		nodeByID[n.ID] = n
 		switch n.Type {
 		case graph.NodeTypeHTTPHandler:
-			raw := routeKey(n.Meta["method"], n.Meta["path"])
-			exactHandlers[raw] = n
-			norm := routeKey(n.Meta["method"], normalizePath(n.Meta["path"]))
-			normalHandlers[norm] = n
+			handlers = append(handlers, n)
 		case graph.NodeTypeHTTPClient:
 			clients = append(clients, n)
 		}
@@ -68,6 +74,26 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 	for _, client := range clients {
 		method := client.Meta["method"]
 		path := client.Meta["path"]
+		targetSvc := client.Meta["target_service"]
+
+		// Build handler lookup maps, stripping the base_url prefix from handler paths
+		// so they align with the already-stripped client paths from ApplyHints.
+		baseURL := l.baseURLFor(client.Service, targetSvc)
+		exactHandlers := make(map[string]*graph.Node)
+		normalHandlers := make(map[string]*graph.Node)
+		for _, h := range handlers {
+			hpath := h.Meta["path"]
+			if baseURL != "" && strings.HasPrefix(hpath, baseURL) {
+				hpath = hpath[len(baseURL):]
+				if hpath == "" {
+					hpath = "/"
+				}
+			}
+			raw := routeKey(h.Meta["method"], hpath)
+			exactHandlers[raw] = h
+			norm := routeKey(h.Meta["method"], normalizePath(hpath))
+			normalHandlers[norm] = h
+		}
 
 		// Find handler and determine confidence
 		handler, confidence := resolveHandler(method, path, exactHandlers, normalHandlers)
@@ -107,22 +133,39 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 	return crossEdges, nil
 }
 
-func resolveHandler(method, path string, exact, normal map[string]*graph.Node) (*graph.Node, string) {
-	rawKey := routeKey(method, path)
-	if h, ok := exact[rawKey]; ok {
-		return h, "static"
+// candidateMethods returns the methods to try when matching. An empty method
+// means the client didn't specify one (e.g. a bare fetch() call), so we
+// fall back to the most common HTTP verbs in priority order.
+func candidateMethods(method string) []string {
+	if method != "" {
+		return []string{strings.ToUpper(method)}
 	}
-	// Try matching by normalizing both sides: if the client path has no params,
-	// its normalized form equals itself, so we scan handler normalized paths for
-	// a wildcard match against the client path.
-	m := strings.ToUpper(method)
-	for normKey, h := range normal {
-		if !strings.HasPrefix(normKey, m+" ") {
-			continue
+	return []string{"GET", "POST", "PUT", "PATCH", "DELETE", ""}
+}
+
+func resolveHandler(method, path string, exact, normal map[string]*graph.Node) (*graph.Node, string) {
+	for _, m := range candidateMethods(method) {
+		rawKey := routeKey(m, path)
+		if h, ok := exact[rawKey]; ok {
+			return h, "static"
 		}
-		handlerNorm := normKey[len(m)+1:]
-		if pathMatchesPattern(path, handlerNorm) {
-			return h, "inferred"
+	}
+	// Try normalized matching across candidate methods.
+	for _, m := range candidateMethods(method) {
+		prefix := m + " "
+		for normKey, h := range normal {
+			if m != "" && !strings.HasPrefix(normKey, prefix) {
+				continue
+			}
+			handlerNorm := normKey
+			if m != "" {
+				handlerNorm = normKey[len(prefix):]
+			} else if i := strings.Index(normKey, " "); i >= 0 {
+				handlerNorm = normKey[i+1:]
+			}
+			if pathMatchesPattern(path, handlerNorm) {
+				return h, "inferred"
+			}
 		}
 	}
 	return nil, ""
