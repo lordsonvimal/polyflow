@@ -1,0 +1,14 @@
+language: jsx
+version: "1"
+patterns:
+  # Detect any plain-identifier function call (e.g. fetchWarnings()) inside a
+  # JSX component body. Captures the callee name so MatchToGraph can emit a
+  # calls edge from the enclosing component to the referenced function.
+  - name: component_fn_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#match? @callee "^[a-z]"))
+    captures:
+      - name: callee
+        role: func_ref

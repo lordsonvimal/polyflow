@@ -214,15 +214,38 @@ func (m *TreeSitterMatcher) MatchToNodes(service string, results []MatchResult) 
 	return MatchToGraph(service, results)
 }
 
+// isCallRef returns true for pattern results that represent a call-site reference
+// rather than a definition. These do not create nodes; instead they emit edges
+// from the enclosing function to the target function by name.
+func isCallRef(patternName string) bool {
+	return patternName == "component_fn_call"
+}
+
 // MatchToGraph maps match results to graph nodes and edges.
 // Node IDs follow the design doc format: service:file:type:name:line
 func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.Edge) {
 	nodes := make([]graph.Node, 0, len(results))
 	var edges []graph.Edge
 
-	// Pass 1: build all nodes.
+	// Separate call-reference results from definition results.
+	var callRefs []MatchResult
+	var defResults []MatchResult
 	for _, r := range results {
+		if isCallRef(r.PatternName) {
+			callRefs = append(callRefs, r)
+		} else {
+			defResults = append(defResults, r)
+		}
+	}
+
+	// Pass 1: build all nodes from definition results only.
+	// Skip pure structural type declarations (TypeScript interfaces, type aliases, enums)
+	// — they are not runtime entities and would add noise to the call graph.
+	for _, r := range defResults {
 		nodeType, _ := classifyPattern(r.PatternName)
+		if nodeType == graph.NodeTypeInterface || nodeType == graph.NodeTypeTypeAlias {
+			continue
+		}
 
 		// Build label from captures, preferring the most informative available field.
 		label := r.PatternName
@@ -238,6 +261,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			label = stripStringLiteral(url)
 		} else if path, ok := r.Captures["path"]; ok {
 			label = stripStringLiteral(path)
+		} else if callee, ok := r.Captures["callee"]; ok {
+			label = stripStringLiteral(callee)
 		} else if fn, ok := r.Captures["fn"]; ok {
 			// For goroutine fn captures: use the identifier only, not the full closure body.
 			// If the captured fn spans multiple lines it's a func_literal — label it "func()".
@@ -295,21 +320,28 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// in the same file at a line <= this node's line. That is the enclosing function.
 	//
 	// Build a per-file sorted list of (line, nodeID) for function/method nodes.
+	// Also build a per-file name→nodeID index for Pass 3 call-ref resolution.
 	type lineID struct {
 		line int
 		id   string
 	}
 	funcsByFile := make(map[string][]lineID)
+	nameByFileAndName := make(map[string]string) // "file\x00name" -> nodeID
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
 			funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, n.ID})
+			nameByFileAndName[n.File+"\x00"+n.Label] = n.ID
 		}
 	}
 
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			continue
+		}
+		// Type declarations don't need caller→callee edges.
+		if n.Type == graph.NodeTypeInterface || n.Type == graph.NodeTypeTypeAlias {
 			continue
 		}
 		funcs := funcsByFile[n.File]
@@ -341,6 +373,46 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		})
 	}
 
+	// Pass 3: resolve call-reference results (component_fn_call).
+	// For each call site, find the enclosing function by proximity and emit a
+	// calls edge to the target function (resolved by name in the same file).
+	for _, r := range callRefs {
+		callee, ok := r.Captures["callee"]
+		if !ok {
+			continue
+		}
+		callee = stripStringLiteral(callee)
+
+		// Resolve callee to an existing node in the same file.
+		calleeID, ok := nameByFileAndName[r.File+"\x00"+callee]
+		if !ok {
+			continue
+		}
+
+		// Find enclosing function by proximity.
+		funcs := funcsByFile[r.File]
+		var best *lineID
+		for j := range funcs {
+			f := &funcs[j]
+			if f.line <= r.Line {
+				if best == nil || f.line > best.line {
+					best = f
+				}
+			}
+		}
+		if best == nil || best.id == calleeID {
+			continue
+		}
+
+		edgeID := fmt.Sprintf("calls:%s->%s", best.id, calleeID)
+		edges = append(edges, graph.Edge{
+			ID:   edgeID,
+			From: best.id,
+			To:   calleeID,
+			Type: graph.EdgeTypeCalls,
+		})
+	}
+
 	return nodes, edges
 }
 
@@ -349,11 +421,19 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	lower := strings.ToLower(patternName)
 
 	switch {
+	// TypeScript structural type declarations — must classify before generic checks.
+	case lower == "interface_declaration" || lower == "interface_extends":
+		return graph.NodeTypeInterface, graph.EdgeTypeCalls
+	case lower == "type_alias" || lower == "generic_type" || lower == "enum_declaration" || lower == "const_enum":
+		return graph.NodeTypeTypeAlias, graph.EdgeTypeCalls
 	// JSX component declarations and usage.
 	case lower == "component_decl" || lower == "component_arrow_decl":
 		return graph.NodeTypeComponent, graph.EdgeTypeRenders
 	case lower == "jsx_component_use" || lower == "jsx_component_self_closing":
 		return graph.NodeTypeComponent, graph.EdgeTypeRenders
+	// JSX imperative calls (lifecycle hooks, event handlers).
+	case lower == "lifecycle_call" || lower == "event_handler_call":
+		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 	// Explicit method declaration — must come before generic "handle" checks.
 	case lower == "method_decl":
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls

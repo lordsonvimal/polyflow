@@ -1,6 +1,7 @@
 package parser_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -367,6 +368,35 @@ func TestJavaScriptParser_TSX_JSXComponents(t *testing.T) {
 		}
 	}
 	assert.True(t, hasRenders, "expected at least one renders edge from JSX component usage")
+}
+
+func TestJavaScriptParser_TSX_ImperativeCalls(t *testing.T) {
+	m := mustMatcher(t)
+	p := parser.ForFile("testdata/notification.tsx")
+	require.NotNil(t, p)
+
+	nodes, edges, err := p.Parse("testdata/notification.tsx", service, m)
+	require.NoError(t, err)
+
+	labels := make(map[string]bool)
+	for _, n := range nodes {
+		labels[n.Label] = true
+	}
+	assert.True(t, labels["fetchWarnings"], "expected fetchWarnings node")
+	assert.True(t, labels["Notification"], "expected Notification node")
+
+	// Notification should have a calls edge to fetchWarnings (called inside onMount)
+	hasCallsEdge := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To != "" {
+			// edge from Notification to fetchWarnings
+			if strings.Contains(e.From, "Notification") && strings.Contains(e.To, "fetchWarnings") {
+				hasCallsEdge = true
+				break
+			}
+		}
+	}
+	assert.True(t, hasCallsEdge, "expected calls edge from Notification to fetchWarnings")
 }
 
 // BenchmarkWorkerPool_100Files measures parsing 100 fixture files concurrently.

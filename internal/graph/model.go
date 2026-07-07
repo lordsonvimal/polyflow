@@ -14,6 +14,8 @@ const (
 	NodeTypePublisher    NodeType = "publisher"
 	NodeTypeSubscriber   NodeType = "subscriber"
 	NodeTypeTemplElement NodeType = "templ_element"
+	NodeTypeInterface    NodeType = "interface"
+	NodeTypeTypeAlias    NodeType = "type_alias"
 )
 
 // EdgeType classifies the relationship between two nodes.
