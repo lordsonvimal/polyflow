@@ -1,0 +1,24 @@
+language: javascript
+version: "1"
+patterns:
+  - name: create_element
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "createElement"))
+        arguments: (arguments
+          (string) @tag_name))
+    captures:
+      - name: tag_name
+        role: dom_element_tag
+  - name: clone_node
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "cloneNode"))
+        arguments: (arguments . _*))
+    captures:
+      - name: fn
+        role: dom_create_method

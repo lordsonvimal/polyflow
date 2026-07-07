@@ -1,0 +1,27 @@
+language: ruby
+version: "1"
+patterns:
+  - name: faraday_connection
+    query: |
+      (call
+        receiver: (constant) @faraday
+        (#eq? @faraday "Faraday")
+        method: (identifier) @fn
+        (#eq? @fn "new")
+        arguments: (argument_list
+          (_) @url . _*))
+    captures:
+      - name: url
+        role: http_url
+  - name: faraday_http_verb
+    query: |
+      (call
+        method: (identifier) @method
+        (#match? @method "^(get|post|put|patch|delete|head|options)$")
+        arguments: (argument_list
+          (_) @path . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path

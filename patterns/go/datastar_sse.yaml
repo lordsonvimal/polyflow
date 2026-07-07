@@ -1,0 +1,27 @@
+language: go
+version: "1"
+patterns:
+  - name: datastar_sse_merge_fragments
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "MergeFragments"))
+        arguments: (argument_list . (_) @sse_handler . (_) @fragment))
+    captures:
+      - name: sse_handler
+        role: sse_handler
+      - name: fragment
+        role: html_fragment
+  - name: datastar_sse_send_event
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(MergeSignals|RemoveFragments|ExecuteScript)$"))
+        arguments: (argument_list . (_) @sse_handler . (_) @payload))
+    captures:
+      - name: fn
+        role: event_type
+      - name: payload
+        role: event_payload

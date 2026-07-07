@@ -1,0 +1,20 @@
+language: ruby
+version: "1"
+patterns:
+  - name: net_http_get
+    query: |
+      (call
+        receiver: (scope_resolution
+          scope: (constant) @ns
+          (#eq? @ns "Net")
+          name: (constant) @cls
+          (#eq? @cls "HTTP"))
+        method: (identifier) @fn
+        (#match? @fn "^(get|post|start)$")
+        arguments: (argument_list
+          (_) @host . _*))
+    captures:
+      - name: fn
+        role: http_method
+      - name: host
+        role: http_host

@@ -1,0 +1,30 @@
+language: javascript
+version: "1"
+patterns:
+  - name: fetch_call
+    query: |
+      (call_expression
+        function: (identifier) @fn
+        (#eq? @fn "fetch")
+        arguments: (arguments
+          (_) @url . _*))
+    captures:
+      - name: url
+        role: http_url
+  - name: fetch_with_options
+    query: |
+      (call_expression
+        function: (identifier) @fn
+        (#eq? @fn "fetch")
+        arguments: (arguments
+          (_) @url
+          (object
+            (pair
+              key: (property_identifier) @key
+              (#eq? @key "method")
+              value: (string) @method))))
+    captures:
+      - name: url
+        role: http_url
+      - name: method
+        role: http_method

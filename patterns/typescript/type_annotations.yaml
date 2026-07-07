@@ -1,0 +1,23 @@
+language: typescript
+version: "1"
+patterns:
+  - name: type_alias
+    query: |
+      (type_alias_declaration
+        name: (type_identifier) @name
+        value: (_) @type)
+    captures:
+      - name: name
+        role: ts_type_alias
+      - name: type
+        role: ts_type_value
+  - name: generic_type
+    query: |
+      (generic_type
+        name: (type_identifier) @name
+        type_arguments: (type_arguments) @args)
+    captures:
+      - name: name
+        role: ts_generic_name
+      - name: args
+        role: ts_type_args

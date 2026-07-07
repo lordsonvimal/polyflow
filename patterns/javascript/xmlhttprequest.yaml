@@ -1,0 +1,27 @@
+language: javascript
+version: "1"
+patterns:
+  - name: xhr_open
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "open"))
+        arguments: (arguments
+          (string) @method
+          (string) @url . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+  - name: xhr_send
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "send"))
+        arguments: (arguments . _*))
+    captures:
+      - name: fn
+        role: xhr_send

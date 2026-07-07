@@ -1,0 +1,25 @@
+language: javascript
+version: "1"
+patterns:
+  - name: set_inner_html
+    query: |
+      (assignment_expression
+        left: (member_expression
+          property: (property_identifier) @prop
+          (#eq? @prop "innerHTML"))
+        right: (_) @value)
+    captures:
+      - name: prop
+        role: dom_mutation_type
+      - name: value
+        role: dom_mutation_value
+  - name: set_text_content
+    query: |
+      (assignment_expression
+        left: (member_expression
+          property: (property_identifier) @prop
+          (#eq? @prop "textContent"))
+        right: (_) @value)
+    captures:
+      - name: prop
+        role: dom_mutation_type

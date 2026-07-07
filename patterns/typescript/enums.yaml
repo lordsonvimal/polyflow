@@ -1,0 +1,21 @@
+language: typescript
+version: "1"
+patterns:
+  - name: enum_declaration
+    query: |
+      (enum_declaration
+        name: (identifier) @name
+        body: (enum_body) @body)
+    captures:
+      - name: name
+        role: ts_enum_name
+      - name: body
+        role: ts_enum_body
+  - name: const_enum
+    query: |
+      (enum_declaration
+        "const" @const_kw
+        name: (identifier) @name)
+    captures:
+      - name: name
+        role: ts_enum_name

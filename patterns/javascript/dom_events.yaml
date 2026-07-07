@@ -1,0 +1,29 @@
+language: javascript
+version: "1"
+patterns:
+  - name: add_event_listener
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "addEventListener"))
+        arguments: (arguments
+          (string) @event_type
+          (_) @handler . _*))
+    captures:
+      - name: event_type
+        role: dom_event_type
+      - name: handler
+        role: event_handler
+  - name: remove_event_listener
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "removeEventListener"))
+        arguments: (arguments
+          (string) @event_type
+          (_) @handler))
+    captures:
+      - name: event_type
+        role: dom_event_type
