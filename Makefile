@@ -1,11 +1,13 @@
-.PHONY: build build-all test lint clean
+.PHONY: web build build-all test lint clean
 
 BUILD_DIR := dist
 BINARY    := polyflow
 VERSION   := $(shell grep 'Version' internal/meta/meta.go | head -1 | cut -d'"' -f2)
 
-build:
-	cd web && npm run build && cd ..
+web:
+	cd web && npm install && npm run build
+
+build: web
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
 
 test:

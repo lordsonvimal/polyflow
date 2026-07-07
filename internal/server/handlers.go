@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -17,7 +20,61 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// handleSearch handles GET /api/search?q=<query>&limit=<n>
+// handleGraph handles GET /api/graph?page=<n>&limit=<n>
+func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	const defaultLimit = 500
+	const maxLimit = 2000
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	// Collect all nodes from the in-memory index
+	allNodes := make([]*graph.Node, 0, len(s.idx.Nodes))
+	for _, n := range s.idx.Nodes {
+		allNodes = append(allNodes, n)
+	}
+
+	// Paginate
+	start := (page - 1) * limit
+	if start >= len(allNodes) {
+		writeJSON(w, http.StatusOK, CytoscapeGraph{
+			Nodes: []CytoscapeNode{},
+			Edges: []CytoscapeEdge{},
+		})
+		return
+	}
+	end := min(start+limit, len(allNodes))
+	pageNodes := allNodes[start:end]
+
+	// Build a set of node IDs in this page
+	nodeSet := make(map[string]bool, len(pageNodes))
+	for _, n := range pageNodes {
+		nodeSet[n.ID] = true
+	}
+
+	// Collect edges where both endpoints are in the page
+	var pageEdges []*graph.Edge
+	for fromID := range nodeSet {
+		for _, e := range s.idx.OutEdges[fromID] {
+			if nodeSet[e.To] {
+				pageEdges = append(pageEdges, e)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, ToCytoscapeJSON(pageNodes, pageEdges))
+}
+
+// handleSearch handles GET /api/graph/search?q=<query>&limit=<n>
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -61,10 +118,95 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTrace handles GET /api/trace?from=<id>&to=<id>&depth=<n>
+// handleNodeSource handles GET /api/node/{id}/source
+func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing node id")
+		return
+	}
+
+	node, err := s.db.GetNode(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	src, err := os.ReadFile(node.File)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read source file: %s", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"source": string(src)})
+}
+
+// handleTrace handles GET /api/graph/trace?root=<id>&direction=<forward|backward|both>&depth=<n>
 func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement BFS/DFS trace between two nodes
-	writeError(w, http.StatusNotImplemented, "trace: not yet implemented")
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "missing query parameter 'root'")
+		return
+	}
+
+	direction := r.URL.Query().Get("direction")
+	if direction == "" {
+		direction = "forward"
+	}
+
+	depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
+	if depth <= 0 {
+		depth = 10
+	}
+	if depth > 50 {
+		depth = 50
+	}
+
+	if _, ok := s.idx.Nodes[root]; !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	// Traverse in-memory; collect result node IDs
+	nodeSet := map[string]bool{root: true}
+
+	switch direction {
+	case "forward":
+		for _, r := range graph.Descendants(s.idx, root, depth) {
+			nodeSet[r.Node.ID] = true
+		}
+	case "backward":
+		for _, r := range graph.Ancestors(s.idx, root, depth) {
+			nodeSet[r.Node.ID] = true
+		}
+	default: // "both"
+		for _, r := range graph.Descendants(s.idx, root, depth) {
+			nodeSet[r.Node.ID] = true
+		}
+		for _, r := range graph.Ancestors(s.idx, root, depth) {
+			nodeSet[r.Node.ID] = true
+		}
+	}
+
+	// Fetch full node objects
+	nodes := make([]*graph.Node, 0, len(nodeSet))
+	for id := range nodeSet {
+		if n, ok := s.idx.Nodes[id]; ok {
+			nodes = append(nodes, n)
+		}
+	}
+
+	// Collect edges where both endpoints are in the result set
+	var edges []*graph.Edge
+	for fromID := range nodeSet {
+		for _, e := range s.idx.OutEdges[fromID] {
+			if nodeSet[e.To] {
+				edges = append(edges, e)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, ToCytoscapeJSON(nodes, edges))
 }
 
 // handleStats handles GET /api/stats
