@@ -1,6 +1,7 @@
 package graph_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -97,4 +98,27 @@ func nodeIDs(results []graph.TraversalResult) []string {
 		ids[i] = r.Node.ID
 	}
 	return ids
+}
+
+// BenchmarkTraverse_Depth10 measures BFS traversal on a 10k node linear graph at depth 10.
+func BenchmarkTraverse_Depth10(b *testing.B) {
+	const nodeCount = 10000
+	idx := graph.NewAdjacencyIndex()
+	for i := 0; i < nodeCount; i++ {
+		id := fmt.Sprintf("n%d", i)
+		idx.AddNode(&graph.Node{ID: id, Label: id})
+		if i > 0 {
+			idx.AddEdge(&graph.Edge{
+				ID:   fmt.Sprintf("e%d", i),
+				From: fmt.Sprintf("n%d", i-1),
+				To:   id,
+				Type: graph.EdgeTypeCalls,
+			})
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		graph.Descendants(idx, "n0", 10)
+	}
 }

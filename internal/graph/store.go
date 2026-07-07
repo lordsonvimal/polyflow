@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS parse_errors (
 	first_error_line INTEGER NOT NULL DEFAULT 0,
 	indexed_at       INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 // Store is the persistence interface for the polyflow graph.
@@ -66,6 +71,10 @@ type Store interface {
 	UpsertParseError(ctx context.Context, pe *ParseError) error
 	// ListParseErrors returns all files that had parse errors during the last index.
 	ListParseErrors(ctx context.Context) ([]*ParseError, error)
+	// SetMeta stores a key-value metadata entry.
+	SetMeta(ctx context.Context, key, value string) error
+	// GetMeta retrieves a metadata entry by key.
+	GetMeta(ctx context.Context, key string) (string, error)
 	Close() error
 }
 
@@ -269,6 +278,28 @@ func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error
 		out = append(out, &pe)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLiteStore) SetMeta(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		key, value)
+	if err != nil {
+		return fmt.Errorf("set meta %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetMeta(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("meta key not found: %s", key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("get meta %s: %w", key, err)
+	}
+	return value, nil
 }
 
 func (s *SQLiteStore) Close() error {

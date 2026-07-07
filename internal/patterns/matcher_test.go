@@ -11,6 +11,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// BenchmarkMatch_GoFile measures matching a 500-line Go file against all Go patterns.
+func BenchmarkMatch_GoFile(b *testing.B) {
+	reg, err := patterns.DefaultRegistry("../../patterns")
+	if err != nil {
+		b.Fatal(err)
+	}
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src, err := os.ReadFile("testdata/chi_routes.go")
+	if err != nil {
+		b.Fatal(err)
+	}
+	// Replicate content to approximate 500 lines
+	extended := make([]byte, 0, len(src)*10)
+	for i := 0; i < 10; i++ {
+		extended = append(extended, src...)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = m.Match("go", "testdata/chi_routes.go", extended)
+	}
+}
+
 func mustLoadRegistry(t *testing.T, yamlPath string) *patterns.Registry {
 	t.Helper()
 	pf, err := patterns.LoadFile(yamlPath)

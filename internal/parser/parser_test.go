@@ -308,6 +308,35 @@ func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
 	assert.NotNil(t, parser.ForFile("page.templ"))
 }
 
+// BenchmarkWorkerPool_100Files measures parsing 100 fixture files concurrently.
+func BenchmarkWorkerPool_100Files(b *testing.B) {
+	reg, err := patterns.DefaultRegistry(patternsDir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	m := patterns.NewTreeSitterMatcher(reg)
+	pool := parser.NewWorkerPool(4, m, service)
+
+	// Build a list of 100 files by repeating the known fixtures.
+	baseFiles := []string{
+		"testdata/routes.go",
+		"testdata/client.js",
+		"testdata/page.templ",
+		"testdata/app.rb",
+	}
+	files := make([]string, 0, 100)
+	for len(files) < 100 {
+		files = append(files, baseFiles...)
+	}
+	files = files[:100]
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for range pool.Run(files) {
+		}
+	}
+}
+
 // helpers
 
 func nodeTypes(nodes []graph.Node) []graph.NodeType {

@@ -233,6 +233,64 @@ func TestListParseErrors_Empty(t *testing.T) {
 	assert.Empty(t, list)
 }
 
+func TestSetAndGetMeta(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SetMeta(ctx, "last_indexed", "1700000000"))
+
+	val, err := s.GetMeta(ctx, "last_indexed")
+	require.NoError(t, err)
+	assert.Equal(t, "1700000000", val)
+}
+
+func TestGetMeta_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.GetMeta(context.Background(), "nonexistent")
+	assert.Error(t, err)
+}
+
+func TestSetMeta_Idempotent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SetMeta(ctx, "key", "v1"))
+	require.NoError(t, s.SetMeta(ctx, "key", "v2"))
+
+	val, err := s.GetMeta(ctx, "key")
+	require.NoError(t, err)
+	assert.Equal(t, "v2", val)
+}
+
+// BenchmarkSearchNodes measures FTS5 search on a 10k node store.
+func BenchmarkSearchNodes(b *testing.B) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	bw := graph.NewBatchWriter(s)
+	for i := 0; i < 10000; i++ {
+		n := &graph.Node{
+			ID:       fmt.Sprintf("n%d", i),
+			Type:     graph.NodeTypeFunction,
+			Label:    fmt.Sprintf("HandleRequest%d", i),
+			Service:  "svc",
+			File:     fmt.Sprintf("handler_%d.go", i),
+			Language: "go",
+		}
+		_ = bw.AddNode(ctx, n)
+	}
+	_ = bw.Flush(ctx)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = s.SearchNodes(ctx, "HandleRequest", 20)
+	}
+}
+
 func TestBuildIndex(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -37,9 +37,13 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		limit = maxLimit
 	}
 
+	s.idxMu.RLock()
+	idx := s.idx
+	s.idxMu.RUnlock()
+
 	// Collect all nodes from the in-memory index
-	allNodes := make([]*graph.Node, 0, len(s.idx.Nodes))
-	for _, n := range s.idx.Nodes {
+	allNodes := make([]*graph.Node, 0, len(idx.Nodes))
+	for _, n := range idx.Nodes {
 		allNodes = append(allNodes, n)
 	}
 
@@ -64,7 +68,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	// Collect edges where both endpoints are in the page
 	var pageEdges []*graph.Edge
 	for fromID := range nodeSet {
-		for _, e := range s.idx.OutEdges[fromID] {
+		for _, e := range idx.OutEdges[fromID] {
 			if nodeSet[e.To] {
 				pageEdges = append(pageEdges, e)
 			}
@@ -162,7 +166,11 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		depth = 50
 	}
 
-	if _, ok := s.idx.Nodes[root]; !ok {
+	s.idxMu.RLock()
+	idx := s.idx
+	s.idxMu.RUnlock()
+
+	if _, ok := idx.Nodes[root]; !ok {
 		writeError(w, http.StatusNotFound, "node not found")
 		return
 	}
@@ -172,18 +180,18 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 
 	switch direction {
 	case "forward":
-		for _, r := range graph.Descendants(s.idx, root, depth) {
+		for _, r := range graph.Descendants(idx, root, depth) {
 			nodeSet[r.Node.ID] = true
 		}
 	case "backward":
-		for _, r := range graph.Ancestors(s.idx, root, depth) {
+		for _, r := range graph.Ancestors(idx, root, depth) {
 			nodeSet[r.Node.ID] = true
 		}
 	default: // "both"
-		for _, r := range graph.Descendants(s.idx, root, depth) {
+		for _, r := range graph.Descendants(idx, root, depth) {
 			nodeSet[r.Node.ID] = true
 		}
-		for _, r := range graph.Ancestors(s.idx, root, depth) {
+		for _, r := range graph.Ancestors(idx, root, depth) {
 			nodeSet[r.Node.ID] = true
 		}
 	}
@@ -191,7 +199,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	// Fetch full node objects
 	nodes := make([]*graph.Node, 0, len(nodeSet))
 	for id := range nodeSet {
-		if n, ok := s.idx.Nodes[id]; ok {
+		if n, ok := idx.Nodes[id]; ok {
 			nodes = append(nodes, n)
 		}
 	}
@@ -199,7 +207,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	// Collect edges where both endpoints are in the result set
 	var edges []*graph.Edge
 	for fromID := range nodeSet {
-		for _, e := range s.idx.OutEdges[fromID] {
+		for _, e := range idx.OutEdges[fromID] {
 			if nodeSet[e.To] {
 				edges = append(edges, e)
 			}
@@ -237,5 +245,24 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
 	flusher.Flush()
 
-	<-r.Context().Done()
+	ch := make(chan string, 8)
+	s.clientsMu.Lock()
+	s.clients[ch] = struct{}{}
+	s.clientsMu.Unlock()
+
+	defer func() {
+		s.clientsMu.Lock()
+		delete(s.clients, ch)
+		s.clientsMu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		}
+	}
 }
