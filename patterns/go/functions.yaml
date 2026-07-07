@@ -1,0 +1,17 @@
+language: go
+version: "1"
+patterns:
+  - name: func_decl
+    query: |
+      (function_declaration
+        name: (identifier) @name)
+    captures:
+      - name: name
+        role: func_name
+  - name: method_decl
+    query: |
+      (method_declaration
+        (field_identifier) @name)
+    captures:
+      - name: name
+        role: method_name

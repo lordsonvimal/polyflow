@@ -16,15 +16,3 @@ patterns:
         role: datastar_signal
       - name: handler
         role: signal_handler
-  - name: datastar_action
-    query: |
-      (attribute
-        name: (attribute_name) @attr
-        (#match? @attr "^data-on-")
-        value: (quoted_attribute_value
-          (attribute_value) @expr))
-    captures:
-      - name: attr
-        role: datastar_event
-      - name: expr
-        role: datastar_expression

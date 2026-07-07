@@ -8,7 +8,8 @@ patterns:
           field: (field_identifier) @fn
           (#match? @fn "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
         arguments: (argument_list
-          (_) @url))
+          (_) @url
+          (#match? @url "^[\"\x60](/|https?://)")))
     captures:
       - name: fn
         role: http_method
