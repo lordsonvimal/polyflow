@@ -224,9 +224,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{
-		"nodes": nodes,
-		"edges": edges,
+
+	var semanticWarnings []string
+	if raw, err := s.db.GetMeta(r.Context(), "semantic_warnings"); err == nil && raw != "" && raw != "[]" {
+		_ = json.Unmarshal([]byte(raw), &semanticWarnings)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes":            nodes,
+		"edges":            edges,
+		"semantic_warnings": semanticWarnings,
 	})
 }
 

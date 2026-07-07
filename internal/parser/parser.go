@@ -2,12 +2,39 @@ package parser
 
 import (
 	"fmt"
+	"go/token"
 	"path/filepath"
 	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
+
+// ServiceAnalyzer runs whole-service semantic analysis (not per-file).
+// This is used for languages like Go where type-resolved analysis requires
+// loading the full package graph (go/packages).
+type ServiceAnalyzer interface {
+	Language() string
+	AnalyzeService(dir, service string, fset *token.FileSet) SemanticResult
+}
+
+// SemanticResult holds the output of a whole-service semantic analysis pass.
+type SemanticResult struct {
+	Edges   []graph.Edge
+	Warning string // non-empty when falling back to tree-sitter accuracy
+}
+
+var serviceAnalyzerRegistry = map[string]ServiceAnalyzer{}
+
+// RegisterServiceAnalyzer adds a ServiceAnalyzer to the global registry.
+func RegisterServiceAnalyzer(a ServiceAnalyzer) {
+	serviceAnalyzerRegistry[a.Language()] = a
+}
+
+// ServiceAnalyzerFor returns the ServiceAnalyzer for the given language, or nil.
+func ServiceAnalyzerFor(lang string) ServiceAnalyzer {
+	return serviceAnalyzerRegistry[lang]
+}
 
 // Parser extracts nodes and edges from a single source file.
 type Parser interface {

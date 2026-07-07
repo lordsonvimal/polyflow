@@ -6,6 +6,7 @@ const [selectedNodeId, setSelectedNodeId] = createSignal<string | null>(null);
 const [layout, setLayout] = createSignal<Layout>("dagre");
 const [activeFilters, setActiveFilters] = createSignal<string[]>([]);
 const [notification, setNotification] = createSignal<string | null>(null);
+const [semanticWarnings, setSemanticWarnings] = createSignal<string[]>([]);
 
 function addFilter(type: string) {
   setActiveFilters((prev) => (prev.includes(type) ? prev : [...prev, type]));
@@ -19,6 +20,10 @@ function clearNotification() {
   setNotification(null);
 }
 
+function clearSemanticWarnings() {
+  setSemanticWarnings([]);
+}
+
 export const uiStore = {
   selectedNodeId,
   setSelectedNodeId,
@@ -30,4 +35,7 @@ export const uiStore = {
   notification,
   setNotification,
   clearNotification,
+  semanticWarnings,
+  setSemanticWarnings,
+  clearSemanticWarnings,
 };
