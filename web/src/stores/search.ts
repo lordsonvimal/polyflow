@@ -1,22 +1,30 @@
 import { createSignal, createEffect } from "solid-js";
-import { graphStore } from "./graph";
+import { GraphNode } from "./graph";
 
 const [query, setQuery] = createSignal("");
-const [debouncedQuery, setDebouncedQuery] = createSignal("");
+const [results, setResults] = createSignal<GraphNode[]>([]);
+const [searching, setSearching] = createSignal(false);
 
-// Debounce search by 300 ms
+let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
 createEffect(() => {
   const q = query();
-  const timer = setTimeout(() => setDebouncedQuery(q), 300);
-  return () => clearTimeout(timer);
-});
-
-// Trigger graph fetch when debounced query changes
-createEffect(() => {
-  const q = debouncedQuery();
-  if (q.trim().length >= 2) {
-    graphStore.fetchGraph(q);
+  clearTimeout(debounceTimer);
+  if (q.trim().length < 2) {
+    setResults([]);
+    return;
   }
+  debounceTimer = setTimeout(async () => {
+    setSearching(true);
+    try {
+      const res = await fetch(`/api/graph/search?q=${encodeURIComponent(q)}&limit=20`);
+      if (!res.ok) return;
+      const data: GraphNode[] = await res.json();
+      setResults(data);
+    } finally {
+      setSearching(false);
+    }
+  }, 200);
 });
 
-export const searchStore = { query, setQuery, debouncedQuery };
+export const searchStore = { query, setQuery, results, searching };

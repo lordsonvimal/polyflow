@@ -1,4 +1,4 @@
-import { Component, onMount, onCleanup } from "solid-js";
+import { Component, createEffect, onMount, onCleanup } from "solid-js";
 import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
 import fcose from "cytoscape-fcose";
@@ -54,6 +54,35 @@ const Graph: Component = () => {
       const id = evt.target.data("id") as string;
       uiStore.setSelectedNodeId(id);
     });
+
+    // Load the full graph on mount
+    graphStore.fetchGraph();
+  });
+
+  // Re-render Cytoscape whenever the store changes
+  createEffect(() => {
+    const nodes = graphStore.nodes();
+    const edges = graphStore.edges();
+    const layout = uiStore.layout();
+    if (!cy) return;
+
+    cy.elements().remove();
+
+    cy.add(
+      nodes.map((n) => ({
+        group: "nodes" as const,
+        data: { id: n.id, label: n.label, type: n.type, service: n.service, file: n.file, line: n.line },
+      }))
+    );
+
+    cy.add(
+      edges.map((e) => ({
+        group: "edges" as const,
+        data: { id: e.id, source: e.from, target: e.to, type: e.type, label: e.label ?? "" },
+      }))
+    );
+
+    cy.layout({ name: layout } as any).run();
   });
 
   onCleanup(() => {
