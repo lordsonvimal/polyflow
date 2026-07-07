@@ -8,7 +8,7 @@ web:
 	cd web && npm install && npm run build
 
 build: web
-	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
+	GOTOOLCHAIN=local CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
 
 test:
 	go test ./... -coverprofile=coverage.out
