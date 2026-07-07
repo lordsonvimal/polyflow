@@ -284,7 +284,20 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	time.Sleep(300 * time.Millisecond)
 	fmt.Println()
 
-	// Semantic pass: run go/packages + RTA for Go services.
+	// Flush all tree-sitter nodes+edges before the semantic pass so FK constraints
+	// are satisfied when semantic edges reference those nodes.
+	if err := bw.Flush(ctx); err != nil {
+		return err
+	}
+
+	// Build a set of all node IDs now committed to the DB so we can filter
+	// semantic edges — only emit edges where both endpoints already exist.
+	knownNodeIDs := make(map[string]bool, len(allNodes))
+	for _, n := range allNodes {
+		knownNodeIDs[n.ID] = true
+	}
+
+	// Semantic pass: run go/packages + SSA for Go services.
 	// Adds type-resolved call edges on top of tree-sitter nodes.
 	// Falls back gracefully if the service has build errors.
 	fset := token.NewFileSet()
@@ -298,24 +311,26 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			absSvcPath = sf.svc.Path
 		}
 		fmt.Printf("  Semantic analysis: %s...\n", sf.svc.Name)
-		sem := analyzer.AnalyzeService(absSvcPath, sf.svc.Name, fset)
+		sem := analyzer.AnalyzeService(absSvcPath, sf.svc.Name, fset, knownNodeIDs)
 		if sem.Warning != "" {
 			fmt.Fprintf(os.Stderr, "  Warning: %s\n", sem.Warning)
 			semanticWarnings = append(semanticWarnings, sem.Warning)
-		} else {
-			bwSem := graph.NewBatchWriter(store)
-			for i := range sem.Edges {
-				e := sem.Edges[i]
-				if err := bwSem.AddEdge(ctx, &e); err != nil {
-					return err
-				}
-				allEdges = append(allEdges, e)
-			}
-			if err := bwSem.Flush(ctx); err != nil {
+			continue
+		}
+		bwSem := graph.NewBatchWriter(store)
+		written := 0
+		for i := range sem.Edges {
+			e := sem.Edges[i]
+			if err := bwSem.AddEdge(ctx, &e); err != nil {
 				return err
 			}
-			fmt.Printf("  Semantic analysis: %s — %d call edges added\n", sf.svc.Name, len(sem.Edges))
+			allEdges = append(allEdges, e)
+			written++
 		}
+		if err := bwSem.Flush(ctx); err != nil {
+			return err
+		}
+		fmt.Printf("  Semantic analysis: %s — %d call edges added\n", sf.svc.Name, written)
 	}
 
 	// Store semantic warnings in DB meta so the web UI can surface them.
@@ -324,10 +339,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		_ = store.SetMeta(ctx, "semantic_warnings", string(warningsJSON))
 	} else {
 		_ = store.SetMeta(ctx, "semantic_warnings", "[]")
-	}
-
-	if err := bw.Flush(ctx); err != nil {
-		return err
 	}
 
 	// Cross-service linking
