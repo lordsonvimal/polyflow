@@ -96,6 +96,25 @@ func (m *TreeSitterMatcher) getCompiledQueries(language string, lang *sitter.Lan
 	return cqs
 }
 
+// MatchWithGrammar runs patterns registered under patternLang but parses with the
+// grammar for grammarLang. This lets TypeScript files use JavaScript patterns
+// (fetch, axios) compiled against the TypeScript grammar, which is a superset.
+func (m *TreeSitterMatcher) MatchWithGrammar(patternLang, grammarLang, file string, src []byte) ([]MatchResult, error) {
+	lang := languageFor(grammarLang)
+	if lang == nil {
+		return nil, nil
+	}
+	cqs := m.getCompiledQueries(patternLang, lang)
+	if len(cqs) == 0 {
+		return nil, nil
+	}
+	root, err := sitter.ParseCtx(context.Background(), src, lang)
+	if err != nil {
+		return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
+	}
+	return m.execQueries(cqs, root, src, file)
+}
+
 // Match runs registered patterns for the language against the source bytes.
 func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchResult, error) {
 	lang := languageFor(language)
@@ -115,6 +134,10 @@ func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchRes
 		return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
 	}
 
+	return m.execQueries(cqs, root, src, file)
+}
+
+func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, src []byte, file string) ([]MatchResult, error) {
 	var results []MatchResult
 
 	for _, cq := range cqs {
@@ -189,10 +212,10 @@ func (m *TreeSitterMatcher) MatchToNodes(service string, results []MatchResult) 
 // Node IDs follow the design doc format: service:file:type:name:line
 func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.Edge) {
 	nodes := make([]graph.Node, 0, len(results))
-	edges := make([]graph.Edge, 0, len(results))
+	var edges []graph.Edge
 
 	for _, r := range results {
-		nodeType, edgeType := classifyPattern(r.PatternName)
+		nodeType, _ := classifyPattern(r.PatternName)
 
 		// Build label from captures
 		label := r.PatternName
@@ -213,6 +236,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		meta := make(map[string]string, len(r.Captures))
 		maps.Copy(meta, r.Captures)
 
+		// Strip surrounding quotes from path and url captures (tree-sitter includes them).
+		for _, key := range []string{"path", "url", "method"} {
+			if v, ok := meta[key]; ok {
+				meta[key] = stripStringLiteral(v)
+			}
+		}
+
+		// Handle Go 1.22 ServeMux "METHOD /path" route format: split into method+path.
+		if path, ok := meta["path"]; ok {
+			if i := strings.Index(path, " "); i > 0 {
+				meta["method"] = path[:i]
+				meta["path"] = path[i+1:]
+				label = meta["method"] + " " + meta["path"]
+			}
+		}
+
 		node := graph.Node{
 			ID:      nodeID,
 			Type:    nodeType,
@@ -223,17 +262,6 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			Meta:    meta,
 		}
 		nodes = append(nodes, node)
-
-		// Self-referencing edge records the matched pattern on the node.
-		edge := graph.Edge{
-			ID:    nodeID + ":edge",
-			From:  nodeID,
-			To:    nodeID,
-			Type:  edgeType,
-			Label: string(edgeType),
-			Meta:  meta,
-		}
-		edges = append(edges, edge)
 	}
 
 	return nodes, edges
@@ -264,4 +292,16 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	default:
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 	}
+}
+
+// stripStringLiteral removes surrounding Go/JS string delimiters (", ', `)
+// and raw Go backtick literals from a captured value.
+func stripStringLiteral(s string) string {
+	if len(s) >= 2 {
+		c := s[0]
+		if (c == '"' || c == '\'' || c == '`') && s[len(s)-1] == c {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }

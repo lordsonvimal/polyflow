@@ -176,9 +176,32 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		svc   workspace.Service
 		files []string
 	}
+	// Collect other service paths so each service excludes files owned by another service.
+	svcPaths := make([]string, len(cfg.Services))
+	for i, svc := range cfg.Services {
+		abs, err := filepath.Abs(svc.Path)
+		if err != nil {
+			abs = svc.Path
+		}
+		svcPaths[i] = abs
+	}
+
 	var allSvcFiles []serviceFiles
-	for _, svc := range cfg.Services {
-		files, err := walkService(svc.Path, cfg.Index.Exclude)
+	for idx, svc := range cfg.Services {
+		absSvcPath, _ := filepath.Abs(svc.Path)
+		// Build extra excludes: any other service path that is a sub-directory of this one.
+		var extraExcludes []string
+		for i, other := range svcPaths {
+			if i == idx {
+				continue
+			}
+			rel, err := filepath.Rel(absSvcPath, other)
+			if err == nil && !strings.HasPrefix(rel, "..") {
+				extraExcludes = append(extraExcludes, rel+"/**")
+			}
+		}
+		excludes := append(cfg.Index.Exclude, extraExcludes...)
+		files, err := walkService(svc.Path, excludes)
 		if err != nil {
 			return fmt.Errorf("walk %s: %w", svc.Name, err)
 		}
