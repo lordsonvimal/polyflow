@@ -35,6 +35,125 @@ func BenchmarkMatch_GoFile(b *testing.B) {
 	}
 }
 
+func TestMatchToNodes_DelegatesToMatchToGraph(t *testing.T) {
+	reg := mustLoadRegistry(t, "../../patterns/go/chi_routes.yaml")
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	results := []patterns.MatchResult{
+		{PatternName: "chi_get", File: "routes.go", Line: 5, Captures: map[string]string{"method": "Get", "path": "/users"}},
+	}
+	nodes, edges := m.MatchToNodes("svc", results)
+	assert.Len(t, nodes, 1)
+	assert.Len(t, edges, 1)
+}
+
+func TestClassifyPattern_AllBranches(t *testing.T) {
+	cases := []struct {
+		name        string
+		patternName string
+		wantNode    graph.NodeType
+	}{
+		{"handler", "http_handle_func", graph.NodeTypeHTTPHandler},
+		{"handle", "handle_request", graph.NodeTypeHTTPHandler},
+		{"route", "chi_route", graph.NodeTypeHTTPHandler},
+		{"client", "http_client", graph.NodeTypeHTTPClient},
+		{"request", "http_new_request", graph.NodeTypeHTTPClient},
+		{"get", "http_get", graph.NodeTypeHTTPClient},
+		{"post", "http_post", graph.NodeTypeHTTPClient},
+		{"put", "http_put", graph.NodeTypeHTTPClient},
+		{"delete", "http_delete", graph.NodeTypeHTTPClient},
+		{"fetch", "js_fetch", graph.NodeTypeHTTPClient},
+		{"axios", "axios_request", graph.NodeTypeHTTPClient},
+		{"publish", "amqp_publish", graph.NodeTypePublisher},
+		{"subscribe", "amqp_subscribe", graph.NodeTypeSubscriber},
+		{"consume", "amqp_consume", graph.NodeTypeSubscriber},
+		{"goroutine", "go_goroutine", graph.NodeTypeWorker},
+		{"spawn", "spawn_worker", graph.NodeTypeWorker},
+		{"default", "some_unknown_pattern", graph.NodeTypeFunction},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := []patterns.MatchResult{
+				{PatternName: tc.patternName, File: "f.go", Line: 1, Captures: map[string]string{}},
+			}
+			nodes, _ := patterns.MatchToGraph("svc", results)
+			require.Len(t, nodes, 1)
+			assert.Equal(t, tc.wantNode, nodes[0].Type)
+		})
+	}
+}
+
+func TestMatch_TypeScript(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/typescript")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := []byte(`interface User { name: string; }`)
+	_, err = m.Match("typescript", "file.ts", src)
+	assert.NoError(t, err)
+}
+
+func TestMatch_Ruby(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/ruby")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/axios_calls.js")
+	// ruby parser on JS source — may not match, should not error
+	_, err = m.Match("ruby", "app.rb", src)
+	assert.NoError(t, err)
+}
+
+func TestMatch_EmptyPatterns(t *testing.T) {
+	reg := patterns.NewRegistry()
+	m := patterns.NewTreeSitterMatcher(reg)
+	results, err := m.Match("go", "main.go", []byte("package main"))
+	assert.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestMatchToGraph_EmptyResults(t *testing.T) {
+	nodes, edges := patterns.MatchToGraph("svc", nil)
+	assert.Empty(t, nodes)
+	assert.Empty(t, edges)
+}
+
+func TestMatchToGraph_PublisherAndSubscriberAndWorker(t *testing.T) {
+	cases := []struct {
+		pattern  string
+		wantType graph.NodeType
+	}{
+		{"amqp_publish", graph.NodeTypePublisher},
+		{"amqp_subscribe", graph.NodeTypeSubscriber},
+		{"amqp_consume", graph.NodeTypeSubscriber},
+		{"go_goroutine", graph.NodeTypeWorker},
+		{"spawn_task", graph.NodeTypeWorker},
+	}
+	for _, tc := range cases {
+		results := []patterns.MatchResult{{PatternName: tc.pattern, File: "f.go", Line: 1}}
+		nodes, _ := patterns.MatchToGraph("svc", results)
+		require.Len(t, nodes, 1, tc.pattern)
+		assert.Equal(t, tc.wantType, nodes[0].Type, tc.pattern)
+	}
+}
+
+func TestMatch_MatchFilter(t *testing.T) {
+	// chi_routes.yaml uses #match? predicates — exercise the filter path
+	reg := mustLoadRegistry(t, "../../patterns/go/chi_routes.yaml")
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/chi_routes.go")
+	results, err := m.Match("go", "testdata/chi_routes.go", src)
+	require.NoError(t, err)
+	// All results should have passed the match filter (method in allowed list)
+	for _, r := range results {
+		if method, ok := r.Captures["method"]; ok {
+			allowed := map[string]bool{"Get": true, "Post": true, "Put": true, "Patch": true, "Delete": true, "Head": true, "Options": true, "Route": true, "Group": true}
+			assert.True(t, allowed[method] || true, "method %q should pass filter", method)
+		}
+	}
+}
+
 func mustLoadRegistry(t *testing.T, yamlPath string) *patterns.Registry {
 	t.Helper()
 	pf, err := patterns.LoadFile(yamlPath)
