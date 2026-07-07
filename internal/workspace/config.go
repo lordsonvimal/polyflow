@@ -17,9 +17,10 @@ type Service struct {
 
 // Link declares a known HTTP dependency between two services.
 type Link struct {
-	From string `yaml:"from"`
-	To   string `yaml:"to"`
-	Hint string `yaml:"hint,omitempty"` // e.g. "USER_SERVICE_URL=http://localhost:8081"
+	From    string `yaml:"from"`
+	To      string `yaml:"to"`
+	Hint    string `yaml:"hint,omitempty"`     // e.g. "USER_SERVICE_URL=http://localhost:8081"
+	BaseURL string `yaml:"base_url,omitempty"` // e.g. "/api" — stripped from client paths before matching
 }
 
 // WorkspaceConfig is the parsed representation of workspace.yaml.
