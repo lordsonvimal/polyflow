@@ -11,7 +11,7 @@ Reference: [polyflow-design.md](./polyflow-design.md)
 | 1 | Foundation (meta, workspace, CLI skeleton) | ✅ Done | — |
 | 4 | Graph / SQLite store | ✅ Done | 84.7% |
 | 3 | Pattern loading + tree-sitter matcher | ✅ Done | 75.0% |
-| 2 | Per-language parsers | ⬜ Pending | — |
+| 2 | Per-language parsers | ✅ Done | 100% |
 | 5 | Cross-service linker | ⬜ Pending | — |
 | 6 | HTTP server + frontend | 🟡 Partial | — |
 | 7 | End-to-end tests | ⬜ Pending | — |
@@ -61,17 +61,15 @@ See: [YAML Pattern Registry Format](./polyflow-design.md#yaml-pattern-registry-f
 
 ## Pending (implementation order)
 
-### Phase 2 — Per-Language Parsers ← next
+### Phase 2 — Per-Language Parsers
 `internal/parser/`
 
-Wire the `WorkerPool` orchestrator and implement each language extractor using the Phase 3 matcher:
-- `parser.go`: `WorkerPool` — reads files from a channel, dispatches to per-language parsers, emits `([]Node, []Edge)` pairs to a writer channel
-- `go.go`: walk `.go` files, call `TreeSitterMatcher.Match("go", ...)`, feed results through `MatchToGraph`
-- `javascript.go`: same for `.js`/`.ts` files
-- `ruby.go`: same for `.rb` files
-- `templ.go`: parse `.templ` files using `github.com/a-h/templ/parser/v2` Visitor (not tree-sitter) — extract `data-on-*` actions, `href`/`action` attributes, `id`/`class`/`data-*` for DOM target nodes, component signatures
-
-All parsers return `([]graph.Node, []graph.Edge, error)`. Partial extraction on syntax errors (track in `parse_errors`).
+- `parser.go`: Updated `Parser` interface signature (`Parse(file, service string, matcher *patterns.TreeSitterMatcher)`); `WorkerPool` accepts matcher + service; `setLanguage` helper stamps `Language` on nodes; `ForFile` and `Register` unchanged.
+- `go.go`: Reads file, calls `TreeSitterMatcher.Match("go", ...)`, maps via `MatchToGraph`, stamps `Language:"go"`. Partial results on parse error.
+- `javascript.go`: Handles `.js`/`.ts`/`.jsx`/`.tsx`/`.mjs`; dispatches to `"javascript"` or `"typescript"` grammar based on extension.
+- `ruby.go`: Same pattern for `.rb`/`.rake` files using `"ruby"` grammar.
+- `templ.go`: Regex-based scanner for `.templ` files (a-h/templ not yet a dep) — detects `templ`/`func` component declarations, `data-on-*` Datastar actions, `data-bind`/`data-signals`/`data-model`, `data-text`/`data-indicator` signal reads, `href`/`action` links.
+- 15 tests passing in `parser_test.go`; testdata fixtures: `routes.go`, `client.js`, `app.rb`, `page.templ`.
 
 See: [Architecture → parser/](./polyflow-design.md#go-module-structure), [Parser Strategy by Trigger](./polyflow-design.md#parser-strategy-by-trigger), [Datastar/SSE Pattern Detection](./polyflow-design.md#datastarsse-pattern-detection)
 

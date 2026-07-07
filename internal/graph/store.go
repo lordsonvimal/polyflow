@@ -41,6 +41,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_to      ON edges("to");
 CREATE INDEX IF NOT EXISTS idx_edges_type    ON edges(type);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, label, file, service);
+
+CREATE TABLE IF NOT EXISTS parse_errors (
+	file_path        TEXT PRIMARY KEY,
+	service          TEXT NOT NULL,
+	error_count      INTEGER NOT NULL DEFAULT 1,
+	first_error_line INTEGER NOT NULL DEFAULT 0,
+	indexed_at       INTEGER NOT NULL
+);
 `
 
 // Store is the persistence interface for the polyflow graph.
@@ -54,6 +62,10 @@ type Store interface {
 	ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
 	BuildIndex(ctx context.Context) (*AdjacencyIndex, error)
 	Stats(ctx context.Context) (nodeCount, edgeCount int, err error)
+	// UpsertParseError records (or updates) a parse error for a file.
+	UpsertParseError(ctx context.Context, pe *ParseError) error
+	// ListParseErrors returns all files that had parse errors during the last index.
+	ListParseErrors(ctx context.Context) ([]*ParseError, error)
 	Close() error
 }
 
@@ -222,6 +234,41 @@ func (s *SQLiteStore) Stats(ctx context.Context) (int, int, error) {
 		return 0, 0, fmt.Errorf("count edges: %w", err)
 	}
 	return nodeCount, edgeCount, nil
+}
+
+func (s *SQLiteStore) UpsertParseError(ctx context.Context, pe *ParseError) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO parse_errors (file_path, service, error_count, first_error_line, indexed_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(file_path) DO UPDATE SET
+			service=excluded.service,
+			error_count=excluded.error_count,
+			first_error_line=excluded.first_error_line,
+			indexed_at=excluded.indexed_at`,
+		pe.FilePath, pe.Service, pe.ErrorCount, pe.FirstErrorLine, pe.IndexedAt)
+	if err != nil {
+		return fmt.Errorf("upsert parse error %s: %w", pe.FilePath, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT file_path, service, error_count, first_error_line, indexed_at FROM parse_errors ORDER BY file_path`)
+	if err != nil {
+		return nil, fmt.Errorf("list parse errors: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*ParseError
+	for rows.Next() {
+		var pe ParseError
+		if err := rows.Scan(&pe.FilePath, &pe.Service, &pe.ErrorCount, &pe.FirstErrorLine, &pe.IndexedAt); err != nil {
+			return nil, fmt.Errorf("scan parse error row: %w", err)
+		}
+		out = append(out, &pe)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLiteStore) Close() error {

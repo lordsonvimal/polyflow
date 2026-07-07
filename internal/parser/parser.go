@@ -6,19 +6,17 @@ import (
 	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // Parser extracts nodes and edges from a single source file.
 type Parser interface {
-	// Language returns the language this parser handles (e.g. "go", "javascript").
 	Language() string
-	// Extensions returns the file extensions this parser handles.
 	Extensions() []string
-	// Parse parses a file and returns discovered nodes and edges.
-	Parse(file string) ([]graph.Node, []graph.Edge, error)
+	Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error)
 }
 
-// Registry maps file extensions to parsers.
+// registry maps file extensions to parsers.
 var registry = map[string]Parser{}
 
 // Register adds a parser to the global registry.
@@ -34,28 +32,6 @@ func ForFile(path string) Parser {
 	return registry[ext]
 }
 
-// ParseFile dispatches to the correct parser for the given file.
-func ParseFile(path string) ([]graph.Node, []graph.Edge, error) {
-	p := ForFile(path)
-	if p == nil {
-		return nil, nil, fmt.Errorf("no parser for %s", path)
-	}
-	return p.Parse(path)
-}
-
-// WorkerPool fans out file parsing across multiple goroutines.
-type WorkerPool struct {
-	workers int
-}
-
-// NewWorkerPool creates a pool with the given concurrency.
-func NewWorkerPool(workers int) *WorkerPool {
-	if workers <= 0 {
-		workers = 4
-	}
-	return &WorkerPool{workers: workers}
-}
-
 // Result holds the parsed output or error for a single file.
 type Result struct {
 	File  string
@@ -64,7 +40,31 @@ type Result struct {
 	Err   error
 }
 
+// WorkerPool fans out file parsing across multiple goroutines.
+type WorkerPool struct {
+	workers int
+	matcher *patterns.TreeSitterMatcher
+	service string
+}
+
+// NewWorkerPool creates a pool with the given concurrency, matcher, and service name.
+// service is used as a namespace prefix in generated node IDs.
+func NewWorkerPool(workers int, matcher *patterns.TreeSitterMatcher, service string) *WorkerPool {
+	if workers <= 0 {
+		workers = 4
+	}
+	return &WorkerPool{workers: workers, matcher: matcher, service: service}
+}
+
+// setLanguage stamps the Language field on a slice of nodes.
+func setLanguage(nodes []graph.Node, lang string) {
+	for i := range nodes {
+		nodes[i].Language = lang
+	}
+}
+
 // Run parses all files concurrently and streams results on the returned channel.
+// Files with no registered parser produce a Result with Err set and no nodes/edges.
 func (wp *WorkerPool) Run(files []string) <-chan Result {
 	out := make(chan Result, len(files))
 	sem := make(chan struct{}, wp.workers)
@@ -76,7 +76,13 @@ func (wp *WorkerPool) Run(files []string) <-chan Result {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			nodes, edges, err := ParseFile(path)
+
+			p := ForFile(path)
+			if p == nil {
+				out <- Result{File: path, Err: fmt.Errorf("no parser for %s", path)}
+				return
+			}
+			nodes, edges, err := p.Parse(path, wp.service, wp.matcher)
 			out <- Result{File: path, Nodes: nodes, Edges: edges, Err: err}
 		}(f)
 	}

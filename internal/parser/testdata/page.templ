@@ -1,0 +1,28 @@
+package views
+
+templ UserPage(name string) {
+  <div>
+    <h1 data-text="$username">Hello</h1>
+    <form action="/users" method="post">
+      <input data-bind="username" type="text" />
+      <button data-on-click="@post('/users')">Submit</button>
+    </form>
+    <a href="/users/list">View Users</a>
+    <div data-indicator="$loading">Loading...</div>
+    <!-- multi-attribute: both href and data-on-click on the same line -->
+    <a href="/home" data-on-click="@get('/api/home')">Home</a>
+    <!-- root path -->
+    <a href="/">Root</a>
+  </div>
+}
+
+templ Header() {
+  <header>
+    <nav>
+      <a href="/dashboard">Dashboard</a>
+    </nav>
+  </header>
+}
+
+// Regular exported Go helper — must NOT produce a component node.
+func RegisterRoutes() {}

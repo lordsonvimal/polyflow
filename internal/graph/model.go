@@ -51,6 +51,16 @@ type Edge struct {
 	Meta  map[string]string `json:"meta,omitempty"`
 }
 
+// ParseError records a file that produced errors during indexing.
+// Partial extraction may still have occurred; consult the associated nodes/edges.
+type ParseError struct {
+	FilePath       string
+	Service        string
+	ErrorCount     int
+	FirstErrorLine int
+	IndexedAt      int64 // unix timestamp
+}
+
 // AdjacencyIndex is an in-memory representation of the graph for fast traversal.
 type AdjacencyIndex struct {
 	Nodes    map[string]*Node
