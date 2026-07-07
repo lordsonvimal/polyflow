@@ -27,10 +27,9 @@ func TestGoParser_ReturnsNodesForKnownPatterns(t *testing.T) {
 	p := parser.ForFile("testdata/routes.go")
 	require.NotNil(t, p, "expected a parser for .go files")
 
-	nodes, edges, err := p.Parse("testdata/routes.go", service, m)
+	nodes, _, err := p.Parse("testdata/routes.go", service, m)
 	require.NoError(t, err)
 	assert.NotEmpty(t, nodes, "expected nodes from routes.go")
-	assert.NotEmpty(t, edges, "expected edges from routes.go")
 	for _, n := range nodes {
 		assert.Equal(t, service, n.Service)
 		assert.Equal(t, "go", n.Language)
@@ -71,10 +70,9 @@ func TestJavaScriptParser_ReturnsNodesForAxios(t *testing.T) {
 	p := parser.ForFile("testdata/client.js")
 	require.NotNil(t, p, "expected a parser for .js files")
 
-	nodes, edges, err := p.Parse("testdata/client.js", service, m)
+	nodes, _, err := p.Parse("testdata/client.js", service, m)
 	require.NoError(t, err)
 	assert.NotEmpty(t, nodes)
-	assert.NotEmpty(t, edges)
 	for _, n := range nodes {
 		assert.Equal(t, "javascript", n.Language)
 	}

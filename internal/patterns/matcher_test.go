@@ -44,7 +44,7 @@ func TestMatchToNodes_DelegatesToMatchToGraph(t *testing.T) {
 	}
 	nodes, edges := m.MatchToNodes("svc", results)
 	assert.Len(t, nodes, 1)
-	assert.Len(t, edges, 1)
+	assert.Empty(t, edges) // MatchToGraph no longer emits self-edges
 }
 
 func TestClassifyPattern_AllBranches(t *testing.T) {
@@ -318,7 +318,7 @@ func TestMatchToGraph(t *testing.T) {
 	nodes, edges := patterns.MatchToGraph("mysvc", results)
 
 	assert.Len(t, nodes, 3)
-	assert.Len(t, edges, 3)
+	assert.Empty(t, edges) // MatchToGraph no longer emits self-edges
 
 	// http_handle_func → contains "handler" → NodeTypeHTTPHandler
 	assert.Equal(t, graph.NodeTypeHTTPHandler, nodes[0].Type)
@@ -327,16 +327,10 @@ func TestMatchToGraph(t *testing.T) {
 	assert.Equal(t, 10, nodes[0].Line)
 	// Node ID must follow design doc format: service:file:type:name:line
 	assert.Equal(t, "mysvc:service/routes.go:http_handler:http_handle_func:10", nodes[0].ID)
-	assert.Equal(t, nodes[0].ID+":edge", edges[0].ID)
 
 	// http_get → contains "get" → NodeTypeHTTPClient
 	assert.Equal(t, graph.NodeTypeHTTPClient, nodes[1].Type)
 
 	// go_statement → default → NodeTypeFunction
 	assert.Equal(t, graph.NodeTypeFunction, nodes[2].Type)
-
-	// Check edge types
-	assert.Equal(t, graph.EdgeTypeHTTPCall, edges[0].Type)
-	assert.Equal(t, graph.EdgeTypeHTTPCall, edges[1].Type)
-	assert.Equal(t, graph.EdgeTypeCalls, edges[2].Type)
 }
