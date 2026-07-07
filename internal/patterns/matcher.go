@@ -186,14 +186,13 @@ func (m *TreeSitterMatcher) MatchToNodes(service string, results []MatchResult) 
 }
 
 // MatchToGraph maps match results to graph nodes and edges.
+// Node IDs follow the design doc format: service:file:type:name:line
 func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.Edge) {
 	nodes := make([]graph.Node, 0, len(results))
 	edges := make([]graph.Edge, 0, len(results))
 
 	for _, r := range results {
 		nodeType, edgeType := classifyPattern(r.PatternName)
-
-		nodeID := fmt.Sprintf("%s:%s:%d:%s", service, r.File, r.Line, r.PatternName)
 
 		// Build label from captures
 		label := r.PatternName
@@ -206,6 +205,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		} else if path, ok := r.Captures["path"]; ok {
 			label = path
 		}
+
+		// ID format: service:file:type:name:line  (design doc §SQLite Schema)
+		nodeID := fmt.Sprintf("%s:%s:%s:%s:%d", service, r.File, string(nodeType), r.PatternName, r.Line)
 
 		// Build meta from all captures
 		meta := make(map[string]string, len(r.Captures))
@@ -222,10 +224,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 		nodes = append(nodes, node)
 
-		// Create a self-referencing edge to indicate the pattern was matched
-		edgeID := fmt.Sprintf("%s:%s:%d:%s:edge", service, r.File, r.Line, r.PatternName)
+		// Self-referencing edge records the matched pattern on the node.
 		edge := graph.Edge{
-			ID:    edgeID,
+			ID:    nodeID + ":edge",
 			From:  nodeID,
 			To:    nodeID,
 			Type:  edgeType,

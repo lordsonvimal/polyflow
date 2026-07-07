@@ -182,6 +182,9 @@ func TestMatchToGraph(t *testing.T) {
 	assert.Equal(t, "mysvc", nodes[0].Service)
 	assert.Equal(t, "service/routes.go", nodes[0].File)
 	assert.Equal(t, 10, nodes[0].Line)
+	// Node ID must follow design doc format: service:file:type:name:line
+	assert.Equal(t, "mysvc:service/routes.go:http_handler:http_handle_func:10", nodes[0].ID)
+	assert.Equal(t, nodes[0].ID+":edge", edges[0].ID)
 
 	// http_get → contains "get" → NodeTypeHTTPClient
 	assert.Equal(t, graph.NodeTypeHTTPClient, nodes[1].Type)

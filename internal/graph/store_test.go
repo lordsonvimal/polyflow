@@ -186,6 +186,53 @@ func TestStats(t *testing.T) {
 	assert.Equal(t, 1, edges)
 }
 
+func TestUpsertAndListParseErrors(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	pe := &graph.ParseError{
+		FilePath:       "internal/handlers/broken.go",
+		Service:        "svc",
+		ErrorCount:     2,
+		FirstErrorLine: 17,
+		IndexedAt:      1700000000,
+	}
+	require.NoError(t, s.UpsertParseError(ctx, pe))
+
+	list, err := s.ListParseErrors(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, pe.FilePath, list[0].FilePath)
+	assert.Equal(t, pe.Service, list[0].Service)
+	assert.Equal(t, pe.ErrorCount, list[0].ErrorCount)
+	assert.Equal(t, pe.FirstErrorLine, list[0].FirstErrorLine)
+	assert.Equal(t, pe.IndexedAt, list[0].IndexedAt)
+}
+
+func TestUpsertParseErrorIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	pe := &graph.ParseError{FilePath: "a.go", Service: "svc", ErrorCount: 1, IndexedAt: 100}
+	require.NoError(t, s.UpsertParseError(ctx, pe))
+
+	pe.ErrorCount = 3
+	pe.IndexedAt = 200
+	require.NoError(t, s.UpsertParseError(ctx, pe))
+
+	list, err := s.ListParseErrors(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 1, "upsert should not duplicate rows")
+	assert.Equal(t, 3, list[0].ErrorCount)
+}
+
+func TestListParseErrors_Empty(t *testing.T) {
+	s := newTestStore(t)
+	list, err := s.ListParseErrors(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
 func TestBuildIndex(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
