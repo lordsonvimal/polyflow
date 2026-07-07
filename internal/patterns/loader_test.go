@@ -1,6 +1,7 @@
 package patterns_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -59,4 +60,56 @@ func TestDefaultRegistry(t *testing.T) {
 
 	goPatterns := reg.List("go")
 	assert.NotEmpty(t, goPatterns)
+}
+
+func TestRegistryGet_Found(t *testing.T) {
+	pf, err := patterns.LoadFile("../../patterns/go/chi_routes.yaml")
+	require.NoError(t, err)
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(pf)
+
+	p, err := reg.Get("go", "chi_get")
+	require.NoError(t, err)
+	assert.Equal(t, "chi_get", p.Name)
+}
+
+func TestRegistryGet_UnknownLanguage(t *testing.T) {
+	reg := patterns.NewRegistry()
+	_, err := reg.Get("cobol", "anything")
+	assert.Error(t, err)
+}
+
+func TestRegistryGet_UnknownPattern(t *testing.T) {
+	pf, err := patterns.LoadFile("../../patterns/go/chi_routes.yaml")
+	require.NoError(t, err)
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(pf)
+
+	_, err = reg.Get("go", "no_such_pattern")
+	assert.Error(t, err)
+}
+
+func TestLoad_NonexistentDir(t *testing.T) {
+	_, err := patterns.Load("/no/such/dir")
+	assert.Error(t, err)
+}
+
+func TestLoadFile_InvalidYAML(t *testing.T) {
+	tmp := t.TempDir()
+	path := tmp + "/bad.yaml"
+	require.NoError(t, os.WriteFile(path, []byte(":\t[invalid"), 0o644))
+	_, err := patterns.LoadFile(path)
+	assert.Error(t, err)
+}
+
+func TestDefaultRegistry_NonexistentDir(t *testing.T) {
+	_, err := patterns.DefaultRegistry("/no/such/patterns")
+	assert.Error(t, err)
+}
+
+func TestLoad_WithInvalidYAMLFile(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(tmp+"/bad.yaml", []byte(":\t[invalid"), 0o644))
+	_, err := patterns.Load(tmp)
+	assert.Error(t, err)
 }

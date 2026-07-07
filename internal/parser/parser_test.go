@@ -295,6 +295,28 @@ func TestWorkerPool_NoParserReturnsError(t *testing.T) {
 
 // --- ForFile ---
 
+func TestWorkerPool_ZeroFiles(t *testing.T) {
+	m := mustMatcher(t)
+	pool := parser.NewWorkerPool(2, m, service)
+	results := collect(pool.Run(nil))
+	assert.Empty(t, results)
+}
+
+func TestWorkerPool_ZeroWorkers(t *testing.T) {
+	m := mustMatcher(t)
+	// workers <= 0 should default to 4 without panic
+	pool := parser.NewWorkerPool(0, m, service)
+	results := collect(pool.Run([]string{"testdata/routes.go"}))
+	assert.Len(t, results, 1)
+}
+
+func TestLanguage_Methods(t *testing.T) {
+	assert.Equal(t, "go", parser.ForFile("x.go").Language())
+	assert.Equal(t, "javascript", parser.ForFile("x.js").Language())
+	assert.Equal(t, "ruby", parser.ForFile("x.rb").Language())
+	assert.Equal(t, "templ", parser.ForFile("x.templ").Language())
+}
+
 func TestForFile_ReturnsNilForUnknownExtension(t *testing.T) {
 	assert.Nil(t, parser.ForFile("main.py"))
 	assert.Nil(t, parser.ForFile("config.json"))
@@ -306,6 +328,20 @@ func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
 	assert.NotNil(t, parser.ForFile("app.ts"))
 	assert.NotNil(t, parser.ForFile("app.rb"))
 	assert.NotNil(t, parser.ForFile("page.templ"))
+	assert.NotNil(t, parser.ForFile("Rakefile.rake"))
+}
+
+func TestRubyParser_RakeExtension(t *testing.T) {
+	p := parser.ForFile("testdata/app.rb")
+	require.NotNil(t, p)
+	assert.Equal(t, []string{".rb", ".rake"}, p.Extensions())
+}
+
+func TestJavaScriptParser_TSX(t *testing.T) {
+	// .tsx uses the javascript parser (TypeScript JSX)
+	p := parser.ForFile("component.tsx")
+	require.NotNil(t, p)
+	assert.Equal(t, "javascript", p.Language())
 }
 
 // BenchmarkWorkerPool_100Files measures parsing 100 fixture files concurrently.

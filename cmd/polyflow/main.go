@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -193,10 +194,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	var processed atomic.Int64
 	start := time.Now()
 
-	// Progress goroutine
-	done := make(chan struct{})
+	// Progress goroutine — cancelled via progressCtx when indexing completes.
+	progressCtx, stopProgress := context.WithCancel(ctx)
+	defer stopProgress()
 	go func() {
-		defer close(done)
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -209,7 +210,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				}
 				bar := progressBar(pct)
 				fmt.Printf("\rIndexing [%s] %d%% (%d/%d files)  ", bar, pct, n, totalFiles)
-			case <-ctx.Done():
+			case <-progressCtx.Done():
 				return
 			}
 		}
@@ -252,11 +253,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Stop progress display
-	ctxCancel, cancel := context.WithCancel(ctx)
-	cancel()
-	_ = ctxCancel
-	time.Sleep(300 * time.Millisecond) // let progress ticker fire once more
+	// Stop progress display and print final newline.
+	stopProgress()
+	time.Sleep(300 * time.Millisecond)
 	fmt.Println()
 
 	if err := bw.Flush(ctx); err != nil {
@@ -408,6 +407,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	srv := server.New(store, idx)
 
+	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
+	// On a Write or Create event, reopen the store, rebuild the index, and push a
+	// graph_updated SSE event to all connected browser clients.
+	if err := watchDB(dbPath, srv); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not start DB watcher: %v\n", err)
+	}
+
 	if serveHost == "0.0.0.0" {
 		fmt.Fprintln(os.Stderr, "Warning: server exposed on all interfaces (0.0.0.0)")
 	}
@@ -422,6 +428,60 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	return srv.StartOn(serveHost, port)
+}
+
+// watchDB starts a background goroutine that watches dbPath for changes and
+// calls srv.Reload whenever the graph database is updated.
+func watchDB(dbPath string, srv *server.Server) error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("create watcher: %w", err)
+	}
+	// Watch the directory — fsnotify on macOS/Linux misses rename events on the
+	// file itself, but directory-level events fire reliably for atomic renames.
+	if err := watcher.Add(filepath.Dir(dbPath)); err != nil {
+		watcher.Close()
+		return fmt.Errorf("watch dir: %w", err)
+	}
+	go func() {
+		defer watcher.Close()
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if filepath.Clean(event.Name) != filepath.Clean(dbPath) {
+					continue
+				}
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					reloadDB(dbPath, srv)
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				fmt.Fprintf(os.Stderr, "DB watcher error: %v\n", err)
+			}
+		}
+	}()
+	return nil
+}
+
+func reloadDB(dbPath string, srv *server.Server) {
+	newStore, err := graph.NewSQLiteStore(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reload: open store: %v\n", err)
+		return
+	}
+	newIdx, err := newStore.BuildIndex(context.Background())
+	if err != nil {
+		newStore.Close()
+		fmt.Fprintf(os.Stderr, "reload: build index: %v\n", err)
+		return
+	}
+	srv.Reload(newIdx)
+	fmt.Println("Graph reloaded.")
 }
 
 func openBrowser(url string) {

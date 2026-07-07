@@ -99,6 +99,39 @@ func TestApplyHints_NonClientNodesUnchanged(t *testing.T) {
 	}
 }
 
+func TestApplyHints_NilMetaWithMatchingURL(t *testing.T) {
+	// Client node with nil Meta but a URL that matches the hint — ensureMeta
+	// must initialise the map rather than panic on nil assignment.
+	links := []workspace.Link{
+		{From: "frontend", To: "backend", Hint: "SVC_URL=http://backend"},
+	}
+	nodes := []graph.Node{
+		{
+			ID: "c1", Service: "frontend", Type: graph.NodeTypeHTTPClient,
+			// Meta is nil — ensureMeta is called when the URL matches.
+			Meta: map[string]string{"url": "http://backend/api/users"},
+		},
+	}
+	result := ApplyHints(links, nodes, nil)
+	if got := result[0].Meta["target_service"]; got != "backend" {
+		t.Errorf("target_service = %q, want backend", got)
+	}
+}
+
+func TestApplyHints_NilMetaNoMatch(t *testing.T) {
+	// Node with nil Meta — no matching hint, must not panic.
+	links := []workspace.Link{
+		{From: "frontend", To: "backend", Hint: "SVC_URL=http://backend"},
+	}
+	nodes := []graph.Node{
+		{ID: "c1", Service: "frontend", Type: graph.NodeTypeHTTPClient, Meta: nil},
+	}
+	result := ApplyHints(links, nodes, nil)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 node")
+	}
+}
+
 func TestApplyHints_BaseURLStripsToRoot(t *testing.T) {
 	links := []workspace.Link{
 		{From: "frontend", To: "backend", BaseURL: "/api"},

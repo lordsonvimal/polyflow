@@ -42,6 +42,40 @@ func TestBatchWriterFlushEdges(t *testing.T) {
 	assert.Equal(t, 1, e)
 }
 
+func TestBatchWriter_FlushEmpty(t *testing.T) {
+	s := newTestStore(t)
+	w := graph.NewBatchWriter(s)
+	ctx := context.Background()
+	// Flushing with nothing pending must not error.
+	require.NoError(t, w.Flush(ctx))
+}
+
+func TestBatchWriter_FlushNodesError(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	w := graph.NewBatchWriter(s)
+	ctx := context.Background()
+	require.NoError(t, w.AddNode(ctx, nodeFixture("n1")))
+	s.Close() // close store to force error on flush
+	err = w.FlushNodes(ctx)
+	assert.Error(t, err)
+}
+
+func TestBatchWriter_FlushEdgesError(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	// Add nodes first so edge FK passes — but we'll close the store before flushing.
+	ctx := context.Background()
+	w := graph.NewBatchWriter(s)
+	require.NoError(t, w.AddNode(ctx, nodeFixture("src")))
+	require.NoError(t, w.AddNode(ctx, nodeFixture("dst")))
+	require.NoError(t, w.FlushNodes(ctx))
+	require.NoError(t, w.AddEdge(ctx, edgeFixture("e1", "src", "dst")))
+	s.Close()
+	err = w.FlushEdges(ctx)
+	assert.Error(t, err)
+}
+
 func TestBatchWriterAutoFlush(t *testing.T) {
 	s, err := graph.NewSQLiteStore(":memory:")
 	require.NoError(t, err)

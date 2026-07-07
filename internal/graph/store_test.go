@@ -291,6 +291,102 @@ func BenchmarkSearchNodes(b *testing.B) {
 	}
 }
 
+func TestNewSQLiteStore_BadDSN(t *testing.T) {
+	// A directory path is not a valid SQLite DSN and schema exec will fail.
+	_, err := graph.NewSQLiteStore("/")
+	assert.Error(t, err)
+}
+
+func TestUpsertEdge_MissingNode(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	// Edge referencing non-existent nodes should fail (FK constraint).
+	e := edgeFixture("e1", "ghost1", "ghost2")
+	err := s.UpsertEdge(ctx, e)
+	assert.Error(t, err)
+}
+
+func TestUpsertNodeMeta_EmptyMap(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	n := nodeFixture("nmeta")
+	n.Meta = map[string]string{}
+	require.NoError(t, s.UpsertNode(ctx, n))
+	got, err := s.GetNode(ctx, "nmeta")
+	require.NoError(t, err)
+	assert.Nil(t, got.Meta)
+}
+
+func TestGetEdge_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.GetEdge(context.Background(), "missing")
+	assert.Error(t, err)
+}
+
+func TestStats_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	_, _, err = s.Stats(context.Background())
+	assert.Error(t, err)
+}
+
+func TestSearchNodes_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	_, err = s.SearchNodes(context.Background(), "anything", 10)
+	assert.Error(t, err)
+}
+
+func TestListEdgesFrom_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	_, err = s.ListEdgesFrom(context.Background(), "n1")
+	assert.Error(t, err)
+}
+
+func TestListEdgesTo_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	_, err = s.ListEdgesTo(context.Background(), "n1")
+	assert.Error(t, err)
+}
+
+func TestBuildIndex_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	_, err = s.BuildIndex(context.Background())
+	assert.Error(t, err)
+}
+
+func TestUpsertParseError_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	err = s.UpsertParseError(context.Background(), &graph.ParseError{FilePath: "f.go", Service: "svc", IndexedAt: 1})
+	assert.Error(t, err)
+}
+
+func TestListParseErrors_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	_, err = s.ListParseErrors(context.Background())
+	assert.Error(t, err)
+}
+
+func TestSetMeta_ClosedStore(t *testing.T) {
+	s, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	s.Close()
+	err = s.SetMeta(context.Background(), "k", "v")
+	assert.Error(t, err)
+}
+
 func TestBuildIndex(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
