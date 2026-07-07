@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 
@@ -331,17 +332,23 @@ func walkService(root string, excludes []string) ([]string, error) {
 		if err != nil {
 			return nil
 		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		for _, pattern := range excludes {
+			if matched, _ := doublestar.Match(pattern, rel); matched {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
 		if d.IsDir() {
 			return nil
 		}
-		for _, pattern := range excludes {
-			if matched, _ := filepath.Match(pattern, path); matched {
-				return nil
-			}
-			// also try just the base
-			if matched, _ := filepath.Match(pattern, filepath.Base(path)); matched {
-				return nil
-			}
+		if parser.ForFile(path) == nil {
+			return nil
 		}
 		files = append(files, path)
 		return nil

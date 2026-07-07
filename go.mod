@@ -11,6 +11,8 @@ require (
 
 require github.com/fsnotify/fsnotify v1.10.1
 
+require github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
+
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

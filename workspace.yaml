@@ -1,21 +1,19 @@
+name: polyflow
 version: "1"
 services:
-  - name: api-gateway
-    path: ./services/api-gateway
+  - name: go-backend
+    path: /Users/lordsonvimalyesudhas/projects/polyflow
     language: go
-    port: 8080
-  - name: user-service
-    path: ./services/user-service
-    language: go
-    port: 8081
-  - name: frontend
-    path: ./frontend
+  - name: js-frontend
+    path: /Users/lordsonvimalyesudhas/projects/polyflow/web
     language: javascript
-    port: 3000
+    frameworks: [fetch]
 links:
-  - from: frontend
-    to: api-gateway
-    hint: "HTTP_BASE_URL=http://localhost:8080"
-  - from: api-gateway
-    to: user-service
-    hint: "USER_SERVICE_URL=http://localhost:8081"
+  - from: js-frontend
+    to: go-backend
+    base_url: "/api"
+index:
+  exclude:
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/testdata/**"

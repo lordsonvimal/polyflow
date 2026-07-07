@@ -82,6 +82,7 @@ const Graph: Component = () => {
       }))
     );
 
+    cy.resize();
     cy.layout({ name: layout } as any).run();
   });
 
