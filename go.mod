@@ -9,7 +9,7 @@ require (
 	modernc.org/sqlite v1.37.1
 )
 
-require github.com/fsnotify/fsnotify v1.10.1 // indirect
+require github.com/fsnotify/fsnotify v1.10.1
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
