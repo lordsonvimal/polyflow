@@ -1,0 +1,21 @@
+language: jsx
+version: "1"
+patterns:
+  # Detect JSX element usage — captures PascalCase component references.
+  # Component declarations are already captured by javascript function patterns.
+  - name: jsx_component_use
+    query: |
+      (jsx_opening_element
+        name: (identifier) @name
+        (#match? @name "^[A-Z]"))
+    captures:
+      - name: name
+        role: component_ref
+  - name: jsx_component_self_closing
+    query: |
+      (jsx_self_closing_element
+        name: (identifier) @name
+        (#match? @name "^[A-Z]"))
+    captures:
+      - name: name
+        role: component_ref

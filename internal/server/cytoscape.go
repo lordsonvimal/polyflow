@@ -9,12 +9,13 @@ type CytoscapeNode struct {
 
 // CytoscapeNodeData holds the node payload for Cytoscape.js.
 type CytoscapeNodeData struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Type    string `json:"type"`
-	Service string `json:"service"`
-	File    string `json:"file"`
-	Line    int    `json:"line"`
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Service  string `json:"service"`
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Language string `json:"language"`
 }
 
 // CytoscapeEdge is the Cytoscape.js edge format.
@@ -47,12 +48,13 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 	for _, n := range nodes {
 		result.Nodes = append(result.Nodes, CytoscapeNode{
 			Data: CytoscapeNodeData{
-				ID:      n.ID,
-				Label:   n.Label,
-				Type:    string(n.Type),
-				Service: n.Service,
-				File:    n.File,
-				Line:    n.Line,
+				ID:       n.ID,
+				Label:    n.Label,
+				Type:     string(n.Type),
+				Service:  n.Service,
+				File:     n.File,
+				Line:     n.Line,
+				Language: n.Language,
 			},
 		})
 	}
