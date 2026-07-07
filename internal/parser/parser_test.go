@@ -342,6 +342,33 @@ func TestJavaScriptParser_TSX(t *testing.T) {
 	assert.Equal(t, "javascript", p.Language())
 }
 
+func TestJavaScriptParser_TSX_JSXComponents(t *testing.T) {
+	m := mustMatcher(t)
+	p := parser.ForFile("testdata/app.tsx")
+	require.NotNil(t, p)
+
+	nodes, edges, err := p.Parse("testdata/app.tsx", service, m)
+	require.NoError(t, err)
+
+	// Should detect function declarations for Layout and App
+	labels := make(map[string]bool)
+	for _, n := range nodes {
+		labels[n.Label] = true
+	}
+	assert.True(t, labels["Layout"], "expected Layout node")
+	assert.True(t, labels["App"], "expected App node")
+
+	// Should have at least one renders edge (App renders Layout)
+	hasRenders := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeRenders {
+			hasRenders = true
+			break
+		}
+	}
+	assert.True(t, hasRenders, "expected at least one renders edge from JSX component usage")
+}
+
 // BenchmarkWorkerPool_100Files measures parsing 100 fixture files concurrently.
 func BenchmarkWorkerPool_100Files(b *testing.B) {
 	reg, err := patterns.DefaultRegistry(patternsDir)

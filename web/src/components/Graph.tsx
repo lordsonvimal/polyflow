@@ -8,6 +8,16 @@ import { uiStore } from "../stores/ui";
 cytoscape.use(dagre as any);
 cytoscape.use(fcose as any);
 
+function inferLanguage(file: string): string {
+  const ext = file.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "go") return "go";
+  if (ext === "rb") return "ruby";
+  if (ext === "templ") return "templ";
+  if (ext === "ts" || ext === "tsx") return "typescript";
+  if (ext === "js" || ext === "jsx" || ext === "mjs") return "javascript";
+  return "";
+}
+
 const Graph: Component = () => {
   let containerRef: HTMLDivElement | undefined;
   let cy: cytoscape.Core | undefined;
@@ -23,12 +33,33 @@ const Graph: Component = () => {
           selector: "node",
           style: {
             label: "data(label)",
-            "background-color": "#6366f1",
+            "background-color": "#6b7280",
             "font-size": "10px",
             color: "#f9fafb",
             "text-valign": "bottom",
             "text-margin-y": 4,
           },
+        },
+        // Per-language colors
+        {
+          selector: 'node[language="go"]',
+          style: { "background-color": "#00ADD8" },
+        },
+        {
+          selector: 'node[language="javascript"]',
+          style: { "background-color": "#F7DF1E", color: "#1a1a1a" },
+        },
+        {
+          selector: 'node[language="typescript"]',
+          style: { "background-color": "#3178C6" },
+        },
+        {
+          selector: 'node[language="ruby"]',
+          style: { "background-color": "#CC342D" },
+        },
+        {
+          selector: 'node[language="templ"]',
+          style: { "background-color": "#7C3AED" },
         },
         {
           selector: "edge",
@@ -42,7 +73,7 @@ const Graph: Component = () => {
         },
         {
           selector: "node:selected",
-          style: { "background-color": "#a5b4fc", "border-width": 2, "border-color": "#fff" },
+          style: { "border-width": 2, "border-color": "#fff" },
         },
       ],
       layout: { name: "dagre" },
@@ -69,7 +100,7 @@ const Graph: Component = () => {
     cy.add(
       nodes.map((n) => ({
         group: "nodes" as const,
-        data: { id: n.id, label: n.label, type: n.type, service: n.service, file: n.file, line: n.line },
+        data: { id: n.id, label: n.label, type: n.type, service: n.service, file: n.file, line: n.line, language: n.language || inferLanguage(n.file) },
       }))
     );
 

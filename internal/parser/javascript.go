@@ -23,32 +23,56 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 		return nil, nil, err
 	}
 
-	grammarLang := tsLanguage(file)
+	grammarLang := grammarLanguage(file)
+	// Language tag for nodes: tsx/jsx files are still "typescript"/"javascript" at the language level.
+	langTag := tsLanguage(file)
 
-	// For TypeScript files, run both javascript patterns (fetch, axios, etc.)
+	// For TypeScript/TSX files, run both javascript patterns (fetch, axios, etc.)
 	// and typescript-specific patterns (interfaces, type annotations).
-	// JS patterns use the TypeScript grammar since TS is a superset.
+	// JS patterns use the TypeScript/TSX grammar since those are supersets.
 	patternLangs := []string{"javascript"}
-	if grammarLang == "typescript" {
+	if grammarLang == "typescript" || grammarLang == "tsx" {
 		patternLangs = append(patternLangs, "typescript")
 	}
+	// JSX component relationship patterns for TSX/JSX files.
+	if grammarLang == "tsx" {
+		patternLangs = append(patternLangs, "jsx")
+	}
 
-	var allNodes []graph.Node
-	var allEdges []graph.Edge
+	// Collect all match results across pattern languages before building the graph.
+	// This ensures MatchToGraph sees function nodes and JSX usage nodes together,
+	// so proximity-based edge linking works across pattern sets.
+	var allResults []patterns.MatchResult
 	for _, patLang := range patternLangs {
 		results, matchErr := matcher.MatchWithGrammar(patLang, grammarLang, file, src)
 		if matchErr != nil && err == nil {
 			err = matchErr
 		}
-		nodes, edges := patterns.MatchToGraph(service, results)
-		setLanguage(nodes, grammarLang)
-		allNodes = append(allNodes, nodes...)
-		allEdges = append(allEdges, edges...)
+		allResults = append(allResults, results...)
 	}
-	return allNodes, allEdges, err
+
+	nodes, edges := patterns.MatchToGraph(service, allResults)
+	setLanguage(nodes, langTag)
+	return nodes, edges, err
+}
+
+// grammarLanguage returns the tree-sitter grammar name for a file extension.
+// .tsx/.jsx use the "tsx" grammar (JSX-aware superset of TypeScript/JavaScript).
+// .ts uses "typescript". Everything else uses "javascript".
+func grammarLanguage(file string) string {
+	ext := strings.ToLower(filepath.Ext(file))
+	switch ext {
+	case ".tsx", ".jsx":
+		return "tsx"
+	case ".ts":
+		return "typescript"
+	default:
+		return "javascript"
+	}
 }
 
 // tsLanguage returns "typescript" for .ts/.tsx files, "javascript" otherwise.
+// Kept for backward compatibility with language tagging.
 func tsLanguage(file string) string {
 	ext := strings.ToLower(filepath.Ext(file))
 	if ext == ".ts" || ext == ".tsx" {

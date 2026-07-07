@@ -14,6 +14,7 @@ import (
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
+	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -66,6 +67,8 @@ func languageFor(lang string) *sitter.Language {
 		return jssitter.GetLanguage()
 	case "typescript":
 		return tssitter.GetLanguage()
+	case "tsx":
+		return tsxsitter.GetLanguage()
 	case "ruby":
 		return rubysitter.GetLanguage()
 	default:
@@ -73,26 +76,29 @@ func languageFor(lang string) *sitter.Language {
 	}
 }
 
-// getCompiledQueries returns cached compiled queries for a language, compiling them if needed.
-func (m *TreeSitterMatcher) getCompiledQueries(language string, lang *sitter.Language) []compiledQuery {
+// getCompiledQueries returns cached compiled queries for patternLang compiled against grammarLang.
+// The cache key includes both so jsx patterns compiled against tsx grammar don't collide with
+// the same patterns compiled against typescript grammar.
+func (m *TreeSitterMatcher) getCompiledQueries(patternLang, grammarLang string, lang *sitter.Language) []compiledQuery {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if cqs, ok := m.compiled[language]; ok {
+	cacheKey := patternLang + "@" + grammarLang
+	if cqs, ok := m.compiled[cacheKey]; ok {
 		return cqs
 	}
 
-	patterns := m.registry.List(language)
+	patterns := m.registry.List(patternLang)
 	cqs := make([]compiledQuery, 0, len(patterns))
 	for _, p := range patterns {
 		q, err := sitter.NewQuery([]byte(p.Query), lang)
 		if err != nil {
-			log.Printf("patterns: failed to compile query %q for language %q: %v", p.Name, language, err)
+			log.Printf("patterns: failed to compile query %q for language %q: %v", p.Name, patternLang, err)
 			continue
 		}
 		cqs = append(cqs, compiledQuery{query: q, pattern: p})
 	}
-	m.compiled[language] = cqs
+	m.compiled[cacheKey] = cqs
 	return cqs
 }
 
@@ -104,7 +110,7 @@ func (m *TreeSitterMatcher) MatchWithGrammar(patternLang, grammarLang, file stri
 	if lang == nil {
 		return nil, nil
 	}
-	cqs := m.getCompiledQueries(patternLang, lang)
+	cqs := m.getCompiledQueries(patternLang, grammarLang, lang)
 	if len(cqs) == 0 {
 		return nil, nil
 	}
@@ -123,7 +129,7 @@ func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchRes
 		return nil, nil
 	}
 
-	cqs := m.getCompiledQueries(language, lang)
+	cqs := m.getCompiledQueries(language, language, lang)
 	if len(cqs) == 0 {
 		return nil, nil
 	}
@@ -244,10 +250,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 
 		// ID format: service:file:type:name:line  (design doc §SQLite Schema)
-		// Function/method nodes use the captured name so semantic call edges (which
-		// know only the function name + file + line) can target the same ID.
+		// Function/method/component nodes use the captured name so edges can target the same ID.
 		idName := r.PatternName
-		if (nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod) && label != r.PatternName {
+		namedTypes := nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod || nodeType == graph.NodeTypeComponent
+		if namedTypes && label != r.PatternName {
 			idName = label
 		}
 		nodeID := fmt.Sprintf("%s:%s:%s:%s:%d", service, r.File, string(nodeType), idName, r.Line)
@@ -323,11 +329,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if best == nil {
 			continue
 		}
+		edgeType := graph.EdgeTypeCalls
+		if n.Type == graph.NodeTypeComponent {
+			edgeType = graph.EdgeTypeRenders
+		}
 		edges = append(edges, graph.Edge{
-			ID:   fmt.Sprintf("calls:%s->%s", best.id, n.ID),
+			ID:   fmt.Sprintf("%s:%s->%s", string(edgeType), best.id, n.ID),
 			From: best.id,
 			To:   n.ID,
-			Type: graph.EdgeTypeCalls,
+			Type: edgeType,
 		})
 	}
 
@@ -339,6 +349,11 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	lower := strings.ToLower(patternName)
 
 	switch {
+	// JSX component declarations and usage.
+	case lower == "component_decl" || lower == "component_arrow_decl":
+		return graph.NodeTypeComponent, graph.EdgeTypeRenders
+	case lower == "jsx_component_use" || lower == "jsx_component_self_closing":
+		return graph.NodeTypeComponent, graph.EdgeTypeRenders
 	// Explicit method declaration — must come before generic "handle" checks.
 	case lower == "method_decl":
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls

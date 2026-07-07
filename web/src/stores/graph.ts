@@ -7,6 +7,7 @@ export interface GraphNode {
   service: string;
   file: string;
   line: number;
+  language: string;
   meta?: Record<string, string>;
 }
 
@@ -25,6 +26,7 @@ interface CytoscapeNodeData {
   service: string;
   file: string;
   line: number;
+  language: string;
 }
 
 interface CytoscapeEdgeData {
@@ -54,6 +56,7 @@ function cytoscapeToStore(g: CytoscapeGraph) {
       service: n.data.service,
       file: n.data.file,
       line: n.data.line,
+      language: n.data.language ?? "",
     }))
   );
   setEdges(
