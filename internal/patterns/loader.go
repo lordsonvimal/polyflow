@@ -14,11 +14,20 @@ type Capture struct {
 	Role string `yaml:"role"` // e.g. "method", "url", "handler"
 }
 
+// ExtractConfig describes how to map pattern captures to graph node/edge attributes.
+type ExtractConfig struct {
+	NodeType   string            `yaml:"node_type"`
+	EdgeType   string            `yaml:"edge_type"`
+	Attributes map[string]string `yaml:"attributes"` // attribute name -> capture ref like "@method"
+}
+
 // Pattern is a single named tree-sitter pattern within a file.
 type Pattern struct {
-	Name     string    `yaml:"name"`
-	Query    string    `yaml:"query"`
-	Captures []Capture `yaml:"captures"`
+	Name     string              `yaml:"name"`
+	Query    string              `yaml:"query"`
+	Match    map[string][]string `yaml:"match"`    // capture name -> allowed values (optional filter)
+	Extract  ExtractConfig       `yaml:"extract"`
+	Captures []Capture           `yaml:"captures"` // kept for backward compat
 }
 
 // PatternFile is the top-level structure of a YAML pattern file.
@@ -61,4 +70,17 @@ func LoadFile(path string) (*PatternFile, error) {
 		return nil, err
 	}
 	return &pf, nil
+}
+
+// DefaultRegistry loads all YAML patterns from patternsDir and returns a populated Registry.
+func DefaultRegistry(patternsDir string) (*Registry, error) {
+	files, err := Load(patternsDir)
+	if err != nil {
+		return nil, err
+	}
+	reg := NewRegistry()
+	for _, pf := range files {
+		reg.RegisterFile(pf)
+	}
+	return reg, nil
 }
