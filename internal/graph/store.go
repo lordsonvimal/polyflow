@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	_ "modernc.org/sqlite"
@@ -10,6 +11,9 @@ import (
 
 // Schema is the SQLite DDL for the polyflow graph database.
 const Schema = `
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+
 CREATE TABLE IF NOT EXISTS nodes (
 	id       TEXT PRIMARY KEY,
 	type     TEXT NOT NULL,
@@ -23,44 +27,33 @@ CREATE TABLE IF NOT EXISTS nodes (
 
 CREATE TABLE IF NOT EXISTS edges (
 	id     TEXT PRIMARY KEY,
-	"from" TEXT NOT NULL,
-	"to"   TEXT NOT NULL,
+	"from" TEXT NOT NULL REFERENCES nodes(id),
+	"to"   TEXT NOT NULL REFERENCES nodes(id),
 	type   TEXT NOT NULL,
 	label  TEXT NOT NULL DEFAULT '',
-	meta   TEXT NOT NULL DEFAULT '{}',
-	FOREIGN KEY("from") REFERENCES nodes(id),
-	FOREIGN KEY("to")   REFERENCES nodes(id)
+	meta   TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX IF NOT EXISTS idx_nodes_service  ON nodes(service);
-CREATE INDEX IF NOT EXISTS idx_nodes_type     ON nodes(type);
-CREATE INDEX IF NOT EXISTS idx_edges_from     ON edges("from");
-CREATE INDEX IF NOT EXISTS idx_edges_to       ON edges("to");
-CREATE INDEX IF NOT EXISTS idx_edges_type     ON edges(type);
-CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id, label, file, service);
+CREATE INDEX IF NOT EXISTS idx_nodes_service ON nodes(service);
+CREATE INDEX IF NOT EXISTS idx_nodes_type    ON nodes(type);
+CREATE INDEX IF NOT EXISTS idx_edges_from    ON edges("from");
+CREATE INDEX IF NOT EXISTS idx_edges_to      ON edges("to");
+CREATE INDEX IF NOT EXISTS idx_edges_type    ON edges(type);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, label, file, service);
 `
 
 // Store is the persistence interface for the polyflow graph.
 type Store interface {
-	// UpsertNode inserts or replaces a node.
 	UpsertNode(ctx context.Context, n *Node) error
-	// UpsertEdge inserts or replaces an edge.
 	UpsertEdge(ctx context.Context, e *Edge) error
-	// GetNode fetches a node by ID.
 	GetNode(ctx context.Context, id string) (*Node, error)
-	// GetEdge fetches an edge by ID.
 	GetEdge(ctx context.Context, id string) (*Edge, error)
-	// SearchNodes performs a full-text search against labels/files.
 	SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error)
-	// ListEdgesFrom returns all edges originating from nodeID.
 	ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
-	// ListEdgesTo returns all edges terminating at nodeID.
 	ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
-	// BuildIndex loads the full graph into an AdjacencyIndex for traversal.
 	BuildIndex(ctx context.Context) (*AdjacencyIndex, error)
-	// Stats returns aggregate counts of nodes and edges.
 	Stats(ctx context.Context) (nodeCount, edgeCount int, err error)
-	// Close releases the database connection.
 	Close() error
 }
 
@@ -75,6 +68,8 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	// single writer connection; WAL set in schema
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(Schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
@@ -83,50 +78,269 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) UpsertNode(ctx context.Context, n *Node) error {
-	// TODO: implement
-	return fmt.Errorf("not yet implemented")
+	metaJSON, err := marshalMeta(n.Meta)
+	if err != nil {
+		return fmt.Errorf("marshal node meta: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO nodes (id, type, label, service, file, line, language, meta)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			type=excluded.type, label=excluded.label, service=excluded.service,
+			file=excluded.file, line=excluded.line, language=excluded.language,
+			meta=excluded.meta`,
+		n.ID, string(n.Type), n.Label, n.Service, n.File, n.Line, n.Language, metaJSON)
+	if err != nil {
+		return fmt.Errorf("upsert node %s: %w", n.ID, err)
+	}
+	if err := s.upsertFTS(ctx, n); err != nil {
+		return err
+	}
+	return nil
+}
+
+// upsertFTS keeps the nodes_fts virtual table in sync with the nodes table.
+func (s *SQLiteStore) upsertFTS(ctx context.Context, n *Node) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM nodes_fts WHERE id = ?`, n.ID); err != nil {
+		return fmt.Errorf("fts delete %s: %w", n.ID, err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO nodes_fts (id, label, file, service) VALUES (?, ?, ?, ?)`,
+		n.ID, n.Label, n.File, n.Service); err != nil {
+		return fmt.Errorf("fts insert %s: %w", n.ID, err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
-	// TODO: implement
-	return fmt.Errorf("not yet implemented")
+	metaJSON, err := marshalMeta(e.Meta)
+	if err != nil {
+		return fmt.Errorf("marshal edge meta: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO edges (id, "from", "to", type, label, meta)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			"from"=excluded."from", "to"=excluded."to",
+			type=excluded.type, label=excluded.label, meta=excluded.meta`,
+		e.ID, e.From, e.To, string(e.Type), e.Label, metaJSON)
+	if err != nil {
+		return fmt.Errorf("upsert edge %s: %w", e.ID, err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) GetNode(ctx context.Context, id string) (*Node, error) {
-	// TODO: implement
-	return nil, fmt.Errorf("not yet implemented")
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, type, label, service, file, line, language, meta FROM nodes WHERE id = ?`, id)
+	return scanNode(row)
 }
 
 func (s *SQLiteStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
-	// TODO: implement
-	return nil, fmt.Errorf("not yet implemented")
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, "from", "to", type, label, meta FROM edges WHERE id = ?`, id)
+	return scanEdge(row)
 }
 
 func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
-	// TODO: implement FTS5 query
-	return nil, fmt.Errorf("not yet implemented")
+	// FTS5 prefix search: append * for prefix matching
+	ftsQuery := query + "*"
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT n.id, n.type, n.label, n.service, n.file, n.line, n.language, n.meta
+		FROM nodes n
+		JOIN nodes_fts f ON f.id = n.id
+		WHERE nodes_fts MATCH ?
+		ORDER BY rank
+		LIMIT ?`, ftsQuery, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search nodes: %w", err)
+	}
+	defer rows.Close()
+	return scanNodes(rows)
 }
 
 func (s *SQLiteStore) ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
-	// TODO: implement
-	return nil, fmt.Errorf("not yet implemented")
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, "from", "to", type, label, meta FROM edges WHERE "from" = ?`, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("list edges from %s: %w", nodeID, err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
 }
 
 func (s *SQLiteStore) ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
-	// TODO: implement
-	return nil, fmt.Errorf("not yet implemented")
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, "from", "to", type, label, meta FROM edges WHERE "to" = ?`, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("list edges to %s: %w", nodeID, err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
 }
 
 func (s *SQLiteStore) BuildIndex(ctx context.Context) (*AdjacencyIndex, error) {
-	// TODO: load all nodes and edges, build AdjacencyIndex
-	return NewAdjacencyIndex(), fmt.Errorf("not yet implemented")
+	idx := NewAdjacencyIndex()
+
+	nodeRows, err := s.db.QueryContext(ctx,
+		`SELECT id, type, label, service, file, line, language, meta FROM nodes`)
+	if err != nil {
+		return nil, fmt.Errorf("load nodes: %w", err)
+	}
+	defer nodeRows.Close()
+	nodes, err := scanNodes(nodeRows)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		idx.AddNode(n)
+	}
+
+	edgeRows, err := s.db.QueryContext(ctx,
+		`SELECT id, "from", "to", type, label, meta FROM edges`)
+	if err != nil {
+		return nil, fmt.Errorf("load edges: %w", err)
+	}
+	defer edgeRows.Close()
+	edges, err := scanEdges(edgeRows)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range edges {
+		idx.AddEdge(e)
+	}
+
+	return idx, nil
 }
 
 func (s *SQLiteStore) Stats(ctx context.Context) (int, int, error) {
-	// TODO: implement
-	return 0, 0, fmt.Errorf("not yet implemented")
+	var nodeCount, edgeCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&nodeCount); err != nil {
+		return 0, 0, fmt.Errorf("count nodes: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM edges`).Scan(&edgeCount); err != nil {
+		return 0, 0, fmt.Errorf("count edges: %w", err)
+	}
+	return nodeCount, edgeCount, nil
 }
 
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// WithTx executes fn inside a single transaction, rolling back on error.
+func (s *SQLiteStore) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// --- scanning helpers ---
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanNode(row rowScanner) (*Node, error) {
+	var n Node
+	var typ, metaJSON string
+	err := row.Scan(&n.ID, &typ, &n.Label, &n.Service, &n.File, &n.Line, &n.Language, &metaJSON)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("node not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan node: %w", err)
+	}
+	n.Type = NodeType(typ)
+	n.Meta, err = unmarshalMeta(metaJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal node meta: %w", err)
+	}
+	return &n, nil
+}
+
+func scanNodes(rows *sql.Rows) ([]*Node, error) {
+	var out []*Node
+	for rows.Next() {
+		var n Node
+		var typ, metaJSON string
+		if err := rows.Scan(&n.ID, &typ, &n.Label, &n.Service, &n.File, &n.Line, &n.Language, &metaJSON); err != nil {
+			return nil, fmt.Errorf("scan node row: %w", err)
+		}
+		n.Type = NodeType(typ)
+		var err error
+		n.Meta, err = unmarshalMeta(metaJSON)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal node meta: %w", err)
+		}
+		out = append(out, &n)
+	}
+	return out, rows.Err()
+}
+
+func scanEdge(row rowScanner) (*Edge, error) {
+	var e Edge
+	var typ, metaJSON string
+	err := row.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("edge not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan edge: %w", err)
+	}
+	e.Type = EdgeType(typ)
+	e.Meta, err = unmarshalMeta(metaJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal edge meta: %w", err)
+	}
+	return &e, nil
+}
+
+func scanEdges(rows *sql.Rows) ([]*Edge, error) {
+	var out []*Edge
+	for rows.Next() {
+		var e Edge
+		var typ, metaJSON string
+		if err := rows.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON); err != nil {
+			return nil, fmt.Errorf("scan edge row: %w", err)
+		}
+		e.Type = EdgeType(typ)
+		var err error
+		e.Meta, err = unmarshalMeta(metaJSON)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal edge meta: %w", err)
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+// --- JSON helpers ---
+
+func marshalMeta(m map[string]string) (string, error) {
+	if len(m) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func unmarshalMeta(s string) (map[string]string, error) {
+	if s == "" || s == "{}" {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
