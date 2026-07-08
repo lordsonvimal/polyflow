@@ -98,8 +98,41 @@ func runInit(cmd *cobra.Command, args []string) error {
 		svc := workspace.Service{}
 		svc.Name = prompt("  Name: ")
 		svc.Path = prompt("  Path: ")
-		svc.Language = prompt("  Language (go/javascript/ruby/typescript): ")
-		fw := prompt("  Frameworks (optional, comma-separated): ")
+
+		// Auto-detect language and frameworks from the service directory.
+		hints, _ := workspace.DetectFrameworks(svc.Path)
+		detectedLang := ""
+		var detectedFW []string
+		for _, h := range hints {
+			if detectedLang == "" {
+				detectedLang = h.Language
+			}
+			if h.Name != "go-module" && h.Name != "node" && h.Name != "bundler" && h.Name != "pip" && h.Name != "cargo" {
+				detectedFW = append(detectedFW, h.Name)
+			}
+		}
+
+		langPrompt := "  Language (go/javascript/ruby/typescript): "
+		if detectedLang != "" {
+			langPrompt = fmt.Sprintf("  Language [detected: %s]: ", detectedLang)
+		}
+		svc.Language = prompt(langPrompt)
+		if svc.Language == "" {
+			svc.Language = detectedLang
+		}
+
+		fwDefault := ""
+		if len(detectedFW) > 0 {
+			fwDefault = strings.Join(detectedFW, ", ")
+		}
+		fwPrompt := "  Frameworks (optional, comma-separated): "
+		if fwDefault != "" {
+			fwPrompt = fmt.Sprintf("  Frameworks [detected: %s]: ", fwDefault)
+		}
+		fw := prompt(fwPrompt)
+		if fw == "" {
+			fw = fwDefault
+		}
 		if fw != "" {
 			for _, f := range strings.Split(fw, ",") {
 				svc.Frameworks = append(svc.Frameworks, strings.TrimSpace(f))
@@ -511,6 +544,7 @@ var (
 	serveHost   string
 	serveNoOpen bool
 	serveWS     string
+	serveDev    bool
 )
 
 func initServeFlags() {
@@ -518,6 +552,7 @@ func initServeFlags() {
 	serveCmd.Flags().StringVar(&serveHost, "host", "127.0.0.1", "host to listen on")
 	serveCmd.Flags().BoolVar(&serveNoOpen, "no-open", false, "skip browser launch")
 	serveCmd.Flags().StringVar(&serveWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
+	serveCmd.Flags().BoolVar(&serveDev, "dev", false, "enable CORS for Vite dev server (port 5173)")
 }
 
 var serveCmd = &cobra.Command{
@@ -553,7 +588,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build index: %w", err)
 	}
 
-	srv := server.New(store, idx)
+	var srv *server.Server
+	if serveDev {
+		srv = server.NewDev(store, idx)
+	} else {
+		srv = server.New(store, idx)
+	}
 
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
 	// On a Write or Create event, reopen the store, rebuild the index, and push a
