@@ -124,10 +124,14 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 
 		// Build handler lookup maps, stripping the base_url prefix from handler paths
 		// so they align with the already-stripped client paths from ApplyHints.
+		// When target_service is known, only index handlers from that service.
 		baseURL := l.baseURLFor(client.Service, targetSvc)
 		exactHandlers := make(map[string]*graph.Node)
 		normalHandlers := make(map[string]*graph.Node)
 		for _, h := range handlers {
+			if targetSvc != "" && h.Service != targetSvc {
+				continue
+			}
 			hpath := h.Meta["path"]
 			if baseURL != "" && strings.HasPrefix(hpath, baseURL) {
 				hpath = hpath[len(baseURL):]
@@ -149,6 +153,10 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 			if client.Service == handler.Service {
 				continue
 			}
+			edgeMeta := map[string]string{"confidence": confidence}
+			if client.Meta["datastar"] == "true" {
+				edgeMeta["via"] = "datastar_action"
+			}
 			crossEdges = append(crossEdges, graph.Edge{
 				ID:         fmt.Sprintf("link:%s->%s", client.ID, handler.ID),
 				From:       client.ID,
@@ -158,7 +166,7 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 				Confidence: confidence,
 				Method:     method,
 				Path:       path,
-				Meta:       map[string]string{"confidence": confidence},
+				Meta:       edgeMeta,
 			})
 		} else {
 			// Unresolvable: emit edge with unknown confidence so the call is visible

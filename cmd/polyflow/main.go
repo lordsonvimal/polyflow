@@ -966,10 +966,18 @@ func printContextText(r *pfcontext.Result) error {
 
 // ─── impact ──────────────────────────────────────────────────────────────────
 
-var impactTarget string
+var (
+	impactTarget  string
+	impactDepth   int
+	impactService string
+	impactFormat  string
+)
 
 func initImpactFlags() {
 	impactCmd.Flags().StringVar(&impactTarget, "target", "", "search query (required)")
+	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
+	impactCmd.Flags().StringVar(&impactService, "service", "", "filter results to a specific service")
+	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text or json")
 	_ = impactCmd.MarkFlagRequired("target")
 }
 
@@ -977,6 +985,32 @@ var impactCmd = &cobra.Command{
 	Use:   "impact",
 	Short: "Show what is impacted by changes to a node",
 	RunE:  runImpact,
+}
+
+type impactCaller struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Service  string `json:"service"`
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	EdgeType string `json:"edge_type"`
+	Depth    int    `json:"depth"`
+}
+
+type crossServiceTrigger struct {
+	FromService string `json:"from_service"`
+	EdgeCount   int    `json:"edge_count"`
+}
+
+type impactOutput struct {
+	Target                *graph.Node           `json:"target"`
+	Callers               []impactCaller        `json:"callers"`
+	EntryPoints           []*graph.Node         `json:"entry_points"`
+	ServicesAffected      []string              `json:"services_affected"`
+	CrossServiceTriggers  []crossServiceTrigger `json:"cross_service_triggers"`
+	Depth                 int                   `json:"depth"`
+	TotalCallers          int                   `json:"total_callers"`
 }
 
 func runImpact(cmd *cobra.Command, args []string) error {
@@ -987,42 +1021,147 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
-	nodes, err := store.SearchNodes(ctx, impactTarget, 1)
-	if err != nil || len(nodes) == 0 {
+	matches, err := store.SearchNodes(ctx, impactTarget, 5)
+	if err != nil || len(matches) == 0 {
 		return fmt.Errorf("node not found for query: %s", impactTarget)
 	}
-	root := nodes[0]
+	root := matches[0]
 
 	idx, err := store.BuildIndex(ctx)
 	if err != nil {
 		return err
 	}
 
-	results := graph.Ancestors(idx, root.ID, 0)
+	ancestors := graph.Ancestors(idx, root.ID, impactDepth)
 
-	type affected struct {
-		ID      string `json:"id"`
-		Service string `json:"service"`
-		File    string `json:"file"`
-		Line    int    `json:"line"`
-		Type    string `json:"type"`
-	}
-	byService := make(map[string][]affected)
-	for _, r := range results {
-		a := affected{
-			ID:      r.Node.ID,
-			Service: r.Node.Service,
-			File:    r.Node.File,
-			Line:    r.Node.Line,
-			Type:    string(r.Node.Type),
+	// Filter by service if requested.
+	if impactService != "" {
+		filtered := ancestors[:0]
+		for _, a := range ancestors {
+			if a.Node.Service == impactService {
+				filtered = append(filtered, a)
+			}
 		}
-		byService[r.Node.Service] = append(byService[r.Node.Service], a)
+		ancestors = filtered
 	}
 
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{
-		"root":       root,
-		"by_service": byService,
-	})
+	// Build callers list.
+	callers := make([]impactCaller, 0, len(ancestors))
+	for _, a := range ancestors {
+		c := impactCaller{
+			ID:      a.Node.ID,
+			Label:   a.Node.Label,
+			Type:    string(a.Node.Type),
+			Service: a.Node.Service,
+			File:    a.Node.File,
+			Line:    a.Node.Line,
+			Depth:   a.Depth,
+		}
+		if a.Via != nil {
+			c.EdgeType = string(a.Via.Type)
+		}
+		callers = append(callers, c)
+	}
+
+	// Entry points: ancestors with no incoming edges.
+	var entryPoints []*graph.Node
+	for _, a := range ancestors {
+		if len(idx.InEdges[a.Node.ID]) == 0 {
+			entryPoints = append(entryPoints, a.Node)
+		}
+	}
+
+	// Services affected.
+	svcSet := make(map[string]bool)
+	for _, a := range ancestors {
+		svcSet[a.Node.Service] = true
+	}
+	servicesAffected := make([]string, 0, len(svcSet))
+	for svc := range svcSet {
+		servicesAffected = append(servicesAffected, svc)
+	}
+
+	// Cross-service triggers: edges arriving at any ancestor node from a different service.
+	xsCount := make(map[string]int) // fromService -> count
+	for _, a := range ancestors {
+		for _, e := range idx.InEdges[a.Node.ID] {
+			fromNode := idx.Nodes[e.From]
+			if fromNode != nil && fromNode.Service != a.Node.Service {
+				xsCount[fromNode.Service]++
+			}
+		}
+	}
+	triggers := make([]crossServiceTrigger, 0, len(xsCount))
+	for svc, cnt := range xsCount {
+		triggers = append(triggers, crossServiceTrigger{FromService: svc, EdgeCount: cnt})
+	}
+
+	out := impactOutput{
+		Target:               root,
+		Callers:              callers,
+		EntryPoints:          entryPoints,
+		ServicesAffected:     servicesAffected,
+		CrossServiceTriggers: triggers,
+		Depth:                impactDepth,
+		TotalCallers:         len(callers),
+	}
+
+	if impactFormat == "json" {
+		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	return printImpactText(out)
+}
+
+func printImpactText(out impactOutput) error {
+	t := out.Target
+	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d\n\n", t.Label, t.Type, t.File, t.Line)
+
+	// Split callers into direct (depth 1) and indirect (depth > 1).
+	var direct, indirect []impactCaller
+	for _, c := range out.Callers {
+		if c.Depth == 1 {
+			direct = append(direct, c)
+		} else {
+			indirect = append(indirect, c)
+		}
+	}
+
+	if len(direct) > 0 {
+		fmt.Fprintln(os.Stdout, "Direct callers (depth 1):")
+		for _, c := range direct {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(indirect) > 0 {
+		fmt.Fprintf(os.Stdout, "Indirect callers (depth 2-%d):\n", out.Depth)
+		for _, c := range indirect {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(out.EntryPoints) > 0 {
+		fmt.Fprintln(os.Stdout, "Entry points (no callers):")
+		for _, ep := range out.EntryPoints {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n", ep.Label, ep.File, ep.Line)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(out.ServicesAffected) > 0 {
+		fmt.Fprintf(os.Stdout, "Services affected: %s\n", strings.Join(out.ServicesAffected, ", "))
+	}
+
+	for _, xs := range out.CrossServiceTriggers {
+		fmt.Fprintf(os.Stdout, "Cross-service triggers: %s (%d http_call edges)\n", xs.FromService, xs.EdgeCount)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nTotal: %d nodes in blast radius\n", out.TotalCallers)
+	return nil
 }
 
 // ─── config ──────────────────────────────────────────────────────────────────

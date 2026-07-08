@@ -40,6 +40,10 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 	var nodes []graph.Node
 	var edges []graph.Edge
 
+	// currentComponentID tracks the most recently declared templ component so
+	// attribute nodes can be attached to it with a real edge instead of a self-loop.
+	currentComponentID := ""
+
 	scanner := bufio.NewScanner(bytes.NewReader(src))
 	lineNum := 0
 	for scanner.Scan() {
@@ -59,6 +63,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				Meta:     map[string]string{"name": m[1]},
 			})
 			edges = append(edges, selfEdge(nodeID, graph.EdgeTypeRenders))
+			currentComponentID = nodeID
 			// A component declaration line cannot also contain data-on-* or href
 			// attributes, so skip the remaining attribute checks for this line.
 			continue
@@ -78,9 +83,9 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				ID: nodeID, Type: graph.NodeTypeHTTPClient,
 				Label: fmt.Sprintf("%s %s", method, path), Service: service, File: file, Line: lineNum,
 				Language: "templ",
-				Meta:     map[string]string{"method": method, "path": path},
+				Meta:     map[string]string{"method": method, "path": path, "datastar": "true"},
 			})
-			edges = append(edges, selfEdge(nodeID, graph.EdgeTypeHTTPCall))
+			edges = append(edges, componentEdge(currentComponentID, nodeID, graph.EdgeTypeDatastarAction))
 		}
 
 		// data-bind / data-signals / data-model
@@ -92,7 +97,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				Language: "templ",
 				Meta:     map[string]string{"signal": m[1]},
 			})
-			edges = append(edges, selfEdge(nodeID, graph.EdgeTypeRenders))
+			edges = append(edges, componentEdge(currentComponentID, nodeID, graph.EdgeTypeDatastarBind))
 		}
 
 		// data-text / data-indicator referencing a signal variable
@@ -104,7 +109,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				Language: "templ",
 				Meta:     map[string]string{"signal": m[1]},
 			})
-			edges = append(edges, selfEdge(nodeID, graph.EdgeTypeCalls))
+			edges = append(edges, componentEdge(currentComponentID, nodeID, graph.EdgeTypeDatastarBind))
 		}
 
 		// href / action pointing to a server path (including root "/")
@@ -117,7 +122,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				Language: "templ",
 				Meta:     map[string]string{"path": path},
 			})
-			edges = append(edges, selfEdge(nodeID, graph.EdgeTypeHTTPCall))
+			edges = append(edges, componentEdge(currentComponentID, nodeID, graph.EdgeTypeHTTPCall))
 		}
 	}
 
@@ -135,6 +140,21 @@ func selfEdge(nodeID string, edgeType graph.EdgeType) graph.Edge {
 		ID:    nodeID + ":edge",
 		From:  nodeID,
 		To:    nodeID,
+		Type:  edgeType,
+		Label: string(edgeType),
+	}
+}
+
+// componentEdge returns an edge from a component to an attribute node.
+// Falls back to a self-loop when no enclosing component has been seen yet.
+func componentEdge(fromID, toID string, edgeType graph.EdgeType) graph.Edge {
+	if fromID == "" {
+		return selfEdge(toID, edgeType)
+	}
+	return graph.Edge{
+		ID:    fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, toID),
+		From:  fromID,
+		To:    toID,
 		Type:  edgeType,
 		Label: string(edgeType),
 	}

@@ -20,6 +20,9 @@ links:
   - from: svc-js
     to: svc-go
     base_url: "/api"
+  - from: svc-templ
+    to: svc-go
+    base_url: "/api"
 index:
   exclude:
     - "**/vendor/**"

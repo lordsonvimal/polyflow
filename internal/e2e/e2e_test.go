@@ -169,6 +169,42 @@ func TestIndex_TemplDatastar(t *testing.T) {
 	assert.True(t, hasDatastarAction, "expected a datastar_action http_client node from svc-templ")
 }
 
+func TestIndex_DatastarCrossServiceLink(t *testing.T) {
+	store, _ := indexFixture(t)
+	ctx := context.Background()
+
+	idx, err := store.BuildIndex(ctx)
+	require.NoError(t, err)
+
+	// svc-templ emits @post('/api/users') → after base_url strip → POST /users
+	// svc-go registers r.Post("/users", CreateUser)
+	// The linker should connect them with an http_call edge where via=datastar_action.
+	found := false
+	for _, edges := range idx.OutEdges {
+		for _, e := range edges {
+			if e.Type != graph.EdgeTypeHTTPCall {
+				continue
+			}
+			fromNode := idx.Nodes[e.From]
+			toNode := idx.Nodes[e.To]
+			if fromNode == nil || toNode == nil {
+				continue
+			}
+			if fromNode.Service == "svc-templ" && toNode.Service == "svc-go" &&
+				e.Meta["via"] == "datastar_action" {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	assert.True(t, found, "expected cross-service http_call edge from svc-templ to svc-go with via=datastar_action")
+
+	_ = ctx
+}
+
 func TestIndex_ParseErrors(t *testing.T) {
 	// The normal fixture files shouldn't have parse errors that cause panics.
 	// We verify the index completes without panic (test completing = success).

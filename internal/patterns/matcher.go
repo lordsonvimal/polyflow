@@ -494,6 +494,11 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
 
 	// ── HTTP routes / handlers ────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "chi_get") || strings.HasPrefix(lower, "chi_post") ||
+		strings.HasPrefix(lower, "chi_put") || strings.HasPrefix(lower, "chi_patch") ||
+		strings.HasPrefix(lower, "chi_delete") || strings.HasPrefix(lower, "chi_head") ||
+		strings.HasPrefix(lower, "chi_options") || strings.HasPrefix(lower, "chi_route"):
+		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
 	case strings.Contains(lower, "handler") || strings.Contains(lower, "handle") ||
 		strings.Contains(lower, "route"):
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
