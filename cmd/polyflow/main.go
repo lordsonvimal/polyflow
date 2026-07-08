@@ -387,6 +387,23 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Route → handler linking: emit calls edges from HTTP route nodes to their
+	// handler function nodes (resolved by name across the service).
+	{
+		routeEdges := linker.LinkRouteHandlers(allNodes)
+		bwRoute := graph.NewBatchWriter(store)
+		for i := range routeEdges {
+			e := routeEdges[i]
+			if err := bwRoute.AddEdge(ctx, &e); err != nil {
+				return err
+			}
+			allEdges = append(allEdges, e)
+		}
+		if err := bwRoute.Flush(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Cross-service linking
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
 	l := linker.New(cfg)

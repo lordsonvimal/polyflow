@@ -218,7 +218,7 @@ func (m *TreeSitterMatcher) MatchToNodes(service string, results []MatchResult) 
 // rather than a definition. These do not create nodes; instead they emit edges
 // from the enclosing function to the target function by name.
 func isCallRef(patternName string) bool {
-	return patternName == "component_fn_call"
+	return patternName == "component_fn_call" || patternName == "jsx_event_handler_ref"
 }
 
 // MatchToGraph maps match results to graph nodes and edges.
@@ -389,18 +389,21 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			continue
 		}
 
-		// Find enclosing function by proximity.
+		// Find enclosing function by proximity, skipping the callee itself.
+		// A nested function (e.g. loadSource defined inside Detail) appears as
+		// a closer proximity match than the outer function, but we want the
+		// outer function to own the event-prop reference.
 		funcs := funcsByFile[r.File]
 		var best *lineID
 		for j := range funcs {
 			f := &funcs[j]
-			if f.line <= r.Line {
+			if f.line <= r.Line && f.id != calleeID {
 				if best == nil || f.line > best.line {
 					best = f
 				}
 			}
 		}
-		if best == nil || best.id == calleeID {
+		if best == nil {
 			continue
 		}
 
