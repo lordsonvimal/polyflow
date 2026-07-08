@@ -46,6 +46,52 @@ func (l *Linker) baseURLFor(fromSvc, toSvc string) string {
 	return ""
 }
 
+// LinkRouteHandlers emits calls edges from HTTP route nodes to their handler
+// function nodes. Route patterns capture the handler as Meta["handler"], but
+// since parsing is per-file the reference can't be resolved there. This pass
+// runs after all nodes are collected and matches by function label within the
+// same service.
+func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
+	// Index function/method nodes: service + "\x00" + label → nodeID
+	funcIndex := make(map[string]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			key := n.Service + "\x00" + n.Label
+			if _, exists := funcIndex[key]; !exists {
+				funcIndex[key] = n.ID
+			}
+		}
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeHTTPHandler {
+			continue
+		}
+		handlerName, ok := n.Meta["handler"]
+		if !ok || handlerName == "" {
+			continue
+		}
+		// Strip method receiver: "s.handleSearch" → "handleSearch"
+		if dot := strings.LastIndex(handlerName, "."); dot >= 0 {
+			handlerName = handlerName[dot+1:]
+		}
+		calleeID, ok := funcIndex[n.Service+"\x00"+handlerName]
+		if !ok {
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:   fmt.Sprintf("calls:%s->%s", n.ID, calleeID),
+			From: n.ID,
+			To:   calleeID,
+			Type: graph.EdgeTypeCalls,
+		})
+	}
+	return edges
+}
+
 // Link attempts to resolve cross-service HTTP connections.
 // It returns synthetic edges connecting client call nodes to handler nodes.
 // Clients whose paths cannot be resolved still produce an edge with confidence "unknown".

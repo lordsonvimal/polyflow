@@ -13,3 +13,16 @@ patterns:
     captures:
       - name: callee
         role: func_ref
+  # Detect JSX event-prop function references: onClick={loadSource}, onSubmit={handleForm}, etc.
+  # These are prop references (not direct calls), so component_fn_call misses them.
+  # Requires the TSX grammar (jsx_attribute node only exists there).
+  - name: jsx_event_handler_ref
+    query: |
+      (jsx_attribute
+        (property_identifier) @prop
+        (#match? @prop "^on[A-Z]")
+        (jsx_expression
+          (identifier) @callee))
+    captures:
+      - name: callee
+        role: func_ref

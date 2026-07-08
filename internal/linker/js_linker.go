@@ -384,6 +384,41 @@ func resolveImportCalls(file string, _ string, svcFuncByLabel map[string]string,
 		}
 	}
 
+	// JSX event prop references: onClick={importedFn} — not a call_expression,
+	// so the plain call query misses them. Only compiles against TSX grammar.
+	jsxEventPropQuery := `
+(jsx_attribute
+  (property_identifier) @prop
+  (#match? @prop "^on[A-Z]")
+  (jsx_expression
+    (identifier) @callee))`
+	{
+		q, err := sitter.NewQuery([]byte(jsxEventPropQuery), lang)
+		if err == nil {
+			cur := sitter.NewQueryCursor()
+			cur.Exec(q, root)
+			for {
+				m, ok := cur.NextMatch()
+				if !ok {
+					break
+				}
+				caps := make(map[string]string)
+				var minLine int
+				for _, c := range m.Captures {
+					caps[q.CaptureNameForId(c.Index)] = c.Node.Content(src)
+					row := int(c.Node.StartPoint().Row) + 1
+					if minLine == 0 || row < minLine {
+						minLine = row
+					}
+				}
+				local := caps["callee"]
+				if exported, ok := plainImport[local]; ok {
+					callSites = append(callSites, callSite{targetLabel: exported, line: minLine})
+				}
+			}
+		}
+	}
+
 	if len(callSites) == 0 {
 		return nil
 	}
