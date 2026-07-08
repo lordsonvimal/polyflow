@@ -5,8 +5,11 @@ templ UserPage(name string) {
     <h1 data-text="$username">Hello</h1>
     <form action="/users" method="post">
       <input data-bind="username" type="text" />
-      <button data-on-click="@post('/users')">Submit</button>
+      <input data-bind="email" type="text" />
+      <button data-on-click="@post('/api/users')">Submit</button>
     </form>
+    <button data-on-click="@get('/api/users')">Load Users</button>
+    <ul id="user-list" data-signals='{"count": 0}'></ul>
     <a href="/users/list">View Users</a>
     <div data-indicator="$loading">Loading...</div>
     <!-- multi-attribute: both href and data-on-click on the same line -->
