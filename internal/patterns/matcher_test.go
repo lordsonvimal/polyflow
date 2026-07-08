@@ -118,6 +118,35 @@ func TestMatchToGraph_EmptyResults(t *testing.T) {
 	assert.Empty(t, edges)
 }
 
+func TestMatchToGraph_GoroutineCallIsEdge(t *testing.T) {
+	// goroutine_call must be a call-ref: no new node, one spawns edge from enclosing func.
+	results := []patterns.MatchResult{
+		{PatternName: "func_decl", File: "f.go", Line: 1, Captures: map[string]string{"name": "New"}},
+		{PatternName: "func_decl", File: "f.go", Line: 10, Captures: map[string]string{"name": "fanOut"}},
+		{PatternName: "goroutine_call", File: "f.go", Line: 5, Captures: map[string]string{"callee": "fanOut"}},
+	}
+	nodes, edges := patterns.MatchToGraph("svc", results)
+	require.Len(t, nodes, 2, "only the two func_decl nodes should be created")
+	require.Len(t, edges, 1, "one spawns edge from New -> fanOut")
+	assert.Equal(t, "svc:f.go:function:New:1", edges[0].From)
+	assert.Equal(t, "svc:f.go:function:fanOut:10", edges[0].To)
+	assert.Equal(t, graph.EdgeTypeSpawns, edges[0].Type)
+}
+
+func TestMatchToGraph_CobraRunIsEdge(t *testing.T) {
+	// cobra_run must be a call-ref: no new node, edge from enclosing func to RunE target.
+	results := []patterns.MatchResult{
+		{PatternName: "func_decl", File: "main.go", Line: 1, Captures: map[string]string{"name": "init"}},
+		{PatternName: "func_decl", File: "main.go", Line: 20, Captures: map[string]string{"name": "runServe"}},
+		{PatternName: "cobra_run", File: "main.go", Line: 10, Captures: map[string]string{"callee": "runServe"}},
+	}
+	nodes, edges := patterns.MatchToGraph("svc", results)
+	require.Len(t, nodes, 2, "only the two func_decl nodes should be created")
+	require.Len(t, edges, 1, "one edge from init -> runServe")
+	assert.Equal(t, "svc:main.go:function:init:1", edges[0].From)
+	assert.Equal(t, "svc:main.go:function:runServe:20", edges[0].To)
+}
+
 func TestMatchToGraph_PublisherAndSubscriberAndWorker(t *testing.T) {
 	cases := []struct {
 		pattern  string

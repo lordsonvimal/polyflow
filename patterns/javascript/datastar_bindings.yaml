@@ -1,0 +1,39 @@
+language: javascript
+version: "1"
+patterns:
+  - name: datastar_bind_signal
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "setSignal"))
+        arguments: (arguments
+          (string) @signal_name
+          (_) @value))
+    captures:
+      - name: signal_name
+        role: datastar_signal
+      - name: value
+        role: signal_value
+  - name: datastar_merge_signals
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "mergeSignals"))
+        arguments: (arguments
+          (_) @signals))
+    captures:
+      - name: signals
+        role: datastar_signals
+  - name: datastar_read_signal
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "readSignal"))
+        arguments: (arguments
+          (string) @signal_name))
+    captures:
+      - name: signal_name
+        role: datastar_signal

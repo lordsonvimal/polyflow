@@ -218,7 +218,10 @@ func (m *TreeSitterMatcher) MatchToNodes(service string, results []MatchResult) 
 // rather than a definition. These do not create nodes; instead they emit edges
 // from the enclosing function to the target function by name.
 func isCallRef(patternName string) bool {
-	return patternName == "component_fn_call" || patternName == "jsx_event_handler_ref"
+	return patternName == "component_fn_call" ||
+		patternName == "jsx_event_handler_ref" ||
+		patternName == "goroutine_call" ||
+		patternName == "cobra_run"
 }
 
 // MatchToGraph maps match results to graph nodes and edges.
@@ -407,56 +410,120 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			continue
 		}
 
-		edgeID := fmt.Sprintf("calls:%s->%s", best.id, calleeID)
+		edgeType := callRefEdgeType(r.PatternName)
+		edgeID := fmt.Sprintf("%s:%s->%s", string(edgeType), best.id, calleeID)
 		edges = append(edges, graph.Edge{
 			ID:   edgeID,
 			From: best.id,
 			To:   calleeID,
-			Type: graph.EdgeTypeCalls,
+			Type: edgeType,
 		})
 	}
 
 	return nodes, edges
 }
 
+// callRefEdgeType returns the edge type for a call-reference pattern.
+func callRefEdgeType(patternName string) graph.EdgeType {
+	switch patternName {
+	case "goroutine_call":
+		return graph.EdgeTypeSpawns
+	default:
+		return graph.EdgeTypeCalls
+	}
+}
+
 // classifyPattern maps a pattern name to appropriate node and edge types.
+// Explicit prefix/exact matches take priority; keyword heuristics handle unknown patterns.
 func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	lower := strings.ToLower(patternName)
 
 	switch {
-	// TypeScript structural type declarations — must classify before generic checks.
+	// ── TypeScript structural declarations (suppress from graph) ──────────────
 	case lower == "interface_declaration" || lower == "interface_extends":
 		return graph.NodeTypeInterface, graph.EdgeTypeCalls
 	case lower == "type_alias" || lower == "generic_type" || lower == "enum_declaration" || lower == "const_enum":
 		return graph.NodeTypeTypeAlias, graph.EdgeTypeCalls
-	// JSX component declarations and usage.
+
+	// ── JSX / component ───────────────────────────────────────────────────────
 	case lower == "component_decl" || lower == "component_arrow_decl":
 		return graph.NodeTypeComponent, graph.EdgeTypeRenders
 	case lower == "jsx_component_use" || lower == "jsx_component_self_closing":
 		return graph.NodeTypeComponent, graph.EdgeTypeRenders
-	// JSX imperative calls (lifecycle hooks, event handlers).
 	case lower == "lifecycle_call" || lower == "event_handler_call":
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
-	// Explicit method declaration — must come before generic "handle" checks.
+
+	// ── Explicit declarations ─────────────────────────────────────────────────
+	case lower == "func_decl" || lower == "function_decl" || lower == "arrow_func_decl":
+		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 	case lower == "method_decl":
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
-	case strings.Contains(lower, "handler") || strings.Contains(lower, "handle") || strings.Contains(lower, "route"):
+
+	// ── Datastar / SSE ────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "datastar_sse") || strings.HasPrefix(lower, "sse_"):
+		return graph.NodeTypeHTTPHandler, graph.EdgeTypeSSEEndpoint
+	case strings.HasPrefix(lower, "datastar_action") || strings.HasPrefix(lower, "datastar_on"):
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeDatastarAction
+	case strings.HasPrefix(lower, "datastar_bind") || strings.HasPrefix(lower, "datastar_signal"):
+		return graph.NodeTypeFunction, graph.EdgeTypeDatastarBind
+
+	// ── Sidekiq ───────────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "sidekiq_perform") || strings.Contains(lower, "perform_async") ||
+		strings.Contains(lower, "perform_in") || strings.Contains(lower, "perform_at"):
+		return graph.NodeTypePublisher, graph.EdgeTypeSidekiqEnqueue
+	case strings.Contains(lower, "sidekiq_worker") || strings.Contains(lower, "sidekiq_job"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypeSidekiqPerform
+
+	// ── Pusher ────────────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "pusher_trigger"):
+		return graph.NodeTypePublisher, graph.EdgeTypePusherTrigger
+	case strings.HasPrefix(lower, "pusher_subscribe") || strings.HasPrefix(lower, "pusher_channel"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypePusherSubscribe
+
+	// ── DOM ───────────────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "dom_access") || strings.HasPrefix(lower, "query_selector") ||
+		strings.HasPrefix(lower, "get_element"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMRead
+	case strings.HasPrefix(lower, "dom_mutation") || strings.HasPrefix(lower, "set_inner") ||
+		strings.HasPrefix(lower, "set_text") || strings.HasPrefix(lower, "set_attribute") ||
+		strings.HasPrefix(lower, "class_list") || strings.HasPrefix(lower, "set_style"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+	case strings.HasPrefix(lower, "dom_create") || strings.HasPrefix(lower, "create_element") ||
+		strings.HasPrefix(lower, "clone_node") || strings.HasPrefix(lower, "insert_adjacent"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMCreate
+	case strings.HasPrefix(lower, "dom_remove") || strings.HasPrefix(lower, "remove_child") ||
+		strings.HasPrefix(lower, "remove_element"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMRemove
+	case strings.HasPrefix(lower, "dom_event") || strings.HasPrefix(lower, "add_event_listener") ||
+		strings.HasPrefix(lower, "remove_event_listener") || strings.HasPrefix(lower, "on_event"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMListen
+	case strings.HasPrefix(lower, "dom_tree") || strings.HasPrefix(lower, "append_child") ||
+		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+
+	// ── HTTP routes / handlers ────────────────────────────────────────────────
+	case strings.Contains(lower, "handler") || strings.Contains(lower, "handle") ||
+		strings.Contains(lower, "route"):
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
-	case strings.Contains(lower, "client") ||
-		strings.Contains(lower, "request") ||
-		strings.Contains(lower, "get") ||
-		strings.Contains(lower, "post") ||
-		strings.Contains(lower, "put") ||
-		strings.Contains(lower, "delete") ||
-		strings.Contains(lower, "fetch") ||
-		strings.Contains(lower, "axios"):
+
+	// ── HTTP clients ──────────────────────────────────────────────────────────
+	case strings.Contains(lower, "client") || strings.Contains(lower, "request") ||
+		strings.Contains(lower, "fetch") || strings.Contains(lower, "axios") ||
+		strings.HasPrefix(lower, "http_get") || strings.HasPrefix(lower, "http_post") ||
+		strings.HasPrefix(lower, "http_put") || strings.HasPrefix(lower, "http_delete") ||
+		strings.HasPrefix(lower, "resty_"):
 		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
+
+	// ── Message brokers ───────────────────────────────────────────────────────
 	case strings.Contains(lower, "publish"):
 		return graph.NodeTypePublisher, graph.EdgeTypePublishes
 	case strings.Contains(lower, "subscribe") || strings.Contains(lower, "consume"):
 		return graph.NodeTypeSubscriber, graph.EdgeTypeSubscribes
+
+	// ── Goroutines ────────────────────────────────────────────────────────────
 	case strings.Contains(lower, "goroutine") || strings.Contains(lower, "spawn"):
 		return graph.NodeTypeWorker, graph.EdgeTypeSpawns
+
 	default:
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 	}
