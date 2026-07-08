@@ -347,6 +347,46 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		_ = store.SetMeta(ctx, "semantic_warnings", "[]")
 	}
 
+	// JS/TS component + import-aware linking pass.
+	// Redirects renders edges from JSX usage proxy nodes to actual declaration
+	// nodes, and resolves cross-file function calls through import statements.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		jsLinker := linker.NewJSLinker()
+		jsEdges, removeIDs := jsLinker.LinkJS(allNodes, allEdges, svcFiles)
+
+		// Write new JS edges.
+		bwJS := graph.NewBatchWriter(store)
+		for i := range jsEdges {
+			e := jsEdges[i]
+			if err := bwJS.AddEdge(ctx, &e); err != nil {
+				return err
+			}
+			allEdges = append(allEdges, e)
+		}
+		if err := bwJS.Flush(ctx); err != nil {
+			return err
+		}
+
+		// Remove proxy component usage nodes and their orphaned edges.
+		if len(removeIDs) > 0 {
+			if err := store.DeleteNodes(ctx, removeIDs); err != nil {
+				return fmt.Errorf("delete proxy nodes: %w", err)
+			}
+			// Remove from in-memory slice so later passes don't see them.
+			filtered := allNodes[:0]
+			for _, n := range allNodes {
+				if !removeIDs[n.ID] {
+					filtered = append(filtered, n)
+				}
+			}
+			allNodes = filtered
+		}
+	}
+
 	// Cross-service linking
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
 	l := linker.New(cfg)
