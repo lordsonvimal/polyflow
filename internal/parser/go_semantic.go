@@ -162,6 +162,46 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 	}
 
+	// Synthetic main→init edges: Go's runtime calls all init() functions before
+	// main(), but there's no explicit call site in main's body. Emit a synthetic
+	// calls edge from main to each init in the same package so main is connected.
+	for caller := range inService {
+		if caller.Name() != "main" {
+			continue
+		}
+		callerID, ok := resolveFunc(caller)
+		if !ok {
+			continue
+		}
+		callerPkg := caller.Package()
+		for callee := range inService {
+			name := callee.Name()
+			// SSA names user-written init functions as init#1, init#2, etc.
+			// After # stripping in resolveFunc they all map to "init".
+			if name != "init" && !strings.HasPrefix(name, "init#") {
+				continue
+			}
+			if callee.Package() != callerPkg {
+				continue
+			}
+			calleeID, ok := resolveFunc(callee)
+			if !ok {
+				continue
+			}
+			key := callerID + "->" + calleeID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			edges = append(edges, graph.Edge{
+				ID:   "semantic:calls:" + key,
+				From: callerID,
+				To:   calleeID,
+				Type: graph.EdgeTypeCalls,
+			})
+		}
+	}
+
 	return SemanticResult{Edges: edges}
 }
 
