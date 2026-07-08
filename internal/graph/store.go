@@ -234,6 +234,27 @@ func (s *SQLiteStore) BuildIndex(ctx context.Context) (*AdjacencyIndex, error) {
 	return idx, nil
 }
 
+// DeleteNodes removes nodes and any edges referencing them by ID.
+func (s *SQLiteStore) DeleteNodes(ctx context.Context, ids map[string]bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for id := range ids {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM edges WHERE "from"=? OR "to"=?`, id, id); err != nil {
+			return fmt.Errorf("delete edges for node %s: %w", id, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, id); err != nil {
+			return fmt.Errorf("delete node %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *SQLiteStore) Stats(ctx context.Context) (int, int, error) {
 	var nodeCount, edgeCount int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&nodeCount); err != nil {
