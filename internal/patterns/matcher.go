@@ -28,21 +28,13 @@ type MatchResult struct {
 	File        string
 }
 
-// Matcher runs tree-sitter queries against source files.
-type Matcher interface {
-	// Match runs all patterns for the given language against src and returns matches.
-	Match(language, file string, src []byte) ([]MatchResult, error)
-	// MatchToNodes converts match results into graph nodes and edges.
-	MatchToNodes(service string, results []MatchResult) ([]graph.Node, []graph.Edge)
-}
-
 // compiledQuery holds a compiled tree-sitter query and the original pattern.
 type compiledQuery struct {
 	query   *sitter.Query
 	pattern *Pattern
 }
 
-// TreeSitterMatcher implements Matcher using go-tree-sitter.
+// TreeSitterMatcher runs tree-sitter queries against source files.
 type TreeSitterMatcher struct {
 	registry *Registry
 	mu       sync.Mutex

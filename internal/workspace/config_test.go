@@ -138,6 +138,44 @@ func TestDetectFrameworks_MultipleFiles(t *testing.T) {
 	assert.GreaterOrEqual(t, len(hints), 2)
 }
 
+func TestDetectFrameworks_GoFrameworks(t *testing.T) {
+	dir := t.TempDir()
+	gomod := "module example\n\nrequire (\n\tgithub.com/go-chi/chi v5.0.0\n\tgithub.com/a-h/templ v0.2.0\n)\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644))
+
+	hints, err := workspace.DetectFrameworks(dir)
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, h := range hints {
+		names[h.Name] = true
+	}
+	assert.True(t, names["chi"], "expected chi detected")
+	assert.True(t, names["templ"], "expected templ detected")
+}
+
+func TestDetectFrameworks_NodeFrameworks(t *testing.T) {
+	dir := t.TempDir()
+	pkgjson := `{"dependencies":{"axios":"^1.0","solid-js":"^1.8"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkgjson), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte("{}"), 0o644))
+
+	hints, err := workspace.DetectFrameworks(dir)
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	lang := ""
+	for _, h := range hints {
+		names[h.Name] = true
+		if h.Language != "" {
+			lang = h.Language
+		}
+	}
+	assert.Equal(t, "typescript", lang, "expected typescript detected via tsconfig.json")
+	assert.True(t, names["axios"], "expected axios detected")
+	assert.True(t, names["solid"], "expected solid-js detected")
+}
+
 func TestDetectFrameworks_Empty(t *testing.T) {
 	dir := t.TempDir()
 	hints, err := workspace.DetectFrameworks(dir)
