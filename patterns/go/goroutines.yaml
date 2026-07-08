@@ -1,20 +1,20 @@
 language: go
 version: "1"
 patterns:
-  - name: go_named_call
+  - name: goroutine_call
     query: |
       (go_statement
         (call_expression
-          function: (identifier) @fn))
+          function: (identifier) @callee))
     captures:
-      - name: fn
-        role: goroutine_fn
-  - name: go_method_call
+      - name: callee
+        role: goroutine_callee
+  - name: goroutine_call
     query: |
       (go_statement
         (call_expression
           function: (selector_expression
-            field: (field_identifier) @fn)))
+            field: (field_identifier) @callee)))
     captures:
-      - name: fn
-        role: goroutine_fn
+      - name: callee
+        role: goroutine_callee

@@ -62,32 +62,6 @@ func TestDefaultRegistry(t *testing.T) {
 	assert.NotEmpty(t, goPatterns)
 }
 
-func TestRegistryGet_Found(t *testing.T) {
-	pf, err := patterns.LoadFile("../../patterns/go/chi_routes.yaml")
-	require.NoError(t, err)
-	reg := patterns.NewRegistry()
-	reg.RegisterFile(pf)
-
-	p, err := reg.Get("go", "chi_get")
-	require.NoError(t, err)
-	assert.Equal(t, "chi_get", p.Name)
-}
-
-func TestRegistryGet_UnknownLanguage(t *testing.T) {
-	reg := patterns.NewRegistry()
-	_, err := reg.Get("cobol", "anything")
-	assert.Error(t, err)
-}
-
-func TestRegistryGet_UnknownPattern(t *testing.T) {
-	pf, err := patterns.LoadFile("../../patterns/go/chi_routes.yaml")
-	require.NoError(t, err)
-	reg := patterns.NewRegistry()
-	reg.RegisterFile(pf)
-
-	_, err = reg.Get("go", "no_such_pattern")
-	assert.Error(t, err)
-}
 
 func TestLoad_NonexistentDir(t *testing.T) {
 	_, err := patterns.Load("/no/such/dir")

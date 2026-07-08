@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -402,7 +403,7 @@ func TestServe_Trace(t *testing.T) {
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/graph/trace?root=" + rootID + "&direction=forward&depth=5")
+	resp, err := http.Get(ts.URL + "/api/graph/trace?root=" + url.QueryEscape(rootID) + "&direction=forward&depth=5")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 

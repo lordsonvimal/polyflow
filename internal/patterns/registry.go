@@ -1,7 +1,6 @@
 package patterns
 
 import (
-	"fmt"
 	"sync"
 )
 
@@ -33,21 +32,6 @@ func (r *Registry) RegisterFile(pf *PatternFile) {
 	for i := range pf.Patterns {
 		r.Register(pf.Language, &pf.Patterns[i])
 	}
-}
-
-// Get retrieves a pattern by language and name.
-func (r *Registry) Get(language, name string) (*Pattern, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	lang, ok := r.patterns[language]
-	if !ok {
-		return nil, fmt.Errorf("no patterns for language %q", language)
-	}
-	p, ok := lang[name]
-	if !ok {
-		return nil, fmt.Errorf("pattern %q not found for language %q", name, language)
-	}
-	return p, nil
 }
 
 // List returns all patterns for the given language.

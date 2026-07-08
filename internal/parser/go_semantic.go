@@ -80,9 +80,12 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		if !pos.IsValid() || pos.Filename == "" {
 			return "", false
 		}
-		// Strip anonymous suffixes like "$1".
+		// Strip anonymous suffixes like "$1" and numbered init suffixes like "#1".
 		name := fn.Name()
 		if idx := strings.Index(name, "$"); idx >= 0 {
+			name = name[:idx]
+		}
+		if idx := strings.Index(name, "#"); idx >= 0 {
 			name = name[:idx]
 		}
 		if name == "" {
@@ -182,31 +185,4 @@ func matchesInvoke(call *ssa.CallCommon, fn *ssa.Function) bool {
 		return false
 	}
 	return fn.Name() == call.Method.Name()
-}
-
-// funcNodeID returns the graph node ID for an SSA function, matching the format
-// produced by MatchToGraph: service:absoluteFilePath:type:funcName:line.
-// Returns false if the position is not resolvable to a source file under the service.
-func funcNodeID(service string, fn *ssa.Function, fset *token.FileSet) (string, bool) {
-	pos := fset.Position(fn.Pos())
-	if !pos.IsValid() || pos.Filename == "" {
-		return "", false
-	}
-
-	name := fn.Name()
-	// Strip anonymous-function suffixes like "$1", "$2".
-	if idx := strings.Index(name, "$"); idx >= 0 {
-		name = name[:idx]
-	}
-	if name == "" {
-		return "", false
-	}
-
-	nodeType := graph.NodeTypeFunction
-	if fn.Signature.Recv() != nil {
-		nodeType = graph.NodeTypeMethod
-	}
-
-	id := fmt.Sprintf("%s:%s:%s:%s:%d", service, pos.Filename, string(nodeType), name, pos.Line)
-	return id, true
 }

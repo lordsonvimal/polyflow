@@ -1,0 +1,12 @@
+language: go
+version: "1"
+patterns:
+  - name: cobra_run
+    query: |
+      (keyed_element
+        (literal_element (identifier) @field
+          (#match? @field "^(RunE|Run)$"))
+        (literal_element (identifier) @callee))
+    captures:
+      - name: callee
+        role: cobra_run_fn
