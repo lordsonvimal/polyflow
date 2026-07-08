@@ -1,0 +1,15 @@
+language: jsx_calls
+version: "1"
+patterns:
+  # Plain-identifier call detection for .ts/.js files (no JSX grammar needed).
+  # Same logic as jsx/calls.yaml but registered under a separate language key
+  # so it compiles against typescript/javascript grammars without trying the
+  # JSX-specific queries (jsx_opening_element etc.) that only exist in the tsx grammar.
+  - name: component_fn_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#match? @callee "^[a-z]"))
+    captures:
+      - name: callee
+        role: func_ref

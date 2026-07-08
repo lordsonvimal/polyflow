@@ -34,9 +34,14 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	if grammarLang == "typescript" || grammarLang == "tsx" {
 		patternLangs = append(patternLangs, "typescript")
 	}
-	// JSX component relationship patterns for TSX/JSX files.
 	if grammarLang == "tsx" {
+		// Full JSX pattern set: component renders queries (jsx_opening_element etc.)
+		// require the TSX grammar and only run for .tsx/.jsx files.
 		patternLangs = append(patternLangs, "jsx")
+	} else {
+		// For .ts/.js files, run only the call-ref patterns (component_fn_call),
+		// which use only call_expression + identifier and compile against any grammar.
+		patternLangs = append(patternLangs, "jsx_calls")
 	}
 
 	// Collect all match results across pattern languages before building the graph.
