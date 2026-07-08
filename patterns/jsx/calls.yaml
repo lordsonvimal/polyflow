@@ -1,9 +1,10 @@
 language: jsx
 version: "1"
 patterns:
-  # Detect any plain-identifier function call (e.g. fetchWarnings()) inside a
-  # JSX component body. Captures the callee name so MatchToGraph can emit a
-  # calls edge from the enclosing component to the referenced function.
+  # Detect any plain-identifier function call (e.g. fetchWarnings(), cytoscapeToStore())
+  # inside a function body. Captures the callee name so MatchToGraph Pass 3 can emit a
+  # calls edge from the enclosing function to the referenced function in the same file.
+  # This query uses only call_expression + identifier which exist in all JS/TS grammars.
   - name: component_fn_call
     query: |
       (call_expression
