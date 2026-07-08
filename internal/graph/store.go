@@ -26,19 +26,25 @@ CREATE TABLE IF NOT EXISTS nodes (
 );
 
 CREATE TABLE IF NOT EXISTS edges (
-	id     TEXT PRIMARY KEY,
-	"from" TEXT NOT NULL REFERENCES nodes(id),
-	"to"   TEXT NOT NULL REFERENCES nodes(id),
-	type   TEXT NOT NULL,
-	label  TEXT NOT NULL DEFAULT '',
-	meta   TEXT NOT NULL DEFAULT '{}'
+	id         TEXT PRIMARY KEY,
+	"from"     TEXT NOT NULL REFERENCES nodes(id),
+	"to"       TEXT NOT NULL REFERENCES nodes(id),
+	type       TEXT NOT NULL,
+	label      TEXT NOT NULL DEFAULT '',
+	meta       TEXT NOT NULL DEFAULT '{}',
+	confidence TEXT NOT NULL DEFAULT '',
+	method     TEXT NOT NULL DEFAULT '',
+	path       TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_nodes_service ON nodes(service);
-CREATE INDEX IF NOT EXISTS idx_nodes_type    ON nodes(type);
-CREATE INDEX IF NOT EXISTS idx_edges_from    ON edges("from");
-CREATE INDEX IF NOT EXISTS idx_edges_to      ON edges("to");
-CREATE INDEX IF NOT EXISTS idx_edges_type    ON edges(type);
+CREATE INDEX IF NOT EXISTS idx_nodes_service    ON nodes(service);
+CREATE INDEX IF NOT EXISTS idx_nodes_type       ON nodes(type);
+CREATE INDEX IF NOT EXISTS idx_edges_from       ON edges("from");
+CREATE INDEX IF NOT EXISTS idx_edges_to         ON edges("to");
+CREATE INDEX IF NOT EXISTS idx_edges_type       ON edges(type);
+CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence);
+CREATE INDEX IF NOT EXISTS idx_edges_method     ON edges(method);
+CREATE INDEX IF NOT EXISTS idx_edges_path       ON edges(path);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, label, file, service);
 
@@ -138,13 +144,27 @@ func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
 	if err != nil {
 		return fmt.Errorf("marshal edge meta: %w", err)
 	}
+	confidence := e.Confidence
+	if confidence == "" {
+		confidence = e.Meta["confidence"]
+	}
+	method := e.Method
+	if method == "" {
+		method = e.Meta["method"]
+	}
+	path := e.Path
+	if path == "" {
+		path = e.Meta["path"]
+	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO edges (id, "from", "to", type, label, meta)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			"from"=excluded."from", "to"=excluded."to",
-			type=excluded.type, label=excluded.label, meta=excluded.meta`,
-		e.ID, e.From, e.To, string(e.Type), e.Label, metaJSON)
+			type=excluded.type, label=excluded.label, meta=excluded.meta,
+			confidence=excluded.confidence, method=excluded.method, path=excluded.path`,
+		e.ID, e.From, e.To, string(e.Type), e.Label, metaJSON,
+		confidence, method, path)
 	if err != nil {
 		return fmt.Errorf("upsert edge %s: %w", e.ID, err)
 	}
@@ -159,7 +179,7 @@ func (s *SQLiteStore) GetNode(ctx context.Context, id string) (*Node, error) {
 
 func (s *SQLiteStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, "from", "to", type, label, meta FROM edges WHERE id = ?`, id)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges WHERE id = ?`, id)
 	return scanEdge(row)
 }
 
@@ -182,7 +202,7 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 
 func (s *SQLiteStore) ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, "from", "to", type, label, meta FROM edges WHERE "from" = ?`, nodeID)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges WHERE "from" = ?`, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list edges from %s: %w", nodeID, err)
 	}
@@ -192,7 +212,7 @@ func (s *SQLiteStore) ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge
 
 func (s *SQLiteStore) ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, "from", "to", type, label, meta FROM edges WHERE "to" = ?`, nodeID)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges WHERE "to" = ?`, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list edges to %s: %w", nodeID, err)
 	}
@@ -218,7 +238,7 @@ func (s *SQLiteStore) BuildIndex(ctx context.Context) (*AdjacencyIndex, error) {
 	}
 
 	edgeRows, err := s.db.QueryContext(ctx,
-		`SELECT id, "from", "to", type, label, meta FROM edges`)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges`)
 	if err != nil {
 		return nil, fmt.Errorf("load edges: %w", err)
 	}
@@ -386,7 +406,7 @@ func scanNodes(rows *sql.Rows) ([]*Node, error) {
 func scanEdge(row rowScanner) (*Edge, error) {
 	var e Edge
 	var typ, metaJSON string
-	err := row.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON)
+	err := row.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON, &e.Confidence, &e.Method, &e.Path)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("edge not found")
 	}
@@ -406,7 +426,7 @@ func scanEdges(rows *sql.Rows) ([]*Edge, error) {
 	for rows.Next() {
 		var e Edge
 		var typ, metaJSON string
-		if err := rows.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON); err != nil {
+		if err := rows.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON, &e.Confidence, &e.Method, &e.Path); err != nil {
 			return nil, fmt.Errorf("scan edge row: %w", err)
 		}
 		e.Type = EdgeType(typ)

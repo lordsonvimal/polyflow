@@ -96,6 +96,56 @@ func TestUpsertAndGetEdge(t *testing.T) {
 	assert.Equal(t, e.Meta, got.Meta)
 }
 
+func TestUpsertEdge_IndexedColumns(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.UpsertNode(ctx, nodeFixture("n1")))
+	require.NoError(t, s.UpsertNode(ctx, nodeFixture("n2")))
+
+	e := &graph.Edge{
+		ID:         "e1",
+		From:       "n1",
+		To:         "n2",
+		Type:       graph.EdgeTypeHTTPCall,
+		Label:      "GET /api/users",
+		Confidence: graph.ConfidenceStatic,
+		Method:     "GET",
+		Path:       "/api/users",
+	}
+	require.NoError(t, s.UpsertEdge(ctx, e))
+
+	got, err := s.GetEdge(ctx, "e1")
+	require.NoError(t, err)
+	assert.Equal(t, graph.ConfidenceStatic, got.Confidence)
+	assert.Equal(t, "GET", got.Method)
+	assert.Equal(t, "/api/users", got.Path)
+}
+
+func TestUpsertEdge_IndexedColumns_FromMeta(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.UpsertNode(ctx, nodeFixture("n1")))
+	require.NoError(t, s.UpsertNode(ctx, nodeFixture("n2")))
+
+	// Confidence/method/path only in Meta — should be promoted to columns.
+	e := &graph.Edge{
+		ID:   "e1",
+		From: "n1",
+		To:   "n2",
+		Type: graph.EdgeTypeHTTPCall,
+		Meta: map[string]string{"confidence": "inferred", "method": "POST", "path": "/api/items"},
+	}
+	require.NoError(t, s.UpsertEdge(ctx, e))
+
+	got, err := s.GetEdge(ctx, "e1")
+	require.NoError(t, err)
+	assert.Equal(t, graph.ConfidenceInferred, got.Confidence)
+	assert.Equal(t, "POST", got.Method)
+	assert.Equal(t, "/api/items", got.Path)
+}
+
 func TestListEdgesFromTo(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

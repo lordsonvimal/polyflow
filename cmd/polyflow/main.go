@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/parser"
@@ -878,11 +879,15 @@ func runPatternsAdd(cmd *cobra.Command, args []string) error {
 var (
 	contextTarget string
 	contextTask   string
+	contextDepth  int
+	contextFormat string
 )
 
 func initContextFlags() {
 	contextCmd.Flags().StringVar(&contextTarget, "target", "", "search query to find root node (required)")
 	contextCmd.Flags().StringVar(&contextTask, "task", "debug", "task type: impact, generate, debug, refactor")
+	contextCmd.Flags().IntVar(&contextDepth, "depth", 5, "max traversal depth (0 = unlimited)")
+	contextCmd.Flags().StringVar(&contextFormat, "format", "json", "output format: json or text")
 	_ = contextCmd.MarkFlagRequired("target")
 }
 
@@ -892,19 +897,11 @@ var contextCmd = &cobra.Command{
 	RunE:  runContext,
 }
 
-type taskDepths struct {
-	upstream   int
-	downstream int
-}
-
-var taskDepthMap = map[string]taskDepths{
-	"debug":    {upstream: 3, downstream: 5},
-	"impact":   {upstream: 0, downstream: 0}, // unlimited
-	"generate": {upstream: 2, downstream: 3},
-	"refactor": {upstream: 0, downstream: 2}, // upstream unlimited
-}
-
 func runContext(cmd *cobra.Command, args []string) error {
+	if contextTask != "impact" && contextTask != "generate" && contextTask != "debug" && contextTask != "refactor" {
+		return fmt.Errorf("unknown task type: %s (use: impact, generate, debug, refactor)", contextTask)
+	}
+
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -912,7 +909,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
-	nodes, err := store.SearchNodes(ctx, contextTarget, 1)
+	nodes, err := store.SearchNodes(ctx, contextTarget, 5)
 	if err != nil || len(nodes) == 0 {
 		return fmt.Errorf("node not found for query: %s", contextTarget)
 	}
@@ -923,28 +920,48 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	depths, ok := taskDepthMap[contextTask]
-	if !ok {
-		return fmt.Errorf("unknown task type: %s (use: impact, generate, debug, refactor)", contextTask)
+	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth)
+
+	if contextFormat == "text" {
+		return printContextText(result)
+	}
+	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+func printContextText(r *pfcontext.Result) error {
+	if r.Target == nil {
+		fmt.Fprintln(os.Stdout, "Target: (not found)")
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Target: %s (%s) %s:%d\n\n", r.Target.Label, r.Target.Type, r.Target.File, r.Target.Line)
+
+	if len(r.Upstream) > 0 {
+		fmt.Fprintln(os.Stdout, "Upstream (callers):")
+		for _, n := range r.Upstream {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
+				fmt.Sprintf("%s [%s]", n.Label, n.EdgeType), n.File, n.Line)
+		}
+		fmt.Fprintln(os.Stdout)
 	}
 
-	upstream := graph.Ancestors(idx, root.ID, depths.upstream)
-	downstream := graph.Descendants(idx, root.ID, depths.downstream)
-
-	type contextOutput struct {
-		Target     *graph.Node              `json:"target"`
-		Task       string                   `json:"task"`
-		Upstream   []graph.TraversalResult  `json:"upstream"`
-		Downstream []graph.TraversalResult  `json:"downstream"`
+	if len(r.Downstream) > 0 {
+		fmt.Fprintf(os.Stdout, "Downstream (callees, depth %d):\n", r.Depth)
+		for _, n := range r.Downstream {
+			indent := strings.Repeat("  ", n.Depth)
+			fmt.Fprintf(os.Stdout, "%s%-40s %s:%d\n",
+				indent, fmt.Sprintf("%s [%s]", n.Label, n.EdgeType), n.File, n.Line)
+		}
+		fmt.Fprintln(os.Stdout)
 	}
 
-	out := contextOutput{
-		Target:     root,
-		Task:       contextTask,
-		Upstream:   upstream,
-		Downstream: downstream,
+	if len(r.CrossService) > 0 {
+		fmt.Fprintln(os.Stdout, "Cross-service:")
+		for _, cs := range r.CrossService {
+			fmt.Fprintf(os.Stdout, "  %s → %s → %s\n", cs.FromService, cs.Label, cs.ToService)
+		}
 	}
-	return json.NewEncoder(os.Stdout).Encode(out)
+
+	return nil
 }
 
 // ─── impact ──────────────────────────────────────────────────────────────────
