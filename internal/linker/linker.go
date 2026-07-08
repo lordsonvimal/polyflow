@@ -149,14 +149,16 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 			if client.Service == handler.Service {
 				continue
 			}
-			meta := map[string]string{"confidence": confidence}
 			crossEdges = append(crossEdges, graph.Edge{
-				ID:    fmt.Sprintf("link:%s->%s", client.ID, handler.ID),
-				From:  client.ID,
-				To:    handler.ID,
-				Type:  graph.EdgeTypeHTTPCall,
-				Label: fmt.Sprintf("%s %s", method, path),
-				Meta:  meta,
+				ID:         fmt.Sprintf("link:%s->%s", client.ID, handler.ID),
+				From:       client.ID,
+				To:         handler.ID,
+				Type:       graph.EdgeTypeHTTPCall,
+				Label:      fmt.Sprintf("%s %s", method, path),
+				Confidence: confidence,
+				Method:     method,
+				Path:       path,
+				Meta:       map[string]string{"confidence": confidence},
 			})
 		} else {
 			// Unresolvable: emit edge with unknown confidence so the call is visible
@@ -166,12 +168,15 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 				targetID = "unresolved:" + targetService
 			}
 			crossEdges = append(crossEdges, graph.Edge{
-				ID:    fmt.Sprintf("link:%s->%s", client.ID, targetID),
-				From:  client.ID,
-				To:    targetID,
-				Type:  graph.EdgeTypeHTTPCall,
-				Label: fmt.Sprintf("%s %s", method, path),
-				Meta:  map[string]string{"confidence": "unknown"},
+				ID:         fmt.Sprintf("link:%s->%s", client.ID, targetID),
+				From:       client.ID,
+				To:         targetID,
+				Type:       graph.EdgeTypeHTTPCall,
+				Label:      fmt.Sprintf("%s %s", method, path),
+				Confidence: graph.ConfidenceUnknown,
+				Method:     method,
+				Path:       path,
+				Meta:       map[string]string{"confidence": graph.ConfidenceUnknown},
 			})
 		}
 	}

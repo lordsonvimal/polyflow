@@ -25,11 +25,14 @@ type CytoscapeEdge struct {
 
 // CytoscapeEdgeData holds the edge payload for Cytoscape.js.
 type CytoscapeEdgeData struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Type   string `json:"type"`
-	Label  string `json:"label,omitempty"`
+	ID         string `json:"id"`
+	Source     string `json:"source"`
+	Target     string `json:"target"`
+	Type       string `json:"type"`
+	Label      string `json:"label,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
+	Method     string `json:"method,omitempty"`
+	Path       string `json:"path,omitempty"`
 }
 
 // CytoscapeGraph is the top-level Cytoscape.js elements object.
@@ -62,11 +65,14 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 	for _, e := range edges {
 		result.Edges = append(result.Edges, CytoscapeEdge{
 			Data: CytoscapeEdgeData{
-				ID:     e.ID,
-				Source: e.From,
-				Target: e.To,
-				Type:   string(e.Type),
-				Label:  e.Label,
+				ID:         e.ID,
+				Source:     e.From,
+				Target:     e.To,
+				Type:       string(e.Type),
+				Label:      e.Label,
+				Confidence: e.Confidence,
+				Method:     e.Method,
+				Path:       e.Path,
 			},
 		})
 	}

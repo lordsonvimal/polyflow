@@ -57,14 +57,25 @@ type Node struct {
 	Meta     map[string]string `json:"meta,omitempty"`
 }
 
+// Confidence levels for edges — how certain the linker is about a match.
+const (
+	ConfidenceStatic   = "static"   // literal string match
+	ConfidenceInferred = "inferred" // wildcard/normalized match
+	ConfidencePartial  = "partial"  // partially resolved
+	ConfidenceUnknown  = "unknown"  // dynamic, unresolvable
+)
+
 // Edge represents a directed relationship between two nodes.
 type Edge struct {
-	ID    string            `json:"id"`
-	From  string            `json:"from"`
-	To    string            `json:"to"`
-	Type  EdgeType          `json:"type"`
-	Label string            `json:"label,omitempty"`
-	Meta  map[string]string `json:"meta,omitempty"`
+	ID         string            `json:"id"`
+	From       string            `json:"from"`
+	To         string            `json:"to"`
+	Type       EdgeType          `json:"type"`
+	Label      string            `json:"label,omitempty"`
+	Confidence string            `json:"confidence,omitempty"` // static | inferred | partial | unknown
+	Method     string            `json:"method,omitempty"`     // HTTP method (GET, POST, …)
+	Path       string            `json:"path,omitempty"`       // HTTP route path
+	Meta       map[string]string `json:"meta,omitempty"`
 }
 
 // ParseError records a file that produced errors during indexing.
