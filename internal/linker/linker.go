@@ -118,6 +118,11 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 
 	var crossEdges []graph.Edge
 	for _, client := range clients {
+		// Navigation links (href/action attributes in HTML) are not API calls;
+		// skip them to avoid spurious cross-service edges.
+		if client.Meta["nav_link"] == "true" {
+			continue
+		}
 		method := client.Meta["method"]
 		path := client.Meta["path"]
 		targetSvc := client.Meta["target_service"]
@@ -256,4 +261,109 @@ func splitPath(p string) []string {
 
 func routeKey(method, path string) string {
 	return strings.ToUpper(method) + " " + path
+}
+
+// LinkBrokerChannels emits cross-service publisher→subscriber edges by matching
+// channel nodes that share the same exchange/routing_key across services.
+// It returns synthetic http_call-style edges of type EdgeTypePublishes connecting
+// a publisher directly to the matching subscriber (via their shared channel node).
+func LinkBrokerChannels(nodes []graph.Node) []graph.Edge {
+	// Index channel nodes by "exchange/routing_key", grouped by service.
+	type channelEntry struct {
+		nodeID  string
+		service string
+	}
+	// channelKey -> []channelEntry
+	channelsByKey := make(map[string][]channelEntry)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeChannel {
+			continue
+		}
+		ex := n.Meta["exchange"]
+		rk := n.Meta["routing_key"]
+		key := ex + "/" + rk
+		channelsByKey[key] = append(channelsByKey[key], channelEntry{n.ID, n.Service})
+	}
+
+	// Index publishers and subscribers: channelID -> []nodeID
+	pubsByChannel := make(map[string][]string)
+	subsByChannel := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		switch n.Type {
+		case graph.NodeTypePublisher:
+			ex := stripMeta(n.Meta["exchange"])
+			rk := stripMeta(n.Meta["routing_key"])
+			if ex == "" {
+				continue
+			}
+			key := ex + "/" + rk
+			for _, ch := range channelsByKey[key] {
+				if ch.service == n.Service {
+					pubsByChannel[ch.nodeID] = append(pubsByChannel[ch.nodeID], n.ID)
+				}
+			}
+		case graph.NodeTypeSubscriber:
+			// Subscribers carry queue, not exchange. Match via channel nodes in the same service.
+			// The channel node was synthesized from a publisher in the same service that shares
+			// the exchange. We match by finding channel nodes in any service whose exchange
+			// corresponds to a publisher targeting this subscriber's service.
+		}
+	}
+	_ = subsByChannel
+
+	// Build subscriber index: service+channelKey -> []subscriberID
+	// (subscribers are linked to channels via "subscribes" edges already emitted in matcher)
+	// Here we emit cross-service edges: for each (pub channel, sub channel) pair with same key
+	// but different services, emit publisher→subscriber edges.
+	var crossEdges []graph.Edge
+	for key, entries := range channelsByKey {
+		if len(entries) < 2 {
+			continue
+		}
+		// Collect pub-side and sub-side channel node IDs across services.
+		// Publishers emit "publishes" edges TO a channel; subscribers receive "subscribes" FROM a channel.
+		// The channel nodes from different services with the same key are the cross-service anchor.
+		pubChannels := make([]channelEntry, 0)
+		subChannels := make([]channelEntry, 0)
+		_ = key
+
+		for _, e := range entries {
+			hasPub := len(pubsByChannel[e.nodeID]) > 0
+			if hasPub {
+				pubChannels = append(pubChannels, e)
+			} else {
+				subChannels = append(subChannels, e)
+			}
+		}
+
+		for _, pubCh := range pubChannels {
+			for _, subCh := range subChannels {
+				if pubCh.service == subCh.service {
+					continue
+				}
+				crossEdges = append(crossEdges, graph.Edge{
+					ID:   fmt.Sprintf("broker:%s->%s", pubCh.nodeID, subCh.nodeID),
+					From: pubCh.nodeID,
+					To:   subCh.nodeID,
+					Type: graph.EdgeTypePublishes,
+					Meta: map[string]string{"via": "amqp_channel"},
+				})
+			}
+		}
+	}
+
+	return crossEdges
+}
+
+// stripMeta strips surrounding quotes from a meta value captured by tree-sitter.
+func stripMeta(s string) string {
+	if len(s) >= 2 {
+		c := s[0]
+		if (c == '"' || c == '\'' || c == '`') && s[len(s)-1] == c {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }

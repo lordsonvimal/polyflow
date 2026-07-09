@@ -33,3 +33,19 @@ patterns:
         role: amqp_queue
       - name: consumer
         role: amqp_consumer_tag
+  - name: amqp_queue_declare
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "QueueDeclare"))
+        arguments: (argument_list
+          (_) @queue
+          (_) @durable
+          (_) @delete
+          (_) @exclusive
+          (_) @no_wait
+          (_) @args))
+    captures:
+      - name: queue
+        role: amqp_queue

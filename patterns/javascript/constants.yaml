@@ -1,0 +1,25 @@
+language: javascript
+version: "1"
+patterns:
+  - name: const_string
+    query: |
+      (lexical_declaration
+        (variable_declarator
+          name: (identifier) @name
+          value: (string) @value))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value
+  - name: const_template_prefix
+    query: |
+      (lexical_declaration
+        (variable_declarator
+          name: (identifier) @name
+          value: (template_string) @value))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value

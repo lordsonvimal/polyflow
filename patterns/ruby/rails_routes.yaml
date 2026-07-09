@@ -4,6 +4,7 @@ patterns:
   - name: http_verb_route
     query: |
       (call
+        !receiver
         method: (identifier) @method
         (#match? @method "^(get|post|put|patch|delete|head|options|match)$")
         arguments: (argument_list

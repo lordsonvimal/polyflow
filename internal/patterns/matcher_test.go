@@ -183,6 +183,193 @@ func TestMatch_MatchFilter(t *testing.T) {
 	}
 }
 
+func TestMatchToGraph_AMQPChannelSynthesis(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "func_decl",
+			File:        "svc.go",
+			Line:        1,
+			Captures:    map[string]string{"name": "publishUserCreated"},
+		},
+		{
+			PatternName: "amqp_publish",
+			File:        "svc.go",
+			Line:        5,
+			Captures: map[string]string{
+				"exchange":    `"user.events"`,
+				"routing_key": `"user.created"`,
+			},
+		},
+	}
+	nodes, edges := patterns.MatchToGraph("svc", results)
+
+	// Expect: func node, publisher node, channel node
+	nodeTypes := make(map[graph.NodeType]int)
+	for _, n := range nodes {
+		nodeTypes[n.Type]++
+	}
+	assert.Equal(t, 1, nodeTypes[graph.NodeTypeFunction], "expected one function node")
+	assert.Equal(t, 1, nodeTypes[graph.NodeTypePublisher], "expected one publisher node")
+	assert.Equal(t, 1, nodeTypes[graph.NodeTypeChannel], "expected one channel node")
+
+	// Channel label should be "user.events/user.created"
+	var channelNode *graph.Node
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeChannel {
+			channelNode = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, channelNode)
+	assert.Equal(t, "user.events/user.created", channelNode.Label)
+
+	// Expect a publishes edge from publisher to channel
+	var publishEdge *graph.Edge
+	for i := range edges {
+		if edges[i].Type == graph.EdgeTypePublishes {
+			publishEdge = &edges[i]
+			break
+		}
+	}
+	require.NotNil(t, publishEdge, "expected a publishes edge")
+	assert.Equal(t, channelNode.ID, publishEdge.To)
+}
+
+func TestMatchToGraph_AMQPChannelDedup(t *testing.T) {
+	// Two publishers to the same exchange/routing_key should share one channel node.
+	results := []patterns.MatchResult{
+		{PatternName: "func_decl", File: "svc.go", Line: 1, Captures: map[string]string{"name": "pub1"}},
+		{PatternName: "amqp_publish", File: "svc.go", Line: 2, Captures: map[string]string{"exchange": `"events"`, "routing_key": `"created"`}},
+		{PatternName: "func_decl", File: "svc.go", Line: 10, Captures: map[string]string{"name": "pub2"}},
+		{PatternName: "amqp_publish", File: "svc.go", Line: 11, Captures: map[string]string{"exchange": `"events"`, "routing_key": `"created"`}},
+	}
+	nodes, _ := patterns.MatchToGraph("svc", results)
+	channelCount := 0
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeChannel {
+			channelCount++
+		}
+	}
+	assert.Equal(t, 1, channelCount, "two publishers to same channel should share one channel node")
+}
+
+func TestMatchToGraph_URLConstantPropagation(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "const_string",
+			File:        "client.js",
+			Line:        1,
+			Captures:    map[string]string{"name": "BASE", "value": `"/api"`},
+		},
+		{
+			PatternName: "func_decl",
+			File:        "client.js",
+			Line:        3,
+			Captures:    map[string]string{"name": "loadUsers"},
+		},
+		{
+			PatternName: "fetch_call",
+			File:        "client.js",
+			Line:        4,
+			Captures:    map[string]string{"url": `BASE + "/users"`},
+		},
+	}
+	nodes, _ := patterns.MatchToGraph("svc", results)
+
+	var clientNode *graph.Node
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeHTTPClient {
+			clientNode = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, clientNode, "expected an http_client node")
+	assert.Equal(t, "/api/users", clientNode.Meta["url"], "URL should be resolved from constant")
+	assert.Equal(t, "inferred", clientNode.Meta["url_confidence"])
+}
+
+func TestMatchToGraph_URLTemplateLiteral(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "const_string",
+			File:        "client.js",
+			Line:        1,
+			Captures:    map[string]string{"name": "API_URL", "value": `"/api/v1"`},
+		},
+		{
+			PatternName: "func_decl",
+			File:        "client.js",
+			Line:        3,
+			Captures:    map[string]string{"name": "getUser"},
+		},
+		{
+			PatternName: "fetch_call",
+			File:        "client.js",
+			Line:        4,
+			Captures:    map[string]string{"url": "${API_URL}/users"},
+		},
+	}
+	nodes, _ := patterns.MatchToGraph("svc", results)
+
+	var clientNode *graph.Node
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeHTTPClient {
+			clientNode = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, clientNode, "expected an http_client node")
+	assert.Equal(t, "/api/v1/users", clientNode.Meta["url"])
+	assert.Equal(t, "inferred", clientNode.Meta["url_confidence"])
+}
+
+func TestMatchToGraph_URLLiteralUnchanged(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "func_decl",
+			File:        "client.go",
+			Line:        1,
+			Captures:    map[string]string{"name": "fetchUsers"},
+		},
+		{
+			PatternName: "http_get",
+			File:        "client.go",
+			Line:        2,
+			Captures:    map[string]string{"url": `"/api/users"`},
+		},
+	}
+	nodes, _ := patterns.MatchToGraph("svc", results)
+
+	var clientNode *graph.Node
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeHTTPClient {
+			clientNode = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, clientNode)
+	assert.Equal(t, "/api/users", clientNode.Meta["url"])
+	assert.Empty(t, clientNode.Meta["url_confidence"], "literal URL should have no url_confidence set")
+}
+
+func TestMatchAMQPService(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/go/amqp091.yaml")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/amqp_service.go")
+	results, err := m.Match("go", "testdata/amqp_service.go", src)
+	require.NoError(t, err)
+
+	patternNames := make(map[string]bool)
+	for _, r := range results {
+		patternNames[r.PatternName] = true
+		t.Logf("amqp match: pattern=%s captures=%v", r.PatternName, r.Captures)
+	}
+	assert.True(t, patternNames["amqp_publish"], "expected amqp_publish pattern")
+	assert.True(t, patternNames["amqp_consume"], "expected amqp_consume pattern")
+}
+
 func mustLoadRegistry(t *testing.T, yamlPath string) *patterns.Registry {
 	t.Helper()
 	pf, err := patterns.LoadFile(yamlPath)

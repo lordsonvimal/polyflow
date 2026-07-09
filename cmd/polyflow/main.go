@@ -438,6 +438,22 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Broker channel linking: emit cross-service publisher→subscriber edges via AMQP channels.
+	{
+		brokerEdges := linker.LinkBrokerChannels(allNodes)
+		bwBroker := graph.NewBatchWriter(store)
+		for i := range brokerEdges {
+			e := brokerEdges[i]
+			if err := bwBroker.AddEdge(ctx, &e); err != nil {
+				return err
+			}
+			allEdges = append(allEdges, e)
+		}
+		if err := bwBroker.Flush(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Cross-service linking
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
 	l := linker.New(cfg)
