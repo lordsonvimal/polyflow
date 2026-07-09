@@ -1,4 +1,4 @@
 {
-  "patterns": ["http_get", "http_post"],
-  "node_types": ["http_client", "http_client"]
+  "patterns": ["http_get", "http_post", "http_new_request"],
+  "node_types": ["http_client", "http_client", "http_client"]
 }

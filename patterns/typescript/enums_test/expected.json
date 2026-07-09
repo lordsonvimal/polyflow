@@ -1,1 +1,1 @@
-{"patterns": ["enum_declaration", "const_enum"], "node_types": ["type_alias", "type_alias"]}
+{"patterns": ["enum_declaration", "enum_declaration", "const_enum"], "node_types": ["type_alias", "type_alias", "type_alias"]}

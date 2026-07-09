@@ -10,7 +10,8 @@ patterns:
           property: (property_identifier) @method
           (#match? @method "^(get|post|put|patch|delete|head|options|request)$"))
         arguments: (arguments
-          (_) @url . _*))
+          .
+          (_) @url))
     captures:
       - name: method
         role: http_method

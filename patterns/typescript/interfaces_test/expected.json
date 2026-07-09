@@ -1,1 +1,1 @@
-{"patterns": ["interface_declaration", "interface_extends"], "node_types": ["interface", "interface"]}
+{"patterns": ["interface_declaration", "interface_declaration", "interface_extends"], "node_types": ["interface", "interface", "interface"]}

@@ -25,9 +25,10 @@ patterns:
           field: (field_identifier) @fn
           (#eq? @fn "Consume"))
         arguments: (argument_list
+          .
           (_) @queue
-          (_) @consumer
-          . _*))
+          .
+          (_) @consumer))
     captures:
       - name: queue
         role: amqp_queue
