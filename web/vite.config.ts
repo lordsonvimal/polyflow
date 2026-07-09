@@ -13,4 +13,10 @@ export default defineConfig({
     outDir: "dist",
     target: "esnext",
   },
+  // vitest reads this block; the vite type doesn't know it.
+  // @ts-ignore
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  },
 });

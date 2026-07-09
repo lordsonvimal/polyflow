@@ -1,23 +1,7 @@
 import { createSignal, createEffect } from "solid-js";
+import { GraphNode, GraphEdge } from "../lib/types";
 
-export interface GraphNode {
-  id: string;
-  type: string;
-  label: string;
-  service: string;
-  file: string;
-  line: number;
-  language: string;
-  meta?: Record<string, string>;
-}
-
-export interface GraphEdge {
-  id: string;
-  from: string;
-  to: string;
-  type: string;
-  label?: string;
-}
+export type { GraphNode, GraphEdge };
 
 interface CytoscapeNodeData {
   id: string;
@@ -27,6 +11,7 @@ interface CytoscapeNodeData {
   file: string;
   line: number;
   language: string;
+  meta?: Record<string, string>;
 }
 
 interface CytoscapeEdgeData {
@@ -35,6 +20,8 @@ interface CytoscapeEdgeData {
   target: string;
   type: string;
   label?: string;
+  confidence?: string;
+  meta?: Record<string, string>;
 }
 
 interface CytoscapeGraph {
@@ -71,7 +58,7 @@ export type TraceDirection = "forward" | "backward" | "both";
 
 const [traceRoot, setTraceRoot] = createSignal<string | null>(urlParam("root"));
 const [traceDirection, setTraceDirection] = createSignal<TraceDirection>(
-  (urlParam("direction") as TraceDirection | null) ?? "forward"
+  (urlParam("direction") as TraceDirection | null) ?? "both"
 );
 const [traceDepth, setTraceDepth] = createSignal<number>(
   parseInt(urlParam("depth") ?? "10", 10)
@@ -83,10 +70,11 @@ const [nodes, setNodes] = createSignal<GraphNode[]>([]);
 const [edges, setEdges] = createSignal<GraphEdge[]>([]);
 const [loading, setLoading] = createSignal(false);
 const [error, setError] = createSignal<string | null>(null);
+const [stats, setStats] = createSignal<{ nodes: number; edges: number } | null>(null);
 
 function cytoscapeToStore(g: CytoscapeGraph) {
   setNodes(
-    g.nodes.map((n) => ({
+    (g.nodes ?? []).map((n) => ({
       id: n.data.id,
       type: n.data.type,
       label: n.data.label,
@@ -94,20 +82,23 @@ function cytoscapeToStore(g: CytoscapeGraph) {
       file: n.data.file,
       line: n.data.line,
       language: n.data.language ?? "",
+      meta: n.data.meta,
     }))
   );
   setEdges(
-    g.edges.map((e) => ({
+    (g.edges ?? []).map((e) => ({
       id: e.data.id,
       from: e.data.source,
       to: e.data.target,
       type: e.data.type,
       label: e.data.label,
+      confidence: e.data.confidence,
+      meta: e.data.meta,
     }))
   );
 }
 
-async function fetchGraph(page = 1, limit = 500) {
+async function fetchGraph(page = 1, limit = 2000) {
   setLoading(true);
   setError(null);
   try {
@@ -122,9 +113,20 @@ async function fetchGraph(page = 1, limit = 500) {
   }
 }
 
+async function fetchStats() {
+  try {
+    const res = await fetch("/api/stats");
+    if (!res.ok) return;
+    const data = await res.json();
+    setStats({ nodes: data.nodes ?? 0, edges: data.edges ?? 0 });
+  } catch {
+    // ignore — stats are cosmetic
+  }
+}
+
 async function fetchTrace(
   rootId: string,
-  direction: TraceDirection = "forward",
+  direction: TraceDirection = "both",
   depth = 10
 ) {
   setLoading(true);
@@ -147,6 +149,20 @@ async function fetchTrace(
   }
 }
 
+// clearTrace returns to the full-graph view.
+function clearTrace() {
+  setTraceRoot(null);
+  pushURLGraphParams({ root: null, direction: null, depth: null });
+  fetchGraph();
+}
+
+// retrace re-runs the active trace with a new direction/depth.
+function retrace(direction?: TraceDirection, depth?: number) {
+  const root = traceRoot();
+  if (!root) return;
+  fetchTrace(root, direction ?? traceDirection(), depth ?? traceDepth());
+}
+
 // Restore trace from URL on startup.
 createEffect(() => {
   const root = traceRoot();
@@ -160,8 +176,12 @@ export const graphStore = {
   edges,
   loading,
   error,
+  stats,
   fetchGraph,
+  fetchStats,
   fetchTrace,
+  clearTrace,
+  retrace,
   traceRoot,
   traceDirection,
   traceDepth,

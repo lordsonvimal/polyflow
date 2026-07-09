@@ -7,15 +7,18 @@ type CytoscapeNode struct {
 	Data CytoscapeNodeData `json:"data"`
 }
 
-// CytoscapeNodeData holds the node payload for Cytoscape.js.
+// CytoscapeNodeData holds the node payload for Cytoscape.js. Meta carries
+// node metadata — notably package + resolved_version for framework-boundary
+// and cloud-SDK matches, which the UI surfaces and groups on.
 type CytoscapeNodeData struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Type     string `json:"type"`
-	Service  string `json:"service"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Language string `json:"language"`
+	ID       string            `json:"id"`
+	Label    string            `json:"label"`
+	Type     string            `json:"type"`
+	Service  string            `json:"service"`
+	File     string            `json:"file"`
+	Line     int               `json:"line"`
+	Language string            `json:"language"`
+	Meta     map[string]string `json:"meta,omitempty"`
 }
 
 // CytoscapeEdge is the Cytoscape.js edge format.
@@ -25,14 +28,15 @@ type CytoscapeEdge struct {
 
 // CytoscapeEdgeData holds the edge payload for Cytoscape.js.
 type CytoscapeEdgeData struct {
-	ID         string `json:"id"`
-	Source     string `json:"source"`
-	Target     string `json:"target"`
-	Type       string `json:"type"`
-	Label      string `json:"label,omitempty"`
-	Confidence string `json:"confidence,omitempty"`
-	Method     string `json:"method,omitempty"`
-	Path       string `json:"path,omitempty"`
+	ID         string            `json:"id"`
+	Source     string            `json:"source"`
+	Target     string            `json:"target"`
+	Type       string            `json:"type"`
+	Label      string            `json:"label,omitempty"`
+	Confidence string            `json:"confidence,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Path       string            `json:"path,omitempty"`
+	Meta       map[string]string `json:"meta,omitempty"`
 }
 
 // CytoscapeGraph is the top-level Cytoscape.js elements object.
@@ -58,6 +62,7 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 				File:     n.File,
 				Line:     n.Line,
 				Language: n.Language,
+				Meta:     n.Meta,
 			},
 		})
 	}
@@ -73,6 +78,7 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 				Confidence: e.Confidence,
 				Method:     e.Method,
 				Path:       e.Path,
+				Meta:       e.Meta,
 			},
 		})
 	}

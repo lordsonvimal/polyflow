@@ -1,0 +1,14 @@
+flowchart LR
+  subgraph api
+    n0["sqlite (datastore)"]
+    n1["CreateUser (function)"]
+    n2["POST /users (http_handler)"]
+    n3["PutObject github.com/aws/aws-sdk-go@1.55.8 (external_service)"]
+  end
+  subgraph web
+    n4["POST /api/users (http_client)"]
+  end
+  n1 -.->|queries| n0
+  n1 -->|cloud_call| n3
+  n2 -->|calls| n1
+  n4 -->|http_call| n2
