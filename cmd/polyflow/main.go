@@ -21,6 +21,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
+	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/parser"
@@ -53,7 +54,9 @@ func init() {
 		contextCmd,
 		impactCmd,
 		configCmd,
+		depsCmd,
 	)
+	initDepsFlags()
 	initIndexFlags()
 	initServeFlags()
 	initSearchFlags()
@@ -204,12 +207,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 		reg.RegisterFile(pf)
 	}
-	matcher := patterns.NewTreeSitterMatcher(reg)
+	ctx := context.Background()
 
 	fmt.Println("Scanning services...")
 	type serviceFiles struct {
 		svc   workspace.Service
 		files []string
+		deps  []deps.Dependency
 	}
 	// Collect other service paths so each service excludes files owned by another service.
 	svcPaths := make([]string, len(cfg.Services))
@@ -240,8 +244,24 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("walk %s: %w", svc.Name, err)
 		}
-		fmt.Printf("  %s: %d files (%s)\n", svc.Name, len(files), svc.Language)
-		allSvcFiles = append(allSvcFiles, serviceFiles{svc, files})
+		// Resolve exact dependency versions (go.mod, package.json+lockfile,
+		// Gemfile.lock) — drives version-gated pattern activation and is
+		// stored for "what version of X does this service use" queries.
+		svcDeps, err := deps.Resolve(absSvcPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: dependency resolution for %s: %v\n", svc.Name, err)
+		}
+		for i := range svcDeps {
+			d := svcDeps[i]
+			if err := store.UpsertDependency(ctx, &graph.Dependency{
+				Service: svc.Name, Ecosystem: d.Ecosystem, Name: d.Name,
+				Version: d.Version, Kind: d.Kind,
+			}); err != nil {
+				return err
+			}
+		}
+		fmt.Printf("  %s: %d files (%s, %d deps)\n", svc.Name, len(files), svc.Language, len(svcDeps))
+		allSvcFiles = append(allSvcFiles, serviceFiles{svc, files, svcDeps})
 	}
 
 	totalFiles := 0
@@ -249,7 +269,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		totalFiles += len(sf.files)
 	}
 
-	ctx := context.Background()
 	var processed atomic.Int64
 	start := time.Now()
 
@@ -289,6 +308,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	bw := graph.NewBatchWriter(store)
 
 	for _, sf := range allSvcFiles {
+		// Per-service matcher: pattern set filtered by the service's resolved
+		// dependency versions (version-gated patterns activate per service).
+		matcher := patterns.NewTreeSitterMatcherForService(reg, sf.deps)
 		pool := parser.NewWorkerPool(indexWorkers, matcher, sf.svc.Name)
 		for result := range pool.Run(sf.files) {
 			processed.Add(1)
@@ -1177,6 +1199,45 @@ func printImpactText(out impactOutput) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "\nTotal: %d nodes in blast radius\n", out.TotalCallers)
+	return nil
+}
+
+// ─── deps ────────────────────────────────────────────────────────────────────
+
+var (
+	depsService string
+	depsFormat  string
+)
+
+func initDepsFlags() {
+	depsCmd.Flags().StringVar(&depsService, "service", "", "filter to one service")
+	depsCmd.Flags().StringVar(&depsFormat, "format", "table", "output format: table or json")
+}
+
+var depsCmd = &cobra.Command{
+	Use:   "deps",
+	Short: "List resolved dependency versions per service",
+	RunE:  runDeps,
+}
+
+func runDeps(cmd *cobra.Command, args []string) error {
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	list, err := store.ListDependencies(context.Background(), depsService)
+	if err != nil {
+		return err
+	}
+
+	if depsFormat == "json" {
+		return json.NewEncoder(os.Stdout).Encode(list)
+	}
+	for _, d := range list {
+		fmt.Printf("  %-20s %-10s %-45s %-15s %s\n", d.Service, d.Ecosystem, d.Name, d.Version, d.Kind)
+	}
 	return nil
 }
 

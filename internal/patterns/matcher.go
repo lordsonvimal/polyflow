@@ -16,6 +16,7 @@ import (
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
+	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -26,6 +27,11 @@ type MatchResult struct {
 	Captures    map[string]string // capture name -> matched text
 	Line        int
 	File        string
+
+	// Set for matches from version-gated patterns: which package the pattern
+	// targets and the service's resolved version of it.
+	Package         string
+	ResolvedVersion string
 }
 
 // compiledQuery holds a compiled tree-sitter query and the original pattern.
@@ -37,6 +43,7 @@ type compiledQuery struct {
 // TreeSitterMatcher runs tree-sitter queries against source files.
 type TreeSitterMatcher struct {
 	registry *Registry
+	versions map[string]string // package -> resolved version (for match metadata)
 	mu       sync.Mutex
 	// compiled queries cached per language: language -> patternName -> compiledQuery
 	compiled map[string][]compiledQuery
@@ -48,6 +55,15 @@ func NewTreeSitterMatcher(reg *Registry) *TreeSitterMatcher {
 		registry: reg,
 		compiled: make(map[string][]compiledQuery),
 	}
+}
+
+// NewTreeSitterMatcherForService creates a matcher whose pattern set is
+// filtered by the service's resolved dependency versions, and whose matches
+// carry package + resolved-version metadata.
+func NewTreeSitterMatcherForService(reg *Registry, svcDeps []deps.Dependency) *TreeSitterMatcher {
+	m := NewTreeSitterMatcher(reg.ForService(svcDeps))
+	m.versions = ResolvedVersions(svcDeps)
+	return m
 }
 
 // languageFor returns the tree-sitter Language for the given language string.
@@ -189,12 +205,17 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				minLine = 0
 			}
 
-			results = append(results, MatchResult{
+			mr := MatchResult{
 				PatternName: cq.pattern.Name,
 				Captures:    captures,
 				Line:        minLine,
 				File:        file,
-			})
+			}
+			if cq.pattern.Package != "" {
+				mr.Package = cq.pattern.Package
+				mr.ResolvedVersion = m.versions[cq.pattern.Package]
+			}
+			results = append(results, mr)
 		}
 	}
 
@@ -299,6 +320,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// Build meta from all captures
 		meta := make(map[string]string, len(r.Captures))
 		maps.Copy(meta, r.Captures)
+
+		// Version-gated patterns stamp which package version they matched
+		// against, so the graph/UI can show e.g. "this call uses SDK v1".
+		if r.Package != "" {
+			meta["package"] = r.Package
+			if r.ResolvedVersion != "" {
+				meta["resolved_version"] = r.ResolvedVersion
+			}
+		}
 
 		// Strip surrounding quotes from path and url captures (tree-sitter includes them).
 		for _, key := range []string{"path", "url", "method"} {

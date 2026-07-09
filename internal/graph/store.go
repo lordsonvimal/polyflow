@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dependencies (
+	service   TEXT NOT NULL,
+	ecosystem TEXT NOT NULL,
+	name      TEXT NOT NULL,
+	version   TEXT NOT NULL,
+	kind      TEXT NOT NULL DEFAULT 'prod',
+	PRIMARY KEY (service, ecosystem, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dependencies_name ON dependencies(name);
 `
 
 // Store is the persistence interface for the polyflow graph.
@@ -77,6 +88,11 @@ type Store interface {
 	UpsertParseError(ctx context.Context, pe *ParseError) error
 	// ListParseErrors returns all files that had parse errors during the last index.
 	ListParseErrors(ctx context.Context) ([]*ParseError, error)
+	// UpsertDependency records one resolved dependency version for a service.
+	UpsertDependency(ctx context.Context, d *Dependency) error
+	// ListDependencies returns resolved dependencies, optionally filtered by
+	// service (empty service = all).
+	ListDependencies(ctx context.Context, service string) ([]*Dependency, error)
 	// SetMeta stores a key-value metadata entry.
 	SetMeta(ctx context.Context, key, value string) error
 	// GetMeta retrieves a metadata entry by key.
@@ -317,6 +333,45 @@ func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error
 			return nil, fmt.Errorf("scan parse error row: %w", err)
 		}
 		out = append(out, &pe)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) UpsertDependency(ctx context.Context, d *Dependency) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO dependencies (service, ecosystem, name, version, kind)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(service, ecosystem, name) DO UPDATE SET
+			version=excluded.version,
+			kind=excluded.kind`,
+		d.Service, d.Ecosystem, d.Name, d.Version, d.Kind)
+	if err != nil {
+		return fmt.Errorf("upsert dependency %s/%s: %w", d.Service, d.Name, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListDependencies(ctx context.Context, service string) ([]*Dependency, error) {
+	query := `SELECT service, ecosystem, name, version, kind FROM dependencies`
+	args := []any{}
+	if service != "" {
+		query += ` WHERE service = ?`
+		args = append(args, service)
+	}
+	query += ` ORDER BY service, ecosystem, name`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list dependencies: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Dependency
+	for rows.Next() {
+		var d Dependency
+		if err := rows.Scan(&d.Service, &d.Ecosystem, &d.Name, &d.Version, &d.Kind); err != nil {
+			return nil, fmt.Errorf("scan dependency row: %w", err)
+		}
+		out = append(out, &d)
 	}
 	return out, rows.Err()
 }

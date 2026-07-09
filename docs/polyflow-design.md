@@ -1055,6 +1055,47 @@ Every YAML pattern file is **required** to have a corresponding test fixture dir
 
 ---
 
+## Version-Aware Pattern Matching
+
+Different versions of the same package can have materially different call-site
+shapes (proof case: AWS SDK for Go v1 vs v2 — session-based `s3.New(sess)` +
+context-less calls vs config-based `s3.NewFromConfig(cfg)` + context-first
+calls). A pattern written for one silently misses or misfires on the other.
+
+**Dependency resolution (`internal/deps`)**: at index time, every service's
+exact installed versions are resolved from `go.mod`, `package.json` + lockfile
+(`package-lock.json` v1–v3 or `yarn.lock` classic/berry — the resolved version,
+not the semver range; `dependencies` vs `devDependencies` recorded as
+`kind: prod|dev`), and `Gemfile.lock`. Stored in a `dependencies` table
+(`service, ecosystem, name, version, kind`) and queryable via `polyflow deps
+[--service X]`.
+
+**Pattern gating**: pattern YAML files may declare a top-level gate:
+
+```yaml
+# patterns/go/aws_s3_v1.yaml
+language: go
+package: github.com/aws/aws-sdk-go
+version_range: ">=1.0.0 <2.0.0"   # Masterminds semver syntax
+```
+
+The registry activates the file's patterns for a service only when that
+service depends on `package` and its resolved version satisfies
+`version_range` (`package` alone = presence check). Where call shapes diverge
+across a major version, ship separate pattern files per range (aws_s3_v1 /
+aws_s3_v2) rather than one pattern matching both. Unparseable versions fail
+closed. This is a registry capability — nothing is hardcoded per package.
+
+**Metadata**: nodes produced by gated patterns carry `package` and
+`resolved_version` in metadata, surfaced in the UI and agent JSON so "this S3
+upload uses SDK v1" is answerable without reading code.
+
+**Fixtures**: version-gated patterns must ship a same-shape-wrong-version
+negative fixture — a v1-shaped call must produce zero matches under the v2
+pattern file and vice versa.
+
+---
+
 ## Datastar/SSE Pattern Detection
 
 ### Client-side (Templ HTML attributes)

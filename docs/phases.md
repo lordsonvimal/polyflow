@@ -46,7 +46,7 @@ by CI.
 **Proof**: `go test ./internal/patterns/` fails if any pattern matches its
 negative fixture or diverges from `expected.json`; passes on the full tree.
 
-## Phase 2 — Dependency resolution + version-aware pattern gating — pending
+## Phase 2 — Dependency resolution + version-aware pattern gating — done
 
 **Problem**: no per-service resolved dependency versions; patterns cannot be
 scoped to package version ranges (AWS SDK v1 vs v2 is the proof case).
@@ -273,6 +273,12 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 2 — done.** internal/deps resolves go.mod / package.json+lockfile
+  (package-lock v1–v3, yarn classic+berry, prod/dev kind) / Gemfile.lock;
+  dependencies table + `polyflow deps` command; pattern YAML gains
+  `package:`/`version_range:` file-level gate enforced by Registry.ForService;
+  per-service matchers stamp package+resolved_version into node metadata.
+  Design doc gained a "Version-Aware Pattern Matching" section.
 - **Phase 1 — done.** Harness verifies expected.json multisets + node types and
   enforces/runs negative fixtures for all 37 pattern files. Found and fixed two
   real bugs: Registry stored patterns in a name-keyed map, silently dropping
