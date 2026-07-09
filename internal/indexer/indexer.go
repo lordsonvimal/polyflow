@@ -133,6 +133,10 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		svcPaths[i] = abs
 	}
 
+	// .polyflowignore patterns apply on top of index.exclude; the file lives
+	// at the workspace root (the directory the indexer runs from).
+	ignorePatterns := workspace.LoadIgnoreFile(".")
+
 	var allSvcFiles []serviceFiles
 	for idx, svc := range cfg.Services {
 		absSvcPath, _ := filepath.Abs(svc.Path)
@@ -146,7 +150,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				extraExcludes = append(extraExcludes, rel+"/**")
 			}
 		}
-		excludes := append(append([]string{}, cfg.Index.Exclude...), extraExcludes...)
+		excludes := append(append([]string{}, cfg.Index.Exclude...), ignorePatterns...)
+		excludes = append(excludes, extraExcludes...)
 		files, err := walkService(svc.Path, excludes)
 		if err != nil {
 			return nil, fmt.Errorf("walk %s: %w", svc.Name, err)
@@ -461,6 +466,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkWebSocketMessages(allNodes)); err != nil {
 		return nil, err
 	}
+	if err := writeEdges(linker.LinkSSEClients(allNodes)); err != nil {
+		return nil, err
+	}
 	if err := writeEdges(linker.LinkHubFanout(allNodes)); err != nil {
 		return nil, err
 	}
@@ -536,8 +544,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 
 	if s, err := graph.NewSQLiteStore(finalDB); err == nil {
-		stats.Nodes, stats.Edges, _ = s.Stats(ctx)
+		var statsErr error
+		stats.Nodes, stats.Edges, statsErr = s.Stats(ctx)
+		if statsErr != nil {
+			fmt.Fprintf(logw, "  Warning: read final stats: %v\n", statsErr)
+		}
 		s.Close()
+	} else {
+		fmt.Fprintf(logw, "  Warning: open graph for stats: %v\n", err)
 	}
 	stats.Elapsed = time.Since(start)
 	return stats, nil

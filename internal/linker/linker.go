@@ -125,6 +125,11 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 		}
 		method := client.Meta["method"]
 		path := client.Meta["path"]
+		if path == "" {
+			// Most JS client patterns capture "url", not "path" (fetch, axios,
+			// EventSource). Extract the path portion so handlers can match.
+			path = urlToPath(stripMeta(client.Meta["url"]))
+		}
 		targetSvc := client.Meta["target_service"]
 
 		// Build handler lookup maps, stripping the base_url prefix from handler paths
@@ -138,6 +143,11 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 				continue
 			}
 			hpath := h.Meta["path"]
+			if hpath == "" {
+				// A handler without a path can never be a real route target;
+				// indexing it would let empty-path clients "match" it.
+				continue
+			}
 			if baseURL != "" && strings.HasPrefix(hpath, baseURL) {
 				hpath = hpath[len(baseURL):]
 				if hpath == "" {
@@ -208,6 +218,11 @@ func candidateMethods(method string) []string {
 }
 
 func resolveHandler(method, path string, exact, normal map[string]*graph.Node) (*graph.Node, string) {
+	if path == "" {
+		// No path information — nothing to match against; the caller emits an
+		// unresolved edge instead of blind-matching every empty-path handler.
+		return nil, ""
+	}
 	for _, m := range candidateMethods(method) {
 		rawKey := routeKey(m, path)
 		if h, ok := exact[rawKey]; ok {
@@ -261,6 +276,28 @@ func splitPath(p string) []string {
 
 func routeKey(method, path string) string {
 	return strings.ToUpper(method) + " " + path
+}
+
+// urlToPath extracts the request path from a captured client URL: query
+// strings are dropped, absolute http(s) URLs are reduced to their path, and
+// values that are neither absolute URLs nor root-relative paths (variable
+// references like mermaidURL(...)) resolve to "" — unmatched, not guessed.
+func urlToPath(url string) string {
+	if i := strings.Index(url, "://"); i >= 0 {
+		rest := url[i+3:]
+		if j := strings.Index(rest, "/"); j >= 0 {
+			url = rest[j:]
+		} else {
+			url = "/"
+		}
+	}
+	if !strings.HasPrefix(url, "/") {
+		return ""
+	}
+	if qi := strings.Index(url, "?"); qi >= 0 {
+		url = url[:qi]
+	}
+	return url
 }
 
 // LinkBrokerChannels emits cross-service publisher→subscriber edges by matching
@@ -573,6 +610,46 @@ func LinkPusherChannels(nodes []graph.Node) []graph.Edge {
 				Type:       graph.EdgeTypePusherTrigger,
 				Confidence: graph.ConfidenceInferred,
 				Meta:       map[string]string{"channel": ch, "event": stripMeta(n.Meta["event"])},
+			})
+		}
+	}
+	return edges
+}
+
+// LinkSSEClients connects an EventSource connection to the message handlers
+// registered on it in the same file (es.onmessage = …, es.on('message', …)).
+// Without this edge the subscriber floats disconnected from the stream that
+// feeds it.
+func LinkSSEClients(nodes []graph.Node) []graph.Edge {
+	clientsByFile := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Meta["pattern"] == "eventsource_connect" {
+			clientsByFile[n.File] = append(clientsByFile[n.File], n.ID)
+		}
+	}
+	if len(clientsByFile) == 0 {
+		return nil
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeSubscriber {
+			continue
+		}
+		p := n.Meta["pattern"]
+		if p != "ws_onmessage_assign" && p != "ws_on_message" {
+			continue
+		}
+		for _, clientID := range clientsByFile[n.File] {
+			edges = append(edges, graph.Edge{
+				ID:         fmt.Sprintf("sse:%s->%s", clientID, n.ID),
+				From:       clientID,
+				To:         n.ID,
+				Type:       graph.EdgeTypeSubscribes,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"via": "eventsource"},
 			})
 		}
 	}

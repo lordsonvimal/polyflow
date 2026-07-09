@@ -435,3 +435,61 @@ func TestLinkBrokerHints_SkipsNonBrokerPublishers(t *testing.T) {
 	assert.Empty(t, n)
 	assert.Empty(t, e)
 }
+
+func TestURLToPath(t *testing.T) {
+	cases := []struct {
+		in  string
+		out string
+	}{
+		{"/api/stats", "/api/stats"},
+		{"/api/graph?page=${page}&limit=${limit}", "/api/graph"},
+		{"http://localhost:8081/api/users", "/api/users"},
+		{"wss://tether.local/socket", "/socket"},
+		{"http://localhost:8081", "/"},
+		{"mermaidURL(level, scope)", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.out, urlToPath(c.in), "urlToPath(%q)", c.in)
+	}
+}
+
+func TestLink_URLMetaFallbackAndNoEmptyPathMatch(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "web:app.ts:http_client:fetch_call:1", Type: graph.NodeTypeHTTPClient, Service: "web",
+			Meta: map[string]string{"url": "'/api/stats'"}},
+		{ID: "web:app.ts:http_client:fetch_call:2", Type: graph.NodeTypeHTTPClient, Service: "web",
+			Meta: map[string]string{"url": "someVar"}},
+		{ID: "api:server.go:http_handler:h:1", Type: graph.NodeTypeHTTPHandler, Service: "api",
+			Meta: map[string]string{"method": "GET", "path": "/api/stats"}},
+		{ID: "api:fixture.go:http_handler:empty:1", Type: graph.NodeTypeHTTPHandler, Service: "api",
+			Meta: map[string]string{}},
+	}
+	l := New(&workspace.WorkspaceConfig{})
+	edges, err := l.Link(nodes, nil)
+	require.NoError(t, err)
+
+	targets := map[string]string{}
+	for _, e := range edges {
+		targets[e.From] = e.To
+	}
+	// url meta resolves to the handler by path
+	assert.Equal(t, "api:server.go:http_handler:h:1", targets["web:app.ts:http_client:fetch_call:1"])
+	// unresolvable variable url must NOT blind-match the empty-path handler
+	assert.Equal(t, "unresolved", targets["web:app.ts:http_client:fetch_call:2"])
+}
+
+func TestLinkSSEClients(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "web:notif.tsx:http_client:eventsource_connect:23", Type: graph.NodeTypeHTTPClient,
+			Service: "web", File: "notif.tsx", Meta: map[string]string{"pattern": "eventsource_connect"}},
+		{ID: "web:notif.tsx:subscriber:ws_onmessage_assign:24", Type: graph.NodeTypeSubscriber,
+			Service: "web", File: "notif.tsx", Meta: map[string]string{"pattern": "ws_onmessage_assign"}},
+		{ID: "web:other.tsx:subscriber:ws_onmessage_assign:5", Type: graph.NodeTypeSubscriber,
+			Service: "web", File: "other.tsx", Meta: map[string]string{"pattern": "ws_onmessage_assign"}},
+	}
+	edges := LinkSSEClients(nodes)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "web:notif.tsx:http_client:eventsource_connect:23", edges[0].From)
+	assert.Equal(t, "web:notif.tsx:subscriber:ws_onmessage_assign:24", edges[0].To)
+}

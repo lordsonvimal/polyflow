@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"go/token"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -56,6 +57,8 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 
 	// Build file+name → nodeID index from known tree-sitter nodes.
 	// Key: "file\x00name" (both function and method are stored; we try both types).
+	// Node IDs carry workspace-relative file paths while SSA positions are
+	// absolute, so both sides are canonicalized before comparison.
 	nodeByFileAndName := make(map[string]string, len(knownNodes))
 	for id := range knownNodes {
 		// ID format: service:file:type:name:line
@@ -64,7 +67,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 			continue
 		}
 		file, name := parts[1], parts[3]
-		key := file + "\x00" + name
+		key := canonicalPath(file) + "\x00" + name
 		// Prefer the first match; for Go, name is unique per file in practice.
 		if _, exists := nodeByFileAndName[key]; !exists {
 			nodeByFileAndName[key] = id
@@ -91,7 +94,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		if name == "" {
 			return "", false
 		}
-		key := pos.Filename + "\x00" + name
+		key := canonicalPath(pos.Filename) + "\x00" + name
 		id, ok := nodeByFileAndName[key]
 		return id, ok
 	}
@@ -99,9 +102,21 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// Collect in-service functions.
 	allFns := ssautil.AllFunctions(prog)
 	inService := make(map[*ssa.Function]bool)
+	resolved := 0
 	for fn := range allFns {
 		if isServiceFunc(fn, dir, fset) {
 			inService[fn] = true
+			if _, ok := resolveFunc(fn); ok {
+				resolved++
+			}
+		}
+	}
+	// Every SSA function failing to resolve against the tree-sitter node set
+	// means the two sides disagree on file paths (or the node set is stale) —
+	// silently returning zero edges would leave the whole call graph missing.
+	if len(inService) > 0 && resolved == 0 {
+		return SemanticResult{
+			Warning: fmt.Sprintf("service %q: none of %d analyzed functions matched indexed nodes — call edges unavailable (path mismatch between analyzer and index?)", service, len(inService)),
 		}
 	}
 
@@ -205,6 +220,21 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	return SemanticResult{Edges: edges}
 }
 
+// canonicalPath resolves a path to its absolute, symlink-evaluated form so
+// workspace-relative node paths and absolute go/packages positions compare
+// equal (filepath.Abs resolves relative paths against the indexer's cwd,
+// which is the workspace root).
+func canonicalPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
+
 // isServiceFunc returns true if fn is a non-synthetic function whose source file
 // is under serviceDir.
 func isServiceFunc(fn *ssa.Function, serviceDir string, fset *token.FileSet) bool {
@@ -215,7 +245,7 @@ func isServiceFunc(fn *ssa.Function, serviceDir string, fset *token.FileSet) boo
 	if !pos.IsValid() || pos.Filename == "" {
 		return false
 	}
-	return strings.HasPrefix(pos.Filename, serviceDir)
+	return strings.HasPrefix(canonicalPath(pos.Filename), canonicalPath(serviceDir))
 }
 
 // matchesInvoke returns true if fn satisfies the interface method described by call.

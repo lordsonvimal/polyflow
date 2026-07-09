@@ -1,0 +1,17 @@
+# Server-sent events client: new EventSource(url) opens a long-lived GET
+# stream. Emits an http_client node so the cross-service linker can match it
+# to the server's SSE endpoint handler by path.
+language: javascript
+version: "1"
+patterns:
+  - name: eventsource_connect
+    query: |
+      (new_expression
+        constructor: (identifier) @cls
+        (#eq? @cls "EventSource")
+        arguments: (arguments
+          .
+          (_) @url))
+    captures:
+      - name: url
+        role: http_url
