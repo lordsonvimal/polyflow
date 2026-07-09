@@ -78,6 +78,16 @@ type Edge struct {
 	Meta       map[string]string `json:"meta,omitempty"`
 }
 
+// Dependency is one resolved package version for a service, recorded at
+// index time so users and agents can query "what version of X does Y use".
+type Dependency struct {
+	Service   string `json:"service"`
+	Ecosystem string `json:"ecosystem"` // go | npm | rubygems
+	Name      string `json:"name"`
+	Version   string `json:"version"` // exact resolved version
+	Kind      string `json:"kind"`    // prod | dev
+}
+
 // ParseError records a file that produced errors during indexing.
 // Partial extraction may still have occurred; consult the associated nodes/edges.
 type ParseError struct {
