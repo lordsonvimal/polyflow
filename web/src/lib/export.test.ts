@@ -37,3 +37,27 @@ describe("fetchMermaid", () => {
     await expect(fetchMermaid("service")).rejects.toThrow("export failed: 400");
   });
 });
+
+import { safeExportScale, MAX_EXPORT_DIM } from "./export";
+
+describe("safeExportScale", () => {
+  it("keeps the desired scale for small graphs", () => {
+    expect(safeExportScale(1000, 800)).toBe(2);
+  });
+
+  it("clamps by max dimension for wide graphs", () => {
+    const scale = safeExportScale(20000, 1000);
+    expect(scale * 20000).toBeLessThanOrEqual(MAX_EXPORT_DIM);
+    expect(scale).toBeGreaterThan(0);
+  });
+
+  it("clamps by area for large square graphs", () => {
+    const scale = safeExportScale(7000, 7000);
+    expect(scale * 7000 * scale * 7000).toBeLessThanOrEqual(32_000_000 + 1);
+  });
+
+  it("never returns zero or negative", () => {
+    expect(safeExportScale(1e9, 1e9)).toBeGreaterThan(0);
+    expect(safeExportScale(0, 0)).toBe(2);
+  });
+});

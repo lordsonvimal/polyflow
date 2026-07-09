@@ -189,3 +189,16 @@ func TestSave_ErrorOnReadonlyDir(t *testing.T) {
 	err := workspace.Save(path, cfg)
 	assert.Error(t, err)
 }
+
+func TestLoadIgnoreFile_Missing(t *testing.T) {
+	assert.Nil(t, workspace.LoadIgnoreFile(t.TempDir()))
+}
+
+func TestLoadIgnoreFile_PatternsAndComments(t *testing.T) {
+	dir := t.TempDir()
+	content := "# fixtures\npatterns/\n**/*.gen.go\n\n  docs  \n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workspace.IgnoreFileName), []byte(content), 0o644))
+
+	got := workspace.LoadIgnoreFile(dir)
+	assert.Equal(t, []string{"patterns", "patterns/**", "**/*.gen.go", "docs", "docs/**"}, got)
+}
