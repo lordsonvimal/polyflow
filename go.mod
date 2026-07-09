@@ -10,16 +10,16 @@ require (
 )
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/a-h/templ v0.3.1020
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/fsnotify/fsnotify v1.10.1
+	golang.org/x/mod v0.37.0
 	golang.org/x/tools v0.47.0
 )
 
 require (
-	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
-	github.com/a-h/templ v0.3.1020 // indirect
-	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 )
 
