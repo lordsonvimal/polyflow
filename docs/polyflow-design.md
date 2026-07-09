@@ -435,7 +435,7 @@ Distinguish between fundamentally different listener types to avoid conflating t
 
 | Command | Purpose |
 |---------|---------|
-| `polyflow init` | Create `workspace.yaml` with interactive prompts |
+| `polyflow init` | Auto-discover services (go.work/go.mod, package.json incl. npm/yarn workspaces + Nx project.json, Gemfile; yarn portal:/link: deps become link hints) and write `workspace.yaml` with relative paths. `--interactive` for the manual prompt flow, `--force` to overwrite |
 | `polyflow index` | Parse all services, build/update graph in `.polyflow/graph.db` |
 | `polyflow serve` | Start local HTTP server, open browser for graph visualization |
 | `polyflow search <query>` | Terminal search — print matching nodes (file, function, line) |
@@ -444,6 +444,7 @@ Distinguish between fundamentally different listener types to avoid conflating t
 | `polyflow patterns add <file>` | Register a custom YAML pattern file |
 | `polyflow context --target <query> --task <type>` | Generate AI agent-optimized context (JSON) |
 | `polyflow impact --target <query>` | Show blast radius of a change |
+| `polyflow deps [--service <n>]` | List resolved dependency versions per service |
 | `polyflow config service add --name <n> --path <p> --language <l>` | Add a service to workspace |
 | `polyflow config service remove --name <n>` | Remove a service |
 | `polyflow config service list` | List configured services |

@@ -1,20 +1,28 @@
 name: polyflow
 version: "1"
 services:
-  - name: go-backend
-    path: /Users/lordsonvimalyesudhas/projects/polyflow
-    language: go
-  - name: js-frontend
-    path: /Users/lordsonvimalyesudhas/projects/polyflow/web
-    language: javascript
-    frameworks: [fetch]
-links:
-  - from: js-frontend
-    to: go-backend
-    base_url: "/api"
+    - name: polyflow
+      path: .
+      language: go
+      frameworks:
+        - templ
+    - name: web
+      path: ./web
+      language: javascript
+      frameworks:
+        - solid
+links: []
 index:
-  exclude:
-    - "**/node_modules/**"
-    - "**/dist/**"
-    - "**/testdata/**"
-    - "**/*_test.go"
+    exclude:
+        - '**/node_modules/**'
+        - '**/vendor/**'
+        - '**/dist/**'
+        - '**/testdata/**'
+        - '**/*_test.go'
+        - '**/spec/**'
+        - '**/tmp/**'
+settings:
+    snippet_lines: 0
+    default_layout: ""
+    default_depth: 0
+    port: 0
