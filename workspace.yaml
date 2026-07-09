@@ -19,6 +19,9 @@ index:
         - '**/dist/**'
         - '**/testdata/**'
         - '**/*_test.go'
+        - '**/*_test/**'
+        - '**/*.test.*'
+        - '**/*.spec.*'
         - '**/spec/**'
         - '**/tmp/**'
 settings:

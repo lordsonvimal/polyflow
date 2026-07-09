@@ -98,7 +98,9 @@ func TestRun_IncrementalSkipsUnchangedFiles(t *testing.T) {
 	third := runIndexer(t, cfg, dbDir, false)
 	assert.Equal(t, 1, third.ParsedFiles, "only the edited file re-parses")
 	assert.Equal(t, 1, third.SkippedFiles)
-	assert.Equal(t, first.Nodes+1, third.Nodes, "new fetch call adds one node")
+	// The new fetch adds its client node, and /api/games has no matching
+	// handler so the shared "unresolved" sink node appears too.
+	assert.Equal(t, first.Nodes+2, third.Nodes, "new fetch call adds client + unresolved sink")
 }
 
 func TestRun_FullForcesReparse(t *testing.T) {
