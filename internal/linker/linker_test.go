@@ -365,6 +365,24 @@ func TestLinkHubFanout_MultipleHubTypesPartial(t *testing.T) {
 		"two hub types in one service: cannot tell which hub the call goes through")
 }
 
+// Regression: LinkJS must not delete templ component declarations. It prunes
+// JSX component *usage proxies* that lack a matching function declaration,
+// but templ components are declarations from the templ parser — removing
+// them severed every datastar action/bind chain at the root.
+func TestLinkJS_KeepsTemplComponents(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "ui:page.templ:component:GamePage:3", Type: graph.NodeTypeComponent,
+			Label: "GamePage", Service: "ui", Language: "templ"},
+		{ID: "web:App.jsx:component:MissingLib:9", Type: graph.NodeTypeComponent,
+			Label: "MissingLib", Service: "web", Language: "javascript"},
+	}
+	_, removeIDs := NewJSLinker().LinkJS(nodes, nil, map[string][]string{})
+	assert.False(t, removeIDs["ui:page.templ:component:GamePage:3"],
+		"templ component declarations must survive JS proxy pruning")
+	assert.True(t, removeIDs["web:App.jsx:component:MissingLib:9"],
+		"JSX usage proxies without declarations are still pruned")
+}
+
 func TestLinkJobQueues_EnqueueToPerform(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "app:jobs.rb:publisher:aj_perform_later:9", Type: graph.NodeTypePublisher, Service: "app",

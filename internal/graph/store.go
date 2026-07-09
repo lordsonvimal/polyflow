@@ -140,6 +140,22 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 	return &SQLiteStore{db: db}, nil
 }
 
+// NewBuildStore opens a store tuned for bulk index builds: durability is
+// relaxed (synchronous=OFF, in-memory journal) because the indexer writes to
+// a throwaway temp file and atomically renames it over the real DB only
+// after the whole build succeeds — a crash mid-build loses nothing.
+func NewBuildStore(dsn string) (*SQLiteStore, error) {
+	s, err := NewSQLiteStore(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`PRAGMA synchronous=OFF; PRAGMA journal_mode=MEMORY;`); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("apply build pragmas: %w", err)
+	}
+	return s, nil
+}
+
 func (s *SQLiteStore) UpsertNode(ctx context.Context, n *Node) error {
 	metaJSON, err := marshalMeta(n.Meta)
 	if err != nil {
@@ -370,6 +386,35 @@ func (s *SQLiteStore) UpsertFileHash(ctx context.Context, fh *FileHash) error {
 		return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
 	}
 	return nil
+}
+
+// UpsertFileHashes writes a batch of file-hash records in one transaction.
+// The per-row autocommit variant costs one fsync per file, which dominates
+// re-index time on large workspaces.
+func (s *SQLiteStore) UpsertFileHashes(ctx context.Context, fhs []*FileHash) error {
+	if len(fhs) == 0 {
+		return nil
+	}
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, errored)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(file_path) DO UPDATE SET
+				service=excluded.service, content_hash=excluded.content_hash,
+				indexed_at=excluded.indexed_at, nodes_json=excluded.nodes_json,
+				edges_json=excluded.edges_json, errored=excluded.errored`)
+		if err != nil {
+			return fmt.Errorf("prepare file-hash upsert: %w", err)
+		}
+		defer stmt.Close()
+		for _, fh := range fhs {
+			if _, err := stmt.ExecContext(ctx,
+				fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, boolToInt(fh.Errored)); err != nil {
+				return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
+			}
+		}
+		return nil
+	})
 }
 
 func (s *SQLiteStore) ListFileHashes(ctx context.Context) (map[string]*FileHash, error) {
