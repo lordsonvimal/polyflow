@@ -418,6 +418,15 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkWebSocketMessages(allNodes)); err != nil {
 		return nil, err
 	}
+	if err := writeEdges(linker.LinkHubFanout(allNodes)); err != nil {
+		return nil, err
+	}
+	if err := writeEdges(linker.LinkJobQueues(allNodes)); err != nil {
+		return nil, err
+	}
+	if err := writeEdges(linker.LinkPusherChannels(allNodes)); err != nil {
+		return nil, err
+	}
 
 	// Broker hint linking (via: rabbitmq + exchange).
 	{

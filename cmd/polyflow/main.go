@@ -22,6 +22,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/server"
+	"github.com/lordsonvimal/polyflow/internal/trace"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
@@ -48,6 +49,7 @@ func init() {
 		patternsCmd,
 		contextCmd,
 		impactCmd,
+		traceCmd,
 		configCmd,
 		depsCmd,
 	)
@@ -59,6 +61,7 @@ func init() {
 	initPatternsSubcmds()
 	initContextFlags()
 	initImpactFlags()
+	initTraceFlags()
 	initConfigSubcmds()
 }
 
@@ -677,6 +680,107 @@ func printContextText(r *pfcontext.Result) error {
 	return nil
 }
 
+// ─── trace ───────────────────────────────────────────────────────────────────
+
+var (
+	traceRoot      string
+	traceDirection string
+	traceDepth     int
+	traceFormat    string
+)
+
+func initTraceFlags() {
+	traceCmd.Flags().StringVar(&traceRoot, "root", "", "search query to find the root node (required)")
+	traceCmd.Flags().StringVar(&traceDirection, "direction", "forward", "trace direction: forward, backward, or both")
+	traceCmd.Flags().IntVar(&traceDepth, "depth", 10, "max traversal depth (0 = unlimited)")
+	traceCmd.Flags().StringVar(&traceFormat, "format", "text", "output format: json, text, or chain")
+	_ = traceCmd.MarkFlagRequired("root")
+}
+
+var traceCmd = &cobra.Command{
+	Use:   "trace",
+	Short: "Trace multi-hop flows from a node (chain format prints linear A → B → C paths)",
+	RunE:  runTrace,
+}
+
+func runTrace(cmd *cobra.Command, args []string) error {
+	if traceDirection != "forward" && traceDirection != "backward" && traceDirection != "both" {
+		return fmt.Errorf("unknown direction: %s (use: forward, backward, both)", traceDirection)
+	}
+	if traceFormat != "json" && traceFormat != "text" && traceFormat != "chain" {
+		return fmt.Errorf("unknown format: %s (use: json, text, chain)", traceFormat)
+	}
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	matches, err := store.SearchNodes(ctx, traceRoot, 5)
+	if err != nil || len(matches) == 0 {
+		return fmt.Errorf("node not found for query: %s", traceRoot)
+	}
+	root := matches[0]
+
+	idx, err := store.BuildIndex(ctx)
+	if err != nil {
+		return err
+	}
+
+	result := trace.Run(idx, root.ID, traceDirection, traceDepth)
+	if result == nil {
+		return fmt.Errorf("root node %s not in graph", root.ID)
+	}
+
+	switch traceFormat {
+	case "json":
+		return json.NewEncoder(os.Stdout).Encode(result)
+	case "chain":
+		for _, c := range result.Chains {
+			fmt.Fprintln(os.Stdout, c.Text)
+		}
+		if result.Truncated {
+			fmt.Fprintf(os.Stderr, "(truncated at %d chains)\n", trace.MaxChains)
+		}
+		return nil
+	}
+	return printTraceText(result)
+}
+
+func printTraceText(r *trace.Result) error {
+	t := r.Root
+	fmt.Fprintf(os.Stdout, "Trace: %s (%s) %s:%d\n", t.Label, t.Type, t.File, t.Line)
+	fmt.Fprintf(os.Stdout, "Direction: %s   Depth: %d   Services: %s\n\n",
+		r.Direction, r.Depth, strings.Join(r.Services, ", "))
+
+	for _, h := range r.Nodes {
+		indent := strings.Repeat("  ", h.Depth)
+		boundary := ""
+		if h.CrossService {
+			boundary = fmt.Sprintf(" ‖%s‖", h.Service)
+		}
+		version := ""
+		if v, ok := h.NodeMeta["resolved_version"]; ok {
+			version = fmt.Sprintf(" (%s@%s)", h.NodeMeta["package"], v)
+		}
+		fmt.Fprintf(os.Stdout, "%s-[%s]->%s %s%s  %s:%d\n",
+			indent, h.EdgeType, boundary, h.Label, version, h.File, h.Line)
+	}
+
+	if len(r.Chains) > 0 {
+		fmt.Fprintf(os.Stdout, "\nChains (%d):\n", len(r.Chains))
+		for _, c := range r.Chains {
+			fmt.Fprintf(os.Stdout, "  %s\n", c.Text)
+		}
+	}
+	if r.Truncated {
+		fmt.Fprintf(os.Stdout, "(truncated at %d chains)\n", trace.MaxChains)
+	}
+	return nil
+}
+
 // ─── impact ──────────────────────────────────────────────────────────────────
 
 var (
@@ -701,14 +805,17 @@ var impactCmd = &cobra.Command{
 }
 
 type impactCaller struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Type     string `json:"type"`
-	Service  string `json:"service"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	EdgeType string `json:"edge_type"`
-	Depth    int    `json:"depth"`
+	ID         string            `json:"id"`
+	Label      string            `json:"label"`
+	Type       string            `json:"type"`
+	Service    string            `json:"service"`
+	File       string            `json:"file"`
+	Line       int               `json:"line"`
+	Meta       map[string]string `json:"meta,omitempty"`
+	EdgeType   string            `json:"edge_type"`
+	Confidence string            `json:"confidence,omitempty"`
+	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
+	Depth      int               `json:"depth"`
 }
 
 type crossServiceTrigger struct {
@@ -768,10 +875,13 @@ func runImpact(cmd *cobra.Command, args []string) error {
 			Service: a.Node.Service,
 			File:    a.Node.File,
 			Line:    a.Node.Line,
+			Meta:    a.Node.Meta,
 			Depth:   a.Depth,
 		}
 		if a.Via != nil {
 			c.EdgeType = string(a.Via.Type)
+			c.Confidence = a.Via.Confidence
+			c.EdgeMeta = a.Via.Meta
 		}
 		callers = append(callers, c)
 	}
