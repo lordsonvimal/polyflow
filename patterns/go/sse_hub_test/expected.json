@@ -1,0 +1,4 @@
+{
+  "patterns": ["hub_method_decl", "hub_method_decl", "hub_method_decl", "hub_broadcast_call", "hub_subscribe_call"],
+  "node_types": ["method", "method", "method", "publisher", "subscriber"]
+}

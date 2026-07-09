@@ -671,6 +671,25 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
 
+	// ── WebSocket (gorilla server pumps + JS typed dispatch) ─────────────────
+	case strings.HasPrefix(lower, "ws_upgrade"):
+		return graph.NodeTypeHTTPHandler, graph.EdgeTypeWSUpgrade
+	case strings.HasPrefix(lower, "ws_new"):
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeWSConnect
+	case strings.HasPrefix(lower, "ws_send") || strings.HasPrefix(lower, "ws_write"):
+		return graph.NodeTypePublisher, graph.EdgeTypeWSSend
+	case strings.HasPrefix(lower, "ws_read") || strings.HasPrefix(lower, "ws_dispatch") ||
+		strings.HasPrefix(lower, "ws_on"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypeWSRead
+
+	// ── SSE broadcast hub ─────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "hub_broadcast"):
+		return graph.NodeTypePublisher, graph.EdgeTypeHubBroadcast
+	case strings.HasPrefix(lower, "hub_subscribe"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypeHubSubscribe
+	case strings.HasPrefix(lower, "hub_method"):
+		return graph.NodeTypeMethod, graph.EdgeTypeCalls
+
 	// ── Cloud SDK boundaries (S3, Bedrock) ────────────────────────────────────
 	case strings.HasPrefix(lower, "s3_") || strings.HasPrefix(lower, "bedrock_"):
 		return graph.NodeTypeExternalService, graph.EdgeTypeCloudCall

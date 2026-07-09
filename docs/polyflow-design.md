@@ -552,6 +552,9 @@ $ polyflow status --errors
 | `queries` | Code reads from a datastore (GORM chains, database/sql Query*) |
 | `persists` | Code writes to a datastore (Create/Save/Delete, Exec*) |
 | `cloud_call` | Code calls an external cloud service via an SDK (S3, Bedrock) — carries SDK package + resolved version |
+| `ws_upgrade` / `ws_connect` | Server upgrades HTTP to WebSocket / client opens one |
+| `ws_read` / `ws_write` / `ws_send` | WebSocket pumps and typed sends; `ws_send` carries the message type and links to matching dispatch cases across services |
+| `hub_subscribe` / `hub_broadcast` | SSE broadcast-hub channel fan-out (Subscribe/Unsubscribe/Broadcast) feeding per-connection SSE writers |
 
 Edge types are **extensible** — new YAML patterns can define new edge types without modifying core code.
 

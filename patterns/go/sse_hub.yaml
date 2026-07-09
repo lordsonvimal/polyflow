@@ -1,0 +1,50 @@
+# SSE broadcast-hub fan-out (chessleap game/hub.go shape): a hub struct with
+# Subscribe()/Unsubscribe()/Broadcast() methods doing channel fan-out to
+# per-connection SSE writers. Distinct from datastar_sse.yaml, which covers
+# direct MergeFragments/PatchSignals call sites — this covers the hub chain
+# feeding them.
+language: go
+version: "1"
+patterns:
+  # func (h *Hub) Subscribe() chan Event  /  Unsubscribe(ch)  /  Broadcast(evt)
+  - name: hub_method_decl
+    query: |
+      (method_declaration
+        receiver: (parameter_list
+          (parameter_declaration
+            type: (pointer_type (type_identifier) @receiver)))
+        name: (field_identifier) @name
+        (#match? @name "^(Subscribe|Unsubscribe|Broadcast)$"))
+    captures:
+      - name: receiver
+        role: hub_type
+      - name: name
+        role: hub_method
+
+  # hub.Broadcast(event) — fan-out call site
+  - name: hub_broadcast_call
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Broadcast"))
+        arguments: (argument_list
+          .
+          (_) @event
+          .))
+    captures:
+      - name: event
+        role: hub_event
+
+  # ch := hub.Subscribe() — per-connection subscription (no args)
+  - name: hub_subscribe_call
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Subscribe"))
+        arguments: (argument_list) @args
+        (#eq? @args "()"))
+    captures:
+      - name: fn
+        role: hub_subscribe

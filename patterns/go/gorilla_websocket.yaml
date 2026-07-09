@@ -1,0 +1,51 @@
+# gorilla/websocket server-side shapes (dsw-manager), written against the
+# canonical gorilla chat-example API (upgrader.Upgrade + read/write pumps).
+# If dsw-manager's real call sites diverge, update the fixtures from a
+# redacted snippet.
+language: go
+version: "1"
+package: github.com/gorilla/websocket
+patterns:
+  # conn, err := upgrader.Upgrade(w, r, nil)
+  - name: ws_upgrade
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Upgrade"))
+        arguments: (argument_list
+          .
+          (_) @writer
+          .
+          (_) @request
+          .
+          (_) @header))
+    captures:
+      - name: fn
+        role: ws_upgrade
+
+  # Read pump: conn.ReadMessage() / conn.ReadJSON(&msg)
+  - name: ws_read_pump
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @conn
+          field: (field_identifier) @fn
+          (#match? @fn "^(ReadMessage|ReadJSON|NextReader)$"))
+        arguments: (argument_list) @args)
+    captures:
+      - name: fn
+        role: ws_read
+
+  # Write pump: conn.WriteMessage(mt, data) / conn.WriteJSON(v)
+  - name: ws_write_pump
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @conn
+          field: (field_identifier) @fn
+          (#match? @fn "^(WriteMessage|WriteJSON|NextWriter|WritePreparedMessage)$"))
+        arguments: (argument_list) @args)
+    captures:
+      - name: fn
+        role: ws_write

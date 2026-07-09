@@ -156,7 +156,7 @@ the other major). Bedrock fixture must not match the S3 patterns.
 (Go publisher + Ruby consumer on the same exchange → one channel edge chain) in
 the linker tests.
 
-## Phase 7 — Realtime: WebSocket patterns + SSE broadcast-hub — pending
+## Phase 7 — Realtime: WebSocket patterns + SSE broadcast-hub — done
 
 **Deliverable**
 - `patterns/go/gorilla_websocket.yaml`: `upgrader.Upgrade(w, r, nil)`,
@@ -273,6 +273,14 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 7 — done.** gorilla_websocket.yaml (Upgrade + read/write pumps,
+  gated on the gorilla dep), javascript/websocket.yaml (new WebSocket,
+  onmessage/on('message'), typed send capturing the {type: …} literal,
+  switch-dispatch one match per case), sse_hub.yaml
+  (Subscribe/Unsubscribe/Broadcast methods + call sites). New ws_*/hub_*
+  edge types; LinkWebSocketMessages joins senders to dispatch cases by
+  message type across services; LinkBrokerHints now refuses non-broker
+  publisher/subscriber nodes (ws/hub/pusher).
 - **Phase 6 — done.** delayed_job.yaml + active_job.yaml + solid_queue.yaml
   with generic job_enqueue/job_perform edges (Sidekiq migrated onto them,
   old constants kept as aliases); amqp091 extended with

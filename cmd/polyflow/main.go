@@ -505,6 +505,22 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// WebSocket typed-message linking: {type: "x"} senders → dispatch cases.
+	{
+		wsEdges := linker.LinkWebSocketMessages(allNodes)
+		bwWS := graph.NewBatchWriter(store)
+		for i := range wsEdges {
+			e := wsEdges[i]
+			if err := bwWS.AddEdge(ctx, &e); err != nil {
+				return err
+			}
+			allEdges = append(allEdges, e)
+		}
+		if err := bwWS.Flush(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Broker hint linking: workspace links with via=rabbitmq + exchange
 	// connect publishers/subscribers whose exchange is not statically
 	// resolvable (e.g. Ruby bunny publishes via a variable-held exchange).

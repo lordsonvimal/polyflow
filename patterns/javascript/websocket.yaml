@@ -1,0 +1,92 @@
+# Native WebSocket with typed-JSON message dispatch, built against the real
+# shape in synergy/apps/tether: messages are {type: "battery", ...}, the
+# server dispatches on JSON.parse(data).type, and the client mirrors it.
+language: javascript
+version: "1"
+patterns:
+  # const ws = new WebSocket(url)
+  - name: ws_new_connection
+    query: |
+      (new_expression
+        constructor: (identifier) @cls
+        (#eq? @cls "WebSocket")
+        arguments: (arguments
+          .
+          (_) @url))
+    captures:
+      - name: url
+        role: ws_url
+
+  # ws.on('message', handler) — node `ws` library server side
+  - name: ws_on_message
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @socket
+          property: (property_identifier) @fn
+          (#eq? @fn "on"))
+        arguments: (arguments
+          .
+          (string) @event
+          (#match? @event "message")
+          .
+          (_) @handler))
+    captures:
+      - name: event
+        role: ws_event
+      - name: handler
+        role: ws_handler
+
+  # ws.onmessage = handler — browser side
+  - name: ws_onmessage_assign
+    query: |
+      (assignment_expression
+        left: (member_expression
+          property: (property_identifier) @prop
+          (#eq? @prop "onmessage"))
+        right: (_) @handler)
+    captures:
+      - name: handler
+        role: ws_handler
+
+  # ws.send(JSON.stringify({type: 'battery', ...})) — typed outbound message.
+  # The literal type value is captured so client and server can be linked by
+  # message type.
+  - name: ws_send_typed
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "send"))
+        arguments: (arguments
+          (call_expression
+            function: (member_expression
+              object: (identifier) @json
+              (#eq? @json "JSON")
+              property: (property_identifier) @stringify
+              (#eq? @stringify "stringify"))
+            arguments: (arguments
+              (object
+                (pair
+                  key: (property_identifier) @key
+                  (#eq? @key "type")
+                  value: (string) @message_type))))))
+    captures:
+      - name: message_type
+        role: ws_message_type
+
+  # switch (msg.type) { case 'battery': ... } — typed dispatch, one match per
+  # case so each message type becomes a handler entry.
+  - name: ws_dispatch_case
+    query: |
+      (switch_statement
+        value: (parenthesized_expression
+          (member_expression
+            property: (property_identifier) @prop
+            (#eq? @prop "type")))
+        body: (switch_body
+          (switch_case
+            value: (string) @message_type)))
+    captures:
+      - name: message_type
+        role: ws_message_type
