@@ -321,6 +321,25 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		meta := make(map[string]string, len(r.Captures))
 		maps.Copy(meta, r.Captures)
 
+		// Record the originating pattern so later passes (datastore linking,
+		// boundary classification) can reason about the match without
+		// re-deriving it.
+		meta["pattern"] = r.PatternName
+
+		// Datastore call sites: record whether this is a read or a write so
+		// the linker can emit queries/persists edges to the service store node.
+		if nodeType == graph.NodeTypeDatastore {
+			meta["kind"] = "call"
+			switch _, et := classifyPattern(r.PatternName); et {
+			case graph.EdgeTypeQueries:
+				meta["op"] = "query"
+			case graph.EdgeTypePersists:
+				meta["op"] = "persist"
+			default:
+				meta["op"] = "open"
+			}
+		}
+
 		// Version-gated patterns stamp which package version they matched
 		// against, so the graph/UI can show e.g. "this call uses SDK v1".
 		if r.Package != "" {
@@ -634,6 +653,14 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "dom_tree") || strings.HasPrefix(lower, "append_child") ||
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+
+	// ── Datastores (GORM / database/sql) ──────────────────────────────────────
+	case strings.HasPrefix(lower, "gorm_query") || strings.HasPrefix(lower, "sql_query"):
+		return graph.NodeTypeDatastore, graph.EdgeTypeQueries
+	case strings.HasPrefix(lower, "gorm_persist") || strings.HasPrefix(lower, "sql_exec"):
+		return graph.NodeTypeDatastore, graph.EdgeTypePersists
+	case strings.HasPrefix(lower, "gorm_open") || lower == "sql_open":
+		return graph.NodeTypeDatastore, graph.EdgeTypeCalls
 
 	// ── Gin handler-body shapes (request bind / response render) ─────────────
 	case strings.HasPrefix(lower, "gin_bind") || strings.HasPrefix(lower, "gin_json"):
