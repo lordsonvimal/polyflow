@@ -1,12 +1,26 @@
-import { Component, createEffect, onMount, onCleanup } from "solid-js";
+import { Component, createEffect, onMount, onCleanup, Show } from "solid-js";
 import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
 import fcose from "cytoscape-fcose";
+// @ts-ignore — no type definitions published
+import svg from "cytoscape-svg";
 import { graphStore } from "../stores/graph";
 import { uiStore } from "../stores/ui";
+import { visibleGraph } from "../stores/derived";
+import { edgeConfidence } from "../lib/confidence";
+import { BOUNDARY_GROUP_TYPE, isBoundaryGroupId } from "../lib/boundary";
+import { SERVICE_NODE_TYPE } from "../lib/aggregate";
 
 cytoscape.use(dagre as any);
 cytoscape.use(fcose as any);
+cytoscape.use(svg as any);
+
+// The current Cytoscape instance, exposed so the export menu can render
+// SVG/PNG of exactly what is on screen.
+let cyInstance: cytoscape.Core | undefined;
+export function getCy(): cytoscape.Core | undefined {
+  return cyInstance;
+}
 
 function inferLanguage(file: string): string {
   const ext = file.split(".").pop()?.toLowerCase() ?? "";
@@ -18,6 +32,87 @@ function inferLanguage(file: string): string {
   return "";
 }
 
+const STYLE: cytoscape.Stylesheet[] = [
+  {
+    selector: "node",
+    style: {
+      label: "data(label)",
+      "background-color": "#6b7280",
+      "font-size": "10px",
+      color: "#f9fafb",
+      "text-valign": "bottom",
+      "text-margin-y": 4,
+      "text-max-width": "160px",
+      "text-wrap": "ellipsis",
+    } as any,
+  },
+  // Per-language colors
+  { selector: 'node[language="go"]', style: { "background-color": "#00ADD8" } },
+  { selector: 'node[language="javascript"]', style: { "background-color": "#F7DF1E", color: "#1a1a1a" } as any },
+  { selector: 'node[language="typescript"]', style: { "background-color": "#3178C6" } },
+  { selector: 'node[language="ruby"]', style: { "background-color": "#CC342D" } },
+  { selector: 'node[language="templ"]', style: { "background-color": "#7C3AED" } },
+  // Node-type shapes so the graph reads without hovering
+  { selector: 'node[type="http_handler"]', style: { shape: "round-rectangle" } },
+  { selector: 'node[type="http_client"]', style: { shape: "round-tag" } },
+  { selector: 'node[type="channel"]', style: { shape: "diamond", "background-color": "#f59e0b" } },
+  { selector: 'node[type="datastore"]', style: { shape: "barrel", "background-color": "#10b981" } },
+  { selector: 'node[type="external_service"]', style: { shape: "hexagon", "background-color": "#ec4899" } },
+  { selector: 'node[type="publisher"]', style: { shape: "vee" } },
+  { selector: 'node[type="subscriber"]', style: { shape: "rhomboid" } },
+  // Collapsed framework/SDK boundary groups: compact, outlined, dimmed
+  {
+    selector: `node[type="${BOUNDARY_GROUP_TYPE}"]`,
+    style: {
+      shape: "round-rectangle",
+      "background-color": "#312e81",
+      "border-width": 1.5,
+      "border-color": "#818cf8",
+      "border-style": "dashed",
+      color: "#c7d2fe",
+      "font-size": "9px",
+    } as any,
+  },
+  // High-level service nodes
+  {
+    selector: `node[type="${SERVICE_NODE_TYPE}"]`,
+    style: {
+      shape: "round-rectangle",
+      width: 60,
+      height: 40,
+      "background-color": "#4f46e5",
+      "font-size": "12px",
+      "text-valign": "center",
+      "text-margin-y": 0,
+    } as any,
+  },
+  {
+    selector: "edge",
+    style: {
+      width: 1.5,
+      "line-color": "#4b5563",
+      "target-arrow-color": "#4b5563",
+      "target-arrow-shape": "triangle",
+      "curve-style": "bezier",
+      label: "data(label)",
+      "font-size": "8px",
+      color: "#9ca3af",
+      "text-rotation": "autorotate" as any,
+    } as any,
+  },
+  // Uncertain edges: dashed + dimmed, visually distinct from confirmed flow
+  {
+    selector: 'edge[confidence="partial"], edge[confidence="unknown"]',
+    style: { "line-style": "dashed", "line-color": "#6b7280", opacity: 0.6 } as any,
+  },
+  { selector: "node:selected", style: { "border-width": 2, "border-color": "#fff" } },
+  // Trace root gets a bright ring
+  { selector: "node.trace-root", style: { "border-width": 3, "border-color": "#f472b6" } as any },
+  // Neighborhood highlight on selection
+  { selector: "node.dimmed", style: { opacity: 0.25 } as any },
+  { selector: "edge.dimmed", style: { opacity: 0.15 } as any },
+];
+
 const Graph: Component = () => {
   let containerRef: HTMLDivElement | undefined;
   let cy: cytoscape.Core | undefined;
@@ -28,71 +123,36 @@ const Graph: Component = () => {
     cy = cytoscape({
       container: containerRef,
       elements: [],
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            "background-color": "#6b7280",
-            "font-size": "10px",
-            color: "#f9fafb",
-            "text-valign": "bottom",
-            "text-margin-y": 4,
-          },
-        },
-        // Per-language colors
-        {
-          selector: 'node[language="go"]',
-          style: { "background-color": "#00ADD8" },
-        },
-        {
-          selector: 'node[language="javascript"]',
-          style: { "background-color": "#F7DF1E", color: "#1a1a1a" },
-        },
-        {
-          selector: 'node[language="typescript"]',
-          style: { "background-color": "#3178C6" },
-        },
-        {
-          selector: 'node[language="ruby"]',
-          style: { "background-color": "#CC342D" },
-        },
-        {
-          selector: 'node[language="templ"]',
-          style: { "background-color": "#7C3AED" },
-        },
-        {
-          selector: "edge",
-          style: {
-            width: 1.5,
-            "line-color": "#4b5563",
-            "target-arrow-color": "#4b5563",
-            "target-arrow-shape": "triangle",
-            "curve-style": "bezier",
-          },
-        },
-        {
-          selector: "node:selected",
-          style: { "border-width": 2, "border-color": "#fff" },
-        },
-      ],
+      style: STYLE,
       layout: { name: "dagre" },
+      wheelSensitivity: 0.3,
     });
+    cyInstance = cy;
 
     cy.on("tap", "node", (evt) => {
+      uiStore.setSelectedNodeId(evt.target.data("id") as string);
+    });
+    cy.on("tap", (evt) => {
+      if (evt.target === cy) uiStore.setSelectedNodeId(null);
+    });
+    // Double-tap a collapsed boundary group to expand it in place.
+    cy.on("dbltap", "node", (evt) => {
       const id = evt.target.data("id") as string;
-      uiStore.setSelectedNodeId(id);
+      if (isBoundaryGroupId(id)) uiStore.toggleBoundary(id);
     });
 
-    // Load the full graph on mount
-    graphStore.fetchGraph();
+    // Load the full graph on mount unless a trace is being restored from URL.
+    if (!graphStore.traceRoot()) {
+      graphStore.fetchGraph();
+    }
+    graphStore.fetchStats();
   });
 
-  // Re-render Cytoscape whenever the store changes
+  // Re-render Cytoscape whenever the visible graph or layout changes.
   createEffect(() => {
-    const nodes = graphStore.nodes();
-    const edges = graphStore.edges();
+    const { nodes, edges } = visibleGraph();
     const layout = uiStore.layout();
+    const root = graphStore.traceRoot();
     if (!cy) return;
 
     cy.elements().remove();
@@ -100,26 +160,79 @@ const Graph: Component = () => {
     cy.add(
       nodes.map((n) => ({
         group: "nodes" as const,
-        data: { id: n.id, label: n.label, type: n.type, service: n.service, file: n.file, line: n.line, language: n.language || inferLanguage(n.file) },
+        data: {
+          id: n.id,
+          label: n.label,
+          type: n.type,
+          service: n.service,
+          file: n.file,
+          line: n.line,
+          language: n.language || inferLanguage(n.file),
+        },
       }))
     );
 
     cy.add(
       edges.map((e) => ({
         group: "edges" as const,
-        data: { id: e.id, source: e.from, target: e.to, type: e.type, label: e.label ?? "" },
+        data: {
+          id: e.id,
+          source: e.from,
+          target: e.to,
+          type: e.type,
+          label: e.label ?? "",
+          confidence: edgeConfidence(e),
+        },
       }))
     );
 
+    if (root) {
+      cy.getElementById(root).addClass("trace-root");
+    }
+
     cy.resize();
-    cy.layout({ name: layout } as any).run();
+    cy.layout({ name: layout, fit: true, padding: 30 } as any).run();
+  });
+
+  // Dim everything outside the selected node's neighborhood.
+  createEffect(() => {
+    const id = uiStore.selectedNodeId();
+    if (!cy) return;
+    cy.elements().removeClass("dimmed");
+    if (!id) return;
+    const sel = cy.getElementById(id);
+    if (sel.empty()) return;
+    const hood = sel.closedNeighborhood();
+    cy.elements().not(hood).addClass("dimmed");
   });
 
   onCleanup(() => {
     cy?.destroy();
+    cyInstance = undefined;
   });
 
-  return <div ref={containerRef} class="w-full h-full" />;
+  return (
+    <div class="relative w-full h-full">
+      <div ref={containerRef} class="w-full h-full" />
+      <Show when={graphStore.loading()}>
+        <div class="absolute inset-0 flex items-center justify-center bg-gray-950/40 pointer-events-none">
+          <span class="text-sm text-gray-300 animate-pulse">Loading graph…</span>
+        </div>
+      </Show>
+      <Show when={graphStore.error()}>
+        <div class="absolute top-3 left-1/2 -translate-x-1/2 bg-red-900/90 border border-red-600 text-red-100 text-xs rounded px-3 py-2">
+          {graphStore.error()}
+        </div>
+      </Show>
+      <Show when={!graphStore.loading() && visibleGraph().nodes.length === 0}>
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <span class="text-sm text-gray-500">
+            No nodes to show — run <code class="text-gray-400">polyflow index</code> or relax the filters.
+          </span>
+        </div>
+      </Show>
+    </div>
+  );
 };
 
 export default Graph;

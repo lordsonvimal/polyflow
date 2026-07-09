@@ -1,5 +1,6 @@
 import { Component, For, Show, onMount, onCleanup } from "solid-js";
 import { uiStore } from "../stores/ui";
+import { graphStore } from "../stores/graph";
 
 async function fetchWarnings() {
   try {
@@ -26,6 +27,10 @@ const Notification: Component = () => {
         if (data.type === "graph_updated") {
           uiStore.setNotification("Graph updated");
           fetchWarnings();
+          // Refresh whatever view is active so the canvas reflects the new index.
+          if (graphStore.traceRoot()) graphStore.retrace();
+          else graphStore.fetchGraph();
+          graphStore.fetchStats();
         }
       } catch {
         // ignore malformed events
