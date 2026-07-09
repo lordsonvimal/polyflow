@@ -1,0 +1,4 @@
+{
+  "patterns": ["s3_client_new_ruby", "s3_operation_ruby", "s3_operation_ruby", "s3_operation_ruby"],
+  "node_types": ["external_service", "external_service", "external_service", "external_service"]
+}
