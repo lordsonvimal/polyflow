@@ -37,6 +37,26 @@ export function downloadText(filename: string, text: string, mime = "text/plain"
   downloadBlob(filename, new Blob([text], { type: mime }));
 }
 
+// Browsers cap canvas dimensions (~16k px per side and a total-area limit);
+// beyond them toDataURL silently returns an empty image, which used to ship
+// as a 0-byte PNG. Clamp the render scale so the output stays inside a safe
+// budget instead.
+export const MAX_EXPORT_DIM = 8000;
+export const MAX_EXPORT_AREA = 32_000_000; // ~32MP, well under Safari's limit
+
+export function safeExportScale(
+  width: number,
+  height: number,
+  desired = 2,
+  maxDim = MAX_EXPORT_DIM,
+  maxArea = MAX_EXPORT_AREA,
+): number {
+  if (width <= 0 || height <= 0) return desired;
+  const dimScale = Math.min(maxDim / width, maxDim / height);
+  const areaScale = Math.sqrt(maxArea / (width * height));
+  return Math.max(0.1, Math.min(desired, dimScale, areaScale));
+}
+
 export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

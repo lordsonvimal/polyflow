@@ -1,7 +1,8 @@
 import { Component, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { graphStore } from "../stores/graph";
 import { uiStore, Layout } from "../stores/ui";
-import { fetchMermaid, downloadText, downloadBlob, exportFilename, MermaidLevel } from "../lib/export";
+import { fetchMermaid, downloadText, downloadBlob, exportFilename, safeExportScale, MermaidLevel } from "../lib/export";
+import { CANVAS_BG } from "../lib/styles";
 import { getCy } from "./Graph";
 
 const LAYOUTS: Layout[] = ["dagre", "fcose", "circle", "grid"];
@@ -41,7 +42,7 @@ const Toolbar: Component = () => {
     const cy = getCy();
     if (!cy) return;
     try {
-      const svgText = (cy as any).svg({ full: true, scale: 1.5, bg: "#030712" });
+      const svgText = (cy as any).svg({ full: true, scale: 1.5, bg: CANVAS_BG });
       downloadText(exportFilename("svg"), svgText, "image/svg+xml");
     } catch (e) {
       uiStore.setNotification(`SVG export failed: ${e}`);
@@ -53,12 +54,21 @@ const Toolbar: Component = () => {
     const cy = getCy();
     if (!cy) return;
     try {
-      const blob = cy.png({ full: true, scale: 2, bg: "#030712", output: "blob" }) as unknown as Blob;
+      // Clamp the scale to the browser's canvas limits — a too-large canvas
+      // silently produces an empty image (the old 0-byte PNG bug).
+      const bb = cy.elements().boundingBox();
+      const scale = safeExportScale(bb.w, bb.h);
+      const blob = cy.png({ full: true, scale, bg: CANVAS_BG, output: "blob" }) as unknown as Blob;
+      if (!blob || blob.size === 0) {
+        uiStore.setNotification("PNG export failed: rendered image was empty (graph too large?)");
+        return;
+      }
       downloadBlob(exportFilename("png"), blob);
     } catch (e) {
       uiStore.setNotification(`PNG export failed: ${e}`);
+    } finally {
+      setExportOpen(false);
     }
-    setExportOpen(false);
   }
 
   const btn = (active: boolean) =>

@@ -3,11 +3,18 @@ package workspace
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/lordsonvimal/polyflow/internal/meta"
 )
+
+// IgnoreFileName is the optional per-workspace ignore file. Each line is a
+// doublestar glob matched against service-relative paths, same as
+// index.exclude; blank lines and #-comments are skipped.
+const IgnoreFileName = ".polyflowignore"
 
 // Service describes a single service (repo or subdirectory) in the workspace.
 type Service struct {
@@ -50,6 +57,41 @@ type WorkspaceConfig struct {
 	Patterns []string    `yaml:"patterns,omitempty"`
 	Index    IndexConfig `yaml:"index"`
 	Settings Settings    `yaml:"settings"`
+}
+
+// DefaultExcludes returns the exclude globs written by `polyflow init`.
+// They cover dependency dirs, build output, and test code across the
+// supported ecosystems (Go *_test.go files and *_test/ fixture dirs,
+// JS/TS *.test.* / *.spec.* files, Ruby spec/ dirs).
+func DefaultExcludes() []string {
+	return []string{
+		"**/node_modules/**", "**/vendor/**", "**/dist/**",
+		"**/testdata/**", "**/*_test.go", "**/*_test/**",
+		"**/*.test.*", "**/*.spec.*", "**/spec/**", "**/tmp/**",
+	}
+}
+
+// LoadIgnoreFile reads .polyflowignore from dir. A missing file is not an
+// error — it returns nil. Patterns without a glob metacharacter also match
+// everything beneath them (gitignore-style directory entries).
+func LoadIgnoreFile(dir string) []string {
+	data, err := os.ReadFile(filepath.Join(dir, IgnoreFileName))
+	if err != nil {
+		return nil
+	}
+	var patterns []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSuffix(line, "/")
+		patterns = append(patterns, line)
+		if !strings.ContainsAny(line, "*?[{") {
+			patterns = append(patterns, line+"/**")
+		}
+	}
+	return patterns
 }
 
 // EffectivePort returns the configured port, falling back to the default.

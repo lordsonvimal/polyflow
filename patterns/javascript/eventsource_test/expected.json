@@ -1,0 +1,4 @@
+{
+  "patterns": ["eventsource_connect"],
+  "node_types": ["http_client"]
+}

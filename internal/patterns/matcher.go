@@ -280,6 +280,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if nodeType == graph.NodeTypeInterface || nodeType == graph.NodeTypeTypeAlias {
 			continue
 		}
+		// Constant declarations exist only to feed URL propagation (the
+		// constants table above); emitting them as nodes floods the graph
+		// with rootless "function" entries for every const in the codebase.
+		if r.PatternName == "const_string" || r.PatternName == "const_template_prefix" {
+			continue
+		}
 
 		// Build label from captures, preferring the most informative available field.
 		label := r.PatternName
@@ -347,6 +353,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			default:
 				meta["op"] = "open"
 			}
+		}
+
+		// SSE clients open a plain GET stream; stamp the method so the
+		// cross-service linker can match the server's SSE endpoint.
+		if r.PatternName == "eventsource_connect" {
+			meta["method"] = "GET"
+			meta["transport"] = "sse"
 		}
 
 		// Version-gated patterns stamp which package version they matched
@@ -670,6 +683,10 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "dom_tree") || strings.HasPrefix(lower, "append_child") ||
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+
+	// ── Server-sent events client (new EventSource) ──────────────────────────
+	case lower == "eventsource_connect":
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
 
 	// ── WebSocket (gorilla server pumps + JS typed dispatch) ─────────────────
 	case strings.HasPrefix(lower, "ws_upgrade"):

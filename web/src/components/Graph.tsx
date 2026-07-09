@@ -10,6 +10,7 @@ import { visibleGraph } from "../stores/derived";
 import { edgeConfidence } from "../lib/confidence";
 import { BOUNDARY_GROUP_TYPE, isBoundaryGroupId } from "../lib/boundary";
 import { SERVICE_NODE_TYPE } from "../lib/aggregate";
+import { DEFAULT_NODE_COLOR, LABEL_COLOR, LANG_COLORS, NODE_TYPE_STYLES } from "../lib/styles";
 
 cytoscape.use(dagre as any);
 cytoscape.use(fcose as any);
@@ -37,35 +38,31 @@ const STYLE: cytoscape.Stylesheet[] = [
     selector: "node",
     style: {
       label: "data(label)",
-      "background-color": "#6b7280",
+      "background-color": DEFAULT_NODE_COLOR,
       "font-size": "10px",
-      color: "#f9fafb",
+      // Labels sit below the node on the dark canvas, so they must stay
+      // light no matter what the node fill is.
+      color: LABEL_COLOR,
       "text-valign": "bottom",
       "text-margin-y": 4,
       "text-max-width": "160px",
       "text-wrap": "ellipsis",
     } as any,
   },
-  // Per-language colors
-  { selector: 'node[language="go"]', style: { "background-color": "#00ADD8" } },
-  { selector: 'node[language="javascript"]', style: { "background-color": "#F7DF1E", color: "#1a1a1a" } as any },
-  { selector: 'node[language="typescript"]', style: { "background-color": "#3178C6" } },
-  { selector: 'node[language="ruby"]', style: { "background-color": "#CC342D" } },
-  { selector: 'node[language="templ"]', style: { "background-color": "#7C3AED" } },
-  // Node-type shapes so the graph reads without hovering
-  { selector: 'node[type="http_handler"]', style: { shape: "round-rectangle" } },
-  { selector: 'node[type="http_client"]', style: { shape: "round-tag" } },
-  { selector: 'node[type="channel"]', style: { shape: "diamond", "background-color": "#f59e0b" } },
-  { selector: 'node[type="datastore"]', style: { shape: "barrel", "background-color": "#10b981" } },
-  { selector: 'node[type="external_service"]', style: { shape: "hexagon", "background-color": "#ec4899" } },
-  { selector: 'node[type="publisher"]', style: { shape: "vee" } },
-  { selector: 'node[type="subscriber"]', style: { shape: "rhomboid" } },
+  // Per-language colors (shared with the Legend via lib/styles)
+  ...LANG_COLORS.map(([lang, color]) => ({
+    selector: `node[language="${lang}"]`,
+    style: { "background-color": color },
+  })),
+  // Node-type shapes/colors (shared with the Legend via lib/styles)
+  ...NODE_TYPE_STYLES.map(({ type, shape, color }) => ({
+    selector: `node[type="${type}"]`,
+    style: { shape, ...(color ? { "background-color": color } : {}) } as any,
+  })),
   // Collapsed framework/SDK boundary groups: compact, outlined, dimmed
   {
     selector: `node[type="${BOUNDARY_GROUP_TYPE}"]`,
     style: {
-      shape: "round-rectangle",
-      "background-color": "#312e81",
       "border-width": 1.5,
       "border-color": "#818cf8",
       "border-style": "dashed",
@@ -77,10 +74,8 @@ const STYLE: cytoscape.Stylesheet[] = [
   {
     selector: `node[type="${SERVICE_NODE_TYPE}"]`,
     style: {
-      shape: "round-rectangle",
       width: 60,
       height: 40,
-      "background-color": "#4f46e5",
       "font-size": "12px",
       "text-valign": "center",
       "text-margin-y": 0,

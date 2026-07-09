@@ -133,6 +133,12 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 	}
 	// single writer connection; WAL set in schema
 	db.SetMaxOpenConns(1)
+	// Wait for concurrent holders (e.g. a running `polyflow serve`) instead
+	// of failing instantly with SQLITE_BUSY.
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply busy_timeout: %w", err)
+	}
 	if _, err := db.Exec(Schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
