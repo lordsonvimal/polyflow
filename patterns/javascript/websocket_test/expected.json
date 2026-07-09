@@ -1,0 +1,4 @@
+{
+  "patterns": ["ws_new_connection", "ws_onmessage_assign", "ws_dispatch_case", "ws_dispatch_case", "ws_send_typed", "ws_on_message"],
+  "node_types": ["http_client", "subscriber", "subscriber", "subscriber", "publisher", "subscriber"]
+}

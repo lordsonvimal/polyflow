@@ -59,6 +59,15 @@ const (
 	EdgeTypeQueries         EdgeType = "queries"  // reads from a datastore
 	EdgeTypePersists        EdgeType = "persists" // writes to a datastore
 	EdgeTypeCloudCall       EdgeType = "cloud_call"
+	// WebSocket edges
+	EdgeTypeWSUpgrade EdgeType = "ws_upgrade" // HTTP handler upgrades to a WebSocket
+	EdgeTypeWSConnect EdgeType = "ws_connect" // client opens a WebSocket
+	EdgeTypeWSRead    EdgeType = "ws_read"    // reads/dispatches inbound messages
+	EdgeTypeWSWrite   EdgeType = "ws_write"   // writes outbound messages
+	EdgeTypeWSSend    EdgeType = "ws_send"    // sends a typed message ({type: "…"})
+	// SSE broadcast-hub edges (Subscribe/Unsubscribe/Broadcast channel fan-out)
+	EdgeTypeHubSubscribe EdgeType = "hub_subscribe"
+	EdgeTypeHubBroadcast EdgeType = "hub_broadcast"
 )
 
 // Node represents a code entity in the graph.
