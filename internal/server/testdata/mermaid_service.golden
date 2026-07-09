@@ -1,0 +1,4 @@
+flowchart LR
+  api["api"]
+  web["web"]
+  web -->|http_call| api
