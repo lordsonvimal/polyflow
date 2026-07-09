@@ -307,6 +307,19 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	bw := graph.NewBatchWriter(store)
 
+	// Service-level datastore nodes derived from resolved driver dependencies
+	// (dual SQLite drivers merge into one logical sqlite node; lib/pq and GORM
+	// dialectors map to postgres).
+	for _, sf := range allSvcFiles {
+		for _, n := range deps.DatastoreNodes(sf.svc.Name, sf.deps) {
+			node := n
+			if err := bw.AddNode(ctx, &node); err != nil {
+				return err
+			}
+			allNodes = append(allNodes, node)
+		}
+	}
+
 	for _, sf := range allSvcFiles {
 		// Per-service matcher: pattern set filtered by the service's resolved
 		// dependency versions (version-gated patterns activate per service).
@@ -456,6 +469,22 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			allEdges = append(allEdges, e)
 		}
 		if err := bwRoute.Flush(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Datastore linking: connect DB call sites to their service's store node.
+	{
+		dsEdges := linker.LinkDatastores(allNodes)
+		bwDS := graph.NewBatchWriter(store)
+		for i := range dsEdges {
+			e := dsEdges[i]
+			if err := bwDS.AddEdge(ctx, &e); err != nil {
+				return err
+			}
+			allEdges = append(allEdges, e)
+		}
+		if err := bwDS.Flush(ctx); err != nil {
 			return err
 		}
 	}

@@ -521,6 +521,8 @@ $ polyflow status --errors
 | Variable | `dbTimeout` | Type, scope, value if constant |
 | External Endpoint | `POST /api/users` | HTTP method, path |
 | Message Channel | `user.created` (RabbitMQ topic) | Broker type, queue/topic name |
+| Datastore | `postgres`, `sqlite` | kind (store/call), engine, driver(s), orm. Dual drivers for one engine (modernc + mattn SQLite) merge into ONE store node with driver metadata |
+| External Service | AWS S3, Bedrock | Provider, service, SDK package + resolved version |
 | DOM Target | `#user-list`, `.modal` | Selector string, element type, file where defined |
 
 ### Edge Types
@@ -547,6 +549,9 @@ $ polyflow status --errors
 | `sidekiq_perform` | Sidekiq worker processes the job |
 | `pusher_trigger` | Code triggers a Pusher event |
 | `pusher_subscribe` | Client subscribes to Pusher channel |
+| `queries` | Code reads from a datastore (GORM chains, database/sql Query*) |
+| `persists` | Code writes to a datastore (Create/Save/Delete, Exec*) |
+| `cloud_call` | Code calls an external cloud service via an SDK (S3, Bedrock) — carries SDK package + resolved version |
 
 Edge types are **extensible** — new YAML patterns can define new edge types without modifying core code.
 

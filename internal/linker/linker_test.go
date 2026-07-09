@@ -3,6 +3,9 @@ package linker
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -226,5 +229,45 @@ func TestLinkBrokerChannels_NoChannels(t *testing.T) {
 	edges := LinkBrokerChannels([]graph.Node{})
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for empty node list, got %d", len(edges))
+	}
+}
+
+func TestLinkDatastores(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "svc:datastore:sqlite", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "store", "engine": "sqlite"}},
+		{ID: "svc:q1", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "query"}},
+		{ID: "svc:p1", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist"}},
+		{ID: "other:q", Type: graph.NodeTypeDatastore, Service: "other",
+			Meta: map[string]string{"kind": "call", "op": "query"}}, // no store in service
+	}
+	edges := LinkDatastores(nodes)
+	require.Len(t, edges, 2)
+
+	byFrom := map[string]graph.Edge{}
+	for _, e := range edges {
+		byFrom[e.From] = e
+	}
+	assert.Equal(t, graph.EdgeTypeQueries, byFrom["svc:q1"].Type)
+	assert.Equal(t, graph.EdgeTypePersists, byFrom["svc:p1"].Type)
+	assert.Equal(t, "svc:datastore:sqlite", byFrom["svc:q1"].To)
+	assert.Equal(t, graph.ConfidenceInferred, byFrom["svc:q1"].Confidence)
+}
+
+func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "m:datastore:postgres", Type: graph.NodeTypeDatastore, Service: "m",
+			Meta: map[string]string{"kind": "store"}},
+		{ID: "m:datastore:sqlite", Type: graph.NodeTypeDatastore, Service: "m",
+			Meta: map[string]string{"kind": "store"}},
+		{ID: "m:q", Type: graph.NodeTypeDatastore, Service: "m",
+			Meta: map[string]string{"kind": "call", "op": "query"}},
+	}
+	edges := LinkDatastores(nodes)
+	require.Len(t, edges, 2, "ambiguous engine: edge to each store")
+	for _, e := range edges {
+		assert.Equal(t, graph.ConfidencePartial, e.Confidence)
 	}
 }

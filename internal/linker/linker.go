@@ -367,3 +367,46 @@ func stripMeta(s string) string {
 	}
 	return s
 }
+
+// LinkDatastores emits queries/persists edges from datastore call-site nodes
+// (GORM chains, database/sql calls; meta kind=call) to their service's
+// logical datastore node (meta kind=store, derived from resolved driver
+// dependencies). When a service has multiple engines the edge targets each —
+// static analysis cannot tell which engine a *gorm.DB instance points at, so
+// those extra edges carry confidence "partial" instead of "inferred".
+func LinkDatastores(nodes []graph.Node) []graph.Edge {
+	storesByService := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeDatastore && n.Meta["kind"] == "store" {
+			storesByService[n.Service] = append(storesByService[n.Service], n.ID)
+		}
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeDatastore || n.Meta["kind"] != "call" {
+			continue
+		}
+		stores := storesByService[n.Service]
+		edgeType := graph.EdgeTypeQueries
+		if n.Meta["op"] == "persist" {
+			edgeType = graph.EdgeTypePersists
+		}
+		confidence := graph.ConfidenceInferred
+		if len(stores) > 1 {
+			confidence = graph.ConfidencePartial
+		}
+		for _, storeID := range stores {
+			edges = append(edges, graph.Edge{
+				ID:         fmt.Sprintf("%s:%s->%s", string(edgeType), n.ID, storeID),
+				From:       n.ID,
+				To:         storeID,
+				Type:       edgeType,
+				Confidence: confidence,
+			})
+		}
+	}
+	return edges
+}

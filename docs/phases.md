@@ -89,7 +89,7 @@ style: engine routes, grouped routes, method handlers), negative fixture (chi
 and net/http shapes must NOT match), `expected.json` verified by the Phase 1
 harness. Zero core code changes.
 
-## Phase 4 — Datastore patterns: GORM, dual SQLite drivers, PostgreSQL — pending
+## Phase 4 — Datastore patterns: GORM, dual SQLite drivers, PostgreSQL — done
 
 **Deliverable**
 - `patterns/go/gorm.yaml`: method-chained query API (`db.Where(...).First(&x)`,
@@ -273,6 +273,13 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 4 — done.** gorm.yaml (gated on gorm.io/gorm; &target pointer-arg
+  shape guard) + database_sql.yaml (SQL-string-literal guard, Context
+  variants); NodeTypeDatastore + queries/persists edges;
+  deps.DatastoreNodes merges dual SQLite drivers into one logical store node
+  with driver metadata and maps lib/pq/pgx/GORM dialectors to postgres;
+  linker.LinkDatastores connects call sites to store nodes (partial
+  confidence when a service has multiple engines).
 - **Phase 3 — done.** patterns/go/gin_routes.yaml (routes, groups, Use
   middleware, ShouldBind*/JSON shapes), gated on package
   github.com/gin-gonic/gin so Use/Group shapes shared with chi cannot misfire

@@ -1,0 +1,60 @@
+# GORM ORM call shapes (mysycamore, dsw-manager).
+#
+# Gate: only activates for services depending on gorm.io/gorm — the
+# method-chain finishers (First/Find/Create/…) are generic method names that
+# would misfire on unrelated code without the dependency gate. Shape-level
+# guards additionally require the idiomatic &target pointer argument.
+language: go
+version: "1"
+package: gorm.io/gorm
+patterns:
+  # gorm.Open(postgres.Open(dsn), &gorm.Config{}) — captures the dialector so
+  # the datastore engine (postgres/sqlite) is recorded.
+  - name: gorm_open
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "gorm")
+          field: (field_identifier) @fn
+          (#eq? @fn "Open"))
+        arguments: (argument_list
+          .
+          (call_expression
+            function: (selector_expression
+              operand: (identifier) @dialector)) ))
+    captures:
+      - name: dialector
+        role: datastore_engine
+
+  # Query finishers: db.Where("…").First(&user), db.Find(&users), …
+  - name: gorm_query
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(First|Find|Take|Last|Scan|Count|Pluck)$"))
+        arguments: (argument_list
+          .
+          (unary_expression) @target))
+    captures:
+      - name: fn
+        role: gorm_op
+      - name: target
+        role: query_target
+
+  # Persistence: db.Create(&user), db.Save(&user), db.Delete(&user)
+  - name: gorm_persist
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(Create|Save|Delete)$"))
+        arguments: (argument_list
+          .
+          (unary_expression) @target))
+    captures:
+      - name: fn
+        role: gorm_op
+      - name: target
+        role: persist_target

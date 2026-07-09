@@ -1,0 +1,92 @@
+# Raw database/sql call sites: sql.Open + query/exec with SQL string
+# literals. Ungated (stdlib); the SQL-string first argument is the
+# shape-level guard against unrelated Query/Exec methods.
+language: go
+version: "1"
+patterns:
+  # sql.Open("postgres", dsn) — the driver name identifies the engine
+  # (lib/pq → "postgres", modernc/mattn → "sqlite"/"sqlite3").
+  - name: sql_open
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "sql")
+          field: (field_identifier) @fn
+          (#eq? @fn "Open"))
+        arguments: (argument_list
+          .
+          (interpreted_string_literal) @driver
+          .
+          (_) @dsn))
+    captures:
+      - name: driver
+        role: datastore_driver
+
+  # db.Query("SELECT …", args) / QueryRow — SQL string first
+  - name: sql_query
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(Query|QueryRow)$"))
+        arguments: (argument_list
+          .
+          [(interpreted_string_literal) (raw_string_literal)] @sql))
+    captures:
+      - name: fn
+        role: sql_op
+      - name: sql
+        role: sql_text
+
+  # db.QueryContext(ctx, "SELECT …") / QueryRowContext — ctx first, SQL second
+  - name: sql_query
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(QueryContext|QueryRowContext)$"))
+        arguments: (argument_list
+          .
+          (identifier) @ctx
+          .
+          [(interpreted_string_literal) (raw_string_literal)] @sql))
+    captures:
+      - name: fn
+        role: sql_op
+      - name: sql
+        role: sql_text
+
+  # db.Exec("INSERT …", args)
+  - name: sql_exec
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Exec"))
+        arguments: (argument_list
+          .
+          [(interpreted_string_literal) (raw_string_literal)] @sql))
+    captures:
+      - name: fn
+        role: sql_op
+      - name: sql
+        role: sql_text
+
+  # db.ExecContext(ctx, "INSERT …", args)
+  - name: sql_exec
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "ExecContext"))
+        arguments: (argument_list
+          .
+          (identifier) @ctx
+          .
+          [(interpreted_string_literal) (raw_string_literal)] @sql))
+    captures:
+      - name: fn
+        role: sql_op
+      - name: sql
+        role: sql_text

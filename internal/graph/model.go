@@ -18,6 +18,13 @@ const (
 	NodeTypeTypeAlias    NodeType = "type_alias"
 	NodeTypeDOMTarget    NodeType = "dom_target"
 	NodeTypeChannel      NodeType = "channel"
+	// NodeTypeDatastore covers both service-level datastore nodes (derived
+	// from resolved dependencies; meta kind=store, engine, driver) and DB
+	// call sites (GORM chains, database/sql queries; meta kind=call, op).
+	NodeTypeDatastore NodeType = "datastore"
+	// NodeTypeExternalService is a third-party service boundary (cloud SDKs:
+	// S3, Bedrock, Pusher-as-a-service, …).
+	NodeTypeExternalService NodeType = "external_service"
 )
 
 // EdgeType classifies the relationship between two nodes.
@@ -43,6 +50,9 @@ const (
 	EdgeTypeDOMCreate       EdgeType = "dom_create"
 	EdgeTypeDOMRemove       EdgeType = "dom_remove"
 	EdgeTypeDOMListen       EdgeType = "dom_listen"
+	EdgeTypeQueries         EdgeType = "queries"  // reads from a datastore
+	EdgeTypePersists        EdgeType = "persists" // writes to a datastore
+	EdgeTypeCloudCall       EdgeType = "cloud_call"
 )
 
 // Node represents a code entity in the graph.
