@@ -1,0 +1,94 @@
+# Gin route registrations, groups, middleware, and request/response shapes.
+#
+# Gate: only activates for services that depend on gin. Shapes like
+# `r.Use(mw)` and `g.Group(...)` exist in other routers (chi, echo); the
+# dependency gate is what disambiguates them, per the version-aware
+# pattern-matching design.
+language: go
+version: "1"
+package: github.com/gin-gonic/gin
+patterns:
+  # r.GET("/users", listUsers) / api.POST("/games/:id", h) — engine or group.
+  # Gin verbs are ALL-CAPS, which distinguishes them from chi's Get/Post.
+  - name: gin_route
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @router
+          field: (field_identifier) @method
+          (#match? @method "^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Any)$"))
+        arguments: (argument_list
+          (interpreted_string_literal) @path
+          (_) @handler))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+
+  # api := r.Group("/api/v1") — route group with a string prefix.
+  # chi's Group takes a func literal, not a string, so this shape is gin's.
+  - name: gin_route_group
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @method
+          (#eq? @method "Group"))
+        arguments: (argument_list
+          .
+          (interpreted_string_literal) @prefix))
+    captures:
+      - name: prefix
+        role: route_prefix
+
+  # r.Use(authMiddleware()) — middleware registration.
+  - name: gin_middleware_use
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @router
+          field: (field_identifier) @fn
+          (#eq? @fn "Use"))
+        arguments: (argument_list
+          (_) @middleware))
+    captures:
+      - name: middleware
+        role: middleware_ref
+
+  # c.ShouldBindJSON(&req) — request shape extraction: which struct the
+  # handler expects.
+  - name: gin_bind_request
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @ctx
+          field: (field_identifier) @fn
+          (#match? @fn "^(ShouldBindJSON|BindJSON|ShouldBind|ShouldBindQuery|ShouldBindUri|ShouldBindHeader)$"))
+        arguments: (argument_list
+          (unary_expression) @target))
+    captures:
+      - name: fn
+        role: bind_kind
+      - name: target
+        role: request_shape
+
+  # c.JSON(200, resp) — response shape extraction.
+  - name: gin_json_response
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @ctx
+          field: (field_identifier) @fn
+          (#eq? @fn "JSON"))
+        arguments: (argument_list
+          .
+          (_) @status
+          .
+          (_) @body))
+    captures:
+      - name: status
+        role: http_status
+      - name: body
+        role: response_shape

@@ -635,6 +635,10 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
 
+	// ── Gin handler-body shapes (request bind / response render) ─────────────
+	case strings.HasPrefix(lower, "gin_bind") || strings.HasPrefix(lower, "gin_json"):
+		return graph.NodeTypeFunction, graph.EdgeTypeCalls
+
 	// ── Rails controllers ─────────────────────────────────────────────────────
 	case lower == "controller_action":
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
