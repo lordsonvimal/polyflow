@@ -1,1 +1,1 @@
-{"patterns": ["bunny_publish", "bunny_subscribe", "bunny_queue_declare"], "node_types": ["publisher", "subscriber", "channel"]}
+{"patterns": ["bunny_publish", "bunny_publish", "bunny_exchange_publish", "bunny_subscribe", "bunny_queue_declare"], "node_types": ["publisher", "publisher", "publisher", "subscriber", "channel"]}

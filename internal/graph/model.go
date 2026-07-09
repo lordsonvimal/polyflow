@@ -41,8 +41,14 @@ const (
 	EdgeTypeSSEEndpoint     EdgeType = "sse_endpoint"
 	EdgeTypeDatastarAction  EdgeType = "datastar_action"
 	EdgeTypeDatastarBind    EdgeType = "datastar_bind"
-	EdgeTypeSidekiqEnqueue  EdgeType = "sidekiq_enqueue"
-	EdgeTypeSidekiqPerform  EdgeType = "sidekiq_perform"
+	// Generic background-job edges: delayed_job, solid_queue, ActiveJob,
+	// Sidekiq all map onto these; the meta records which queue system.
+	EdgeTypeJobEnqueue EdgeType = "job_enqueue"
+	EdgeTypeJobPerform EdgeType = "job_perform"
+	// Deprecated: kept as aliases for stored graphs; new code emits the
+	// generic job_enqueue/job_perform types.
+	EdgeTypeSidekiqEnqueue EdgeType = "sidekiq_enqueue"
+	EdgeTypeSidekiqPerform EdgeType = "sidekiq_perform"
 	EdgeTypePusherTrigger   EdgeType = "pusher_trigger"
 	EdgeTypePusherSubscribe EdgeType = "pusher_subscribe"
 	EdgeTypeDOMRead         EdgeType = "dom_read"

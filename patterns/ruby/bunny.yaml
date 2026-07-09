@@ -1,5 +1,8 @@
+# Gated on the bunny gem: publish/subscribe/queue are generic method names
+# that would misfire on unrelated Ruby code without the dependency gate.
 language: ruby
 version: "1"
+package: bunny
 patterns:
   - name: bunny_publish
     query: |
@@ -7,7 +10,8 @@ patterns:
         method: (identifier) @fn
         (#eq? @fn "publish")
         arguments: (argument_list
-          (_) @payload . _*))
+          .
+          (_) @payload))
     captures:
       - name: payload
         role: amqp_payload
@@ -30,3 +34,22 @@ patterns:
     captures:
       - name: queue_name
         role: amqp_queue
+  # exchange.publish(payload, routing_key: "build.start")
+  - name: bunny_exchange_publish
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "publish")
+        arguments: (argument_list
+          .
+          (_) @payload
+          .
+          (pair
+            key: (hash_key_symbol) @opt
+            (#eq? @opt "routing_key")
+            value: (_) @routing_key)))
+    captures:
+      - name: payload
+        role: amqp_payload
+      - name: routing_key
+        role: amqp_routing_key

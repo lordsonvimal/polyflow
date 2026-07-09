@@ -10,3 +10,8 @@ func run(p Producer, ch Chan) {
 	ch.QueueDeclare("jobs")
 	bus.Emit("user.created", payload)
 }
+func modernNegatives(ctx Context, p Producer) {
+	p.PublishWithContext(ctx, msg)          // wrong arity
+	p.ConsumeWithContext(ctx)               // wrong arity
+	registry.ExchangeDeclare(name)          // wrong arity
+}
