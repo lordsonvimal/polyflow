@@ -27,3 +27,13 @@ func writePump(conn *websocket.Conn) {
 	conn.WriteMessage(websocket.TextMessage, payload)
 	conn.WriteJSON(response)
 }
+
+func dispatch(conn *websocket.Conn, msg Message) {
+	switch msg.Type {
+	case "battery":
+		handleBattery(msg)
+	case "location":
+		handleLocation(msg)
+	}
+	conn.WriteJSON(Ack{Type: "battery_ack"})
+}

@@ -1203,6 +1203,27 @@ Templ files are parsed using `github.com/a-h/templ/parser/v2` Visitor interface 
 | Graph query (trace, depth 10) | < 200ms |
 | Serve startup | < 1 second |
 
+**Measured (Phase 12, M-series laptop, synthetic synergy/nextGen-shaped
+workspace — 4 go.work modules + 3 JS apps + Rails-sized Ruby tree; see
+`internal/e2e/bench_test.go`, sizes via `POLYFLOW_BENCH_FILES`):**
+
+| Metric | 1,200 files | 10,000 files | Target |
+|--------|------------|--------------|--------|
+| Cold index | 4.2s | 19.3s | ✓ (< 30s at 10k) |
+| Re-index, nothing changed | 31ms | 213ms | ✓ (no-change fast path: workspace fingerprint match skips the rebuild) |
+| Re-index, 100 files changed | 2.1s | 15.9s | ✓ at 1.2k; ✗ at 10k |
+
+The 100-changed miss at 10k scale is architectural: incremental indexing
+skips *parsing* but still rebuilds the whole graph DB into a tmp file for the
+atomic swap (correctness identical to a full rebuild by construction), so the
+floor is O(graph), not O(change). Hitting < 3s at 10k requires in-place
+incremental DB updates (delete/reinsert per changed file + derived-edge
+refresh) — deliberate follow-up, not attempted in v1. Phase 12 also removed
+two superlinear costs that dominated before measurement: `DELETE FROM
+nodes_fts WHERE id=?` full-FTS-table scans (O(n²) across a build — now
+skipped on fresh builds via an in-memory seen-set) and per-row SQL
+re-preparation in the batch writer.
+
 ### Pipeline Architecture
 
 ```

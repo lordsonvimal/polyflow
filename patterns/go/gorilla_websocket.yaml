@@ -49,3 +49,40 @@ patterns:
     captures:
       - name: fn
         role: ws_write
+
+  # switch msg.Type { case "battery": ... } — typed-JSON dispatch after a
+  # read pump, one match per case (mirrors the JS ws_dispatch_case shape so
+  # LinkWebSocketMessages joins client sends to server cases by type).
+  # Anchored on a .Type/.MsgType/.Kind field selector so ordinary string
+  # switches cannot match.
+  - name: ws_dispatch_case
+    query: |
+      (expression_switch_statement
+        value: (selector_expression
+          field: (field_identifier) @field
+          (#match? @field "^(Type|MsgType|Kind)$"))
+        (expression_case
+          value: (expression_list
+            (interpreted_string_literal) @message_type)))
+    captures:
+      - name: message_type
+        role: ws_message_type
+
+  # conn.WriteJSON(Ack{Type: "battery_ack"}) — typed outbound message; the
+  # literal Type value links the server write back to the client dispatch.
+  - name: ws_send_typed
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "WriteJSON"))
+        arguments: (argument_list
+          (composite_literal
+            body: (literal_value
+              (keyed_element
+                (literal_element (identifier) @key)
+                (#eq? @key "Type")
+                (literal_element (interpreted_string_literal) @message_type))))))
+    captures:
+      - name: message_type
+        role: ws_message_type

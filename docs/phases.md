@@ -249,7 +249,7 @@ listing every edge type present in fixtures.
 export output shape; Mermaid export golden test on the server side; manual
 smoke via `polyflow serve` documented in the phase notes.
 
-## Phase 12 — E2E cross-stack chains + performance — pending
+## Phase 12 — E2E cross-stack chains + performance — done
 
 **Deliverable**
 - E2E fixture workspaces exercising ≥4 hops across ≥3 languages:
@@ -273,6 +273,38 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 12 — done.** E2E chains: new internal/e2e/testdata/chains
+  workspace (6 services, 4 languages) indexed through the real
+  indexer.Run pipeline, chains asserted via trace chain text:
+  (1) `(ui) GamePage -[datastar_action]-> POST /move -[http_call]-> ‖hub‖
+  POST /move -[calls]-> handleMove -[calls]-> Broadcast -[hub_broadcast]->
+  Subscribe` (templ→Gin→hub→SSE, 6 hops); (2) `(rails) create -[calls]->
+  publish -[publishes]-> dsw.builds -[subscribes]-> ‖agent‖
+  ConsumeWithContext` (Ruby bunny → Go amqp091 via broker hint);
+  (3) WebSocket typed round trip both directions (JS send → Go dispatch
+  case; Go WriteJSON ack → JS onmessage case) — enabled by two new
+  gorilla_websocket.yaml patterns (ws_dispatch_case anchored on
+  .Type/.MsgType/.Kind switches, ws_send_typed on WriteJSON with a literal
+  Type key), YAML+fixtures only. Benchmarks (make bench; sizes via
+  POLYFLOW_BENCH_FILES): cold 1.2k=4.2s / 10k=19.3s (target <30s ✓, was
+  144.6s before fixes); unchanged re-index 31ms / 213ms (new no-change
+  fast path: workspace fingerprint of config+file hashes+pattern files
+  matched → rebuild skipped); 100-changed 2.1s (✓ <3s) / 15.9s (✗ at 10k —
+  the atomic-swap full-graph-rewrite floor; in-place DB updates are the
+  documented follow-up). Real bugs found by this phase and fixed:
+  (a) LinkJS deleted templ component declarations as "unresolved JSX
+  proxies", severing every datastar chain at the root; (b) BatchWriter
+  auto-flushed edge batches before pending node batches → FK failures on
+  any workspace with >1000 edges; (c) BatchWriter's edge statement dropped
+  confidence/method/path — every batch-indexed edge lost its confidence in
+  the stored graph; (d) O(n²) FTS delete-by-id full scans during builds;
+  (e) the atomic swap left the previous DB's -wal/-shm sidecars next to
+  the renamed file — readers paired the new DB with the stale WAL and saw
+  empty tables/phantom cache misses (now removed as part of the swap).
+  Also: file-hash writes batched into one tx; tmp-DB builds use
+  synchronous=OFF (safe: atomic rename only after success); prepared
+  statements in batch flushes; fast-path runs report the persisted
+  cross-link count.
 - **Phase 11 — done.** UI revamped on the same stack (SolidJS + Cytoscape +
   Tailwind + Vite). Server: node/edge meta + confidence now flow through the
   Cytoscape JSON; new GET /api/export/mermaid?level=service|function

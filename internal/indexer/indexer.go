@@ -86,6 +86,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	finalDB := filepath.Join(opts.DBDir, meta.DBFile)
 	oldHashes := map[string]*graph.FileHash{}
 	oldSemantic := map[string][2]string{} // service → (fingerprint, edgesJSON)
+	oldFingerprint := ""
 	if !opts.Full {
 		if _, err := os.Stat(finalDB); err == nil {
 			if oldStore, err := graph.NewSQLiteStore(finalDB); err == nil {
@@ -97,18 +98,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 						oldSemantic[svc.Name] = [2]string{fp, edges}
 					}
 				}
+				if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
+					oldFingerprint = fp
+				}
 				oldStore.Close()
 			}
 		}
 	}
-
-	tmpDB := filepath.Join(opts.DBDir, "graph.db.tmp")
-	_ = os.Remove(tmpDB)
-	store, err := graph.NewSQLiteStore(tmpDB)
-	if err != nil {
-		return nil, fmt.Errorf("open tmp store: %w", err)
-	}
-	defer store.Close()
 
 	reg, err := patterns.DefaultRegistry(opts.PatternsDir)
 	if err != nil {
@@ -160,15 +156,6 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if err != nil {
 			fmt.Fprintf(logw, "  Warning: dependency resolution for %s: %v\n", svc.Name, err)
 		}
-		for i := range svcDeps {
-			d := svcDeps[i]
-			if err := store.UpsertDependency(ctx, &graph.Dependency{
-				Service: svc.Name, Ecosystem: d.Ecosystem, Name: d.Name,
-				Version: d.Version, Kind: d.Kind,
-			}); err != nil {
-				return nil, err
-			}
-		}
 		fmt.Fprintf(logw, "  %s: %d files (%s, %d deps)\n", svc.Name, len(files), svc.Language, len(svcDeps))
 		allSvcFiles = append(allSvcFiles, serviceFiles{svc, files, svcDeps})
 	}
@@ -178,9 +165,74 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		stats.TotalFiles += len(sf.files)
 	}
 
+	// ── Hash pre-pass + no-change fast path ──────────────────────────────────
+	// Hash every file up front. If the workspace fingerprint (config + file
+	// set + content hashes + pattern files) matches the previous run, the
+	// graph cannot differ — skip the rebuild entirely.
+	now := time.Now().Unix()
+	hashes := map[string]string{}     // file → content hash
+	svcHashLines := map[string][]string{} // semantic cache key input
+	var fpLines []string
+	for _, sf := range allSvcFiles {
+		for _, file := range sf.files {
+			data, err := os.ReadFile(file)
+			if err != nil {
+				continue // recorded as an error during the parse loop
+			}
+			sum := sha256.Sum256(data)
+			h := hex.EncodeToString(sum[:])
+			hashes[file] = h
+			svcHashLines[sf.svc.Name] = append(svcHashLines[sf.svc.Name], file+":"+h)
+			fpLines = append(fpLines, sf.svc.Name+":"+file+":"+h)
+		}
+	}
+	cfgJSON, _ := json.Marshal(cfg)
+	fpLines = append(fpLines, "config:"+string(cfgJSON))
+	fpLines = append(fpLines, "patterns:"+patternsFingerprint(opts.PatternsDir, cfg.Patterns))
+	workspaceFingerprint := fingerprintLines(fpLines)
+
+	if !opts.Full && oldFingerprint != "" && workspaceFingerprint == oldFingerprint {
+		finalStore, err := graph.NewSQLiteStore(finalDB)
+		if err == nil {
+			defer finalStore.Close()
+			_ = finalStore.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10))
+			if n, e, err := finalStore.Stats(ctx); err == nil {
+				stats.Nodes, stats.Edges = n, e
+			}
+			if v, err := finalStore.GetMeta(ctx, "cross_links"); err == nil {
+				stats.CrossLinks, _ = strconv.Atoi(v)
+			}
+			stats.SkippedFiles = stats.TotalFiles
+			stats.Elapsed = time.Since(start)
+			fmt.Fprintf(logw, "  No changes since last index — graph reused.\n")
+			return stats, nil
+		}
+		// Fall through to a full build if the previous DB cannot be opened.
+	}
+
+	tmpDB := filepath.Join(opts.DBDir, "graph.db.tmp")
+	_ = os.Remove(tmpDB)
+	store, err := graph.NewBuildStore(tmpDB)
+	if err != nil {
+		return nil, fmt.Errorf("open tmp store: %w", err)
+	}
+	defer store.Close()
+
+	for _, sf := range allSvcFiles {
+		for i := range sf.deps {
+			d := sf.deps[i]
+			if err := store.UpsertDependency(ctx, &graph.Dependency{
+				Service: sf.svc.Name, Ecosystem: d.Ecosystem, Name: d.Name,
+				Version: d.Version, Kind: d.Kind,
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	var allNodes []graph.Node
 	var allEdges []graph.Edge
-	bw := graph.NewBatchWriter(store)
+	bw := graph.NewFreshBatchWriter(store)
 
 	// Service-level datastore nodes from resolved driver dependencies.
 	for _, sf := range allSvcFiles {
@@ -195,28 +247,22 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	// ── Parse (incremental) ──────────────────────────────────────────────────
 	done := 0
-	now := time.Now().Unix()
-	// serviceFingerprint accumulates per-service "path:hash" lines for the
-	// semantic cache key.
-	svcHashLines := map[string][]string{}
+	// File-hash records are collected and written in one transaction at the
+	// end of the parse phase — per-row autocommit costs one fsync per file.
+	var fhBatch []*graph.FileHash
 
 	for _, sf := range allSvcFiles {
 		matcher := patterns.NewTreeSitterMatcherForService(reg, sf.deps)
 
 		var toParse []string
-		hashes := map[string]string{}
 		for _, file := range sf.files {
-			data, err := os.ReadFile(file)
-			if err != nil {
+			h, ok := hashes[file]
+			if !ok { // unreadable during the hash pre-pass
 				stats.ErrorFiles++
 				done++
 				progress(done, stats.TotalFiles)
 				continue
 			}
-			sum := sha256.Sum256(data)
-			h := hex.EncodeToString(sum[:])
-			hashes[file] = h
-			svcHashLines[sf.svc.Name] = append(svcHashLines[sf.svc.Name], file+":"+h)
 
 			old := oldHashes[file]
 			if old != nil && old.ContentHash == h && old.Service == sf.svc.Name {
@@ -244,9 +290,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 						})
 					}
 					old.IndexedAt = now
-					if err := store.UpsertFileHash(ctx, old); err != nil {
-						return nil, err
-					}
+					fhBatch = append(fhBatch, old)
 					stats.SkippedFiles++
 					done++
 					progress(done, stats.TotalFiles)
@@ -273,17 +317,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				_ = store.UpsertParseError(ctx, &graph.ParseError{
 					FilePath: result.File, Service: sf.svc.Name, ErrorCount: 1, IndexedAt: now,
 				})
-				if err := store.UpsertFileHash(ctx, fh); err != nil {
-					return nil, err
-				}
+				fhBatch = append(fhBatch, fh)
 				continue
 			}
 			nodesJSON, _ := json.Marshal(result.Nodes)
 			edgesJSON, _ := json.Marshal(result.Edges)
 			fh.NodesJSON, fh.EdgesJSON = string(nodesJSON), string(edgesJSON)
-			if err := store.UpsertFileHash(ctx, fh); err != nil {
-				return nil, err
-			}
+			fhBatch = append(fhBatch, fh)
 			for i := range result.Nodes {
 				n := result.Nodes[i]
 				if err := bw.AddNode(ctx, &n); err != nil {
@@ -303,6 +343,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	// Flush tree-sitter nodes+edges before the semantic pass (FK constraints).
 	if err := bw.Flush(ctx); err != nil {
+		return nil, err
+	}
+	if err := store.UpsertFileHashes(ctx, fhBatch); err != nil {
 		return nil, err
 	}
 
@@ -431,15 +474,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// Broker hint linking (via: rabbitmq + exchange).
 	{
 		hintNodes, hintEdges := linker.LinkBrokerHints(cfg.Links, allNodes)
-		bwHint := graph.NewBatchWriter(store)
 		for i := range hintNodes {
 			n := hintNodes[i]
-			if err := bwHint.AddNode(ctx, &n); err != nil {
+			if err := bw.AddNode(ctx, &n); err != nil {
 				return nil, err
 			}
 			allNodes = append(allNodes, n)
 		}
-		if err := bwHint.Flush(ctx); err != nil {
+		if err := bw.Flush(ctx); err != nil {
 			return nil, err
 		}
 		if err := writeEdges(hintEdges); err != nil {
@@ -454,17 +496,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("link: %w", err)
 	}
-	bw2 := graph.NewBatchWriter(store)
+
 	for i := range crossEdges {
 		e := crossEdges[i]
 		if _, err := store.GetNode(ctx, e.To); err != nil {
-			_ = bw2.AddNode(ctx, &graph.Node{
+			_ = bw.AddNode(ctx, &graph.Node{
 				ID: e.To, Type: graph.NodeTypeHTTPHandler, Label: e.To, Service: "unresolved",
 				File: "unresolved", Language: "unknown",
 			})
 		}
 	}
-	if err := bw2.Flush(ctx); err != nil {
+	if err := bw.Flush(ctx); err != nil {
 		return nil, err
 	}
 	if err := writeEdges(crossEdges); err != nil {
@@ -475,8 +517,20 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
 		return nil, err
 	}
+	if err := store.SetMeta(ctx, "workspace_fingerprint", workspaceFingerprint); err != nil {
+		return nil, err
+	}
+	if err := store.SetMeta(ctx, "cross_links", strconv.Itoa(stats.CrossLinks)); err != nil {
+		return nil, err
+	}
 	store.Close()
 
+	// Atomic swap. The previous DB's WAL sidecar files must go too: the new
+	// file was built with an in-memory journal and has none of its own, and
+	// a reader pairing the renamed DB with the old -wal/-shm sees garbage
+	// (empty tables, phantom cache misses).
+	_ = os.Remove(finalDB + "-wal")
+	_ = os.Remove(finalDB + "-shm")
 	if err := os.Rename(tmpDB, finalDB); err != nil {
 		return nil, fmt.Errorf("atomic swap: %w", err)
 	}
@@ -487,6 +541,24 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 	stats.Elapsed = time.Since(start)
 	return stats, nil
+}
+
+// patternsFingerprint hashes the contents of every pattern YAML (built-in
+// dir + workspace-registered extras) so pattern edits invalidate the
+// no-change fast path.
+func patternsFingerprint(dir string, extra []string) string {
+	files, _ := filepath.Glob(filepath.Join(dir, "*", "*.yaml"))
+	files = append(files, extra...)
+	sort.Strings(files)
+	h := sha256.New()
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(h, "%s:%x\n", f, sha256.Sum256(data))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // fingerprintLines hashes the sorted per-file hash lines of a service.
