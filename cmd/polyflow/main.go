@@ -69,15 +69,25 @@ func init() {
 
 // ─── init ────────────────────────────────────────────────────────────────────
 
+var (
+	initInteractive bool
+	initForce       bool
+)
+
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize a polyflow workspace",
+	Short: "Initialize a polyflow workspace (auto-discovers services)",
 	RunE:  runInit,
+}
+
+func init() {
+	initCmd.Flags().BoolVar(&initInteractive, "interactive", false, "prompt for each service instead of auto-discovering")
+	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing workspace.yaml without asking")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	cfgPath := meta.ConfigFile
-	if _, err := os.Stat(cfgPath); err == nil {
+	if _, err := os.Stat(cfgPath); err == nil && !initForce {
 		fmt.Printf("workspace.yaml already exists. Overwrite? [y/N]: ")
 		var ans string
 		fmt.Scanln(&ans)
@@ -85,6 +95,32 @@ func runInit(cmd *cobra.Command, args []string) error {
 			fmt.Println("Aborted.")
 			return nil
 		}
+	}
+
+	if !initInteractive {
+		cfg, err := workspace.Discover(".")
+		if err != nil {
+			return fmt.Errorf("discover services: %w", err)
+		}
+		if len(cfg.Services) == 0 {
+			return fmt.Errorf("no services found (no go.mod/go.work, package.json, or Gemfile) — use --interactive to add them manually")
+		}
+		fmt.Println("Discovered services:")
+		for _, s := range cfg.Services {
+			fw := ""
+			if len(s.Frameworks) > 0 {
+				fw = " [" + strings.Join(s.Frameworks, ", ") + "]"
+			}
+			fmt.Printf("  %-24s %-30s %s%s\n", s.Name, s.Path, s.Language, fw)
+		}
+		for _, l := range cfg.Links {
+			fmt.Printf("  link: %s -> %s (via %s)\n", l.From, l.To, l.Via)
+		}
+		if err := workspace.Save(cfgPath, cfg); err != nil {
+			return err
+		}
+		fmt.Printf("Created %s — edit it or use `polyflow config service` to adjust.\n", cfgPath)
+		return nil
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
