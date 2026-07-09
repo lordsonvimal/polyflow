@@ -632,12 +632,17 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "datastar_bind") || strings.HasPrefix(lower, "datastar_signal"):
 		return graph.NodeTypeFunction, graph.EdgeTypeDatastarBind
 
-	// ── Sidekiq ───────────────────────────────────────────────────────────────
+	// ── Background jobs (delayed_job, solid_queue, ActiveJob, Sidekiq) ───────
 	case strings.HasPrefix(lower, "sidekiq_perform") || strings.Contains(lower, "perform_async") ||
-		strings.Contains(lower, "perform_in") || strings.Contains(lower, "perform_at"):
-		return graph.NodeTypePublisher, graph.EdgeTypeSidekiqEnqueue
-	case strings.Contains(lower, "sidekiq_worker") || strings.Contains(lower, "sidekiq_job"):
-		return graph.NodeTypeSubscriber, graph.EdgeTypeSidekiqPerform
+		strings.Contains(lower, "perform_in") || strings.Contains(lower, "perform_at") ||
+		strings.HasPrefix(lower, "dj_delay") || strings.HasPrefix(lower, "dj_enqueue") ||
+		strings.HasPrefix(lower, "dj_handle_async") || strings.HasPrefix(lower, "aj_perform_later"):
+		return graph.NodeTypePublisher, graph.EdgeTypeJobEnqueue
+	case strings.Contains(lower, "sidekiq_worker") || strings.Contains(lower, "sidekiq_job") ||
+		strings.HasPrefix(lower, "aj_perform_method"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypeJobPerform
+	case strings.HasPrefix(lower, "aj_queue_adapter") || strings.HasPrefix(lower, "sq_adapter"):
+		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 
 	// ── Pusher ────────────────────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "pusher_trigger"):
@@ -686,8 +691,8 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case lower == "controller_action":
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
 
-	// ── Message channel declarations (queue setup, not pub/sub itself) ───────
-	case strings.Contains(lower, "queue_declare"):
+	// ── Message channel declarations (queue/exchange setup, not pub/sub) ─────
+	case strings.Contains(lower, "queue_declare") || strings.Contains(lower, "exchange_declare"):
 		return graph.NodeTypeChannel, graph.EdgeTypeCalls
 
 	// ── Legacy XHR / jQuery ───────────────────────────────────────────────────

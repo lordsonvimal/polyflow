@@ -1,4 +1,4 @@
 {
-  "patterns": ["amqp_publish", "amqp_consume", "amqp_queue_declare"],
-  "node_types": ["publisher", "subscriber", "channel"]
+  "patterns": ["amqp_publish", "amqp_publish", "amqp_consume", "amqp_consume", "amqp_queue_declare", "amqp_exchange_declare"],
+  "node_types": ["publisher", "publisher", "subscriber", "subscriber", "channel", "channel"]
 }

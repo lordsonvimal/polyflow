@@ -505,6 +505,35 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Broker hint linking: workspace links with via=rabbitmq + exchange
+	// connect publishers/subscribers whose exchange is not statically
+	// resolvable (e.g. Ruby bunny publishes via a variable-held exchange).
+	{
+		hintNodes, hintEdges := linker.LinkBrokerHints(cfg.Links, allNodes)
+		bwHint := graph.NewBatchWriter(store)
+		for i := range hintNodes {
+			n := hintNodes[i]
+			if err := bwHint.AddNode(ctx, &n); err != nil {
+				return err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bwHint.Flush(ctx); err != nil {
+			return err
+		}
+		bwHintE := graph.NewBatchWriter(store)
+		for i := range hintEdges {
+			e := hintEdges[i]
+			if err := bwHintE.AddEdge(ctx, &e); err != nil {
+				return err
+			}
+			allEdges = append(allEdges, e)
+		}
+		if err := bwHintE.Flush(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Cross-service linking
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
 	l := linker.New(cfg)

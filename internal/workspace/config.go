@@ -18,13 +18,14 @@ type Service struct {
 	Port       int      `yaml:"port,omitempty"`
 }
 
-// Link declares a known HTTP dependency between two services.
+// Link declares a known dependency between two services (HTTP or broker).
 type Link struct {
-	From    string `yaml:"from"`
-	To      string `yaml:"to"`
-	Via     string `yaml:"via,omitempty"`
-	Hint    string `yaml:"hint,omitempty"`     // e.g. "USER_SERVICE_URL=http://localhost:8081"
-	BaseURL string `yaml:"base_url,omitempty"` // e.g. "/api" — stripped from client paths before matching
+	From     string `yaml:"from"`
+	To       string `yaml:"to"`
+	Via      string `yaml:"via,omitempty"`      // e.g. "rabbitmq"
+	Hint     string `yaml:"hint,omitempty"`     // e.g. "USER_SERVICE_URL=http://localhost:8081"
+	BaseURL  string `yaml:"base_url,omitempty"` // e.g. "/api" — stripped from client paths before matching
+	Exchange string `yaml:"exchange,omitempty"` // via: rabbitmq — broker exchange connecting the services
 }
 
 // IndexConfig holds settings for the index command.
