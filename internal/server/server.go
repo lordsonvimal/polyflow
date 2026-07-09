@@ -80,6 +80,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/node/{id}", s.handleNode)
 	s.mux.HandleFunc("GET /api/node/{id}/source", s.handleNodeSource)
 	s.mux.HandleFunc("GET /api/stats", s.handleStats)
+	s.mux.HandleFunc("GET /api/export/mermaid", s.handleExportMermaid)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend
 	s.mux.Handle("/", http.FileServer(http.Dir("web/dist")))

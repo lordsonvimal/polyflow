@@ -1396,6 +1396,14 @@ All responses in Cytoscape JSON format (for graph endpoints) — zero transforma
 
 **Scope (v1):** Web UI is visualization-only (graph, search, trace, detail panel, filters). All operational commands (index, config, status, patterns) remain CLI-only. Web UI for CLI features is a v2+ consideration.
 
+**UI behaviors (Phase 11, pulled forward from the v2 roadmap where noted):**
+
+- **Version surfacing** — the detail panel shows a `package@resolved_version` chip for framework-boundary and cloud-SDK nodes (e.g. `github.com/aws/aws-sdk-go@1.55.8`), sourced from node meta stamped by version-gated patterns.
+- **Boundary collapse (default)** — framework/SDK call sites (anything with `package` in meta, or `external_service` nodes) fold into one group node per (service, package), labeled `pkg@version (n)`, with edges re-routed and deduplicated. Double-click a group (or use the detail panel toggle) to expand its call sites. Application code never collapses.
+- **Confidence default** — only `static` + `inferred` edges render by default; `partial`/`unknown` are opt-in via the filter panel and draw dashed/dimmed. Edges without an explicit confidence are structural AST matches and count as static.
+- **Two altitudes** — in-depth (per-function) vs high-level (one node per service, cross-service edges aggregated per type with counts). The high-level view matches the service-level Mermaid export exactly.
+- **Diagram export (pulled forward from v2)** — `GET /api/export/mermaid?level=service|function[&root=&direction=&depth=]` renders golden-tested Mermaid (per-service subgraphs, `package@version` in labels, dashed uncertain edges); SVG/PNG export client-side from the live Cytoscape canvas (cytoscape-svg), reflecting current filters/collapse state.
+
 ---
 
 ## Build Order (Dependency-Driven)

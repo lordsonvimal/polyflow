@@ -1,6 +1,8 @@
 import { createSignal, createEffect } from "solid-js";
+import { DEFAULT_CONFIDENCE } from "../lib/confidence";
 
-type Layout = "dagre" | "fcose" | "circle" | "grid";
+export type Layout = "dagre" | "fcose" | "circle" | "grid";
+export type ViewMode = "indepth" | "highlevel";
 
 // ── localStorage helpers ───────────────────────────────────────────────────
 
@@ -31,12 +33,28 @@ function pushURL(params: Record<string, string | null>) {
 
 const initLayout = (urlParam("layout") ?? lsGet("pf:layout", "dagre")) as Layout;
 const initNodeId = urlParam("node");
+const initView = (urlParam("view") ?? "indepth") as ViewMode;
 
 const [selectedNodeId, setSelectedNodeIdRaw] = createSignal<string | null>(initNodeId);
 const [layout, setLayoutRaw] = createSignal<Layout>(initLayout);
-const [activeFilters, setActiveFilters] = createSignal<string[]>([]);
 const [notification, setNotification] = createSignal<string | null>(null);
 const [semanticWarnings, setSemanticWarnings] = createSignal<string[]>([]);
+
+// View mode: in-depth (per-function) vs high-level (service-to-service).
+const [viewMode, setViewModeRaw] = createSignal<ViewMode>(
+  initView === "highlevel" ? "highlevel" : "indepth"
+);
+
+// Node types / services the user has hidden (empty = show everything).
+const [hiddenTypes, setHiddenTypes] = createSignal<string[]>([]);
+const [hiddenServices, setHiddenServices] = createSignal<string[]>([]);
+
+// Confidence levels rendered. Default: static + inferred only — partial and
+// unknown edges are opt-in (zero-false-positive default view).
+const [activeConfidence, setActiveConfidence] = createSignal<string[]>([...DEFAULT_CONFIDENCE]);
+
+// Boundary groups the user has expanded (collapsed is the default).
+const [expandedBoundaries, setExpandedBoundaries] = createSignal<string[]>([]);
 
 // Persist layout to localStorage and URL whenever it changes.
 createEffect(() => {
@@ -45,10 +63,13 @@ createEffect(() => {
   pushURL({ layout: l === "dagre" ? null : l }); // omit default from URL
 });
 
-// Persist selected node to URL whenever it changes.
+// Persist selected node and view mode to URL.
 createEffect(() => {
-  const id = selectedNodeId();
-  pushURL({ node: id });
+  pushURL({ node: selectedNodeId() });
+});
+createEffect(() => {
+  const v = viewMode();
+  pushURL({ view: v === "indepth" ? null : v });
 });
 
 function setSelectedNodeId(id: string | null) {
@@ -59,12 +80,41 @@ function setLayout(l: Layout) {
   setLayoutRaw(l);
 }
 
-function addFilter(type: string) {
-  setActiveFilters((prev) => (prev.includes(type) ? prev : [...prev, type]));
+function setViewMode(v: ViewMode) {
+  setViewModeRaw(v);
+  setSelectedNodeIdRaw(null); // selection does not carry across altitudes
 }
 
-function removeFilter(type: string) {
-  setActiveFilters((prev) => prev.filter((f) => f !== type));
+function toggleHiddenType(type: string) {
+  setHiddenTypes((prev) =>
+    prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+  );
+}
+
+function toggleHiddenService(svc: string) {
+  setHiddenServices((prev) =>
+    prev.includes(svc) ? prev.filter((s) => s !== svc) : [...prev, svc]
+  );
+}
+
+function toggleConfidence(level: string) {
+  setActiveConfidence((prev) =>
+    prev.includes(level) ? prev.filter((c) => c !== level) : [...prev, level]
+  );
+}
+
+function toggleBoundary(groupId: string) {
+  setExpandedBoundaries((prev) =>
+    prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
+  );
+}
+
+function expandAllBoundaries(groupIds: string[]) {
+  setExpandedBoundaries(groupIds);
+}
+
+function collapseAllBoundaries() {
+  setExpandedBoundaries([]);
 }
 
 function clearNotification() {
@@ -80,9 +130,18 @@ export const uiStore = {
   setSelectedNodeId,
   layout,
   setLayout,
-  activeFilters,
-  addFilter,
-  removeFilter,
+  viewMode,
+  setViewMode,
+  hiddenTypes,
+  toggleHiddenType,
+  hiddenServices,
+  toggleHiddenService,
+  activeConfidence,
+  toggleConfidence,
+  expandedBoundaries,
+  toggleBoundary,
+  expandAllBoundaries,
+  collapseAllBoundaries,
   notification,
   setNotification,
   clearNotification,

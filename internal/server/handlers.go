@@ -175,45 +175,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Traverse in-memory; collect result node IDs
-	nodeSet := map[string]bool{root: true}
-
-	switch direction {
-	case "forward":
-		for _, r := range graph.Descendants(idx, root, depth) {
-			nodeSet[r.Node.ID] = true
-		}
-	case "backward":
-		for _, r := range graph.Ancestors(idx, root, depth) {
-			nodeSet[r.Node.ID] = true
-		}
-	default: // "both"
-		for _, r := range graph.Descendants(idx, root, depth) {
-			nodeSet[r.Node.ID] = true
-		}
-		for _, r := range graph.Ancestors(idx, root, depth) {
-			nodeSet[r.Node.ID] = true
-		}
-	}
-
-	// Fetch full node objects
-	nodes := make([]*graph.Node, 0, len(nodeSet))
-	for id := range nodeSet {
-		if n, ok := idx.Nodes[id]; ok {
-			nodes = append(nodes, n)
-		}
-	}
-
-	// Collect edges where both endpoints are in the result set
-	var edges []*graph.Edge
-	for fromID := range nodeSet {
-		for _, e := range idx.OutEdges[fromID] {
-			if nodeSet[e.To] {
-				edges = append(edges, e)
-			}
-		}
-	}
-
+	nodes, edges := traceSubgraph(idx, root, direction, depth)
 	writeJSON(w, http.StatusOK, ToCytoscapeJSON(nodes, edges))
 }
 

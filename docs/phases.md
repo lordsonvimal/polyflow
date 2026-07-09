@@ -231,7 +231,7 @@ identical graph; edit one file → only that file re-parses.
 and the SSE-hub and WebSocket fixture chains specifically; JSON snapshot test
 listing every edge type present in fixtures.
 
-## Phase 11 — UI: versions, boundary collapse, confidence default, diagram export — pending
+## Phase 11 — UI: versions, boundary collapse, confidence default, diagram export — done
 
 **Deliverable**
 - Detail panel shows `package@resolved_version` for framework-boundary and
@@ -273,6 +273,28 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 11 — done.** UI revamped on the same stack (SolidJS + Cytoscape +
+  Tailwind + Vite). Server: node/edge meta + confidence now flow through the
+  Cytoscape JSON; new GET /api/export/mermaid?level=service|function
+  (+root/direction/depth trace scoping) with golden tests; handleTrace
+  refactored onto the shared traceSubgraph. Web: pure lib modules
+  (boundary.ts collapse transform, confidence.ts, aggregate.ts, export.ts)
+  feed a derived visible-graph pipeline — confidence filter (default
+  static+inferred, partial/unknown opt-in and dashed/dimmed) → type/service
+  filters (previously the filter checkboxes did nothing) → altitude
+  transform (in-depth with per-(service,package) boundary groups collapsed
+  by default, double-click or Detail-panel toggle to expand; high-level
+  service aggregation matching the Mermaid service export). Toolbar with
+  view/layout/fit/export menu (Mermaid via server, SVG via cytoscape-svg,
+  PNG); TracePanel completes search→root→isolated-subgraph with in-place
+  direction/depth controls and a clear button; Detail panel shows
+  package@resolved_version chips, full metadata, clickable neighbor edges
+  with confidence badges, trace-from-here buttons; Legend; node-type
+  shapes; loading/error/empty states; live graph_updated refetch. Proof:
+  vitest (25 tests: collapse default+toggle, confidence default+opt-in,
+  aggregation shape, export URL/filename/fetch, store defaults) + Go golden
+  tests for both Mermaid levels; manual smoke via polyflow serve on this
+  repo (service-level export renders web→polyflow http_call edges).
 - **Phase 10 — done.** New internal/trace package + `polyflow trace --root
   --direction forward|backward|both --depth --format json|text|chain`:
   deterministic DFS chain enumeration (cycle-safe, capped at 100 with a
