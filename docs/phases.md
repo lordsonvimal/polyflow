@@ -73,7 +73,7 @@ scoped to package version ranges (AWS SDK v1 vs v2 is the proof case).
 test proving a pattern gated on `>=2.0.0` activates for a service with v2 and
 not for v1; dependency table integration test.
 
-## Phase 3 — Gin routes pattern — pending
+## Phase 3 — Gin routes pattern — done
 
 **Problem**: Gin is the dominant Go web framework across every surveyed Go repo;
 no pattern exists.
@@ -273,6 +273,12 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 3 — done.** patterns/go/gin_routes.yaml (routes, groups, Use
+  middleware, ShouldBind*/JSON shapes), gated on package
+  github.com/gin-gonic/gin so Use/Group shapes shared with chi cannot misfire
+  on non-gin services. Deviation from "zero core changes": classifyPattern
+  gained a 2-line mapping for gin_bind/gin_json (the "request" keyword
+  heuristic misclassified gin_bind_request as http_client).
 - **Phase 2 — done.** internal/deps resolves go.mod / package.json+lockfile
   (package-lock v1–v3, yarn classic+berry, prod/dev kind) / Gemfile.lock;
   dependencies table + `polyflow deps` command; pattern YAML gains
