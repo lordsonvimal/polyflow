@@ -1,0 +1,40 @@
+# pusher-js client subscriptions (nextGen, mdr — realtime is Pusher, not
+# ActionCable). Gated on the pusher-js dependency because subscribe/bind are
+# generic method names.
+language: javascript
+version: "1"
+package: pusher-js
+patterns:
+  # const channel = pusher.subscribe('orders');
+  - name: pusher_subscribe_client
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "subscribe"))
+        arguments: (arguments
+          .
+          (string) @channel
+          .))
+    captures:
+      - name: channel
+        role: pusher_channel
+
+  # channel.bind('order:updated', handler);
+  - name: pusher_channel_bind
+    query: |
+      (call_expression
+        function: (member_expression
+          property: (property_identifier) @fn
+          (#eq? @fn "bind"))
+        arguments: (arguments
+          .
+          (string) @event
+          .
+          (_) @handler
+          .))
+    captures:
+      - name: event
+        role: pusher_event
+      - name: handler
+        role: event_handler

@@ -132,7 +132,7 @@ matches under the v2 pattern file and vice versa, both at the shape level
 (negative fixture) and the gating level (registry test with a go.mod pinning
 the other major). Bedrock fixture must not match the S3 patterns.
 
-## Phase 6 — Jobs & brokers: delayed_job, solid_queue, RabbitMQ + Pusher validation — pending
+## Phase 6 — Jobs & brokers: delayed_job, solid_queue, RabbitMQ + Pusher validation — done
 
 **Deliverable**
 - `patterns/ruby/delayed_job.yaml`: `.delay.method(...)`,
@@ -273,6 +273,14 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 6 — done.** delayed_job.yaml + active_job.yaml + solid_queue.yaml
+  with generic job_enqueue/job_perform edges (Sidekiq migrated onto them,
+  old constants kept as aliases); amqp091 extended with
+  PublishWithContext/ConsumeWithContext/ExchangeDeclare; bunny gated on the
+  bunny gem + exchange.publish(routing_key:) variant and anchored payload
+  capture (was double-matching); pusher-js client patterns; workspace links
+  gained exchange: field and LinkBrokerHints connects Ruby publishers to Go
+  consumers through a hinted channel node (cross-language test).
 - **Phase 5 — done.** aws_s3_v1/v2 split both at the gate level (package +
   version_range; TestAWSSDKGating proves v1 file inactive for v2-pinned
   services and vice versa) and the shape level (session/1-arg vs

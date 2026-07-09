@@ -1,0 +1,50 @@
+# ActiveJob shapes shared by delayed_job and solid_queue backends
+# (nextGen, ssd, mdr — none use Sidekiq; job classes and perform_later are
+# the common surface, the adapter is configuration).
+language: ruby
+version: "1"
+package: activejob
+patterns:
+  # ReportJob.perform_later(user.id)
+  - name: aj_perform_later
+    query: |
+      (call
+        receiver: (constant) @job_class
+        method: (identifier) @fn
+        (#match? @fn "^(perform_later|perform_now)$"))
+    captures:
+      - name: job_class
+        role: job_class
+      - name: fn
+        role: enqueue_kind
+
+  # ReportJob.set(wait: 5.minutes).perform_later(id)
+  - name: aj_perform_later
+    query: |
+      (call
+        receiver: (call
+          receiver: (constant) @job_class
+          method: (identifier) @set
+          (#eq? @set "set"))
+        method: (identifier) @fn
+        (#match? @fn "^(perform_later|perform_now)$"))
+    captures:
+      - name: job_class
+        role: job_class
+
+  # class ReportJob < ApplicationJob ... def perform(...)
+  - name: aj_perform_method
+    query: |
+      (class
+        name: (constant) @job_class
+        superclass: (superclass (constant) @super
+          (#match? @super "^(ApplicationJob|ActiveJob)$"))
+        body: (body_statement
+          (method
+            name: (identifier) @name
+            (#eq? @name "perform"))))
+    captures:
+      - name: job_class
+        role: job_class
+      - name: name
+        role: perform_method

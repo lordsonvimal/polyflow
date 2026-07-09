@@ -545,8 +545,8 @@ $ polyflow status --errors
 | `sse_endpoint` | Go handler serves SSE stream |
 | `datastar_action` | Templ element triggers backend call via `data-on-*="@get('/path')"` |
 | `datastar_bind` | Templ element binds to a signal/fragment |
-| `sidekiq_enqueue` | Code enqueues a Sidekiq job (`perform_async`) |
-| `sidekiq_perform` | Sidekiq worker processes the job |
+| `job_enqueue` | Code enqueues a background job (delayed_job `.delay`/`handle_asynchronously`/`Delayed::Job.enqueue`, ActiveJob `perform_later`, Sidekiq `perform_async`) |
+| `job_perform` | Job class processes the job (`def perform` in ApplicationJob subclass, Sidekiq worker) |
 | `pusher_trigger` | Code triggers a Pusher event |
 | `pusher_subscribe` | Client subscribes to Pusher channel |
 | `queries` | Code reads from a datastore (GORM chains, database/sql Query*) |
@@ -891,7 +891,9 @@ links:
   - from: dsw-manager
     to: dsw-agent
     via: rabbitmq
-    exchange: "dsw.builds"
+    exchange: "dsw.builds"   # connects publishers/subscribers whose exchange
+                             # is not statically resolvable, via a shared
+                             # channel node (confidence: static)
 
   - from: nextgen-frontend
     to: nextgen-backend
@@ -1168,9 +1170,10 @@ Templ files are parsed using `github.com/a-h/templ/parser/v2` Visitor interface 
 |----------|----------|
 | HTTP routes | Rails (`get`, `post`, `resources`, `namespace`, controller actions) |
 | HTTP clients | `Net::HTTP`, `Faraday`, `HTTParty`, `RestClient` |
-| RabbitMQ | Bunny (`queue.publish`, `queue.subscribe`, `exchange.publish`) |
-| Sidekiq | `perform_async`, `perform_in`, `perform_at` → link to worker class `perform` |
-| Pusher | `Pusher.trigger`, channel subscriptions |
+| RabbitMQ | Bunny (`queue.publish`, `queue.subscribe`, `exchange.publish` with routing_key) — dependency-gated on the bunny gem |
+| Jobs | delayed_job (`.delay`, `handle_asynchronously`, `Delayed::Job.enqueue`), ActiveJob (`perform_later`, `def perform`), solid_queue adapter config; Sidekiq kept only for legacy evidence |
+| Pusher | `Pusher.trigger`/`trigger_async` (server), `pusher-js` `subscribe`/`bind` (client, patterns/javascript/pusher.yaml) |
+| AWS S3 | `Aws::S3::Client` operations, `upload_file`/`download_file` |
 
 ---
 

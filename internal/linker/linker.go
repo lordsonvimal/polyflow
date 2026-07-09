@@ -410,3 +410,66 @@ func LinkDatastores(nodes []graph.Node) []graph.Edge {
 	}
 	return edges
 }
+
+// LinkBrokerHints applies workspace `links:` hints of the form
+// {via: rabbitmq, exchange: "dsw.builds"}. Broker publishers whose exchange
+// cannot be resolved statically (e.g. Ruby bunny publishes through an
+// exchange held in a variable) and consumers that only know their queue name
+// get connected through a shared channel node for the hinted exchange:
+//
+//	publisher(from-service) → channel(exchange) → subscriber(to-service)
+//
+// Hint edges are user-declared, so they carry confidence "static".
+func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, []graph.Edge) {
+	var newNodes []graph.Node
+	var edges []graph.Edge
+
+	for _, link := range links {
+		if link.Via != "rabbitmq" || link.Exchange == "" {
+			continue
+		}
+		channelID := "broker:channel:" + link.Exchange
+		channelCreated := false
+
+		ensureChannel := func() {
+			if channelCreated {
+				return
+			}
+			channelCreated = true
+			newNodes = append(newNodes, graph.Node{
+				ID:      channelID,
+				Type:    graph.NodeTypeChannel,
+				Label:   link.Exchange,
+				Service: link.From,
+				Meta:    map[string]string{"exchange": link.Exchange, "hint": "true"},
+			})
+		}
+
+		for i := range nodes {
+			n := &nodes[i]
+			switch {
+			case n.Type == graph.NodeTypePublisher && n.Service == link.From && stripMeta(n.Meta["exchange"]) == "":
+				ensureChannel()
+				edges = append(edges, graph.Edge{
+					ID:         fmt.Sprintf("publishes:%s->%s", n.ID, channelID),
+					From:       n.ID,
+					To:         channelID,
+					Type:       graph.EdgeTypePublishes,
+					Confidence: graph.ConfidenceStatic,
+					Meta:       map[string]string{"via": "workspace_hint"},
+				})
+			case n.Type == graph.NodeTypeSubscriber && n.Service == link.To:
+				ensureChannel()
+				edges = append(edges, graph.Edge{
+					ID:         fmt.Sprintf("subscribes:%s->%s", channelID, n.ID),
+					From:       channelID,
+					To:         n.ID,
+					Type:       graph.EdgeTypeSubscribes,
+					Confidence: graph.ConfidenceStatic,
+					Meta:       map[string]string{"via": "workspace_hint"},
+				})
+			}
+		}
+	}
+	return newNodes, edges
+}

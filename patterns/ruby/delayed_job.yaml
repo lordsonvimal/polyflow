@@ -1,0 +1,45 @@
+# delayed_job / delayed_job_active_record — the actual job queue in nextGen,
+# ssd, and mdr (NOT Sidekiq).
+language: ruby
+version: "1"
+package: delayed_job
+patterns:
+  # user.delay.send_welcome_email — the .delay proxy enqueue.
+  - name: dj_delay
+    query: |
+      (call
+        receiver: (call
+          method: (identifier) @d
+          (#eq? @d "delay"))
+        method: (identifier) @job_method)
+    captures:
+      - name: job_method
+        role: job_method
+
+  # handle_asynchronously :send_welcome_email
+  - name: dj_handle_asynchronously
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "handle_asynchronously")
+        arguments: (argument_list
+          .
+          (simple_symbol) @method_name))
+    captures:
+      - name: method_name
+        role: job_method
+
+  # Delayed::Job.enqueue(ExportJob.new(user.id))
+  - name: dj_enqueue
+    query: |
+      (call
+        receiver: (scope_resolution
+          scope: (constant) @ns
+          (#eq? @ns "Delayed")
+          name: (constant) @cls
+          (#eq? @cls "Job"))
+        method: (identifier) @fn
+        (#eq? @fn "enqueue"))
+    captures:
+      - name: fn
+        role: enqueue_kind

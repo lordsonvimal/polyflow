@@ -271,3 +271,42 @@ func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
 		assert.Equal(t, graph.ConfidencePartial, e.Confidence)
 	}
 }
+
+// TestLinkBrokerHints_CrossLanguage proves the confirmed real chain: a Rails
+// service publishing via bunny (exchange held in a variable — unresolvable
+// statically) reaching a Go amqp091 consumer, connected by a workspace hint.
+func TestLinkBrokerHints_CrossLanguage(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "nextgen:pub", Type: graph.NodeTypePublisher, Service: "nextgen",
+			Language: "ruby", Meta: map[string]string{"pattern": "bunny_publish"}},
+		{ID: "dsw-agent:sub", Type: graph.NodeTypeSubscriber, Service: "dsw-agent",
+			Language: "go", Meta: map[string]string{"queue": "build-queue", "pattern": "amqp_consume"}},
+		{ID: "other:fn", Type: graph.NodeTypeFunction, Service: "other"},
+	}
+	links := []workspace.Link{
+		{From: "nextgen", To: "dsw-agent", Via: "rabbitmq", Exchange: "dsw.builds"},
+	}
+
+	chanNodes, edges := LinkBrokerHints(links, nodes)
+	require.Len(t, chanNodes, 1)
+	assert.Equal(t, graph.NodeTypeChannel, chanNodes[0].Type)
+	assert.Equal(t, "dsw.builds", chanNodes[0].Meta["exchange"])
+
+	require.Len(t, edges, 2)
+	assert.Equal(t, graph.EdgeTypePublishes, edges[0].Type)
+	assert.Equal(t, "nextgen:pub", edges[0].From)
+	assert.Equal(t, chanNodes[0].ID, edges[0].To)
+	assert.Equal(t, graph.EdgeTypeSubscribes, edges[1].Type)
+	assert.Equal(t, chanNodes[0].ID, edges[1].From)
+	assert.Equal(t, "dsw-agent:sub", edges[1].To)
+	for _, e := range edges {
+		assert.Equal(t, graph.ConfidenceStatic, e.Confidence, "user-declared hints are static")
+	}
+}
+
+func TestLinkBrokerHints_NoRabbitLinks(t *testing.T) {
+	nodes := []graph.Node{{ID: "a", Type: graph.NodeTypePublisher, Service: "svc"}}
+	n, e := LinkBrokerHints([]workspace.Link{{From: "a", To: "b", BaseURL: "/api"}}, nodes)
+	assert.Empty(t, n)
+	assert.Empty(t, e)
+}

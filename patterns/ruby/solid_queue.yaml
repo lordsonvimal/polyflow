@@ -1,0 +1,19 @@
+# solid_queue (nextGen layers it alongside delayed_job). The Ruby-visible
+# surface is the adapter configuration; job classes and perform_later are
+# covered by active_job.yaml.
+language: ruby
+version: "1"
+package: solid_queue
+patterns:
+  # config.active_job.queue_adapter = :solid_queue
+  - name: sq_adapter
+    query: |
+      (assignment
+        left: (call
+          method: (identifier) @attr
+          (#eq? @attr "queue_adapter"))
+        right: (simple_symbol) @adapter
+        (#eq? @adapter ":solid_queue"))
+    captures:
+      - name: adapter
+        role: queue_adapter

@@ -50,3 +50,62 @@ patterns:
     captures:
       - name: queue
         role: amqp_queue
+  # Modern amqp091-go API: PublishWithContext(ctx, exchange, key, m, i, msg)
+  - name: amqp_publish
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "PublishWithContext"))
+        arguments: (argument_list
+          .
+          (_) @ctx
+          .
+          (_) @exchange
+          .
+          (_) @routing_key
+          .
+          (_) @mandatory
+          .
+          (_) @immediate
+          .
+          (_) @publishing))
+    captures:
+      - name: exchange
+        role: amqp_exchange
+      - name: routing_key
+        role: amqp_routing_key
+  # ConsumeWithContext(ctx, queue, consumer, ...)
+  - name: amqp_consume
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "ConsumeWithContext"))
+        arguments: (argument_list
+          .
+          (_) @ctx
+          .
+          (_) @queue
+          .
+          (_) @consumer))
+    captures:
+      - name: queue
+        role: amqp_queue
+  # ExchangeDeclare("dsw.builds", "topic", ...)
+  - name: amqp_exchange_declare
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "ExchangeDeclare"))
+        arguments: (argument_list
+          .
+          (_) @exchange
+          .
+          (_) @kind))
+    captures:
+      - name: exchange
+        role: amqp_exchange
+      - name: kind
+        role: amqp_exchange_kind
