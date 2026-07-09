@@ -1,0 +1,1 @@
+{"patterns": ["datastar_bind_signal", "datastar_merge_signals", "datastar_read_signal"], "node_types": ["function", "function", "function"]}

@@ -1,0 +1,4 @@
+{
+  "patterns": ["resty_get", "resty_get"],
+  "node_types": ["http_client", "http_client"]
+}

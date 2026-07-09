@@ -1,0 +1,4 @@
+{
+  "patterns": ["datastar_sse_merge_fragments", "datastar_sse_send_event"],
+  "node_types": ["http_handler", "http_handler"]
+}

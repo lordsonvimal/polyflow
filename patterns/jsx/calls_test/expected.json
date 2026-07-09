@@ -1,0 +1,1 @@
+{"patterns": ["component_fn_call", "jsx_event_handler_ref"], "node_types": ["function", "function"]}

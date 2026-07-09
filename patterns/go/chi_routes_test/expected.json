@@ -1,0 +1,4 @@
+{
+  "patterns": ["chi_get", "chi_get", "chi_get", "chi_get", "chi_route_group"],
+  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler", "http_handler"]
+}

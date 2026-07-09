@@ -1,0 +1,4 @@
+{
+  "patterns": ["cobra_run"],
+  "node_types": ["function"]
+}

@@ -1,0 +1,4 @@
+{
+  "patterns": ["http_handle_func", "http_handle"],
+  "node_types": ["http_handler", "http_handler"]
+}
