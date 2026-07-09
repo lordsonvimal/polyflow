@@ -1,0 +1,4 @@
+{
+  "patterns": ["ws_upgrade", "ws_read_pump", "ws_read_pump", "ws_write_pump", "ws_write_pump"],
+  "node_types": ["http_handler", "subscriber", "subscriber", "publisher", "publisher"]
+}
