@@ -28,6 +28,11 @@ type Pattern struct {
 	Match    map[string][]string `yaml:"match"`    // capture name -> allowed values (optional filter)
 	Extract  ExtractConfig       `yaml:"extract"`
 	Captures []Capture           `yaml:"captures"` // kept for backward compat
+
+	// Version gate, copied down from the PatternFile at registration time so
+	// per-service filtering and match metadata don't need the file context.
+	Package      string `yaml:"-"`
+	VersionRange string `yaml:"-"`
 }
 
 // PatternFile is the top-level structure of a YAML pattern file.
@@ -35,6 +40,14 @@ type PatternFile struct {
 	Language string    `yaml:"language"`
 	Version  string    `yaml:"version"`
 	Patterns []Pattern `yaml:"patterns"`
+
+	// Optional version gate: when both are set, the patterns in this file only
+	// activate for services whose resolved version of Package satisfies
+	// VersionRange (Masterminds semver syntax, e.g. ">=1.0.0 <2.0.0").
+	// When only Package is set, the patterns activate for any version of the
+	// package but are skipped entirely if the service does not depend on it.
+	Package      string `yaml:"package"`
+	VersionRange string `yaml:"version_range"`
 }
 
 // Load reads and parses all *.yaml pattern files under dir (recursively).

@@ -27,9 +27,12 @@ func (r *Registry) Register(language string, p *Pattern) {
 	r.patterns[language] = append(r.patterns[language], p)
 }
 
-// RegisterFile registers all patterns from a PatternFile.
+// RegisterFile registers all patterns from a PatternFile, copying the
+// file-level version gate down onto each pattern.
 func (r *Registry) RegisterFile(pf *PatternFile) {
 	for i := range pf.Patterns {
+		pf.Patterns[i].Package = pf.Package
+		pf.Patterns[i].VersionRange = pf.VersionRange
 		r.Register(pf.Language, &pf.Patterns[i])
 	}
 }
