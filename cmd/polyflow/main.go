@@ -5,26 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 
-	"github.com/lordsonvimal/polyflow/internal/graph"
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
-	"github.com/lordsonvimal/polyflow/internal/deps"
-	"github.com/lordsonvimal/polyflow/internal/linker"
+	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/indexer"
 	"github.com/lordsonvimal/polyflow/internal/meta"
-	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/server"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
@@ -204,7 +199,7 @@ var (
 func initIndexFlags() {
 	indexCmd.Flags().StringVar(&indexWorkspace, "workspace", meta.ConfigFile, "path to workspace.yaml")
 	indexCmd.Flags().IntVar(&indexWorkers, "workers", runtime.GOMAXPROCS(0), "parser worker pool size")
-	indexCmd.Flags().BoolVar(&indexFull, "full", true, "full re-index (v1 always does full)")
+	indexCmd.Flags().BoolVar(&indexFull, "full", false, "force a full re-parse, ignoring the incremental cache")
 }
 
 var indexCmd = &cobra.Command{
@@ -219,464 +214,34 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	dbDir := meta.DBDir
-	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dbDir, err)
-	}
-
-	tmpDB := filepath.Join(dbDir, "graph.db.tmp")
-	_ = os.Remove(tmpDB)
-
-	store, err := graph.NewSQLiteStore(tmpDB)
-	if err != nil {
-		return fmt.Errorf("open tmp store: %w", err)
-	}
-
-	reg, err := patterns.DefaultRegistry("patterns/")
-	if err != nil {
-		return fmt.Errorf("load default patterns: %w", err)
-	}
-	for _, p := range cfg.Patterns {
-		pf, err := patterns.LoadFile(p)
-		if err != nil {
-			return fmt.Errorf("load custom pattern %s: %w", p, err)
-		}
-		reg.RegisterFile(pf)
-	}
-	ctx := context.Background()
-
 	fmt.Println("Scanning services...")
-	type serviceFiles struct {
-		svc   workspace.Service
-		files []string
-		deps  []deps.Dependency
-	}
-	// Collect other service paths so each service excludes files owned by another service.
-	svcPaths := make([]string, len(cfg.Services))
-	for i, svc := range cfg.Services {
-		abs, err := filepath.Abs(svc.Path)
-		if err != nil {
-			abs = svc.Path
-		}
-		svcPaths[i] = abs
-	}
-
-	var allSvcFiles []serviceFiles
-	for idx, svc := range cfg.Services {
-		absSvcPath, _ := filepath.Abs(svc.Path)
-		// Build extra excludes: any other service path that is a sub-directory of this one.
-		var extraExcludes []string
-		for i, other := range svcPaths {
-			if i == idx {
-				continue
+	stats, err := indexer.Run(context.Background(), indexer.Options{
+		Config:  cfg,
+		Workers: indexWorkers,
+		Full:    indexFull,
+		Log:     os.Stdout,
+		Progress: func(done, total int) {
+			pct := 0
+			if total > 0 {
+				pct = done * 100 / total
 			}
-			rel, err := filepath.Rel(absSvcPath, other)
-			if err == nil && !strings.HasPrefix(rel, "..") {
-				extraExcludes = append(extraExcludes, rel+"/**")
+			fmt.Printf("\rIndexing [%s] %d%% (%d/%d files)  ", progressBar(pct), pct, done, total)
+			if done == total {
+				fmt.Println()
 			}
-		}
-		excludes := append(cfg.Index.Exclude, extraExcludes...)
-		files, err := walkService(svc.Path, excludes)
-		if err != nil {
-			return fmt.Errorf("walk %s: %w", svc.Name, err)
-		}
-		// Resolve exact dependency versions (go.mod, package.json+lockfile,
-		// Gemfile.lock) — drives version-gated pattern activation and is
-		// stored for "what version of X does this service use" queries.
-		svcDeps, err := deps.Resolve(absSvcPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: dependency resolution for %s: %v\n", svc.Name, err)
-		}
-		for i := range svcDeps {
-			d := svcDeps[i]
-			if err := store.UpsertDependency(ctx, &graph.Dependency{
-				Service: svc.Name, Ecosystem: d.Ecosystem, Name: d.Name,
-				Version: d.Version, Kind: d.Kind,
-			}); err != nil {
-				return err
-			}
-		}
-		fmt.Printf("  %s: %d files (%s, %d deps)\n", svc.Name, len(files), svc.Language, len(svcDeps))
-		allSvcFiles = append(allSvcFiles, serviceFiles{svc, files, svcDeps})
-	}
-
-	totalFiles := 0
-	for _, sf := range allSvcFiles {
-		totalFiles += len(sf.files)
-	}
-
-	var processed atomic.Int64
-	start := time.Now()
-
-	// Progress goroutine — cancelled via progressCtx when indexing completes.
-	// progressDone is closed once the goroutine has printed the final line.
-	progressCtx, stopProgress := context.WithCancel(ctx)
-	defer stopProgress()
-	progressDone := make(chan struct{})
-	go func() {
-		defer close(progressDone)
-		ticker := time.NewTicker(250 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				n := int(processed.Load())
-				pct := 0
-				if totalFiles > 0 {
-					pct = n * 100 / totalFiles
-				}
-				bar := progressBar(pct)
-				fmt.Printf("\rIndexing [%s] %d%% (%d/%d files)  ", bar, pct, n, totalFiles)
-			case <-progressCtx.Done():
-				// Print final 100% line before exiting.
-				bar := progressBar(100)
-				fmt.Printf("\rIndexing [%s] 100%% (%d/%d files)  ", bar, totalFiles, totalFiles)
-				return
-			}
-		}
-	}()
-
-	var allNodes []graph.Node
-	var allEdges []graph.Edge
-	var totalErrors int
-	var semanticWarnings []string
-
-	bw := graph.NewBatchWriter(store)
-
-	// Service-level datastore nodes derived from resolved driver dependencies
-	// (dual SQLite drivers merge into one logical sqlite node; lib/pq and GORM
-	// dialectors map to postgres).
-	for _, sf := range allSvcFiles {
-		for _, n := range deps.DatastoreNodes(sf.svc.Name, sf.deps) {
-			node := n
-			if err := bw.AddNode(ctx, &node); err != nil {
-				return err
-			}
-			allNodes = append(allNodes, node)
-		}
-	}
-
-	for _, sf := range allSvcFiles {
-		// Per-service matcher: pattern set filtered by the service's resolved
-		// dependency versions (version-gated patterns activate per service).
-		matcher := patterns.NewTreeSitterMatcherForService(reg, sf.deps)
-		pool := parser.NewWorkerPool(indexWorkers, matcher, sf.svc.Name)
-		for result := range pool.Run(sf.files) {
-			processed.Add(1)
-			if result.Err != nil {
-				totalErrors++
-				_ = store.UpsertParseError(ctx, &graph.ParseError{
-					FilePath:   result.File,
-					Service:    sf.svc.Name,
-					ErrorCount: 1,
-					IndexedAt:  time.Now().Unix(),
-				})
-				continue
-			}
-			for i := range result.Nodes {
-				n := result.Nodes[i]
-				if err := bw.AddNode(ctx, &n); err != nil {
-					return err
-				}
-				allNodes = append(allNodes, n)
-			}
-			for i := range result.Edges {
-				e := result.Edges[i]
-				if err := bw.AddEdge(ctx, &e); err != nil {
-					return err
-				}
-				allEdges = append(allEdges, e)
-			}
-		}
-	}
-
-	// Stop progress display: cancel the goroutine, wait for it to print 100%, then newline.
-	stopProgress()
-	<-progressDone
-	fmt.Println()
-
-	// Flush all tree-sitter nodes+edges before the semantic pass so FK constraints
-	// are satisfied when semantic edges reference those nodes.
-	if err := bw.Flush(ctx); err != nil {
-		return err
-	}
-
-	// Build a set of all node IDs now committed to the DB so we can filter
-	// semantic edges — only emit edges where both endpoints already exist.
-	knownNodeIDs := make(map[string]bool, len(allNodes))
-	for _, n := range allNodes {
-		knownNodeIDs[n.ID] = true
-	}
-
-	// Semantic pass: run go/packages + SSA for Go services.
-	// Adds type-resolved call edges on top of tree-sitter nodes.
-	// Falls back gracefully if the service has build errors.
-	fset := token.NewFileSet()
-	for _, sf := range allSvcFiles {
-		analyzer := parser.ServiceAnalyzerFor(sf.svc.Language)
-		if analyzer == nil {
-			continue
-		}
-		absSvcPath, err := filepath.Abs(sf.svc.Path)
-		if err != nil {
-			absSvcPath = sf.svc.Path
-		}
-		fmt.Printf("  Semantic analysis: %s...\n", sf.svc.Name)
-		sem := analyzer.AnalyzeService(absSvcPath, sf.svc.Name, fset, knownNodeIDs)
-		if sem.Warning != "" {
-			fmt.Fprintf(os.Stderr, "  Warning: %s\n", sem.Warning)
-			semanticWarnings = append(semanticWarnings, sem.Warning)
-			continue
-		}
-		bwSem := graph.NewBatchWriter(store)
-		written := 0
-		for i := range sem.Edges {
-			e := sem.Edges[i]
-			if err := bwSem.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-			written++
-		}
-		if err := bwSem.Flush(ctx); err != nil {
-			return err
-		}
-		fmt.Printf("  Semantic analysis: %s — %d call edges added\n", sf.svc.Name, written)
-	}
-
-	// Store semantic warnings in DB meta so the web UI can surface them.
-	if len(semanticWarnings) > 0 {
-		warningsJSON, _ := json.Marshal(semanticWarnings)
-		_ = store.SetMeta(ctx, "semantic_warnings", string(warningsJSON))
-	} else {
-		_ = store.SetMeta(ctx, "semantic_warnings", "[]")
-	}
-
-	// JS/TS component + import-aware linking pass.
-	// Redirects renders edges from JSX usage proxy nodes to actual declaration
-	// nodes, and resolves cross-file function calls through import statements.
-	{
-		svcFiles := make(map[string][]string, len(allSvcFiles))
-		for _, sf := range allSvcFiles {
-			svcFiles[sf.svc.Name] = sf.files
-		}
-		jsLinker := linker.NewJSLinker()
-		jsEdges, removeIDs := jsLinker.LinkJS(allNodes, allEdges, svcFiles)
-
-		// Write new JS edges.
-		bwJS := graph.NewBatchWriter(store)
-		for i := range jsEdges {
-			e := jsEdges[i]
-			if err := bwJS.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-		}
-		if err := bwJS.Flush(ctx); err != nil {
-			return err
-		}
-
-		// Remove proxy component usage nodes and their orphaned edges.
-		if len(removeIDs) > 0 {
-			if err := store.DeleteNodes(ctx, removeIDs); err != nil {
-				return fmt.Errorf("delete proxy nodes: %w", err)
-			}
-			// Remove from in-memory slice so later passes don't see them.
-			filtered := allNodes[:0]
-			for _, n := range allNodes {
-				if !removeIDs[n.ID] {
-					filtered = append(filtered, n)
-				}
-			}
-			allNodes = filtered
-		}
-	}
-
-	// Route → handler linking: emit calls edges from HTTP route nodes to their
-	// handler function nodes (resolved by name across the service).
-	{
-		routeEdges := linker.LinkRouteHandlers(allNodes)
-		bwRoute := graph.NewBatchWriter(store)
-		for i := range routeEdges {
-			e := routeEdges[i]
-			if err := bwRoute.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-		}
-		if err := bwRoute.Flush(ctx); err != nil {
-			return err
-		}
-	}
-
-	// Datastore linking: connect DB call sites to their service's store node.
-	{
-		dsEdges := linker.LinkDatastores(allNodes)
-		bwDS := graph.NewBatchWriter(store)
-		for i := range dsEdges {
-			e := dsEdges[i]
-			if err := bwDS.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-		}
-		if err := bwDS.Flush(ctx); err != nil {
-			return err
-		}
-	}
-
-	// Broker channel linking: emit cross-service publisher→subscriber edges via AMQP channels.
-	{
-		brokerEdges := linker.LinkBrokerChannels(allNodes)
-		bwBroker := graph.NewBatchWriter(store)
-		for i := range brokerEdges {
-			e := brokerEdges[i]
-			if err := bwBroker.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-		}
-		if err := bwBroker.Flush(ctx); err != nil {
-			return err
-		}
-	}
-
-	// WebSocket typed-message linking: {type: "x"} senders → dispatch cases.
-	{
-		wsEdges := linker.LinkWebSocketMessages(allNodes)
-		bwWS := graph.NewBatchWriter(store)
-		for i := range wsEdges {
-			e := wsEdges[i]
-			if err := bwWS.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-		}
-		if err := bwWS.Flush(ctx); err != nil {
-			return err
-		}
-	}
-
-	// Broker hint linking: workspace links with via=rabbitmq + exchange
-	// connect publishers/subscribers whose exchange is not statically
-	// resolvable (e.g. Ruby bunny publishes via a variable-held exchange).
-	{
-		hintNodes, hintEdges := linker.LinkBrokerHints(cfg.Links, allNodes)
-		bwHint := graph.NewBatchWriter(store)
-		for i := range hintNodes {
-			n := hintNodes[i]
-			if err := bwHint.AddNode(ctx, &n); err != nil {
-				return err
-			}
-			allNodes = append(allNodes, n)
-		}
-		if err := bwHint.Flush(ctx); err != nil {
-			return err
-		}
-		bwHintE := graph.NewBatchWriter(store)
-		for i := range hintEdges {
-			e := hintEdges[i]
-			if err := bwHintE.AddEdge(ctx, &e); err != nil {
-				return err
-			}
-			allEdges = append(allEdges, e)
-		}
-		if err := bwHintE.Flush(ctx); err != nil {
-			return err
-		}
-	}
-
-	// Cross-service linking
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
-	l := linker.New(cfg)
-	crossEdges, err := l.Link(hintedNodes, allEdges)
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("link: %w", err)
-	}
-
-	// Insert synthetic unresolved nodes before writing cross-service edges.
-	bw2 := graph.NewBatchWriter(store)
-	for i := range crossEdges {
-		e := crossEdges[i]
-		if _, err := store.GetNode(ctx, e.To); err != nil {
-			_ = bw2.AddNode(ctx, &graph.Node{
-				ID: e.To, Type: graph.NodeTypeHTTPHandler, Label: e.To, Service: "unresolved",
-				File: "unresolved", Language: "unknown",
-			})
-		}
-	}
-	if err := bw2.Flush(ctx); err != nil {
 		return err
 	}
 
-	bw3 := graph.NewBatchWriter(store)
-	for i := range crossEdges {
-		e := crossEdges[i]
-		if err := bw3.AddEdge(ctx, &e); err != nil {
-			return err
-		}
-	}
-	if err := bw3.Flush(ctx); err != nil {
-		return err
-	}
-
-	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
-		return err
-	}
-
-	store.Close()
-
-	finalDB := filepath.Join(dbDir, meta.DBFile)
-	if err := os.Rename(tmpDB, finalDB); err != nil {
-		return fmt.Errorf("atomic swap: %w", err)
-	}
-
-	nodeCount, edgeCount, _ := func() (int, int, error) {
-		s, err := graph.NewSQLiteStore(finalDB)
-		if err != nil {
-			return 0, 0, err
-		}
-		defer s.Close()
-		return s.Stats(ctx)
-	}()
-
-	elapsed := time.Since(start).Truncate(time.Millisecond)
-	fmt.Printf("\nDone. %d files indexed in %s\n", totalFiles, elapsed)
-	fmt.Printf("  Nodes: %d | Edges: %d | Links: %d cross-service\n", nodeCount, edgeCount, len(crossEdges))
-	if totalErrors > 0 {
-		fmt.Printf("  Errors: %d files (run `polyflow status --errors` for details)\n", totalErrors)
+	fmt.Printf("\nDone. %d files indexed in %s (%d parsed, %d unchanged)\n",
+		stats.TotalFiles, stats.Elapsed.Truncate(time.Millisecond), stats.ParsedFiles, stats.SkippedFiles)
+	fmt.Printf("  Nodes: %d | Edges: %d | Links: %d cross-service\n", stats.Nodes, stats.Edges, stats.CrossLinks)
+	if stats.ErrorFiles > 0 {
+		fmt.Printf("  Errors: %d files (run `polyflow status --errors` for details)\n", stats.ErrorFiles)
 	}
 	return nil
-}
-
-func walkService(root string, excludes []string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		for _, pattern := range excludes {
-			if matched, _ := doublestar.Match(pattern, rel); matched {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if parser.ForFile(path) == nil {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	return files, err
 }
 
 func progressBar(pct int) string {

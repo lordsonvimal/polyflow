@@ -200,7 +200,7 @@ workspaces + Nx, Rails app, portal: cross-link); integration test:
 `init && index` on a fixture monorepo produces a working graph with zero manual
 entry.
 
-## Phase 9 — Incremental indexing — pending
+## Phase 9 — Incremental indexing — done
 
 **Problem**: design doc specifies `file_hashes` + incremental re-index; the
 table and logic don't exist — every index is a full rebuild.
@@ -273,6 +273,16 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 9 — done.** Index pipeline extracted from the CLI into
+  internal/indexer (now testable/benchmarkable). file_hashes stores the
+  content hash AND the file's parse results (nodes/edges JSON), so
+  unchanged files skip tree-sitter entirely while linking passes re-run on
+  the full carried-over set — correctness identical to a full rebuild.
+  Whole-service semantic (go/packages) results cached per service
+  fingerprint. Incremental is the default; --full forces re-parse. Real
+  run on this repo: 2.4s cold → 0.36s warm (0/147 parsed, identical graph).
+  Deviation from the design doc's file_hashes schema: two extra columns
+  (nodes_json/edges_json + errored) carry the cached results.
 - **Phase 8 — done.** workspace.Discover walks go.work (per-module),
   go.mod, package.json (npm/yarn workspaces expanded, Nx project.json),
   Gemfile; yarn portal:/link: deps become link hints; paths stored

@@ -28,7 +28,7 @@ Polyflow is a static analysis tool that traces code flow across multiple service
 | Core UX | Search -> select root -> choose direction -> isolated subgraph |
 | API format | Cytoscape JSON directly from Go backend |
 | CLI framework | Cobra |
-| Indexing | Explicit only (`polyflow index`), no auto-reindex |
+| Indexing | Explicit only (`polyflow index`), incremental by default (file-hash cache; `--full` to force re-parse) |
 | Framework detection | Auto-detected from imports/Gemfile/package.json, with user override |
 | Test coverage | 90% minimum enforced in CI |
 

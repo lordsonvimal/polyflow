@@ -113,6 +113,19 @@ type Dependency struct {
 	Kind      string `json:"kind"`    // prod | dev
 }
 
+// FileHash records a file's content hash and cached parse results for
+// incremental re-indexing: when the hash is unchanged, the cached
+// nodes/edges are reused and tree-sitter parsing is skipped.
+type FileHash struct {
+	FilePath    string
+	Service     string
+	ContentHash string
+	IndexedAt   int64
+	NodesJSON   string
+	EdgesJSON   string
+	Errored     bool
+}
+
 // ParseError records a file that produced errors during indexing.
 // Partial extraction may still have occurred; consult the associated nodes/edges.
 type ParseError struct {
