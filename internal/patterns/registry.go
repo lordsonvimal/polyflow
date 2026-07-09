@@ -4,16 +4,19 @@ import (
 	"sync"
 )
 
-// Registry holds all loaded patterns indexed by language and name.
+// Registry holds all loaded patterns indexed by language.
+// Patterns are stored as a slice, not a name-keyed map: multiple query
+// variants may legitimately share one pattern name (e.g. the two
+// goroutine_call queries for identifier vs selector call targets).
 type Registry struct {
 	mu       sync.RWMutex
-	patterns map[string]map[string]*Pattern // language -> name -> pattern
+	patterns map[string][]*Pattern // language -> patterns in registration order
 }
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		patterns: make(map[string]map[string]*Pattern),
+		patterns: make(map[string][]*Pattern),
 	}
 }
 
@@ -21,10 +24,7 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(language string, p *Pattern) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.patterns[language] == nil {
-		r.patterns[language] = make(map[string]*Pattern)
-	}
-	r.patterns[language][p.Name] = p
+	r.patterns[language] = append(r.patterns[language], p)
 }
 
 // RegisterFile registers all patterns from a PatternFile.
@@ -38,12 +38,7 @@ func (r *Registry) RegisterFile(pf *PatternFile) {
 func (r *Registry) List(language string) []*Pattern {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	lang := r.patterns[language]
-	out := make([]*Pattern, 0, len(lang))
-	for _, p := range lang {
-		out = append(out, p)
-	}
-	return out
+	return append([]*Pattern(nil), r.patterns[language]...)
 }
 
 // Languages returns all languages with registered patterns.

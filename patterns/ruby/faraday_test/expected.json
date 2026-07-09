@@ -1,1 +1,1 @@
-{"patterns": ["faraday_connection", "faraday_http_verb", "faraday_http_verb"], "node_types": ["http_client", "http_client", "http_client"]}
+{"patterns": ["faraday_connection", "faraday_http_verb", "faraday_http_verb", "faraday_http_verb"], "node_types": ["http_client", "http_client", "http_client", "http_client"]}

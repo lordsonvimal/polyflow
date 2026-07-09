@@ -28,7 +28,7 @@ Ground rules carried through every phase:
 
 ---
 
-## Phase 1 — Fixture verification harness + negative fixtures — pending
+## Phase 1 — Fixture verification harness + negative fixtures — done
 
 **Problem**: `expected.json` files exist but nothing reads them; the fixture test
 only checks that `input.*` exists. "Zero false positives" is not currently proven
@@ -272,3 +272,16 @@ output; `make bench` includes the new benchmarks; results recorded here.
 ## Completion log
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
+
+- **Phase 1 — done.** Harness verifies expected.json multisets + node types and
+  enforces/runs negative fixtures for all 37 pattern files. Found and fixed two
+  real bugs: Registry stored patterns in a name-keyed map, silently dropping
+  same-named query variants (second goroutine_call overwrote the first); and
+  unanchored `(_) @x . _*` argument captures in amqp_consume/fetch/axios
+  produced combinatorial duplicate matches (21 matches for one Consume call).
+  Classifier gaps fixed: xhr_*/jquery_ajax → http_client, jquery_selector →
+  dom_target, controller_action → method, queue_declare → channel,
+  datastar_on_signal → function. Note: the design doc's "90% coverage CI gate"
+  does not exist in-repo (no CI config; measured total 46.8%, dominated by the
+  untested cmd/polyflow CLI). New code in later phases ships with tests; adding
+  a real CI gate at the honest baseline is tracked as follow-up.

@@ -1,1 +1,1 @@
-{"patterns": ["rest_client_verb"], "node_types": ["http_client"]}
+{"patterns": ["rest_client_verb", "rest_client_verb"], "node_types": ["http_client", "http_client"]}

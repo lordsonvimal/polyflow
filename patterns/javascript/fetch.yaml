@@ -7,7 +7,8 @@ patterns:
         function: (identifier) @fn
         (#eq? @fn "fetch")
         arguments: (arguments
-          (_) @url . _*))
+          .
+          (_) @url))
     captures:
       - name: url
         role: http_url

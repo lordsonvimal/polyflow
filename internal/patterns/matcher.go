@@ -561,6 +561,9 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
 
 	// ── Datastar / SSE ────────────────────────────────────────────────────────
+	case lower == "datastar_on_signal":
+		// Client-side signal subscription (JS onSignal callback), not an HTTP action.
+		return graph.NodeTypeFunction, graph.EdgeTypeDatastarBind
 	case strings.HasPrefix(lower, "datastar_sse") || strings.HasPrefix(lower, "sse_"):
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeSSEEndpoint
 	case strings.HasPrefix(lower, "datastar_action") || strings.HasPrefix(lower, "datastar_on"):
@@ -601,6 +604,20 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "dom_tree") || strings.HasPrefix(lower, "append_child") ||
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+
+	// ── Rails controllers ─────────────────────────────────────────────────────
+	case lower == "controller_action":
+		return graph.NodeTypeMethod, graph.EdgeTypeCalls
+
+	// ── Message channel declarations (queue setup, not pub/sub itself) ───────
+	case strings.Contains(lower, "queue_declare"):
+		return graph.NodeTypeChannel, graph.EdgeTypeCalls
+
+	// ── Legacy XHR / jQuery ───────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "xhr_") || strings.HasPrefix(lower, "jquery_ajax"):
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
+	case strings.HasPrefix(lower, "jquery_selector"):
+		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMRead
 
 	// ── HTTP routes / handlers ────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "chi_get") || strings.HasPrefix(lower, "chi_post") ||
