@@ -447,6 +447,9 @@ func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, 
 
 		for i := range nodes {
 			n := &nodes[i]
+			if !isBrokerPattern(n.Meta["pattern"]) {
+				continue // ws/hub/pusher/job publishers are not RabbitMQ traffic
+			}
 			switch {
 			case n.Type == graph.NodeTypePublisher && n.Service == link.From && stripMeta(n.Meta["exchange"]) == "":
 				ensureChannel()
@@ -472,4 +475,58 @@ func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, 
 		}
 	}
 	return newNodes, edges
+}
+
+// isBrokerPattern reports whether a pattern name represents message-broker
+// traffic (as opposed to WebSocket/hub/Pusher publishers, which also use
+// publisher/subscriber node types but must not be attached to broker hints).
+func isBrokerPattern(pattern string) bool {
+	if strings.HasPrefix(pattern, "ws_") || strings.HasPrefix(pattern, "hub_") ||
+		strings.HasPrefix(pattern, "pusher_") {
+		return false
+	}
+	return strings.Contains(pattern, "publish") || strings.Contains(pattern, "consume") ||
+		strings.Contains(pattern, "subscribe")
+}
+
+// LinkWebSocketMessages links typed WebSocket senders to the dispatch cases
+// handling the same message type ({type: "battery"} → case 'battery'),
+// including across services (tether client ↔ server).
+func LinkWebSocketMessages(nodes []graph.Node) []graph.Edge {
+	// message type → dispatch node IDs
+	dispatchByType := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if strings.HasPrefix(n.Meta["pattern"], "ws_dispatch") {
+			if mt := stripMeta(n.Meta["message_type"]); mt != "" {
+				dispatchByType[mt] = append(dispatchByType[mt], n.ID)
+			}
+		}
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if !strings.HasPrefix(n.Meta["pattern"], "ws_send") {
+			continue
+		}
+		mt := stripMeta(n.Meta["message_type"])
+		if mt == "" {
+			continue
+		}
+		for _, target := range dispatchByType[mt] {
+			if target == n.ID {
+				continue
+			}
+			edges = append(edges, graph.Edge{
+				ID:         fmt.Sprintf("ws:%s->%s", n.ID, target),
+				From:       n.ID,
+				To:         target,
+				Type:       graph.EdgeTypeWSSend,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"message_type": mt},
+			})
+		}
+	}
+	return edges
 }

@@ -310,3 +310,33 @@ func TestLinkBrokerHints_NoRabbitLinks(t *testing.T) {
 	assert.Empty(t, n)
 	assert.Empty(t, e)
 }
+
+func TestLinkWebSocketMessages_TypedDispatch(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "client:send", Type: graph.NodeTypePublisher, Service: "tether-client",
+			Meta: map[string]string{"pattern": "ws_send_typed", "message_type": "'battery'"}},
+		{ID: "server:case", Type: graph.NodeTypeSubscriber, Service: "tether-server",
+			Meta: map[string]string{"pattern": "ws_dispatch_case", "message_type": "'battery'"}},
+		{ID: "server:other", Type: graph.NodeTypeSubscriber, Service: "tether-server",
+			Meta: map[string]string{"pattern": "ws_dispatch_case", "message_type": "'location'"}},
+	}
+	edges := LinkWebSocketMessages(nodes)
+	require.Len(t, edges, 1, "only the matching message type links")
+	assert.Equal(t, "client:send", edges[0].From)
+	assert.Equal(t, "server:case", edges[0].To)
+	assert.Equal(t, graph.EdgeTypeWSSend, edges[0].Type)
+	assert.Equal(t, "battery", edges[0].Meta["message_type"])
+}
+
+func TestLinkBrokerHints_SkipsNonBrokerPublishers(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:ws", Type: graph.NodeTypePublisher, Service: "a",
+			Meta: map[string]string{"pattern": "ws_send_typed", "message_type": "'x'"}},
+		{ID: "b:hub", Type: graph.NodeTypeSubscriber, Service: "b",
+			Meta: map[string]string{"pattern": "hub_subscribe_call"}},
+	}
+	links := []workspace.Link{{From: "a", To: "b", Via: "rabbitmq", Exchange: "ex"}}
+	n, e := LinkBrokerHints(links, nodes)
+	assert.Empty(t, n)
+	assert.Empty(t, e)
+}
