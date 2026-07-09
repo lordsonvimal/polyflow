@@ -1,0 +1,35 @@
+# Ruby aws-sdk-s3 (nextGen, ssd, mdr — all pin aws-sdk-s3).
+language: ruby
+version: "1"
+package: aws-sdk-s3
+patterns:
+  # Aws::S3::Client.new(region: "…")
+  - name: s3_client_new_ruby
+    query: |
+      (call
+        receiver: (scope_resolution
+          scope: (scope_resolution
+            scope: (constant) @aws
+            (#eq? @aws "Aws")
+            name: (constant) @s3
+            (#eq? @s3 "S3"))
+          name: (constant) @cls)
+        method: (identifier) @fn
+        (#eq? @fn "new"))
+    captures:
+      - name: cls
+        role: s3_client_class
+
+  # client.put_object(bucket: "b", key: "k", body: file) and friends
+  - name: s3_operation_ruby
+    query: |
+      (call
+        receiver: (_) @client
+        method: (identifier) @fn
+        (#match? @fn "^(put_object|get_object|delete_object|list_objects_v2|head_object|copy_object|upload_file|download_file|presigned_url)$")
+        arguments: (argument_list) @args)
+    captures:
+      - name: fn
+        role: s3_operation
+      - name: args
+        role: request_shape

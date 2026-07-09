@@ -1,0 +1,49 @@
+# AWS SDK for Go v1 — S3 (dsw-agent pins aws-sdk-go v1.55.x).
+#
+# v1 shape: session-based clients and context-less, single-argument calls:
+#   svc := s3.New(sess)
+#   svc.PutObject(&s3.PutObjectInput{...})
+#
+# The version gate keeps this file inactive on services that moved to SDK v2
+# (config-based clients, context-first calls) — see aws_s3_v2.yaml. The two
+# files also differ at the shape level so a v2 call can never match here.
+language: go
+version: "1"
+package: github.com/aws/aws-sdk-go
+version_range: ">=1.0.0 <2.0.0"
+patterns:
+  # svc := s3.New(sess) — session-based client construction (v1 only).
+  - name: s3_client_new_v1
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "s3")
+          field: (field_identifier) @fn
+          (#eq? @fn "New"))
+        arguments: (argument_list
+          .
+          (identifier) @session
+          .))
+    captures:
+      - name: session
+        role: aws_session
+
+  # svc.PutObject(&s3.PutObjectInput{...}) — exactly ONE argument, no context.
+  # The anchored single-argument shape is what distinguishes v1 from v2's
+  # context-first two-argument calls.
+  - name: s3_operation_v1
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(PutObject|GetObject|DeleteObject|ListObjectsV2|HeadObject|CopyObject|CreateMultipartUpload|UploadPart|CompleteMultipartUpload)$"))
+        arguments: (argument_list
+          .
+          (unary_expression) @input
+          .))
+    captures:
+      - name: fn
+        role: s3_operation
+      - name: input
+        role: request_shape

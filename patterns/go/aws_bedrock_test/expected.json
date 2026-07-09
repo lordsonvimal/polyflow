@@ -1,0 +1,4 @@
+{
+  "patterns": ["bedrock_client_new", "bedrock_invoke", "bedrock_invoke"],
+  "node_types": ["external_service", "external_service", "external_service"]
+}

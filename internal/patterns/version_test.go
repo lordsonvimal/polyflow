@@ -119,3 +119,37 @@ func patternNames(ps []*patterns.Pattern) []string {
 	}
 	return out
 }
+
+// TestAWSSDKGating loads the real shipped AWS pattern files and proves the
+// gating level of the version split: a service pinning SDK v1 activates only
+// the v1 file; a service on SDK v2 activates only the v2 file.
+func TestAWSSDKGating(t *testing.T) {
+	v1, err := patterns.LoadFile("../../patterns/go/aws_s3_v1.yaml")
+	require.NoError(t, err)
+	v2, err := patterns.LoadFile("../../patterns/go/aws_s3_v2.yaml")
+	require.NoError(t, err)
+
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(v1)
+	reg.RegisterFile(v2)
+
+	agent := reg.ForService([]deps.Dependency{ // dsw-agent: SDK v1
+		{Ecosystem: "go", Name: "github.com/aws/aws-sdk-go", Version: "v1.55.8"},
+	})
+	agentNames := patternNames(agent.List("go"))
+	assert.Contains(t, agentNames, "s3_operation_v1")
+	assert.NotContains(t, agentNames, "s3_operation_v2")
+
+	manager := reg.ForService([]deps.Dependency{ // dsw-manager: SDK v2
+		{Ecosystem: "go", Name: "github.com/aws/aws-sdk-go-v2/service/s3", Version: "v1.66.0"},
+	})
+	managerNames := patternNames(manager.List("go"))
+	assert.Contains(t, managerNames, "s3_operation_v2")
+	assert.NotContains(t, managerNames, "s3_operation_v1")
+
+	// Hypothetical future: aws-sdk-go bumped to v2.x — v1 range no longer satisfied.
+	bumped := reg.ForService([]deps.Dependency{
+		{Ecosystem: "go", Name: "github.com/aws/aws-sdk-go", Version: "v2.0.0"},
+	})
+	assert.NotContains(t, patternNames(bumped.List("go")), "s3_operation_v1")
+}

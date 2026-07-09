@@ -1,0 +1,4 @@
+{
+  "patterns": ["s3_client_new_v1", "s3_operation_v1", "s3_operation_v1"],
+  "node_types": ["external_service", "external_service", "external_service"]
+}

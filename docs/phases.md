@@ -108,7 +108,7 @@ chains must not match raw `database/sql`, and vice versa); unit test proving
 both SQLite drivers produce the same datastore node type with different
 `driver` meta; design doc Node/Edge tables updated.
 
-## Phase 5 — AWS SDKs: S3 v1 + v2, Bedrock, Ruby aws-sdk-s3 — pending
+## Phase 5 — AWS SDKs: S3 v1 + v2, Bedrock, Ruby aws-sdk-s3 — done
 
 The version-aware proof case.
 
@@ -273,6 +273,13 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 5 — done.** aws_s3_v1/v2 split both at the gate level (package +
+  version_range; TestAWSSDKGating proves v1 file inactive for v2-pinned
+  services and vice versa) and the shape level (session/1-arg vs
+  config/context-first; each file's negative fixture is the other
+  generation's code). aws_bedrock.yaml as distinct LLM external service;
+  ruby aws_s3.yaml for aws-sdk-s3. NodeTypeExternalService + cloud_call
+  edges; cloud_service + package + resolved_version in node metadata.
 - **Phase 4 — done.** gorm.yaml (gated on gorm.io/gorm; &target pointer-arg
   shape guard) + database_sql.yaml (SQL-string-literal guard, Context
   variants); NodeTypeDatastore + queries/persists edges;

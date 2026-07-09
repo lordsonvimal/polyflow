@@ -1,0 +1,41 @@
+# AWS Bedrock runtime — LLM/AI service calls (dsw-manager).
+#
+# Detected as a distinct external service (an AI model invocation), not
+# generic S3/cloud storage.
+language: go
+version: "1"
+package: github.com/aws/aws-sdk-go-v2/service/bedrockruntime
+patterns:
+  # client := bedrockruntime.NewFromConfig(cfg)
+  - name: bedrock_client_new
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "bedrockruntime")
+          field: (field_identifier) @fn
+          (#eq? @fn "NewFromConfig"))
+        arguments: (argument_list
+          .
+          (identifier) @config))
+    captures:
+      - name: config
+        role: aws_config
+
+  # client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{...})
+  - name: bedrock_invoke
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(InvokeModel|InvokeModelWithResponseStream|Converse|ConverseStream)$"))
+        arguments: (argument_list
+          .
+          (identifier) @ctx
+          .
+          (unary_expression) @input))
+    captures:
+      - name: fn
+        role: bedrock_operation
+      - name: input
+        role: request_shape

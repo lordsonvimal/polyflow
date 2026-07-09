@@ -1,0 +1,45 @@
+# AWS SDK for Go v2 — S3 (dsw-manager uses aws-sdk-go-v2/service/s3).
+#
+# v2 shape: config-based clients and context-first calls:
+#   client := s3.NewFromConfig(cfg)
+#   client.PutObject(ctx, &s3.PutObjectInput{...})
+#
+# Shape-level counterpart to aws_s3_v1.yaml — a v1 single-argument call can
+# never match the context-first two-argument queries here, and vice versa.
+language: go
+version: "1"
+package: github.com/aws/aws-sdk-go-v2/service/s3
+patterns:
+  # client := s3.NewFromConfig(cfg) — config-based client construction (v2 only).
+  - name: s3_client_new_v2
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "s3")
+          field: (field_identifier) @fn
+          (#eq? @fn "NewFromConfig"))
+        arguments: (argument_list
+          .
+          (identifier) @config))
+    captures:
+      - name: config
+        role: aws_config
+
+  # client.PutObject(ctx, &s3.PutObjectInput{...}) — context-first, then input.
+  - name: s3_operation_v2
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^(PutObject|GetObject|DeleteObject|ListObjectsV2|HeadObject|CopyObject|CreateMultipartUpload|UploadPart|CompleteMultipartUpload)$"))
+        arguments: (argument_list
+          .
+          (identifier) @ctx
+          .
+          (unary_expression) @input))
+    captures:
+      - name: fn
+        role: s3_operation
+      - name: input
+        role: request_shape

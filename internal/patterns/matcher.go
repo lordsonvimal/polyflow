@@ -326,6 +326,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// re-deriving it.
 		meta["pattern"] = r.PatternName
 
+		// External-service call sites: record which cloud service (derived
+		// from the pattern-name prefix, e.g. s3_operation_v1 → s3).
+		if nodeType == graph.NodeTypeExternalService {
+			name := r.PatternName
+			if i := strings.Index(name, "_"); i > 0 {
+				meta["cloud_service"] = name[:i]
+			}
+		}
+
 		// Datastore call sites: record whether this is a read or a write so
 		// the linker can emit queries/persists edges to the service store node.
 		if nodeType == graph.NodeTypeDatastore {
@@ -471,8 +480,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			continue
 		}
 		edgeType := graph.EdgeTypeCalls
-		if n.Type == graph.NodeTypeComponent {
+		switch n.Type {
+		case graph.NodeTypeComponent:
 			edgeType = graph.EdgeTypeRenders
+		case graph.NodeTypeExternalService:
+			edgeType = graph.EdgeTypeCloudCall
 		}
 		edges = append(edges, graph.Edge{
 			ID:   fmt.Sprintf("%s:%s->%s", string(edgeType), best.id, n.ID),
@@ -653,6 +665,10 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "dom_tree") || strings.HasPrefix(lower, "append_child") ||
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+
+	// ── Cloud SDK boundaries (S3, Bedrock) ────────────────────────────────────
+	case strings.HasPrefix(lower, "s3_") || strings.HasPrefix(lower, "bedrock_"):
+		return graph.NodeTypeExternalService, graph.EdgeTypeCloudCall
 
 	// ── Datastores (GORM / database/sql) ──────────────────────────────────────
 	case strings.HasPrefix(lower, "gorm_query") || strings.HasPrefix(lower, "sql_query"):
