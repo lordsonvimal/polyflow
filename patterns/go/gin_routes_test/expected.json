@@ -1,0 +1,4 @@
+{
+  "patterns": ["gin_route", "gin_route", "gin_route", "gin_route", "gin_route_group", "gin_middleware_use", "gin_bind_request", "gin_json_response", "gin_json_response"],
+  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler", "http_handler", "function", "function", "function", "function"]
+}
