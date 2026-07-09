@@ -61,6 +61,26 @@ CREATE TABLE IF NOT EXISTS meta (
 	value TEXT NOT NULL
 );
 
+-- Incremental indexing: per-file content hash plus the parse results for the
+-- file, so unchanged files skip tree-sitter entirely on re-index.
+CREATE TABLE IF NOT EXISTS file_hashes (
+	file_path    TEXT PRIMARY KEY,
+	service      TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	indexed_at   INTEGER NOT NULL,
+	nodes_json   TEXT NOT NULL DEFAULT '[]',
+	edges_json   TEXT NOT NULL DEFAULT '[]',
+	errored      INTEGER NOT NULL DEFAULT 0
+);
+
+-- Whole-service semantic (go/packages) results, keyed by a fingerprint of
+-- all the service's file hashes.
+CREATE TABLE IF NOT EXISTS semantic_cache (
+	service     TEXT PRIMARY KEY,
+	fingerprint TEXT NOT NULL,
+	edges_json  TEXT NOT NULL DEFAULT '[]'
+);
+
 CREATE TABLE IF NOT EXISTS dependencies (
 	service   TEXT NOT NULL,
 	ecosystem TEXT NOT NULL,
@@ -335,6 +355,74 @@ func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error
 		out = append(out, &pe)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLiteStore) UpsertFileHash(ctx context.Context, fh *FileHash) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, errored)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(file_path) DO UPDATE SET
+			service=excluded.service, content_hash=excluded.content_hash,
+			indexed_at=excluded.indexed_at, nodes_json=excluded.nodes_json,
+			edges_json=excluded.edges_json, errored=excluded.errored`,
+		fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, boolToInt(fh.Errored))
+	if err != nil {
+		return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListFileHashes(ctx context.Context) (map[string]*FileHash, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT file_path, service, content_hash, indexed_at, nodes_json, edges_json, errored FROM file_hashes`)
+	if err != nil {
+		return nil, fmt.Errorf("list file hashes: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]*FileHash)
+	for rows.Next() {
+		var fh FileHash
+		var errored int
+		if err := rows.Scan(&fh.FilePath, &fh.Service, &fh.ContentHash, &fh.IndexedAt, &fh.NodesJSON, &fh.EdgesJSON, &errored); err != nil {
+			return nil, fmt.Errorf("scan file hash row: %w", err)
+		}
+		fh.Errored = errored != 0
+		out[fh.FilePath] = &fh
+	}
+	return out, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (s *SQLiteStore) UpsertSemanticCache(ctx context.Context, service, fingerprint, edgesJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO semantic_cache (service, fingerprint, edges_json)
+		VALUES (?, ?, ?)
+		ON CONFLICT(service) DO UPDATE SET
+			fingerprint=excluded.fingerprint, edges_json=excluded.edges_json`,
+		service, fingerprint, edgesJSON)
+	if err != nil {
+		return fmt.Errorf("upsert semantic cache %s: %w", service, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetSemanticCache(ctx context.Context, service string) (fingerprint, edgesJSON string, err error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT fingerprint, edges_json FROM semantic_cache WHERE service = ?`, service)
+	if err := row.Scan(&fingerprint, &edgesJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", nil
+		}
+		return "", "", fmt.Errorf("get semantic cache %s: %w", service, err)
+	}
+	return fingerprint, edgesJSON, nil
 }
 
 func (s *SQLiteStore) UpsertDependency(ctx context.Context, d *Dependency) error {
