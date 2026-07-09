@@ -7,8 +7,8 @@ patterns:
         function: (selector_expression
           field: (field_identifier) @fn
           (#match? @fn "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
-        arguments: (argument_list
-          (_) @url
+        arguments: (argument_list .
+          (_) @url .
           (#match? @url "^[\"\x60](/|https?://)")))
     captures:
       - name: fn

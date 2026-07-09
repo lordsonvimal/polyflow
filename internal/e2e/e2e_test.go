@@ -88,6 +88,26 @@ func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Worksp
 
 	require.NoError(t, bw.Flush(ctx))
 
+	// Route → handler linking (same as runIndex production path).
+	routeEdges := linker.LinkRouteHandlers(allNodes)
+	bwRoute := graph.NewBatchWriter(store)
+	for i := range routeEdges {
+		e := routeEdges[i]
+		require.NoError(t, bwRoute.AddEdge(ctx, &e))
+		allEdges = append(allEdges, e)
+	}
+	require.NoError(t, bwRoute.Flush(ctx))
+
+	// Broker channel linking.
+	brokerEdges := linker.LinkBrokerChannels(allNodes)
+	bwBroker := graph.NewBatchWriter(store)
+	for i := range brokerEdges {
+		e := brokerEdges[i]
+		require.NoError(t, bwBroker.AddEdge(ctx, &e))
+		allEdges = append(allEdges, e)
+	}
+	require.NoError(t, bwBroker.Flush(ctx))
+
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
 	l := linker.New(cfg)
 	crossEdges, err := l.Link(hintedNodes, allEdges)

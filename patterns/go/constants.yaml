@@ -1,0 +1,15 @@
+language: go
+version: "1"
+patterns:
+  - name: const_string
+    query: |
+      (const_declaration
+        (const_spec
+          name: (identifier) @name
+          value: (expression_list
+            (interpreted_string_literal) @value)))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value

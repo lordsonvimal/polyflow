@@ -6,6 +6,7 @@ patterns:
       (call_expression
         function: (selector_expression
           operand: (identifier) @router
+          (#not-eq? @router "http")
           field: (field_identifier) @method
           (#match? @method "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
         arguments: (argument_list

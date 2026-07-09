@@ -156,3 +156,75 @@ func TestLinkNilConfig(t *testing.T) {
 		t.Fatal("expected error for nil config")
 	}
 }
+
+func TestLinkBrokerChannels_CrossService(t *testing.T) {
+	// Two channel nodes with the same key from different services:
+	// one has a publisher pointing at it, the other is the subscribe-side.
+	pubChannel := graph.Node{
+		ID:      "svc-a:channel:user.events/user.created",
+		Type:    graph.NodeTypeChannel,
+		Service: "svc-a",
+		Meta:    map[string]string{"exchange": "user.events", "routing_key": "user.created"},
+	}
+	subChannel := graph.Node{
+		ID:      "svc-b:channel:user.events/user.created",
+		Type:    graph.NodeTypeChannel,
+		Service: "svc-b",
+		Meta:    map[string]string{"exchange": "user.events", "routing_key": "user.created"},
+	}
+	publisher := graph.Node{
+		ID:      "svc-a:svc.go:publisher:publishUserCreated:5",
+		Type:    graph.NodeTypePublisher,
+		Service: "svc-a",
+		Meta:    map[string]string{"exchange": "user.events", "routing_key": "user.created"},
+	}
+	// "publishes" edge links publisher -> pubChannel (in-memory only for this test)
+	// LinkBrokerChannels builds its own index from node meta.
+
+	nodes := []graph.Node{pubChannel, subChannel, publisher}
+	edges := LinkBrokerChannels(nodes)
+
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 cross-service broker edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.From != pubChannel.ID {
+		t.Errorf("edge.From = %q, want %q", e.From, pubChannel.ID)
+	}
+	if e.To != subChannel.ID {
+		t.Errorf("edge.To = %q, want %q", e.To, subChannel.ID)
+	}
+	if e.Type != graph.EdgeTypePublishes {
+		t.Errorf("edge.Type = %q, want publishes", e.Type)
+	}
+	if e.Meta["via"] != "amqp_channel" {
+		t.Errorf("edge.Meta[via] = %q, want amqp_channel", e.Meta["via"])
+	}
+}
+
+func TestLinkBrokerChannels_SameService(t *testing.T) {
+	// Same-service channel nodes should not produce cross edges.
+	ch1 := graph.Node{
+		ID:      "svc-a:channel:orders/placed",
+		Type:    graph.NodeTypeChannel,
+		Service: "svc-a",
+		Meta:    map[string]string{"exchange": "orders", "routing_key": "placed"},
+	}
+	pub := graph.Node{
+		ID:      "svc-a:order.go:publisher:placeOrder:10",
+		Type:    graph.NodeTypePublisher,
+		Service: "svc-a",
+		Meta:    map[string]string{"exchange": "orders", "routing_key": "placed"},
+	}
+	edges := LinkBrokerChannels([]graph.Node{ch1, pub})
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for same-service channels, got %d", len(edges))
+	}
+}
+
+func TestLinkBrokerChannels_NoChannels(t *testing.T) {
+	edges := LinkBrokerChannels([]graph.Node{})
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for empty node list, got %d", len(edges))
+	}
+}

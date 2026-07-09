@@ -4,17 +4,11 @@ patterns:
   - name: controller_action
     query: |
       (class
-        name: (constant) @controller
-        superclass: (constant) @parent
         body: (body_statement
           (method
-            name: (identifier) @action)))
+            name: (identifier) @name)))
     captures:
-      - name: controller
-        role: rails_controller
-      - name: parent
-        role: rails_parent_controller
-      - name: action
+      - name: name
         role: rails_action
   - name: before_action
     query: |

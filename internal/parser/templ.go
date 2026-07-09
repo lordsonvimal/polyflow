@@ -62,7 +62,6 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				Language: "templ",
 				Meta:     map[string]string{"name": m[1]},
 			})
-			edges = append(edges, selfEdge(nodeID, graph.EdgeTypeRenders))
 			currentComponentID = nodeID
 			// A component declaration line cannot also contain data-on-* or href
 			// attributes, so skip the remaining attribute checks for this line.
@@ -113,6 +112,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 		}
 
 		// href / action pointing to a server path (including root "/")
+		// Mark as navigation links so the cross-service linker skips them.
 		for _, m := range reHrefAction.FindAllStringSubmatch(trimmed, -1) {
 			path := m[1]
 			nodeID := templNodeID(service, file, lineNum, graph.NodeTypeHTTPClient, "href:"+path)
@@ -120,7 +120,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 				ID: nodeID, Type: graph.NodeTypeHTTPClient,
 				Label: path, Service: service, File: file, Line: lineNum,
 				Language: "templ",
-				Meta:     map[string]string{"path": path},
+				Meta:     map[string]string{"path": path, "nav_link": "true"},
 			})
 			edges = append(edges, componentEdge(currentComponentID, nodeID, graph.EdgeTypeHTTPCall))
 		}

@@ -233,6 +233,24 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 	}
 
+	// Build per-file constant table from const_string / const_template_prefix results.
+	// file -> varName -> literalValue
+	constants := make(map[string]map[string]string)
+	for _, r := range defResults {
+		if r.PatternName != "const_string" && r.PatternName != "const_template_prefix" {
+			continue
+		}
+		name, okN := r.Captures["name"]
+		value, okV := r.Captures["value"]
+		if !okN || !okV {
+			continue
+		}
+		if constants[r.File] == nil {
+			constants[r.File] = make(map[string]string)
+		}
+		constants[r.File][name] = stripStringLiteral(value)
+	}
+
 	// Pass 1: build all nodes from definition results only.
 	// Skip pure structural type declarations (TypeScript interfaces, type aliases, enums)
 	// — they are not runtime entities and would add noise to the call graph.
@@ -289,6 +307,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// URL constant propagation: resolve variable references in http_client URL/path captures.
+		if nodeType == graph.NodeTypeHTTPClient {
+			for _, key := range []string{"url", "path"} {
+				if raw, ok := meta[key]; ok {
+					if resolved, conf := resolveURL(raw, r.File, constants); resolved != raw {
+						meta[key] = resolved
+						meta["url_confidence"] = conf
+						// Rebuild label if it was derived from the URL.
+						if label == raw {
+							label = resolved
+						}
+					}
+				}
+			}
+		}
+
 		// Handle Go 1.22 ServeMux "METHOD /path" route format: split into method+path.
 		if path, ok := meta["path"]; ok {
 			if i := strings.Index(path, " "); i > 0 {
@@ -309,6 +343,37 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 		nodes = append(nodes, node)
 	}
+
+	// Pass 1b: deduplicate http_client nodes at file+line positions that already have
+	// an http_handler node. When a more-specific route pattern (chi_get, http_verb_route)
+	// and a generic client pattern (resty_get, http_get, faraday_http_verb) both match
+	// the same call site, the handler node wins and the client duplicate is dropped.
+	handlerLines := make(map[string]bool) // "file:line" → true
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeHTTPHandler {
+			handlerLines[fmt.Sprintf("%s:%d", n.File, n.Line)] = true
+		}
+	}
+	// Also deduplicate http_client nodes: multiple patterns can match the same call site
+	// (e.g. resty_get + http_get for a plain .Get("/url") call). Keep the first match only.
+	seenClientLines := make(map[string]bool) // "file:line" → true
+	filtered := nodes[:0]
+	for i := range nodes {
+		n := nodes[i]
+		if n.Type == graph.NodeTypeHTTPClient {
+			key := fmt.Sprintf("%s:%d", n.File, n.Line)
+			if handlerLines[key] {
+				continue // drop: a handler pattern already owns this call site
+			}
+			if seenClientLines[key] {
+				continue // drop: already have an http_client node for this line
+			}
+			seenClientLines[key] = true
+		}
+		filtered = append(filtered, n)
+	}
+	nodes = filtered
 
 	// Pass 2: emit caller→callee edges using line-proximity.
 	// For each non-function node, find the closest function/method node defined
@@ -412,6 +477,50 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		})
 	}
 
+	// Pass 4: synthesize channel nodes for AMQP publishers and subscribers.
+	// For every publisher/subscriber node that has "exchange" in its meta, create
+	// a NodeTypeChannel node keyed by "service:exchange/routing_key" and emit
+	// publishes/subscribes edges.
+	seenChannels := make(map[string]bool)
+	for i := range nodes {
+		n := &nodes[i]
+		exchange, hasEx := n.Meta["exchange"]
+		if !hasEx || exchange == "" {
+			continue
+		}
+		exchange = stripStringLiteral(exchange)
+		routingKey := stripStringLiteral(n.Meta["routing_key"])
+		channelKey := exchange + "/" + routingKey
+		channelID := fmt.Sprintf("%s:channel:%s", service, channelKey)
+
+		if !seenChannels[channelID] {
+			seenChannels[channelID] = true
+			nodes = append(nodes, graph.Node{
+				ID:      channelID,
+				Type:    graph.NodeTypeChannel,
+				Label:   channelKey,
+				Service: service,
+				Meta:    map[string]string{"exchange": exchange, "routing_key": routingKey},
+			})
+		}
+
+		if n.Type == graph.NodeTypePublisher {
+			edges = append(edges, graph.Edge{
+				ID:   fmt.Sprintf("publishes:%s->%s", n.ID, channelID),
+				From: n.ID,
+				To:   channelID,
+				Type: graph.EdgeTypePublishes,
+			})
+		} else if n.Type == graph.NodeTypeSubscriber {
+			edges = append(edges, graph.Edge{
+				ID:   fmt.Sprintf("subscribes:%s->%s", channelID, n.ID),
+				From: channelID,
+				To:   n.ID,
+				Type: graph.EdgeTypeSubscribes,
+			})
+		}
+	}
+
 	return nodes, edges
 }
 
@@ -504,6 +613,9 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
 
 	// ── HTTP clients ──────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "faraday_") || strings.HasPrefix(lower, "httparty_") ||
+		strings.HasPrefix(lower, "net_http_") || strings.HasPrefix(lower, "rest_client"):
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
 	case strings.Contains(lower, "client") || strings.Contains(lower, "request") ||
 		strings.Contains(lower, "fetch") || strings.Contains(lower, "axios") ||
 		strings.HasPrefix(lower, "http_get") || strings.HasPrefix(lower, "http_post") ||
@@ -536,4 +648,77 @@ func stripStringLiteral(s string) string {
 		}
 	}
 	return s
+}
+
+// resolveURL attempts to resolve a URL capture value that may reference a constant
+// variable (up to 3 hops). Returns the resolved value and a confidence level.
+//
+// Handles:
+//   - "VAR + \"/path\""  → look up VAR in constants, prepend
+//   - "`${VAR}/path`"    → template literal with leading variable interpolation
+//   - Already-literal paths (start with "/" or "http") → returned as-is with "static"
+func resolveURL(raw, file string, constants map[string]map[string]string) (string, string) {
+	if strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "http") {
+		return raw, graph.ConfidenceStatic
+	}
+
+	fileConsts := constants[file]
+
+	// Try up to 3 resolution hops.
+	for hop := 0; hop < 3; hop++ {
+		resolved, conf := tryResolveOne(raw, fileConsts)
+		if conf == graph.ConfidenceStatic {
+			return resolved, graph.ConfidenceInferred
+		}
+		if resolved == raw {
+			break // no progress
+		}
+		raw = resolved
+	}
+	return raw, graph.ConfidenceUnknown
+}
+
+// tryResolveOne attempts a single resolution step on raw.
+// Returns (resolved, "static") if fully resolved to a literal path,
+// or (transformed, "") if partially transformed, or (raw, "") if no match.
+func tryResolveOne(raw string, fileConsts map[string]string) (string, string) {
+	// Pattern: VAR + "/suffix"  or  VAR + '/suffix'
+	if idx := strings.Index(raw, " + "); idx > 0 {
+		varName := strings.TrimSpace(raw[:idx])
+		suffix := strings.TrimSpace(raw[idx+3:])
+		suffix = stripStringLiteral(suffix)
+		if val, ok := fileConsts[varName]; ok {
+			resolved := val + suffix
+			if strings.HasPrefix(resolved, "/") || strings.HasPrefix(resolved, "http") {
+				return resolved, graph.ConfidenceStatic
+			}
+			return resolved, ""
+		}
+	}
+
+	// Pattern: `${VAR}/suffix`  (template literal already stripped of backticks)
+	if strings.HasPrefix(raw, "${") {
+		end := strings.Index(raw, "}")
+		if end > 2 {
+			varName := raw[2:end]
+			suffix := raw[end+1:]
+			if val, ok := fileConsts[varName]; ok {
+				resolved := val + suffix
+				if strings.HasPrefix(resolved, "/") || strings.HasPrefix(resolved, "http") {
+					return resolved, graph.ConfidenceStatic
+				}
+				return resolved, ""
+			}
+		}
+	}
+
+	// Plain variable lookup (no concatenation)
+	if val, ok := fileConsts[raw]; ok {
+		if strings.HasPrefix(val, "/") || strings.HasPrefix(val, "http") {
+			return val, graph.ConfidenceStatic
+		}
+		return val, ""
+	}
+
+	return raw, ""
 }
