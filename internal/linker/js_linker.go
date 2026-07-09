@@ -65,6 +65,12 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 		if n.Type != graph.NodeTypeComponent {
 			continue
 		}
+		// templ components are declarations emitted by the templ parser (with
+		// datastar action/bind children attached), not JSX usage proxies —
+		// there is no JS function declaration to redirect to; keep them.
+		if n.Language == "templ" {
+			continue
+		}
 		// Skip framework components (Show, For, Match etc. — no user declaration).
 		if isFrameworkComponent(n.Label) {
 			removeNodeIDs[n.ID] = true
