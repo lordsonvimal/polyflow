@@ -1,0 +1,8 @@
+package templates
+
+templ GamePage(state GameState) {
+    <div id="board">
+        <button data-on-click="@post('/move')" class="btn-move">Make Move</button>
+        <span id="turn" data-text="$currentTurn"></span>
+    </div>
+}

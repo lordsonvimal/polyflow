@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
@@ -124,8 +126,43 @@ func TestRun_CrossServiceLinkSurvivesIncremental(t *testing.T) {
 	cfg, dir := testWorkspace(t)
 	dbDir := filepath.Join(dir, ".polyflow")
 
+	countCrossEdges := func() int {
+		store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+		require.NoError(t, err)
+		defer store.Close()
+		idx, err := store.BuildIndex(context.Background())
+		require.NoError(t, err)
+		n := 0
+		for _, edges := range idx.OutEdges {
+			for _, e := range edges {
+				from, to := idx.Nodes[e.From], idx.Nodes[e.To]
+				if from != nil && to != nil && from.Service != to.Service {
+					n++
+				}
+			}
+		}
+		return n
+	}
+
 	first := runIndexer(t, cfg, dbDir, false)
 	require.Greater(t, first.CrossLinks, 0, "fetch('/api/users') should link to the Go handler")
+	wantCross := countCrossEdges()
+	require.Greater(t, wantCross, 0)
+
+	// Unchanged re-run takes the no-change fast path: nothing parses and the
+	// stored cross-service links are untouched.
 	second := runIndexer(t, cfg, dbDir, false)
-	assert.Equal(t, first.CrossLinks, second.CrossLinks, "linking passes re-run on cached results")
+	assert.Equal(t, 0, second.ParsedFiles)
+	assert.Equal(t, wantCross, countCrossEdges(), "cross-service links survive the fast path")
+
+	// Touching a file bypasses the fast path; linking re-runs on the merged
+	// set and produces the same cross-service links.
+	writeFile(t, cfg.Services[1].Path, "app.js", `async function load() {
+  const res = await fetch('/api/users');
+  return res; // touched
+}
+`)
+	third := runIndexer(t, cfg, dbDir, false)
+	assert.Equal(t, first.CrossLinks, third.CrossLinks, "linking passes re-run on cached results")
+	assert.Equal(t, wantCross, countCrossEdges())
 }
