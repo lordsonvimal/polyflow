@@ -1,0 +1,4 @@
+{
+  "patterns": ["func_decl", "method_decl"],
+  "node_types": ["function", "method"]
+}

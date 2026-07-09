@@ -1,0 +1,2 @@
+function handleClick() {}
+const doSomething = () => {};

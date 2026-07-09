@@ -23,6 +23,7 @@ const Search: Component = () => {
                   class="w-full text-left text-xs text-gray-300 hover:text-indigo-300 px-2 py-1 rounded hover:bg-gray-800 truncate"
                   onClick={() => {
                     uiStore.setSelectedNodeId(node.id);
+                    searchStore.saveRecent(searchStore.query());
                     graphStore.fetchTrace(node.id, "both", 10);
                   }}
                 >

@@ -1,0 +1,1 @@
+{"patterns": ["xhr_open", "xhr_send"], "node_types": ["http_client", "http_client"]}
