@@ -1,2 +1,2 @@
-pusher.trigger('channel', 'event', { data: 1 })
-pusher.trigger_async('channel', 'event', {})
+pusher.trigger('orders', 'order:updated', { data: 1 })
+pusher.trigger_async('orders', 'order:updated', {})

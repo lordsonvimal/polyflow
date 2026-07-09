@@ -110,3 +110,25 @@ func TestBuild_TotalCounts(t *testing.T) {
 	// 2 trace nodes (fetchUser + queryDB) + 1 target = 3
 	assert.Equal(t, 3, result.TotalNodes)
 }
+
+func TestBuild_JSONCarriesNodeAndEdgeMeta(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	fn := &graph.Node{ID: "agent:upload", Type: graph.NodeTypeFunction, Label: "UploadReport", Service: "dsw-agent"}
+	s3 := &graph.Node{ID: "agent:s3", Type: graph.NodeTypeExternalService, Label: "PutObject", Service: "dsw-agent",
+		Meta: map[string]string{"package": "github.com/aws/aws-sdk-go", "resolved_version": "1.55.8", "cloud_service": "s3"}}
+	idx.AddNode(fn)
+	idx.AddNode(s3)
+	idx.AddEdge(&graph.Edge{ID: "e1", From: fn.ID, To: s3.ID, Type: graph.EdgeTypeCloudCall,
+		Confidence: graph.ConfidenceInferred, Meta: map[string]string{"via": "sdk"}})
+
+	result := ctx.Build(idx, fn.ID, "debug", 5)
+	require.NotNil(t, result)
+	require.Len(t, result.Downstream, 1)
+
+	d := result.Downstream[0]
+	assert.Equal(t, "github.com/aws/aws-sdk-go", d.Meta["package"],
+		"context JSON must answer 'what breaks if I bump aws-sdk-go to v2'")
+	assert.Equal(t, "1.55.8", d.Meta["resolved_version"])
+	assert.Equal(t, graph.ConfidenceInferred, d.Confidence)
+	assert.Equal(t, "sdk", d.EdgeMeta["via"])
+}

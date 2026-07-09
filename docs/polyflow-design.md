@@ -546,16 +546,16 @@ $ polyflow status --errors
 | `sse_endpoint` | Go handler serves SSE stream |
 | `datastar_action` | Templ element triggers backend call via `data-on-*="@get('/path')"` |
 | `datastar_bind` | Templ element binds to a signal/fragment |
-| `job_enqueue` | Code enqueues a background job (delayed_job `.delay`/`handle_asynchronously`/`Delayed::Job.enqueue`, ActiveJob `perform_later`, Sidekiq `perform_async`) |
+| `job_enqueue` | Code enqueues a background job (delayed_job `.delay`/`handle_asynchronously`/`Delayed::Job.enqueue`, ActiveJob `perform_later`, Sidekiq `perform_async`); the linker connects the enqueue call site to the job class's `perform` method by class name |
 | `job_perform` | Job class processes the job (`def perform` in ApplicationJob subclass, Sidekiq worker) |
-| `pusher_trigger` | Code triggers a Pusher event |
+| `pusher_trigger` | Code triggers a Pusher event; the linker connects server-side `Pusher.trigger` to pusher-js `subscribe` sites on the same literal channel name, across services |
 | `pusher_subscribe` | Client subscribes to Pusher channel |
 | `queries` | Code reads from a datastore (GORM chains, database/sql Query*) |
 | `persists` | Code writes to a datastore (Create/Save/Delete, Exec*) |
 | `cloud_call` | Code calls an external cloud service via an SDK (S3, Bedrock) — carries SDK package + resolved version |
 | `ws_upgrade` / `ws_connect` | Server upgrades HTTP to WebSocket / client opens one |
 | `ws_read` / `ws_write` / `ws_send` | WebSocket pumps and typed sends; `ws_send` carries the message type and links to matching dispatch cases across services |
-| `hub_subscribe` / `hub_broadcast` | SSE broadcast-hub channel fan-out (Subscribe/Unsubscribe/Broadcast) feeding per-connection SSE writers |
+| `hub_subscribe` / `hub_broadcast` | SSE broadcast-hub channel fan-out (Subscribe/Unsubscribe/Broadcast) feeding per-connection SSE writers; the linker connects each `Broadcast()` call site to the `Subscribe()` call sites in the same service (partial confidence when a service has multiple hub types) |
 
 Edge types are **extensible** — new YAML patterns can define new edge types without modifying core code.
 
@@ -1614,7 +1614,7 @@ Pre-generate context files that agents read at session start. Zero latency durin
 
 | Command | Purpose | Output |
 |---------|---------|--------|
-| `polyflow trace --format json` | Trace with structured output | Cytoscape JSON + metadata |
+| `polyflow trace --root <query> --direction forward\|backward\|both --depth N --format json\|text\|chain` | Multi-hop flow trace | JSON: flat hop list + enumerated chains, every hop carrying node meta (incl. `package`/`resolved_version`), edge type/confidence/meta, and cross-service marks. `chain`: one linear path per line, e.g. `(nextgen) publish -[publishes]-> dsw.builds -[subscribes]-> ‖dsw-agent‖ consume` (‖service‖ marks a boundary crossing; `-[type?]->` marks partial/unknown confidence). Chain enumeration is capped at 100 paths (`truncated` flag set). |
 | `polyflow context --target <query> --task <type>` | Generate agent-ready context | Structured JSON (see above) |
 | `polyflow impact --target <query>` | Show blast radius of a change | List of affected functions, services, DOM elements |
 | `polyflow suggest --task "add validation to user creation"` | Suggest which files/functions to modify | Ordered list of change targets with reasoning |

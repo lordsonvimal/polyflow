@@ -17,27 +17,33 @@ type Result struct {
 }
 
 // TraceNode is a node in a traversal result with its edge type and depth.
+// Meta carries node metadata (including package + resolved_version for
+// version-gated matches); EdgeMeta/Confidence describe the connecting edge.
 type TraceNode struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Label    string `json:"label"`
-	Service  string `json:"service"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Language string `json:"language"`
-	EdgeType string `json:"edge_type"`
-	Depth    int    `json:"depth"`
+	ID         string            `json:"id"`
+	Type       string            `json:"type"`
+	Label      string            `json:"label"`
+	Service    string            `json:"service"`
+	File       string            `json:"file"`
+	Line       int               `json:"line"`
+	Language   string            `json:"language"`
+	Meta       map[string]string `json:"meta,omitempty"`
+	EdgeType   string            `json:"edge_type"`
+	Confidence string            `json:"confidence,omitempty"`
+	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
+	Depth      int               `json:"depth"`
 }
 
 // CrossEdge represents a connection that crosses service boundaries.
 type CrossEdge struct {
-	FromService string `json:"from_service"`
-	ToService   string `json:"to_service"`
-	Label       string `json:"label"`
-	EdgeType    string `json:"edge_type"`
-	Confidence  string `json:"confidence,omitempty"`
-	Method      string `json:"method,omitempty"`
-	Path        string `json:"path,omitempty"`
+	FromService string            `json:"from_service"`
+	ToService   string            `json:"to_service"`
+	Label       string            `json:"label"`
+	EdgeType    string            `json:"edge_type"`
+	Confidence  string            `json:"confidence,omitempty"`
+	Method      string            `json:"method,omitempty"`
+	Path        string            `json:"path,omitempty"`
+	Meta        map[string]string `json:"meta,omitempty"`
 }
 
 // Build produces a context result for the given target node and task.
@@ -105,10 +111,13 @@ func toTraceNodes(results []graph.TraversalResult) []TraceNode {
 			File:     r.Node.File,
 			Line:     r.Node.Line,
 			Language: r.Node.Language,
+			Meta:     r.Node.Meta,
 			Depth:    r.Depth,
 		}
 		if r.Via != nil {
 			tn.EdgeType = string(r.Via.Type)
+			tn.Confidence = r.Via.Confidence
+			tn.EdgeMeta = r.Via.Meta
 		}
 		out = append(out, tn)
 	}
@@ -155,6 +164,7 @@ func extractCrossService(idx *graph.AdjacencyIndex, upstream, downstream []Trace
 				Confidence:  e.Confidence,
 				Method:      e.Method,
 				Path:        e.Path,
+				Meta:        e.Meta,
 			})
 		}
 	}

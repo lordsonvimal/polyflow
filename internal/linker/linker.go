@@ -489,6 +489,150 @@ func isBrokerPattern(pattern string) bool {
 		strings.Contains(pattern, "subscribe")
 }
 
+// LinkJobQueues links background-job enqueue call sites to the job class's
+// perform method by class name (ReportJob.perform_later → ReportJob#perform).
+// Generic across queue backends: delayed_job and solid_queue both enqueue
+// through the ActiveJob surface, and Sidekiq workers map onto the same
+// publisher/subscriber node types.
+func LinkJobQueues(nodes []graph.Node) []graph.Edge {
+	performByClass := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeSubscriber {
+			continue
+		}
+		if cls := stripMeta(n.Meta["job_class"]); cls != "" {
+			performByClass[cls] = append(performByClass[cls], n.ID)
+		}
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypePublisher {
+			continue
+		}
+		cls := stripMeta(n.Meta["job_class"])
+		if cls == "" {
+			continue
+		}
+		for _, target := range performByClass[cls] {
+			if target == n.ID {
+				continue
+			}
+			edges = append(edges, graph.Edge{
+				ID:         fmt.Sprintf("job:%s->%s", n.ID, target),
+				From:       n.ID,
+				To:         target,
+				Type:       graph.EdgeTypeJobEnqueue,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"job_class": cls},
+			})
+		}
+	}
+	return edges
+}
+
+// LinkPusherChannels links server-side Pusher.trigger call sites to pusher-js
+// client subscriptions on the same channel name (nextGen Rails → pusher-js),
+// including across services.
+func LinkPusherChannels(nodes []graph.Node) []graph.Edge {
+	subsByChannel := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if !strings.HasPrefix(n.Meta["pattern"], "pusher_subscribe") &&
+			!strings.HasPrefix(n.Meta["pattern"], "pusher_channel") {
+			continue
+		}
+		if ch := stripMeta(n.Meta["channel"]); ch != "" {
+			subsByChannel[ch] = append(subsByChannel[ch], n.ID)
+		}
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if !strings.HasPrefix(n.Meta["pattern"], "pusher_trigger") {
+			continue
+		}
+		// Only quoted string literals are statically resolvable — a bare
+		// identifier is a variable-held channel and must not be linked.
+		raw := n.Meta["channel"]
+		if len(raw) < 2 || (raw[0] != '"' && raw[0] != '\'') {
+			continue
+		}
+		ch := stripMeta(raw)
+		if ch == "" {
+			continue
+		}
+		for _, target := range subsByChannel[ch] {
+			edges = append(edges, graph.Edge{
+				ID:         fmt.Sprintf("pusher:%s->%s", n.ID, target),
+				From:       n.ID,
+				To:         target,
+				Type:       graph.EdgeTypePusherTrigger,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"channel": ch, "event": stripMeta(n.Meta["event"])},
+			})
+		}
+	}
+	return edges
+}
+
+// LinkHubFanout links SSE broadcast-hub fan-out: every hub Broadcast() call
+// site reaches every Subscribe() call site in the same service (the hub's
+// channel fan-out delivers each broadcast event to all subscribers). Static
+// analysis cannot tell which hub instance a call goes through, so when a
+// service has a single hub type the edges are "inferred"; with multiple hub
+// types they degrade to "partial".
+func LinkHubFanout(nodes []graph.Node) []graph.Edge {
+	type hubCall struct {
+		id      string
+		service string
+	}
+	broadcasts := make(map[string][]hubCall) // service -> broadcast call sites
+	subscribes := make(map[string][]hubCall) // service -> subscribe call sites
+	hubTypes := make(map[string]map[string]bool)
+	for i := range nodes {
+		n := &nodes[i]
+		switch n.Meta["pattern"] {
+		case "hub_broadcast_call":
+			broadcasts[n.Service] = append(broadcasts[n.Service], hubCall{n.ID, n.Service})
+		case "hub_subscribe_call":
+			subscribes[n.Service] = append(subscribes[n.Service], hubCall{n.ID, n.Service})
+		case "hub_method_decl":
+			if ht := n.Meta["receiver"]; ht != "" {
+				if hubTypes[n.Service] == nil {
+					hubTypes[n.Service] = make(map[string]bool)
+				}
+				hubTypes[n.Service][ht] = true
+			}
+		}
+	}
+
+	var edges []graph.Edge
+	for svc, pubs := range broadcasts {
+		subs := subscribes[svc]
+		confidence := graph.ConfidenceInferred
+		if len(hubTypes[svc]) > 1 {
+			confidence = graph.ConfidencePartial
+		}
+		for _, pub := range pubs {
+			for _, sub := range subs {
+				edges = append(edges, graph.Edge{
+					ID:         fmt.Sprintf("hub:%s->%s", pub.id, sub.id),
+					From:       pub.id,
+					To:         sub.id,
+					Type:       graph.EdgeTypeHubBroadcast,
+					Confidence: confidence,
+					Meta:       map[string]string{"via": "hub_fanout"},
+				})
+			}
+		}
+	}
+	return edges
+}
+
 // LinkWebSocketMessages links typed WebSocket senders to the dispatch cases
 // handling the same message type ({type: "battery"} → case 'battery'),
 // including across services (tether client ↔ server).

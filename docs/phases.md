@@ -216,7 +216,7 @@ table and logic don't exist — every index is a full rebuild.
 integration test: index twice, second run parses zero files and produces an
 identical graph; edit one file → only that file re-parses.
 
-## Phase 10 — Chain tracing + agent JSON completeness — pending
+## Phase 10 — Chain tracing + agent JSON completeness — done
 
 **Deliverable**
 - `polyflow trace --root <query> --direction --depth --format json|text|chain`:
@@ -273,6 +273,23 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
 
+- **Phase 10 — done.** New internal/trace package + `polyflow trace --root
+  --direction forward|backward|both --depth --format json|text|chain`:
+  deterministic DFS chain enumeration (cycle-safe, capped at 100 with a
+  truncated flag), chain lines like `(nextgen) publish -[publishes]->
+  dsw.builds -[subscribes]-> ‖dsw-agent‖ consume` (boundary marks; `?` on
+  partial/unknown edges); backward chains render source→root. Every hop
+  carries node meta (incl. package/resolved_version) + edge
+  type/confidence/meta; context/impact JSON enriched the same way
+  (TraceNode/CrossEdge/impactCaller). Proof: chain tests over the real
+  fixtures (bunny→amqp091 via broker hint, SSE-hub, WebSocket typed
+  dispatch) and an edge-type golden asserting all 12 fixture edge types
+  survive into trace JSON. Deviation/discovery: hub_broadcast, job_enqueue,
+  and pusher_trigger existed only as classifications — no edges were ever
+  emitted — so three small linker passes were added (LinkHubFanout,
+  LinkJobQueues by job class, LinkPusherChannels by literal channel) and
+  wired into the indexer; the ruby pusher fixture channel was aligned to
+  the js fixture ('orders') so the cross-language link is exercised.
 - **Phase 9 — done.** Index pipeline extracted from the CLI into
   internal/indexer (now testable/benchmarkable). file_hashes stores the
   content hash AND the file's parse results (nodes/edges JSON), so
