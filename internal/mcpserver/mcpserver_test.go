@@ -138,6 +138,52 @@ func TestContextTool_CarriesUnresolved(t *testing.T) {
 	assert.Contains(t, out.Note, "verify this 1 unresolved reference manually")
 }
 
+func TestContextTool_FilesMode(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	// db.go is called by handler.go (backend:getUser -> backend:queryDB), so
+	// asking for files related to db.go returns handler.go with a direct ref.
+	var out struct {
+		Files      []string                 `json:"files"`
+		Related    []graph.RelatedFileEntry `json:"related"`
+		Unresolved []graph.UnresolvedRef    `json:"unresolved"`
+	}
+	callJSON(t, cs, "context", map[string]any{"files": []string{"db.go"}}, &out)
+
+	assert.Equal(t, []string{"db.go"}, out.Files)
+	require.NotEmpty(t, out.Related)
+	assert.Equal(t, "handler.go", out.Related[0].File)
+	assert.Equal(t, 1, out.Related[0].Refs)
+	// db.go's own unresolved ref surfaces (seed file is in scope).
+	require.Len(t, out.Unresolved, 1)
+	assert.Equal(t, "dynDispatch", out.Unresolved[0].Name)
+}
+
+func TestContextTool_FilesModeMissing(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "context",
+		Arguments: map[string]any{"files": []string{"nonexistent.go"}},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+}
+
+func TestContextTool_TargetAndFilesConflict(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "context",
+		Arguments: map[string]any{"target": "getUser", "files": []string{"db.go"}},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+}
+
 func TestImpactTool_NodeMode(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)

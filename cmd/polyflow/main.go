@@ -671,6 +671,9 @@ func runPatternsAdd(cmd *cobra.Command, args []string) error {
 
 var (
 	contextTarget       string
+	contextFiles        []string
+	contextService      string
+	contextLimit        int
 	contextTask         string
 	contextDepth        int
 	contextFormat       string
@@ -680,14 +683,16 @@ var (
 )
 
 func initContextFlags() {
-	contextCmd.Flags().StringVar(&contextTarget, "target", "", "search query to find root node (required)")
+	contextCmd.Flags().StringVar(&contextTarget, "target", "", "search query to find root node (use this or --file)")
+	contextCmd.Flags().StringSliceVar(&contextFiles, "file", nil, "file path(s): return ranked related files instead of node context (repeatable)")
+	contextCmd.Flags().StringVar(&contextService, "service", "", "with --file: restrict seed file resolution to a service")
+	contextCmd.Flags().IntVar(&contextLimit, "limit", 20, "with --file: max related files returned (0 = unlimited)")
 	contextCmd.Flags().StringVar(&contextTask, "task", "debug", "task type: impact, generate, debug, refactor")
-	contextCmd.Flags().IntVar(&contextDepth, "depth", 5, "max traversal depth (0 = unlimited)")
+	contextCmd.Flags().IntVar(&contextDepth, "depth", 5, "max traversal depth (0 = unlimited; --file mode defaults to 2)")
 	contextCmd.Flags().StringVar(&contextFormat, "format", "json", "output format: json or text")
 	contextCmd.Flags().IntVar(&contextMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
 	contextCmd.Flags().BoolVar(&contextSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
 	contextCmd.Flags().IntVar(&contextSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
-	_ = contextCmd.MarkFlagRequired("target")
 }
 
 var contextCmd = &cobra.Command{
@@ -697,6 +702,9 @@ var contextCmd = &cobra.Command{
 }
 
 func runContext(cmd *cobra.Command, args []string) error {
+	if (contextTarget == "") == (len(contextFiles) == 0) {
+		return fmt.Errorf("provide exactly one of --target or --file")
+	}
 	if contextTask != "impact" && contextTask != "generate" && contextTask != "debug" && contextTask != "refactor" {
 		return fmt.Errorf("unknown task type: %s (use: impact, generate, debug, refactor)", contextTask)
 	}
@@ -708,6 +716,32 @@ func runContext(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
+
+	// File mode: rank the files related to the seed file(s).
+	if len(contextFiles) > 0 {
+		idx, err := store.BuildIndex(ctx)
+		if err != nil {
+			return err
+		}
+		depth := contextDepth
+		if !cmd.Flags().Changed("depth") {
+			depth = 2 // a file neighborhood at call-graph depth 5 is the whole repo
+		}
+		result, err := pfcontext.BuildFiles(idx, contextService, contextFiles, depth, contextLimit)
+		if err != nil {
+			return err
+		}
+		unresolved, err := store.ListUnresolvedRefs(ctx)
+		if err != nil {
+			return err
+		}
+		result.AttachUnresolved(unresolved)
+		result.ApplyBudget(contextMaxTokens)
+		if contextFormat == "text" {
+			return printContextFilesText(result)
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
 	nodes, err := store.SearchNodes(ctx, contextTarget, 5)
 	if err != nil || len(nodes) == 0 {
 		return fmt.Errorf("node not found for query: %s", contextTarget)
@@ -736,6 +770,25 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return printContextText(result)
 	}
 	return json.NewEncoder(os.Stdout).Encode(out)
+}
+
+func printContextFilesText(r *pfcontext.FilesResult) error {
+	fmt.Fprintf(os.Stdout, "Files: %s\n\n", strings.Join(r.Files, ", "))
+	if len(r.Related) == 0 {
+		fmt.Fprintln(os.Stdout, "No related files within depth.")
+	} else {
+		fmt.Fprintf(os.Stdout, "Related files (depth %d):\n", r.Depth)
+		for _, e := range r.Related {
+			fmt.Fprintf(os.Stdout, "  %-60s %2d refs, %2d nodes, depth %d via %s [%s]\n",
+				e.File, e.Refs, e.Nodes, e.MinDepth, strings.Join(e.EdgeTypes, ","), e.Service)
+		}
+	}
+	fmt.Fprintln(os.Stdout)
+	printUnresolvedText(r.Unresolved)
+	if r.Budget != nil && r.Budget.Note != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", r.Budget.Note)
+	}
+	return nil
 }
 
 func printContextSummaryText(s *pfcontext.Summary) error {
