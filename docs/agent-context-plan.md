@@ -126,7 +126,15 @@ dead code (`Store.UpsertNode` — zero references in repo).
 **Tests:** unit tests per class; reindex: cobra run* are non-roots (0.1),
 templ Visit* marked `callback`, `UpsertNode` marked `unreachable`.
 
-### Phase 0.5 — Recall gauge (unresolved references) `pending`
+### Phase 0.5 — Recall gauge (unresolved references) `done`
+
+> Outcome: unresolved refs flow from the matcher (call_ref) and JS linker
+> (import_ref, relative imports only) into an unresolved_refs table, cached
+> per file for incremental runs; `polyflow status` reports the count and
+> `--unresolved` lists details. On this repo: 149 call_refs, all verified
+> honest (local component signals, function-valued params, prop handlers —
+> dynamic dispatch). Builtins/prototype methods/re-exports are excluded.
+> SchemaVersion bumped to 3 so pre-series incremental caches are discarded.
 
 **Problem:** dropped references are invisible, so graph blind spots are
 discovered by being burned.

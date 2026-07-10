@@ -145,7 +145,7 @@ func TestPatternFixtures(t *testing.T) {
 				allowed[name][exp.NodeTypes[i]] = true
 			}
 			for _, r := range results {
-				nodes, _ := patterns.MatchToGraph("svc", []patterns.MatchResult{r})
+				nodes, _, _ := patterns.MatchToGraph("svc", []patterns.MatchResult{r})
 				if len(nodes) == 0 {
 					continue
 				}

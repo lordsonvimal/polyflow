@@ -494,12 +494,14 @@ func runSearch(cmd *cobra.Command, args []string) error {
 // ─── status ──────────────────────────────────────────────────────────────────
 
 var (
-	statusErrors bool
-	statusWS     string
+	statusErrors     bool
+	statusUnresolved bool
+	statusWS         string
 )
 
 func initStatusFlags() {
 	statusCmd.Flags().BoolVar(&statusErrors, "errors", false, "list files with parse errors")
+	statusCmd.Flags().BoolVar(&statusUnresolved, "unresolved", false, "list references the graph could not resolve (blind spots)")
 	statusCmd.Flags().StringVar(&statusWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
 }
 
@@ -560,10 +562,38 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Parse errors: %d files (--errors for details)\n", len(parseErrors))
 	}
 
+	// Recall gauge: the graph's known blind spots. Impact/context answers are
+	// only trustworthy when this ledger is reviewed, not when it is empty by
+	// omission.
+	unresolvedRefs, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return err
+	}
+	if len(unresolvedRefs) > 0 {
+		byKind := map[string]int{}
+		for _, u := range unresolvedRefs {
+			byKind[u.Kind]++
+		}
+		var kindParts []string
+		for _, kind := range []string{"call_ref", "import_ref"} {
+			if byKind[kind] > 0 {
+				kindParts = append(kindParts, fmt.Sprintf("%d %s", byKind[kind], kind))
+			}
+		}
+		fmt.Printf("  Unresolved refs: %d (%s) — graph blind spots (--unresolved for details)\n",
+			len(unresolvedRefs), strings.Join(kindParts, ", "))
+	}
+
 	if statusErrors {
 		fmt.Println()
 		for _, pe := range parseErrors {
 			fmt.Printf("  PARTIAL  %s:%d    (%d error)\n", pe.FilePath, pe.FirstErrorLine, pe.ErrorCount)
+		}
+	}
+	if statusUnresolved {
+		fmt.Println()
+		for _, u := range unresolvedRefs {
+			fmt.Printf("  UNRESOLVED  %-10s %s:%d  %s (%s)\n", u.Service, u.File, u.Line, u.Name, u.Kind)
 		}
 	}
 	return nil

@@ -34,7 +34,7 @@ func TestMatchToGraph_DOMEdgeTypes(t *testing.T) {
 			Captures:    map[string]string{"fn": "querySelector", "selector": `"#x"`},
 		},
 	}
-	_, edges := patterns.MatchToGraph("web", results)
+	_, edges, _ := patterns.MatchToGraph("web", results)
 
 	types := map[graph.EdgeType]int{}
 	for _, e := range edges {
@@ -76,7 +76,7 @@ func TestMatchToGraph_ListenerHandlerEdge(t *testing.T) {
 			Captures:    map[string]string{"event_type": `"input"`, "handler": "(e) => validate(e)"},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("web", results)
+	nodes, edges, _ := patterns.MatchToGraph("web", results)
 
 	labelByID := map[string]string{}
 	var domNode *graph.Node
@@ -110,7 +110,7 @@ func TestMatchToGraph_NavLinkMeta(t *testing.T) {
 			Captures:    map[string]string{"prop": "href", "path": "/reports"},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("web", results)
+	nodes, _, _ := patterns.MatchToGraph("web", results)
 
 	var client *graph.Node
 	for i := range nodes {
@@ -147,7 +147,7 @@ func TestMatchToGraph_NavLinkFormMethod(t *testing.T) {
 			Captures:    map[string]string{"prop": "href", "path": "/about"},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("site", results)
+	nodes, _, _ := patterns.MatchToGraph("site", results)
 
 	methodByPath := map[string]string{}
 	count := 0

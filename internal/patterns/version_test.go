@@ -106,7 +106,7 @@ func TestMatcherForService_StampsVersionMetadata(t *testing.T) {
 	assert.Equal(t, "github.com/aws/aws-sdk-go", results[0].Package)
 	assert.Equal(t, "v1.55.8", results[0].ResolvedVersion)
 
-	nodes, _ := patterns.MatchToGraph("svc", results)
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
 	require.Len(t, nodes, 1)
 	assert.Equal(t, "github.com/aws/aws-sdk-go", nodes[0].Meta["package"])
 	assert.Equal(t, "v1.55.8", nodes[0].Meta["resolved_version"])
