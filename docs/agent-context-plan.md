@@ -167,7 +167,20 @@ sanity: unresolved count is nonzero and explains remaining known gaps.
 scoped to the traversed files, plus per-edge confidence already present.
 Agent-facing message: "verify these N references manually."
 
-### Phase 1.2 — MCP server `pending`
+### Phase 1.2 — MCP server `done`
+
+> Outcome: `polyflow mcp` serves `search`, `context`, `impact` (node +
+> file modes), and `trace` over stdio via the official MCP Go SDK
+> (`modelcontextprotocol/go-sdk`). Tools return the same JSON as the CLI
+> commands, including the Phase 1.1 unresolved section; tool descriptions
+> tell agents to verify unresolved refs. Impact query logic moved from
+> `cmd/polyflow` into `internal/impact` so CLI and MCP share one
+> implementation; `internal/mcpserver` holds the handlers behind a `Store`
+> interface (tested over in-memory transports). The server watches graph.db
+> and hot-reloads the index when `polyflow index` reruns mid-session.
+> Depth convention over JSON: omitted/0 → default, -1 → unlimited.
+> Register with `claude mcp add polyflow -- polyflow mcp`.
+
 Thin stdio MCP wrapper exposing `search`, `context`, `impact`, `trace`
 (same query layer as REST). Enables automatic tool discovery by Claude Code
 and other agents.
