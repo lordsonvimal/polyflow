@@ -710,6 +710,12 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth)
 
+	unresolved, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return err
+	}
+	result.AttachUnresolved(unresolved)
+
 	if contextFormat == "text" {
 		return printContextText(result)
 	}
@@ -747,9 +753,23 @@ func printContextText(r *pfcontext.Result) error {
 		for _, cs := range r.CrossService {
 			fmt.Fprintf(os.Stdout, "  %s → %s → %s\n", cs.FromService, cs.Label, cs.ToService)
 		}
+		fmt.Fprintln(os.Stdout)
 	}
 
+	printUnresolvedText(r.Unresolved)
 	return nil
+}
+
+// printUnresolvedText renders the traversal-scoped blind spots appended to
+// text-format query output.
+func printUnresolvedText(refs []graph.UnresolvedRef) {
+	if len(refs) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stdout, "Unresolved references in traversed files (%d — verify manually, edges may be missing):\n", len(refs))
+	for _, u := range refs {
+		fmt.Fprintf(os.Stdout, "  %s:%d  %s (%s)\n", u.File, u.Line, u.Name, u.Kind)
+	}
 }
 
 // ─── trace ───────────────────────────────────────────────────────────────────
@@ -806,6 +826,12 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
 
+	unresolved, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return err
+	}
+	result.AttachUnresolved(unresolved)
+
 	switch traceFormat {
 	case "json":
 		return json.NewEncoder(os.Stdout).Encode(result)
@@ -815,6 +841,9 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		}
 		if result.Truncated {
 			fmt.Fprintf(os.Stderr, "(truncated at %d chains)\n", trace.MaxChains)
+		}
+		if result.UnresolvedNote != "" {
+			fmt.Fprintf(os.Stderr, "(%s)\n", result.UnresolvedNote)
 		}
 		return nil
 	}
@@ -849,6 +878,10 @@ func printTraceText(r *trace.Result) error {
 	}
 	if r.Truncated {
 		fmt.Fprintf(os.Stdout, "(truncated at %d chains)\n", trace.MaxChains)
+	}
+	if len(r.Unresolved) > 0 {
+		fmt.Fprintln(os.Stdout)
+		printUnresolvedText(r.Unresolved)
 	}
 	return nil
 }
@@ -908,6 +941,12 @@ type impactOutput struct {
 	CrossServiceTriggers  []crossServiceTrigger `json:"cross_service_triggers"`
 	Depth                 int                   `json:"depth"`
 	TotalCallers          int                   `json:"total_callers"`
+
+	// Unresolved lists references in the traversed files that the indexer
+	// could not resolve — the blast radius may be under-reported where these
+	// appear. Always present ([] when clean).
+	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
+	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 }
 
 // fileImpactOutput is the JSON shape for `impact --file`.
@@ -917,6 +956,9 @@ type fileImpactOutput struct {
 	Direction string                  `json:"direction"`
 	Depth     int                     `json:"depth"`
 	Impacted  []graph.FileImpactEntry `json:"impacted"`
+
+	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
+	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 }
 
 func runImpact(cmd *cobra.Command, args []string) error {
@@ -944,6 +986,16 @@ func runImpact(cmd *cobra.Command, args []string) error {
 			Depth:     impactDepth,
 			Impacted:  graph.FileImpact(idx, impactService, impactFile, impactDirection, impactDepth),
 		}
+		unresolved, err := store.ListUnresolvedRefs(ctx)
+		if err != nil {
+			return err
+		}
+		files := map[string]bool{out.File: true}
+		for _, e := range out.Impacted {
+			files[e.File] = true
+		}
+		out.Unresolved = graph.UnresolvedInFiles(unresolved, files)
+		out.UnresolvedNote = graph.UnresolvedNote(len(out.Unresolved))
 		if impactFormat == "json" {
 			return json.NewEncoder(os.Stdout).Encode(out)
 		}
@@ -953,6 +1005,10 @@ func runImpact(cmd *cobra.Command, args []string) error {
 				e.MinDepth, e.File, e.Nodes, strings.Join(e.EdgeTypes, ","), e.Service)
 		}
 		fmt.Fprintf(os.Stdout, "\nTotal: %d files impacted\n", len(out.Impacted))
+		if len(out.Unresolved) > 0 {
+			fmt.Fprintln(os.Stdout)
+			printUnresolvedText(out.Unresolved)
+		}
 		return nil
 	}
 
@@ -1044,6 +1100,17 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		TotalCallers:         len(callers),
 	}
 
+	unresolved, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return err
+	}
+	traversed := map[string]bool{root.File: true}
+	for _, c := range callers {
+		traversed[c.File] = true
+	}
+	out.Unresolved = graph.UnresolvedInFiles(unresolved, traversed)
+	out.UnresolvedNote = graph.UnresolvedNote(len(out.Unresolved))
+
 	if impactFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
@@ -1099,6 +1166,10 @@ func printImpactText(out impactOutput) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "\nTotal: %d nodes in blast radius\n", out.TotalCallers)
+	if len(out.Unresolved) > 0 {
+		fmt.Fprintln(os.Stdout)
+		printUnresolvedText(out.Unresolved)
+	}
 	return nil
 }
 
