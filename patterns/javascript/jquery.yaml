@@ -15,6 +15,24 @@ patterns:
         role: jquery_ajax_method
       - name: url
         role: http_url
+  # jQuery event binding: $(sel).on('click', handler)
+  - name: dom_event_jquery_on
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (call_expression
+            function: (identifier) @jq
+            (#match? @jq "^([$]|jQuery)$"))
+          property: (property_identifier) @fn
+          (#eq? @fn "on"))
+        arguments: (arguments
+          (string) @event_type
+          (_) @handler))
+    captures:
+      - name: event_type
+        role: dom_event_type
+      - name: handler
+        role: event_handler
   - name: jquery_selector
     query: |
       (call_expression

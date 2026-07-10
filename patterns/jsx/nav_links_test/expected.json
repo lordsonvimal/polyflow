@@ -1,0 +1,4 @@
+{
+  "patterns": ["nav_link_jsx", "nav_link_jsx"],
+  "node_types": ["http_client", "http_client"]
+}

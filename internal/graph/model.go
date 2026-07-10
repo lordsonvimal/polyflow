@@ -45,6 +45,8 @@ const (
 	EdgeTypeHTTPCall        EdgeType = "http_call"
 	EdgeTypeCalls           EdgeType = "calls"
 	EdgeTypeRenders         EdgeType = "renders"
+	// Page navigation (href/action attributes) — user-driven, not an API call.
+	EdgeTypeNavigatesTo EdgeType = "navigates_to"
 	EdgeTypePublishes       EdgeType = "publishes"
 	EdgeTypeSubscribes      EdgeType = "subscribes"
 	EdgeTypeImports         EdgeType = "imports"

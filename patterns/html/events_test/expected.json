@@ -1,0 +1,4 @@
+{
+  "patterns": ["dom_event_attr", "dom_event_attr", "dom_event_attr"],
+  "node_types": ["dom_target", "dom_target", "dom_target"]
+}

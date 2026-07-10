@@ -420,8 +420,16 @@ func resolveImportCalls(file string, svcFuncByLabel, svcVarByLabel map[string]st
   (#match? @prop "^on[A-Z]")
   (jsx_expression
     (identifier) @callee))`
-	{
-		q, err := sitter.NewQuery([]byte(jsxEventPropQuery), lang)
+	// Solid delegated/native directives: on:click={importedFn} — the
+	// attribute name parses as a namespaced JSX name.
+	jsxEventDirectiveQuery := `
+(jsx_attribute
+  (jsx_namespace_name) @prop
+  (#match? @prop "^on(capture)?:")
+  (jsx_expression
+    (identifier) @callee))`
+	for _, qstr := range []string{jsxEventPropQuery, jsxEventDirectiveQuery} {
+		q, err := sitter.NewQuery([]byte(qstr), lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)

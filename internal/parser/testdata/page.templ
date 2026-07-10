@@ -16,6 +16,8 @@ templ UserPage(name string) {
     <a href="/home" data-on-click="@get('/api/home')">Home</a>
     <!-- root path -->
     <a href="/">Root</a>
+    <!-- native DOM event attribute -->
+    <button onclick="refresh()">Reload</button>
   </div>
 }
 

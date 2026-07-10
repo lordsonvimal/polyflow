@@ -23,6 +23,10 @@ var reDataOnAction = regexp.MustCompile(`^@(get|post|put|delete|patch)\s*\(\s*['
 // reSignalRef matches $signalName used in data-text / data-indicator values.
 var reSignalRef = regexp.MustCompile(`^\$([A-Za-z_]\w*)`)
 
+// reOnEventAttr matches native DOM event attributes: onclick, oninput, …
+// (data-on-* datastar actions are handled separately and never reach this).
+var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
+
 func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error) {
 	tf, err := templparser.Parse(file)
 	if err != nil {
@@ -170,12 +174,32 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 				File:     v.file,
 				Line:     lineNo,
 				Language: "templ",
-				Meta:     map[string]string{"path": val, "nav_link": "true"},
+				Meta:     map[string]string{"path": val, "method": "GET", "nav_link": "true"},
 			})
-			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeHTTPCall))
+			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeNavigatesTo))
 		}
+
+	// Native DOM event attributes: onclick="save()" etc.
+	case reOnEventAttr.MatchString(key):
+		v.addEventAttr(key, val, lineNo)
 	}
 	return nil
+}
+
+// addEventAttr emits a dom_target node for a native on<event> attribute and
+// a dom_listen edge from the enclosing component.
+func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
+	nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeDOMTarget, key+":"+val)
+	v.nodes = append(v.nodes, graph.Node{
+		ID: nodeID, Type: graph.NodeTypeDOMTarget,
+		Label:    key + " handler",
+		Service:  v.service,
+		File:     v.file,
+		Line:     lineNo,
+		Language: "templ",
+		Meta:     map[string]string{"prop": key, "event_type": key[2:], "handler": val, "pattern": "dom_event_attr"},
+	})
+	v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDOMListen))
 }
 
 // ExpressionAttribute covers data-on-click={ expr } style attributes.
@@ -207,6 +231,12 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 			})
 			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarAction))
 		}
+		return nil
+	}
+
+	// Native DOM event attributes with expression values: onclick={ handler }
+	if reOnEventAttr.MatchString(key) {
+		v.addEventAttr(key, val, lineNo)
 	}
 	return nil
 }
