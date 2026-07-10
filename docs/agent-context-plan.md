@@ -28,7 +28,7 @@ commit; this doc is updated as each phase completes.
 
 ## Tier 0 — Graph recall (prerequisite for everything else)
 
-### Phase 0.1 — Go top-level call refs `pending`
+### Phase 0.1 — Go top-level call refs `done`
 
 **Bug:** call-ref patterns matched outside any function body in Go files are
 silently dropped in `MatchToGraph` Pass 3 (`internal/patterns/matcher.go`):
