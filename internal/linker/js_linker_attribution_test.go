@@ -71,3 +71,88 @@ const Filters = () => {
 		fromByTarget["web:ui.ts:variable:setNotification:42"],
 		"member call must fall back to module-scope variable targets")
 }
+
+// Module-level store derivations (regression: derived.ts had zero outgoing
+// edges): member calls inside a `const x = createMemo(() => …)` initializer
+// must attribute to the declared variable, target variables get read/write
+// semantics (accessor → reads, signal setter → writes), and bare value uses
+// of imported constants produce reads edges.
+func TestLinkJS_ModuleLevelDerivationsAndVariableSemantics(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "derived.ts")
+	src := `import { uiStore } from "./ui";
+import { DEFAULT_CONFIDENCE } from "./confidence";
+
+export const filtered = createMemo(() => {
+  const hidden = uiStore.hiddenTypes();
+  return hidden;
+});
+
+createEffect(() => {
+  uiStore.setNotification("changed");
+});
+
+export const levels = [...DEFAULT_CONFIDENCE];
+`
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
+
+	filteredID := "web:" + file + ":variable:filtered:4"
+	moduleID := "web:" + file + ":function:(module):0"
+	nodes := []graph.Node{
+		{
+			ID: filteredID, Type: graph.NodeTypeVariable,
+			Label: "filtered", Service: "web", File: file, Line: 4,
+			Meta: map[string]string{"scope": "module"},
+		},
+		{
+			ID: "web:" + file + ":variable:levels:13", Type: graph.NodeTypeVariable,
+			Label: "levels", Service: "web", File: file, Line: 13,
+			Meta: map[string]string{"scope": "module"},
+		},
+		{
+			ID: moduleID, Type: graph.NodeTypeFunction,
+			Label: "(module)", Service: "web", File: file, Line: 0,
+			Meta: map[string]string{"scope": "module"},
+		},
+		{
+			ID: "web:ui.ts:variable:hiddenTypes:52", Type: graph.NodeTypeVariable,
+			Label: "hiddenTypes", Service: "web", File: "ui.ts", Line: 52,
+			Meta: map[string]string{"scope": "module", "destructured": "true"},
+		},
+		{
+			ID: "web:ui.ts:variable:setNotification:42", Type: graph.NodeTypeVariable,
+			Label: "setNotification", Service: "web", File: "ui.ts", Line: 42,
+			Meta: map[string]string{"scope": "module", "destructured": "true", "setter": "true"},
+		},
+		{
+			ID: "web:confidence.ts:variable:DEFAULT_CONFIDENCE:10", Type: graph.NodeTypeVariable,
+			Label: "DEFAULT_CONFIDENCE", Service: "web", File: "confidence.ts", Line: 10,
+			Meta: map[string]string{"scope": "module", "kind": "const"},
+		},
+	}
+
+	edges, _ := NewJSLinker().LinkJS(nodes, nil, map[string][]string{"web": {file}})
+
+	type key struct{ from, to string }
+	byPair := map[key]graph.Edge{}
+	for _, e := range edges {
+		byPair[key{e.From, e.To}] = e
+	}
+
+	// filtered (memo) reads hiddenTypes through the store member call.
+	if e, ok := byPair[key{filteredID, "web:ui.ts:variable:hiddenTypes:52"}]; assert.True(t, ok,
+		"memo-body member call must attribute to the filtered variable; edges: %+v", edges) {
+		assert.Equal(t, graph.EdgeTypeReads, e.Type, "accessor call on a variable is a read")
+		assert.Equal(t, graph.ConfidenceInferred, e.Confidence)
+	}
+	// Bare createEffect setter call: (module) writes the signal.
+	if e, ok := byPair[key{moduleID, "web:ui.ts:variable:setNotification:42"}]; assert.True(t, ok,
+		"module-level effect must attribute to the (module) node; edges: %+v", edges) {
+		assert.Equal(t, graph.EdgeTypeWrites, e.Type, "setter call must retype to writes")
+	}
+	// Imported constant spread into a module initializer: levels reads it.
+	if e, ok := byPair[key{"web:" + file + ":variable:levels:13", "web:confidence.ts:variable:DEFAULT_CONFIDENCE:10"}]; assert.True(t, ok,
+		"imported constant value use must produce a reads edge; edges: %+v", edges) {
+		assert.Equal(t, graph.EdgeTypeReads, e.Type)
+	}
+}

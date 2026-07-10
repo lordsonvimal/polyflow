@@ -59,16 +59,23 @@ func TestJSVariables_DestructuredModuleBindings(t *testing.T) {
 	}
 }
 
-// Calling a signal accessor or setter reads the module binding.
-func TestJSVariables_SignalCallsAreReads(t *testing.T) {
+// Calling a signal accessor reads the binding; calling its setter writes it —
+// the read/write split is what makes variable impact queries answer "who
+// mutates this state" vs "who depends on it".
+func TestJSVariables_SignalCallSemantics(t *testing.T) {
 	nodes, edges := parseJSSignalFixture(t)
-	_ = nodes
 
-	if e := jsEdge(edges, graph.EdgeTypeReads, "clearNotification", "setNotification"); e == nil {
-		t.Error("expected reads edge clearNotification → setNotification")
+	if e := jsEdge(edges, graph.EdgeTypeWrites, "clearNotification", "setNotification"); e == nil {
+		t.Error("expected writes edge clearNotification → setNotification (setter call mutates)")
 	}
 	if e := jsEdge(edges, graph.EdgeTypeReads, "showNotification", "notification"); e == nil {
 		t.Error("expected reads edge showNotification → notification (accessor call)")
+	}
+	if n := jsNode(nodes, graph.NodeTypeVariable, "setNotification"); n == nil || n.Meta["setter"] != "true" {
+		t.Error("setNotification must carry setter meta for linker retyping")
+	}
+	if n := jsNode(nodes, graph.NodeTypeVariable, "notification"); n != nil && n.Meta["setter"] == "true" {
+		t.Error("accessor must not be marked as setter")
 	}
 }
 
@@ -79,6 +86,67 @@ func TestJSVariables_DestructuredLocalCapture(t *testing.T) {
 
 	if e := jsEdge(edges, graph.EdgeTypeCaptures, "toggle", "open"); e == nil {
 		t.Error("expected captures edge toggle → open (destructured local signal)")
+	}
+}
+
+const jsReactiveFixture = `import { createSignal, createMemo, createEffect } from "solid-js";
+
+const [items, setItems] = createSignal([]);
+
+export const filtered = createMemo(() => items().filter(Boolean));
+
+createEffect(() => {
+  setItems([]);
+});
+`
+
+// Module-level reactive derivations (const x = createMemo(() => …)) must
+// attribute their reads to the declared variable — this is the edge that was
+// silently missing for every store-derivation file (regression: derived.ts
+// had zero outgoing edges, making variable impact queries wrong).
+func TestJSVariables_ModuleLevelReactiveAttribution(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "derived.ts")
+	if err := os.WriteFile(file, []byte(jsReactiveFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := os.ReadFile(file)
+	nodes, edges := extractJSVariables(file, "web", "typescript", "typescript", src)
+
+	if e := jsEdge(edges, graph.EdgeTypeReads, "variable:filtered", "variable:items"); e == nil {
+		t.Fatalf("expected reads edge filtered → items (memo body); edges: %+v", edges)
+	}
+	// Bare module-level effect: attribution falls back to the synthetic
+	// (module) node, and calling the setter is a write.
+	if e := jsEdge(edges, graph.EdgeTypeWrites, "(module)", "variable:setItems"); e == nil {
+		t.Fatalf("expected writes edge (module) → setItems; edges: %+v", edges)
+	}
+	if n := jsNode(nodes, graph.NodeTypeFunction, "(module)"); n == nil {
+		t.Error("expected synthetic (module) node to be materialised")
+	}
+}
+
+const jsDefaultParamFixture = `export const MAX_DIM = 8000;
+
+export function scale(cy: unknown, maxDim = MAX_DIM) {
+  return maxDim;
+}
+`
+
+// A module constant used as a parameter default is a read, not a parameter
+// binding (regression: MAX_EXPORT_DIM was shadowed by its own default-value
+// position and stayed isolated).
+func TestJSVariables_DefaultParamReadsModuleConst(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "export.ts")
+	if err := os.WriteFile(file, []byte(jsDefaultParamFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := os.ReadFile(file)
+	_, edges := extractJSVariables(file, "web", "typescript", "typescript", src)
+
+	if e := jsEdge(edges, graph.EdgeTypeReads, "function:scale", "variable:MAX_DIM"); e == nil {
+		t.Fatalf("expected reads edge scale → MAX_DIM (default param value); edges: %+v", edges)
 	}
 }
 
