@@ -11,6 +11,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	gositter "github.com/smacker/go-tree-sitter/golang"
+	htmlsitter "github.com/smacker/go-tree-sitter/html"
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -80,6 +81,8 @@ func languageFor(lang string) *sitter.Language {
 		return tsxsitter.GetLanguage()
 	case "ruby":
 		return rubysitter.GetLanguage()
+	case "html":
+		return htmlsitter.GetLanguage()
 	default:
 		return nil
 	}
@@ -395,6 +398,16 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			meta["transport"] = "sse"
 		}
 
+		// Navigation links (href/action in JSX or HTML): mark as nav_link so
+		// the cross-service linker emits navigates_to instead of http_call,
+		// and default to GET (anchor navigation, form default method).
+		if strings.HasPrefix(r.PatternName, "nav_link") {
+			meta["nav_link"] = "true"
+			if meta["method"] == "" {
+				meta["method"] = "GET"
+			}
+		}
+
 		// Version-gated patterns stamp which package version they matched
 		// against, so the graph/UI can show e.g. "this call uses SDK v1".
 		if r.Package != "" {
@@ -583,6 +596,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			edgeType = graph.EdgeTypeCloudCall
 		case graph.NodeTypeWorker:
 			edgeType = graph.EdgeTypeSpawns
+		case graph.NodeTypeDOMTarget:
+			// Honor the DOM edge kind the pattern classified (dom_read,
+			// dom_write, dom_listen, …) instead of a generic calls edge.
+			if _, et := classifyPattern(n.Meta["pattern"]); strings.HasPrefix(string(et), "dom_") {
+				edgeType = et
+			}
 		}
 		edges = append(edges, graph.Edge{
 			ID:   fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, n.ID),
@@ -630,6 +649,32 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// Materialise any module nodes synthesized above.
 	for _, mn := range moduleNodes {
 		nodes = append(nodes, *mn)
+	}
+
+	// Pass 3b: connect event listeners to their handlers. Listener nodes
+	// (addEventListener, el.onclick = …, $(x).on(…)) capture the handler
+	// expression; when it is a plain identifier declared in the same file,
+	// emit a calls edge listener → handler so "what runs when this fires"
+	// is traversable.
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeDOMTarget && n.Type != graph.NodeTypeSubscriber {
+			continue
+		}
+		handler := n.Meta["handler"]
+		if !isIdentifier(handler) {
+			continue // inline arrows/closures: their calls already attribute to the enclosing function
+		}
+		handlerID, ok := nameByFileAndName[n.File+"\x00"+handler]
+		if !ok || handlerID == n.ID {
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:   fmt.Sprintf("calls:%s->%s", n.ID, handlerID),
+			From: n.ID,
+			To:   handlerID,
+			Type: graph.EdgeTypeCalls,
+		})
 	}
 
 	// Pass 4: synthesize channel nodes for AMQP publishers and subscribers.
@@ -775,6 +820,10 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "dom_tree") || strings.HasPrefix(lower, "append_child") ||
 		strings.HasPrefix(lower, "insert_before") || strings.HasPrefix(lower, "replace_child"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMWrite
+
+	// ── Navigation links (href / form action in JSX and HTML) ────────────────
+	case strings.HasPrefix(lower, "nav_link"):
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeNavigatesTo
 
 	// ── Server-sent events client (new EventSource) ──────────────────────────
 	case lower == "eventsource_connect":

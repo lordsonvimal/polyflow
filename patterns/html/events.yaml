@@ -1,0 +1,16 @@
+language: html
+version: "1"
+patterns:
+  # Inline DOM event attributes in static HTML: <button onclick="save()">.
+  - name: dom_event_attr
+    query: |
+      (attribute
+        (attribute_name) @prop
+        (#match? @prop "^on[a-z]+$")
+        (quoted_attribute_value
+          (attribute_value) @handler))
+    captures:
+      - name: prop
+        role: dom_event_type
+      - name: handler
+        role: event_handler

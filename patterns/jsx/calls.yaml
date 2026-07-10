@@ -26,3 +26,16 @@ patterns:
     captures:
       - name: callee
         role: func_ref
+  # Solid delegated/native event directives: on:click={handler},
+  # oncapture:click={handler}. The attribute name parses as a namespaced
+  # JSX name, so the camelCase pattern above misses it.
+  - name: jsx_event_handler_ref
+    query: |
+      (jsx_attribute
+        (jsx_namespace_name) @prop
+        (#match? @prop "^on(capture)?:")
+        (jsx_expression
+          (identifier) @callee))
+    captures:
+      - name: callee
+        role: func_ref

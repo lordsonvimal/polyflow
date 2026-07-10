@@ -1,5 +1,9 @@
 calls
 cloud_call
+dom_create
+dom_listen
+dom_read
+dom_write
 http_call
 hub_broadcast
 job_enqueue
