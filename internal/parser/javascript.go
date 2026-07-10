@@ -17,10 +17,10 @@ func (p *JavaScriptParser) Extensions() []string {
 	return []string{".js", ".ts", ".jsx", ".tsx", ".mjs"}
 }
 
-func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error) {
+func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	src, err := os.ReadFile(file)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	grammarLang := grammarLanguage(file)
@@ -56,7 +56,7 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 		allResults = append(allResults, results...)
 	}
 
-	nodes, edges := patterns.MatchToGraph(service, allResults)
+	nodes, edges, unresolved := patterns.MatchToGraph(service, allResults)
 	setLanguage(nodes, langTag)
 
 	// Structural variable tracking: module vars, classes, reads/writes,
@@ -64,7 +64,7 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	varNodes, varEdges := extractJSVariables(file, service, langTag, grammarLang, src)
 	nodes = append(nodes, varNodes...)
 	edges = append(edges, varEdges...)
-	return nodes, edges, err
+	return nodes, edges, unresolved, err
 }
 
 // grammarLanguage returns the tree-sitter grammar name for a file extension.

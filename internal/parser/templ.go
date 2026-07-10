@@ -27,17 +27,17 @@ var reSignalRef = regexp.MustCompile(`^\$([A-Za-z_]\w*)`)
 // (data-on-* datastar actions are handled separately and never reach this).
 var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
 
-func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error) {
+func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	tf, err := templparser.Parse(file)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	v := &templVisitor{file: file, service: service}
 	if err := tf.Visit(v); err != nil {
-		return v.nodes, v.edges, err
+		return v.nodes, v.edges, nil, err
 	}
-	return v.nodes, v.edges, nil
+	return v.nodes, v.edges, nil, nil
 }
 
 // templVisitor implements templparser.Visitor and accumulates nodes and edges.

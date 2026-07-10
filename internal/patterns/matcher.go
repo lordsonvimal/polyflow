@@ -241,7 +241,19 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 
 // MatchToNodes converts raw match results into typed graph nodes and edges.
 func (m *TreeSitterMatcher) MatchToNodes(service string, results []MatchResult) ([]graph.Node, []graph.Edge) {
-	return MatchToGraph(service, results)
+	nodes, edges, _ := MatchToGraph(service, results)
+	return nodes, edges
+}
+
+// jsBuiltins are host/runtime globals that legitimately resolve to nothing:
+// call refs to them are not graph blind spots and stay out of the ledger.
+var jsBuiltins = map[string]bool{
+	"alert": true, "atob": true, "btoa": true, "clearInterval": true,
+	"clearTimeout": true, "confirm": true, "decodeURIComponent": true,
+	"encodeURIComponent": true, "fetch": true, "isFinite": true, "isNaN": true,
+	"parseFloat": true, "parseInt": true, "prompt": true, "queueMicrotask": true,
+	"requestAnimationFrame": true, "setInterval": true, "setTimeout": true,
+	"structuredClone": true,
 }
 
 // isCallRef returns true for pattern results that represent a call-site reference
@@ -264,11 +276,15 @@ func isConstantPattern(patternName string) bool {
 		patternName == "fn_return_template_prefix"
 }
 
-// MatchToGraph maps match results to graph nodes and edges.
+// MatchToGraph maps match results to graph nodes and edges. The third return
+// lists call references that resolved to nothing in-file — candidates for the
+// unresolved-refs ledger (the JS import linker resolves some of them later;
+// the indexer subtracts those before persisting).
 // Node IDs follow the design doc format: service:file:type:name:line
-func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.Edge) {
+func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
 	nodes := make([]graph.Node, 0, len(results))
 	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
 
 	// Separate call-reference results from definition results.
 	var callRefs []MatchResult
@@ -659,6 +675,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// Resolve callee to an existing node in the same file.
 		calleeID, ok := nameByFileAndName[r.File+"\x00"+callee]
 		if !ok {
+			if !jsBuiltins[callee] {
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: service, File: r.File, Line: r.Line,
+					Name: callee, Kind: "call_ref",
+				})
+			}
 			continue
 		}
 
@@ -670,6 +692,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			// package-level composite literal) dispatch from the program entry,
 			// so fall back to the file's main, then init.
 			if fromID = goTopLevelScope(r.File, calleeID, nameByFileAndName); fromID == "" {
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: service, File: r.File, Line: r.Line,
+					Name: callee, Kind: "call_ref",
+				})
 				continue
 			}
 		}
@@ -759,7 +785,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 	}
 
-	return nodes, edges
+	return nodes, edges, unresolved
 }
 
 // goTopLevelScope resolves the caller for a top-level call reference in a Go

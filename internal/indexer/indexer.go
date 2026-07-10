@@ -244,6 +244,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	var allNodes []graph.Node
 	var allEdges []graph.Edge
+	var allUnresolved []graph.UnresolvedRef // recall gauge: references that resolved to nothing
 	bw := graph.NewFreshBatchWriter(store)
 
 	// Service-level datastore nodes from resolved driver dependencies.
@@ -283,6 +284,10 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				var edges []graph.Edge
 				if json.Unmarshal([]byte(old.NodesJSON), &nodes) == nil &&
 					json.Unmarshal([]byte(old.EdgesJSON), &edges) == nil {
+					var cachedUnresolved []graph.UnresolvedRef
+					if json.Unmarshal([]byte(old.UnresolvedJSON), &cachedUnresolved) == nil {
+						allUnresolved = append(allUnresolved, cachedUnresolved...)
+					}
 					for i := range nodes {
 						if err := bw.AddNode(ctx, &nodes[i]); err != nil {
 							return nil, err
@@ -334,8 +339,10 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 			nodesJSON, _ := json.Marshal(result.Nodes)
 			edgesJSON, _ := json.Marshal(result.Edges)
-			fh.NodesJSON, fh.EdgesJSON = string(nodesJSON), string(edgesJSON)
+			unresolvedJSON, _ := json.Marshal(result.Unresolved)
+			fh.NodesJSON, fh.EdgesJSON, fh.UnresolvedJSON = string(nodesJSON), string(edgesJSON), string(unresolvedJSON)
 			fhBatch = append(fhBatch, fh)
+			allUnresolved = append(allUnresolved, result.Unresolved...)
 			for i := range result.Nodes {
 				n := result.Nodes[i]
 				if err := bw.AddNode(ctx, &n); err != nil {
@@ -463,7 +470,18 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			svcFiles[sf.svc.Name] = sf.files
 		}
 		jsLinker := linker.NewJSLinker()
-		jsEdges, removeIDs := jsLinker.LinkJS(allNodes, allEdges, svcFiles)
+		jsEdges, removeIDs, linkerUnresolved, importedNames := jsLinker.LinkJS(allNodes, allEdges, svcFiles)
+		// Parser-level call_ref candidates that an import statement explains
+		// are either resolved by the linker or point at external packages —
+		// both are accounted for; the rest are real blind spots.
+		filtered := allUnresolved[:0]
+		for _, u := range allUnresolved {
+			if u.Kind == "call_ref" && importedNames[u.File+"\x00"+u.Name] {
+				continue
+			}
+			filtered = append(filtered, u)
+		}
+		allUnresolved = append(filtered, linkerUnresolved...)
 		if err := writeEdges(jsEdges); err != nil {
 			return nil, err
 		}
@@ -587,6 +605,23 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if err := bwR.Flush(ctx); err != nil {
 			return nil, err
 		}
+	}
+
+	// ── Recall gauge ─────────────────────────────────────────────────────────
+	// Persist the blind-spot ledger so `polyflow status` can report exactly
+	// which references the graph is missing instead of failing silently.
+	for i := range allUnresolved {
+		if allUnresolved[i].Service == "" {
+			// Parser-level refs already carry service via MatchToGraph; keep
+			// a defensive default for linker records.
+			allUnresolved[i].Service = "unknown"
+		}
+	}
+	if err := store.UpsertUnresolvedRefs(ctx, allUnresolved); err != nil {
+		return nil, err
+	}
+	if err := store.SetMeta(ctx, "unresolved_refs", strconv.Itoa(len(allUnresolved))); err != nil {
+		return nil, err
 	}
 
 	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {

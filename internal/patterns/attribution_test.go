@@ -41,7 +41,7 @@ func TestMatchToGraph_EnclosingFunctionContainment(t *testing.T) {
 			Captures:    map[string]string{"url": `"/api/y"`},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("web", results)
+	nodes, edges, _ := patterns.MatchToGraph("web", results)
 
 	byID := map[string]graph.Node{}
 	for _, n := range nodes {
@@ -90,7 +90,7 @@ func TestMatchToGraph_CallRefContainment(t *testing.T) {
 			Captures:    map[string]string{"callee": "edgeRow"},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("web", results)
+	nodes, edges, _ := patterns.MatchToGraph("web", results)
 
 	labelByID := map[string]string{}
 	for _, n := range nodes {
@@ -112,7 +112,7 @@ func TestMatchToGraph_ModuleLevelRender(t *testing.T) {
 			Captures:    map[string]string{"name": "App"},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("web", results)
+	nodes, edges, _ := patterns.MatchToGraph("web", results)
 
 	var moduleNode *graph.Node
 	for i := range nodes {
@@ -138,7 +138,7 @@ func TestMatchToGraph_NoModuleNodeForGo(t *testing.T) {
 			Captures:    map[string]string{"url": `"/x"`},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 	for _, n := range nodes {
 		assert.NotEqual(t, "(module)", n.Label)
 	}
@@ -170,7 +170,7 @@ func TestMatchToGraph_GoTopLevelCallRefFallsBackToMain(t *testing.T) {
 			Captures:    map[string]string{"callee": "runIndex"},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 
 	labelByID := map[string]string{}
 	for _, n := range nodes {
@@ -208,7 +208,7 @@ func TestMatchToGraph_GoTopLevelCallRefInitFallback(t *testing.T) {
 			Captures:    map[string]string{"callee": "runRoot"},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 
 	labelByID := map[string]string{}
 	for _, n := range nodes {
@@ -219,8 +219,8 @@ func TestMatchToGraph_GoTopLevelCallRefInitFallback(t *testing.T) {
 	assert.Equal(t, "runRoot", labelByID[edges[0].To])
 }
 
-// A Go file with neither main nor init still drops top-level call refs
-// (recorded by the recall gauge in a later phase).
+// A Go file with neither main nor init still drops top-level call refs, but
+// the drop lands in the unresolved ledger instead of vanishing.
 func TestMatchToGraph_GoTopLevelCallRefNoScopeDropped(t *testing.T) {
 	results := []patterns.MatchResult{
 		{
@@ -237,8 +237,41 @@ func TestMatchToGraph_GoTopLevelCallRefNoScopeDropped(t *testing.T) {
 			Captures:    map[string]string{"callee": "runOther"},
 		},
 	}
-	_, edges := patterns.MatchToGraph("svc", results)
+	_, edges, unresolved := patterns.MatchToGraph("svc", results)
 	assert.Empty(t, edges)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "runOther", unresolved[0].Name)
+	assert.Equal(t, "call_ref", unresolved[0].Kind)
+	assert.Equal(t, 25, unresolved[0].Line)
+}
+
+// Unknown callees enter the unresolved ledger; JS runtime builtins do not.
+func TestMatchToGraph_UnresolvedCallRefs(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "arrow_func_var",
+			File:        "app.tsx",
+			Line:        3,
+			EndLine:     20,
+			Captures:    map[string]string{"name": "App"},
+		},
+		{
+			PatternName: "component_fn_call", // imported/unknown function
+			File:        "app.tsx",
+			Line:        5,
+			Captures:    map[string]string{"callee": "fetchWarnings"},
+		},
+		{
+			PatternName: "component_fn_call", // runtime builtin: not a blind spot
+			File:        "app.tsx",
+			Line:        6,
+			Captures:    map[string]string{"callee": "setTimeout"},
+		},
+	}
+	_, _, unresolved := patterns.MatchToGraph("web", results)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "fetchWarnings", unresolved[0].Name)
+	assert.Equal(t, "web", unresolved[0].Service)
 }
 
 // Anonymous goroutines produce a worker node spawned by the enclosing function.
@@ -258,7 +291,7 @@ func TestMatchToGraph_AnonGoroutineSpawns(t *testing.T) {
 			Captures:    map[string]string{},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 
 	var worker *graph.Node
 	for i := range nodes {
@@ -319,7 +352,7 @@ func TestMatchToGraph_WorkerEnclosesBody(t *testing.T) {
 			Captures:    map[string]string{"url": `"/done"`},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 
 	byID := map[string]graph.Node{}
 	var worker *graph.Node
@@ -378,7 +411,7 @@ func TestMatchToGraph_URLBuilderFunctionResolution(t *testing.T) {
 			Captures:    map[string]string{"url": "mermaidURL(level, scope)"},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("web", results)
+	nodes, _, _ := patterns.MatchToGraph("web", results)
 
 	var client *graph.Node
 	for i := range nodes {
@@ -401,7 +434,7 @@ func TestMatchToGraph_HandlerAssignLabel(t *testing.T) {
 			Captures:    map[string]string{"prop": "onmessage", "handler": "(evt) => {}"},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("web", results)
+	nodes, _, _ := patterns.MatchToGraph("web", results)
 
 	var sub *graph.Node
 	for i := range nodes {

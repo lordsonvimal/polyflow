@@ -76,7 +76,7 @@ func TestClassifyPattern_AllBranches(t *testing.T) {
 			results := []patterns.MatchResult{
 				{PatternName: tc.patternName, File: "f.go", Line: 1, Captures: map[string]string{}},
 			}
-			nodes, _ := patterns.MatchToGraph("svc", results)
+			nodes, _, _ := patterns.MatchToGraph("svc", results)
 			require.Len(t, nodes, 1)
 			assert.Equal(t, tc.wantNode, nodes[0].Type)
 		})
@@ -113,7 +113,7 @@ func TestMatch_EmptyPatterns(t *testing.T) {
 }
 
 func TestMatchToGraph_EmptyResults(t *testing.T) {
-	nodes, edges := patterns.MatchToGraph("svc", nil)
+	nodes, edges, _ := patterns.MatchToGraph("svc", nil)
 	assert.Empty(t, nodes)
 	assert.Empty(t, edges)
 }
@@ -125,7 +125,7 @@ func TestMatchToGraph_GoroutineCallIsEdge(t *testing.T) {
 		{PatternName: "func_decl", File: "f.go", Line: 10, Captures: map[string]string{"name": "fanOut"}},
 		{PatternName: "goroutine_call", File: "f.go", Line: 5, Captures: map[string]string{"callee": "fanOut"}},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 	require.Len(t, nodes, 2, "only the two func_decl nodes should be created")
 	require.Len(t, edges, 1, "one spawns edge from New -> fanOut")
 	assert.Equal(t, "svc:f.go:function:New:1", edges[0].From)
@@ -140,7 +140,7 @@ func TestMatchToGraph_CobraRunIsEdge(t *testing.T) {
 		{PatternName: "func_decl", File: "main.go", Line: 20, Captures: map[string]string{"name": "runServe"}},
 		{PatternName: "cobra_run", File: "main.go", Line: 10, Captures: map[string]string{"callee": "runServe"}},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 	require.Len(t, nodes, 2, "only the two func_decl nodes should be created")
 	require.Len(t, edges, 1, "one edge from init -> runServe")
 	assert.Equal(t, "svc:main.go:function:init:1", edges[0].From)
@@ -160,7 +160,7 @@ func TestMatchToGraph_PublisherAndSubscriberAndWorker(t *testing.T) {
 	}
 	for _, tc := range cases {
 		results := []patterns.MatchResult{{PatternName: tc.pattern, File: "f.go", Line: 1}}
-		nodes, _ := patterns.MatchToGraph("svc", results)
+		nodes, _, _ := patterns.MatchToGraph("svc", results)
 		require.Len(t, nodes, 1, tc.pattern)
 		assert.Equal(t, tc.wantType, nodes[0].Type, tc.pattern)
 	}
@@ -201,7 +201,7 @@ func TestMatchToGraph_AMQPChannelSynthesis(t *testing.T) {
 			},
 		},
 	}
-	nodes, edges := patterns.MatchToGraph("svc", results)
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
 
 	// Expect: func node, publisher node, channel node
 	nodeTypes := make(map[graph.NodeType]int)
@@ -243,7 +243,7 @@ func TestMatchToGraph_AMQPChannelDedup(t *testing.T) {
 		{PatternName: "func_decl", File: "svc.go", Line: 10, Captures: map[string]string{"name": "pub2"}},
 		{PatternName: "amqp_publish", File: "svc.go", Line: 11, Captures: map[string]string{"exchange": `"events"`, "routing_key": `"created"`}},
 	}
-	nodes, _ := patterns.MatchToGraph("svc", results)
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
 	channelCount := 0
 	for _, n := range nodes {
 		if n.Type == graph.NodeTypeChannel {
@@ -274,7 +274,7 @@ func TestMatchToGraph_URLConstantPropagation(t *testing.T) {
 			Captures:    map[string]string{"url": `BASE + "/users"`},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("svc", results)
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
 
 	var clientNode *graph.Node
 	for i := range nodes {
@@ -309,7 +309,7 @@ func TestMatchToGraph_URLTemplateLiteral(t *testing.T) {
 			Captures:    map[string]string{"url": "${API_URL}/users"},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("svc", results)
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
 
 	var clientNode *graph.Node
 	for i := range nodes {
@@ -338,7 +338,7 @@ func TestMatchToGraph_URLLiteralUnchanged(t *testing.T) {
 			Captures:    map[string]string{"url": `"/api/users"`},
 		},
 	}
-	nodes, _ := patterns.MatchToGraph("svc", results)
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
 
 	var clientNode *graph.Node
 	for i := range nodes {
@@ -531,7 +531,7 @@ func TestMatchToGraph(t *testing.T) {
 		},
 	}
 
-	nodes, edges := patterns.MatchToGraph("mysvc", results)
+	nodes, edges, _ := patterns.MatchToGraph("mysvc", results)
 
 	assert.Len(t, nodes, 3)
 	assert.Empty(t, edges) // MatchToGraph no longer emits self-edges

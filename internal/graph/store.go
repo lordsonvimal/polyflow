@@ -69,9 +69,21 @@ CREATE TABLE IF NOT EXISTS file_hashes (
 	service      TEXT NOT NULL,
 	content_hash TEXT NOT NULL,
 	indexed_at   INTEGER NOT NULL,
-	nodes_json   TEXT NOT NULL DEFAULT '[]',
-	edges_json   TEXT NOT NULL DEFAULT '[]',
+	nodes_json      TEXT NOT NULL DEFAULT '[]',
+	edges_json      TEXT NOT NULL DEFAULT '[]',
+	unresolved_json TEXT NOT NULL DEFAULT '[]',
 	errored      INTEGER NOT NULL DEFAULT 0
+);
+
+-- References the indexer saw but could not resolve to a node: the graph's
+-- blind-spot ledger, reported by "polyflow status".
+CREATE TABLE IF NOT EXISTS unresolved_refs (
+	service TEXT NOT NULL,
+	file    TEXT NOT NULL,
+	line    INTEGER NOT NULL,
+	name    TEXT NOT NULL,
+	kind    TEXT NOT NULL,
+	PRIMARY KEY (service, file, line, name, kind)
 );
 
 -- Whole-service semantic (go/packages) results, keyed by a fingerprint of
@@ -384,13 +396,14 @@ func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error
 
 func (s *SQLiteStore) UpsertFileHash(ctx context.Context, fh *FileHash) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, errored)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, unresolved_json, errored)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(file_path) DO UPDATE SET
 			service=excluded.service, content_hash=excluded.content_hash,
 			indexed_at=excluded.indexed_at, nodes_json=excluded.nodes_json,
-			edges_json=excluded.edges_json, errored=excluded.errored`,
-		fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, boolToInt(fh.Errored))
+			edges_json=excluded.edges_json, unresolved_json=excluded.unresolved_json,
+			errored=excluded.errored`,
+		fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, orEmptyList(fh.UnresolvedJSON), boolToInt(fh.Errored))
 	if err != nil {
 		return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
 	}
@@ -406,19 +419,20 @@ func (s *SQLiteStore) UpsertFileHashes(ctx context.Context, fhs []*FileHash) err
 	}
 	return s.WithTx(ctx, func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
-			INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, errored)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, unresolved_json, errored)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(file_path) DO UPDATE SET
 				service=excluded.service, content_hash=excluded.content_hash,
 				indexed_at=excluded.indexed_at, nodes_json=excluded.nodes_json,
-				edges_json=excluded.edges_json, errored=excluded.errored`)
+				edges_json=excluded.edges_json, unresolved_json=excluded.unresolved_json,
+				errored=excluded.errored`)
 		if err != nil {
 			return fmt.Errorf("prepare file-hash upsert: %w", err)
 		}
 		defer stmt.Close()
 		for _, fh := range fhs {
 			if _, err := stmt.ExecContext(ctx,
-				fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, boolToInt(fh.Errored)); err != nil {
+				fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, orEmptyList(fh.UnresolvedJSON), boolToInt(fh.Errored)); err != nil {
 				return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
 			}
 		}
@@ -428,7 +442,7 @@ func (s *SQLiteStore) UpsertFileHashes(ctx context.Context, fhs []*FileHash) err
 
 func (s *SQLiteStore) ListFileHashes(ctx context.Context) (map[string]*FileHash, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT file_path, service, content_hash, indexed_at, nodes_json, edges_json, errored FROM file_hashes`)
+		`SELECT file_path, service, content_hash, indexed_at, nodes_json, edges_json, unresolved_json, errored FROM file_hashes`)
 	if err != nil {
 		return nil, fmt.Errorf("list file hashes: %w", err)
 	}
@@ -438,13 +452,66 @@ func (s *SQLiteStore) ListFileHashes(ctx context.Context) (map[string]*FileHash,
 	for rows.Next() {
 		var fh FileHash
 		var errored int
-		if err := rows.Scan(&fh.FilePath, &fh.Service, &fh.ContentHash, &fh.IndexedAt, &fh.NodesJSON, &fh.EdgesJSON, &errored); err != nil {
+		if err := rows.Scan(&fh.FilePath, &fh.Service, &fh.ContentHash, &fh.IndexedAt, &fh.NodesJSON, &fh.EdgesJSON, &fh.UnresolvedJSON, &errored); err != nil {
 			return nil, fmt.Errorf("scan file hash row: %w", err)
 		}
 		fh.Errored = errored != 0
 		out[fh.FilePath] = &fh
 	}
 	return out, rows.Err()
+}
+
+// UpsertUnresolvedRefs records references that could not be resolved to
+// nodes. The primary key dedupes re-submissions across index runs.
+func (s *SQLiteStore) UpsertUnresolvedRefs(ctx context.Context, refs []UnresolvedRef) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO unresolved_refs (service, file, line, name, kind)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(service, file, line, name, kind) DO NOTHING`)
+		if err != nil {
+			return fmt.Errorf("prepare unresolved-ref upsert: %w", err)
+		}
+		defer stmt.Close()
+		for _, r := range refs {
+			if _, err := stmt.ExecContext(ctx, r.Service, r.File, r.Line, r.Name, r.Kind); err != nil {
+				return fmt.Errorf("upsert unresolved ref %s:%d %s: %w", r.File, r.Line, r.Name, err)
+			}
+		}
+		return nil
+	})
+}
+
+// ListUnresolvedRefs returns the graph's blind-spot ledger, ordered for
+// stable reporting.
+func (s *SQLiteStore) ListUnresolvedRefs(ctx context.Context) ([]UnresolvedRef, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT service, file, line, name, kind FROM unresolved_refs ORDER BY service, file, line, name`)
+	if err != nil {
+		return nil, fmt.Errorf("list unresolved refs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []UnresolvedRef
+	for rows.Next() {
+		var r UnresolvedRef
+		if err := rows.Scan(&r.Service, &r.File, &r.Line, &r.Name, &r.Kind); err != nil {
+			return nil, fmt.Errorf("scan unresolved ref: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// orEmptyList normalizes an empty cached-JSON string to a valid empty array.
+func orEmptyList(s string) string {
+	if s == "" {
+		return "[]"
+	}
+	return s
 }
 
 func boolToInt(b bool) int {
