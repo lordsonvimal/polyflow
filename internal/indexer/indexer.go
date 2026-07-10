@@ -85,7 +85,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// Load the incremental cache from the previous graph, if any.
 	finalDB := filepath.Join(opts.DBDir, meta.DBFile)
 	oldHashes := map[string]*graph.FileHash{}
-	oldSemantic := map[string][3]string{} // service → (fingerprint, nodesJSON, edgesJSON)
+	oldSemantic := map[string][4]string{} // service → (fingerprint, nodesJSON, edgesJSON, referencedJSON)
 	oldFingerprint := ""
 	if !opts.Full {
 		if _, err := os.Stat(finalDB); err == nil {
@@ -98,8 +98,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 						oldHashes = hs
 					}
 					for _, svc := range cfg.Services {
-						if fp, nodes, edges, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
-							oldSemantic[svc.Name] = [3]string{fp, nodes, edges}
+						if fp, nodes, edges, referenced, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
+							oldSemantic[svc.Name] = [4]string{fp, nodes, edges, referenced}
 						}
 					}
 					if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
@@ -368,6 +368,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	// ── Semantic pass (go/packages), cached per service fingerprint ─────────
 	var semanticWarnings []string
+	referencedIDs := map[string]bool{} // callback-classification input (root_kind)
 	fset := token.NewFileSet()
 	for _, sf := range allSvcFiles {
 		analyzer := parser.ServiceAnalyzerFor(sf.svc.Language)
@@ -378,9 +379,11 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 		var semNodes []graph.Node
 		var semEdges []graph.Edge
+		var semReferenced []string
 		if cached, ok := oldSemantic[sf.svc.Name]; ok && cached[0] == fingerprint {
 			_ = json.Unmarshal([]byte(cached[1]), &semNodes)
 			_ = json.Unmarshal([]byte(cached[2]), &semEdges)
+			_ = json.Unmarshal([]byte(cached[3]), &semReferenced)
 			fmt.Fprintf(logw, "  Semantic analysis: %s — cached (%d nodes, %d edges)\n", sf.svc.Name, len(semNodes), len(semEdges))
 		} else {
 			absSvcPath, err := filepath.Abs(sf.svc.Path)
@@ -394,13 +397,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				semanticWarnings = append(semanticWarnings, sem.Warning)
 				continue
 			}
-			semNodes, semEdges = sem.Nodes, sem.Edges
+			semNodes, semEdges, semReferenced = sem.Nodes, sem.Edges, sem.Referenced
 			fmt.Fprintf(logw, "  Semantic analysis: %s — %d nodes, %d edges added\n", sf.svc.Name, len(semNodes), len(semEdges))
+		}
+		for _, id := range semReferenced {
+			referencedIDs[id] = true
 		}
 
 		nodesJSON, _ := json.Marshal(semNodes)
 		edgesJSON, _ := json.Marshal(semEdges)
-		if err := store.UpsertSemanticCache(ctx, sf.svc.Name, fingerprint, string(nodesJSON), string(edgesJSON)); err != nil {
+		referencedJSON, _ := json.Marshal(semReferenced)
+		if err := store.UpsertSemanticCache(ctx, sf.svc.Name, fingerprint, string(nodesJSON), string(edgesJSON), string(referencedJSON)); err != nil {
 			return nil, err
 		}
 		bwSem := graph.NewBatchWriter(store)
@@ -541,6 +548,46 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, err
 	}
 	stats.CrossLinks = len(crossEdges)
+
+	// ── Root classification ──────────────────────────────────────────────────
+	// With the full edge set assembled, function/method nodes with no incoming
+	// edges are roots. Distinguish the three very different meanings so agents
+	// and the UI don't have to guess: entrypoint (run by the runtime),
+	// callback (referenced / satisfies an external interface — invoked by a
+	// framework), unreachable (nothing references it: dead-code candidate).
+	{
+		incoming := make(map[string]bool, len(allEdges))
+		for _, e := range allEdges {
+			incoming[e.To] = true
+		}
+		bwR := graph.NewBatchWriter(store)
+		for i := range allNodes {
+			n := &allNodes[i]
+			if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
+				continue
+			}
+			if incoming[n.ID] {
+				continue
+			}
+			kind := "unreachable"
+			switch {
+			case n.Label == "main" || n.Label == "init" || n.Label == "(module)":
+				kind = "entrypoint"
+			case referencedIDs[n.ID]:
+				kind = "callback"
+			}
+			if n.Meta == nil {
+				n.Meta = map[string]string{}
+			}
+			n.Meta["root_kind"] = kind
+			if err := bwR.AddNode(ctx, n); err != nil {
+				return nil, err
+			}
+		}
+		if err := bwR.Flush(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
 		return nil, err
