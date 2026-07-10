@@ -101,7 +101,14 @@ memo-body read); linker tests; reindex acceptance: isolated-variable count
 drops from 105 to near zero (allowing genuinely unused consts), and
 `impact --target hiddenTypes` includes `derived.ts`.
 
-### Phase 0.4 — Root-node classification `pending`
+### Phase 0.4 — Root-node classification `done`
+
+> Outcome on this repo: 32 callback (templ Visit*, function values), 13
+> entrypoint (main/init/(module)), 8 unreachable — each manually verified
+> as genuine dead code (Store.UpsertNode/UpsertEdge/GetEdge/UpsertFileHash,
+> server.Start, isUncertain, expandAllBoundaries, MatchToNodes). Known
+> limitation: JS has no referenced-scan yet, so JS functions referenced
+> only dynamically may over-report as unreachable.
 
 **Problem:** 60+ function/method roots with three very different meanings the
 graph doesn't distinguish: entrypoints (`main`, `init`, handlers), framework

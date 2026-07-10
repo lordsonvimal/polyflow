@@ -3,7 +3,9 @@ package parser
 import (
 	"fmt"
 	"go/token"
+	"go/types"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -253,7 +255,128 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	varNodes, varEdges := extractVariables(ssaPkgs, dir, service, fset, inService, resolveFunc)
 	edges = append(edges, varEdges...)
 
-	return SemanticResult{Nodes: varNodes, Edges: edges}
+	referenced := collectReferenced(prog, ssaPkgs, allFns, resolveFunc)
+
+	return SemanticResult{Nodes: varNodes, Edges: edges, Referenced: referenced}
+}
+
+// collectReferenced finds functions that are referenced without being called
+// in-service — the "framework callback" signal for root classification:
+//  1. Function values appearing as instruction operands outside the callee
+//     position (stored in composite literals like cobra's RunE, passed to
+//     http.HandlerFunc, assigned to fields). Synthetic package initializers
+//     are scanned too: package-level `var cmd = &cobra.Command{RunE: runX}`
+//     lives there.
+//  2. Methods that satisfy an interface belonging to a package outside the
+//     service (templ's Visitor, io.Reader): external code invokes them, so
+//     an absent in-service caller does not mean dead.
+func collectReferenced(prog *ssa.Program, ssaPkgs []*ssa.Package, allFns map[*ssa.Function]bool, resolveFunc func(*ssa.Function) (string, bool)) []string {
+	svcPkgs := make(map[*ssa.Package]bool, len(ssaPkgs))
+	svcTypesPkgs := make(map[*types.Package]bool, len(ssaPkgs))
+	for _, p := range ssaPkgs {
+		if p != nil {
+			svcPkgs[p] = true
+			svcTypesPkgs[p.Pkg] = true
+		}
+	}
+
+	referenced := make(map[string]bool)
+
+	// 1. Operand scan (includes synthetic init functions of service packages).
+	for fn := range allFns {
+		if fn.Package() == nil || !svcPkgs[fn.Package()] {
+			continue
+		}
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				var callee ssa.Value
+				if c, ok := instr.(ssa.CallInstruction); ok && !c.Common().IsInvoke() {
+					callee = c.Common().Value
+				}
+				var rands [8]*ssa.Value
+				for _, op := range instr.Operands(rands[:0]) {
+					if op == nil || *op == nil || *op == callee {
+						continue
+					}
+					target, ok := (*op).(*ssa.Function)
+					if !ok {
+						continue
+					}
+					if id, ok := resolveFunc(target); ok {
+						referenced[id] = true
+					}
+				}
+			}
+		}
+	}
+
+	// 2. External-interface method sets.
+	for _, p := range ssaPkgs {
+		if p == nil {
+			continue
+		}
+		// Candidate interfaces: exported interfaces of directly imported
+		// packages that are not part of this service.
+		var ifaces []*types.Interface
+		for _, imp := range p.Pkg.Imports() {
+			if svcTypesPkgs[imp] {
+				continue
+			}
+			scope := imp.Scope()
+			for _, name := range scope.Names() {
+				tn, ok := scope.Lookup(name).(*types.TypeName)
+				if !ok {
+					continue
+				}
+				if iface, ok := tn.Type().Underlying().(*types.Interface); ok && iface.NumMethods() > 0 {
+					ifaces = append(ifaces, iface)
+				}
+			}
+		}
+		if len(ifaces) == 0 {
+			continue
+		}
+		scope := p.Pkg.Scope()
+		for _, name := range scope.Names() {
+			tn, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok || tn.IsAlias() {
+				continue
+			}
+			T := tn.Type()
+			ptrT := types.NewPointer(T)
+			for _, iface := range ifaces {
+				var impl types.Type
+				if types.Implements(T, iface) {
+					impl = T
+				} else if types.Implements(ptrT, iface) {
+					impl = ptrT
+				} else {
+					continue
+				}
+				for i := 0; i < iface.NumMethods(); i++ {
+					m := iface.Method(i)
+					sel := prog.MethodSets.MethodSet(impl).Lookup(m.Pkg(), m.Name())
+					if sel == nil {
+						continue
+					}
+					fn := prog.MethodValue(sel)
+					if fn == nil {
+						continue
+					}
+					if id, ok := resolveFunc(fn); ok {
+						referenced[id] = true
+					}
+				}
+			}
+		}
+	}
+
+	out := make([]string, 0, len(referenced))
+	for id := range referenced {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // canonicalPath resolves a path to its absolute, symlink-evaluated form so
