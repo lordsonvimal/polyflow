@@ -123,3 +123,41 @@ func TestMatchToGraph_NavLinkMeta(t *testing.T) {
 	assert.Equal(t, "GET", client.Meta["method"])
 	assert.Equal(t, "/reports", client.Meta["path"])
 }
+
+// Method-aware form patterns win over the generic action pattern for the
+// same link target, and the captured verb is normalized to upper case.
+func TestMatchToGraph_NavLinkFormMethod(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "nav_link_form", // registered before the generic pattern
+			File:        "page.html",
+			Line:        4,
+			Captures:    map[string]string{"path": "/save", "method": "post"},
+		},
+		{
+			PatternName: "nav_link_href", // generic match of the same form's action
+			File:        "page.html",
+			Line:        4,
+			Captures:    map[string]string{"prop": "action", "path": "/save"},
+		},
+		{
+			PatternName: "nav_link_href", // distinct link elsewhere in the file
+			File:        "page.html",
+			Line:        9,
+			Captures:    map[string]string{"prop": "href", "path": "/about"},
+		},
+	}
+	nodes, _ := patterns.MatchToGraph("site", results)
+
+	methodByPath := map[string]string{}
+	count := 0
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			count++
+			methodByPath[n.Meta["path"]] = n.Meta["method"]
+		}
+	}
+	assert.Equal(t, 2, count, "duplicate form match must be deduped by (file, path)")
+	assert.Equal(t, "POST", methodByPath["/save"])
+	assert.Equal(t, "GET", methodByPath["/about"])
+}

@@ -1,6 +1,47 @@
 language: jsx
 version: "1"
 patterns:
+  # Forms with an explicit method: <form action="/save" method="post">.
+  # Two entries cover both attribute orders; listed before the generic
+  # pattern so the method-aware node wins the http_client dedup.
+  - name: nav_link_form
+    query: |
+      (jsx_opening_element
+        (jsx_attribute
+          (property_identifier) @prop
+          (#eq? @prop "action")
+          (string
+            (string_fragment) @path
+            (#match? @path "^/")))
+        (jsx_attribute
+          (property_identifier) @mprop
+          (#eq? @mprop "method")
+          (string
+            (string_fragment) @method)))
+    captures:
+      - name: path
+        role: http_path
+      - name: method
+        role: http_method
+  - name: nav_link_form
+    query: |
+      (jsx_opening_element
+        (jsx_attribute
+          (property_identifier) @mprop
+          (#eq? @mprop "method")
+          (string
+            (string_fragment) @method))
+        (jsx_attribute
+          (property_identifier) @prop
+          (#eq? @prop "action")
+          (string
+            (string_fragment) @path
+            (#match? @path "^/"))))
+    captures:
+      - name: path
+        role: http_path
+      - name: method
+        role: http_method
   # Navigation links in JSX: <a href="/reports">, <form action="/save">.
   # Only root-relative paths — external URLs and fragments are not part of
   # the app's own flow. The linker emits navigates_to edges to the matching

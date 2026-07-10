@@ -399,12 +399,19 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 
 		// Navigation links (href/action in JSX or HTML): mark as nav_link so
-		// the cross-service linker emits navigates_to instead of http_call,
-		// and default to GET (anchor navigation, form default method).
+		// the cross-service linker emits navigates_to instead of http_call.
+		// Forms with method="post" (and data-method="delete" spoofing) carry
+		// their verb; everything else defaults to GET (anchor navigation,
+		// form default method).
 		if strings.HasPrefix(r.PatternName, "nav_link") {
 			meta["nav_link"] = "true"
-			if meta["method"] == "" {
+			if m := stripStringLiteral(meta["method"]); m == "" {
 				meta["method"] = "GET"
+			} else {
+				meta["method"] = strings.ToUpper(m)
+				if p := stripStringLiteral(meta["path"]); p != "" {
+					label = meta["method"] + " " + p
+				}
 			}
 		}
 
@@ -482,7 +489,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	}
 	// Also deduplicate http_client nodes: multiple patterns can match the same call site
 	// (e.g. resty_get + http_get for a plain .Get("/url") call). Keep the first match only.
+	//
+	// Nav links additionally dedupe by (file, path): a form matches both the
+	// method-aware pair pattern and the generic action pattern — possibly at
+	// different lines when the attributes span lines. The method-aware
+	// pattern is registered first, so it wins.
 	seenClientLines := make(map[string]bool) // "file:line" → true
+	seenNavPaths := make(map[string]bool)    // "file\x00path" → true
 	filtered := nodes[:0]
 	for i := range nodes {
 		n := nodes[i]
@@ -493,6 +506,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 			if seenClientLines[key] {
 				continue // drop: already have an http_client node for this line
+			}
+			if n.Meta["nav_link"] == "true" {
+				navKey := n.File + "\x00" + n.Meta["path"]
+				if seenNavPaths[navKey] {
+					continue // drop: same link target already captured (method-aware node won)
+				}
+				seenNavPaths[navKey] = true
 			}
 			seenClientLines[key] = true
 		}

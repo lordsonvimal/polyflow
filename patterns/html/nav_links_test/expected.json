@@ -1,4 +1,4 @@
 {
-  "patterns": ["nav_link_href", "nav_link_href"],
-  "node_types": ["http_client", "http_client"]
+  "patterns": ["nav_link_form", "nav_link_data_method", "nav_link_href", "nav_link_href", "nav_link_href"],
+  "node_types": ["http_client", "http_client", "http_client", "http_client", "http_client"]
 }
