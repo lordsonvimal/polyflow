@@ -86,7 +86,7 @@ func fixtureGraph(t *testing.T) ([]graph.Node, []graph.Edge) {
 	}
 
 	// The same linking passes the indexer runs.
-	jsEdges, _ := linker.NewJSLinker().LinkJS(allNodes, allEdges, svcFiles)
+	jsEdges, _, _, _ := linker.NewJSLinker().LinkJS(allNodes, allEdges, svcFiles)
 	allEdges = append(allEdges, jsEdges...)
 	allEdges = append(allEdges, linker.LinkRouteHandlers(allNodes)...)
 	allEdges = append(allEdges, linker.LinkDatastores(allNodes)...)

@@ -57,7 +57,7 @@ const Filters = () => {
 		},
 	}
 
-	edges, _ := NewJSLinker().LinkJS(nodes, nil, map[string][]string{"web": {file}})
+	edges, _, _, _ := NewJSLinker().LinkJS(nodes, nil, map[string][]string{"web": {file}})
 
 	fromByTarget := map[string]string{}
 	for _, e := range edges {
@@ -131,7 +131,7 @@ export const levels = [...DEFAULT_CONFIDENCE];
 		},
 	}
 
-	edges, _ := NewJSLinker().LinkJS(nodes, nil, map[string][]string{"web": {file}})
+	edges, _, _, _ := NewJSLinker().LinkJS(nodes, nil, map[string][]string{"web": {file}})
 
 	type key struct{ from, to string }
 	byPair := map[key]graph.Edge{}
@@ -155,4 +155,41 @@ export const levels = [...DEFAULT_CONFIDENCE];
 		"imported constant value use must produce a reads edge; edges: %+v", edges) {
 		assert.Equal(t, graph.EdgeTypeReads, e.Type)
 	}
+}
+
+// Recall gauge: misses on relative (in-service) imports enter the unresolved
+// ledger; external-package imports do not; all imported names are returned so
+// the indexer can suppress matcher-level candidates they explain.
+func TestLinkJS_UnresolvedImportRefs(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "app.tsx")
+	src := `import { createSignal } from "solid-js";
+import { missingHelper } from "./helpers";
+
+const App = () => {
+  const [x] = createSignal(0);
+  return missingHelper(x);
+};
+`
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
+
+	nodes := []graph.Node{
+		{
+			ID: "web:" + file + ":function:App:4", Type: graph.NodeTypeFunction,
+			Label: "App", Service: "web", File: file, Line: 4,
+			Meta: map[string]string{"end_line": "7"},
+		},
+	}
+
+	edges, _, unresolved, importedNames := NewJSLinker().LinkJS(nodes, nil, map[string][]string{"web": {file}})
+	assert.Empty(t, edges)
+
+	require.Len(t, unresolved, 1, "only the relative-import miss is a blind spot")
+	assert.Equal(t, "missingHelper", unresolved[0].Name)
+	assert.Equal(t, "import_ref", unresolved[0].Kind)
+	assert.Equal(t, "web", unresolved[0].Service)
+	assert.Equal(t, file, unresolved[0].File)
+
+	assert.True(t, importedNames[file+"\x00missingHelper"])
+	assert.True(t, importedNames[file+"\x00createSignal"], "external imports still suppress matcher candidates")
 }

@@ -13,25 +13,25 @@ type RubyParser struct{}
 func (p *RubyParser) Language() string     { return "ruby" }
 func (p *RubyParser) Extensions() []string { return []string{".rb", ".rake"} }
 
-func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error) {
+func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	src, err := os.ReadFile(file)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	results, err := matcher.Match("ruby", file, src)
 	if err != nil {
-		nodes, edges := patterns.MatchToGraph(service, results)
+		nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 		setLanguage(nodes, "ruby")
-		return nodes, edges, err
+		return nodes, edges, unresolved, err
 	}
-	nodes, edges := patterns.MatchToGraph(service, results)
+	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "ruby")
 
 	// Structural variable tracking: constants, classes, ivar reads/writes.
 	varNodes, varEdges := extractRubyVariables(file, service, src)
 	nodes = append(nodes, varNodes...)
 	edges = append(edges, varEdges...)
-	return nodes, edges, nil
+	return nodes, edges, unresolved, nil
 }
 
 func init() {

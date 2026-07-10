@@ -376,7 +376,7 @@ func TestLinkJS_KeepsTemplComponents(t *testing.T) {
 		{ID: "web:App.jsx:component:MissingLib:9", Type: graph.NodeTypeComponent,
 			Label: "MissingLib", Service: "web", Language: "javascript"},
 	}
-	_, removeIDs := NewJSLinker().LinkJS(nodes, nil, map[string][]string{})
+	_, removeIDs, _, _ := NewJSLinker().LinkJS(nodes, nil, map[string][]string{})
 	assert.False(t, removeIDs["ui:page.templ:component:GamePage:3"],
 		"templ component declarations must survive JS proxy pruning")
 	assert.True(t, removeIDs["web:App.jsx:component:MissingLib:9"],

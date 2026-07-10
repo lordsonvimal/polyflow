@@ -17,7 +17,7 @@ func TestTemplParser_NavLinkMethods(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, err := p.Parse("testdata/page.templ", "app", m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", "app", m)
 	require.NoError(t, err)
 
 	methodByPath := map[string]string{}

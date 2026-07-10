@@ -97,7 +97,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 // Node represents a code entity in the graph.
 type Node struct {
@@ -146,13 +146,27 @@ type Dependency struct {
 // incremental re-indexing: when the hash is unchanged, the cached
 // nodes/edges are reused and tree-sitter parsing is skipped.
 type FileHash struct {
-	FilePath    string
-	Service     string
-	ContentHash string
-	IndexedAt   int64
-	NodesJSON   string
-	EdgesJSON   string
-	Errored     bool
+	FilePath       string
+	Service        string
+	ContentHash    string
+	IndexedAt      int64
+	NodesJSON      string
+	EdgesJSON      string
+	UnresolvedJSON string // cached UnresolvedRefs for the file ('[]' when none)
+	Errored        bool
+}
+
+// UnresolvedRef records a reference the indexer saw but could not resolve to
+// a node — the graph's blind-spot ledger. A silently missing edge is the
+// worst failure mode for impact queries, so every drop is kept visible here
+// instead. Kinds: "call_ref" (in-file call reference with no target),
+// "import_ref" (imported name with no node in the service).
+type UnresolvedRef struct {
+	Service string `json:"service"`
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
 }
 
 // ParseError records a file that produced errors during indexing.
