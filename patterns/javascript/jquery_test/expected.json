@@ -1,1 +1,4 @@
-{"patterns": ["jquery_ajax", "jquery_ajax", "jquery_selector"], "node_types": ["http_client", "http_client", "dom_target"]}
+{
+  "patterns": ["jquery_ajax", "jquery_ajax", "jquery_selector", "jquery_selector", "dom_event_jquery_on"],
+  "node_types": ["http_client", "http_client", "dom_target", "dom_target", "dom_target"]
+}

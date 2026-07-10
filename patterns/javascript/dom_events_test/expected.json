@@ -1,1 +1,4 @@
-{"patterns": ["add_event_listener", "remove_event_listener"], "node_types": ["dom_target", "dom_target"]}
+{
+  "patterns": ["add_event_listener", "remove_event_listener", "dom_event_prop_assign", "dom_event_prop_assign"],
+  "node_types": ["dom_target", "dom_target", "dom_target", "dom_target"]
+}
