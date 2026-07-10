@@ -26,6 +26,7 @@ type MatchResult struct {
 	NodeID      string
 	Captures    map[string]string // capture name -> matched text
 	Line        int
+	EndLine     int // declaration body end (from @_-prefixed span captures; 0 = unknown)
 	File        string
 
 	// Set for matches from version-gated patterns: which package the pattern
@@ -169,13 +170,25 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				continue
 			}
 
-			// Build capture map: capture name -> text
+			// Build capture map: capture name -> text.
+			// Captures whose name starts with "_" are positional only: they
+			// contribute line-range information (e.g. @_def spanning a whole
+			// function body) but their text is not stored, so declaration
+			// bodies never leak into node meta.
 			captures := make(map[string]string, len(m2.Captures))
 			var minLine int = -1
+			var defEndLine int
 			for _, cap := range m2.Captures {
 				name := cq.query.CaptureNameForId(cap.Index)
-				text := cap.Node.Content(src)
-				captures[name] = text
+				if strings.HasPrefix(name, "_") {
+					// Positional-only capture: it marks the span of the whole
+					// declaration, so its end row bounds the definition body.
+					if endRow := int(cap.Node.EndPoint().Row) + 1; endRow > defEndLine {
+						defEndLine = endRow
+					}
+				} else {
+					captures[name] = cap.Node.Content(src)
+				}
 				row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
 				if minLine < 0 || row < minLine {
 					minLine = row
@@ -209,6 +222,7 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				PatternName: cq.pattern.Name,
 				Captures:    captures,
 				Line:        minLine,
+				EndLine:     defEndLine,
 				File:        file,
 			}
 			if cq.pattern.Package != "" {
@@ -237,6 +251,16 @@ func isCallRef(patternName string) bool {
 		patternName == "cobra_run"
 }
 
+// isConstantPattern returns true for pattern results that only feed the URL
+// constant-propagation table and never become graph nodes: literal const
+// declarations and URL-builder helpers that return a literal.
+func isConstantPattern(patternName string) bool {
+	return patternName == "const_string" ||
+		patternName == "const_template_prefix" ||
+		patternName == "fn_return_string" ||
+		patternName == "fn_return_template_prefix"
+}
+
 // MatchToGraph maps match results to graph nodes and edges.
 // Node IDs follow the design doc format: service:file:type:name:line
 func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.Edge) {
@@ -254,11 +278,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 	}
 
-	// Build per-file constant table from const_string / const_template_prefix results.
+	// Build per-file constant table from const_string / const_template_prefix
+	// results, plus fn_return_* results (URL-builder helpers whose body returns
+	// a literal or a template with a constant prefix, e.g. mermaidURL()).
 	// file -> varName -> literalValue
 	constants := make(map[string]map[string]string)
 	for _, r := range defResults {
-		if r.PatternName != "const_string" && r.PatternName != "const_template_prefix" {
+		if !isConstantPattern(r.PatternName) {
 			continue
 		}
 		name, okN := r.Captures["name"]
@@ -283,7 +309,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// Constant declarations exist only to feed URL propagation (the
 		// constants table above); emitting them as nodes floods the graph
 		// with rootless "function" entries for every const in the codebase.
-		if r.PatternName == "const_string" || r.PatternName == "const_template_prefix" {
+		if isConstantPattern(r.PatternName) {
 			continue
 		}
 
@@ -312,6 +338,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			} else {
 				label = stripStringLiteral(fn)
 			}
+		} else if prop, ok := r.Captures["prop"]; ok && strings.HasPrefix(prop, "on") {
+			// Event-handler assignments (es.onmessage = …, ws.onclose = …):
+			// label with the property, not the internal pattern name.
+			label = prop + " handler"
+		}
+		if r.PatternName == "goroutine_anon" {
+			label = "go func()"
 		}
 
 		// ID format: service:file:type:name:line  (design doc §SQLite Schema)
@@ -376,6 +409,14 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			if v, ok := meta[key]; ok {
 				meta[key] = stripStringLiteral(v)
 			}
+		}
+
+		// Declaration span: patterns that capture the whole definition (@_def)
+		// record where the body ends, so enclosing-function attribution can
+		// require containment instead of guessing by proximity. Persisted in
+		// meta so later passes (JS import linker) can reuse it.
+		if r.EndLine >= r.Line && (nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod) {
+			meta["end_line"] = fmt.Sprintf("%d", r.EndLine)
 		}
 
 		// URL constant propagation: resolve variable references in http_client URL/path captures.
@@ -446,14 +487,17 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	}
 	nodes = filtered
 
-	// Pass 2: emit caller→callee edges using line-proximity.
-	// For each non-function node, find the closest function/method node defined
-	// in the same file at a line <= this node's line. That is the enclosing function.
+	// Pass 2: emit caller→callee edges by locating the enclosing function.
+	// For each non-function node, find the innermost function/method node in
+	// the same file whose declaration span contains this node's line. Functions
+	// whose patterns don't record an end line (no @_def capture) are treated as
+	// open-ended, which degrades to the older nearest-preceding behaviour.
 	//
-	// Build a per-file sorted list of (line, nodeID) for function/method nodes.
+	// Build a per-file list of (line, end, nodeID) for function/method nodes.
 	// Also build a per-file name→nodeID index for Pass 3 call-ref resolution.
 	type lineID struct {
 		line int
+		end  int // 0 = unknown (open-ended)
 		id   string
 	}
 	funcsByFile := make(map[string][]lineID)
@@ -461,9 +505,59 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
-			funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, n.ID})
+			end := 0
+			if v, ok := n.Meta["end_line"]; ok {
+				fmt.Sscanf(v, "%d", &end)
+			}
+			funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, end, n.ID})
 			nameByFileAndName[n.File+"\x00"+n.Label] = n.ID
 		}
+	}
+
+	// enclosingFunc returns the innermost function containing line, skipping
+	// the node with skipID (a callee must not enclose its own reference).
+	enclosingFunc := func(file string, line int, skipID string) *lineID {
+		funcs := funcsByFile[file]
+		var best *lineID
+		for j := range funcs {
+			f := &funcs[j]
+			if f.line > line || f.id == skipID {
+				continue
+			}
+			if f.end > 0 && line > f.end {
+				continue // line falls outside this function's body
+			}
+			if best == nil || f.line > best.line {
+				best = f
+			}
+		}
+		return best
+	}
+
+	// moduleNodeFor lazily creates a synthetic per-file module node so that
+	// module-level statements (a root render(<App/>) call, a top-level
+	// EventSource) still get a caller edge instead of being silently dropped.
+	// Only JS/TS modules execute top-level statements; other languages return
+	// "" and the node keeps no caller edge, as before.
+	moduleNodes := make(map[string]*graph.Node)
+	moduleNodeFor := func(file string) string {
+		if !isJSModuleFile(file) {
+			return ""
+		}
+		if n, ok := moduleNodes[file]; ok {
+			return n.ID
+		}
+		id := fmt.Sprintf("%s:%s:function:(module):0", service, file)
+		moduleNodes[file] = &graph.Node{
+			ID:      id,
+			Type:    graph.NodeTypeFunction,
+			Label:   "(module)",
+			Service: service,
+			File:    file,
+			Line:    0,
+			Meta:    map[string]string{"scope": "module"},
+		}
+		return id
 	}
 
 	for i := range nodes {
@@ -475,21 +569,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if n.Type == graph.NodeTypeInterface || n.Type == graph.NodeTypeTypeAlias {
 			continue
 		}
-		funcs := funcsByFile[n.File]
-		if len(funcs) == 0 {
-			continue
-		}
-		// Find the closest function whose line is <= this node's line.
-		var best *lineID
-		for j := range funcs {
-			f := &funcs[j]
-			if f.line <= n.Line {
-				if best == nil || f.line > best.line {
-					best = f
-				}
-			}
-		}
-		if best == nil {
+		var fromID string
+		if best := enclosingFunc(n.File, n.Line, ""); best != nil {
+			fromID = best.id
+		} else if fromID = moduleNodeFor(n.File); fromID == "" {
 			continue
 		}
 		edgeType := graph.EdgeTypeCalls
@@ -498,18 +581,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			edgeType = graph.EdgeTypeRenders
 		case graph.NodeTypeExternalService:
 			edgeType = graph.EdgeTypeCloudCall
+		case graph.NodeTypeWorker:
+			edgeType = graph.EdgeTypeSpawns
 		}
 		edges = append(edges, graph.Edge{
-			ID:   fmt.Sprintf("%s:%s->%s", string(edgeType), best.id, n.ID),
-			From: best.id,
+			ID:   fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, n.ID),
+			From: fromID,
 			To:   n.ID,
 			Type: edgeType,
 		})
 	}
 
 	// Pass 3: resolve call-reference results (component_fn_call).
-	// For each call site, find the enclosing function by proximity and emit a
-	// calls edge to the target function (resolved by name in the same file).
+	// For each call site, find the enclosing function and emit a calls edge to
+	// the target function (resolved by name in the same file). The callee is
+	// skipped during enclosure lookup: a nested function (e.g. loadSource
+	// defined inside Detail) must not own an event-prop reference to itself.
 	for _, r := range callRefs {
 		callee, ok := r.Captures["callee"]
 		if !ok {
@@ -523,32 +610,26 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			continue
 		}
 
-		// Find enclosing function by proximity, skipping the callee itself.
-		// A nested function (e.g. loadSource defined inside Detail) appears as
-		// a closer proximity match than the outer function, but we want the
-		// outer function to own the event-prop reference.
-		funcs := funcsByFile[r.File]
-		var best *lineID
-		for j := range funcs {
-			f := &funcs[j]
-			if f.line <= r.Line && f.id != calleeID {
-				if best == nil || f.line > best.line {
-					best = f
-				}
-			}
-		}
-		if best == nil {
+		var fromID string
+		if best := enclosingFunc(r.File, r.Line, calleeID); best != nil {
+			fromID = best.id
+		} else if fromID = moduleNodeFor(r.File); fromID == "" {
 			continue
 		}
 
 		edgeType := callRefEdgeType(r.PatternName)
-		edgeID := fmt.Sprintf("%s:%s->%s", string(edgeType), best.id, calleeID)
+		edgeID := fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, calleeID)
 		edges = append(edges, graph.Edge{
 			ID:   edgeID,
-			From: best.id,
+			From: fromID,
 			To:   calleeID,
 			Type: edgeType,
 		})
+	}
+
+	// Materialise any module nodes synthesized above.
+	for _, mn := range moduleNodes {
+		nodes = append(nodes, *mn)
 	}
 
 	// Pass 4: synthesize channel nodes for AMQP publishers and subscribers.
@@ -596,6 +677,17 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	}
 
 	return nodes, edges
+}
+
+// isJSModuleFile reports whether file is a JavaScript/TypeScript module —
+// the only language here whose top-level statements execute on load.
+func isJSModuleFile(file string) bool {
+	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs"} {
+		if strings.HasSuffix(file, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // callRefEdgeType returns the edge type for a call-reference pattern.
@@ -855,5 +947,39 @@ func tryResolveOne(raw string, fileConsts map[string]string) (string, string) {
 		return val, ""
 	}
 
+	// URL-builder call: mermaidURL(level, scope) → look up the helper's
+	// returned literal (collected by the fn_return_* constant patterns).
+	if open := strings.Index(raw, "("); open > 0 && strings.HasSuffix(raw, ")") {
+		fnName := raw[:open]
+		if isIdentifier(fnName) {
+			if val, ok := fileConsts[fnName]; ok {
+				if strings.HasPrefix(val, "/") || strings.HasPrefix(val, "http") {
+					return val, graph.ConfidenceStatic
+				}
+				return val, ""
+			}
+		}
+	}
+
 	return raw, ""
+}
+
+// isIdentifier reports whether s is a plain identifier (letters, digits, _, $).
+func isIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || r == '$':
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }

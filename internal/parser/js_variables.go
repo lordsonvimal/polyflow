@@ -176,8 +176,15 @@ func (ex *jsExtractor) collectTopLevel(root *sitter.Node) {
 					continue
 				}
 				nameNode := decl.ChildByFieldName("name")
-				if nameNode == nil || nameNode.Type() != "identifier" {
-					continue // destructuring patterns are not tracked in v1
+				if nameNode == nil {
+					continue
+				}
+				if nameNode.Type() != "identifier" {
+					// Destructuring: const [notification, setNotification] =
+					// createSignal(...) — register every bound identifier as a
+					// module variable so signal reads/setter calls resolve.
+					ex.collectDestructured(decl, nameNode, kind)
+					continue
 				}
 				name := nameNode.Content(ex.src)
 				value := decl.ChildByFieldName("value")
@@ -219,6 +226,61 @@ func (ex *jsExtractor) collectTopLevel(root *sitter.Node) {
 		case "class_declaration":
 			ex.collectClass(stmt)
 		}
+	}
+}
+
+// collectDestructured registers every identifier bound by a destructuring
+// declarator (array_pattern / object_pattern) as a module variable. The
+// initializer callee is recorded so consumers can see where the binding came
+// from (e.g. init=createSignal for Solid signals).
+func (ex *jsExtractor) collectDestructured(decl, pattern *sitter.Node, kind string) {
+	init := ""
+	if value := decl.ChildByFieldName("value"); value != nil && value.Type() == "call_expression" {
+		if fn := value.ChildByFieldName("function"); fn != nil {
+			init = fn.Content(ex.src)
+		}
+	}
+	collectPatternBindings(pattern, ex.src, func(name string, _ int) {
+		line := tsLine(declStatement(decl))
+		id := ex.varNodeID(name, line)
+		ex.moduleVars[name] = &jsVar{nodeID: id}
+		meta := map[string]string{
+			"kind": kind, "scope": "module", "destructured": "true",
+			"mutable": fmt.Sprintf("%t", kind != "const"),
+		}
+		if init != "" {
+			meta["init"] = init
+		}
+		ex.addNode(graph.Node{
+			ID: id, Type: graph.NodeTypeVariable, Label: name,
+			Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+			Meta: meta,
+		})
+	})
+}
+
+// collectPatternBindings visits the identifiers bound by a destructuring
+// pattern: array elements, object shorthand properties, pair values, rest
+// elements, and defaulted bindings. Object property *keys* are not bindings
+// and are skipped.
+func collectPatternBindings(n *sitter.Node, src []byte, visit func(name string, line int)) {
+	switch n.Type() {
+	case "identifier", "shorthand_property_identifier_pattern":
+		visit(n.Content(src), int(n.StartPoint().Row)+1)
+		return
+	case "pair_pattern":
+		if v := n.ChildByFieldName("value"); v != nil {
+			collectPatternBindings(v, src, visit)
+		}
+		return
+	case "assignment_pattern":
+		if l := n.ChildByFieldName("left"); l != nil {
+			collectPatternBindings(l, src, visit)
+		}
+		return
+	}
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		collectPatternBindings(n.NamedChild(i), src, visit)
 	}
 }
 
@@ -328,8 +390,18 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 				if decl.Type() != "variable_declarator" {
 					continue
 				}
-				if nameNode := decl.ChildByFieldName("name"); nameNode != nil && nameNode.Type() == "identifier" {
+				nameNode := decl.ChildByFieldName("name")
+				if nameNode == nil {
+					continue
+				}
+				if nameNode.Type() == "identifier" {
 					cur.locals[nameNode.Content(ex.src)] = tsLine(decl)
+				} else {
+					// Destructured locals (const [sel, setSel] = createSignal(...))
+					// shadow outer names and are capturable by nested closures.
+					collectPatternBindings(nameNode, ex.src, func(name string, _ int) {
+						cur.locals[name] = tsLine(decl)
+					})
 				}
 			}
 		}
@@ -396,7 +468,12 @@ func (ex *jsExtractor) handleRead(node *sitter.Node, scopes []*jsScope) {
 		return
 	case "call_expression":
 		if parent.ChildByFieldName("function") == node {
-			return // plain function calls are call edges, not variable reads
+			// Calls to declared functions are call edges, not variable reads.
+			// Calls to variables (signal accessors/setters: notification(),
+			// setNotification(x)) read the binding, so they fall through.
+			if _, isFn := ex.fnDecls[node.Content(ex.src)]; isFn {
+				return
+			}
 		}
 	}
 	name := node.Content(ex.src)
