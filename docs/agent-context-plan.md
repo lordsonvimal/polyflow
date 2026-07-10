@@ -44,7 +44,7 @@ fallback: same-file `main` → same-file `init`. Applies to Pass 3 call refs.
 `patterns/go/cobra_test` still passes; full reindex of this repo must show
 `runIndex`, `runServe`, etc. with incoming edges from `main`.
 
-### Phase 0.2 — Goroutine worker outflow `pending`
+### Phase 0.2 — Goroutine worker outflow `done`
 
 **Bug:** `worker` nodes (`go func(){…}`) have spawns in-edges but **zero
 outgoing edges**: Pass 2/3 only register `function`/`method` nodes as
