@@ -669,10 +669,13 @@ func runPatternsAdd(cmd *cobra.Command, args []string) error {
 // ─── context ─────────────────────────────────────────────────────────────────
 
 var (
-	contextTarget string
-	contextTask   string
-	contextDepth  int
-	contextFormat string
+	contextTarget       string
+	contextTask         string
+	contextDepth        int
+	contextFormat       string
+	contextMaxTokens    int
+	contextSummary      bool
+	contextSnippetLines int
 )
 
 func initContextFlags() {
@@ -680,6 +683,9 @@ func initContextFlags() {
 	contextCmd.Flags().StringVar(&contextTask, "task", "debug", "task type: impact, generate, debug, refactor")
 	contextCmd.Flags().IntVar(&contextDepth, "depth", 5, "max traversal depth (0 = unlimited)")
 	contextCmd.Flags().StringVar(&contextFormat, "format", "json", "output format: json or text")
+	contextCmd.Flags().IntVar(&contextMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
+	contextCmd.Flags().BoolVar(&contextSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
+	contextCmd.Flags().IntVar(&contextSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
 	_ = contextCmd.MarkFlagRequired("target")
 }
 
@@ -719,11 +725,47 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	result.AttachUnresolved(unresolved)
+	result.InlineSnippets(".", contextSnippetLines)
 
+	out := result.ApplyBudget(contextMaxTokens, contextSummary)
 	if contextFormat == "text" {
+		if s, ok := out.(*pfcontext.Summary); ok {
+			return printContextSummaryText(s)
+		}
 		return printContextText(result)
 	}
-	return json.NewEncoder(os.Stdout).Encode(result)
+	return json.NewEncoder(os.Stdout).Encode(out)
+}
+
+func printContextSummaryText(s *pfcontext.Summary) error {
+	if s.Target == nil {
+		fmt.Fprintln(os.Stdout, "Target: (not found)")
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Target: %s (%s) %s:%d\n\n", s.Target.Label, s.Target.Type, s.Target.File, s.Target.Line)
+
+	if len(s.Files) > 0 {
+		fmt.Fprintf(os.Stdout, "Files (%d nodes, %d edges):\n", s.TotalNodes, s.TotalEdges)
+		for _, f := range s.Files {
+			fmt.Fprintf(os.Stdout, "  %-10s depth %-2d %-60s %2d nodes via %s [%s]\n",
+				f.Direction, f.MinDepth, f.File, f.Nodes, strings.Join(f.EdgeTypes, ","), f.Service)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(s.CrossService) > 0 {
+		fmt.Fprintln(os.Stdout, "Cross-service:")
+		for _, cs := range s.CrossService {
+			fmt.Fprintf(os.Stdout, "  %s → %s → %s\n", cs.FromService, cs.Label, cs.ToService)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	printUnresolvedText(s.Unresolved)
+	if s.Budget != nil && s.Budget.Note != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", s.Budget.Note)
+	}
+	return nil
 }
 
 func printContextText(r *pfcontext.Result) error {
@@ -893,12 +935,15 @@ func printTraceText(r *trace.Result) error {
 // ─── impact ──────────────────────────────────────────────────────────────────
 
 var (
-	impactTarget  string
-	impactDepth   int
-	impactService string
-	impactFormat  string
-	impactFile      string
-	impactDirection string
+	impactTarget       string
+	impactDepth        int
+	impactService      string
+	impactFormat       string
+	impactFile         string
+	impactDirection    string
+	impactMaxTokens    int
+	impactSummary      bool
+	impactSnippetLines int
 )
 
 func initImpactFlags() {
@@ -908,6 +953,9 @@ func initImpactFlags() {
 	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	impactCmd.Flags().StringVar(&impactService, "service", "", "filter results to a specific service")
 	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text or json")
+	impactCmd.Flags().IntVar(&impactMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
+	impactCmd.Flags().BoolVar(&impactSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
+	impactCmd.Flags().IntVar(&impactSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
 	impactCmd.MarkFlagsOneRequired("target", "file")
 	impactCmd.MarkFlagsMutuallyExclusive("target", "file")
 }
@@ -916,18 +964,6 @@ var impactCmd = &cobra.Command{
 	Use:   "impact",
 	Short: "Show what is impacted by changes to a node",
 	RunE:  runImpact,
-}
-
-// fileImpactOutput is the JSON shape for `impact --file`.
-type fileImpactOutput struct {
-	File      string                  `json:"file"`
-	Service   string                  `json:"service"`
-	Direction string                  `json:"direction"`
-	Depth     int                     `json:"depth"`
-	Impacted  []graph.FileImpactEntry `json:"impacted"`
-
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 }
 
 func runImpact(cmd *cobra.Command, args []string) error {
@@ -944,27 +980,16 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		seeds := graph.NodesInFile(idx, impactService, impactFile)
-		if len(seeds) == 0 {
-			return fmt.Errorf("file not found in index: %s", impactFile)
-		}
-		out := fileImpactOutput{
-			File:      seeds[0].File,
-			Service:   seeds[0].Service,
-			Direction: impactDirection,
-			Depth:     impactDepth,
-			Impacted:  graph.FileImpact(idx, impactService, impactFile, impactDirection, impactDepth),
+		out, err := impact.BuildFile(idx, impactService, impactFile, impactDirection, impactDepth)
+		if err != nil {
+			return err
 		}
 		unresolved, err := store.ListUnresolvedRefs(ctx)
 		if err != nil {
 			return err
 		}
-		files := map[string]bool{out.File: true}
-		for _, e := range out.Impacted {
-			files[e.File] = true
-		}
-		out.Unresolved = graph.UnresolvedInFiles(unresolved, files)
-		out.UnresolvedNote = graph.UnresolvedNote(len(out.Unresolved))
+		out.AttachUnresolved(unresolved)
+		out.ApplyBudget(impactMaxTokens)
 		if impactFormat == "json" {
 			return json.NewEncoder(os.Stdout).Encode(out)
 		}
@@ -977,6 +1002,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		if len(out.Unresolved) > 0 {
 			fmt.Fprintln(os.Stdout)
 			printUnresolvedText(out.Unresolved)
+		}
+		if out.Budget != nil && out.Budget.Note != "" {
+			fmt.Fprintf(os.Stdout, "(%s)\n", out.Budget.Note)
 		}
 		return nil
 	}
@@ -999,11 +1027,55 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	out.AttachUnresolved(unresolved)
+	out.InlineSnippets(".", impactSnippetLines)
 
+	budgeted := out.ApplyBudget(impactMaxTokens, impactSummary)
 	if impactFormat == "json" {
-		return json.NewEncoder(os.Stdout).Encode(out)
+		return json.NewEncoder(os.Stdout).Encode(budgeted)
+	}
+	if s, ok := budgeted.(*impact.Summary); ok {
+		return printImpactSummaryText(s)
 	}
 	return printImpactText(out)
+}
+
+func printImpactSummaryText(s *impact.Summary) error {
+	t := s.Target
+	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d\n\n", t.Label, t.Type, t.File, t.Line)
+
+	if len(s.Files) > 0 {
+		fmt.Fprintln(os.Stdout, "Files in blast radius:")
+		for _, f := range s.Files {
+			fmt.Fprintf(os.Stdout, "  depth %-2d %-60s %2d nodes via %s [%s]\n",
+				f.MinDepth, f.File, f.Nodes, strings.Join(f.EdgeTypes, ","), f.Service)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(s.EntryPoints) > 0 {
+		fmt.Fprintln(os.Stdout, "Entry points (no callers):")
+		for _, ep := range s.EntryPoints {
+			fmt.Fprintf(os.Stdout, "  %s\n", ep)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(s.ServicesAffected) > 0 {
+		fmt.Fprintf(os.Stdout, "Services affected: %s\n", strings.Join(s.ServicesAffected, ", "))
+	}
+	for _, xs := range s.CrossServiceTriggers {
+		fmt.Fprintf(os.Stdout, "Cross-service triggers: %s (%d http_call edges)\n", xs.FromService, xs.EdgeCount)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nTotal: %d nodes in blast radius\n", s.TotalCallers)
+	if len(s.Unresolved) > 0 {
+		fmt.Fprintln(os.Stdout)
+		printUnresolvedText(s.Unresolved)
+	}
+	if s.Budget != nil && s.Budget.Note != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", s.Budget.Note)
+	}
+	return nil
 }
 
 func printImpactText(out *impact.Result) error {

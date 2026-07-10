@@ -5,6 +5,7 @@
 package impact
 
 import (
+	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -21,6 +22,7 @@ type Caller struct {
 	Confidence string            `json:"confidence,omitempty"`
 	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
 	Depth      int               `json:"depth"`
+	Snippet    string            `json:"snippet,omitempty"`
 }
 
 // CrossServiceTrigger counts edges arriving at the blast radius from
@@ -45,6 +47,10 @@ type Result struct {
 	// appear. Always present ([] when clean).
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
 	UnresolvedNote string                `json:"unresolved_note,omitempty"`
+
+	// Budget records the token-budgeting decision when a budget was set and
+	// the detail shape was emitted.
+	Budget *budget.Info `json:"budget,omitempty"`
 }
 
 // Build computes the blast radius of root: its ancestors up to depth
