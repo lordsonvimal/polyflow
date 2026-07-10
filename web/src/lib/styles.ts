@@ -4,6 +4,7 @@
 
 import { BOUNDARY_GROUP_TYPE } from "./boundary";
 import { SERVICE_NODE_TYPE } from "./aggregate";
+import { FILE_GROUP_TYPE } from "./filegroup";
 
 export const CANVAS_BG = "#030712";
 export const DEFAULT_NODE_COLOR = "#6b7280";
@@ -44,6 +45,16 @@ export const NODE_TYPE_STYLES: NodeTypeStyle[] = [
   { type: "external_service", shape: "hexagon", color: "#ec4899", glyph: "⬡", desc: "external service (cloud SDK)" },
   { type: "dom_target", shape: "ellipse", glyph: "●", desc: "DOM element access" },
   { type: "templ_element", shape: "ellipse", glyph: "●", desc: "templ template element" },
+  { type: "variable", shape: "tag", color: "#f97316", glyph: "◖", desc: "tracked variable (global / captured)" },
+  { type: "struct", shape: "round-rectangle", color: "#0ea5e9", glyph: "▭", desc: "struct (fields in detail panel)" },
+  { type: "class", shape: "round-rectangle", color: "#8b5cf6", glyph: "▭", desc: "class (methods/fields in detail panel)" },
+  {
+    type: FILE_GROUP_TYPE,
+    shape: "round-rectangle",
+    color: "#111827",
+    glyph: "▢",
+    desc: "file container (double-click to collapse/expand)",
+  },
   {
     type: BOUNDARY_GROUP_TYPE,
     shape: "round-rectangle",
@@ -68,6 +79,10 @@ export interface EdgeLegendEntry {
 
 export const EDGE_LEGEND: EdgeLegendEntry[] = [
   { glyph: "──▶", desc: "static / inferred edge (calls, http, renders, publishes…)" },
+  { glyph: "──▶", color: "#ef4444", desc: "writes / mutates variable" },
+  { glyph: "──▶", color: "#64748b", desc: "reads variable" },
+  { glyph: "┄┄▶", color: "#f97316", desc: "captures (closure over variable)" },
+  { glyph: "──▶", color: "#22d3ee", desc: "flows_to (variable passed by ref/value)" },
   { glyph: "┄┄▶", desc: "partial / unknown edge (opt-in, dashed)" },
   { glyph: "◯", color: "#f472b6", desc: "trace root (pink ring)" },
   { glyph: "◻", color: "#ffffff", desc: "selected node (white border, neighbors highlighted)" },

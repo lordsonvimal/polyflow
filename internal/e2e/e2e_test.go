@@ -475,3 +475,97 @@ func TestServe_Trace(t *testing.T) {
 
 	_ = ctx
 }
+
+// TestIndex_VariableTracking asserts the structural variable pass runs
+// during indexing: the JS fixture's module-level API_BASE const becomes a
+// variable node with reads edges from the functions using it.
+func TestIndex_VariableTracking(t *testing.T) {
+	store, _ := indexFixture(t)
+	ctx := context.Background()
+
+	idx, err := store.BuildIndex(ctx)
+	require.NoError(t, err)
+
+	var apiBase *graph.Node
+	for _, n := range idx.Nodes {
+		if n.Type == graph.NodeTypeVariable && n.Label == "API_BASE" {
+			apiBase = n
+			break
+		}
+	}
+	require.NotNil(t, apiBase, "API_BASE module const should be a variable node")
+	assert.Equal(t, "string", apiBase.Meta["data_type"])
+	assert.Equal(t, "const", apiBase.Meta["kind"])
+
+	var readers []string
+	for _, e := range idx.InEdges[apiBase.ID] {
+		if e.Type == graph.EdgeTypeReads {
+			readers = append(readers, e.From)
+			assert.Equal(t, graph.ConfidenceInferred, e.Confidence)
+		}
+	}
+	assert.NotEmpty(t, readers, "functions using API_BASE should have reads edges")
+}
+
+func TestServe_Files(t *testing.T) {
+	store, _ := indexFixture(t)
+
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+
+	srv := server.New(store, idx)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var result struct {
+		Files []graph.FileSummary `json:"files"`
+	}
+	require.NoError(t, json.Unmarshal(body, &result))
+	assert.NotEmpty(t, result.Files, "expected indexed files")
+}
+
+func TestServe_FileImpact(t *testing.T) {
+	store, _ := indexFixture(t)
+
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+
+	// Pick the file of any node that has an outgoing edge, so impact is non-trivial.
+	var seedFile, seedService string
+	for id, edges := range idx.OutEdges {
+		if len(edges) == 0 {
+			continue
+		}
+		if n := idx.Nodes[id]; n != nil && n.File != "" {
+			seedFile, seedService = n.File, n.Service
+			break
+		}
+	}
+	require.NotEmpty(t, seedFile)
+
+	srv := server.New(store, idx)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/file/impact?direction=both&path=" +
+		url.QueryEscape(seedFile) + "&service=" + url.QueryEscape(seedService))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var result struct {
+		File     string                  `json:"file"`
+		Impacted []graph.FileImpactEntry `json:"impacted"`
+	}
+	require.NoError(t, json.Unmarshal(body, &result))
+	assert.Equal(t, seedFile, result.File)
+}

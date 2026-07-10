@@ -34,9 +34,17 @@ function pushSearchURL(q: string) {
 
 // ── Signals ────────────────────────────────────────────────────────────────
 
+export interface FileResult {
+  file: string;
+  service: string;
+  counts: Record<string, number>;
+}
+
 const initQuery = urlParam("search") ?? "";
 const [query, setQueryRaw] = createSignal(initQuery);
+const [kind, setKind] = createSignal<string>(""); // "" = all node types
 const [results, setResults] = createSignal<GraphNode[]>([]);
+const [fileResults, setFileResults] = createSignal<FileResult[]>([]);
 const [searching, setSearching] = createSignal(false);
 const [recentSearches, setRecentSearches] = createSignal<string[]>(loadRecent());
 
@@ -49,18 +57,28 @@ function setQuery(q: string) {
 
 createEffect(() => {
   const q = query();
+  const k = kind();
   clearTimeout(debounceTimer);
   if (q.trim().length < 2) {
     setResults([]);
+    setFileResults([]);
     return;
   }
   debounceTimer = setTimeout(async () => {
     setSearching(true);
     try {
-      const res = await fetch(`/api/graph/search?q=${encodeURIComponent(q)}&limit=20`);
-      if (!res.ok) return;
-      const data: GraphNode[] = await res.json();
-      setResults(data);
+      const kindParam = k ? `&kind=${encodeURIComponent(k)}` : "";
+      const [nodeRes, fileRes] = await Promise.all([
+        fetch(`/api/graph/search?q=${encodeURIComponent(q)}&limit=20${kindParam}`),
+        fetch(`/api/files?q=${encodeURIComponent(q)}&limit=10`),
+      ]);
+      if (nodeRes.ok) {
+        setResults((await nodeRes.json()) as GraphNode[]);
+      }
+      if (fileRes.ok) {
+        const data = await fileRes.json();
+        setFileResults((data.files ?? []) as FileResult[]);
+      }
     } finally {
       setSearching(false);
     }
@@ -70,7 +88,10 @@ createEffect(() => {
 export const searchStore = {
   query,
   setQuery,
+  kind,
+  setKind,
   results,
+  fileResults,
   searching,
   recentSearches,
   saveRecent,

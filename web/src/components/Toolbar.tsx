@@ -86,10 +86,26 @@ const Toolbar: Component = () => {
         <button class={btn(uiStore.viewMode() === "indepth")} onClick={() => uiStore.setViewMode("indepth")}>
           In-depth
         </button>
+        <button class={btn(uiStore.viewMode() === "structure")} onClick={() => uiStore.setViewMode("structure")} title="Classes, structs, variables and their data flow">
+          Structure
+        </button>
         <button class={btn(uiStore.viewMode() === "highlevel")} onClick={() => uiStore.setViewMode("highlevel")}>
           High-level
         </button>
       </div>
+
+      {/* File grouping (not applicable at service altitude) */}
+      <Show when={uiStore.viewMode() !== "highlevel"}>
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Group</span>
+          <button class={btn(uiStore.groupByFile())} onClick={() => uiStore.setGroupByFile(true)} title="Wrap nodes in per-file containers">
+            Files
+          </button>
+          <button class={btn(!uiStore.groupByFile())} onClick={() => uiStore.setGroupByFile(false)}>
+            Flat
+          </button>
+        </div>
+      </Show>
 
       {/* Layout */}
       <div class="flex items-center gap-1">
@@ -123,6 +139,12 @@ const Toolbar: Component = () => {
             <span class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500">Diagram (Mermaid)</span>
             <button class="text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 cursor-pointer" onClick={() => exportMermaid("service")}>
               High-level (services)
+            </button>
+            <button class="text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 cursor-pointer" onClick={() => exportMermaid("file")}>
+              File-grouped
+            </button>
+            <button class="text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 cursor-pointer" onClick={() => exportMermaid("structure")}>
+              Structure (classes/variables)
             </button>
             <button class="text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 cursor-pointer" onClick={() => exportMermaid("function")}>
               In-depth (functions)

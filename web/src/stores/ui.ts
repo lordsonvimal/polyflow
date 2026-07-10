@@ -2,7 +2,7 @@ import { createSignal, createEffect } from "solid-js";
 import { DEFAULT_CONFIDENCE } from "../lib/confidence";
 
 export type Layout = "dagre" | "fcose" | "circle" | "grid";
-export type ViewMode = "indepth" | "highlevel";
+export type ViewMode = "indepth" | "structure" | "highlevel";
 
 // ── localStorage helpers ───────────────────────────────────────────────────
 
@@ -34,15 +34,18 @@ function pushURL(params: Record<string, string | null>) {
 const initLayout = (urlParam("layout") ?? lsGet("pf:layout", "dagre")) as Layout;
 const initNodeId = urlParam("node");
 const initView = (urlParam("view") ?? "indepth") as ViewMode;
+// File grouping defaults ON; ?group=off or a persisted preference disables it.
+const initGroupByFile = (urlParam("group") ?? lsGet("pf:groupByFile", "files")) !== "off";
 
 const [selectedNodeId, setSelectedNodeIdRaw] = createSignal<string | null>(initNodeId);
 const [layout, setLayoutRaw] = createSignal<Layout>(initLayout);
 const [notification, setNotification] = createSignal<string | null>(null);
 const [semanticWarnings, setSemanticWarnings] = createSignal<string[]>([]);
 
-// View mode: in-depth (per-function) vs high-level (service-to-service).
+// View mode: in-depth (per-function), structure (classes/variables/flow
+// diagram), or high-level (service-to-service).
 const [viewMode, setViewModeRaw] = createSignal<ViewMode>(
-  initView === "highlevel" ? "highlevel" : "indepth"
+  initView === "highlevel" || initView === "structure" ? initView : "indepth"
 );
 
 // Node types / services the user has hidden (empty = show everything).
@@ -55,6 +58,11 @@ const [activeConfidence, setActiveConfidence] = createSignal<string[]>([...DEFAU
 
 // Boundary groups the user has expanded (collapsed is the default).
 const [expandedBoundaries, setExpandedBoundaries] = createSignal<string[]>([]);
+
+// File grouping (in-depth view): nodes wrapped in per-file compound parents.
+const [groupByFile, setGroupByFileRaw] = createSignal<boolean>(initGroupByFile);
+// File groups the user has collapsed into a single node (expanded default).
+const [collapsedFiles, setCollapsedFiles] = createSignal<string[]>([]);
 
 // Persist layout to localStorage and URL whenever it changes.
 createEffect(() => {
@@ -103,6 +111,19 @@ function toggleConfidence(level: string) {
   );
 }
 
+function setGroupByFile(on: boolean) {
+  setGroupByFileRaw(on);
+  lsSet("pf:groupByFile", on ? "files" : "off");
+  pushURL({ group: on ? null : "off" }); // omit default from URL
+  if (!on) setCollapsedFiles([]);
+}
+
+function toggleFileCollapse(groupId: string) {
+  setCollapsedFiles((prev) =>
+    prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
+  );
+}
+
 function toggleBoundary(groupId: string) {
   setExpandedBoundaries((prev) =>
     prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
@@ -138,6 +159,10 @@ export const uiStore = {
   toggleHiddenService,
   activeConfidence,
   toggleConfidence,
+  groupByFile,
+  setGroupByFile,
+  collapsedFiles,
+  toggleFileCollapse,
   expandedBoundaries,
   toggleBoundary,
   expandAllBoundaries,

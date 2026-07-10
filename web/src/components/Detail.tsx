@@ -1,9 +1,10 @@
 import { Component, Show, For, createSignal, createEffect, createMemo } from "solid-js";
 import { uiStore } from "../stores/ui";
 import { graphStore } from "../stores/graph";
-import { boundaryGroups } from "../stores/derived";
+import { boundaryGroups, fileGroups } from "../stores/derived";
 import { GraphNode, GraphEdge } from "../lib/types";
 import { isBoundaryGroupId } from "../lib/boundary";
+import { isFileGroupId, fileGroupId } from "../lib/filegroup";
 import { isServiceNodeId, serviceFromNodeId } from "../lib/aggregate";
 import { edgeConfidence } from "../lib/confidence";
 
@@ -35,10 +36,59 @@ const ConfidenceBadge: Component<{ edge: { confidence?: string } }> = (props) =>
   return <span class={`text-[10px] ${cls()}`}>{c()}</span>;
 };
 
+interface FlowRef {
+  id: string;
+  label: string;
+  file: string;
+  line: number;
+  meta?: Record<string, string>;
+}
+
+interface VariableFlow {
+  readers: FlowRef[] | null;
+  writers: FlowRef[] | null;
+  captured_by: FlowRef[] | null;
+  flows_to: FlowRef[] | null;
+}
+
+interface FileImpactEntry {
+  file: string;
+  service: string;
+  nodes: number;
+  min_depth: number;
+  edge_types: string[];
+}
+
+// CopyPath writes a file path to the clipboard with brief inline feedback.
+const CopyPath: Component<{ path: string }> = (props) => {
+  const [copied, setCopied] = createSignal(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(props.path);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      uiStore.setNotification("Copy failed — clipboard unavailable");
+    }
+  }
+  return (
+    <button
+      class="rounded bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs px-2 py-1 cursor-pointer"
+      title={props.path}
+      onClick={copy}
+    >
+      {copied() ? "Copied ✓" : "Copy path"}
+    </button>
+  );
+};
+
 const Detail: Component = () => {
   const [detail, setDetail] = createSignal<NodeDetail | null>(null);
   const [source, setSource] = createSignal<string | null>(null);
   const [loadingSource, setLoadingSource] = createSignal(false);
+  const [fileImpact, setFileImpact] = createSignal<{ direction: string; entries: FileImpactEntry[] } | null>(null);
+  const [loadingImpact, setLoadingImpact] = createSignal(false);
+  const [varFlow, setVarFlow] = createSignal<VariableFlow | null>(null);
 
   const selectedId = () => uiStore.selectedNodeId();
 
@@ -47,6 +97,30 @@ const Detail: Component = () => {
     if (!id || !isBoundaryGroupId(id)) return null;
     return boundaryGroups().find((g) => g.id === id) ?? null;
   });
+
+  const selectedFile = createMemo(() => {
+    const id = selectedId();
+    if (!id || !isFileGroupId(id)) return null;
+    return fileGroups().find((g) => g.id === id) ?? null;
+  });
+
+  async function loadFileImpact(direction: "forward" | "backward" | "both") {
+    const g = selectedFile();
+    if (!g) return;
+    setLoadingImpact(true);
+    try {
+      const sp = new URLSearchParams({ path: g.file, service: g.service, direction });
+      const res = await fetch(`/api/file/impact?${sp.toString()}`);
+      if (!res.ok) {
+        uiStore.setNotification("File impact query failed");
+        return;
+      }
+      const data = await res.json();
+      setFileImpact({ direction, entries: data.impacted ?? [] });
+    } finally {
+      setLoadingImpact(false);
+    }
+  }
 
   const selectedService = createMemo(() => {
     const id = selectedId();
@@ -62,10 +136,17 @@ const Detail: Component = () => {
     const id = selectedId();
     setSource(null);
     setDetail(null);
-    if (!id || isBoundaryGroupId(id) || isServiceNodeId(id)) return;
+    setFileImpact(null);
+    setVarFlow(null);
+    if (!id || isBoundaryGroupId(id) || isFileGroupId(id) || isServiceNodeId(id)) return;
     const res = await fetch(`/api/node/${encodeURIComponent(id)}`);
     if (!res.ok) return;
-    setDetail(await res.json());
+    const d: NodeDetail = await res.json();
+    setDetail(d);
+    if (d.node.type === "variable") {
+      const fres = await fetch(`/api/variable/${encodeURIComponent(id)}/flow`);
+      if (fres.ok) setVarFlow(await fres.json());
+    }
   });
 
   async function loadSource() {
@@ -133,6 +214,91 @@ const Detail: Component = () => {
         )}
       </Show>
 
+      {/* File group panel */}
+      <Show when={selectedFile()}>
+        {(g) => (
+          <div class="flex flex-col gap-3">
+            <h2 class="text-sm font-semibold text-indigo-300 break-all">{g().file}</h2>
+            <dl class="text-xs text-gray-300 space-y-1">
+              <div class="flex gap-2"><dt class="text-gray-500 w-20 shrink-0">Service</dt><dd>{g().service}</dd></div>
+              <div class="flex gap-2"><dt class="text-gray-500 w-20 shrink-0">Nodes</dt><dd>{g().members.length}</dd></div>
+            </dl>
+            <div class="flex gap-1 flex-wrap">
+              <CopyPath path={g().file} />
+              <button
+                class="rounded bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs px-2 py-1 cursor-pointer"
+                onClick={() => loadFileImpact("forward")}
+                disabled={loadingImpact()}
+              >
+                ↓ downstream
+              </button>
+              <button
+                class="rounded bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs px-2 py-1 cursor-pointer"
+                onClick={() => loadFileImpact("backward")}
+                disabled={loadingImpact()}
+              >
+                ↑ upstream
+              </button>
+              <button
+                class="rounded bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs px-2 py-1 cursor-pointer"
+                onClick={() => uiStore.toggleFileCollapse(g().id)}
+              >
+                {uiStore.collapsedFiles().includes(g().id) ? "Expand file" : "Collapse file"}
+              </button>
+            </div>
+
+            <Show when={loadingImpact()}>
+              <span class="text-[10px] text-gray-500">computing impact…</span>
+            </Show>
+            <Show when={fileImpact()}>
+              {(imp) => (
+                <div>
+                  <h3 class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+                    {imp().direction === "forward" ? "Downstream" : imp().direction === "backward" ? "Upstream" : "Impacted"} files ({imp().entries.length})
+                  </h3>
+                  <Show when={imp().entries.length === 0}>
+                    <p class="text-xs text-gray-500">No impacted files within depth.</p>
+                  </Show>
+                  <ul class="flex flex-col gap-1 text-xs">
+                    <For each={imp().entries}>
+                      {(e) => (
+                        <li class="flex items-center gap-1.5">
+                          <span class="text-gray-600 shrink-0">d{e.min_depth}</span>
+                          <button
+                            class="text-gray-300 hover:text-indigo-300 truncate cursor-pointer text-left"
+                            title={`${e.file} — ${e.nodes} nodes via ${e.edge_types.join(", ")}`}
+                            onClick={() => uiStore.setSelectedNodeId(fileGroupId(e.service, e.file))}
+                          >
+                            {e.file}
+                          </button>
+                          <span class="text-gray-600 shrink-0">{e.nodes}</span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </div>
+              )}
+            </Show>
+
+            <ul class="flex flex-col gap-1 text-xs text-gray-400">
+              <For each={g().members}>
+                {(m) => (
+                  <li class="truncate" title={`${m.file}:${m.line}`}>
+                    <button
+                      class="hover:text-indigo-300 cursor-pointer"
+                      onClick={() => uiStore.setSelectedNodeId(m.id)}
+                    >
+                      {m.label}
+                    </button>
+                    <span class="text-gray-600 ml-1">:{m.line} · {m.type}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        )}
+      </Show>
+
       {/* High-level service panel */}
       <Show when={selectedService()}>
         {(s) => (
@@ -158,7 +324,7 @@ const Detail: Component = () => {
       <Show
         when={detail()}
         fallback={
-          <Show when={!selectedGroup() && !selectedService()}>
+          <Show when={!selectedGroup() && !selectedFile() && !selectedService()}>
             <p class="text-sm text-gray-500">Select a node to see details.</p>
           </Show>
         }
@@ -178,7 +344,8 @@ const Detail: Component = () => {
             </dl>
 
             {/* Trace from here */}
-            <div class="flex gap-1">
+            <div class="flex gap-1 flex-wrap">
+              <CopyPath path={d().node.file} />
               <button
                 class="rounded bg-pink-800 hover:bg-pink-700 text-white text-xs px-2 py-1 cursor-pointer"
                 onClick={() => graphStore.fetchTrace(d().node.id, "both", graphStore.traceDepth())}
@@ -214,6 +381,48 @@ const Detail: Component = () => {
                   </For>
                 </dl>
               </details>
+            </Show>
+
+            {/* Variable flow summary */}
+            <Show when={varFlow()}>
+              {(vf) => {
+                const section = (title: string, refs: FlowRef[] | null, metaKey?: string) => (
+                  <Show when={(refs?.length ?? 0) > 0}>
+                    <div>
+                      <h3 class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+                        {title} ({refs!.length})
+                      </h3>
+                      <ul class="flex flex-col gap-0.5">
+                        <For each={refs!}>
+                          {(r) => (
+                            <li class="flex items-center gap-1.5 text-xs">
+                              <button
+                                class="text-gray-300 hover:text-indigo-300 truncate cursor-pointer text-left"
+                                title={`${r.file}:${r.line}`}
+                                onClick={() => uiStore.setSelectedNodeId(r.id)}
+                              >
+                                {r.label}
+                              </button>
+                              <Show when={metaKey && r.meta?.[metaKey!]}>
+                                <span class="text-[10px] text-amber-400">{r.meta![metaKey!]}</span>
+                              </Show>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
+                );
+                return (
+                  <div class="flex flex-col gap-2 border border-gray-800 rounded p-2">
+                    <h3 class="text-[10px] uppercase tracking-wide text-orange-400">Variable flow</h3>
+                    {section("Mutated by", vf().writers, "op")}
+                    {section("Read by", vf().readers)}
+                    {section("Captured by (closure)", vf().captured_by, "by")}
+                    {section("Flows to", vf().flows_to, "mode")}
+                  </div>
+                );
+              }}
             </Show>
 
             {/* Edges */}
