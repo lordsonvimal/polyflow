@@ -1,4 +1,4 @@
 {
-  "patterns": ["goroutine_call", "goroutine_call"],
-  "node_types": ["spawns", "spawns"]
+  "patterns": ["goroutine_call", "goroutine_call", "goroutine_anon"],
+  "node_types": ["spawns", "spawns", "worker"]
 }

@@ -18,3 +18,13 @@ patterns:
     captures:
       - name: callee
         role: goroutine_callee
+  # Anonymous goroutine: go func() { ... }(). There is no named callee to
+  # reference, so this emits a worker node ("go func()") that the enclosing
+  # function spawns; calls inside the closure body are attributed to the
+  # enclosing function by the regular call patterns.
+  - name: goroutine_anon
+    query: |
+      (go_statement
+        (call_expression
+          function: (func_literal) @_fn))
+    captures: []

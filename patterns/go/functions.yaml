@@ -1,17 +1,19 @@
 language: go
 version: "1"
 patterns:
+  # @_def spans the whole declaration so the matcher can record where the
+  # body ends (containment-based enclosing-function attribution).
   - name: func_decl
     query: |
       (function_declaration
-        name: (identifier) @name)
+        name: (identifier) @name) @_def
     captures:
       - name: name
         role: func_name
   - name: method_decl
     query: |
       (method_declaration
-        (field_identifier) @name)
+        (field_identifier) @name) @_def
     captures:
       - name: name
         role: method_name
