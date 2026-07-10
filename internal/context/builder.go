@@ -14,6 +14,12 @@ type Result struct {
 	Depth        int           `json:"depth"`
 	TotalNodes   int           `json:"total_nodes"`
 	TotalEdges   int           `json:"total_edges"`
+
+	// Unresolved lists references in the traversed files that the indexer
+	// could not resolve — edges that may be missing from this answer. Always
+	// present ([] when clean) so its absence is never mistaken for certainty.
+	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
+	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 }
 
 // TraceNode is a node in a traversal result with its edge type and depth.
@@ -77,7 +83,25 @@ func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int) *Result 
 		Depth:        depth,
 		TotalNodes:   len(nodeSet) + 1, // +1 for the target itself
 		TotalEdges:   len(edgeSet),
+		Unresolved:   []graph.UnresolvedRef{},
 	}
+}
+
+// AttachUnresolved scopes the workspace's unresolved-reference ledger to the
+// files touched by this traversal and records the matches on the result.
+func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
+	files := make(map[string]bool, len(r.Upstream)+len(r.Downstream)+1)
+	if r.Target != nil {
+		files[r.Target.File] = true
+	}
+	for _, n := range r.Upstream {
+		files[n.File] = true
+	}
+	for _, n := range r.Downstream {
+		files[n.File] = true
+	}
+	r.Unresolved = graph.UnresolvedInFiles(refs, files)
+	r.UnresolvedNote = graph.UnresolvedNote(len(r.Unresolved))
 }
 
 // traverse runs BFS in the appropriate directions for the given task.
