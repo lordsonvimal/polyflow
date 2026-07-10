@@ -68,6 +68,25 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		ancestors = filtered
 	}
 
+	callers, entryPoints, servicesAffected, triggers := assemble(idx, ancestors)
+
+	return &Result{
+		Target:               root,
+		Callers:              callers,
+		EntryPoints:          entryPoints,
+		ServicesAffected:     servicesAffected,
+		CrossServiceTriggers: triggers,
+		Depth:                depth,
+		TotalCallers:         len(callers),
+		Unresolved:           []graph.UnresolvedRef{},
+	}
+}
+
+// assemble turns a traversed ancestor set into the shared output pieces:
+// callers with edge context, entry points (ancestors with no incoming
+// edges), the affected-service set, and cross-service triggers (edges
+// arriving at any ancestor from a different service).
+func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult) ([]Caller, []*graph.Node, []string, []CrossServiceTrigger) {
 	callers := make([]Caller, 0, len(ancestors))
 	for _, a := range ancestors {
 		c := Caller{
@@ -88,7 +107,6 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		callers = append(callers, c)
 	}
 
-	// Entry points: ancestors with no incoming edges.
 	var entryPoints []*graph.Node
 	for _, a := range ancestors {
 		if len(idx.InEdges[a.Node.ID]) == 0 {
@@ -105,8 +123,6 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		servicesAffected = append(servicesAffected, svc)
 	}
 
-	// Cross-service triggers: edges arriving at any ancestor from a
-	// different service.
 	xsCount := make(map[string]int)
 	for _, a := range ancestors {
 		for _, e := range idx.InEdges[a.Node.ID] {
@@ -121,16 +137,7 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		triggers = append(triggers, CrossServiceTrigger{FromService: svc, EdgeCount: cnt})
 	}
 
-	return &Result{
-		Target:               root,
-		Callers:              callers,
-		EntryPoints:          entryPoints,
-		ServicesAffected:     servicesAffected,
-		CrossServiceTriggers: triggers,
-		Depth:                depth,
-		TotalCallers:         len(callers),
-		Unresolved:           []graph.UnresolvedRef{},
-	}
+	return callers, entryPoints, servicesAffected, triggers
 }
 
 // AttachUnresolved scopes the workspace's unresolved-reference ledger to the

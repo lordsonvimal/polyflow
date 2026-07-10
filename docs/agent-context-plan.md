@@ -205,7 +205,28 @@ and other agents.
 
 ## Tier 2 — Missing queries
 
-### Phase 2.1 — Diff-aware impact `pending`
+### Phase 2.1 — Diff-aware impact `done`
+
+> Outcome: `polyflow impact --diff [--staged]` reindexes incrementally,
+> parses `git diff -U0` (worktree-vs-HEAD by default, `--cached` with
+> `--staged`; `internal/gitdiff`), and maps each hunk to nodes by span
+> overlap: declaration line for point nodes, `end_line` meta for
+> function/method/worker bodies, with a nearest-preceding open-ended-scope
+> fallback (matcher parity). Blast radii are unioned at minimum depth via
+> `impact.BuildDiff`; changed nodes appear as `targets`, never double as
+> callers. Trust contract carried through: hunks with no node land in an
+> `unmapped_hunks` section (always present, like `unresolved`) and survive
+> any token budget; deleted files are reported there too — their former
+> callers surface as unresolved refs after the reindex. Supports the full
+> impact flag set (`--depth/--service/--format/--max-tokens/--summary/`
+> `--snippet-lines`); shares `assemble`/`rollupCallers` with the node-target
+> path. Untracked files are intentionally skipped: committed code cannot
+> reference a brand-new file unless the referencing file also changed, which
+> the diff already covers. MCP exposure of the diff tool is a follow-up.
+> Verified on this repo: the phase's own working tree mapped 3 changed files
+> to 13 nodes, flagged the import-hunk as unmapped, and surfaced
+> `mcpserver.go` in the blast radius via the shared budgeting code.
+
 `polyflow impact --diff [--staged]`: map git diff hunks → nodes by
 file + line-span, incremental reindex first, union blast radius. Directly
 answers "will my current changes impact anything".
