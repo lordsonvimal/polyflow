@@ -1,0 +1,19 @@
+language: html
+version: "1"
+patterns:
+  # Navigation links in static HTML: <a href="/reports">, <form action="/save">.
+  # Only root-relative paths; the linker emits navigates_to edges to the
+  # matching route handler.
+  - name: nav_link_href
+    query: |
+      (attribute
+        (attribute_name) @prop
+        (#match? @prop "^(href|action)$")
+        (quoted_attribute_value
+          (attribute_value) @path
+          (#match? @path "^/")))
+    captures:
+      - name: prop
+        role: nav_attr
+      - name: path
+        role: http_path

@@ -15,6 +15,22 @@ patterns:
         role: dom_event_type
       - name: handler
         role: event_handler
+  # DOM property handlers: el.onclick = fn, input.oninput = …
+  # onmessage is excluded — it belongs to the WebSocket/EventSource patterns
+  # (ws_onmessage_assign), which classify it as a subscriber.
+  - name: dom_event_prop_assign
+    query: |
+      (assignment_expression
+        left: (member_expression
+          property: (property_identifier) @prop
+          (#match? @prop "^on[a-z]+$")
+          (#not-eq? @prop "onmessage"))
+        right: (_) @handler)
+    captures:
+      - name: prop
+        role: dom_event_type
+      - name: handler
+        role: event_handler
   - name: remove_event_listener
     query: |
       (call_expression

@@ -33,6 +33,8 @@ func grammarForExt(ext string) string {
 		return "tsx"
 	case ".rb":
 		return "ruby"
+	case ".html":
+		return "html"
 	default:
 		return ""
 	}

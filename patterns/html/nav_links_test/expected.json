@@ -1,0 +1,4 @@
+{
+  "patterns": ["nav_link_href", "nav_link_href"],
+  "node_types": ["http_client", "http_client"]
+}

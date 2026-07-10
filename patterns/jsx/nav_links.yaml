@@ -1,0 +1,20 @@
+language: jsx
+version: "1"
+patterns:
+  # Navigation links in JSX: <a href="/reports">, <form action="/save">.
+  # Only root-relative paths — external URLs and fragments are not part of
+  # the app's own flow. The linker emits navigates_to edges to the matching
+  # route handler (nav_link meta keeps them out of the API-call linking).
+  - name: nav_link_jsx
+    query: |
+      (jsx_attribute
+        (property_identifier) @prop
+        (#match? @prop "^(href|action)$")
+        (string
+          (string_fragment) @path
+          (#match? @path "^/")))
+    captures:
+      - name: prop
+        role: nav_attr
+      - name: path
+        role: http_path

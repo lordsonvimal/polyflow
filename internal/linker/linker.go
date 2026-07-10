@@ -118,11 +118,11 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 
 	var crossEdges []graph.Edge
 	for _, client := range clients {
-		// Navigation links (href/action attributes in HTML) are not API calls;
-		// skip them to avoid spurious cross-service edges.
-		if client.Meta["nav_link"] == "true" {
-			continue
-		}
+		// Navigation links (href/action attributes) are not API calls: they
+		// get navigates_to edges when a route handler matches, and are
+		// dropped silently otherwise (an unmatched page link is not an
+		// unresolved API dependency worth flagging).
+		isNavLink := client.Meta["nav_link"] == "true"
 		method := client.Meta["method"]
 		path := client.Meta["path"]
 		if path == "" {
@@ -164,6 +164,23 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 		handler, confidence := resolveHandler(method, path, exactHandlers, normalHandlers)
 
 		if handler != nil {
+			// Nav links connect a rendered page to the route that serves the
+			// target — same-service pairs are the common case (a server-side
+			// template linking to its own routes), so they are kept.
+			if isNavLink {
+				crossEdges = append(crossEdges, graph.Edge{
+					ID:         fmt.Sprintf("nav:%s->%s", client.ID, handler.ID),
+					From:       client.ID,
+					To:         handler.ID,
+					Type:       graph.EdgeTypeNavigatesTo,
+					Label:      fmt.Sprintf("%s %s", method, path),
+					Confidence: confidence,
+					Method:     method,
+					Path:       path,
+					Meta:       map[string]string{"confidence": confidence, "via": "nav_link"},
+				})
+				continue
+			}
 			// Skip same-service pairs — those are already captured by "calls" edges
 			if client.Service == handler.Service {
 				continue
@@ -183,6 +200,8 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 				Path:       path,
 				Meta:       edgeMeta,
 			})
+		} else if isNavLink {
+			continue // unmatched page link: no unresolved-edge noise
 		} else {
 			// Unresolvable: emit edge with unknown confidence so the call is visible
 			targetService := client.Meta["target_service"]
