@@ -151,7 +151,18 @@ sanity: unresolved count is nonzero and explains remaining known gaps.
 
 ## Tier 1 — Agent interface
 
-### Phase 1.1 — Uncertainty in the output contract `pending`
+### Phase 1.1 — Uncertainty in the output contract `done`
+
+> Outcome: `context`, `impact` (node + `--file` modes), and `trace` JSON all
+> carry an `unresolved` array (always present, `[]` when clean so absence is
+> never mistaken for certainty) scoped to the traversed files, plus an
+> `unresolved_note` "verify these N unresolved references manually…" when
+> nonempty. Text formats append the same list; chain format notes it on
+> stderr. Scoping helper `graph.UnresolvedInFiles` + `graph.UnresolvedNote`
+> shared across all three commands. Verified on this repo:
+> `impact --target hiddenTypes` surfaces 80 refs, all in traversed files;
+> Go-side traces report 0 with an explicit empty section.
+
 `context`/`impact`/`trace` JSON gains an `unresolved` section (from 0.5)
 scoped to the traversed files, plus per-edge confidence already present.
 Agent-facing message: "verify these N references manually."
