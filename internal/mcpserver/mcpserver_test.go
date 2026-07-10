@@ -200,6 +200,54 @@ func TestTraceTool_BackwardChain(t *testing.T) {
 	require.Len(t, out.Unresolved, 1)
 }
 
+func TestContextTool_SummaryRollsUpPerFile(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Summary  bool             `json:"summary"`
+		Files    []map[string]any `json:"files"`
+		Upstream []map[string]any `json:"upstream"`
+		Budget   map[string]any   `json:"budget"`
+	}
+	callJSON(t, cs, "context", map[string]any{"target": "getUser", "summary": true}, &out)
+
+	assert.True(t, out.Summary)
+	assert.NotEmpty(t, out.Files, "summary must carry file rollups")
+	assert.Empty(t, out.Upstream, "summary must drop per-node detail")
+	assert.Equal(t, "summary", out.Budget["level"])
+}
+
+func TestImpactTool_MaxTokensKeepsDetailWhenItFits(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Callers []map[string]any `json:"callers"`
+		Budget  map[string]any   `json:"budget"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB", "max_tokens": 100000}, &out)
+
+	assert.NotEmpty(t, out.Callers, "generous budget keeps per-node detail")
+	assert.Equal(t, "detail", out.Budget["level"])
+}
+
+func TestImpactTool_TightMaxTokensRollsUp(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Summary bool             `json:"summary"`
+		Files   []map[string]any `json:"files"`
+		Budget  map[string]any   `json:"budget"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB", "max_tokens": 60}, &out)
+
+	assert.True(t, out.Summary)
+	assert.NotEmpty(t, out.Files)
+	assert.Equal(t, "summary", out.Budget["level"])
+}
+
 func TestUnknownTargetIsToolError(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)

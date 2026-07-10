@@ -185,10 +185,23 @@ Thin stdio MCP wrapper exposing `search`, `context`, `impact`, `trace`
 (same query layer as REST). Enables automatic tool discovery by Claude Code
 and other agents.
 
-### Phase 1.3 — Token budgeting `pending`
-`--max-tokens`/`--summary` on context/impact: file-grouped rollups at low
-budgets, per-node detail at higher; optional `snippet_lines` inlining so the
-agent skips Read round-trips for signatures.
+### Phase 1.3 — Token budgeting `done`
+
+> Outcome: `--max-tokens`/`--summary`/`--snippet-lines` on context/impact
+> (CLI flags + MCP inputs: `max_tokens`/`summary`/`snippet_lines`).
+> `internal/budget` estimates tokens (~4 JSON bytes/token) and picks the
+> shape: per-node detail when it fits, file-grouped rollup (`Summarize`)
+> when over, tail files trimmed when even the rollup is over — but the
+> unresolved section is always carried whole (trust contract: blind spots
+> are never cut to save tokens; a tiny budget therefore has a floor).
+> Emitted output carries a `budget` section (level, estimated_tokens, note,
+> omitted_files) so the agent knows what it got. `impact --file` gained the
+> same trimming via `impact.FileResult`, which also de-duplicates the
+> file-mode output shape that CLI and MCP each had. Snippet inlining copies
+> index-aliased nodes before mutation; failures are best-effort empty.
+> Measured on this repo: `impact --target hiddenTypes` detail ≈2.7k tokens;
+> `--max-tokens 4000` keeps detail, `--max-tokens 500` rolls up to 5 file
+> entries and trims to 1.
 
 ## Tier 2 — Missing queries
 
