@@ -66,8 +66,11 @@ func New(store Store, idx *graph.AdjacencyIndex, version string) (*mcp.Server, *
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "context",
 		Description: "Show the call context around a node: upstream callers, downstream callees, " +
-			"and cross-service edges. The unresolved section lists references in the traversed " +
-			"files the indexer could not resolve — verify those manually, edges may be missing. " +
+			"and cross-service edges. Pass files instead of target to get the ranked files related " +
+			"to those file(s) (graph neighborhood, direct references first) — answers 'where is " +
+			"the code connected to X' without grep exploration. The unresolved section lists " +
+			"references in the traversed files the indexer could not resolve — verify those " +
+			"manually, edges may be missing. " +
 			"Set max_tokens to cap output size (over budget, per-node detail rolls up per file), " +
 			"summary to force the rollup, snippet_lines to inline source snippets per node.",
 	}, s.context)
@@ -183,15 +186,45 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 // ─── context ─────────────────────────────────────────────────────────────────
 
 type contextInput struct {
-	Target       string `json:"target" jsonschema:"search query for the target node"`
-	Task         string `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
-	Depth        int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 5, -1 = unlimited)"`
-	MaxTokens    int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
-	Summary      bool   `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
-	SnippetLines int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	Target       string   `json:"target,omitempty" jsonschema:"search query for the target node (use this or files)"`
+	Files        []string `json:"files,omitempty" jsonschema:"file path(s): return ranked related files (graph neighborhood) instead of node context"`
+	Service      string   `json:"service,omitempty" jsonschema:"with files: restrict seed file resolution to a service"`
+	Limit        int      `json:"limit,omitempty" jsonschema:"with files: max related files returned (default 20, -1 = unlimited)"`
+	Task         string   `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
+	Depth        int      `json:"depth,omitempty" jsonschema:"max traversal depth (node mode default 5, files mode default 2, -1 = unlimited)"`
+	MaxTokens    int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
+	Summary      bool     `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
+	SnippetLines int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
 }
 
 func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
+	if (in.Target == "") == (len(in.Files) == 0) {
+		return nil, nil, fmt.Errorf("provide exactly one of target or files")
+	}
+	store, idx := s.snapshot()
+
+	// Files mode: rank the files related to the seed file(s).
+	if len(in.Files) > 0 {
+		limit := in.Limit
+		switch {
+		case limit < 0:
+			limit = 0
+		case limit == 0:
+			limit = 20
+		}
+		result, err := pfcontext.BuildFiles(idx, in.Service, in.Files, effectiveDepth(in.Depth, 2), limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		unresolved, err := store.ListUnresolvedRefs(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		result.AttachUnresolved(unresolved)
+		result.ApplyBudget(in.MaxTokens)
+		return jsonResult(result)
+	}
+
 	task := in.Task
 	if task == "" {
 		task = "debug"
@@ -201,7 +234,6 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 	}
 	depth := effectiveDepth(in.Depth, 5)
 
-	store, idx := s.snapshot()
 	root, err := resolveNode(ctx, store, in.Target)
 	if err != nil {
 		return nil, nil, err
