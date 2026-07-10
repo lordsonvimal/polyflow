@@ -181,3 +181,38 @@ func TestRun_JSONCarriesVersionAndEdgeMeta(t *testing.T) {
 		assert.True(t, strings.Contains(js, want), "trace JSON missing %s\n%s", want, js)
 	}
 }
+
+func TestAttachUnresolved_ScopedToTracedFiles(t *testing.T) {
+	idx := buildIdx(
+		[]graph.Node{
+			{ID: "a", Label: "A", Service: "svc-1", Type: graph.NodeTypeFunction, File: "a.go"},
+			{ID: "b", Label: "B", Service: "svc-1", Type: graph.NodeTypeFunction, File: "b.go"},
+		},
+		[]graph.Edge{{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls}},
+	)
+	r := Run(idx, "a", "forward", 5)
+	require.NotNil(t, r)
+
+	r.AttachUnresolved([]graph.UnresolvedRef{
+		{Service: "svc-1", File: "b.go", Line: 4, Name: "mystery", Kind: "call_ref"},
+		{Service: "svc-1", File: "elsewhere.go", Line: 9, Name: "other", Kind: "call_ref"},
+	})
+
+	require.Len(t, r.Unresolved, 1)
+	assert.Equal(t, "mystery", r.Unresolved[0].Name)
+	assert.Contains(t, r.UnresolvedNote, "verify this 1 unresolved reference manually")
+}
+
+func TestAttachUnresolved_CleanTraceHasEmptySectionAndNoNote(t *testing.T) {
+	r := Run(linearGraph(), "a", "forward", 5)
+	require.NotNil(t, r)
+
+	r.AttachUnresolved([]graph.UnresolvedRef{
+		{Service: "svc-9", File: "unrelated.go", Line: 1, Name: "x", Kind: "import_ref"},
+	})
+
+	assert.Empty(t, r.UnresolvedNote)
+	data, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"unresolved":[]`)
+}

@@ -54,6 +54,12 @@ type Result struct {
 	EdgeTypes []string    `json:"edge_types"`
 	Services  []string    `json:"services"`
 	Truncated bool        `json:"truncated,omitempty"`
+
+	// Unresolved lists references in the traced files that the indexer could
+	// not resolve — edges that may be missing from this answer. Always
+	// present ([] when clean) so its absence is never mistaken for certainty.
+	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
+	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 }
 
 // Run traces from rootID in the given direction ("forward", "backward",
@@ -65,7 +71,7 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int) *Result
 		return nil
 	}
 
-	r := &Result{Root: root, Direction: direction, Depth: depth}
+	r := &Result{Root: root, Direction: direction, Depth: depth, Unresolved: []graph.UnresolvedRef{}}
 
 	if direction == "backward" || direction == "both" {
 		r.Nodes = append(r.Nodes, toHops(idx, graph.Ancestors(idx, rootID, depth))...)
@@ -91,6 +97,27 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int) *Result
 	r.EdgeTypes = sortedKeys(edgeTypes)
 	r.Services = sortedKeys(services)
 	return r
+}
+
+// AttachUnresolved scopes the workspace's unresolved-reference ledger to the
+// files touched by this trace and records the matches on the result. Chain
+// hops are included alongside Nodes to keep the scope exact even if chain
+// enumeration and traversal diverge.
+func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
+	files := make(map[string]bool, len(r.Nodes)+1)
+	if r.Root != nil {
+		files[r.Root.File] = true
+	}
+	for _, h := range r.Nodes {
+		files[h.File] = true
+	}
+	for _, c := range r.Chains {
+		for _, h := range c.Hops {
+			files[h.File] = true
+		}
+	}
+	r.Unresolved = graph.UnresolvedInFiles(refs, files)
+	r.UnresolvedNote = graph.UnresolvedNote(len(r.Unresolved))
 }
 
 // toHops converts traversal results to hops with full node + edge metadata.

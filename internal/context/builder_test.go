@@ -1,6 +1,7 @@
 package context_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	ctx "github.com/lordsonvimal/polyflow/internal/context"
@@ -131,4 +132,31 @@ func TestBuild_JSONCarriesNodeAndEdgeMeta(t *testing.T) {
 	assert.Equal(t, "1.55.8", d.Meta["resolved_version"])
 	assert.Equal(t, graph.ConfidenceInferred, d.Confidence)
 	assert.Equal(t, "sdk", d.EdgeMeta["via"])
+}
+
+func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
+	idx := fixtureIndex()
+	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	require.NotNil(t, result)
+
+	result.AttachUnresolved([]graph.UnresolvedRef{
+		{Service: "backend", File: "db.go", Line: 41, Name: "dynDispatch", Kind: "call_ref"},
+		{Service: "backend", File: "unrelated.go", Line: 5, Name: "other", Kind: "call_ref"},
+	})
+
+	// db.go is downstream of the target; unrelated.go was never traversed.
+	require.Len(t, result.Unresolved, 1)
+	assert.Equal(t, "dynDispatch", result.Unresolved[0].Name)
+	assert.Contains(t, result.UnresolvedNote, "verify this 1 unresolved reference manually")
+}
+
+func TestBuild_UnresolvedDefaultsToEmptyNotNull(t *testing.T) {
+	idx := fixtureIndex()
+	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	require.NotNil(t, result)
+
+	data, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"unresolved":[]`)
+	assert.NotContains(t, string(data), "unresolved_note")
 }
