@@ -145,6 +145,102 @@ func TestMatchToGraph_NoModuleNodeForGo(t *testing.T) {
 	assert.Empty(t, edges)
 }
 
+// Top-level cobra RunE references in Go files attribute to the file's main
+// (regression: every CLI subcommand appeared as a root node).
+func TestMatchToGraph_GoTopLevelCallRefFallsBackToMain(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "func_decl",
+			File:        "cmd/app/main.go",
+			Line:        29,
+			EndLine:     40,
+			Captures:    map[string]string{"name": "main"},
+		},
+		{
+			PatternName: "func_decl",
+			File:        "cmd/app/main.go",
+			Line:        214,
+			EndLine:     260,
+			Captures:    map[string]string{"name": "runIndex"},
+		},
+		{
+			PatternName: "cobra_run", // RunE: runIndex inside a package-level var block
+			File:        "cmd/app/main.go",
+			Line:        211,
+			Captures:    map[string]string{"callee": "runIndex"},
+		},
+	}
+	nodes, edges := patterns.MatchToGraph("svc", results)
+
+	labelByID := map[string]string{}
+	for _, n := range nodes {
+		labelByID[n.ID] = n.Label
+		assert.NotEqual(t, "(module)", n.Label, "Go files must not grow module nodes")
+	}
+	require.Len(t, edges, 1)
+	assert.Equal(t, graph.EdgeTypeCalls, edges[0].Type)
+	assert.Equal(t, "main", labelByID[edges[0].From])
+	assert.Equal(t, "runIndex", labelByID[edges[0].To])
+}
+
+// Without main, top-level Go call refs fall back to init; a ref to init
+// itself must not self-edge.
+func TestMatchToGraph_GoTopLevelCallRefInitFallback(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "func_decl",
+			File:        "cmd/app/root.go",
+			Line:        10,
+			EndLine:     20,
+			Captures:    map[string]string{"name": "init"},
+		},
+		{
+			PatternName: "func_decl",
+			File:        "cmd/app/root.go",
+			Line:        30,
+			EndLine:     60,
+			Captures:    map[string]string{"name": "runRoot"},
+		},
+		{
+			PatternName: "cobra_run",
+			File:        "cmd/app/root.go",
+			Line:        25,
+			Captures:    map[string]string{"callee": "runRoot"},
+		},
+	}
+	nodes, edges := patterns.MatchToGraph("svc", results)
+
+	labelByID := map[string]string{}
+	for _, n := range nodes {
+		labelByID[n.ID] = n.Label
+	}
+	require.Len(t, edges, 1)
+	assert.Equal(t, "init", labelByID[edges[0].From])
+	assert.Equal(t, "runRoot", labelByID[edges[0].To])
+}
+
+// A Go file with neither main nor init still drops top-level call refs
+// (recorded by the recall gauge in a later phase).
+func TestMatchToGraph_GoTopLevelCallRefNoScopeDropped(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "func_decl",
+			File:        "cmd/app/other.go",
+			Line:        30,
+			EndLine:     60,
+			Captures:    map[string]string{"name": "runOther"},
+		},
+		{
+			PatternName: "cobra_run",
+			File:        "cmd/app/other.go",
+			Line:        25,
+			Captures:    map[string]string{"callee": "runOther"},
+		},
+	}
+	_, edges := patterns.MatchToGraph("svc", results)
+	assert.Empty(t, edges)
+}
+
 // Anonymous goroutines produce a worker node spawned by the enclosing function.
 func TestMatchToGraph_AnonGoroutineSpawns(t *testing.T) {
 	results := []patterns.MatchResult{
