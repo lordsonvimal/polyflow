@@ -1,6 +1,7 @@
 package context
 
 import (
+	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -20,6 +21,10 @@ type Result struct {
 	// present ([] when clean) so its absence is never mistaken for certainty.
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
 	UnresolvedNote string                `json:"unresolved_note,omitempty"`
+
+	// Budget records the token-budgeting decision when --max-tokens was set
+	// and the detail shape was emitted.
+	Budget *budget.Info `json:"budget,omitempty"`
 }
 
 // TraceNode is a node in a traversal result with its edge type and depth.
@@ -38,6 +43,7 @@ type TraceNode struct {
 	Confidence string            `json:"confidence,omitempty"`
 	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
 	Depth      int               `json:"depth"`
+	Snippet    string            `json:"snippet,omitempty"`
 }
 
 // CrossEdge represents a connection that crosses service boundaries.

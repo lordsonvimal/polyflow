@@ -67,7 +67,9 @@ func New(store Store, idx *graph.AdjacencyIndex, version string) (*mcp.Server, *
 		Name: "context",
 		Description: "Show the call context around a node: upstream callers, downstream callees, " +
 			"and cross-service edges. The unresolved section lists references in the traversed " +
-			"files the indexer could not resolve — verify those manually, edges may be missing.",
+			"files the indexer could not resolve — verify those manually, edges may be missing. " +
+			"Set max_tokens to cap output size (over budget, per-node detail rolls up per file), " +
+			"summary to force the rollup, snippet_lines to inline source snippets per node.",
 	}, s.context)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -76,7 +78,9 @@ func New(store Store, idx *graph.AdjacencyIndex, version string) (*mcp.Server, *
 			"transitively depends on it, entry points, and affected services. Directly answers " +
 			"'what is impacted if I change X'. The unresolved section lists references the " +
 			"indexer could not resolve — verify those manually, the blast radius may be " +
-			"under-reported where they appear.",
+			"under-reported where they appear. Set max_tokens to cap output size (over budget, " +
+			"per-node detail rolls up per file), summary to force the rollup, snippet_lines to " +
+			"inline source snippets per node.",
 	}, s.impact)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -179,9 +183,12 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 // ─── context ─────────────────────────────────────────────────────────────────
 
 type contextInput struct {
-	Target string `json:"target" jsonschema:"search query for the target node"`
-	Task   string `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
-	Depth  int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 5, -1 = unlimited)"`
+	Target       string `json:"target" jsonschema:"search query for the target node"`
+	Task         string `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
+	Depth        int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 5, -1 = unlimited)"`
+	MaxTokens    int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
+	Summary      bool   `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
+	SnippetLines int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
 }
 
 func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
@@ -206,30 +213,21 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 	result.AttachUnresolved(unresolved)
-	return jsonResult(result)
+	result.InlineSnippets(".", in.SnippetLines)
+	return jsonResult(result.ApplyBudget(in.MaxTokens, in.Summary))
 }
 
 // ─── impact ──────────────────────────────────────────────────────────────────
 
 type impactInput struct {
-	Target    string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
-	File      string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
-	Direction string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
-	Depth     int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
-	Service   string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
-}
-
-// fileImpactOutput is the file-granularity impact shape, matching
-// `polyflow impact --file`.
-type fileImpactOutput struct {
-	File      string                  `json:"file"`
-	Service   string                  `json:"service"`
-	Direction string                  `json:"direction"`
-	Depth     int                     `json:"depth"`
-	Impacted  []graph.FileImpactEntry `json:"impacted"`
-
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
+	Target       string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
+	File         string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
+	Direction    string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
+	Depth        int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
+	Service      string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
+	MaxTokens    int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
+	Summary      bool   `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
+	SnippetLines int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
 }
 
 func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impactInput) (*mcp.CallToolResult, any, error) {
@@ -249,23 +247,12 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		if direction == "" {
 			direction = "backward"
 		}
-		seeds := graph.NodesInFile(idx, in.Service, in.File)
-		if len(seeds) == 0 {
-			return nil, nil, fmt.Errorf("file not found in index: %s", in.File)
+		out, err := impact.BuildFile(idx, in.Service, in.File, direction, depth)
+		if err != nil {
+			return nil, nil, err
 		}
-		out := fileImpactOutput{
-			File:      seeds[0].File,
-			Service:   seeds[0].Service,
-			Direction: direction,
-			Depth:     depth,
-			Impacted:  graph.FileImpact(idx, in.Service, in.File, direction, depth),
-		}
-		files := map[string]bool{out.File: true}
-		for _, e := range out.Impacted {
-			files[e.File] = true
-		}
-		out.Unresolved = graph.UnresolvedInFiles(unresolved, files)
-		out.UnresolvedNote = graph.UnresolvedNote(len(out.Unresolved))
+		out.AttachUnresolved(unresolved)
+		out.ApplyBudget(in.MaxTokens)
 		return jsonResult(out)
 	}
 
@@ -275,7 +262,8 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 	out := impact.Build(idx, root, depth, in.Service)
 	out.AttachUnresolved(unresolved)
-	return jsonResult(out)
+	out.InlineSnippets(".", in.SnippetLines)
+	return jsonResult(out.ApplyBudget(in.MaxTokens, in.Summary))
 }
 
 // ─── trace ───────────────────────────────────────────────────────────────────

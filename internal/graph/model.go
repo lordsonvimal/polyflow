@@ -109,6 +109,10 @@ type Node struct {
 	Line     int               `json:"line"`
 	Language string            `json:"language"`
 	Meta     map[string]string `json:"meta,omitempty"`
+
+	// Snippet is inlined source (query output only, never persisted): set on
+	// copies of index nodes when a query asks for snippet inlining.
+	Snippet string `json:"snippet,omitempty"`
 }
 
 // Confidence levels for edges — how certain the linker is about a match.
