@@ -23,3 +23,54 @@ patterns:
         role: const_name
       - name: value
         role: const_value
+  # URL-builder helpers: a function whose body returns a string/template
+  # literal (e.g. mermaidURL() → `/api/export/mermaid?${sp}`). Feeds the
+  # constant-propagation table so fetch(mermaidURL(...)) resolves to a path.
+  - name: fn_return_string
+    query: |
+      (function_declaration
+        name: (identifier) @name
+        body: (statement_block
+          (return_statement
+            (string) @value)))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value
+  - name: fn_return_template_prefix
+    query: |
+      (function_declaration
+        name: (identifier) @name
+        body: (statement_block
+          (return_statement
+            (template_string) @value)))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value
+  - name: fn_return_string
+    query: |
+      (lexical_declaration
+        (variable_declarator
+          name: (identifier) @name
+          value: (arrow_function
+            body: (string) @value)))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value
+  - name: fn_return_template_prefix
+    query: |
+      (lexical_declaration
+        (variable_declarator
+          name: (identifier) @name
+          value: (arrow_function
+            body: (template_string) @value)))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value

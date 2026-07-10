@@ -132,6 +132,23 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			}
 		}
 
+		// Module-scope variables are call targets too: Solid signal accessors
+		// and setters (const [x, setX] = createSignal(...)) are variables that
+		// hold functions, so uiStore.setX(...) must resolve to the variable
+		// node. Function declarations take precedence on label collisions.
+		svcVarByLabel := make(map[string]string)
+		for i := range nodes {
+			n := &nodes[i]
+			if n.Service != svcName {
+				continue
+			}
+			if n.Type == graph.NodeTypeVariable && n.Meta["scope"] == "module" {
+				if _, exists := svcVarByLabel[n.Label]; !exists {
+					svcVarByLabel[n.Label] = n.ID
+				}
+			}
+		}
+
 		// Build per-file line→enclosing function index.
 		funcLinesByFile := make(map[string][]lineNode)
 		for i := range nodes {
@@ -140,7 +157,11 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 				continue
 			}
 			if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
-				funcLinesByFile[n.File] = append(funcLinesByFile[n.File], lineNode{n.Line, n.ID})
+				end := 0
+				if v, ok := n.Meta["end_line"]; ok {
+					fmt.Sscanf(v, "%d", &end)
+				}
+				funcLinesByFile[n.File] = append(funcLinesByFile[n.File], lineNode{n.Line, end, n.ID})
 			}
 		}
 
@@ -149,7 +170,7 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			if !isJSFile(file) {
 				continue
 			}
-			importEdges := resolveImportCalls(file, svcName, svcFuncByLabel, funcLinesByFile)
+			importEdges := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile)
 			for _, e := range importEdges {
 				if !seen[e.ID] {
 					seen[e.ID] = true
@@ -183,10 +204,11 @@ func isJSFile(file string) bool {
 // resolved target function in the imported file's node set.
 type lineNode struct {
 	line int
+	end  int // declaration body end (0 = unknown, treated as open-ended)
 	id   string
 }
 
-func resolveImportCalls(file string, _ string, svcFuncByLabel map[string]string, funcLinesByFile map[string][]lineNode) []graph.Edge {
+func resolveImportCalls(file string, svcFuncByLabel, svcVarByLabel map[string]string, funcLinesByFile map[string][]lineNode) []graph.Edge {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil
@@ -435,16 +457,24 @@ func resolveImportCalls(file string, _ string, svcFuncByLabel map[string]string,
 	for _, cs := range callSites {
 		targetID, ok := svcFuncByLabel[cs.targetLabel]
 		if !ok {
-			continue
+			// Fall back to module-scope variables (signal accessors/setters).
+			if targetID, ok = svcVarByLabel[cs.targetLabel]; !ok {
+				continue
+			}
 		}
-		// Find enclosing function in this file.
+		// Find the innermost function containing the call site. Functions
+		// without a recorded end line are treated as open-ended.
 		var best *lineNode
 		for j := range funcs {
 			f := &funcs[j]
-			if f.line <= cs.line {
-				if best == nil || f.line > best.line {
-					best = f
-				}
+			if f.line > cs.line {
+				continue
+			}
+			if f.end > 0 && cs.line > f.end {
+				continue
+			}
+			if best == nil || f.line > best.line {
+				best = f
 			}
 		}
 		if best == nil || best.id == targetID {
