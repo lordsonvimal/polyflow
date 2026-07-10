@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -60,6 +61,10 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// Node IDs carry workspace-relative file paths while SSA positions are
 	// absolute, so both sides are canonicalized before comparison.
 	nodeByFileAndName := make(map[string]string, len(knownNodes))
+	// Worker (goroutine) nodes indexed by file+line: anonymous SSA functions
+	// spawned by `go func(){…}` resolve here so the goroutine body's calls
+	// flow out of the worker node instead of the enclosing named function.
+	workerByFileLine := make(map[string]string)
 	for id := range knownNodes {
 		// ID format: service:file:type:name:line
 		parts := strings.SplitN(id, ":", 5)
@@ -67,6 +72,10 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 			continue
 		}
 		file, name := parts[1], parts[3]
+		if parts[2] == string(graph.NodeTypeWorker) {
+			workerByFileLine[canonicalPath(file)+"\x00"+parts[4]] = id
+			continue
+		}
 		key := canonicalPath(file) + "\x00" + name
 		// Prefer the first match; for Go, name is unique per file in practice.
 		if _, exists := nodeByFileAndName[key]; !exists {
@@ -82,6 +91,15 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		pos := fset.Position(fn.Pos())
 		if !pos.IsValid() || pos.Filename == "" {
 			return "", false
+		}
+		// Anonymous functions: when a worker node exists at the func literal's
+		// position (a goroutine body), resolve to it; otherwise fall through to
+		// name-stripping, which attributes plain closures to their parent.
+		if fn.Parent() != nil {
+			key := canonicalPath(pos.Filename) + "\x00" + strconv.Itoa(pos.Line)
+			if id, ok := workerByFileLine[key]; ok {
+				return id, true
+			}
 		}
 		// Strip anonymous suffixes like "$1" and numbered init suffixes like "#1".
 		name := fn.Name()
@@ -150,6 +168,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 					}
 				}
 
+				_, isGo := instr.(*ssa.Go)
 				for _, callee := range callees {
 					if !inService[callee] {
 						continue
@@ -166,6 +185,18 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 						continue
 					}
 					seen[key] = true
+					if isGo {
+						// `go f()` / `go func(){…}()`: a spawn, not a call. The
+						// ID matches the tree-sitter pattern edge so the store
+						// upsert dedupes instead of drawing a second edge.
+						edges = append(edges, graph.Edge{
+							ID:   fmt.Sprintf("%s:%s->%s", graph.EdgeTypeSpawns, callerID, calleeID),
+							From: callerID,
+							To:   calleeID,
+							Type: graph.EdgeTypeSpawns,
+						})
+						continue
+					}
 					edges = append(edges, graph.Edge{
 						ID:   "semantic:calls:" + key,
 						From: callerID,
