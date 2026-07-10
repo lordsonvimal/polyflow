@@ -231,8 +231,31 @@ and other agents.
 file + line-span, incremental reindex first, union blast radius. Directly
 answers "will my current changes impact anything".
 
-### Phase 2.2 — File-granularity related-files answer `pending`
-`search`/`context` file mode: given file(s), return ranked related files
+### Phase 2.2 — File-granularity related-files answer `done`
+
+> Outcome: `context --file <path>` (repeatable; `--service`/`--limit`/`--depth`/
+> `--max-tokens`/`--format` supported) and the MCP `context` tool's `files`
+> input return the files related to the seed file(s), answering "where is the
+> code for X". Ranking (`graph.RelatedFiles`): direct references first — the
+> count of distinct edges with one endpoint in a seed file and the other
+> outside, in *either* direction, since relatedness is symmetric though edges
+> are not — then hop distance, then reached-node count. Neighborhood is an
+> undirected multi-source BFS over all seed nodes at once (a file two hops away
+> through a shared caller counts, and hop distances are the true minimum);
+> import-derived cross-file edges are already materialized as calls/reads/
+> writes/uses_type by the linker, so imports need no special case. Seed files
+> are excluded from their own result; paths resolve like `NodesInFile` (exact,
+> then "/"+path suffix). Trust contract carried through: any seed path with no
+> nodes in the index is an error (a silently ignored seed would fake
+> completeness), the unresolved section is scoped to seed+related files and
+> always present, and it survives any token budget (only the related list is
+> trimmed). File mode defaults `--depth` to 2 — a call-graph neighborhood at
+> depth 5 is the whole repo. Verified on this repo: `context --file
+> internal/graph/related.go` ranks model.go/files.go/context/files.go (its
+> direct dependents and dependencies) above depth-2 neighbors; `--max-tokens
+> 300` trims to 8 files with an omitted-count note.
+
+`context` file mode: given file(s), return ranked related files
 (graph neighborhood + imports), for "find where the code for X is" prompts.
 
 ## UI track (after Tier 0 lands; data must be right before presenting it)
