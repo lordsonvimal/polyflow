@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS edges (
 
 CREATE INDEX IF NOT EXISTS idx_nodes_service    ON nodes(service);
 CREATE INDEX IF NOT EXISTS idx_nodes_type       ON nodes(type);
+CREATE INDEX IF NOT EXISTS idx_nodes_file       ON nodes(file);
 CREATE INDEX IF NOT EXISTS idx_edges_from       ON edges("from");
 CREATE INDEX IF NOT EXISTS idx_edges_to         ON edges("to");
 CREATE INDEX IF NOT EXISTS idx_edges_type       ON edges(type);
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS file_hashes (
 CREATE TABLE IF NOT EXISTS semantic_cache (
 	service     TEXT PRIMARY KEY,
 	fingerprint TEXT NOT NULL,
+	nodes_json  TEXT NOT NULL DEFAULT '[]',
 	edges_json  TEXT NOT NULL DEFAULT '[]'
 );
 
@@ -451,29 +453,30 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-func (s *SQLiteStore) UpsertSemanticCache(ctx context.Context, service, fingerprint, edgesJSON string) error {
+func (s *SQLiteStore) UpsertSemanticCache(ctx context.Context, service, fingerprint, nodesJSON, edgesJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO semantic_cache (service, fingerprint, edges_json)
-		VALUES (?, ?, ?)
+		INSERT INTO semantic_cache (service, fingerprint, nodes_json, edges_json)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT(service) DO UPDATE SET
-			fingerprint=excluded.fingerprint, edges_json=excluded.edges_json`,
-		service, fingerprint, edgesJSON)
+			fingerprint=excluded.fingerprint, nodes_json=excluded.nodes_json,
+			edges_json=excluded.edges_json`,
+		service, fingerprint, nodesJSON, edgesJSON)
 	if err != nil {
 		return fmt.Errorf("upsert semantic cache %s: %w", service, err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) GetSemanticCache(ctx context.Context, service string) (fingerprint, edgesJSON string, err error) {
+func (s *SQLiteStore) GetSemanticCache(ctx context.Context, service string) (fingerprint, nodesJSON, edgesJSON string, err error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT fingerprint, edges_json FROM semantic_cache WHERE service = ?`, service)
-	if err := row.Scan(&fingerprint, &edgesJSON); err != nil {
+		`SELECT fingerprint, nodes_json, edges_json FROM semantic_cache WHERE service = ?`, service)
+	if err := row.Scan(&fingerprint, &nodesJSON, &edgesJSON); err != nil {
 		if err == sql.ErrNoRows {
-			return "", "", nil
+			return "", "", "", nil
 		}
-		return "", "", fmt.Errorf("get semantic cache %s: %w", service, err)
+		return "", "", "", fmt.Errorf("get semantic cache %s: %w", service, err)
 	}
-	return fingerprint, edgesJSON, nil
+	return fingerprint, nodesJSON, edgesJSON, nil
 }
 
 func (s *SQLiteStore) UpsertDependency(ctx context.Context, d *Dependency) error {

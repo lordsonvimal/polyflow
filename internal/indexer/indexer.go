@@ -85,21 +85,28 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// Load the incremental cache from the previous graph, if any.
 	finalDB := filepath.Join(opts.DBDir, meta.DBFile)
 	oldHashes := map[string]*graph.FileHash{}
-	oldSemantic := map[string][2]string{} // service → (fingerprint, edgesJSON)
+	oldSemantic := map[string][3]string{} // service → (fingerprint, nodesJSON, edgesJSON)
 	oldFingerprint := ""
 	if !opts.Full {
 		if _, err := os.Stat(finalDB); err == nil {
 			if oldStore, err := graph.NewSQLiteStore(finalDB); err == nil {
-				if hs, err := oldStore.ListFileHashes(ctx); err == nil {
-					oldHashes = hs
-				}
-				for _, svc := range cfg.Services {
-					if fp, edges, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
-						oldSemantic[svc.Name] = [2]string{fp, edges}
+				// Cached results from an older data-model generation are
+				// unusable — ignore them all and re-index from scratch.
+				ver, _ := oldStore.GetMeta(ctx, "schema_version")
+				if ver == graph.SchemaVersion {
+					if hs, err := oldStore.ListFileHashes(ctx); err == nil {
+						oldHashes = hs
 					}
-				}
-				if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
-					oldFingerprint = fp
+					for _, svc := range cfg.Services {
+						if fp, nodes, edges, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
+							oldSemantic[svc.Name] = [3]string{fp, nodes, edges}
+						}
+					}
+					if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
+						oldFingerprint = fp
+					}
+				} else {
+					fmt.Fprintf(logw, "  Schema version changed (%q → %q) — full re-index\n", ver, graph.SchemaVersion)
 				}
 				oldStore.Close()
 			}
@@ -369,10 +376,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		fingerprint := fingerprintLines(svcHashLines[sf.svc.Name])
 
+		var semNodes []graph.Node
 		var semEdges []graph.Edge
 		if cached, ok := oldSemantic[sf.svc.Name]; ok && cached[0] == fingerprint {
-			_ = json.Unmarshal([]byte(cached[1]), &semEdges)
-			fmt.Fprintf(logw, "  Semantic analysis: %s — cached (%d edges)\n", sf.svc.Name, len(semEdges))
+			_ = json.Unmarshal([]byte(cached[1]), &semNodes)
+			_ = json.Unmarshal([]byte(cached[2]), &semEdges)
+			fmt.Fprintf(logw, "  Semantic analysis: %s — cached (%d nodes, %d edges)\n", sf.svc.Name, len(semNodes), len(semEdges))
 		} else {
 			absSvcPath, err := filepath.Abs(sf.svc.Path)
 			if err != nil {
@@ -385,15 +394,26 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				semanticWarnings = append(semanticWarnings, sem.Warning)
 				continue
 			}
-			semEdges = sem.Edges
-			fmt.Fprintf(logw, "  Semantic analysis: %s — %d call edges added\n", sf.svc.Name, len(semEdges))
+			semNodes, semEdges = sem.Nodes, sem.Edges
+			fmt.Fprintf(logw, "  Semantic analysis: %s — %d nodes, %d edges added\n", sf.svc.Name, len(semNodes), len(semEdges))
 		}
 
+		nodesJSON, _ := json.Marshal(semNodes)
 		edgesJSON, _ := json.Marshal(semEdges)
-		if err := store.UpsertSemanticCache(ctx, sf.svc.Name, fingerprint, string(edgesJSON)); err != nil {
+		if err := store.UpsertSemanticCache(ctx, sf.svc.Name, fingerprint, string(nodesJSON), string(edgesJSON)); err != nil {
 			return nil, err
 		}
 		bwSem := graph.NewBatchWriter(store)
+		// Semantic nodes (variables, structs) land before edges so FK
+		// references and the knownNodeIDs endpoint check both hold.
+		for i := range semNodes {
+			n := semNodes[i]
+			if err := bwSem.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			knownNodeIDs[n.ID] = true
+			allNodes = append(allNodes, n)
+		}
 		for i := range semEdges {
 			e := semEdges[i]
 			if !knownNodeIDs[e.From] || !knownNodeIDs[e.To] {
@@ -523,6 +543,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	stats.CrossLinks = len(crossEdges)
 
 	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
+		return nil, err
+	}
+	if err := store.SetMeta(ctx, "schema_version", graph.SchemaVersion); err != nil {
 		return nil, err
 	}
 	if err := store.SetMeta(ctx, "workspace_fingerprint", workspaceFingerprint); err != nil {

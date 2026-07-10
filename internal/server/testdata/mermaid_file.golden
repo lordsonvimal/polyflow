@@ -1,0 +1,22 @@
+flowchart LR
+  subgraph api
+    subgraph f0["(no file)"]
+      n0["sqlite (datastore)"]
+    end
+    subgraph f1["api/main.go"]
+      n1["CreateUser (function)"]
+      n2["POST /users (http_handler)"]
+    end
+    subgraph f2["api/s3.go"]
+      n3["PutObject (external_service)"]
+    end
+  end
+  subgraph web
+    subgraph f3["web/src/app.js"]
+      n4["POST /api/users (http_client)"]
+    end
+  end
+  n1 -.->|queries| n0
+  n1 -->|cloud_call| n3
+  n2 -->|calls| n1
+  n4 -->|http_call| n2

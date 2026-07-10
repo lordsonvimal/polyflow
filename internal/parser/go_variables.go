@@ -1,0 +1,334 @@
+package parser
+
+import (
+	"encoding/json"
+	"fmt"
+	"go/token"
+	"go/types"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"golang.org/x/tools/go/ssa"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
+)
+
+// extractVariables walks the already-built SSA packages and emits the
+// variable-tracking layer of the graph:
+//
+//   - variable nodes for package-level vars/consts and closure-captured
+//     locals (the variables whose mutation matters beyond one function —
+//     purely-local variables are deliberately NOT nodes)
+//   - struct nodes with their field list in meta
+//   - writes/reads edges from functions to tracked globals
+//   - captures edges from the enclosing function to variables its closures
+//     capture (Go closures capture by reference)
+//   - flows_to edges when a tracked variable is passed at a call site,
+//     annotated by-ref vs by-value
+//   - uses_type edges from functions whose signatures mention a struct
+//
+// All edges carry static confidence — they come from the type checker, not
+// heuristics.
+func extractVariables(
+	ssaPkgs []*ssa.Package,
+	dir, service string,
+	fset *token.FileSet,
+	inService map[*ssa.Function]bool,
+	resolveFunc func(*ssa.Function) (string, bool),
+) ([]graph.Node, []graph.Edge) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	// relPath converts an absolute SSA position to the workspace-relative
+	// form used by tree-sitter node IDs and File fields.
+	relPath := func(abs string) string {
+		if rel, err := filepath.Rel(canonicalPath(cwd), canonicalPath(abs)); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+		return abs
+	}
+	inDir := func(pos token.Position) bool {
+		return pos.IsValid() && pos.Filename != "" &&
+			strings.HasPrefix(canonicalPath(pos.Filename), canonicalPath(dir))
+	}
+
+	var nodes []graph.Node
+	var edges []graph.Edge
+	nodeSeen := map[string]bool{}
+	edgeSeen := map[string]bool{}
+
+	addNode := func(n graph.Node) {
+		if !nodeSeen[n.ID] {
+			nodeSeen[n.ID] = true
+			nodes = append(nodes, n)
+		}
+	}
+	addEdge := func(typ graph.EdgeType, from, to string, meta map[string]string) {
+		id := fmt.Sprintf("semantic:%s:%s->%s", typ, from, to)
+		if edgeSeen[id] {
+			return
+		}
+		edgeSeen[id] = true
+		edges = append(edges, graph.Edge{
+			ID: id, From: from, To: to, Type: typ,
+			Confidence: graph.ConfidenceStatic, Meta: meta,
+		})
+	}
+
+	// globalIDs maps each package-level *ssa.Global to its node ID so the
+	// instruction walk below can attribute loads/stores to it.
+	globalIDs := map[*ssa.Global]string{}
+	// structIDs maps a named struct type to its node ID for uses_type edges.
+	structIDs := map[*types.Named]string{}
+
+	// ── Package members: globals, consts, struct types ──────────────────────
+	for _, p := range ssaPkgs {
+		if p == nil {
+			continue
+		}
+		for _, m := range p.Members {
+			pos := fset.Position(m.Pos())
+			if !inDir(pos) {
+				continue
+			}
+			file := relPath(pos.Filename)
+			switch v := m.(type) {
+			case *ssa.Global:
+				// A Global's SSA type is a pointer to the variable's type.
+				dataType := v.Type().String()
+				if ptr, ok := v.Type().(*types.Pointer); ok {
+					dataType = ptr.Elem().String()
+				}
+				id := fmt.Sprintf("%s:%s:variable:%s:%d", service, file, v.Name(), pos.Line)
+				globalIDs[v] = id
+				addNode(graph.Node{
+					ID: id, Type: graph.NodeTypeVariable, Label: v.Name(),
+					Service: service, File: file, Line: pos.Line, Language: "go",
+					Meta: map[string]string{
+						"data_type": dataType, "kind": "var",
+						"scope": "package", "mutable": "true",
+					},
+				})
+			case *ssa.NamedConst:
+				id := fmt.Sprintf("%s:%s:variable:%s:%d", service, file, v.Name(), pos.Line)
+				addNode(graph.Node{
+					ID: id, Type: graph.NodeTypeVariable, Label: v.Name(),
+					Service: service, File: file, Line: pos.Line, Language: "go",
+					Meta: map[string]string{
+						"data_type": v.Value.Type().String(), "kind": "const",
+						"scope": "package", "mutable": "false",
+					},
+				})
+			case *ssa.Type:
+				named, ok := v.Type().(*types.Named)
+				if !ok {
+					continue
+				}
+				st, ok := named.Underlying().(*types.Struct)
+				if !ok {
+					continue
+				}
+				type fieldInfo struct {
+					Name string `json:"name"`
+					Type string `json:"type"`
+					Tag  string `json:"tag,omitempty"`
+				}
+				fields := make([]fieldInfo, 0, st.NumFields())
+				for i := 0; i < st.NumFields(); i++ {
+					f := st.Field(i)
+					fields = append(fields, fieldInfo{Name: f.Name(), Type: f.Type().String(), Tag: st.Tag(i)})
+				}
+				fieldsJSON, _ := json.Marshal(fields)
+				id := fmt.Sprintf("%s:%s:struct:%s:%d", service, file, v.Name(), pos.Line)
+				structIDs[named] = id
+				addNode(graph.Node{
+					ID: id, Type: graph.NodeTypeStruct, Label: v.Name(),
+					Service: service, File: file, Line: pos.Line, Language: "go",
+					Meta: map[string]string{
+						"fields":      string(fieldsJSON),
+						"field_count": fmt.Sprintf("%d", st.NumFields()),
+					},
+				})
+			}
+		}
+	}
+
+	// rootGlobal peels FieldAddr/IndexAddr chains to find the Global (if any)
+	// a store/load address ultimately refers to.
+	var rootGlobal func(v ssa.Value) *ssa.Global
+	rootGlobal = func(v ssa.Value) *ssa.Global {
+		switch a := v.(type) {
+		case *ssa.Global:
+			return a
+		case *ssa.FieldAddr:
+			return rootGlobal(a.X)
+		case *ssa.IndexAddr:
+			return rootGlobal(a.X)
+		case *ssa.UnOp:
+			if a.Op == token.MUL {
+				return rootGlobal(a.X)
+			}
+		}
+		return nil
+	}
+
+	// byRef reports whether a value of type t is shared when passed — the
+	// callee can observe or cause mutations through it.
+	byRef := func(t types.Type) bool {
+		switch t.Underlying().(type) {
+		case *types.Pointer, *types.Slice, *types.Map, *types.Chan:
+			return true
+		}
+		return false
+	}
+
+	// enclosing resolves fn (or, for anonymous closures, its outermost named
+	// parent) to a graph node ID.
+	enclosing := func(fn *ssa.Function) (string, bool) {
+		for fn.Parent() != nil {
+			fn = fn.Parent()
+		}
+		return resolveFunc(fn)
+	}
+
+	// ── Instruction walk: reads, writes, captures, flows_to, uses_type ──────
+	for fn := range inService {
+		fnID, fnResolved := enclosing(fn)
+
+		// Closure captures: every free variable of fn was declared in a
+		// parent function; surface it as a captured-variable node.
+		if fnResolved && len(fn.FreeVars) > 0 {
+			for _, fv := range fn.FreeVars {
+				pos := fset.Position(fv.Pos())
+				if !inDir(pos) {
+					continue
+				}
+				file := relPath(pos.Filename)
+				dataType := fv.Type().String()
+				if ptr, ok := fv.Type().(*types.Pointer); ok {
+					dataType = ptr.Elem().String()
+				}
+				id := fmt.Sprintf("%s:%s:variable:%s:%d", service, file, fv.Name(), pos.Line)
+				addNode(graph.Node{
+					ID: id, Type: graph.NodeTypeVariable, Label: fv.Name(),
+					Service: service, File: file, Line: pos.Line, Language: "go",
+					Meta: map[string]string{
+						"data_type": dataType, "kind": "var",
+						"scope": "captured", "mutable": "true",
+					},
+				})
+				// Go closures always capture by reference.
+				addEdge(graph.EdgeTypeCaptures, fnID, id, map[string]string{"by": "ref"})
+			}
+		}
+
+		// uses_type: signature parameters/results referencing a known struct.
+		if fnResolved {
+			sig := fn.Signature
+			checkType := func(t types.Type) {
+				named, ok := t.(*types.Named)
+				if !ok {
+					if ptr, isPtr := t.(*types.Pointer); isPtr {
+						named, ok = ptr.Elem().(*types.Named)
+					}
+				}
+				if !ok || named == nil {
+					return
+				}
+				if sid, tracked := structIDs[named]; tracked {
+					addEdge(graph.EdgeTypeUsesType, fnID, sid, nil)
+				}
+			}
+			for i := 0; i < sig.Params().Len(); i++ {
+				checkType(sig.Params().At(i).Type())
+			}
+			for i := 0; i < sig.Results().Len(); i++ {
+				checkType(sig.Results().At(i).Type())
+			}
+		}
+
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				switch in := instr.(type) {
+				case *ssa.Store:
+					if g := rootGlobal(in.Addr); g != nil {
+						if id, ok := globalIDs[g]; ok && fnResolved {
+							addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "assign"})
+						}
+					}
+					// Mutation through a captured variable's address.
+					if fv, ok := in.Addr.(*ssa.FreeVar); ok && fnResolved {
+						pos := fset.Position(fv.Pos())
+						if inDir(pos) {
+							id := fmt.Sprintf("%s:%s:variable:%s:%d", service, relPath(pos.Filename), fv.Name(), pos.Line)
+							if nodeSeen[id] {
+								addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "assign", "via": "closure"})
+							}
+						}
+					}
+				case *ssa.MapUpdate:
+					if g := rootGlobal(in.Map); g != nil {
+						if id, ok := globalIDs[g]; ok && fnResolved {
+							addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "map_update"})
+						}
+					}
+				case *ssa.UnOp:
+					if in.Op != token.MUL {
+						continue
+					}
+					if g, ok := in.X.(*ssa.Global); ok {
+						if id, tracked := globalIDs[g]; tracked && fnResolved {
+							addEdge(graph.EdgeTypeReads, fnID, id, nil)
+						}
+					}
+				case ssa.CallInstruction:
+					common := in.Common()
+					callee, _ := common.Value.(*ssa.Function)
+					if callee == nil || !inService[callee] {
+						continue
+					}
+					calleeID, ok := resolveFunc(callee)
+					if !ok {
+						continue
+					}
+					for _, arg := range common.Args {
+						var g *ssa.Global
+						var argType types.Type
+						switch a := arg.(type) {
+						case *ssa.Global:
+							// Address of a global passed directly — by ref.
+							g, argType = a, a.Type()
+						case *ssa.UnOp:
+							if a.Op == token.MUL {
+								if root, isG := a.X.(*ssa.Global); isG {
+									g, argType = root, a.Type()
+								}
+							}
+						}
+						if g == nil {
+							continue
+						}
+						id, tracked := globalIDs[g]
+						if !tracked {
+							continue
+						}
+						mode := "value"
+						if byRef(argType) {
+							mode = "ref"
+						}
+						addEdge(graph.EdgeTypeFlowsTo, id, calleeID, map[string]string{
+							"mode": mode, "data_type": argType.String(),
+						})
+					}
+				}
+			}
+		}
+	}
+
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
+}
