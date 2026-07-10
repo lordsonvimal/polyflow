@@ -52,7 +52,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 	}
 
-	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
 
 	// Build file+name → nodeID index from known tree-sitter nodes.
@@ -217,7 +217,12 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 	}
 
-	return SemanticResult{Edges: edges}
+	// Variable-tracking layer: package globals/consts, structs, mutations,
+	// closure captures, by-ref/by-value flow (reuses this SSA build).
+	varNodes, varEdges := extractVariables(ssaPkgs, dir, service, fset, inService, resolveFunc)
+	edges = append(edges, varEdges...)
+
+	return SemanticResult{Nodes: varNodes, Edges: edges}
 }
 
 // canonicalPath resolves a path to its absolute, symlink-evaluated form so

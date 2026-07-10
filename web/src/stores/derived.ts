@@ -9,6 +9,8 @@ import { graphStore } from "./graph";
 import { uiStore } from "./ui";
 import { filterEdgesByConfidence } from "../lib/confidence";
 import { applyBoundaryCollapse, BoundaryGroup } from "../lib/boundary";
+import { applyFileGrouping, FileGroup } from "../lib/filegroup";
+import { buildStructureView } from "../lib/structure";
 import { aggregateServices } from "../lib/aggregate";
 import { GraphNode, GraphEdge } from "../lib/types";
 
@@ -49,11 +51,30 @@ export const boundaryGroups = createMemo<BoundaryGroup[]>(() => {
   return applyBoundaryCollapse(f.nodes, f.edges, uiStore.expandedBoundaries()).groups;
 });
 
+// File groups present in the current in-depth graph — the Detail panel uses
+// this for the per-file panel (copy path, impact, collapse toggle).
+export const fileGroups = createMemo<FileGroup[]>(() => {
+  const f = filtered();
+  if (!uiStore.groupByFile() || uiStore.viewMode() === "highlevel") return [];
+  const collapsed = applyBoundaryCollapse(f.nodes, f.edges, uiStore.expandedBoundaries());
+  return applyFileGrouping(collapsed.nodes, collapsed.edges, uiStore.collapsedFiles()).groups;
+});
+
 export const visibleGraph = createMemo<{ nodes: GraphNode[]; edges: GraphEdge[] }>(() => {
   const f = filtered();
   if (uiStore.viewMode() === "highlevel") {
     return aggregateServices(f.nodes, f.edges);
   }
+  if (uiStore.viewMode() === "structure") {
+    const s = buildStructureView(f.nodes, f.edges);
+    if (!uiStore.groupByFile()) return s;
+    const grouped = applyFileGrouping(s.nodes, s.edges, uiStore.collapsedFiles());
+    return { nodes: grouped.nodes, edges: grouped.edges };
+  }
   const collapsed = applyBoundaryCollapse(f.nodes, f.edges, uiStore.expandedBoundaries());
-  return { nodes: collapsed.nodes, edges: collapsed.edges };
+  if (!uiStore.groupByFile()) {
+    return { nodes: collapsed.nodes, edges: collapsed.edges };
+  }
+  const grouped = applyFileGrouping(collapsed.nodes, collapsed.edges, uiStore.collapsedFiles());
+  return { nodes: grouped.nodes, edges: grouped.edges };
 });

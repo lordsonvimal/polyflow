@@ -9,6 +9,7 @@ import { uiStore } from "../stores/ui";
 import { visibleGraph } from "../stores/derived";
 import { edgeConfidence } from "../lib/confidence";
 import { BOUNDARY_GROUP_TYPE, isBoundaryGroupId } from "../lib/boundary";
+import { FILE_GROUP_TYPE, isFileGroupId } from "../lib/filegroup";
 import { SERVICE_NODE_TYPE } from "../lib/aggregate";
 import { DEFAULT_NODE_COLOR, LABEL_COLOR, LANG_COLORS, NODE_TYPE_STYLES } from "../lib/styles";
 
@@ -70,6 +71,40 @@ const STYLE: cytoscape.Stylesheet[] = [
       "font-size": "9px",
     } as any,
   },
+  // Structure view: struct/class nodes show multi-line field labels
+  {
+    selector: 'node[type="struct"], node[type="class"]',
+    style: {
+      "text-wrap": "wrap",
+      "text-max-width": "220px",
+      "font-size": "9px",
+    } as any,
+  },
+  // File group containers (compound parents) and their collapsed form
+  {
+    selector: `node[type="${FILE_GROUP_TYPE}"]`,
+    style: {
+      shape: "round-rectangle",
+      "background-color": "#111827",
+      "background-opacity": 0.45,
+      "border-width": 1,
+      "border-color": "#374151",
+      color: "#9ca3af",
+      "font-size": "9px",
+      "text-valign": "top",
+      "text-margin-y": -4,
+    } as any,
+  },
+  {
+    selector: `node[type="${FILE_GROUP_TYPE}"][collapsed="true"]`,
+    style: {
+      "border-style": "dashed",
+      "border-color": "#6b7280",
+      "background-opacity": 0.8,
+      "text-valign": "center",
+      "text-margin-y": 0,
+    } as any,
+  },
   // High-level service nodes
   {
     selector: `node[type="${SERVICE_NODE_TYPE}"]`,
@@ -94,6 +129,24 @@ const STYLE: cytoscape.Stylesheet[] = [
       color: "#9ca3af",
       "text-rotation": "autorotate" as any,
     } as any,
+  },
+  // Variable-tracking edges: writes red, reads slate, captures orange
+  // dashed, flows_to cyan.
+  {
+    selector: 'edge[type="writes"]',
+    style: { "line-color": "#ef4444", "target-arrow-color": "#ef4444" } as any,
+  },
+  {
+    selector: 'edge[type="reads"]',
+    style: { "line-color": "#64748b", "target-arrow-color": "#64748b", opacity: 0.7 } as any,
+  },
+  {
+    selector: 'edge[type="captures"]',
+    style: { "line-color": "#f97316", "target-arrow-color": "#f97316", "line-style": "dashed" } as any,
+  },
+  {
+    selector: 'edge[type="flows_to"]',
+    style: { "line-color": "#22d3ee", "target-arrow-color": "#22d3ee" } as any,
   },
   // Uncertain edges: dashed + dimmed, visually distinct from confirmed flow
   {
@@ -130,10 +183,12 @@ const Graph: Component = () => {
     cy.on("tap", (evt) => {
       if (evt.target === cy) uiStore.setSelectedNodeId(null);
     });
-    // Double-tap a collapsed boundary group to expand it in place.
+    // Double-tap a collapsed boundary group to expand it in place, or a
+    // file group to collapse/expand the file.
     cy.on("dbltap", "node", (evt) => {
       const id = evt.target.data("id") as string;
       if (isBoundaryGroupId(id)) uiStore.toggleBoundary(id);
+      else if (isFileGroupId(id)) uiStore.toggleFileCollapse(id);
     });
 
     // Load the full graph on mount unless a trace is being restored from URL.
@@ -163,6 +218,8 @@ const Graph: Component = () => {
           file: n.file,
           line: n.line,
           language: n.language || inferLanguage(n.file),
+          ...(n.parent ? { parent: n.parent } : {}),
+          ...(n.meta?.collapsed ? { collapsed: n.meta.collapsed } : {}),
         },
       }))
     );
@@ -186,7 +243,12 @@ const Graph: Component = () => {
     }
 
     cy.resize();
-    cy.layout({ name: layout, fit: true, padding: 30 } as any).run();
+    // dagre has no compound-node support — parents end up overlapping. When
+    // file containers are on screen, silently run fcose (compound-aware)
+    // instead; the toolbar still shows the user's chosen layout.
+    const hasCompound = nodes.some((n) => n.parent);
+    const effective = hasCompound && layout === "dagre" ? "fcose" : layout;
+    cy.layout({ name: effective, fit: true, padding: 30 } as any).run();
   });
 
   // Dim everything outside the selected node's neighborhood.
