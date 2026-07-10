@@ -47,6 +47,7 @@ type templVisitor struct {
 	nodes            []graph.Node
 	edges            []graph.Edge
 	currentComponent string // node ID of the enclosing HTMLTemplate component
+	formMethod       string // method attr of the enclosing <form> (upper-case), "" outside forms
 }
 
 // line converts the 0-indexed templ Line to 1-indexed.
@@ -94,19 +95,41 @@ func (v *templVisitor) VisitHTMLTemplate(t *templparser.HTMLTemplate) error {
 }
 
 func (v *templVisitor) VisitElement(e *templparser.Element) error {
-	lineNo := line(e.Range.From)
+	// Forms carry their submit verb on a sibling attribute; anchors may spoof
+	// one via data-method (Rails UJS style). Record it before visiting the
+	// attributes so the action/href handler can stamp the right method.
+	prevMethod := v.formMethod
+	v.formMethod = elementMethod(e)
 	for _, attr := range e.Attributes {
 		if err := attr.Visit(v); err != nil {
 			return err
 		}
-		_ = lineNo
 	}
+	// Reset before descending: the verb belongs to this element's own
+	// action/href, not to links nested inside the form.
+	v.formMethod = prevMethod
 	for _, child := range e.Children {
 		if err := child.Visit(v); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// elementMethod extracts the HTTP verb from a <form method="…"> or an
+// <a data-method="…"> attribute, upper-cased; "" when absent.
+func elementMethod(e *templparser.Element) string {
+	for _, attr := range e.Attributes {
+		ca, ok := attr.(*templparser.ConstantAttribute)
+		if !ok {
+			continue
+		}
+		key := strings.ToLower(ca.Key.String())
+		if key == "method" || key == "data-method" {
+			return strings.ToUpper(strings.TrimSpace(ca.Value))
+		}
+	}
+	return ""
 }
 
 func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute) error {
@@ -166,15 +189,21 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 	// href / action pointing to a server path — nav links, not API calls
 	case key == "href" || key == "action":
 		if strings.HasPrefix(val, "/") {
+			method := "GET"
+			label := val
+			if v.formMethod != "" {
+				method = v.formMethod
+				label = method + " " + val
+			}
 			nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeHTTPClient, "href:"+val)
 			v.nodes = append(v.nodes, graph.Node{
 				ID: nodeID, Type: graph.NodeTypeHTTPClient,
-				Label:    val,
+				Label:    label,
 				Service:  v.service,
 				File:     v.file,
 				Line:     lineNo,
 				Language: "templ",
-				Meta:     map[string]string{"path": val, "method": "GET", "nav_link": "true"},
+				Meta:     map[string]string{"path": val, "method": method, "nav_link": "true"},
 			})
 			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeNavigatesTo))
 		}
