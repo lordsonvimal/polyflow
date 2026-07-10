@@ -18,6 +18,7 @@ import (
 
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/indexer"
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -52,6 +53,7 @@ func init() {
 		traceCmd,
 		configCmd,
 		depsCmd,
+		mcpCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
@@ -315,7 +317,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
 	// On a Write or Create event, reopen the store, rebuild the index, and push a
 	// graph_updated SSE event to all connected browser clients.
-	if err := watchDB(dbPath, srv); err != nil {
+	if err := watchDB(dbPath, func() { reloadDB(dbPath, srv) }); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not start DB watcher: %v\n", err)
 	}
 
@@ -336,8 +338,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 }
 
 // watchDB starts a background goroutine that watches dbPath for changes and
-// calls srv.Reload whenever the graph database is updated.
-func watchDB(dbPath string, srv *server.Server) error {
+// calls onChange whenever the graph database is updated (polyflow index
+// renames graph.db.tmp → graph.db, so directory-level Create/Write events
+// on the db path are the signal).
+func watchDB(dbPath string, onChange func()) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("create watcher: %w", err)
@@ -360,7 +364,7 @@ func watchDB(dbPath string, srv *server.Server) error {
 					continue
 				}
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-					reloadDB(dbPath, srv)
+					onChange()
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -914,41 +918,6 @@ var impactCmd = &cobra.Command{
 	RunE:  runImpact,
 }
 
-type impactCaller struct {
-	ID         string            `json:"id"`
-	Label      string            `json:"label"`
-	Type       string            `json:"type"`
-	Service    string            `json:"service"`
-	File       string            `json:"file"`
-	Line       int               `json:"line"`
-	Meta       map[string]string `json:"meta,omitempty"`
-	EdgeType   string            `json:"edge_type"`
-	Confidence string            `json:"confidence,omitempty"`
-	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
-	Depth      int               `json:"depth"`
-}
-
-type crossServiceTrigger struct {
-	FromService string `json:"from_service"`
-	EdgeCount   int    `json:"edge_count"`
-}
-
-type impactOutput struct {
-	Target                *graph.Node           `json:"target"`
-	Callers               []impactCaller        `json:"callers"`
-	EntryPoints           []*graph.Node         `json:"entry_points"`
-	ServicesAffected      []string              `json:"services_affected"`
-	CrossServiceTriggers  []crossServiceTrigger `json:"cross_service_triggers"`
-	Depth                 int                   `json:"depth"`
-	TotalCallers          int                   `json:"total_callers"`
-
-	// Unresolved lists references in the traversed files that the indexer
-	// could not resolve — the blast radius may be under-reported where these
-	// appear. Always present ([] when clean).
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
-}
-
 // fileImpactOutput is the JSON shape for `impact --file`.
 type fileImpactOutput struct {
 	File      string                  `json:"file"`
@@ -1023,93 +992,13 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ancestors := graph.Ancestors(idx, root.ID, impactDepth)
-
-	// Filter by service if requested.
-	if impactService != "" {
-		filtered := ancestors[:0]
-		for _, a := range ancestors {
-			if a.Node.Service == impactService {
-				filtered = append(filtered, a)
-			}
-		}
-		ancestors = filtered
-	}
-
-	// Build callers list.
-	callers := make([]impactCaller, 0, len(ancestors))
-	for _, a := range ancestors {
-		c := impactCaller{
-			ID:      a.Node.ID,
-			Label:   a.Node.Label,
-			Type:    string(a.Node.Type),
-			Service: a.Node.Service,
-			File:    a.Node.File,
-			Line:    a.Node.Line,
-			Meta:    a.Node.Meta,
-			Depth:   a.Depth,
-		}
-		if a.Via != nil {
-			c.EdgeType = string(a.Via.Type)
-			c.Confidence = a.Via.Confidence
-			c.EdgeMeta = a.Via.Meta
-		}
-		callers = append(callers, c)
-	}
-
-	// Entry points: ancestors with no incoming edges.
-	var entryPoints []*graph.Node
-	for _, a := range ancestors {
-		if len(idx.InEdges[a.Node.ID]) == 0 {
-			entryPoints = append(entryPoints, a.Node)
-		}
-	}
-
-	// Services affected.
-	svcSet := make(map[string]bool)
-	for _, a := range ancestors {
-		svcSet[a.Node.Service] = true
-	}
-	servicesAffected := make([]string, 0, len(svcSet))
-	for svc := range svcSet {
-		servicesAffected = append(servicesAffected, svc)
-	}
-
-	// Cross-service triggers: edges arriving at any ancestor node from a different service.
-	xsCount := make(map[string]int) // fromService -> count
-	for _, a := range ancestors {
-		for _, e := range idx.InEdges[a.Node.ID] {
-			fromNode := idx.Nodes[e.From]
-			if fromNode != nil && fromNode.Service != a.Node.Service {
-				xsCount[fromNode.Service]++
-			}
-		}
-	}
-	triggers := make([]crossServiceTrigger, 0, len(xsCount))
-	for svc, cnt := range xsCount {
-		triggers = append(triggers, crossServiceTrigger{FromService: svc, EdgeCount: cnt})
-	}
-
-	out := impactOutput{
-		Target:               root,
-		Callers:              callers,
-		EntryPoints:          entryPoints,
-		ServicesAffected:     servicesAffected,
-		CrossServiceTriggers: triggers,
-		Depth:                impactDepth,
-		TotalCallers:         len(callers),
-	}
+	out := impact.Build(idx, root, impactDepth, impactService)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return err
 	}
-	traversed := map[string]bool{root.File: true}
-	for _, c := range callers {
-		traversed[c.File] = true
-	}
-	out.Unresolved = graph.UnresolvedInFiles(unresolved, traversed)
-	out.UnresolvedNote = graph.UnresolvedNote(len(out.Unresolved))
+	out.AttachUnresolved(unresolved)
 
 	if impactFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(out)
@@ -1117,12 +1006,12 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	return printImpactText(out)
 }
 
-func printImpactText(out impactOutput) error {
+func printImpactText(out *impact.Result) error {
 	t := out.Target
 	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d\n\n", t.Label, t.Type, t.File, t.Line)
 
 	// Split callers into direct (depth 1) and indirect (depth > 1).
-	var direct, indirect []impactCaller
+	var direct, indirect []impact.Caller
 	for _, c := range out.Callers {
 		if c.Depth == 1 {
 			direct = append(direct, c)
