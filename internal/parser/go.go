@@ -13,21 +13,21 @@ type GoParser struct{}
 func (p *GoParser) Language() string     { return "go" }
 func (p *GoParser) Extensions() []string { return []string{".go"} }
 
-func (p *GoParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error) {
+func (p *GoParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	src, err := os.ReadFile(file)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	results, err := matcher.Match("go", file, src)
 	if err != nil {
 		// Return partial results on parse error rather than nothing.
-		nodes, edges := patterns.MatchToGraph(service, results)
+		nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 		setLanguage(nodes, "go")
-		return nodes, edges, err
+		return nodes, edges, unresolved, err
 	}
-	nodes, edges := patterns.MatchToGraph(service, results)
+	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "go")
-	return nodes, edges, nil
+	return nodes, edges, unresolved, nil
 }
 
 func init() {

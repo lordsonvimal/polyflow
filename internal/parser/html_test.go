@@ -28,7 +28,7 @@ func TestHTMLParser_NavLinksAndEvents(t *testing.T) {
 	require.NotNil(t, p, "expected a parser for .html files")
 
 	m := mustMatcher(t)
-	nodes, _, err := p.Parse(file, "site", m)
+	nodes, _, _, err := p.Parse(file, "site", m)
 	require.NoError(t, err)
 
 	navPaths := map[string]bool{}
@@ -58,7 +58,7 @@ func TestTemplParser_NativeEventAttr(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, edges, err := p.Parse("testdata/page.templ", "app", m)
+	nodes, edges, _, err := p.Parse("testdata/page.templ", "app", m)
 	require.NoError(t, err)
 
 	var eventNode *graph.Node

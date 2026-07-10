@@ -51,7 +51,9 @@ func ServiceAnalyzerFor(lang string) ServiceAnalyzer {
 type Parser interface {
 	Language() string
 	Extensions() []string
-	Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error)
+	// Parse returns the file's nodes and edges plus any references it could
+	// not resolve (the recall gauge's per-file input).
+	Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error)
 }
 
 // registry maps file extensions to parsers.
@@ -72,10 +74,11 @@ func ForFile(path string) Parser {
 
 // Result holds the parsed output or error for a single file.
 type Result struct {
-	File  string
-	Nodes []graph.Node
-	Edges []graph.Edge
-	Err   error
+	File       string
+	Nodes      []graph.Node
+	Edges      []graph.Edge
+	Unresolved []graph.UnresolvedRef
+	Err        error
 }
 
 // WorkerPool fans out file parsing across multiple goroutines.
@@ -120,8 +123,8 @@ func (wp *WorkerPool) Run(files []string) <-chan Result {
 				out <- Result{File: path, Err: fmt.Errorf("no parser for %s", path)}
 				return
 			}
-			nodes, edges, err := p.Parse(path, wp.service, wp.matcher)
-			out <- Result{File: path, Nodes: nodes, Edges: edges, Err: err}
+			nodes, edges, unresolved, err := p.Parse(path, wp.service, wp.matcher)
+			out <- Result{File: path, Nodes: nodes, Edges: edges, Unresolved: unresolved, Err: err}
 		}(f)
 	}
 

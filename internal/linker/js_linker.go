@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -25,10 +26,14 @@ func NewJSLinker() *JSLinker { return &JSLinker{} }
 //     statements and emits `calls` edges to the declaration node.
 type JSLinker struct{}
 
-// LinkJS runs both JS linking passes and returns new edges plus the set of
-// proxy node IDs that should be removed from the graph.
-func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles map[string][]string) (newEdges []graph.Edge, removeNodeIDs map[string]bool) {
+// LinkJS runs both JS linking passes and returns new edges, the set of proxy
+// node IDs to remove, unresolved import references (relative imports whose
+// target has no node — graph blind spots), and the set of "file\x00name"
+// import bindings each file declares (the indexer uses it to suppress
+// matcher-level call_ref candidates that imports explain).
+func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles map[string][]string) (newEdges []graph.Edge, removeNodeIDs map[string]bool, unresolved []graph.UnresolvedRef, importedNames map[string]bool) {
 	removeNodeIDs = make(map[string]bool)
+	importedNames = make(map[string]bool)
 
 	// Index nodes by ID for lookup.
 	nodeByID := make(map[string]*graph.Node, len(nodes))
@@ -179,17 +184,24 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			if !isJSFile(file) {
 				continue
 			}
-			importEdges := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile, funcByFileAndLabel, varByFileAndLabel)
+			importEdges, fileUnresolved, fileImported := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile, funcByFileAndLabel, varByFileAndLabel)
 			for _, e := range importEdges {
 				if !seen[e.ID] {
 					seen[e.ID] = true
 					newEdges = append(newEdges, e)
 				}
 			}
+			for _, u := range fileUnresolved {
+				u.Service = svcName
+				unresolved = append(unresolved, u)
+			}
+			for name := range fileImported {
+				importedNames[file+"\x00"+name] = true
+			}
 		}
 	}
 
-	return newEdges, removeNodeIDs
+	return newEdges, removeNodeIDs, unresolved, importedNames
 }
 
 // isFrameworkComponent returns true for SolidJS/React built-in components that
@@ -224,16 +236,16 @@ type varTarget struct {
 	setter bool
 }
 
-func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByLabel map[string]varTarget, funcLinesByFile map[string][]lineNode, funcByFileAndLabel, varByFileAndLabel map[string]string) []graph.Edge {
+func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByLabel map[string]varTarget, funcLinesByFile map[string][]lineNode, funcByFileAndLabel, varByFileAndLabel map[string]string) ([]graph.Edge, []graph.UnresolvedRef, map[string]bool) {
 	src, err := os.ReadFile(file)
 	if err != nil {
-		return nil
+		return nil, nil, nil
 	}
 
 	lang := grammarLangForFile(file)
 	root, err := sitter.ParseCtx(context.Background(), src, lang)
 	if err != nil {
-		return nil
+		return nil, nil, nil
 	}
 
 	// --- Extract import bindings: localName → set of exported names from that module ---
@@ -248,6 +260,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 		localName    string // name used in this file
 		exportedName string // name exported from source (empty = same as local)
 		isNamespace  bool   // import * as X
+		relative     bool   // source starts with ./ or ../ — an in-service module
 	}
 	var bindings []importBinding
 
@@ -257,18 +270,26 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
     (named_imports
       (import_specifier
         name: (identifier) @exported
-        alias: (identifier) @local))))`
+        alias: (identifier) @local)))
+  source: (string) @source)`
 	importQuerySameAlias := `
 (import_statement
   (import_clause
     (named_imports
       (import_specifier
-        name: (identifier) @name))))`
+        name: (identifier) @name)))
+  source: (string) @source)`
 	nsQuery := `
 (import_statement
   (import_clause
     (namespace_import
-      (identifier) @ns)))`
+      (identifier) @ns))
+  source: (string) @source)`
+
+	isRelativeSource := func(raw string) bool {
+		trimmed := strings.Trim(raw, "\"'`")
+		return strings.HasPrefix(trimmed, "./") || strings.HasPrefix(trimmed, "../")
+	}
 
 	for _, qstr := range []string{importQuery} {
 		q, err := sitter.NewQuery([]byte(qstr), lang)
@@ -288,7 +309,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 			}
 			if exp, ok1 := caps["exported"]; ok1 {
 				if loc, ok2 := caps["local"]; ok2 {
-					bindings = append(bindings, importBinding{localName: loc, exportedName: exp})
+					bindings = append(bindings, importBinding{localName: loc, exportedName: exp, relative: isRelativeSource(caps["source"])})
 				}
 			}
 		}
@@ -310,7 +331,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 				caps[q.CaptureNameForId(c.Index)] = c.Node.Content(src)
 			}
 			if name, ok := caps["name"]; ok {
-				bindings = append(bindings, importBinding{localName: name, exportedName: name})
+				bindings = append(bindings, importBinding{localName: name, exportedName: name, relative: isRelativeSource(caps["source"])})
 			}
 		}
 	}
@@ -324,23 +345,35 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 				if !ok {
 					break
 				}
+				caps := make(map[string]string)
 				for _, c := range m.Captures {
-					ns := c.Node.Content(src)
-					bindings = append(bindings, importBinding{localName: ns, isNamespace: true})
+					caps[q.CaptureNameForId(c.Index)] = c.Node.Content(src)
+				}
+				if ns, ok := caps["ns"]; ok {
+					bindings = append(bindings, importBinding{localName: ns, isNamespace: true, relative: isRelativeSource(caps["source"])})
 				}
 			}
 		}
 	}
 
 	if len(bindings) == 0 {
-		return nil
+		return nil, nil, nil
 	}
 
 	// Build lookup: localName → exportedName (for plain calls)
-	// and nsName → true (for member calls obj.method())
+	// and nsName → true (for member calls obj.method()).
+	// relativeNames marks bindings imported from in-service modules — only
+	// their resolution misses are graph blind spots (external packages have
+	// no nodes by design).
 	plainImport := make(map[string]string) // localName → exportedName
 	nsImports := make(map[string]bool)     // namespace import names
+	relativeNames := make(map[string]bool)
+	importedNames := make(map[string]bool)
 	for _, b := range bindings {
+		importedNames[b.localName] = true
+		if b.relative {
+			relativeNames[b.localName] = true
+		}
 		if b.isNamespace {
 			nsImports[b.localName] = true
 		} else {
@@ -367,6 +400,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 
 	type callSite struct {
 		targetLabel string // resolved function name in the service
+		localName   string // binding name in this file (relativity lookup)
 		line        int
 		valueUse    bool // bare identifier use (not a call): always a read on variables
 	}
@@ -387,6 +421,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 					if exported, ok := plainImport[local]; ok {
 						callSites = append(callSites, callSite{
 							targetLabel: exported,
+							localName:   local,
 							line:        int(c.Node.StartPoint().Row) + 1,
 						})
 					}
@@ -417,13 +452,12 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 				// Resolve: obj is a named import (e.g. uiStore exported as-is) or namespace.
 				_, isNS := nsImports[obj]
 				if isNS {
-					callSites = append(callSites, callSite{targetLabel: method, line: minLine})
-				} else if exported, ok := plainImport[obj]; ok {
+					callSites = append(callSites, callSite{targetLabel: method, localName: obj, line: minLine})
+				} else if _, ok := plainImport[obj]; ok {
 					// obj itself was imported as a value (e.g. store object); method is the member.
 					// We try to find a function named method in the service (it's declared in the
 					// source file as a standalone function, not as a method on the object).
-					_ = exported
-					callSites = append(callSites, callSite{targetLabel: method, line: minLine})
+					callSites = append(callSites, callSite{targetLabel: method, localName: obj, line: minLine})
 				}
 			}
 		}
@@ -466,7 +500,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 				}
 				local := caps["callee"]
 				if exported, ok := plainImport[local]; ok {
-					callSites = append(callSites, callSite{targetLabel: exported, line: minLine})
+					callSites = append(callSites, callSite{targetLabel: exported, localName: local, line: minLine})
 				}
 			}
 		}
@@ -498,6 +532,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 					}
 					callSites = append(callSites, callSite{
 						targetLabel: plainImport[name],
+						localName:   name,
 						line:        int(c.Node.StartPoint().Row) + 1,
 						valueUse:    true,
 					})
@@ -507,7 +542,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	}
 
 	if len(callSites) == 0 {
-		return nil
+		return nil, nil, importedNames
 	}
 
 	// Module-level declarator spans: attribution for call sites inside
@@ -552,7 +587,9 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	}
 
 	seenEdge := make(map[string]bool)
+	seenMiss := make(map[string]bool)
 	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
 	for _, cs := range callSites {
 		targetID, isFn := svcFuncByLabel[cs.targetLabel]
 		var target varTarget
@@ -560,6 +597,16 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 			// Fall back to module-scope variables (signal accessors/setters).
 			var ok bool
 			if target, ok = svcVarByLabel[cs.targetLabel]; !ok {
+				// Only in-service (relative) imports are blind spots; external
+				// packages have no nodes by design, and builtin prototype
+				// methods (arr.map, str.split) never will have.
+				missKey := cs.targetLabel + "\x00" + strconv.Itoa(cs.line)
+				if relativeNames[cs.localName] && !jsProtoMethods[cs.targetLabel] && !seenMiss[missKey] {
+					seenMiss[missKey] = true
+					unresolved = append(unresolved, graph.UnresolvedRef{
+						File: file, Line: cs.line, Name: cs.targetLabel, Kind: "import_ref",
+					})
+				}
 				continue
 			}
 			targetID = target.id
@@ -595,7 +642,20 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 			Confidence: confidence,
 		})
 	}
-	return edges
+	return edges, unresolved, importedNames
+}
+
+// jsProtoMethods are builtin prototype methods commonly called on imported
+// values (arrays, strings, maps): misses on them are not graph blind spots.
+var jsProtoMethods = map[string]bool{
+	"map": true, "filter": true, "forEach": true, "reduce": true, "find": true,
+	"findIndex": true, "some": true, "every": true, "includes": true,
+	"indexOf": true, "join": true, "slice": true, "splice": true, "concat": true,
+	"push": true, "pop": true, "shift": true, "unshift": true, "sort": true,
+	"flat": true, "flatMap": true, "keys": true, "values": true, "entries": true,
+	"has": true, "get": true, "set": true, "add": true, "delete": true,
+	"split": true, "replace": true, "trim": true, "toLowerCase": true,
+	"toUpperCase": true, "startsWith": true, "endsWith": true, "toString": true,
 }
 
 // isValueUse reports whether an identifier node is a bare value use: not a
@@ -611,6 +671,7 @@ func isValueUse(n *sitter.Node) bool {
 		"member_expression", "property_identifier",
 		"variable_declarator", "formal_parameters", "required_parameter",
 		"optional_parameter", "assignment_pattern", "array_pattern", "object_pattern",
+		"export_specifier", "export_clause", // re-exports are declarations, not reads
 		"jsx_expression": // JSX event/prop refs are handled by the dedicated queries
 		return false
 	case "call_expression":

@@ -14,15 +14,15 @@ type HTMLParser struct{}
 func (p *HTMLParser) Language() string     { return "html" }
 func (p *HTMLParser) Extensions() []string { return []string{".html", ".htm"} }
 
-func (p *HTMLParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, error) {
+func (p *HTMLParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	src, err := os.ReadFile(file)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	results, matchErr := matcher.Match("html", file, src)
-	nodes, edges := patterns.MatchToGraph(service, results)
+	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "html")
-	return nodes, edges, matchErr
+	return nodes, edges, unresolved, matchErr
 }
 
 func init() {
