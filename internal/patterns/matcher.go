@@ -435,7 +435,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// record where the body ends, so enclosing-function attribution can
 		// require containment instead of guessing by proximity. Persisted in
 		// meta so later passes (JS import linker) can reuse it.
-		if r.EndLine >= r.Line && (nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod) {
+		if r.EndLine >= r.Line && (nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod || nodeType == graph.NodeTypeWorker) {
 			meta["end_line"] = fmt.Sprintf("%d", r.EndLine)
 		}
 
@@ -537,13 +537,24 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	nameByFileAndName := make(map[string]string) // "file\x00name" -> nodeID
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+		switch n.Type {
+		case graph.NodeTypeFunction, graph.NodeTypeMethod:
 			end := 0
 			if v, ok := n.Meta["end_line"]; ok {
 				fmt.Sscanf(v, "%d", &end)
 			}
 			funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, end, n.ID})
 			nameByFileAndName[n.File+"\x00"+n.Label] = n.ID
+		case graph.NodeTypeWorker:
+			// Goroutine bodies are enclosing scopes too: calls inside
+			// go func(){…} must attribute to the worker node, not the outer
+			// function, so the worker has outgoing flow. Workers are unnamed,
+			// so they never enter nameByFileAndName.
+			if v, ok := n.Meta["end_line"]; ok {
+				end := 0
+				fmt.Sscanf(v, "%d", &end)
+				funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, end, n.ID})
+			}
 		}
 	}
 
@@ -603,7 +614,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			continue
 		}
 		var fromID string
-		if best := enclosingFunc(n.File, n.Line, ""); best != nil {
+		// Skip the node's own scope entry: a worker node must attribute to the
+		// function that spawns it, not to itself.
+		if best := enclosingFunc(n.File, n.Line, n.ID); best != nil {
 			fromID = best.id
 		} else if fromID = moduleNodeFor(n.File); fromID == "" {
 			continue

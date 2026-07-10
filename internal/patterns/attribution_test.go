@@ -274,6 +274,86 @@ func TestMatchToGraph_AnonGoroutineSpawns(t *testing.T) {
 	assert.Equal(t, worker.ID, edges[0].To)
 }
 
+// Pattern nodes and call refs inside a goroutine body attribute to the worker
+// node (its span encloses them), while the worker itself is spawned by the
+// outer function — so workers have outgoing flow.
+func TestMatchToGraph_WorkerEnclosesBody(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "func_decl",
+			File:        "hub.go",
+			Line:        100,
+			EndLine:     140,
+			Captures:    map[string]string{"name": "Run"},
+		},
+		{
+			PatternName: "func_decl",
+			File:        "hub.go",
+			Line:        150,
+			EndLine:     160,
+			Captures:    map[string]string{"name": "flush"},
+		},
+		{
+			PatternName: "goroutine_anon", // go func() {…} spanning 107-120
+			File:        "hub.go",
+			Line:        107,
+			EndLine:     120,
+			Captures:    map[string]string{},
+		},
+		{
+			PatternName: "http_get", // inside the goroutine body
+			File:        "hub.go",
+			Line:        110,
+			Captures:    map[string]string{"url": `"/ping"`},
+		},
+		{
+			PatternName: "component_fn_call", // flush() inside the goroutine body
+			File:        "hub.go",
+			Line:        112,
+			Captures:    map[string]string{"callee": "flush"},
+		},
+		{
+			PatternName: "http_get", // after the goroutine body: back to Run
+			File:        "hub.go",
+			Line:        130,
+			Captures:    map[string]string{"url": `"/done"`},
+		},
+	}
+	nodes, edges := patterns.MatchToGraph("svc", results)
+
+	byID := map[string]graph.Node{}
+	var worker *graph.Node
+	for i := range nodes {
+		byID[nodes[i].ID] = nodes[i]
+		if nodes[i].Type == graph.NodeTypeWorker {
+			worker = &nodes[i]
+		}
+	}
+	require.NotNil(t, worker)
+
+	fromLabel := func(e graph.Edge) string { return byID[e.From].Label }
+	var workerOut, spawnsIn int
+	for _, e := range edges {
+		to := byID[e.To]
+		switch {
+		case e.Type == graph.EdgeTypeSpawns && e.To == worker.ID:
+			assert.Equal(t, "Run", fromLabel(e), "worker must be spawned by Run, not itself")
+			spawnsIn++
+		case e.From == worker.ID:
+			workerOut++
+			// Targets: the http_client node inside the body (line 110) and the
+			// flush function declaration (line 150) via the body's call ref.
+			assert.Contains(t, []int{110, 150}, to.Line, "worker outflow must be body http_get + flush declaration")
+		case to.Line == 130:
+			assert.Equal(t, "Run", fromLabel(e), "call after goroutine body attributes to Run")
+		case to.Line == 110:
+			t.Fatalf("body node at line %d attributed to %s, want worker", to.Line, fromLabel(e))
+		}
+	}
+	assert.Equal(t, 1, spawnsIn, "exactly one spawns edge into the worker")
+	assert.Equal(t, 2, workerOut, "http_get + flush call ref flow out of the worker")
+}
+
 // URL-builder helpers: fetch(mermaidURL(...)) resolves through the helper's
 // returned template-literal prefix.
 func TestMatchToGraph_URLBuilderFunctionResolution(t *testing.T) {
