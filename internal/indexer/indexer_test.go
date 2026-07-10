@@ -70,6 +70,56 @@ func runIndexer(t *testing.T, cfg *workspace.WorkspaceConfig, dbDir string, full
 	return stats
 }
 
+// Root classification: entrypoints, framework callbacks (function values /
+// external-interface methods), and dead code get distinct root_kind meta;
+// called functions get none.
+func TestRun_RootClassification(t *testing.T) {
+	dir := t.TempDir()
+	goSvc := filepath.Join(dir, "backend")
+	require.NoError(t, os.MkdirAll(goSvc, 0o755))
+	writeFile(t, goSvc, "go.mod", "module example.com/backend\n\ngo 1.22\n")
+	writeFile(t, goSvc, "main.go", `package main
+
+type command struct{ run func() error }
+
+var cmd = command{run: runIndex}
+
+func runIndex() error { return helper() }
+
+func helper() error { return nil }
+
+func deadCode() {}
+
+func main() {
+	_ = cmd
+}
+`)
+	cfg := &workspace.WorkspaceConfig{
+		Name: "test", Version: "1",
+		Services: []workspace.Service{{Name: "backend", Path: goSvc, Language: "go"}},
+	}
+	dbDir := filepath.Join(dir, ".polyflow")
+	runIndexer(t, cfg, dbDir, false)
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+	kinds := map[string]string{}
+	for _, n := range idx.Nodes {
+		if n.Type == graph.NodeTypeFunction {
+			kinds[n.Label] = n.Meta["root_kind"]
+		}
+	}
+
+	assert.Equal(t, "entrypoint", kinds["main"], "main is an entrypoint root")
+	assert.Equal(t, "callback", kinds["runIndex"], "function value in composite literal is a callback root; kinds: %v", kinds)
+	assert.Equal(t, "unreachable", kinds["deadCode"], "unreferenced function is dead-code root")
+	assert.Empty(t, kinds["helper"], "called functions carry no root_kind")
+}
+
 func TestRun_IncrementalSkipsUnchangedFiles(t *testing.T) {
 	cfg, dir := testWorkspace(t)
 	dbDir := filepath.Join(dir, ".polyflow")

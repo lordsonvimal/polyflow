@@ -4,6 +4,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -176,6 +177,84 @@ func helper() {}
 	}
 	if !found {
 		t.Fatalf("expected main → helper edge via closure fallback, got: %+v", res.Edges)
+	}
+}
+
+// TestGoSemanticReferenced: functions referenced without being called must be
+// reported for callback classification — a function value stored in a
+// package-level composite literal (the cobra RunE shape) and methods
+// satisfying an external interface (sort.Interface here; templ's Visitor in
+// production). A plain unreferenced function must NOT be reported.
+func TestGoSemanticReferenced(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/semtest\n\ngo 1.25.0\n",
+		"main.go": `package main
+
+import "sort"
+
+type command struct{ run func() error }
+
+var cmd = command{run: runIndex}
+
+func runIndex() error { return nil }
+
+type byLen []string
+
+func (b byLen) Len() int           { return len(b) }
+func (b byLen) Less(i, j int) bool { return len(b[i]) < len(b[j]) }
+func (b byLen) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
+
+func deadCode() {}
+
+func main() {
+	_ = cmd
+	sort.Sort(byLen{"a"})
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:main.go:function:main:21":     true,
+		"svc:main.go:function:runIndex:9":  true,
+		"svc:main.go:function:deadCode:19": true,
+		"svc:main.go:method:Len:13":        true,
+		"svc:main.go:method:Less:14":       true,
+		"svc:main.go:method:Swap:15":       true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	ref := map[string]bool{}
+	for _, id := range res.Referenced {
+		ref[id] = true
+	}
+	if !ref["svc:main.go:function:runIndex:9"] {
+		t.Errorf("runIndex stored in a composite literal must be referenced; got %v", res.Referenced)
+	}
+	for _, m := range []string{"Len", "Less", "Swap"} {
+		found := false
+		for id := range ref {
+			if strings.Contains(id, ":method:"+m+":") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s satisfies sort.Interface (external) and must be referenced; got %v", m, res.Referenced)
+		}
+	}
+	if ref["svc:main.go:function:deadCode:19"] {
+		t.Errorf("deadCode must not be referenced; got %v", res.Referenced)
 	}
 }
 

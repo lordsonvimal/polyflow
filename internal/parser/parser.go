@@ -27,6 +27,12 @@ type SemanticResult struct {
 	Nodes   []graph.Node
 	Edges   []graph.Edge
 	Warning string // non-empty when falling back to tree-sitter accuracy
+	// Referenced lists node IDs of functions/methods that are referenced
+	// without being called in-service: function values passed to other code
+	// (cobra RunE, http.HandlerFunc) and methods satisfying an interface of
+	// an external package (framework callbacks like templ's Visitor). Roots
+	// in this set classify as "callback" rather than "unreachable".
+	Referenced []string
 }
 
 var serviceAnalyzerRegistry = map[string]ServiceAnalyzer{}
