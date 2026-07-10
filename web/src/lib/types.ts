@@ -9,6 +9,9 @@ export interface GraphNode {
   line: number;
   language: string;
   meta?: Record<string, string>;
+  // Compound-node containment (client-side only): id of the parent group
+  // node, set by the file-grouping transform.
+  parent?: string;
 }
 
 export interface GraphEdge {

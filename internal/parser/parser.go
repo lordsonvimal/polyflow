@@ -21,7 +21,10 @@ type ServiceAnalyzer interface {
 }
 
 // SemanticResult holds the output of a whole-service semantic analysis pass.
+// Nodes are entities only semantics can see (tracked variables, structs);
+// Edges reference either tree-sitter node IDs or these semantic nodes.
 type SemanticResult struct {
+	Nodes   []graph.Node
 	Edges   []graph.Edge
 	Warning string // non-empty when falling back to tree-sitter accuracy
 }

@@ -58,6 +58,12 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 
 	nodes, edges := patterns.MatchToGraph(service, allResults)
 	setLanguage(nodes, langTag)
+
+	// Structural variable tracking: module vars, classes, reads/writes,
+	// closure captures, flows. Lower confidence than the Go semantic pass.
+	varNodes, varEdges := extractJSVariables(file, service, langTag, grammarLang, src)
+	nodes = append(nodes, varNodes...)
+	edges = append(edges, varEdges...)
 	return nodes, edges, err
 }
 

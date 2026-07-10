@@ -25,6 +25,17 @@ const (
 	// NodeTypeExternalService is a third-party service boundary (cloud SDKs:
 	// S3, Bedrock, Pusher-as-a-service, …).
 	NodeTypeExternalService NodeType = "external_service"
+	// NodeTypeVariable is a tracked variable: package/module-level vars and
+	// consts, closure-captured locals — variables whose mutation has impact
+	// beyond one function. Purely-local variables are NOT nodes (they would
+	// explode the graph); they surface as counts in function-node meta.
+	// Meta: data_type, kind (var|const), scope (package|captured), mutable.
+	NodeTypeVariable NodeType = "variable"
+	// NodeTypeStruct is a Go struct type; fields live in meta ("fields" JSON:
+	// [{name, type, tag}]), not as separate nodes.
+	NodeTypeStruct NodeType = "struct"
+	// NodeTypeClass is a JS/TS/Ruby class; properties/methods in meta.
+	NodeTypeClass NodeType = "class"
 )
 
 // EdgeType classifies the relationship between two nodes.
@@ -68,7 +79,23 @@ const (
 	// SSE broadcast-hub edges (Subscribe/Unsubscribe/Broadcast channel fan-out)
 	EdgeTypeHubSubscribe EdgeType = "hub_subscribe"
 	EdgeTypeHubBroadcast EdgeType = "hub_broadcast"
+	// Variable-tracking edges. declares: enclosing scope → variable;
+	// reads/writes: function → variable (writes meta: op); captures:
+	// closure → outer variable (meta: by=ref|value); flows_to: variable →
+	// parameter/variable at a call site (meta: mode=ref|value, data_type);
+	// uses_type: function/variable → struct/class/interface it references.
+	EdgeTypeDeclares EdgeType = "declares"
+	EdgeTypeReads    EdgeType = "reads"
+	EdgeTypeWrites   EdgeType = "writes"
+	EdgeTypeCaptures EdgeType = "captures"
+	EdgeTypeFlowsTo  EdgeType = "flows_to"
+	EdgeTypeUsesType EdgeType = "uses_type"
 )
+
+// SchemaVersion identifies the graph data-model generation. Bumped when node
+// or edge semantics change in a way that invalidates cached parse results;
+// the indexer forces a full re-index when the stored version differs.
+const SchemaVersion = "2"
 
 // Node represents a code entity in the graph.
 type Node struct {

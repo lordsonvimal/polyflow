@@ -1,0 +1,9 @@
+flowchart TB
+  subgraph api
+    n0["bump (function)"]
+    n1["User (struct)<br/>Name: string<br/>Age: int"]
+    n2["counter: int"]
+  end
+  n0 -->|uses_type| n1
+  n0 -->|writes| n2
+  n2 -->|flows_to (value)| n0

@@ -75,6 +75,37 @@ func TestMermaidService_AggregatesCounts(t *testing.T) {
 	assert.NotContains(t, out, "calls")
 }
 
+func TestMermaidFile_Golden(t *testing.T) {
+	nodes, edges := mermaidFixture()
+	// The shared fixture has no file paths; assign them for the file level.
+	nodes[0].File = "web/src/app.js"
+	nodes[1].File = "api/main.go"
+	nodes[2].File = "api/main.go"
+	nodes[3].File = "api/s3.go"
+	checkGolden(t, "mermaid_file.golden", MermaidFile(nodes, edges))
+}
+
+func TestMermaidStructure_Golden(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "api:models.go:struct:User:5", Label: "User", Type: graph.NodeTypeStruct, Service: "api",
+			Meta: map[string]string{"fields": `[{"name":"Name","type":"string"},{"name":"Age","type":"int"}]`}},
+		{ID: "api:state.go:variable:counter:3", Label: "counter", Type: graph.NodeTypeVariable, Service: "api",
+			Meta: map[string]string{"data_type": "int"}},
+		{ID: "api:main.go:function:bump:10", Label: "bump", Type: graph.NodeTypeFunction, Service: "api"},
+		{ID: "api:main.go:function:orphan:20", Label: "orphan", Type: graph.NodeTypeFunction, Service: "api"},
+		{ID: "api:main.go:http_handler:POST /users:30", Label: "POST /users", Type: graph.NodeTypeHTTPHandler, Service: "api"},
+	}
+	edges := []*graph.Edge{
+		{ID: "e1", From: nodes[2].ID, To: nodes[1].ID, Type: graph.EdgeTypeWrites, Confidence: graph.ConfidenceStatic},
+		{ID: "e2", From: nodes[2].ID, To: nodes[0].ID, Type: graph.EdgeTypeUsesType},
+		{ID: "e3", From: nodes[1].ID, To: nodes[2].ID, Type: graph.EdgeTypeFlowsTo,
+			Meta: map[string]string{"mode": "value"}},
+		// http edge must be excluded from the structure view
+		{ID: "e4", From: nodes[4].ID, To: nodes[2].ID, Type: graph.EdgeTypeHTTPCall},
+	}
+	checkGolden(t, "mermaid_structure.golden", MermaidStructure(nodes, edges))
+}
+
 func TestExportMermaid_Endpoint(t *testing.T) {
 	nodes, edges := mermaidFixture()
 	idx := graph.NewAdjacencyIndex()

@@ -407,11 +407,13 @@ func openBrowser(url string) {
 var (
 	searchFormat string
 	searchLimit  int
+	searchKind   string
 )
 
 func initSearchFlags() {
 	searchCmd.Flags().StringVar(&searchFormat, "format", "table", "output format: table or json")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "max results")
+	searchCmd.Flags().StringVar(&searchKind, "kind", "", "restrict results: 'file' or a node type (function, variable, http_handler, …)")
 }
 
 var searchCmd = &cobra.Command{
@@ -429,9 +431,49 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	nodes, err := store.SearchNodes(context.Background(), args[0], searchLimit)
+	ctx := context.Background()
+
+	// --kind file searches file paths and prints per-file aggregates.
+	if searchKind == "file" {
+		idx, err := store.BuildIndex(ctx)
+		if err != nil {
+			return err
+		}
+		files := graph.ListFiles(idx, args[0], searchLimit)
+		if searchFormat == "json" {
+			return json.NewEncoder(os.Stdout).Encode(files)
+		}
+		for _, f := range files {
+			total := 0
+			for _, c := range f.Counts {
+				total += c
+			}
+			fmt.Printf("  %-60s %3d nodes [%s]\n", f.File, total, f.Service)
+		}
+		return nil
+	}
+
+	// Node-type kinds over-fetch then filter, so a sparse type still fills
+	// the requested limit.
+	fetchLimit := searchLimit
+	if searchKind != "" {
+		fetchLimit = searchLimit * 10
+	}
+	nodes, err := store.SearchNodes(ctx, args[0], fetchLimit)
 	if err != nil {
 		return err
+	}
+	if searchKind != "" {
+		filtered := nodes[:0]
+		for _, n := range nodes {
+			if string(n.Type) == searchKind {
+				filtered = append(filtered, n)
+			}
+		}
+		nodes = filtered
+		if len(nodes) > searchLimit {
+			nodes = nodes[:searchLimit]
+		}
 	}
 
 	if searchFormat == "json" {
@@ -788,14 +830,19 @@ var (
 	impactDepth   int
 	impactService string
 	impactFormat  string
+	impactFile      string
+	impactDirection string
 )
 
 func initImpactFlags() {
-	impactCmd.Flags().StringVar(&impactTarget, "target", "", "search query (required)")
+	impactCmd.Flags().StringVar(&impactTarget, "target", "", "search query for the target node")
+	impactCmd.Flags().StringVar(&impactFile, "file", "", "file path: report impact at file granularity")
+	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "with --file: forward, backward or both")
 	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	impactCmd.Flags().StringVar(&impactService, "service", "", "filter results to a specific service")
 	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text or json")
-	_ = impactCmd.MarkFlagRequired("target")
+	impactCmd.MarkFlagsOneRequired("target", "file")
+	impactCmd.MarkFlagsMutuallyExclusive("target", "file")
 }
 
 var impactCmd = &cobra.Command{
@@ -833,6 +880,15 @@ type impactOutput struct {
 	TotalCallers          int                   `json:"total_callers"`
 }
 
+// fileImpactOutput is the JSON shape for `impact --file`.
+type fileImpactOutput struct {
+	File      string                  `json:"file"`
+	Service   string                  `json:"service"`
+	Direction string                  `json:"direction"`
+	Depth     int                     `json:"depth"`
+	Impacted  []graph.FileImpactEntry `json:"impacted"`
+}
+
 func runImpact(cmd *cobra.Command, args []string) error {
 	store, err := openStore()
 	if err != nil {
@@ -841,6 +897,35 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
+
+	if impactFile != "" {
+		idx, err := store.BuildIndex(ctx)
+		if err != nil {
+			return err
+		}
+		seeds := graph.NodesInFile(idx, impactService, impactFile)
+		if len(seeds) == 0 {
+			return fmt.Errorf("file not found in index: %s", impactFile)
+		}
+		out := fileImpactOutput{
+			File:      seeds[0].File,
+			Service:   seeds[0].Service,
+			Direction: impactDirection,
+			Depth:     impactDepth,
+			Impacted:  graph.FileImpact(idx, impactService, impactFile, impactDirection, impactDepth),
+		}
+		if impactFormat == "json" {
+			return json.NewEncoder(os.Stdout).Encode(out)
+		}
+		fmt.Fprintf(os.Stdout, "Impact of %s (%s, direction=%s):\n\n", out.File, out.Service, out.Direction)
+		for _, e := range out.Impacted {
+			fmt.Fprintf(os.Stdout, "  depth %-2d %-60s %2d nodes via %s [%s]\n",
+				e.MinDepth, e.File, e.Nodes, strings.Join(e.EdgeTypes, ","), e.Service)
+		}
+		fmt.Fprintf(os.Stdout, "\nTotal: %d files impacted\n", len(out.Impacted))
+		return nil
+	}
+
 	matches, err := store.SearchNodes(ctx, impactTarget, 5)
 	if err != nil || len(matches) == 0 {
 		return fmt.Errorf("node not found for query: %s", impactTarget)

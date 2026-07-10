@@ -269,9 +269,65 @@ output; `make bench` includes the new benchmarks; results recorded here.
 
 ---
 
+## Phase 13 — File-grouped view + file-level impact — done
+
+Detailed plan: docs/file-views-variable-tracking-plan.md.
+
+**Deliverable**: file grouping as the DEFAULT graph view (service ▸ file ▸
+nodes via Cytoscape compound parents, toggleable to flat), file-level agent
+API (`/api/files`, `/api/file`, `/api/file/impact`), CLI `impact --file` and
+`search --kind file`, Mermaid `level=file`, copy-file-path and per-file
+upstream/downstream in the Detail panel, file results in search.
+
+## Phase 14 — Variable data model + Go deep extraction (SSA) — done
+
+**Deliverable**: `variable`/`struct`/`class` node types and
+`declares/reads/writes/captures/flows_to/uses_type` edge types; schema-version
+bump forcing one full re-index; `SemanticResult` carries nodes; SSA pass
+(reusing the existing build) emits package globals/consts, structs with field
+JSON, mutation (`Store`/`MapUpdate`) writes, closure captures (by ref), and
+by-ref/by-value `flows_to` at call sites — all static confidence.
+
+## Phase 15 — JS/TS/Ruby structural variable extraction — done
+
+**Deliverable**: tree-sitter walkers (`js_variables.go`, `ruby_variables.go`)
+emitting module vars (TS annotations as data_type), classes, reads/writes
+(inferred), lexical closure captures (partial), flows_to heuristics; Ruby
+constants, classes with attr_*, ivar/class-var read/write tracking.
+
+## Phase 16 — Search & trace by variable — done
+
+**Deliverable**: `kind` filter on `/api/graph/search` and CLI `search --kind`;
+`/api/variable/{id}/flow` (readers/writers/captured_by/flows_to, token-frugal);
+variable trace/impact via existing traversal; UI kind chips, variable-flow
+detail panel, legend/styles for the new node and edge types.
+
+## Phase 17 — Structure (flow-diagram) view + export — done
+
+**Deliverable**: third view mode "structure" — structs/classes with field
+lines, typed variables, and only the structurally-related functions/edges;
+Mermaid `level=structure` export; file grouping composes as containers.
+
+**Known limitations (variable tracking)**: Go const reads are invisible to
+impact (SSA folds constants); JS/Ruby shadowing is approximated lexically
+(hence ≤ inferred confidence); Ruby block captures deliberately skipped
+(noise); local variables are never nodes by design (explosion guard).
+
+---
+
 ## Completion log
 
 (updated as each phase lands — phase, commit, and any deviations from plan)
+
+- **Phases 13–17 — done.** File-grouped default view + variable tracking +
+  structure view, agent API first. Deviations from plan: no persisted file
+  nodes (derived grouping, as planned); `declares` edges reserved but not yet
+  emitted (declaration info lives on variable nodes); `vars_local` counts on
+  function meta skipped (semantic pass can't cheaply update tree-sitter
+  nodes); JS/Ruby fixtures covered by Go unit tests rather than the YAML
+  pattern harness (extraction is code, not patterns); dagre silently swaps to
+  fcose when compound file containers are on screen (dagre lacks compound
+  support).
 
 - **Phase 12 — done.** E2E chains: new internal/e2e/testdata/chains
   workspace (6 services, 4 languages) indexed through the real

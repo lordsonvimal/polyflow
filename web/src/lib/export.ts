@@ -3,7 +3,7 @@
 // Cytoscape canvas, so they show exactly what the user sees (filters,
 // collapse state, layout).
 
-export type MermaidLevel = "service" | "function";
+export type MermaidLevel = "service" | "file" | "structure" | "function";
 
 export interface TraceScope {
   root: string;
