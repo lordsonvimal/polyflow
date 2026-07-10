@@ -653,7 +653,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if best := enclosingFunc(r.File, r.Line, calleeID); best != nil {
 			fromID = best.id
 		} else if fromID = moduleNodeFor(r.File); fromID == "" {
-			continue
+			// Go has no module node: top-level call refs (cobra RunE: runX in a
+			// package-level composite literal) dispatch from the program entry,
+			// so fall back to the file's main, then init.
+			if fromID = goTopLevelScope(r.File, calleeID, nameByFileAndName); fromID == "" {
+				continue
+			}
 		}
 
 		edgeType := callRefEdgeType(r.PatternName)
@@ -742,6 +747,24 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	}
 
 	return nodes, edges
+}
+
+// goTopLevelScope resolves the caller for a top-level call reference in a Go
+// file. Package-level function references (cobra's `RunE: runX`) are wired at
+// program start, so the edge is attributed to the same file's main function,
+// falling back to init. Returns "" when neither exists (the reference is
+// dropped, as before). skipID guards against self-edges (a ref to main/init
+// itself).
+func goTopLevelScope(file, skipID string, nameByFileAndName map[string]string) string {
+	if !strings.HasSuffix(file, ".go") {
+		return ""
+	}
+	for _, name := range []string{"main", "init"} {
+		if id, ok := nameByFileAndName[file+"\x00"+name]; ok && id != skipID {
+			return id
+		}
+	}
+	return ""
 }
 
 // isJSModuleFile reports whether file is a JavaScript/TypeScript module —
