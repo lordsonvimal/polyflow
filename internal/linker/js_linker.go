@@ -136,7 +136,9 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 		// and setters (const [x, setX] = createSignal(...)) are variables that
 		// hold functions, so uiStore.setX(...) must resolve to the variable
 		// node. Function declarations take precedence on label collisions.
-		svcVarByLabel := make(map[string]string)
+		// Setter flag drives reads-vs-writes retyping at the call site.
+		svcVarByLabel := make(map[string]varTarget)
+		varByFileAndLabel := make(map[string]string)
 		for i := range nodes {
 			n := &nodes[i]
 			if n.Service != svcName {
@@ -144,8 +146,9 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			}
 			if n.Type == graph.NodeTypeVariable && n.Meta["scope"] == "module" {
 				if _, exists := svcVarByLabel[n.Label]; !exists {
-					svcVarByLabel[n.Label] = n.ID
+					svcVarByLabel[n.Label] = varTarget{id: n.ID, setter: n.Meta["setter"] == "true"}
 				}
+				varByFileAndLabel[n.File+"\x00"+n.Label] = n.ID
 			}
 		}
 
@@ -157,6 +160,12 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 				continue
 			}
 			if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+				// The synthetic (module) node spans the whole file (line 0,
+				// open-ended); it must not win containment over declarator
+				// spans — it is the explicit last-resort in resolveFrom.
+				if n.Label == "(module)" {
+					continue
+				}
 				end := 0
 				if v, ok := n.Meta["end_line"]; ok {
 					fmt.Sscanf(v, "%d", &end)
@@ -170,7 +179,7 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			if !isJSFile(file) {
 				continue
 			}
-			importEdges := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile)
+			importEdges := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile, funcByFileAndLabel, varByFileAndLabel)
 			for _, e := range importEdges {
 				if !seen[e.ID] {
 					seen[e.ID] = true
@@ -208,7 +217,14 @@ type lineNode struct {
 	id   string
 }
 
-func resolveImportCalls(file string, svcFuncByLabel, svcVarByLabel map[string]string, funcLinesByFile map[string][]lineNode) []graph.Edge {
+// varTarget is a resolvable module-scope variable: calls to signal setters
+// retype to writes, everything else to reads.
+type varTarget struct {
+	id     string
+	setter bool
+}
+
+func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByLabel map[string]varTarget, funcLinesByFile map[string][]lineNode, funcByFileAndLabel, varByFileAndLabel map[string]string) []graph.Edge {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil
@@ -352,6 +368,7 @@ func resolveImportCalls(file string, svcFuncByLabel, svcVarByLabel map[string]st
 	type callSite struct {
 		targetLabel string // resolved function name in the service
 		line        int
+		valueUse    bool // bare identifier use (not a call): always a read on variables
 	}
 	var callSites []callSite
 
@@ -455,47 +472,196 @@ func resolveImportCalls(file string, svcFuncByLabel, svcVarByLabel map[string]st
 		}
 	}
 
+	// Bare value uses of imported bindings: [...DEFAULT_CONFIDENCE],
+	// styles.CANVAS_BG in an initializer, etc. These are reads on the imported
+	// variable — the edges that make imported constants reachable at all.
+	// Call-function positions, member expressions, and the import statement
+	// itself are excluded (covered by the call queries or not a use).
+	valueUseQuery := `(identifier) @id`
+	{
+		q, err := sitter.NewQuery([]byte(valueUseQuery), lang)
+		if err == nil {
+			cur := sitter.NewQueryCursor()
+			cur.Exec(q, root)
+			for {
+				m, ok := cur.NextMatch()
+				if !ok {
+					break
+				}
+				for _, c := range m.Captures {
+					name := c.Node.Content(src)
+					if _, imported := plainImport[name]; !imported {
+						continue
+					}
+					if !isValueUse(c.Node) {
+						continue
+					}
+					callSites = append(callSites, callSite{
+						targetLabel: plainImport[name],
+						line:        int(c.Node.StartPoint().Row) + 1,
+						valueUse:    true,
+					})
+				}
+			}
+		}
+	}
+
 	if len(callSites) == 0 {
 		return nil
 	}
 
+	// Module-level declarator spans: attribution for call sites inside
+	// reactive-primitive initializers (const filtered = createMemo(() => …)) —
+	// the memo's variable node is the reader, which is exactly the reactive
+	// dependency an impact query needs.
+	declSpans := moduleDeclSpans(root, src)
+
 	funcs := funcLinesByFile[file]
 
-	var edges []graph.Edge
-	for _, cs := range callSites {
-		targetID, ok := svcFuncByLabel[cs.targetLabel]
-		if !ok {
-			// Fall back to module-scope variables (signal accessors/setters).
-			if targetID, ok = svcVarByLabel[cs.targetLabel]; !ok {
-				continue
-			}
-		}
-		// Find the innermost function containing the call site. Functions
-		// without a recorded end line are treated as open-ended.
+	// resolveFrom finds the source node for a reference at line: innermost
+	// containing function → module-level declarator span → module node.
+	resolveFrom := func(line int) string {
 		var best *lineNode
 		for j := range funcs {
 			f := &funcs[j]
-			if f.line > cs.line {
+			if f.line > line {
 				continue
 			}
-			if f.end > 0 && cs.line > f.end {
+			if f.end > 0 && line > f.end {
 				continue
 			}
 			if best == nil || f.line > best.line {
 				best = f
 			}
 		}
-		if best == nil || best.id == targetID {
+		if best != nil {
+			return best.id
+		}
+		for _, ds := range declSpans {
+			if line < ds.line || line > ds.end {
+				continue
+			}
+			if id, ok := varByFileAndLabel[file+"\x00"+ds.name]; ok {
+				return id
+			}
+			if id, ok := funcByFileAndLabel[file+"\x00"+ds.name]; ok {
+				return id
+			}
+		}
+		return funcByFileAndLabel[file+"\x00(module)"]
+	}
+
+	seenEdge := make(map[string]bool)
+	var edges []graph.Edge
+	for _, cs := range callSites {
+		targetID, isFn := svcFuncByLabel[cs.targetLabel]
+		var target varTarget
+		if !isFn {
+			// Fall back to module-scope variables (signal accessors/setters).
+			var ok bool
+			if target, ok = svcVarByLabel[cs.targetLabel]; !ok {
+				continue
+			}
+			targetID = target.id
+		}
+		if cs.valueUse && isFn {
+			continue // function references passed as values stay out (JSX event refs are handled above)
+		}
+		fromID := resolveFrom(cs.line)
+		if fromID == "" || fromID == targetID {
 			continue
 		}
+		typ := graph.EdgeTypeCalls
+		confidence := ""
+		if !isFn {
+			// Variable targets carry read/write semantics: calling a signal
+			// setter mutates the signal; everything else reads the binding.
+			typ = graph.EdgeTypeReads
+			if target.setter && !cs.valueUse {
+				typ = graph.EdgeTypeWrites
+			}
+			confidence = graph.ConfidenceInferred
+		}
+		id := fmt.Sprintf("%s:%s->%s", typ, fromID, targetID)
+		if seenEdge[id] {
+			continue
+		}
+		seenEdge[id] = true
 		edges = append(edges, graph.Edge{
-			ID:   fmt.Sprintf("calls:%s->%s", best.id, targetID),
-			From: best.id,
-			To:   targetID,
-			Type: graph.EdgeTypeCalls,
+			ID:         id,
+			From:       fromID,
+			To:         targetID,
+			Type:       typ,
+			Confidence: confidence,
 		})
 	}
 	return edges
+}
+
+// isValueUse reports whether an identifier node is a bare value use: not a
+// declaration, not the function of a call, not part of a member expression or
+// import statement. These positions are covered elsewhere or are not reads.
+func isValueUse(n *sitter.Node) bool {
+	p := n.Parent()
+	if p == nil {
+		return false
+	}
+	switch p.Type() {
+	case "import_specifier", "import_clause", "namespace_import", "named_imports",
+		"member_expression", "property_identifier",
+		"variable_declarator", "formal_parameters", "required_parameter",
+		"optional_parameter", "assignment_pattern", "array_pattern", "object_pattern",
+		"jsx_expression": // JSX event/prop refs are handled by the dedicated queries
+		return false
+	case "call_expression":
+		return p.ChildByFieldName("function") != n
+	case "assignment_expression", "augmented_assignment_expression":
+		return p.ChildByFieldName("left") != n
+	}
+	return true
+}
+
+// declSpan is a module-level variable declaration: name plus the line range
+// of the whole declaration statement (initializer included).
+type declSpan struct {
+	name string
+	line int
+	end  int
+}
+
+// moduleDeclSpans collects module-level `const x = …` declaration spans,
+// unwrapping export statements — used to attribute references inside
+// initializer closures to the declared variable.
+func moduleDeclSpans(root *sitter.Node, src []byte) []declSpan {
+	var spans []declSpan
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		stmt := root.NamedChild(i)
+		if stmt.Type() == "export_statement" {
+			if decl := stmt.ChildByFieldName("declaration"); decl != nil {
+				stmt = decl
+			}
+		}
+		t := stmt.Type()
+		if t != "lexical_declaration" && t != "variable_declaration" {
+			continue
+		}
+		for j := 0; j < int(stmt.NamedChildCount()); j++ {
+			decl := stmt.NamedChild(j)
+			if decl.Type() != "variable_declarator" {
+				continue
+			}
+			nameNode := decl.ChildByFieldName("name")
+			if nameNode == nil || nameNode.Type() != "identifier" {
+				continue
+			}
+			spans = append(spans, declSpan{
+				name: nameNode.Content(src),
+				line: int(stmt.StartPoint().Row) + 1,
+				end:  int(stmt.EndPoint().Row) + 1,
+			})
+		}
+	}
+	return spans
 }
 
 func grammarLangForFile(file string) *sitter.Language {

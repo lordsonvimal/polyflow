@@ -58,6 +58,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 type jsVar struct {
 	nodeID   string
 	dataType string
+	isSetter bool // Solid signal setter (const [x, setX] = createSignal(...))
 }
 
 // jsScope is one lexical function frame (or the module frame at index 0).
@@ -243,7 +244,8 @@ func (ex *jsExtractor) collectDestructured(decl, pattern *sitter.Node, kind stri
 	collectPatternBindings(pattern, ex.src, func(name string, _ int) {
 		line := tsLine(declStatement(decl))
 		id := ex.varNodeID(name, line)
-		ex.moduleVars[name] = &jsVar{nodeID: id}
+		setter := isSignalSetter(init, name)
+		ex.moduleVars[name] = &jsVar{nodeID: id, isSetter: setter}
 		meta := map[string]string{
 			"kind": kind, "scope": "module", "destructured": "true",
 			"mutable": fmt.Sprintf("%t", kind != "const"),
@@ -251,12 +253,25 @@ func (ex *jsExtractor) collectDestructured(decl, pattern *sitter.Node, kind stri
 		if init != "" {
 			meta["init"] = init
 		}
+		if setter {
+			meta["setter"] = "true"
+		}
 		ex.addNode(graph.Node{
 			ID: id, Type: graph.NodeTypeVariable, Label: name,
 			Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
 			Meta: meta,
 		})
 	})
+}
+
+// isSignalSetter reports whether a destructured binding is a Solid signal
+// setter: const [x, setX] = createSignal(...). Calling it writes the signal.
+func isSignalSetter(init, name string) bool {
+	if init != "createSignal" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(name, "set")
+	return ok && rest != "" && rest[0] >= 'A' && rest[0] <= 'Z'
 }
 
 // collectPatternBindings visits the identifiers bound by a destructuring
@@ -318,7 +333,8 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 }
 
 // attribution returns the graph node ID of the nearest named enclosing
-// function, or "" at module level.
+// function (or the module variable owning the frame for reactive-primitive
+// initializers like createMemo), or "" at module level.
 func attribution(scopes []*jsScope, ex *jsExtractor) string {
 	for i := len(scopes) - 1; i >= 1; i-- {
 		if scopes[i].fnName != "" {
@@ -326,6 +342,45 @@ func attribution(scopes []*jsScope, ex *jsExtractor) string {
 		}
 	}
 	return ""
+}
+
+// moduleNodeID lazily materialises the synthetic per-file module node (same
+// ID format the pattern matcher uses, so the store deduplicates) and returns
+// its ID. It attributes accesses in module-level statements that belong to no
+// declarator — top-level side effects that run on import.
+func (ex *jsExtractor) moduleNodeID() string {
+	id := fmt.Sprintf("%s:%s:function:(module):0", ex.service, ex.file)
+	ex.addNode(graph.Node{
+		ID: id, Type: graph.NodeTypeFunction, Label: "(module)",
+		Service: ex.service, File: ex.file, Line: 0, Language: ex.langTag,
+		Meta: map[string]string{"scope": "module"},
+	})
+	return id
+}
+
+// moduleAttr resolves the attribution for an access with no named enclosing
+// function: the module-level declarator whose initializer contains the node
+// (const filtered = createMemo(() => …) → the `filtered` variable node),
+// falling back to the synthetic module node. This is what connects reactive
+// derivations to the state they read.
+func (ex *jsExtractor) moduleAttr(node *sitter.Node) string {
+	for p := node.Parent(); p != nil; p = p.Parent() {
+		if p.Type() != "variable_declarator" {
+			continue
+		}
+		nameNode := p.ChildByFieldName("name")
+		if nameNode == nil || nameNode.Type() != "identifier" {
+			continue
+		}
+		name := nameNode.Content(ex.src)
+		if v, ok := ex.moduleVars[name]; ok {
+			return v.nodeID
+		}
+		if line, ok := ex.fnDecls[name]; ok {
+			return ex.fnNodeID(name, line)
+		}
+	}
+	return ex.moduleNodeID()
 }
 
 // resolve finds which frame declares name: -1 unknown, 0 module, >0 function.
@@ -407,7 +462,7 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		}
 	case "assignment_expression", "augmented_assignment_expression":
 		if left := node.ChildByFieldName("left"); left != nil && left.Type() == "identifier" {
-			ex.handleWrite(left.Content(ex.src), scopes)
+			ex.handleWrite(left, left.Content(ex.src), scopes)
 		}
 	case "identifier":
 		ex.handleRead(node, scopes)
@@ -429,19 +484,25 @@ func declStatement(decl *sitter.Node) *sitter.Node {
 	return decl
 }
 
-func (ex *jsExtractor) handleWrite(name string, scopes []*jsScope) {
+func (ex *jsExtractor) handleWrite(node *sitter.Node, name string, scopes []*jsScope) {
 	from := attribution(scopes, ex)
 	frame := resolve(scopes, name)
 	switch {
 	case frame == 0: // module variable
 		v := ex.moduleVars[name]
-		if v == nil || from == "" || from == ex.fnNodeID(name, ex.fnDecls[name]) {
+		if v == nil {
+			return
+		}
+		if from == "" {
+			from = ex.moduleAttr(node)
+		}
+		if from == "" || from == v.nodeID || from == ex.fnNodeID(name, ex.fnDecls[name]) {
 			return
 		}
 		ex.addEdge(graph.EdgeTypeWrites, from, v.nodeID, graph.ConfidenceInferred,
 			map[string]string{"op": "assign"})
 	case frame > 0 && frame < len(scopes)-1: // captured outer local
-		ex.captureEdge(name, scopes, frame, true)
+		ex.captureEdge(node, name, scopes, frame, true)
 	}
 }
 
@@ -464,13 +525,23 @@ func (ex *jsExtractor) handleRead(node *sitter.Node, scopes []*jsScope) {
 			return
 		}
 	case "pair", "property_identifier", "function_declaration", "method_definition",
-		"formal_parameters", "required_parameter", "optional_parameter":
+		"formal_parameters":
 		return
+	case "required_parameter", "optional_parameter":
+		// The pattern side is a binding; a default *value* referencing a
+		// module constant (maxDim = MAX_EXPORT_DIM) is a read.
+		if parent.ChildByFieldName("value") != node {
+			return
+		}
+	case "assignment_pattern":
+		if parent.ChildByFieldName("left") == node {
+			return
+		}
 	case "call_expression":
 		if parent.ChildByFieldName("function") == node {
 			// Calls to declared functions are call edges, not variable reads.
 			// Calls to variables (signal accessors/setters: notification(),
-			// setNotification(x)) read the binding, so they fall through.
+			// setNotification(x)) read/write the binding, so they fall through.
 			if _, isFn := ex.fnDecls[node.Content(ex.src)]; isFn {
 				return
 			}
@@ -482,20 +553,38 @@ func (ex *jsExtractor) handleRead(node *sitter.Node, scopes []*jsScope) {
 	switch {
 	case frame == 0:
 		v := ex.moduleVars[name]
-		if v == nil || from == "" || from == ex.fnNodeID(name, ex.fnDecls[name]) {
+		if v == nil {
+			return
+		}
+		if from == "" {
+			from = ex.moduleAttr(node)
+		}
+		if from == "" || from == v.nodeID || from == ex.fnNodeID(name, ex.fnDecls[name]) {
+			return
+		}
+		// Calling a Solid signal setter mutates the signal: setX(v) is a
+		// write on the binding, not a read.
+		if v.isSetter && parent.Type() == "call_expression" && parent.ChildByFieldName("function") == node {
+			ex.addEdge(graph.EdgeTypeWrites, from, v.nodeID, graph.ConfidenceInferred,
+				map[string]string{"op": "call"})
 			return
 		}
 		ex.addEdge(graph.EdgeTypeReads, from, v.nodeID, graph.ConfidenceInferred, nil)
 	case frame > 0 && frame < len(scopes)-1:
-		ex.captureEdge(name, scopes, frame, false)
+		ex.captureEdge(node, name, scopes, frame, false)
 	}
 }
 
 // captureEdge materialises a captured-variable node for an outer function
 // local and links the capturing function to it. JS closures share the
 // binding, so mutation propagates — captures are by reference.
-func (ex *jsExtractor) captureEdge(name string, scopes []*jsScope, frame int, isWrite bool) {
+func (ex *jsExtractor) captureEdge(node *sitter.Node, name string, scopes []*jsScope, frame int, isWrite bool) {
 	from := attribution(scopes, ex)
+	if from == "" {
+		// Module-level reactive blocks (createEffect closures) have no named
+		// enclosing function; attribute to the owning declarator/module node.
+		from = ex.moduleAttr(node)
+	}
 	if from == "" {
 		return
 	}
@@ -560,13 +649,28 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 	}
 }
 
-// collectIdentifiers visits every identifier under n (parameter patterns,
-// destructuring) and reports its name and line.
+// collectIdentifiers visits the identifiers *bound* under n (parameter
+// patterns, destructuring) and reports their name and line. Default-value
+// expressions and type annotations are not bindings: `maxDim = MAX_EXPORT_DIM`
+// binds maxDim only — treating the default as a local would shadow the module
+// constant and swallow its reads edge.
 func collectIdentifiers(n *sitter.Node, src []byte, visit func(name string, line int)) {
 	if n.Type() == "identifier" {
 		visit(n.Content(src), int(n.StartPoint().Row)+1)
 	}
+	if n.Type() == "assignment_pattern" {
+		if l := n.ChildByFieldName("left"); l != nil {
+			collectIdentifiers(l, src, visit)
+		}
+		return
+	}
+	value := n.ChildByFieldName("value")
+	typeAnn := n.ChildByFieldName("type")
 	for i := 0; i < int(n.NamedChildCount()); i++ {
-		collectIdentifiers(n.NamedChild(i), src, visit)
+		child := n.NamedChild(i)
+		if child == value || child == typeAnn {
+			continue
+		}
+		collectIdentifiers(child, src, visit)
 	}
 }

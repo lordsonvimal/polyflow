@@ -63,7 +63,14 @@ named function.
 **Tests:** unit tests for both attribution paths (tree-sitter + SSA); reindex
 must show every worker node with ≥1 outgoing edge in this repo.
 
-### Phase 0.3 — Cross-file JS variable linking + reads/writes retyping `pending`
+### Phase 0.3 — Cross-file JS variable linking + reads/writes retyping `done`
+
+> Outcome: web isolated variables 105 → 3 (the 3 are store objects, whose
+> member-level edges are the precise representation); reads 121 → 229,
+> writes 19 → 59. `impact --target hiddenTypes` now returns the full
+> derived.ts chain. Remaining 80 isolated variables are Go-side
+> (cross-package const reads via the SSA pass) — tracked as follow-up in
+> Phase 0.5's gauge.
 
 **Bug (measured):** 105 of 394 variable nodes are fully isolated.
 1. `js_variables.go` tracks reads/writes same-file only; imported constants
