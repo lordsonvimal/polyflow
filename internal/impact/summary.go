@@ -37,12 +37,13 @@ type Summary struct {
 	Budget         *budget.Info          `json:"budget,omitempty"`
 }
 
-// Summarize rolls the per-node blast radius up into per-file entries.
-func (r *Result) Summarize() *Summary {
+// rollupCallers groups blast-radius callers by file, the low-token
+// representation shared by the node-target and diff summaries.
+func rollupCallers(callers []Caller) []FileRollup {
 	type key struct{ service, file string }
 	entries := make(map[key]*FileRollup)
 
-	for _, c := range r.Callers {
+	for _, c := range callers {
 		k := key{c.Service, c.File}
 		e, ok := entries[k]
 		if !ok {
@@ -72,7 +73,11 @@ func (r *Result) Summarize() *Summary {
 		}
 		return files[i].Service < files[j].Service
 	})
+	return files
+}
 
+// Summarize rolls the per-node blast radius up into per-file entries.
+func (r *Result) Summarize() *Summary {
 	entryPoints := make([]string, 0, len(r.EntryPoints))
 	for _, ep := range r.EntryPoints {
 		entryPoints = append(entryPoints, fmt.Sprintf("%s — %s:%d", ep.Label, ep.File, ep.Line))
@@ -81,7 +86,7 @@ func (r *Result) Summarize() *Summary {
 	return &Summary{
 		Target:               r.Target,
 		Summary:              true,
-		Files:                files,
+		Files:                rollupCallers(r.Callers),
 		EntryPoints:          entryPoints,
 		ServicesAffected:     r.ServicesAffected,
 		CrossServiceTriggers: r.CrossServiceTriggers,

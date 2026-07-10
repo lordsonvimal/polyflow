@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
+	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/indexer"
@@ -941,6 +942,8 @@ var (
 	impactFormat       string
 	impactFile         string
 	impactDirection    string
+	impactDiff         bool
+	impactStaged       bool
 	impactMaxTokens    int
 	impactSummary      bool
 	impactSnippetLines int
@@ -950,14 +953,16 @@ func initImpactFlags() {
 	impactCmd.Flags().StringVar(&impactTarget, "target", "", "search query for the target node")
 	impactCmd.Flags().StringVar(&impactFile, "file", "", "file path: report impact at file granularity")
 	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "with --file: forward, backward or both")
+	impactCmd.Flags().BoolVar(&impactDiff, "diff", false, "union blast radius of uncommitted changes (git diff against HEAD)")
+	impactCmd.Flags().BoolVar(&impactStaged, "staged", false, "with --diff: staged changes only (git diff --cached)")
 	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	impactCmd.Flags().StringVar(&impactService, "service", "", "filter results to a specific service")
 	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text or json")
 	impactCmd.Flags().IntVar(&impactMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
 	impactCmd.Flags().BoolVar(&impactSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
 	impactCmd.Flags().IntVar(&impactSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
-	impactCmd.MarkFlagsOneRequired("target", "file")
-	impactCmd.MarkFlagsMutuallyExclusive("target", "file")
+	impactCmd.MarkFlagsOneRequired("target", "file", "diff")
+	impactCmd.MarkFlagsMutuallyExclusive("target", "file", "diff")
 }
 
 var impactCmd = &cobra.Command{
@@ -967,6 +972,13 @@ var impactCmd = &cobra.Command{
 }
 
 func runImpact(cmd *cobra.Command, args []string) error {
+	if impactStaged && !impactDiff {
+		return fmt.Errorf("--staged requires --diff")
+	}
+	if impactDiff {
+		return runImpactDiff()
+	}
+
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -1130,6 +1142,204 @@ func printImpactText(out *impact.Result) error {
 	if len(out.Unresolved) > 0 {
 		fmt.Fprintln(os.Stdout)
 		printUnresolvedText(out.Unresolved)
+	}
+	return nil
+}
+
+// runImpactDiff answers "will my current changes impact anything": it
+// reindexes incrementally (the diff's line numbers must match the graph),
+// maps git diff hunks to nodes, and reports the union blast radius.
+func runImpactDiff() error {
+	ctx := context.Background()
+
+	cfg, err := workspace.Load(meta.ConfigFile)
+	if err != nil {
+		return err
+	}
+	stats, err := indexer.Run(ctx, indexer.Options{Config: cfg, Workers: runtime.GOMAXPROCS(0)})
+	if err != nil {
+		return fmt.Errorf("reindex before diff impact: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Reindexed %d files (%d parsed, %d unchanged)\n", stats.TotalFiles, stats.ParsedFiles, stats.SkippedFiles)
+
+	changes, err := gitdiff.Changes(".", impactStaged)
+	if err != nil {
+		return err
+	}
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	idx, err := store.BuildIndex(ctx)
+	if err != nil {
+		return err
+	}
+
+	out := impact.BuildDiff(idx, changes, impactDepth, impactService)
+	if impactStaged {
+		out.Mode = "staged"
+	}
+
+	unresolved, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return err
+	}
+	out.AttachUnresolved(unresolved)
+	out.InlineSnippets(".", impactSnippetLines)
+
+	budgeted := out.ApplyBudget(impactMaxTokens, impactSummary)
+	if impactFormat == "json" {
+		return json.NewEncoder(os.Stdout).Encode(budgeted)
+	}
+	if s, ok := budgeted.(*impact.DiffSummary); ok {
+		return printImpactDiffSummaryText(s)
+	}
+	return printImpactDiffText(out)
+}
+
+func spanText(s gitdiff.Span) string {
+	if s.Start == s.End {
+		return fmt.Sprintf("line %d", s.Start)
+	}
+	return fmt.Sprintf("lines %d-%d", s.Start, s.End)
+}
+
+func printUnmappedText(unmapped []impact.UnmappedHunk) {
+	if len(unmapped) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stdout, "Unmapped hunks (%d — no graph node, verify manually):\n", len(unmapped))
+	for _, u := range unmapped {
+		if u.Span != nil {
+			fmt.Fprintf(os.Stdout, "  %s (%s): %s\n", u.File, spanText(*u.Span), u.Reason)
+		} else {
+			fmt.Fprintf(os.Stdout, "  %s: %s\n", u.File, u.Reason)
+		}
+	}
+	fmt.Fprintln(os.Stdout)
+}
+
+func printImpactDiffText(out *impact.DiffResult) error {
+	if out.ChangedFiles == 0 {
+		fmt.Fprintln(os.Stdout, "No uncommitted changes.")
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Impact of %s changes: %d changed files, %d changed nodes\n\n", out.Mode, out.ChangedFiles, len(out.Targets))
+
+	if len(out.Targets) > 0 {
+		fmt.Fprintln(os.Stdout, "Changed nodes:")
+		for _, t := range out.Targets {
+			spans := make([]string, 0, len(t.Spans))
+			for _, s := range t.Spans {
+				spans = append(spans, spanText(s))
+			}
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d (%s)\n",
+				fmt.Sprintf("%s  [%s]", t.Node.Label, t.Node.Type), t.Node.File, t.Node.Line, strings.Join(spans, ", "))
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	printUnmappedText(out.Unmapped)
+
+	var direct, indirect []impact.Caller
+	for _, c := range out.Callers {
+		if c.Depth == 1 {
+			direct = append(direct, c)
+		} else {
+			indirect = append(indirect, c)
+		}
+	}
+	if len(direct) > 0 {
+		fmt.Fprintln(os.Stdout, "Direct callers (depth 1):")
+		for _, c := range direct {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+	if len(indirect) > 0 {
+		fmt.Fprintf(os.Stdout, "Indirect callers (depth 2-%d):\n", out.Depth)
+		for _, c := range indirect {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(out.EntryPoints) > 0 {
+		fmt.Fprintln(os.Stdout, "Entry points (no callers):")
+		for _, ep := range out.EntryPoints {
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n", ep.Label, ep.File, ep.Line)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(out.ServicesAffected) > 0 {
+		fmt.Fprintf(os.Stdout, "Services affected: %s\n", strings.Join(out.ServicesAffected, ", "))
+	}
+	for _, xs := range out.CrossServiceTriggers {
+		fmt.Fprintf(os.Stdout, "Cross-service triggers: %s (%d http_call edges)\n", xs.FromService, xs.EdgeCount)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nTotal: %d nodes in blast radius\n", out.TotalCallers)
+	if len(out.Unresolved) > 0 {
+		fmt.Fprintln(os.Stdout)
+		printUnresolvedText(out.Unresolved)
+	}
+	return nil
+}
+
+func printImpactDiffSummaryText(s *impact.DiffSummary) error {
+	if s.ChangedFiles == 0 {
+		fmt.Fprintln(os.Stdout, "No uncommitted changes.")
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Impact of %s changes: %d changed files, %d changed nodes\n\n", s.Mode, s.ChangedFiles, len(s.Targets))
+
+	if len(s.Targets) > 0 {
+		fmt.Fprintln(os.Stdout, "Changed nodes:")
+		for _, t := range s.Targets {
+			fmt.Fprintf(os.Stdout, "  %s\n", t)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	printUnmappedText(s.Unmapped)
+
+	if len(s.Files) > 0 {
+		fmt.Fprintln(os.Stdout, "Files in blast radius:")
+		for _, f := range s.Files {
+			fmt.Fprintf(os.Stdout, "  depth %-2d %-60s %2d nodes via %s [%s]\n",
+				f.MinDepth, f.File, f.Nodes, strings.Join(f.EdgeTypes, ","), f.Service)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(s.EntryPoints) > 0 {
+		fmt.Fprintln(os.Stdout, "Entry points (no callers):")
+		for _, ep := range s.EntryPoints {
+			fmt.Fprintf(os.Stdout, "  %s\n", ep)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+
+	if len(s.ServicesAffected) > 0 {
+		fmt.Fprintf(os.Stdout, "Services affected: %s\n", strings.Join(s.ServicesAffected, ", "))
+	}
+	for _, xs := range s.CrossServiceTriggers {
+		fmt.Fprintf(os.Stdout, "Cross-service triggers: %s (%d http_call edges)\n", xs.FromService, xs.EdgeCount)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nTotal: %d nodes in blast radius\n", s.TotalCallers)
+	if len(s.Unresolved) > 0 {
+		fmt.Fprintln(os.Stdout)
+		printUnresolvedText(s.Unresolved)
+	}
+	if s.Budget != nil && s.Budget.Note != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", s.Budget.Note)
 	}
 	return nil
 }
