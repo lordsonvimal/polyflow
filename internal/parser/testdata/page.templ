@@ -18,6 +18,8 @@ templ UserPage(name string) {
     <a href="/">Root</a>
     <!-- native DOM event attribute -->
     <button onclick="refresh()">Reload</button>
+    <!-- Rails-UJS style method spoofing -->
+    <a href="/users/1" data-method="delete">Remove</a>
   </div>
 }
 

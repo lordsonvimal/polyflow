@@ -1,6 +1,87 @@
 language: html
 version: "1"
 patterns:
+  # Forms with an explicit method: <form action="/save" method="post">.
+  # Two entries cover both attribute orders (tree-sitter sibling patterns
+  # are order-sensitive). These are listed before the generic pattern so the
+  # method-aware node wins the same-line http_client dedup in MatchToGraph.
+  - name: nav_link_form
+    query: |
+      (start_tag
+        (attribute
+          (attribute_name) @prop
+          (#eq? @prop "action")
+          (quoted_attribute_value
+            (attribute_value) @path
+            (#match? @path "^/")))
+        (attribute
+          (attribute_name) @mprop
+          (#eq? @mprop "method")
+          (quoted_attribute_value
+            (attribute_value) @method)))
+    captures:
+      - name: path
+        role: http_path
+      - name: method
+        role: http_method
+  - name: nav_link_form
+    query: |
+      (start_tag
+        (attribute
+          (attribute_name) @mprop
+          (#eq? @mprop "method")
+          (quoted_attribute_value
+            (attribute_value) @method))
+        (attribute
+          (attribute_name) @prop
+          (#eq? @prop "action")
+          (quoted_attribute_value
+            (attribute_value) @path
+            (#match? @path "^/"))))
+    captures:
+      - name: path
+        role: http_path
+      - name: method
+        role: http_method
+  # Rails-UJS style method spoofing: <a href="/items/1" data-method="delete">.
+  - name: nav_link_data_method
+    query: |
+      (start_tag
+        (attribute
+          (attribute_name) @prop
+          (#eq? @prop "href")
+          (quoted_attribute_value
+            (attribute_value) @path
+            (#match? @path "^/")))
+        (attribute
+          (attribute_name) @mprop
+          (#eq? @mprop "data-method")
+          (quoted_attribute_value
+            (attribute_value) @method)))
+    captures:
+      - name: path
+        role: http_path
+      - name: method
+        role: http_method
+  - name: nav_link_data_method
+    query: |
+      (start_tag
+        (attribute
+          (attribute_name) @mprop
+          (#eq? @mprop "data-method")
+          (quoted_attribute_value
+            (attribute_value) @method))
+        (attribute
+          (attribute_name) @prop
+          (#eq? @prop "href")
+          (quoted_attribute_value
+            (attribute_value) @path
+            (#match? @path "^/"))))
+    captures:
+      - name: path
+        role: http_path
+      - name: method
+        role: http_method
   # Navigation links in static HTML: <a href="/reports">, <form action="/save">.
   # Only root-relative paths; the linker emits navigates_to edges to the
   # matching route handler.

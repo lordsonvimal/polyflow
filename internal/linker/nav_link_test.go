@@ -62,6 +62,33 @@ func TestLink_NavLinkCrossService(t *testing.T) {
 	assert.Equal(t, graph.EdgeTypeNavigatesTo, edges[0].Type)
 }
 
+// Forms with a non-GET verb match the corresponding handler, not the GET one.
+func TestLink_NavLinkFormMethod(t *testing.T) {
+	nodes := []graph.Node{
+		{
+			ID: "app:page.templ:http_client:href:/users:6", Type: graph.NodeTypeHTTPClient,
+			Service: "app", File: "page.templ", Line: 6,
+			Meta: map[string]string{"path": "/users", "method": "POST", "nav_link": "true"},
+		},
+		{
+			ID: "app:routes.go:http_handler:GET /users:10", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "routes.go", Line: 10,
+			Meta: map[string]string{"path": "/users", "method": "GET"},
+		},
+		{
+			ID: "app:routes.go:http_handler:POST /users:11", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "routes.go", Line: 11,
+			Meta: map[string]string{"path": "/users", "method": "POST"},
+		},
+	}
+	edges, err := New(navLinkConfig()).Link(nodes, nil)
+	require.NoError(t, err)
+	require.Len(t, edges, 1)
+	assert.Equal(t, graph.EdgeTypeNavigatesTo, edges[0].Type)
+	assert.Equal(t, "app:routes.go:http_handler:POST /users:11", edges[0].To,
+		"POST form must link to the POST handler")
+}
+
 // Unmatched nav links are dropped silently — no unresolved-edge noise for
 // page links that don't correspond to an indexed route.
 func TestLink_NavLinkUnmatchedIsSilent(t *testing.T) {
