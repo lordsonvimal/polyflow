@@ -36,6 +36,11 @@ const (
 	NodeTypeStruct NodeType = "struct"
 	// NodeTypeClass is a JS/TS/Ruby class; properties/methods in meta.
 	NodeTypeClass NodeType = "class"
+	// NodeTypeSignal is a datastar reactive signal binding (data-bind,
+	// data-signals, data-model, data-text/$signal). Meta: signal (the bare
+	// signal name). Kept distinct from component so signal-expression values
+	// like "$idx + 1" don't pollute the component node set.
+	NodeTypeSignal NodeType = "signal"
 )
 
 // EdgeType classifies the relationship between two nodes.
@@ -103,7 +108,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "4"
+const SchemaVersion = "5"
 
 // Node represents a code entity in the graph.
 type Node struct {
