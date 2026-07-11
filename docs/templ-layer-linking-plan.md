@@ -170,7 +170,32 @@ sqlite3 $DB "SELECT type,language,file,line FROM nodes WHERE label='PuzzleRows';
 
 ## Tier 0 — Reconnect the Go↔templ↔JS seams (critical path)
 
-### Phase T.1 — Unify templ components with their generated Go twin `pending`
+### Phase T.1 — Unify templ components with their generated Go twin `done (commit e93fc1a)`
+
+> Outcome: chose **link** over drop. Dropping `*_templ.go` from the parse walk
+> would delete the tree-sitter function nodes the semantic call graph resolves
+> against, so `go_semantic.go` (endpoint check at lines 178–180) would silently
+> drop every `handler → PuzzleRows(go)` call edge — severing the exact
+> reachability the phase exists to preserve. `LinkTemplComponents` instead keeps
+> both halves and emits a `component_impl` bridge (confidence `static`,
+> `via: templ_generated`) from the generated Go function to the templ component,
+> keyed on the derived generated-file path + label (not bare label, so
+> same-named components across packages don't collide).
+>
+> Measured on chessleap (full re-index): **395 `component_impl` edges**;
+> **isolated templ components 347 → 0** (component drops out of the isolated-type
+> list entirely); total isolated nodes **1038 → 691**. Node count unchanged
+> (7915; link strategy keeps the generated nodes), edges 12,762. `PuzzleRows`
+> verified reachable end-to-end: `handlers/puzzles.go:Rows` (gin handler)
+> `-[calls]->` generated `PuzzleRows` (go) `-[component_impl]->` `PuzzleRows`
+> (templ), where all its datastar/DOM edges attach. Benchmarks unchanged
+> (`BenchmarkIndexCold` ~9s/1200 files, `IncrementalUnchanged` 26ms) — the pass
+> is an O(nodes) map join over already-collected nodes. `SchemaVersion` 3 → 4.
+>
+> Graph inflation from the 2,267 generated `*_templ.go` nodes is left as-is: it
+> does not affect the isolated-component metric (only 86 functions are isolated),
+> and removing it safely requires redirecting the semantic call edges — deferred
+> rather than risk the reachability this phase establishes.
 
 **Entry context (re-read to start fresh):** the "Working context" section above;
 `internal/linker/linker.go` (`LinkRouteHandlers` as the template to mirror);
