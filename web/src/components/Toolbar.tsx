@@ -107,6 +107,19 @@ const Toolbar: Component = () => {
         </div>
       </Show>
 
+      {/* Variable visibility (structure view always shows them) */}
+      <Show when={uiStore.viewMode() !== "structure"}>
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Vars</span>
+          <button class={btn(uiStore.showVariables())} onClick={() => uiStore.setShowVariables(true)} title="Show variable nodes">
+            Show
+          </button>
+          <button class={btn(!uiStore.showVariables())} onClick={() => uiStore.setShowVariables(false)} title="Hide variable nodes">
+            Hide
+          </button>
+        </div>
+      </Show>
+
       {/* Layout */}
       <div class="flex items-center gap-1">
         <span class="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Layout</span>

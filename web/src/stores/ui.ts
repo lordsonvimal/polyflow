@@ -36,6 +36,10 @@ const initNodeId = urlParam("node");
 const initView = (urlParam("view") ?? "indepth") as ViewMode;
 // File grouping defaults ON; ?group=off or a persisted preference disables it.
 const initGroupByFile = (urlParam("group") ?? lsGet("pf:groupByFile", "files")) !== "off";
+// Variables are hidden by default (they crowd the call graph); a persisted
+// preference re-enables them. The structure view is exempt — it always shows
+// variables since data flow is its whole point (see derived.ts).
+const initShowVariables = lsGet("pf:showVariables", "off") === "on";
 
 const [selectedNodeId, setSelectedNodeIdRaw] = createSignal<string | null>(initNodeId);
 const [layout, setLayoutRaw] = createSignal<Layout>(initLayout);
@@ -63,6 +67,10 @@ const [expandedBoundaries, setExpandedBoundaries] = createSignal<string[]>([]);
 const [groupByFile, setGroupByFileRaw] = createSignal<boolean>(initGroupByFile);
 // File groups the user has collapsed into a single node (expanded default).
 const [collapsedFiles, setCollapsedFiles] = createSignal<string[]>([]);
+
+// Variable node visibility (in-depth/high-level). Off by default; structure
+// view ignores this and always shows variables.
+const [showVariables, setShowVariablesRaw] = createSignal<boolean>(initShowVariables);
 
 // Persist layout to localStorage and URL whenever it changes.
 createEffect(() => {
@@ -118,6 +126,11 @@ function setGroupByFile(on: boolean) {
   if (!on) setCollapsedFiles([]);
 }
 
+function setShowVariables(on: boolean) {
+  setShowVariablesRaw(on);
+  lsSet("pf:showVariables", on ? "on" : "off");
+}
+
 function toggleFileCollapse(groupId: string) {
   setCollapsedFiles((prev) =>
     prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
@@ -161,6 +174,8 @@ export const uiStore = {
   toggleConfidence,
   groupByFile,
   setGroupByFile,
+  showVariables,
+  setShowVariables,
   collapsedFiles,
   toggleFileCollapse,
   expandedBoundaries,
