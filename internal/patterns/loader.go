@@ -2,9 +2,11 @@ package patterns
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
+	patterndata "github.com/lordsonvimal/polyflow/patterns"
 	"gopkg.in/yaml.v3"
 )
 
@@ -85,15 +87,56 @@ func LoadFile(path string) (*PatternFile, error) {
 	return &pf, nil
 }
 
+// LoadFS reads and parses all *.yaml pattern files in fsys (recursively). It is
+// the io/fs analogue of Load, used to read the patterns embedded in the binary.
+func LoadFS(fsys fs.FS) ([]*PatternFile, error) {
+	var files []*PatternFile
+	err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".yaml" {
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return fmt.Errorf("load pattern %s: %w", path, err)
+		}
+		var pf PatternFile
+		if err := yaml.Unmarshal(data, &pf); err != nil {
+			return fmt.Errorf("load pattern %s: %w", path, err)
+		}
+		files = append(files, &pf)
+		return nil
+	})
+	return files, err
+}
+
+// registryFromFiles builds a Registry from parsed pattern files.
+func registryFromFiles(files []*PatternFile) *Registry {
+	reg := NewRegistry()
+	for _, pf := range files {
+		reg.RegisterFile(pf)
+	}
+	return reg
+}
+
 // DefaultRegistry loads all YAML patterns from patternsDir and returns a populated Registry.
 func DefaultRegistry(patternsDir string) (*Registry, error) {
 	files, err := Load(patternsDir)
 	if err != nil {
 		return nil, err
 	}
-	reg := NewRegistry()
-	for _, pf := range files {
-		reg.RegisterFile(pf)
+	return registryFromFiles(files), nil
+}
+
+// EmbeddedRegistry loads the built-in patterns compiled into the binary. This
+// is the default source so `polyflow` works from any working directory,
+// independent of the polyflow source tree.
+func EmbeddedRegistry() (*Registry, error) {
+	files, err := LoadFS(patterndata.FS)
+	if err != nil {
+		return nil, err
 	}
-	return reg, nil
+	return registryFromFiles(files), nil
 }
