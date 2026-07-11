@@ -83,6 +83,7 @@ export const EDGE_LEGEND: EdgeLegendEntry[] = [
   { glyph: "──▶", color: "#64748b", desc: "reads variable" },
   { glyph: "┄┄▶", color: "#f97316", desc: "captures (closure over variable)" },
   { glyph: "──▶", color: "#22d3ee", desc: "flows_to (variable passed by ref/value)" },
+  { glyph: "┈┈▶", color: "#a855f7", desc: "event binding (onClick, oninput…) — labeled with the event" },
   { glyph: "┄┄▶", desc: "partial / unknown edge (opt-in, dashed)" },
   { glyph: "◯", color: "#f472b6", desc: "trace root (pink ring)" },
   { glyph: "◻", color: "#ffffff", desc: "selected node (white border, neighbors highlighted)" },
