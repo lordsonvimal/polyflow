@@ -34,8 +34,10 @@ function pushURL(params: Record<string, string | null>) {
 const initLayout = (urlParam("layout") ?? lsGet("pf:layout", "dagre")) as Layout;
 const initNodeId = urlParam("node");
 const initView = (urlParam("view") ?? "indepth") as ViewMode;
-// File grouping defaults ON; ?group=off or a persisted preference disables it.
-const initGroupByFile = (urlParam("group") ?? lsGet("pf:groupByFile", "files")) !== "off";
+// File grouping defaults ON and is not persisted: a fresh landing is always
+// grouped so the graph reads as files-first. Only ?group=off disables it, and
+// only for that URL — the preference does not survive into the next session.
+const initGroupByFile = urlParam("group") !== "off";
 // Variables are hidden by default (they crowd the call graph); a persisted
 // preference re-enables them. The structure view is exempt — it always shows
 // variables since data flow is its whole point (see derived.ts).
@@ -121,7 +123,8 @@ function toggleConfidence(level: string) {
 
 function setGroupByFile(on: boolean) {
   setGroupByFileRaw(on);
-  lsSet("pf:groupByFile", on ? "files" : "off");
+  // Not persisted to localStorage (Phase U.2): grouping off is a per-session
+  // choice, carried only in the URL so a fresh landing is always grouped.
   pushURL({ group: on ? null : "off" }); // omit default from URL
   if (!on) setCollapsedFiles([]);
 }

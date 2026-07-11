@@ -275,7 +275,15 @@ answers "will my current changes impact anything".
 `showVariables` signal (default off, persisted, structure view exempt) +
 toolbar toggle; clear selection if the selected node becomes hidden.
 
-### Phase U.2 — Grouping default hardening `pending`
+### Phase U.2 — Grouping default hardening `done`
+
+> Outcome: dropped the `pf:groupByFile` localStorage read/write. `groupByFile`
+> now initializes from `?group=off` only (default ON), and `setGroupByFile` no
+> longer persists — a grouping-off choice lives solely in the URL for that
+> session, so every fresh landing is grouped files-first. `?group=off` still
+> wins on load. Tests: default is grouped; `setGroupByFile` round-trips without
+> touching localStorage.
+
 Stop persisting `groupByFile=off` across sessions (URL param still wins);
 fresh landings always grouped.
 
