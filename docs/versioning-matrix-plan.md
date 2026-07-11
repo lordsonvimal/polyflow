@@ -1,0 +1,215 @@
+# Polyflow — Versioned Toolchain Matrix Plan
+
+Status legend: `pending` · `in progress` · `done (commit <sha>)`
+
+> **Reconciled with `docs/contract-matching-plan.md`.** These are two axes of the
+> same goal: contract-matching gives **breadth** (link *any* cross-service
+> convention), versioning gives **fidelity** (behave correctly per tool *version*).
+> They share **one** gating mechanism — the existing `package:` / `version_range:`
+> semver gate (`internal/patterns/version.go`). This plan therefore does **not**
+> introduce a separate `internal/profiles/` package; version-specific *interpretation
+> and linking* is expressed as **version-gated contract rules + tree-sitter pattern
+> files**. Only *parser-engine* versions (the `a-h/templ` lib, tree-sitter grammars)
+> — which hit Go's hard single-import constraint — need the heavy **sidecar**
+> isolation.
+
+## Context
+
+**Why now.** A version audit of the T.1–T.6 templ-layer work showed polyflow's
+version-robustness is only *partial*:
+
+- **Already versioned:** library/framework semantics (gin, gorm, aws-sdk v1/v2,
+  pusher…) are gated in YAML via `package:` + `version_range:` (semver), filtered
+  per-service by resolved deps (`internal/patterns/version.go`
+  `Registry.ForService`, `deps.Resolve`). Adding a lib version there is already
+  additive.
+- **Not versioned (the gap):** the hand-written parsers — templ AST + datastar
+  vocabulary + HTML attrs in `internal/parser/templ.go`, the SSA pass in
+  `go_semantic.go`, and the five tree-sitter grammars (go/js/ts/html/ruby) — are
+  single-version and version-blind. datastar colon-vs-hyphen is an `if` branch,
+  not a version selection. polyflow bundles exactly **one** `a-h/templ` lib version.
+- **No proof of coverage:** tested against exactly one real stack (templ
+  v0.3.960, datastar-go v1.1.0). No matrix asserting per-(tool, version) behaviour.
+
+**Goal.** A maintainable, scalable version matrix across *every* integrated tool
+so that supporting version **N** is an additive change (a version-gated rule/pattern
+variant, a sidecar build target for parser engines, and a fixture cell), never
+surgery on shared code. Behaviour is selected from the target project's **resolved**
+tool versions.
+
+**Locked decisions:**
+1. **Full multi-version isolation for parser engines** — version-isolated parser
+   **sidecars** (one binary per parsing-engine version); a **router** dispatches each
+   file to the sidecar matching the resolved version. Applies to `a-h/templ` + the
+   tree-sitter grammars (the tools with the Go single-import constraint). *Interpretation/
+   linking* is NOT sidecar'd — it is version-gated rules (see the reconciliation note).
+2. **Real per-version fixtures + CI gate** — each `(tool, version)` cell has a
+   real manifest + expected graph; a matrix runner asserts all cells; CI fails on
+   regression or a registered-but-unfixtured version.
+3. **Fail-safe fallback** — unknown/out-of-range version → nearest (newest) known
+   rule variant / sidecar backend, stamp `resolved_version` + `profile_used` +
+   `confidence=inferred`, and record a coverage note (no silent gaps — matches the
+   existing trust contract).
+
+Follows the repo's per-phase process (`docs/phases.md`): one phase per commit,
+positive+negative fixtures per change, benchmark, doc update, `graph.SchemaVersion`
+bump when stored shape changes.
+
+---
+
+## Target architecture
+
+Two kinds of version-sensitivity, handled by two different mechanisms:
+
+**A. Interpretation & linking semantics** (datastar attribute vocabulary / action
+verbs / signal syntax, framework conventions, cross-boundary matching) →
+**version-gated rules**, reusing the existing `package:` / `version_range:` gate. No
+new package: datastar v2 = a version-gated **contract rule** variant
+(`docs/contract-matching-plan.md`) + a version-gated **tree-sitter pattern** variant.
+The residual hardcoded branches in `internal/parser/templ.go` (`isDataOnKey`,
+`isReactiveAttrKey`, verb regex, reactive-attr set) become data selected by the
+resolved datastar/templ version via a thin selector, not an `if`.
+
+**B. Parser-engine versions** (`a-h/templ` lib; tree-sitter grammars for
+go/js/ts/html/ruby) → **sidecars + router**, because Go can import only one version
+of each. Each sidecar is built against ONE engine version, speaks a stable IPC
+(length-prefixed JSON returning graph `Node`/`Edge`/`UnresolvedRef`), and the main
+process routes files by resolved version with nearest-fallback.
+
+Shared infrastructure across A and B:
+
+1. **Toolchain registry** — declarative single source of truth.
+   `tool → [ {versionRange, ruleVariant | sidecarBackend} ]` for
+   `go, javascript, typescript, templ, datastar, html, ruby`. Feeds *both* the
+   rule/pattern gate (A) and the sidecar router (B). Adding a version = one row.
+2. **Version resolver** — extend `internal/deps` to also resolve *runtime/language*
+   versions (Go `go 1.xx` directive via `modfile.Go.Version`; TypeScript from the
+   `typescript` dep / `tsconfig`; ECMAScript target; templ from `a-h/templ`;
+   datastar from `starfederation/datastar-go` or the JS datastar dep; HTML =
+   stable). Output: per-service `tool → version`, joined against the registry with
+   `patterns.VersionInRange` (reused) + nearest-fallback.
+3. **Coverage ledger + fail-safe** — every rule selection / sidecar dispatch stamps
+   `profile_used`/`backend_version`; when inferred, appends a coverage note surfaced
+   by `polyflow doctor` (shared with the contract-kind coverage from
+   contract-matching phase G.5) and in `status`.
+
+---
+
+## Phases (one commit each)
+
+### Phase V.0 — Registry + resolver + coverage scaffolding `pending`
+New `internal/toolchain/{registry.go,resolve.go}`; extend `internal/deps/deps.go`
+for runtime versions; reuse `patterns.VersionInRange`. Registry seeded with today's
+single versions (behaviour unchanged). Adds `tool → version` to graph meta + a
+coverage ledger. No parser change yet — establishes the seams. *SchemaVersion bump.*
+
+### Phase V.1 — Version-gate interpretation via rules (no new package) `pending`
+Extend the existing `package:` / `version_range:` gate to cover **datastar contract
+rules** (contract-matching G.1/G.3) and **templ recognition patterns**. Move the
+colon/hyphen + reactive-attr vocabulary out of the `internal/parser/templ.go`
+branches into version-gated rule/pattern data, selected by the resolved
+datastar/templ version through a thin `internal/toolchain` selector (reusing
+`gateSatisfied`). Ship datastar **v0-hyphen** and **v1-colon** as gated variants +
+first matrix cells. Pure-Go, no infra; largest maintainability win.
+**Depends on the contract engine (contract-matching G.0–G.3).** Fixtures: v0 + v1
+datastar fixture projects.
+
+### Phase V.2 — Sidecar protocol + router + templ sidecar (parser-engine fidelity) `pending`
+New `internal/sidecar/{protocol.go,router.go,manager.go}` and
+`cmd/polyflow-parse-templ/` (built against `a-h/templ`). Router wraps
+`parser.ForFile` dispatch in `indexer.go`; nearest-version fallback + labeling.
+Migrate the templ parser behind the router (proves isolation on the real-constraint
+tool). Scope: **parser-engine version only** — interpretation/linking already
+version-gated in V.1. Graph output byte-identical on chessleap (regression guard).
+
+### Phase V.3 — Grammar sidecars `pending`
+`cmd/polyflow-parse-grammar/` per language (go/js/ts/html/ruby), one pinned version
+each initially; router dispatches. Adding a second grammar version = a new sidecar
+build target + registry row, zero shared-code edits.
+
+### Phase V.4 — Matrix harness + CI gate + doctor `pending`
+`internal/matrix/matrix_test.go` iterates `testdata/matrix/<tool>@<ver>/` (real
+manifest + `expected.json`), spins the right rule variant / sidecar backend, asserts
+every cell; a coverage test fails when a registered version lacks a fixture.
+`polyflow doctor` prints the tool×version coverage table (merged with the per-kind
+contract coverage from contract-matching G.5). Wire into CI.
+
+**Value ordering:** V.0–V.1 deliver the declarative registry + version-gated rules
+(the maintainability/scalability core, reusing one gate) before any sidecar infra, so
+the parser-engine isolation (V.2–V.3) can be paced independently.
+
+---
+
+## Key files
+
+- **New:** `internal/toolchain/` (registry, resolve, version selector),
+  `internal/sidecar/` (protocol/router/manager), `cmd/polyflow-parse-templ/`,
+  `cmd/polyflow-parse-grammar/`, `internal/matrix/matrix_test.go`,
+  `testdata/matrix/<tool>@<ver>/`, doctor command file. Version-gated **rule/pattern
+  variants** live under `contracts/*.yaml` (contract-matching) and
+  `patterns/<lang>/*.yaml` — no `internal/profiles/` package.
+- **Modify:** `internal/deps/deps.go` (runtime versions), `internal/parser/templ.go`
+  (thin version-selector instead of hardcoded branches), `internal/indexer/indexer.go`
+  (router dispatch + coverage stamping), `internal/graph/model.go`
+  (`profile_used`/`backend_version` meta; `SchemaVersion` bumps),
+  `internal/patterns/version.go` (export/reuse `gateSatisfied`/selector).
+
+## Reuse (don't rebuild)
+
+- `patterns.VersionInRange` / `Registry.ForService` / `gateSatisfied` — the **single**
+  semver gate; both the contract/pattern rule selection (A) and the sidecar router (B)
+  reuse it. No parallel versioning mechanism.
+- `deps.Resolve` / `ResolvedVersions` — already extracts package versions; extend for
+  runtime/language versions.
+- The **contract engine** (`docs/contract-matching-plan.md`, `internal/contract/`) —
+  datastar/cross-boundary linking lives here; V.1 only *gates* those rules by version.
+- Structural, version-agnostic detectors already present — `isTemplRenderSig`,
+  `isDatastarNewSSE` (`go_semantic.go`) — keep as the version-tolerant baseline.
+
+## Verification
+
+- `go test ./...` green; `internal/matrix` runs every cell + a "no registered
+  version without a fixture" guard.
+- Build sidecars; index chessleap (templ v0.3.960 / datastar v1.1.0) → graph
+  **identical to current** node/edge counts (regression), with
+  `profile_used=datastar-v1` / `backend_version` stamped.
+- Add a synthetic **datastar v0-hyphen** fixture project + a **second templ minor**
+  cell → matrix proves >1 version per tool actually diverges and both pass; the v0/v1
+  divergence is driven purely by version-gated rules (no code branch).
+- Fail-safe check: a fixture pinning a *future* datastar v2 → nearest (v1) rule
+  variant applied, `confidence=inferred`, coverage note present (assert, don't crash).
+- Benchmark: router/IPC overhead vs. today's in-process parse (`make bench` +
+  `time polyflow index --full` on chessleap); hold `BenchmarkIndexCold`. Long-lived
+  pooled sidecars keep startup off the hot path.
+
+## Risks / honest notes
+
+- **Sidecars are only for parser engines.** Interpretation/linking versioning is
+  cheap (rule gating); do not sidecar it. This keeps the heavy infra scoped to the
+  two tools (`a-h/templ`, grammars) that genuinely need it.
+- **Heavy option (parser side).** Sidecars add process management, IPC cost, N build
+  targets, and cross-platform distribution concerns. Mitigate: pooled long-lived
+  processes; a single multiplexed `polyflow-parse` binary with `--engine/--version`
+  rather than dozens of tiny binaries; graceful in-process fallback if a sidecar is
+  missing.
+- **templ is the only tool with a true hard constraint.** Grammars are
+  version-tolerant; stand up multiple *versions* only where a matrix cell proves a
+  real behavioural divergence — otherwise one backend per language, matrix documents
+  the tolerated range.
+- **Scale.** Full build is multi-week. Phasing puts the registry + version-gated rules
+  (V.0–V.1) first so the "add version N additively" property lands early, independent
+  of the sidecar rollout.
+
+## Sequencing / dependencies
+
+```
+contract-matching:  G.0 ─> G.1 ─> G.2 ─> G.3 ─> G.4 ─> G.5
+                                    │(rules exist to gate)      │(doctor coverage)
+versioning:         V.0 ─> V.1 ────┘                           │
+                             └─> V.2 ─> V.3 ─> V.4 ────────────┘
+```
+- **V.1 depends on the contract engine** (G.0–G.3): it version-gates contract/pattern
+  rules that must exist first.
+- **V.2–V.3 (sidecars) are independent** of contract-matching — pure parser-engine
+  isolation.
+- **V.4 doctor coverage** merges with contract-matching G.5 per-kind coverage.
