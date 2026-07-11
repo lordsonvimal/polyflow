@@ -147,6 +147,72 @@ func TestMatchToGraph_CobraRunIsEdge(t *testing.T) {
 	assert.Equal(t, "svc:main.go:function:runServe:20", edges[0].To)
 }
 
+func TestMatchToGraph_JSXEventHandlerEdgeCarriesEvent(t *testing.T) {
+	// onClick={loadSource} must emit a calls edge labeled with the event so the
+	// binding is distinguishable from a plain call (Phase U.3).
+	results := []patterns.MatchResult{
+		{PatternName: "component_arrow_decl", File: "App.tsx", Line: 1, Captures: map[string]string{"name": "App"}},
+		{PatternName: "func_decl", File: "App.tsx", Line: 2, Captures: map[string]string{"name": "loadSource"}},
+		{PatternName: "jsx_event_handler_ref", File: "App.tsx", Line: 5, Captures: map[string]string{"prop": "onClick", "callee": "loadSource"}},
+	}
+	_, edges, _ := patterns.MatchToGraph("svc", results)
+	ev := findEdge(edges, graph.EdgeTypeCalls)
+	require.NotNil(t, ev)
+	assert.Equal(t, "click", ev.Meta["event"])
+	assert.Equal(t, "on click", ev.Label)
+}
+
+// findEdge returns the first edge of the given type, or nil.
+func findEdge(edges []graph.Edge, t graph.EdgeType) *graph.Edge {
+	for i := range edges {
+		if edges[i].Type == t {
+			return &edges[i]
+		}
+	}
+	return nil
+}
+
+func TestMatchToGraph_SolidNamespacedEventEdge(t *testing.T) {
+	// on:click namespaced directive normalizes the same as camelCase onClick.
+	results := []patterns.MatchResult{
+		{PatternName: "component_arrow_decl", File: "App.tsx", Line: 1, Captures: map[string]string{"name": "App"}},
+		{PatternName: "func_decl", File: "App.tsx", Line: 2, Captures: map[string]string{"name": "onSubmit"}},
+		{PatternName: "jsx_event_handler_ref", File: "App.tsx", Line: 5, Captures: map[string]string{"prop": "oncapture:submit", "callee": "onSubmit"}},
+	}
+	_, edges, _ := patterns.MatchToGraph("svc", results)
+	ev := findEdge(edges, graph.EdgeTypeCalls)
+	require.NotNil(t, ev)
+	assert.Equal(t, "submit", ev.Meta["event"])
+}
+
+func TestMatchToGraph_HTMLListenEdgeCarriesEvent(t *testing.T) {
+	// An inline HTML event attr inside an enclosing scope stamps the dom_listen
+	// edge with the event; the node also records it for edge-less HTML files.
+	results := []patterns.MatchResult{
+		{PatternName: "func_decl", File: "app.js", Line: 1, Captures: map[string]string{"name": "wire"}, EndLine: 9},
+		{PatternName: "add_event_listener", File: "app.js", Line: 3, Captures: map[string]string{"event_type": "\"click\"", "handler": "onClick"}},
+	}
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
+	var listen *graph.Edge
+	for i := range edges {
+		if edges[i].Type == graph.EdgeTypeDOMListen {
+			listen = &edges[i]
+		}
+	}
+	require.NotNil(t, listen, "expected a dom_listen edge")
+	assert.Equal(t, "click", listen.Meta["event"])
+	assert.Equal(t, "on click", listen.Label)
+	// The dom_target node also records the event name.
+	var found bool
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeDOMTarget {
+			found = true
+			assert.Equal(t, "click", n.Meta["event"])
+		}
+	}
+	assert.True(t, found)
+}
+
 func TestMatchToGraph_PublisherAndSubscriberAndWorker(t *testing.T) {
 	cases := []struct {
 		pattern  string
