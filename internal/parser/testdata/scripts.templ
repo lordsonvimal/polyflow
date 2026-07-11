@@ -1,0 +1,15 @@
+package testdata
+
+templ RoomPage() {
+	<div id="board-root" class="board">
+		<span id="white-clock"></span>
+		// class-only element: no id, must not pollute dom_ids
+		<span class="hint"></span>
+	</div>
+	// Expression src via helpers.Asset — logical path is the string literal
+	<script type="module" src={ helpers.Asset("js/liveclass-room.js") }></script>
+	// Constant src
+	<script src="/static/js/extra.js"></script>
+	// Inline script (no src) — must produce no import
+	<script>console.log("hi")</script>
+}

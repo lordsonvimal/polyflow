@@ -513,6 +513,32 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkTemplComponents(allNodes)); err != nil {
 		return nil, err
 	}
+	// templ <script src> → JS file imports.
+	{
+		scriptEdges, scriptUnresolved := linker.LinkTemplScripts(allNodes)
+		if err := writeEdges(scriptEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, scriptUnresolved...)
+	}
+	// JS DOM target → templ element `defined_in` (creates templ_element nodes).
+	{
+		domNodes, domEdges, domUnresolved := linker.LinkDOMDefinitions(allNodes)
+		for i := range domNodes {
+			n := domNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(domEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, domUnresolved...)
+	}
 	if err := writeEdges(linker.LinkDatastores(allNodes)); err != nil {
 		return nil, err
 	}
