@@ -632,7 +632,7 @@ func initPatternsSubcmds() {
 }
 
 func runPatternsList(cmd *cobra.Command, args []string) error {
-	reg, err := patterns.DefaultRegistry("patterns/")
+	reg, err := patterns.EmbeddedRegistry()
 	if err != nil {
 		return err
 	}

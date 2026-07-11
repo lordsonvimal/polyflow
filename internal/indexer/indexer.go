@@ -34,7 +34,7 @@ import (
 type Options struct {
 	Config      *workspace.WorkspaceConfig
 	DBDir       string // default: meta.DBDir
-	PatternsDir string // default: "patterns/"
+	PatternsDir string // default: "" → built-in patterns embedded in the binary; set to load from disk instead
 	Workers     int    // default: GOMAXPROCS
 	Full        bool   // force full re-parse, ignoring the incremental cache
 	Log         io.Writer
@@ -62,9 +62,6 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 	if opts.DBDir == "" {
 		opts.DBDir = meta.DBDir
-	}
-	if opts.PatternsDir == "" {
-		opts.PatternsDir = "patterns/"
 	}
 	if opts.Workers <= 0 {
 		opts.Workers = runtime.GOMAXPROCS(0)
@@ -113,7 +110,18 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 
-	reg, err := patterns.DefaultRegistry(opts.PatternsDir)
+	// Built-in patterns come from the binary's embedded copy by default, so the
+	// indexer works from any working directory. An explicit PatternsDir (tests,
+	// pattern development) overrides with an on-disk directory.
+	var (
+		reg *patterns.Registry
+		err error
+	)
+	if opts.PatternsDir == "" {
+		reg, err = patterns.EmbeddedRegistry()
+	} else {
+		reg, err = patterns.DefaultRegistry(opts.PatternsDir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load default patterns: %w", err)
 	}
