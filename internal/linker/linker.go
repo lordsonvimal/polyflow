@@ -197,6 +197,12 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 			// EventSource). Extract the path portion so handlers can match.
 			path = urlToPath(stripMeta(client.Meta["url"]))
 		}
+		// Datastar actions carry the raw action URL, which may include a query
+		// string (`@post('/x/history/navigate?direction=1')`); the route pattern
+		// never does, so drop it before matching.
+		if qi := strings.Index(path, "?"); qi >= 0 {
+			path = path[:qi]
+		}
 		targetSvc := client.Meta["target_service"]
 
 		// Build handler lookup maps, stripping the base_url prefix from handler paths
@@ -248,12 +254,17 @@ func (l *Linker) Link(nodes []graph.Node, edges []graph.Edge) ([]graph.Edge, err
 				})
 				continue
 			}
-			// Skip same-service pairs — those are already captured by "calls" edges
-			if client.Service == handler.Service {
+			// Skip same-service pairs — those are already captured by "calls"
+			// edges. Datastar actions are the exception: a templ action node
+			// (data-on:click={ @post('/…') }) reaching its gin handler has no
+			// bridging "calls" edge, so for a monolith the route→handler→
+			// component→action→handler loop only closes if we emit it here.
+			isDatastar := client.Meta["datastar"] == "true"
+			if client.Service == handler.Service && !isDatastar {
 				continue
 			}
 			edgeMeta := map[string]string{"confidence": confidence}
-			if client.Meta["datastar"] == "true" {
+			if isDatastar {
 				edgeMeta["via"] = "datastar_action"
 			}
 			crossEdges = append(crossEdges, graph.Edge{
@@ -315,6 +326,13 @@ func resolveHandler(method, path string, exact, normal map[string]*graph.Node) (
 			return h, "static"
 		}
 	}
+	// Wildcard (normalized) matching only makes sense when the path has at
+	// least one literal segment to anchor on. A fully-wildcarded datastar path
+	// (e.g. `@get(url)` → "*" or "*/*") would otherwise match every same-shaped
+	// handler; surface it as unresolved instead of guessing.
+	if !hasLiteralSegment(path) {
+		return nil, ""
+	}
 	// Try normalized matching across candidate methods.
 	for _, m := range candidateMethods(method) {
 		prefix := m + " "
@@ -336,20 +354,55 @@ func resolveHandler(method, path string, exact, normal map[string]*graph.Node) (
 	return nil, ""
 }
 
-// pathMatchesPattern returns true when path matches pattern where "*" in pattern
-// matches any single non-empty path segment.
+// pathMatchesPattern returns true when path matches pattern segment-for-segment,
+// where "*" on either side matches any single non-empty segment. The wildcard is
+// symmetric because T.2's datastar partial paths put the "*" on the client side
+// (interpolated Go expressions) while route patterns put it on the handler side
+// (":id"/"{id}"), and a real link may need to reconcile both.
+//
+// When the path carries wildcards (a datastar partial), a shared concrete
+// segment is additionally required: otherwise two routes of the same shape but
+// different meaning would match on wildcards alone (e.g. the partial
+// "/play/*/draw" would spuriously match the handler pattern "/*/goto/*").
+// Concrete client paths (cross-service HTTP) have no wildcards, so this extra
+// constraint never affects them.
 func pathMatchesPattern(path, pattern string) bool {
 	ps := splitPath(path)
 	pp := splitPath(pattern)
 	if len(ps) != len(pp) {
 		return false
 	}
+	pathHasWildcard := false
+	sharedAnchor := false
 	for i := range pp {
-		if pp[i] != "*" && pp[i] != ps[i] {
-			return false
+		pw := pp[i] == "*"
+		sw := ps[i] == "*"
+		if sw {
+			pathHasWildcard = true
+		}
+		if !pw && !sw {
+			if pp[i] != ps[i] {
+				return false
+			}
+			sharedAnchor = true
 		}
 	}
+	if pathHasWildcard && !sharedAnchor {
+		return false
+	}
 	return true
+}
+
+// hasLiteralSegment reports whether a normalized path contains at least one
+// concrete (non-wildcard) segment. Paths that are entirely wildcards carry no
+// information to match a specific handler.
+func hasLiteralSegment(path string) bool {
+	for _, seg := range splitPath(path) {
+		if seg != "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func splitPath(p string) []string {
