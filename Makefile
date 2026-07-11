@@ -6,6 +6,9 @@ VERSION   := $(shell grep 'Version' internal/meta/meta.go | head -1 | cut -d'"' 
 
 web:
 	cd web && npm install && npm run build
+	# vite empties dist on build; restore the committed embed placeholder so
+	# `//go:embed all:dist` stays satisfied and the working tree stays clean.
+	touch web/dist/.gitkeep
 
 build: web
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
