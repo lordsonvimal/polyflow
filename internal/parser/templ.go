@@ -26,6 +26,12 @@ var reDatastarVerb = regexp.MustCompile(`(?i)@(get|post|put|delete|patch)\s*\(`)
 // reSignalRef matches $signalName used in data-text / data-indicator values.
 var reSignalRef = regexp.MustCompile(`^\$([A-Za-z_]\w*)`)
 
+// reReactiveSignal finds every $signalName referenced anywhere in a reactive
+// datastar attribute value (data-show, data-class, data-attr:*, data-when,
+// data-computed). Dynamic segments (`"$" + sig`) yield no bare name and are
+// simply skipped — the readable signals still surface.
+var reReactiveSignal = regexp.MustCompile(`\$([A-Za-z_]\w*)`)
+
 // reOnEventAttr matches native DOM event attributes: onclick, oninput, …
 // (data-on-* datastar actions are handled separately and never reach this).
 var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
@@ -183,6 +189,11 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 			v.addSignalBind("read:"+m[1], m[1], m[1], lineNo)
 		}
 
+	// Reactive attrs (data-show, data-class, data-attr:*, data-when,
+	// data-computed) read one or more signals to drive rendering.
+	case isReactiveAttrKey(key):
+		v.addSignalReads(val, lineNo)
+
 	// href / action pointing to a server path — nav links, not API calls
 	case key == "href" || key == "action":
 		if strings.HasPrefix(val, "/") {
@@ -249,11 +260,56 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 		return nil
 	}
 
+	// Reactive attrs with expression values: data-show={ "$" + sig }, etc.
+	if isReactiveAttrKey(key) {
+		v.addSignalReads(raw, lineNo)
+		return nil
+	}
+
 	// Native DOM event attributes with expression values: onclick={ handler }
 	if reOnEventAttr.MatchString(key) {
 		v.addEventAttr(key, stripQuotes(raw), lineNo)
 	}
 	return nil
+}
+
+// isReactiveAttrKey reports whether an attribute is a datastar reactive binding
+// that reads signals to drive rendering (as opposed to data-on:* actions or
+// data-bind writes). data-when's on/off values carry no signal and simply
+// produce no reads.
+func isReactiveAttrKey(key string) bool {
+	switch key {
+	case "data-show", "data-when":
+		return true
+	}
+	return strings.HasPrefix(key, "data-class") ||
+		strings.HasPrefix(key, "data-attr:") || strings.HasPrefix(key, "data-attr-") ||
+		strings.HasPrefix(key, "data-computed")
+}
+
+// addSignalReads emits a signal node + `reads` edge from the enclosing component
+// for every distinct $signal referenced in a reactive attribute value. Dynamic
+// signal names (`"$" + sig`) contribute no bare name and are skipped.
+func (v *templVisitor) addSignalReads(val string, lineNo int) {
+	seen := map[string]bool{}
+	for _, m := range reReactiveSignal.FindAllStringSubmatch(val, -1) {
+		sig := m[1]
+		if seen[sig] {
+			continue
+		}
+		seen[sig] = true
+		nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeSignal, "read:"+sig)
+		v.nodes = append(v.nodes, graph.Node{
+			ID: nodeID, Type: graph.NodeTypeSignal,
+			Label:    sig,
+			Service:  v.service,
+			File:     v.file,
+			Line:     lineNo,
+			Language: "templ",
+			Meta:     map[string]string{"signal": sig},
+		})
+		v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeReads))
+	}
 }
 
 // isDataOnKey reports whether an attribute key is a datastar event binding,
