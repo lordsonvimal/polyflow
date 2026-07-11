@@ -2,10 +2,12 @@ package server
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
 	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	webui "github.com/lordsonvimal/polyflow/web"
 )
 
 // Server is the polyflow HTTP API and UI server.
@@ -86,8 +88,16 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/stats", s.handleStats)
 	s.mux.HandleFunc("GET /api/export/mermaid", s.handleExportMermaid)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
-	// Serve the built SolidJS frontend
-	s.mux.Handle("/", http.FileServer(http.Dir("web/dist")))
+	// Serve the built SolidJS frontend from the embedded FS so `serve` works
+	// from any working directory (not just the source-tree root).
+	dist, err := fs.Sub(webui.Dist, "dist")
+	if err != nil {
+		// Only fails if the embed directive changed; fall back to 404 rather
+		// than panicking so the API stays available.
+		s.mux.Handle("/", http.NotFoundHandler())
+		return
+	}
+	s.mux.Handle("/", http.FileServer(http.FS(dist)))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
