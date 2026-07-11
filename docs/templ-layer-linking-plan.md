@@ -463,7 +463,52 @@ why the 5 SSE publishers read as isolated.
 4. *Commit* — bump `SchemaVersion` if a new edge/node type was added; set status
    + `> Outcome:`.
 
-### Phase T.5 — templ→JS `<script>` loading + JS DOM-target → templ `defined_in` `pending`
+### Phase T.5 — templ→JS `<script>` loading + JS DOM-target → templ `defined_in` `done (commit <pending>)`
+
+> Outcome: split into a parser-side extraction and two linker passes, mirroring
+> the T.1–T.3 shape (parser surfaces per-file facts on the component's meta; a
+> cross-file linker resolves them after all nodes are collected).
+> `VisitScriptElement` (`internal/parser/templ.go`) now pulls the logical asset
+> path out of a `<script src>` — the constant form (`src="/static/js/x.js"`) and
+> the expression form (`src={ helpers.Asset("js/x.js") }`, first string literal)
+> — and stashes it on the enclosing component's `script_srcs` meta; `id="…"`
+> constant attributes are likewise recorded on `dom_ids` ("id@line"). Inline
+> `<script>` bodies and class-only elements are deliberately skipped (no
+> cross-file link). `LinkTemplScripts` matches each asset path to an indexed JS
+> source file's representative node (the synthetic module node, else the
+> lowest-line node), preferring a path-suffix match (`static/` prefix + query
+> string stripped) → `imports` edge `confidence: static`, falling back to a
+> basename-only match → `partial` (build tooling remaps dirs:
+> `js/datastar.js` → `assets/datastar.js`); `dist/` and `node_modules/` copies
+> are excluded so a hashed build output never wins. `LinkDOMDefinitions` resolves
+> the JS↔templ DOM seam: for a `getElementById("x")` / `querySelector("#x")` whose
+> id matches a component's `dom_ids`, it mints a `templ_element` node at the exact
+> `.templ` file:line and emits a `defined_in` edge from the JS target to it
+> (`static`). Class/attribute/tag/dynamic selectors are left unresolved (labeled),
+> and an id selector with no templ definition surfaces as a `dom_ref`
+> UnresolvedRef rather than being dropped.
+>
+> Measured on chessleap (full re-index): **imports 0 → 16** (14 `static`, 2
+> `partial` — both the `js/datastar.js` basename fallback from `Layout`/
+> `RoomLayout`) across **12 templ files**, with **0** `js/*.js` script srcs left
+> unresolved; **defined_in 0 → 15** onto **11 new `templ_element` nodes** (all
+> connected — 0 isolated). Verified `liveclass/views/room.templ` `Room`
+> `-[imports {static}]->` `assets/js/liveclass-room.js` (module node), and
+> `assets/js/sync.js` `getElementById("white-clock")` `-[defined_in]->`
+> `#white-clock` at `ui/components/gameinfopanel.templ:98`. 3 `dom_ref`
+> UnresolvedRefs shipped for id selectors with no templ definition. Nodes
+> 8,056 → 8,067 (+11), edges 13,436 → 13,467 (+31 = 16 imports + 15 defined_in);
+> total isolated unchanged at **691** (isolated components still 0) — these edges
+> connect already-reachable JS/handler nodes to the templ layer, so the win is
+> the closed JS↔templ seam, not isolation reduction. Full re-index ~11.2s
+> (unchanged; both passes are O(nodes) map joins). `SchemaVersion` 6 → 7.
+>
+> Known gaps, shipped labeled not dropped: class/attribute/tag selectors (the
+> bulk of chessleap's `querySelector` usage, incl. `[data-wc-*]` attribute
+> targets) are not linked — class is on 3,308 templ elements, so per-class
+> definition nodes would explode the graph; deferred to the reactive/structural
+> tier. `VisitScriptTemplate` (templ `script name(){…}` blocks) stays a no-op —
+> chessleap loads JS via `<script src>` / `@templ.Raw`, not templ script blocks.
 
 **Entry context (re-read to start fresh):** "Working context" above (the
 `helpers.Asset(...)` script note); `internal/parser/templ.go` no-op visitors

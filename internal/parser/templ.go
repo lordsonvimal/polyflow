@@ -36,7 +36,7 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 		return nil, nil, nil, err
 	}
 
-	v := &templVisitor{file: file, service: service}
+	v := &templVisitor{file: file, service: service, currentComponentIdx: -1}
 	if err := tf.Visit(v); err != nil {
 		return v.nodes, v.edges, nil, err
 	}
@@ -45,13 +45,18 @@ func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher)
 
 // templVisitor implements templparser.Visitor and accumulates nodes and edges.
 type templVisitor struct {
-	file             string
-	service          string
-	nodes            []graph.Node
-	edges            []graph.Edge
-	currentComponent string // node ID of the enclosing HTMLTemplate component
-	formMethod       string // method attr of the enclosing <form> (upper-case), "" outside forms
+	file                string
+	service             string
+	nodes               []graph.Node
+	edges               []graph.Edge
+	currentComponent    string // node ID of the enclosing HTMLTemplate component
+	currentComponentIdx int    // index of the enclosing component in v.nodes, -1 outside one
+	formMethod          string // method attr of the enclosing <form> (upper-case), "" outside forms
 }
+
+// reFirstStringLit matches the first double-quoted string literal in a Go
+// expression, used to pull the asset path out of `helpers.Asset("js/x.js")`.
+var reFirstStringLit = regexp.MustCompile(`"([^"]+)"`)
 
 // line converts the 0-indexed templ Line to 1-indexed.
 func line(p templparser.Position) int {
@@ -87,14 +92,37 @@ func (v *templVisitor) VisitHTMLTemplate(t *templparser.HTMLTemplate) error {
 	})
 
 	prev := v.currentComponent
+	prevIdx := v.currentComponentIdx
 	v.currentComponent = nodeID
+	v.currentComponentIdx = len(v.nodes) - 1
 	for _, child := range t.Children {
 		if err := child.Visit(v); err != nil {
 			return err
 		}
 	}
 	v.currentComponent = prev
+	v.currentComponentIdx = prevIdx
 	return nil
+}
+
+// addComponentMeta appends a value to a newline-separated list stored on the
+// enclosing component node's meta. Used to record script `src` assets and DOM
+// `id=` definitions the component carries, which cross-file linker passes
+// (LinkTemplScripts, LinkDOMDefinitions) resolve after all nodes are collected.
+func (v *templVisitor) addComponentMeta(key, val string) {
+	if v.currentComponentIdx < 0 || val == "" {
+		return
+	}
+	m := v.nodes[v.currentComponentIdx].Meta
+	if m == nil {
+		m = map[string]string{}
+		v.nodes[v.currentComponentIdx].Meta = m
+	}
+	if existing := m[key]; existing != "" {
+		m[key] = existing + "\n" + val
+	} else {
+		m[key] = val
+	}
 }
 
 func (v *templVisitor) VisitElement(e *templparser.Element) error {
@@ -176,6 +204,13 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 			})
 			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeNavigatesTo))
 		}
+
+	// id="foo" — a DOM definition a JS querySelector/getElementById may target.
+	// Recorded on the enclosing component so LinkDOMDefinitions can resolve the
+	// JS→templ `defined_in` seam. Stored as "id@line" so the linker can point the
+	// edge at the exact element.
+	case strings.ToLower(key) == "id" && val != "":
+		v.addComponentMeta("dom_ids", fmt.Sprintf("%s@%d", val, lineNo))
 
 	// Native DOM event attributes: onclick="save()" etc.
 	case reOnEventAttr.MatchString(key):
@@ -460,8 +495,38 @@ func (v *templVisitor) VisitExpressionCSSProperty(*templparser.ExpressionCSSProp
 }
 func (v *templVisitor) VisitDocType(*templparser.DocType) error   { return nil }
 func (v *templVisitor) VisitText(*templparser.Text) error         { return nil }
+// VisitScriptElement records the JS asset a <script src=…> loads so the
+// LinkTemplScripts pass can draw an `imports` edge from the templ component to
+// the JS file node. The src is a Go expression (`helpers.Asset("js/x.js")`) or
+// a literal; we pull the logical asset path out and stash it on the enclosing
+// component. Inline scripts (no src) carry no cross-file link and are skipped.
 func (v *templVisitor) VisitScriptElement(se *templparser.ScriptElement) error {
+	if src := scriptSrc(se.Attributes); src != "" {
+		v.addComponentMeta("script_srcs", src)
+	}
 	return nil
+}
+
+// scriptSrc extracts the logical asset path from a <script>'s src attribute.
+// Handles both the constant form (`src="/static/js/x.js"`) and the expression
+// form (`src={ helpers.Asset("js/x.js") }`), returning the first string literal
+// of the expression. Returns "" when there is no src or no resolvable literal.
+func scriptSrc(attrs []templparser.Attribute) string {
+	for _, attr := range attrs {
+		switch a := attr.(type) {
+		case *templparser.ConstantAttribute:
+			if strings.ToLower(a.Key.String()) == "src" {
+				return strings.TrimSpace(a.Value)
+			}
+		case *templparser.ExpressionAttribute:
+			if strings.ToLower(a.Key.String()) == "src" {
+				if m := reFirstStringLit.FindStringSubmatch(a.Expression.Value); m != nil {
+					return m[1]
+				}
+			}
+		}
+	}
+	return ""
 }
 func (v *templVisitor) VisitRawElement(re *templparser.RawElement) error { return nil }
 func (v *templVisitor) VisitBoolConstantAttribute(*templparser.BoolConstantAttribute) error {
