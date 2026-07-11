@@ -8,8 +8,11 @@ patterns:
         method: (identifier) @fn
         (#eq? @fn "trigger")
         arguments: (argument_list
+          .
           (_) @channel
+          .
           (_) @event
+          .
           (_) @data))
     captures:
       - name: channel
@@ -25,8 +28,11 @@ patterns:
         method: (identifier) @fn
         (#eq? @fn "trigger_async")
         arguments: (argument_list
+          .
           (_) @channel
+          .
           (_) @event
+          .
           (_) @data))
     captures:
       - name: channel

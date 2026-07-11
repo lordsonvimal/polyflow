@@ -8,10 +8,15 @@ patterns:
           field: (field_identifier) @fn
           (#eq? @fn "Publish"))
         arguments: (argument_list
+          .
           (_) @exchange
+          .
           (_) @routing_key
+          .
           (_) @mandatory
+          .
           (_) @immediate
+          .
           (_) @publishing))
     captures:
       - name: exchange
@@ -41,11 +46,17 @@ patterns:
           field: (field_identifier) @fn
           (#eq? @fn "QueueDeclare"))
         arguments: (argument_list
+          .
           (_) @queue
+          .
           (_) @durable
+          .
           (_) @delete
+          .
           (_) @exclusive
+          .
           (_) @no_wait
+          .
           (_) @args))
     captures:
       - name: queue
