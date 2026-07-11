@@ -17,6 +17,10 @@ describe("uiStore defaults", () => {
   it("starts with every boundary group collapsed", () => {
     expect(uiStore.expandedBoundaries()).toEqual([]);
   });
+
+  it("hides variables by default", () => {
+    expect(uiStore.showVariables()).toBe(false);
+  });
 });
 
 describe("uiStore toggles", () => {
@@ -46,5 +50,14 @@ describe("uiStore toggles", () => {
     expect(uiStore.hiddenTypes()).toContain("function");
     uiStore.toggleHiddenType("function");
     expect(uiStore.hiddenTypes()).not.toContain("function");
+  });
+
+  it("setShowVariables opts variables in and out (persisted)", () => {
+    uiStore.setShowVariables(true);
+    expect(uiStore.showVariables()).toBe(true);
+    expect(localStorage.getItem("pf:showVariables")).toBe("on");
+    uiStore.setShowVariables(false);
+    expect(uiStore.showVariables()).toBe(false);
+    expect(localStorage.getItem("pf:showVariables")).toBe("off");
   });
 });
