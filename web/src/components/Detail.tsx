@@ -25,6 +25,38 @@ const VersionChip: Component<{ meta?: Record<string, string> }> = (props) => (
   </Show>
 );
 
+// RootKindBadge surfaces the Phase 0.4 root classification for functions with
+// no in-service caller: entrypoint (run by the runtime), callback (referenced /
+// framework-invoked), or unreachable (dead-code candidate). Called functions
+// carry no root_kind, so the badge is absent for them.
+const ROOT_KIND_STYLES: Record<string, { cls: string; title: string }> = {
+  entrypoint: {
+    cls: "bg-emerald-950 border-emerald-700 text-emerald-300",
+    title: "Entrypoint — invoked by the runtime (main/init/handler)",
+  },
+  callback: {
+    cls: "bg-amber-950 border-amber-700 text-amber-300",
+    title: "Callback — referenced or satisfies an interface invoked by a framework",
+  },
+  unreachable: {
+    cls: "bg-red-950 border-red-700 text-red-300",
+    title: "Unreachable — nothing references it (dead-code candidate)",
+  },
+};
+const RootKindBadge: Component<{ meta?: Record<string, string> }> = (props) => {
+  const rk = () => props.meta?.root_kind;
+  return (
+    <Show when={rk() && ROOT_KIND_STYLES[rk()!]}>
+      <span
+        class={`inline-block rounded border text-[10px] px-1.5 py-0.5 font-mono ${ROOT_KIND_STYLES[rk()!].cls}`}
+        title={ROOT_KIND_STYLES[rk()!].title}
+      >
+        {rk()}
+      </span>
+    </Show>
+  );
+};
+
 const ConfidenceBadge: Component<{ edge: { confidence?: string } }> = (props) => {
   const c = () => edgeConfidence(props.edge);
   const cls = () =>
@@ -332,7 +364,10 @@ const Detail: Component = () => {
         {(d) => (
           <div class="flex flex-col gap-3">
             <h2 class="text-sm font-semibold text-indigo-300 break-all">{d().node.label}</h2>
-            <VersionChip meta={d().node.meta} />
+            <div class="flex gap-1 flex-wrap">
+              <VersionChip meta={d().node.meta} />
+              <RootKindBadge meta={d().node.meta} />
+            </div>
             <dl class="text-xs text-gray-300 space-y-1">
               <div class="flex gap-2"><dt class="text-gray-500 w-16 shrink-0">Type</dt><dd>{d().node.type}</dd></div>
               <div class="flex gap-2"><dt class="text-gray-500 w-16 shrink-0">Service</dt><dd>{d().node.service}</dd></div>

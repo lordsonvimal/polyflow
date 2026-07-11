@@ -165,6 +165,23 @@ const STYLE: cytoscape.Stylesheet[] = [
     selector: 'edge[confidence="partial"], edge[confidence="unknown"]',
     style: { "line-style": "dashed", "line-color": "#6b7280", opacity: 0.6 } as any,
   },
+  // Root classification (Phase U.4). Roots have no in-service caller; the three
+  // meanings look very different, so each gets its own ring:
+  //  · unreachable — dead-code candidate, loud red dashed border.
+  //  · callback    — referenced/framework-invoked, muted amber dashed border.
+  //  · entrypoint  — main/init/handler, quiet emerald border.
+  {
+    selector: 'node[root_kind="unreachable"]',
+    style: { "border-width": 3, "border-color": "#ef4444", "border-style": "dashed" } as any,
+  },
+  {
+    selector: 'node[root_kind="callback"]',
+    style: { "border-width": 2, "border-color": "#f59e0b", "border-style": "dashed" } as any,
+  },
+  {
+    selector: 'node[root_kind="entrypoint"]',
+    style: { "border-width": 2, "border-color": "#10b981" } as any,
+  },
   { selector: "node:selected", style: { "border-width": 2, "border-color": "#fff" } },
   // Trace root gets a bright ring
   { selector: "node.trace-root", style: { "border-width": 3, "border-color": "#f472b6" } as any },
@@ -232,6 +249,9 @@ const Graph: Component = () => {
           language: n.language || inferLanguage(n.file),
           ...(n.parent ? { parent: n.parent } : {}),
           ...(n.meta?.collapsed ? { collapsed: n.meta.collapsed } : {}),
+          // Root classification (entrypoint / callback / unreachable) drives
+          // the dead-code highlight and entry/callback ring styles.
+          ...(n.meta?.root_kind ? { root_kind: n.meta.root_kind } : {}),
         },
       }))
     );

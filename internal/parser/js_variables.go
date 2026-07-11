@@ -597,7 +597,11 @@ func (ex *jsExtractor) captureEdge(node *sitter.Node, name string, scopes []*jsS
 			"kind": "var", "scope": "captured", "mutable": "true",
 		},
 	})
-	ex.addEdge(graph.EdgeTypeCaptures, from, id, graph.ConfidencePartial,
+	// Same-file closure captures are a reliable structural fact (both the
+	// capturing scope and the declaring local live in ex.file), so they carry
+	// `inferred` confidence and render in the default view — closure flow is
+	// legible without opting into partial edges (Phase U.4).
+	ex.addEdge(graph.EdgeTypeCaptures, from, id, graph.ConfidenceInferred,
 		map[string]string{"by": "ref"})
 	if isWrite {
 		ex.addEdge(graph.EdgeTypeWrites, from, id, graph.ConfidencePartial,

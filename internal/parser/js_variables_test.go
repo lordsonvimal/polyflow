@@ -113,8 +113,8 @@ func TestJSVariables_ClosureCapture(t *testing.T) {
 	if cap == nil {
 		t.Fatalf("missing captures edge makeAdder -> total; edges: %+v", edges)
 	}
-	if cap.Confidence != graph.ConfidencePartial || cap.Meta["by"] != "ref" {
-		t.Errorf("capture should be partial confidence by ref: %+v", cap)
+	if cap.Confidence != graph.ConfidenceInferred || cap.Meta["by"] != "ref" {
+		t.Errorf("same-file capture should be inferred confidence by ref: %+v", cap)
 	}
 	if jsEdge(edges, graph.EdgeTypeWrites, "function:makeAdder", "variable:total") == nil {
 		t.Errorf("missing closure write makeAdder -> total")
