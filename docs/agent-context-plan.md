@@ -307,7 +307,23 @@ Tag JSX event-handler edges (`meta.event` = click/submit/…) in the matcher;
 render an edge label/style so onClick bindings are distinguishable from
 plain calls. Same for HTML/templ event edges.
 
-### Phase U.4 — Root/dead-code badges & variable flow legibility `pending`
+### Phase U.4 — Root/dead-code badges & variable flow legibility `done`
+
+> Outcome: two parts. (1) Root classification is now visible: `root_kind`
+> (0.4) flows into node data and each meaning gets its own ring — unreachable
+> (red dashed, dead-code candidate), callback (amber dashed, framework-invoked),
+> entrypoint (emerald). The Detail panel shows a matching `RootKindBadge` with
+> a tooltip, and the legend gains three entries. (2) Same-file JS closure
+> captures were promoted from `partial` → `inferred` in `js_variables.go`
+> (`captureEdge` is always same-file: both the capturing scope and the
+> declaring local live in `ex.file`), so closure flow renders in the default
+> static+inferred view instead of being opt-in. Go captures were already
+> static. Verified on a clean reindex of this repo: 80 JS captures now
+> inferred (0 partial), root_kind = 33 callback / 14 entrypoint / 12
+> unreachable. Note: incremental reindex keeps old edges for unchanged files,
+> so the confidence bump only lands for re-parsed files (a full reindex
+> applies it everywhere).
+
 Badge `root_kind` (0.4) in the UI (dead-code highlight); surface captures
 (partial confidence) via a hint or promote same-file captures to `inferred`
 so closure flow is visible by default.
