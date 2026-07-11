@@ -258,6 +258,146 @@ func main() {
 	}
 }
 
+// TestGoSemanticTemplRenders is the T.4 fixture: a `Component(args).Render(ctx,
+// w)` call site must emit a renders edge from the enclosing func to the .templ
+// component node (resolved through the generated `_templ.go` twin). When the
+// same function also opens a Datastar SSE stream, the renders edge is tagged
+// sse=true and mirrored by an sse_endpoint edge. A struct method named Render
+// with a non-templ signature must NOT produce a renders edge.
+func TestGoSemanticTemplRenders(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/semtest\n\ngo 1.25.0\n",
+		"templ/templ.go": `package templ
+
+import (
+	"context"
+	"io"
+)
+
+type Component interface {
+	Render(ctx context.Context, w io.Writer) error
+}
+`,
+		"datastar/datastar.go": `package datastar
+
+type SSE struct{}
+
+func NewSSE() *SSE { return &SSE{} }
+`,
+		// The generated twin: PuzzleRows lives in a *_templ.go file and returns
+		// templ.Component, exactly like templ codegen output.
+		"view_templ.go": `package main
+
+import (
+	"context"
+	"io"
+
+	"example.com/semtest/templ"
+)
+
+type comp struct{}
+
+func (comp) Render(ctx context.Context, w io.Writer) error { return nil }
+
+func PuzzleRows() templ.Component { return comp{} }
+`,
+		"handler.go": `package main
+
+import (
+	"bytes"
+	"context"
+
+	"example.com/semtest/datastar"
+)
+
+func Rows() {
+	var buf bytes.Buffer
+	PuzzleRows().Render(context.Background(), &buf)
+	_ = datastar.NewSSE()
+}
+
+func Page() {
+	var buf bytes.Buffer
+	PuzzleRows().Render(context.Background(), &buf)
+}
+
+type widget struct{}
+
+func (widget) Render() {}
+
+func Other() {
+	widget{}.Render()
+}
+`,
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	const compID = "svc:view.templ:component:PuzzleRows:1"
+	known := map[string]bool{
+		"svc:view_templ.go:function:PuzzleRows:14": true,
+		"svc:handler.go:function:Rows:10":          true,
+		"svc:handler.go:function:Page:16":          true,
+		"svc:handler.go:function:Other:25":         true,
+		compID:                                     true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	var rowsRenders, rowsSSEEndpoint, pageRenders bool
+	var rowsRendersSSEMeta, pageRendersSSEMeta string
+	otherRenders := false
+	for _, e := range res.Edges {
+		if e.To == compID && e.Type == "renders" {
+			switch e.From {
+			case "svc:handler.go:function:Rows:10":
+				rowsRenders = true
+				rowsRendersSSEMeta = e.Meta["sse"]
+			case "svc:handler.go:function:Page:16":
+				pageRenders = true
+				pageRendersSSEMeta = e.Meta["sse"]
+			case "svc:handler.go:function:Other:25":
+				otherRenders = true
+			}
+		}
+		if e.From == "svc:handler.go:function:Rows:10" && e.To == compID && e.Type == "sse_endpoint" {
+			rowsSSEEndpoint = true
+		}
+	}
+
+	if !rowsRenders {
+		t.Fatalf("expected Rows → PuzzleRows renders edge, got: %+v", res.Edges)
+	}
+	if rowsRendersSSEMeta != "true" {
+		t.Errorf("Rows renders edge must be tagged sse=true (opens NewSSE), got meta sse=%q", rowsRendersSSEMeta)
+	}
+	if !rowsSSEEndpoint {
+		t.Errorf("Rows streams over SSE and must emit an sse_endpoint edge to PuzzleRows, got: %+v", res.Edges)
+	}
+	if !pageRenders {
+		t.Fatalf("expected Page → PuzzleRows renders edge, got: %+v", res.Edges)
+	}
+	if pageRendersSSEMeta != "" {
+		t.Errorf("Page does not stream SSE; its renders edge must not be tagged sse, got sse=%q", pageRendersSSEMeta)
+	}
+	if otherRenders {
+		t.Errorf("widget.Render() has a non-templ signature and must not produce a renders edge")
+	}
+}
+
 // TestGoSemanticZeroResolutionWarns ensures the analyzer fails loudly instead
 // of silently returning an empty edge set when no function matches the node
 // index (e.g. a future path-format regression).

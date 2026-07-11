@@ -67,6 +67,13 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// spawned by `go func(){…}` resolve here so the goroutine body's calls
 	// flow out of the worker node instead of the enclosing named function.
 	workerByFileLine := make(map[string]string)
+	// Templ component nodes indexed by generated-file path + label so a Go
+	// `Component(args).Render(ctx, w)` call site can be linked back to the
+	// `.templ` component it draws (T.4 renders pass). Keyed on the derived
+	// generated path (`x.templ` → `x_templ.go`) + label, mirroring T.1's
+	// LinkTemplComponents, so the semantic pass — which only sees the generated
+	// Go function's position — can find the component twin.
+	templComponentByGenKey := make(map[string]string)
 	for id := range knownNodes {
 		// ID format: service:file:type:name:line
 		parts := strings.SplitN(id, ":", 5)
@@ -76,6 +83,11 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		file, name := parts[1], parts[3]
 		if parts[2] == string(graph.NodeTypeWorker) {
 			workerByFileLine[canonicalPath(file)+"\x00"+parts[4]] = id
+			continue
+		}
+		if parts[2] == string(graph.NodeTypeComponent) && strings.HasSuffix(file, ".templ") {
+			genPath := file[:len(file)-len(".templ")] + "_templ.go"
+			templComponentByGenKey[canonicalPath(genPath)+"\x00"+name] = id
 			continue
 		}
 		key := canonicalPath(file) + "\x00" + name
@@ -119,6 +131,30 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		return id, ok
 	}
 
+	// templComponentFor maps the receiver value of a `X.Render(ctx, w)` invoke
+	// to the templ component node X draws, when X is a generated templ function
+	// call (`views.PuzzleRows(vm)`). Returns "" for any receiver that is not a
+	// direct call to a `_templ.go` function with a known component twin.
+	templComponentFor := func(recv ssa.Value) string {
+		if mi, ok := recv.(*ssa.MakeInterface); ok {
+			recv = mi.X
+		}
+		call, ok := recv.(*ssa.Call)
+		if !ok {
+			return ""
+		}
+		fn, ok := call.Call.Value.(*ssa.Function)
+		if !ok || fn.Pkg == nil {
+			return ""
+		}
+		pos := fset.Position(fn.Pos())
+		if !pos.IsValid() || !strings.HasSuffix(pos.Filename, "_templ.go") {
+			return ""
+		}
+		genKey := canonicalPath(pos.Filename) + "\x00" + fn.Name()
+		return templComponentByGenKey[genKey]
+	}
+
 	// Collect in-service functions.
 	allFns := ssautil.AllFunctions(prog)
 	inService := make(map[*ssa.Function]bool)
@@ -149,6 +185,12 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 			continue
 		}
 
+		// Per-caller templ-render tracking (T.4): the components this function
+		// draws via `Component(args).Render(ctx, w)`, and whether the function
+		// streams them over a Datastar SSE response (`datastar.NewSSE`).
+		var renderTargets []string
+		callerIsSSE := false
+
 		for _, b := range caller.Blocks {
 			for _, instr := range b.Instrs {
 				var callees []*ssa.Function
@@ -157,6 +199,15 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 				case ssa.CallInstruction:
 					common := c.Common()
 					if common.IsInvoke() {
+						// `X.Render(ctx, w)` on a templ.Component: record the
+						// component X draws so the enclosing func gets a renders
+						// edge to the .templ node (not just the calls edge to the
+						// generated Go twin).
+						if common.Method != nil && common.Method.Name() == "Render" && isTemplRenderSig(common.Method) {
+							if compID := templComponentFor(common.Value); compID != "" {
+								renderTargets = append(renderTargets, compID)
+							}
+						}
 						for fn := range allFns {
 							if fn.Synthetic != "" {
 								continue
@@ -167,6 +218,9 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 						}
 					} else if fn, ok2 := common.Value.(*ssa.Function); ok2 {
 						callees = append(callees, fn)
+						if isDatastarNewSSE(fn) {
+							callerIsSSE = true
+						}
 					}
 				}
 
@@ -206,6 +260,41 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 						Type: graph.EdgeTypeCalls,
 					})
 				}
+			}
+		}
+
+		// Emit renders (and, for SSE streamers, sse_endpoint) edges from this
+		// function to each templ component it draws. Deduplicated per (caller,
+		// component); a handler that renders the same component twice draws one
+		// edge. SSE streaming is tagged on the renders edge and mirrored as an
+		// sse_endpoint edge so the server-push path is queryable.
+		renderSeen := make(map[string]bool, len(renderTargets))
+		for _, compID := range renderTargets {
+			if renderSeen[compID] {
+				continue
+			}
+			renderSeen[compID] = true
+			meta := map[string]string{"via": "templ_render"}
+			if callerIsSSE {
+				meta["sse"] = "true"
+			}
+			edges = append(edges, graph.Edge{
+				ID:         "renders:" + callerID + "->" + compID,
+				From:       callerID,
+				To:         compID,
+				Type:       graph.EdgeTypeRenders,
+				Confidence: graph.ConfidenceStatic,
+				Meta:       meta,
+			})
+			if callerIsSSE {
+				edges = append(edges, graph.Edge{
+					ID:         "sse_endpoint:" + callerID + "->" + compID,
+					From:       callerID,
+					To:         compID,
+					Type:       graph.EdgeTypeSSEEndpoint,
+					Confidence: graph.ConfidenceStatic,
+					Meta:       map[string]string{"via": "datastar_sse"},
+				})
 			}
 		}
 	}
@@ -405,6 +494,36 @@ func isServiceFunc(fn *ssa.Function, serviceDir string, fset *token.FileSet) boo
 		return false
 	}
 	return strings.HasPrefix(canonicalPath(pos.Filename), canonicalPath(serviceDir))
+}
+
+// isTemplRenderSig reports whether m has the templ.Component.Render shape —
+// `Render(context.Context, io.Writer) error`. Matched structurally (not by the
+// templ import path) so the check holds regardless of the templ module version
+// or a vendored fork, and so it excludes unrelated `Render` methods with a
+// different signature.
+func isTemplRenderSig(m *types.Func) bool {
+	sig, ok := m.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	if sig.Params().Len() != 2 || sig.Results().Len() != 1 {
+		return false
+	}
+	if sig.Results().At(0).Type().String() != "error" {
+		return false
+	}
+	return sig.Params().At(1).Type().String() == "io.Writer"
+}
+
+// isDatastarNewSSE reports whether fn is the Datastar SSE constructor
+// (`datastar.NewSSE`), the signal that its caller streams fragments over an SSE
+// response. Keyed on the datastar package path + name rather than the writer
+// type so it holds across datastar-go versions.
+func isDatastarNewSSE(fn *ssa.Function) bool {
+	if fn.Name() != "NewSSE" || fn.Pkg == nil || fn.Pkg.Pkg == nil {
+		return false
+	}
+	return strings.Contains(fn.Pkg.Pkg.Path(), "datastar")
 }
 
 // matchesInvoke returns true if fn satisfies the interface method described by call.
