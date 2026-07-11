@@ -379,7 +379,54 @@ wildcards from T.2's partial paths.
 4. *Commit* — set status + `> Outcome:` (bump `SchemaVersion` only if edge shape
    changed).
 
-### Phase T.4 — `renders` pass: `Component(...).Render(...)` + SSE fragment streaming `pending`
+### Phase T.4 — `renders` pass: `Component(...).Render(...)` + SSE fragment streaming `done (commit f8566cf)`
+
+> Outcome: implemented as a **semantic-pass rule** in `internal/parser/go_semantic.go`,
+> not a tree-sitter pattern — SSA is the only layer with the cross-package type
+> resolution to (a) confirm a `.Render(ctx, w)` invoke is on a `templ.Component`
+> and (b) trace the receiver back to the exact function that produced it. A
+> tree-sitter pattern would only see the call site's text and would mint a
+> duplicate component node in the `.go` file instead of linking to the real
+> `.templ` node. The pass detects `Component(args).Render(ctx, w)` invokes,
+> matches `Render` structurally (`isTemplRenderSig`: 2 params, 2nd is `io.Writer`,
+> returns `error`) rather than by templ's import path so it survives version
+> bumps and a vendored fork while excluding unrelated `Render` methods, unwraps
+> the receiver (`*ssa.MakeInterface` → `*ssa.Call` → `*ssa.Function`), and maps
+> the producing generated function back to its `.templ` component through a
+> `templComponentByGenKey` index (`x.templ` → `x_templ.go` + label) built from
+> `knownNodes` — reusing T.1's path-derivation so the `renders` edge lands on the
+> component node where datastar/DOM edges hang, not the generated twin the `calls`
+> edge already reaches. SSE streamers are detected by a `datastar.NewSSE` call in
+> the same function (`isDatastarNewSSE`, keyed on package-path substring, not the
+> writer type); those renders edges carry `meta[sse]=true` and are mirrored by an
+> `sse_endpoint` edge.
+>
+> Measured on chessleap (full re-index): **renders 0 → 469** (21 from real
+> handler/app code, 448 from templ→subview composition in generated `_templ.go`),
+> **sse_endpoint 0 → 5** (`PuzzleBank.Rows`, `AttendanceGrid.BulkColumn`/`patchCell`,
+> `BoardAtHistoryHandler`, `NavigateHistoryHandler` — every function that opens a
+> `datastar.NewSSE` stream and renders a component). Verified `PuzzleBank.Rows`
+> `-[renders {sse:true}]->` `PuzzleRows` (`puzzles.templ:394`) plus a parallel
+> `sse_endpoint` edge, and `BulkColumn -[renders]-> AttendanceCell`
+> (`attendance_grid.templ:178`) traceable directly via `polyflow trace` — the
+> renders edge lands on the `.templ` line while the sibling `calls` edge points at
+> the generated twin (`_templ.go:460`), confirming the seam is crossed to the
+> right half. Edges 12,962 → 13,436 (+474), nodes unchanged at 8,056. Isolated
+> unchanged at **691** (isolated components still 0): these edges connect
+> already-reachable handlers to already-bridged components, so the win is
+> semantic richness (an explicit, queryable handler→view/SSE relationship), not
+> isolation reduction — the 5 SSE publishers cited in the baseline were already
+> connected by T.1–T.3's `hub_broadcast` edges. Full re-index ~11.2s (unchanged;
+> the detection is folded into the existing SSA call-instruction walk).
+> `SchemaVersion` 5 → 6.
+>
+> Known gap, shipped labeled not dropped: raw-frame SSE streamers that write
+> `datastarPatchElementsFrame(...)` bytes directly to the response without
+> `datastar.NewSSE` (`broadcastBoard`, `broadcastPracticeMoveState`) get a plain
+> `renders` edge but no `sse_endpoint` tag — detecting SSE by raw event-stream
+> writes is deferred rather than guessed.
+
+### Phase T.4 — `renders` pass: `Component(...).Render(...)` + SSE fragment streaming (original spec)
 
 **Entry context (re-read to start fresh):** "Working context" above (the "Go
 renders templ via `.Render`" note); T.1's component index (reused here);

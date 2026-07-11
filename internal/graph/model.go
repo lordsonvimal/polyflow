@@ -108,7 +108,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "5"
+const SchemaVersion = "6"
 
 // Node represents a code entity in the graph.
 type Node struct {
