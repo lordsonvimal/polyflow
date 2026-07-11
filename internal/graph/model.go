@@ -45,6 +45,12 @@ const (
 	EdgeTypeHTTPCall        EdgeType = "http_call"
 	EdgeTypeCalls           EdgeType = "calls"
 	EdgeTypeRenders         EdgeType = "renders"
+	// EdgeTypeComponentImpl bridges a templ component to its generated Go twin
+	// (`x.templ` component ↔ `x_templ.go` function). The generated function is
+	// what the go/packages call graph reaches, so the edge runs from that
+	// function to the templ component — carrying route→handler reachability
+	// across the Go↔templ seam into the component where datastar/DOM edges hang.
+	EdgeTypeComponentImpl EdgeType = "component_impl"
 	// Page navigation (href/action attributes) — user-driven, not an API call.
 	EdgeTypeNavigatesTo EdgeType = "navigates_to"
 	EdgeTypePublishes       EdgeType = "publishes"
@@ -97,7 +103,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "3"
+const SchemaVersion = "4"
 
 // Node represents a code entity in the graph.
 type Node struct {
