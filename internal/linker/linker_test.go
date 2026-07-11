@@ -160,6 +160,67 @@ func TestLinkNilConfig(t *testing.T) {
 	}
 }
 
+func TestLinkTemplComponents(t *testing.T) {
+	// A templ component and its generated Go twin in the sibling _templ.go file.
+	templComp := graph.Node{
+		ID:       "app:views/puzzles.templ:component:PuzzleRows:394",
+		Type:     graph.NodeTypeComponent,
+		Label:    "PuzzleRows",
+		Service:  "app",
+		File:     "views/puzzles.templ",
+		Language: "templ",
+	}
+	genFunc := graph.Node{
+		ID:       "app:views/puzzles_templ.go:function:PuzzleRows:845",
+		Type:     graph.NodeTypeFunction,
+		Label:    "PuzzleRows",
+		Service:  "app",
+		File:     "views/puzzles_templ.go",
+		Language: "go",
+	}
+	// A same-named function in a different package must NOT match: keying on the
+	// derived generated-file path, not the bare label, prevents the collision.
+	otherPkgFunc := graph.Node{
+		ID:       "app:other/helpers.go:function:PuzzleRows:12",
+		Type:     graph.NodeTypeFunction,
+		Label:    "PuzzleRows",
+		Service:  "app",
+		File:     "other/helpers.go",
+		Language: "go",
+	}
+	// A hand-written .go component call site with no generated twin: no edge.
+	orphanComp := graph.Node{
+		ID:       "app:views/orphan.templ:component:Orphan:3",
+		Type:     graph.NodeTypeComponent,
+		Label:    "Orphan",
+		Service:  "app",
+		File:     "views/orphan.templ",
+		Language: "templ",
+	}
+
+	edges := LinkTemplComponents([]graph.Node{templComp, genFunc, otherPkgFunc, orphanComp})
+
+	require.Len(t, edges, 1, "exactly one twin bridge expected")
+	e := edges[0]
+	assert.Equal(t, genFunc.ID, e.From, "bridge runs from generated Go func")
+	assert.Equal(t, templComp.ID, e.To, "into the templ component")
+	assert.Equal(t, graph.EdgeTypeComponentImpl, e.Type)
+	assert.Equal(t, graph.ConfidenceStatic, e.Confidence)
+	assert.Equal(t, "templ_generated", e.Meta["via"])
+}
+
+func TestLinkTemplComponents_NoTwin(t *testing.T) {
+	// A generated function whose label differs from any component: no bridge.
+	nodes := []graph.Node{
+		{ID: "app:views/x.templ:component:Foo:1", Type: graph.NodeTypeComponent,
+			Label: "Foo", Service: "app", File: "views/x.templ", Language: "templ"},
+		{ID: "app:views/x_templ.go:function:Bar:2", Type: graph.NodeTypeFunction,
+			Label: "Bar", Service: "app", File: "views/x_templ.go", Language: "go"},
+	}
+	edges := LinkTemplComponents(nodes)
+	assert.Empty(t, edges, "label mismatch must not bridge")
+}
+
 func TestLinkBrokerChannels_CrossService(t *testing.T) {
 	// Two channel nodes with the same key from different services:
 	// one has a publisher pointing at it, the other is the subscribe-side.

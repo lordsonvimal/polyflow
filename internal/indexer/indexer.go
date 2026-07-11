@@ -510,6 +510,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
 		return nil, err
 	}
+	if err := writeEdges(linker.LinkTemplComponents(allNodes)); err != nil {
+		return nil, err
+	}
 	if err := writeEdges(linker.LinkDatastores(allNodes)); err != nil {
 		return nil, err
 	}
