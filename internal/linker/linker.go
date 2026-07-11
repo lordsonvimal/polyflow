@@ -92,6 +92,73 @@ func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
 	return edges
 }
 
+// templGeneratedPath maps a `.templ` source path to the path of the Go file
+// `templ generate` produces beside it: `views/puzzles.templ` →
+// `views/puzzles_templ.go`. Returns "" for non-templ paths.
+func templGeneratedPath(templFile string) string {
+	if !strings.HasSuffix(templFile, ".templ") {
+		return ""
+	}
+	return templFile[:len(templFile)-len(".templ")] + "_templ.go"
+}
+
+// LinkTemplComponents bridges each templ component to its generated Go twin.
+// A `.templ` component and the identically-named function in the sibling
+// `_templ.go` file describe the same component but live in disjoint subgraphs:
+// the generated function is the half the go/packages call graph reaches (a
+// handler's `views.PuzzleRows(vm).Render(...)` call lands there), while the
+// templ component is the half datastar/DOM edges attach to. This pass emits a
+// bridge edge from the generated function to the templ component so a
+// route→handler traversal crosses the seam into the component.
+//
+// Matching keys on the derived generated-file path plus label, not the bare
+// label, so identically-named components in different packages don't collide.
+func LinkTemplComponents(nodes []graph.Node) []graph.Edge {
+	// Index generated Go functions living in a `_templ.go` file: file + "\x00" + label → nodeID.
+	genFuncs := make(map[string]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeFunction || n.Language != "go" {
+			continue
+		}
+		if !strings.HasSuffix(n.File, "_templ.go") {
+			continue
+		}
+		key := n.File + "\x00" + n.Label
+		if _, exists := genFuncs[key]; !exists {
+			genFuncs[key] = n.ID
+		}
+	}
+	if len(genFuncs) == 0 {
+		return nil
+	}
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeComponent || n.Language != "templ" {
+			continue
+		}
+		genPath := templGeneratedPath(n.File)
+		if genPath == "" {
+			continue
+		}
+		funcID, ok := genFuncs[genPath+"\x00"+n.Label]
+		if !ok {
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:         fmt.Sprintf("%s:%s->%s", string(graph.EdgeTypeComponentImpl), funcID, n.ID),
+			From:       funcID,
+			To:         n.ID,
+			Type:       graph.EdgeTypeComponentImpl,
+			Confidence: graph.ConfidenceStatic,
+			Meta:       map[string]string{"via": "templ_generated"},
+		})
+	}
+	return edges
+}
+
 // Link attempts to resolve cross-service HTTP connections.
 // It returns synthetic edges connecting client call nodes to handler nodes.
 // Clients whose paths cannot be resolved still produce an edge with confidence "unknown".
