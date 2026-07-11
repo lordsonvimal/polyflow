@@ -539,6 +539,24 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, domUnresolved...)
 	}
+	// Structural backbone: service→file→declaration + struct→method contains
+	// edges (mints synthetic service/file nodes, so persist them before wiring).
+	{
+		containNodes, containEdges := linker.LinkContainment(allNodes)
+		for i := range containNodes {
+			n := containNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(containEdges); err != nil {
+			return nil, err
+		}
+	}
 	if err := writeEdges(linker.LinkDatastores(allNodes)); err != nil {
 		return nil, err
 	}
@@ -611,8 +629,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// callback (referenced / satisfies an external interface — invoked by a
 	// framework), unreachable (nothing references it: dead-code candidate).
 	{
+		// Containment is structural, not a reference: a file→function `contains`
+		// edge does not make the function reached, so it must not mask a root.
 		incoming := make(map[string]bool, len(allEdges))
 		for _, e := range allEdges {
+			if e.Type == graph.EdgeTypeContains {
+				continue
+			}
 			incoming[e.To] = true
 		}
 		bwR := graph.NewBatchWriter(store)

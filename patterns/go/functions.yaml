@@ -10,10 +10,21 @@ patterns:
     captures:
       - name: name
         role: func_name
+  # The receiver type is captured so the containment linker can draw the
+  # struct→method `contains` edge (pointer and value receivers both resolve to
+  # the bare type identifier).
   - name: method_decl
     query: |
       (method_declaration
-        (field_identifier) @name) @_def
+        receiver: (parameter_list
+          (parameter_declaration
+            type: [
+              (type_identifier) @receiver
+              (pointer_type (type_identifier) @receiver)
+            ]))
+        name: (field_identifier) @name) @_def
     captures:
       - name: name
         role: method_name
+      - name: receiver
+        role: receiver_type

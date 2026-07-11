@@ -41,6 +41,14 @@ const (
 	// signal name). Kept distinct from component so signal-expression values
 	// like "$idx + 1" don't pollute the component node set.
 	NodeTypeSignal NodeType = "signal"
+	// NodeTypeService is a synthetic containment root: one per indexed service,
+	// the top of the service→file→declaration `contains` backbone. Carries no
+	// file/line (it represents the whole service boundary).
+	NodeTypeService NodeType = "service"
+	// NodeTypeFile is a synthetic per-file containment node: the middle of the
+	// service→file→declaration `contains` backbone, so an agent can ask "what's
+	// in this file". Synthesized during linking from existing node file metadata.
+	NodeTypeFile NodeType = "file"
 )
 
 // EdgeType classifies the relationship between two nodes.
@@ -107,12 +115,17 @@ const (
 	EdgeTypeCaptures EdgeType = "captures"
 	EdgeTypeFlowsTo  EdgeType = "flows_to"
 	EdgeTypeUsesType EdgeType = "uses_type"
+	// EdgeTypeContains is the structural backbone: service→file→declaration
+	// (function/method/struct/component) and struct→method. Synthesized during
+	// linking from existing node file/receiver metadata; answers "what's in this
+	// file" / "what hangs off this struct" for agent-context recall.
+	EdgeTypeContains EdgeType = "contains"
 )
 
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "7"
+const SchemaVersion = "8"
 
 // Node represents a code entity in the graph.
 type Node struct {

@@ -1,0 +1,16 @@
+package testdata
+
+templ ReactivePanel(openSignal string) {
+	<div>
+		// Constant reactive attrs referencing signals → reads edges
+		<div data-show="$coachOpen"></div>
+		<div data-class="{'open': $coachOpen}"></div>
+		// Multiple signals in one value → one read per distinct signal
+		<button data-attr:disabled="$streaming || !$input">Send</button>
+		// Expression form with a dynamic signal name → the literal signal is read,
+		// the concatenated `"$" + openSignal` contributes no bare name
+		<div data-show={ "$evalVisible && $" + openSignal }></div>
+		// data-when uses on/off, not signals → no reads
+		<div data-when="on"></div>
+	</div>
+}
