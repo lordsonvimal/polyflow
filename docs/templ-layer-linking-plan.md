@@ -310,7 +310,45 @@ also mis-typed as `component`, producing junk nodes labeled `$idx + 1`
 3. *Benchmark* — reindex time not worse.
 4. *Commit* — bump `SchemaVersion`; set status + `> Outcome:`.
 
-### Phase T.3 — Link datastar actions → handlers, including same-service `pending`
+### Phase T.3 — Link datastar actions → handlers, including same-service `done (commit 51d64cc)`
+
+> Outcome: dropped the same-service skip for datastar clients only
+> (`internal/linker/linker.go`): a templ action node reaching its own gin
+> handler has no bridging `calls` edge, so for a monolith the loop only closes
+> if the edge is emitted here. The edge keeps the existing shape — `http_call`
+> with `via: datastar_action` — so no stored-shape change and `SchemaVersion`
+> stays 5. Plain same-service HTTP still skips (a `calls` edge already covers
+> it).
+>
+> Making T.2's partial paths match required three matcher fixes, all scoped so
+> concrete (cross-service) paths are untouched: (1) **symmetric wildcards** —
+> `*` on either side matches any segment, since T.2 puts the wildcard on the
+> *client* side (`/play/*/draw`) while routes put it on the *handler* side
+> (`:gameID`); (2) a **shared-anchor guard** — a wildcard-bearing path must
+> share ≥1 concrete segment with the handler, or wildcards alone would align
+> unrelated same-shape routes (`/play/*/draw` spuriously matching `/*/goto/*`);
+> (3) **query-string stripping** on the client path
+> (`…/history/navigate?direction=1`). Fully-wildcarded paths (`@get(url)` → `*`)
+> carry no anchor and surface as unresolved rather than blind-matching.
+>
+> Measured on chessleap (full re-index): of 27 datastar action nodes, **3 link
+> to a real handler** (`GET */*/board-at/live` → `GET /play/:gameID/board-at/:halfMoveIdx`,
+> and two `POST */*/history/navigate` → the play/solo navigate handlers); the
+> other 24 stay **unresolved** (surfaced, not dropped) — most are handlers
+> nested under a `r.Group("/play")` whose stored path drops the group prefix
+> (`/:gameID/draw`), a separate route-group-prefix gap left for a future phase.
+> Without the shared-anchor guard the symmetric wildcards produced **22 garbage
+> links** (e.g. `/play/*/draw` → `/*/goto/*`); the guard cuts those to 0.
+> Edges 12,959 → 12,962 (+3), nodes unchanged at 8,056, isolated unchanged at
+> 691 (isolated components still 0). Full re-index ~11.1s (linker pass is
+> O(clients×handlers), no measurable delta).
+>
+> Headline acceptance met — a complete loop is traceable via `polyflow trace`:
+> `ShowPlayGame -[calls]-> PlayGamePage -[calls]-> MoveNotationPanel
+> -[component_impl]-> MoveNotationPanel(go) -[datastar_action]-> POST
+> */*/history/navigate -[http_call]-> POST /play/:gameID/history/navigate
+> -[calls]-> NavigateHistoryHandler` — i.e. route → handler → component →
+> datastar action → handler.
 
 **Entry context (re-read to start fresh):** "Working context" above;
 `internal/linker/linker.go` `Linker.Link` (the **same-service skip at lines
