@@ -260,7 +260,18 @@ answers "will my current changes impact anything".
 
 ## UI track (after Tier 0 lands; data must be right before presenting it)
 
-### Phase U.1 — Variables hidden by default `pending`
+### Phase U.1 — Variables hidden by default `done`
+
+> Outcome: `showVariables` signal in `stores/ui.ts` (default off, persisted to
+> `pf:showVariables` in localStorage) with a Show/Hide toolbar toggle. The
+> `filtered()` memo in `stores/derived.ts` drops `variable` nodes unless the
+> user opts in — except in the structure view, which always keeps them (data
+> flow is its whole purpose), so the toolbar toggle hides itself there. A
+> `createEffect` in `derived.ts` clears the selection when the selected node is
+> a variable that just became hidden (toggle off or leaving structure view), so
+> the Detail panel never points at an off-canvas node. Tests: ui store default
+> is off, `setShowVariables` round-trips and persists.
+
 `showVariables` signal (default off, persisted, structure view exempt) +
 toolbar toggle; clear selection if the selected node becomes hidden.
 

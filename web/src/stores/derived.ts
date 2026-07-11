@@ -4,7 +4,7 @@
 // this; Filters/Detail derive their option lists from the same memos so the
 // whole UI agrees on what is visible.
 
-import { createMemo } from "solid-js";
+import { createMemo, createEffect } from "solid-js";
 import { graphStore } from "./graph";
 import { uiStore } from "./ui";
 import { filterEdgesByConfidence } from "../lib/confidence";
@@ -32,10 +32,18 @@ export const allServices = createMemo<string[]>(() => {
 const filtered = createMemo<{ nodes: GraphNode[]; edges: GraphEdge[] }>(() => {
   const hiddenTypes = uiStore.hiddenTypes();
   const hiddenServices = uiStore.hiddenServices();
+  // Variables are hidden unless the user opts in — except in structure view,
+  // whose whole purpose is data flow, so it always keeps them.
+  const hideVars = !uiStore.showVariables() && uiStore.viewMode() !== "structure";
 
   const nodes = graphStore
     .nodes()
-    .filter((n) => !hiddenTypes.includes(n.type) && !hiddenServices.includes(n.service));
+    .filter(
+      (n) =>
+        !hiddenTypes.includes(n.type) &&
+        !hiddenServices.includes(n.service) &&
+        !(hideVars && n.type === "variable")
+    );
   const nodeIds = new Set(nodes.map((n) => n.id));
 
   const edges = filterEdgesByConfidence(graphStore.edges(), uiStore.activeConfidence()).filter(
@@ -58,6 +66,18 @@ export const fileGroups = createMemo<FileGroup[]>(() => {
   if (!uiStore.groupByFile() || uiStore.viewMode() === "highlevel") return [];
   const collapsed = applyBoundaryCollapse(f.nodes, f.edges, uiStore.expandedBoundaries());
   return applyFileGrouping(collapsed.nodes, collapsed.edges, uiStore.collapsedFiles()).groups;
+});
+
+// When variables become hidden (toggle off, or leaving the structure view),
+// a variable that was selected is no longer on the canvas — drop the stale
+// selection so the Detail panel doesn't point at an invisible node.
+createEffect(() => {
+  const hideVars = !uiStore.showVariables() && uiStore.viewMode() !== "structure";
+  if (!hideVars) return;
+  const id = uiStore.selectedNodeId();
+  if (!id) return;
+  const node = graphStore.nodes().find((n) => n.id === id);
+  if (node?.type === "variable") uiStore.setSelectedNodeId(null);
 });
 
 export const visibleGraph = createMemo<{ nodes: GraphNode[]; edges: GraphEdge[] }>(() => {
