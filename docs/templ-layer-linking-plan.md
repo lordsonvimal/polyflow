@@ -235,7 +235,41 @@ function nodes inflate the graph and skew the isolated-node metric.
    large node drop from removing `*_templ.go` glue).
 4. *Commit* — bump `SchemaVersion`; set status + `> Outcome:`.
 
-### Phase T.2 — Datastar action extraction: colon syntax + expression values `pending`
+### Phase T.2 — Datastar action extraction: colon syntax + expression values `done (commit 13a020d)`
+
+> Outcome: rewrote the datastar path in `internal/parser/templ.go`. `isDataOnKey`
+> now recognizes both the v1 colon form (`data-on:click`) and the legacy hyphen
+> form; the colon form arrives as an `ExpressionAttribute`, so it is handled
+> there against the **raw** Go expression (not a pre-stripped string).
+> `extractDatastarAction` reconstructs the runtime JS string from concatenated Go
+> string literals (`reconstructGoString`: interpolated gaps → a sentinel byte),
+> finds `@(get|post|put|delete|patch)(` anywhere via the unanchored
+> `reDatastarVerb`, then `normalizeDatastarPath` walks the first quoted argument
+> tracking in-string vs. in-JS-expression state, collapsing every interpolated /
+> dynamic segment to a single `*` and labeling the edge+node
+> `confidence: partial` (literal-only paths stay `static`). Signal bindings
+> (`data-bind`/`data-signals`/`data-model`, `data-text`/`data-indicator $sig`)
+> moved off `component` to a new `NodeTypeSignal`, killing the `$idx + 1` junk.
+> Also made `VisitTemplElementExpression` descend into `@Layout(...){ … }`
+> children so actions nested inside layout wrappers aren't dropped (this recovered
+> the one `data-on:load` SSE `@get` in `session_detail.templ`).
+>
+> Measured on chessleap (full re-index): **datastar action nodes 0 → 27** (26
+> `partial`, 1 `static`; matching all 27 `data-on:*`/`data-on-*` `@verb`
+> attributes — the earlier "~250" estimate conflated total `@verb` text
+> occurrences with actionable handlers), **datastar_action edges 0 → 27**,
+> **signal nodes 0 → 54**, and **component nodes 428 → 395** with **0** `$`-junk
+> component nodes remaining. `PuzzleRows`' pager `@get('/rows/*')` and
+> `gametoolspanel`'s `@post('/play/*/draw')` verified present with `datastar=true`.
+> Total isolated nodes unchanged at **691** (every new node is edge-connected);
+> nodes 7915 → 8056, edges 12762 → 12959. Full re-index ~11.4s (parser change is
+> O(chars) per attribute; no measurable delta). `SchemaVersion` 4 → 5.
+>
+> Known partials, shipped labeled not dropped: a two-`@post` ternary
+> (`practice_game.templ:538`) captures only the first action; `fmt.Sprintf`
+> format placeholders surface literally (`POST %s`); a JS ternary tail can leave
+> cosmetic residue (`/practice/*/control/*/*engine*human`). All carry
+> `confidence: partial` for T.3's wildcard linker to consume.
 
 **Entry context (re-read to start fresh):** the "Working context" section above,
 especially "Datastar conventions in chessleap"; `internal/parser/templ.go`

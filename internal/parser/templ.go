@@ -17,8 +17,11 @@ type TemplParser struct{}
 func (p *TemplParser) Language() string     { return "templ" }
 func (p *TemplParser) Extensions() []string { return []string{".templ"} }
 
-// reDataOnAction matches data-on-<event>="@verb('/path')" attribute values.
-var reDataOnAction = regexp.MustCompile(`^@(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]`)
+// reDatastarVerb finds a datastar backend action `@verb(` anywhere in an
+// attribute value. Datastar v1 values are Go expressions, so the action may be
+// wrapped (`templ.JSExpression("@post(…)")`) or prefixed with signal writes
+// (`"$sig = 0; @post(…)"`) — the match is deliberately unanchored.
+var reDatastarVerb = regexp.MustCompile(`(?i)@(get|post|put|delete|patch)\s*\(`)
 
 // reSignalRef matches $signalName used in data-text / data-indicator values.
 var reSignalRef = regexp.MustCompile(`^\$([A-Za-z_]\w*)`)
@@ -138,52 +141,18 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 	lineNo := line(ca.Range.From)
 
 	switch {
-	// data-on-<event>="@verb('/path')"
-	case strings.HasPrefix(key, "data-on-"):
-		if m := reDataOnAction.FindStringSubmatch(val); m != nil {
-			method := strings.ToUpper(m[1])
-			path := m[2]
-			nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeHTTPClient, method+":"+path)
-			v.nodes = append(v.nodes, graph.Node{
-				ID: nodeID, Type: graph.NodeTypeHTTPClient,
-				Label:    fmt.Sprintf("%s %s", method, path),
-				Service:  v.service,
-				File:     v.file,
-				Line:     lineNo,
-				Language: "templ",
-				Meta:     map[string]string{"method": method, "path": path, "datastar": "true"},
-			})
-			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarAction))
-		}
+	// data-on:<event>={ @verb('/path') } / data-on-<event>="@verb('/path')"
+	case isDataOnKey(key):
+		v.addDatastarAction(val, lineNo)
 
 	// data-bind / data-signals / data-model
 	case key == "data-bind" || key == "data-signals" || key == "data-model":
-		nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeComponent, "bind:"+val)
-		v.nodes = append(v.nodes, graph.Node{
-			ID: nodeID, Type: graph.NodeTypeComponent,
-			Label:    val,
-			Service:  v.service,
-			File:     v.file,
-			Line:     lineNo,
-			Language: "templ",
-			Meta:     map[string]string{"signal": val},
-		})
-		v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarBind))
+		v.addSignalBind("bind:"+val, val, signalName(val), lineNo)
 
 	// data-text / data-indicator referencing $signal
 	case key == "data-text" || key == "data-indicator":
 		if m := reSignalRef.FindStringSubmatch(val); m != nil {
-			nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeComponent, "read:"+val)
-			v.nodes = append(v.nodes, graph.Node{
-				ID: nodeID, Type: graph.NodeTypeComponent,
-				Label:    val,
-				Service:  v.service,
-				File:     v.file,
-				Line:     lineNo,
-				Language: "templ",
-				Meta:     map[string]string{"signal": m[1]},
-			})
-			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarBind))
+			v.addSignalBind("read:"+m[1], m[1], m[1], lineNo)
 		}
 
 	// href / action pointing to a server path — nav links, not API calls
@@ -231,43 +200,240 @@ func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
 	v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDOMListen))
 }
 
-// ExpressionAttribute covers data-on-click={ expr } style attributes.
+// ExpressionAttribute covers data-on:click={ expr } style attributes. The
+// datastar colon form (`data-on:click={…}`) surfaces here; the value is a Go
+// expression, not a bare string, so we hand the raw expression to
+// addDatastarAction rather than pre-stripping quotes.
 func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttribute) error {
 	key := ea.Key.String()
-	val := strings.TrimSpace(ea.Expression.Value)
-	// Strip surrounding quotes if any
-	if len(val) >= 2 {
-		c := val[0]
-		if (c == '"' || c == '\'') && val[len(val)-1] == c {
-			val = val[1 : len(val)-1]
-		}
-	}
+	raw := strings.TrimSpace(ea.Expression.Value)
 	lineNo := line(ea.Range.From)
 
-	if strings.HasPrefix(key, "data-on-") {
-		if m := reDataOnAction.FindStringSubmatch(val); m != nil {
-			method := strings.ToUpper(m[1])
-			path := m[2]
-			nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeHTTPClient, method+":"+path)
-			v.nodes = append(v.nodes, graph.Node{
-				ID: nodeID, Type: graph.NodeTypeHTTPClient,
-				Label:    fmt.Sprintf("%s %s", method, path),
-				Service:  v.service,
-				File:     v.file,
-				Line:     lineNo,
-				Language: "templ",
-				Meta:     map[string]string{"method": method, "path": path, "datastar": "true"},
-			})
-			v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarAction))
-		}
+	if isDataOnKey(key) {
+		v.addDatastarAction(raw, lineNo)
 		return nil
 	}
 
 	// Native DOM event attributes with expression values: onclick={ handler }
 	if reOnEventAttr.MatchString(key) {
-		v.addEventAttr(key, val, lineNo)
+		v.addEventAttr(key, stripQuotes(raw), lineNo)
 	}
 	return nil
+}
+
+// isDataOnKey reports whether an attribute key is a datastar event binding,
+// covering both the v1 colon syntax (`data-on:click`) and the legacy hyphen
+// syntax (`data-on-click`).
+func isDataOnKey(key string) bool {
+	return strings.HasPrefix(key, "data-on:") || strings.HasPrefix(key, "data-on-")
+}
+
+// stripQuotes removes a single matching pair of surrounding quotes.
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		c := s[0]
+		if (c == '"' || c == '\'') && s[len(s)-1] == c {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+// signalName strips a leading `$` from a signal reference, leaving the bare
+// name where possible (falls back to the raw value for compound expressions).
+func signalName(val string) string {
+	if m := reSignalRef.FindStringSubmatch(val); m != nil {
+		return m[1]
+	}
+	return strings.TrimPrefix(val, "$")
+}
+
+// addSignalBind emits a signal node (datastar reactive binding) and a
+// datastar_bind edge from the enclosing component.
+func (v *templVisitor) addSignalBind(idKey, label, signal string, lineNo int) {
+	nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeSignal, idKey)
+	v.nodes = append(v.nodes, graph.Node{
+		ID: nodeID, Type: graph.NodeTypeSignal,
+		Label:    label,
+		Service:  v.service,
+		File:     v.file,
+		Line:     lineNo,
+		Language: "templ",
+		Meta:     map[string]string{"signal": signal},
+	})
+	v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarBind))
+}
+
+// addDatastarAction parses a datastar backend action (`@verb('/path')`) out of
+// an attribute value and, when found, emits an http_client node plus a
+// datastar_action edge from the enclosing component. Concatenated paths are
+// partially resolved (interpolated segments → `*`, confidence: partial).
+func (v *templVisitor) addDatastarAction(val string, lineNo int) bool {
+	method, path, partial, ok := extractDatastarAction(val)
+	if !ok {
+		return false
+	}
+	conf := graph.ConfidenceStatic
+	if partial {
+		conf = graph.ConfidencePartial
+	}
+	nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeHTTPClient, method+":"+path)
+	v.nodes = append(v.nodes, graph.Node{
+		ID: nodeID, Type: graph.NodeTypeHTTPClient,
+		Label:    fmt.Sprintf("%s %s", method, path),
+		Service:  v.service,
+		File:     v.file,
+		Line:     lineNo,
+		Language: "templ",
+		Meta:     map[string]string{"method": method, "path": path, "datastar": "true", "confidence": conf},
+	})
+	e := componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarAction)
+	e.Confidence = conf
+	v.edges = append(v.edges, e)
+	return true
+}
+
+// extractDatastarAction pulls the HTTP method and (possibly wildcarded) path
+// out of a datastar action value. It reconstructs the runtime JS string from
+// concatenated Go string literals (interpolated gaps become a sentinel), then
+// scans for `@verb('…')` and normalizes the path. `partial` is true when any
+// segment was interpolated and could not be resolved to a literal.
+func extractDatastarAction(val string) (method, path string, partial, ok bool) {
+	js := val
+	if strings.Contains(val, `"`) {
+		js = reconstructGoString(val)
+	}
+	m := reDatastarVerb.FindStringSubmatchIndex(js)
+	if m == nil {
+		return "", "", false, false
+	}
+	method = strings.ToUpper(js[m[2]:m[3]])
+	path, partial = normalizeDatastarPath(js[m[1]:])
+	if path == "" {
+		return "", "", false, false
+	}
+	return method, path, partial, true
+}
+
+// gapSentinel marks a Go-interpolation boundary in a reconstructed JS string;
+// the path normalizer turns it into a `*` wildcard.
+const gapSentinel = 0
+
+// reconstructGoString joins the contents of concatenated Go double-quoted
+// string literals, inserting a sentinel byte where interpolated expressions sat
+// between them. Non-string text (identifiers, `templ.JSExpression(`, `+`) is
+// dropped. e.g. `templ.JSExpression("@post('/p/" + id + "/x')")` →
+// `@post('/p/<sentinel>/x')`.
+func reconstructGoString(val string) string {
+	var b strings.Builder
+	inStr := false
+	prevLiteral := false
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		if inStr {
+			if c == '\\' && i+1 < len(val) {
+				b.WriteByte(val[i+1])
+				i++
+				continue
+			}
+			if c == '"' {
+				inStr = false
+				prevLiteral = true
+				continue
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if c == '"' {
+			if prevLiteral {
+				b.WriteByte(gapSentinel)
+			}
+			inStr = true
+		}
+	}
+	return b.String()
+}
+
+// isPathChar reports whether c can appear literally in a URL path segment.
+func isPathChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '/', '-', '_', '.', ':', '%', '~', '*', '?', '=', '&':
+		return true
+	}
+	return false
+}
+
+// normalizeDatastarPath reads the first quoted argument of a `@verb(` call
+// (rest is the text just after the `(`), collapsing interpolated / dynamic
+// segments to a single `*`. Returns the path and whether anything was
+// wildcarded. A bare (unquoted) argument is treated as fully dynamic (`*`).
+func normalizeDatastarPath(rest string) (string, bool) {
+	i := 0
+	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
+		i++
+	}
+	var openQuote byte
+	if i < len(rest) && (rest[i] == '\'' || rest[i] == '"' || rest[i] == '`') {
+		openQuote = rest[i]
+		i++
+	} else {
+		// No string literal: a variable/expression argument — fully dynamic.
+		return "*", true
+	}
+
+	var b strings.Builder
+	partial := false
+	lastStar := false
+	inStr := true // opening quote already consumed
+	wildcard := func() {
+		partial = true
+		if !lastStar {
+			b.WriteByte('*')
+			lastStar = true
+		}
+	}
+	for i < len(rest) {
+		c := rest[i]
+		if c == openQuote {
+			// Inside the string, a closing quote followed by `)` (or end)
+			// terminates the path; otherwise it is a JS-level concat boundary
+			// that flips us out of the string into an interpolated expression.
+			if inStr {
+				j := i + 1
+				for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t') {
+					j++
+				}
+				if j >= len(rest) || rest[j] == ')' {
+					break
+				}
+				inStr = false
+				wildcard()
+			} else {
+				inStr = true // reopening the string literal
+			}
+			i++
+			continue
+		}
+		if !inStr {
+			// Inside an interpolated JS expression — already wildcarded.
+			i++
+			continue
+		}
+		if c != gapSentinel && isPathChar(c) {
+			b.WriteByte(c)
+			lastStar = c == '*'
+			i++
+			continue
+		}
+		// Go-interpolation sentinel or a non-path char inside the literal.
+		wildcard()
+		i++
+	}
+	return b.String(), partial
 }
 
 // componentName extracts the bare identifier from a templ expression like "UserPage(users []User)".
@@ -313,7 +479,16 @@ func (v *templVisitor) VisitHTMLComment(*templparser.HTMLComment) error { return
 func (v *templVisitor) VisitCallTemplateExpression(*templparser.CallTemplateExpression) error {
 	return nil
 }
-func (v *templVisitor) VisitTemplElementExpression(*templparser.TemplElementExpression) error {
+// VisitTemplElementExpression descends into the children of a component-call
+// block (`@Layout(...) { ...children... }`) so datastar actions and DOM targets
+// nested inside layout wrappers are not dropped. (Composition/renders edges for
+// the call itself are handled in a later phase.)
+func (v *templVisitor) VisitTemplElementExpression(te *templparser.TemplElementExpression) error {
+	for _, child := range te.Children {
+		if err := child.Visit(v); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (v *templVisitor) VisitChildrenExpression(*templparser.ChildrenExpression) error { return nil }
