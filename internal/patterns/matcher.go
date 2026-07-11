@@ -407,6 +407,17 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// Event-listener nodes (HTML onclick attrs, addEventListener,
+		// el.onclick = …): stamp the bare event name so the dom_listen edge
+		// and the UI can label the binding (Phase U.3).
+		if nodeType == graph.NodeTypeDOMTarget {
+			if _, et := classifyPattern(r.PatternName); et == graph.EdgeTypeDOMListen {
+				if ev := eventNameFromCaptures(r.Captures); ev != "" {
+					meta["event"] = ev
+				}
+			}
+		}
+
 		// SSE clients open a plain GET stream; stamp the method so the
 		// cross-service linker can match the server's SSE endpoint.
 		if r.PatternName == "eventsource_connect" {
@@ -652,12 +663,21 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 				edgeType = et
 			}
 		}
-		edges = append(edges, graph.Edge{
+		edge := graph.Edge{
 			ID:   fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, n.ID),
 			From: fromID,
 			To:   n.ID,
 			Type: edgeType,
-		})
+		}
+		// Event bindings carry the event name so onclick/oninput listeners are
+		// distinguishable from plain flow in the UI (Phase U.3).
+		if edgeType == graph.EdgeTypeDOMListen {
+			if ev := n.Meta["event"]; ev != "" {
+				edge.Label = "on " + ev
+				edge.Meta = map[string]string{"event": ev}
+			}
+		}
+		edges = append(edges, edge)
 	}
 
 	// Pass 3: resolve call-reference results (component_fn_call).
@@ -702,12 +722,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 
 		edgeType := callRefEdgeType(r.PatternName)
 		edgeID := fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, calleeID)
-		edges = append(edges, graph.Edge{
+		edge := graph.Edge{
 			ID:   edgeID,
 			From: fromID,
 			To:   calleeID,
 			Type: edgeType,
-		})
+		}
+		// JSX event-prop bindings (onClick={h}, on:click={h}): label the edge
+		// with the event so an onClick binding reads differently from a plain
+		// call in the UI (Phase U.3).
+		if r.PatternName == "jsx_event_handler_ref" {
+			if ev := eventNameFromCaptures(r.Captures); ev != "" {
+				edge.Label = "on " + ev
+				edge.Meta = map[string]string{"event": ev}
+			}
+		}
+		edges = append(edges, edge)
 	}
 
 	// Materialise any module nodes synthesized above.
@@ -733,12 +763,19 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if !ok || handlerID == n.ID {
 			continue
 		}
-		edges = append(edges, graph.Edge{
+		edge := graph.Edge{
 			ID:   fmt.Sprintf("calls:%s->%s", n.ID, handlerID),
 			From: n.ID,
 			To:   handlerID,
 			Type: graph.EdgeTypeCalls,
-		})
+		}
+		// Carry the event name (stamped in Pass 1) onto the handler edge so
+		// "what runs on click" is labeled as such in the UI (Phase U.3).
+		if ev := n.Meta["event"]; ev != "" {
+			edge.Label = "on " + ev
+			edge.Meta = map[string]string{"event": ev}
+		}
+		edges = append(edges, edge)
 	}
 
 	// Pass 4: synthesize channel nodes for AMQP publishers and subscribers.
@@ -815,6 +852,36 @@ func isJSModuleFile(file string) bool {
 		}
 	}
 	return false
+}
+
+// normalizeEventName reduces an event-binding attribute or property to its bare
+// event name: "onClick" → "click", "on:click"/"oncapture:click" → "click",
+// "onclick" → "click".
+func normalizeEventName(prop string) string {
+	p := prop
+	switch {
+	case strings.HasPrefix(p, "oncapture:"):
+		p = p[len("oncapture:"):]
+	case strings.HasPrefix(p, "on:"):
+		p = p[len("on:"):]
+	case strings.HasPrefix(p, "on"):
+		p = p[len("on"):]
+	}
+	return strings.ToLower(p)
+}
+
+// eventNameFromCaptures extracts a normalized DOM/JSX event name from a match's
+// captures. addEventListener-style patterns capture a quoted string in
+// event_type ("click"); attribute/property patterns capture the on-prefixed
+// name in prop (onClick, on:click, onclick). Returns "" when neither is present.
+func eventNameFromCaptures(caps map[string]string) string {
+	if et, ok := caps["event_type"]; ok {
+		return strings.ToLower(stripStringLiteral(et))
+	}
+	if p, ok := caps["prop"]; ok && strings.HasPrefix(strings.ToLower(p), "on") {
+		return normalizeEventName(p)
+	}
+	return ""
 }
 
 // callRefEdgeType returns the edge type for a call-reference pattern.

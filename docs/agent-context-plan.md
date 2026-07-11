@@ -287,7 +287,22 @@ toolbar toggle; clear selection if the selected node becomes hidden.
 Stop persisting `groupByFile=off` across sessions (URL param still wins);
 fresh landings always grouped.
 
-### Phase U.3 — Event-binding visibility `pending`
+### Phase U.3 — Event-binding visibility `done`
+
+> Outcome: event-binding edges now carry `meta.event` (normalized bare name —
+> `onClick`/`on:click`/`oncapture:click`/`onclick`/`addEventListener("click")`
+> all → `click`) and a `"on <event>"` label. Three matcher paths stamp it:
+> JSX event-prop refs (Pass 3 calls edge), DOM listeners (Pass 2 `dom_listen`
+> edge, plus `meta.event` on the dom_target node so edge-less HTML files still
+> record it), and listener→handler edges (Pass 3b). Extraction is centralized
+> in `eventNameFromCaptures`/`normalizeEventName` off the `event_type`
+> (quoted) or `on`-prefixed `prop` captures. The web graph maps `meta.event`
+> to an `event` edge-data field and styles `edge[event]` violet + dotted, with
+> a legend entry; the label surfaces the event. Templ events are not tagged —
+> the templ parser (`internal/parser/templ.go`) is still a stub that extracts
+> no event handlers, so there is nothing to label yet. Verified on this repo:
+> reindex produces 6 onClick edges (dom_listen + calls) labeled "on click".
+
 Tag JSX event-handler edges (`meta.event` = click/submit/…) in the matcher;
 render an edge label/style so onClick bindings are distinguishable from
 plain calls. Same for HTML/templ event edges.

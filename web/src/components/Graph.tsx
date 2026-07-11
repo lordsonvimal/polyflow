@@ -148,6 +148,18 @@ const STYLE: cytoscape.Stylesheet[] = [
     selector: 'edge[type="flows_to"]',
     style: { "line-color": "#22d3ee", "target-arrow-color": "#22d3ee" } as any,
   },
+  // Event-binding edges (onClick, oninput, addEventListener): violet with a
+  // dotted line so a UI event handler reads differently from a plain call.
+  // The label ("on click") is already carried in data(label).
+  {
+    selector: 'edge[event]',
+    style: {
+      "line-color": "#a855f7",
+      "target-arrow-color": "#a855f7",
+      "line-style": "dotted",
+      color: "#c084fc",
+    } as any,
+  },
   // Uncertain edges: dashed + dimmed, visually distinct from confirmed flow
   {
     selector: 'edge[confidence="partial"], edge[confidence="unknown"]',
@@ -234,6 +246,8 @@ const Graph: Component = () => {
           type: e.type,
           label: e.label ?? "",
           confidence: edgeConfidence(e),
+          // Present only for event-binding edges — drives the edge[event] style.
+          ...(e.meta?.event ? { event: e.meta.event } : {}),
         },
       }))
     );
