@@ -61,6 +61,10 @@ const (
 	EdgeTypePublishes       EdgeType = "publishes"
 	EdgeTypeSubscribes      EdgeType = "subscribes"
 	EdgeTypeImports         EdgeType = "imports"
+	// EdgeTypeDefinedIn links a JS DOM-target (querySelector/getElementById) to
+	// the templ element that declares the matching id=/class= — the JS↔templ DOM
+	// seam. Runs from the JS target to the templ_element definition node.
+	EdgeTypeDefinedIn       EdgeType = "defined_in"
 	EdgeTypeSpawns          EdgeType = "spawns"
 	EdgeTypeSSEEndpoint     EdgeType = "sse_endpoint"
 	EdgeTypeDatastarAction  EdgeType = "datastar_action"
@@ -108,7 +112,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "6"
+const SchemaVersion = "7"
 
 // Node represents a code entity in the graph.
 type Node struct {
