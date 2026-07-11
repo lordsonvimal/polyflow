@@ -87,4 +87,7 @@ export const EDGE_LEGEND: EdgeLegendEntry[] = [
   { glyph: "┄┄▶", desc: "partial / unknown edge (opt-in, dashed)" },
   { glyph: "◯", color: "#f472b6", desc: "trace root (pink ring)" },
   { glyph: "◻", color: "#ffffff", desc: "selected node (white border, neighbors highlighted)" },
+  { glyph: "◌", color: "#ef4444", desc: "unreachable root — dead-code candidate (red dashed ring)" },
+  { glyph: "◌", color: "#f59e0b", desc: "callback root — framework-invoked (amber dashed ring)" },
+  { glyph: "◯", color: "#10b981", desc: "entrypoint root — main/init/handler (green ring)" },
 ];
