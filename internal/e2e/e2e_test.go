@@ -225,6 +225,41 @@ func TestIndex_DatastarCrossServiceLink(t *testing.T) {
 	_ = ctx
 }
 
+func TestIndex_DatastarSameServiceLink(t *testing.T) {
+	store, _ := indexFixture(t)
+	ctx := context.Background()
+
+	idx, err := store.BuildIndex(ctx)
+	require.NoError(t, err)
+
+	// svc-go/userpanel.templ emits @post('/users') and svc-go registers
+	// r.Post("/users", CreateUser) — same service. T.3 must still emit the
+	// link (via=datastar_action) even though the pair shares a service and has
+	// no bridging "calls" edge.
+	found := false
+	for _, edges := range idx.OutEdges {
+		for _, e := range edges {
+			if e.Type != graph.EdgeTypeHTTPCall {
+				continue
+			}
+			fromNode := idx.Nodes[e.From]
+			toNode := idx.Nodes[e.To]
+			if fromNode == nil || toNode == nil {
+				continue
+			}
+			if fromNode.Service == "svc-go" && toNode.Service == "svc-go" &&
+				e.Meta["via"] == "datastar_action" {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	assert.True(t, found, "expected same-service http_call edge within svc-go with via=datastar_action")
+}
+
 func TestIndex_ParseErrors(t *testing.T) {
 	// The normal fixture files shouldn't have parse errors that cause panics.
 	// We verify the index completes without panic (test completing = success).

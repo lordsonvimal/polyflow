@@ -1,0 +1,11 @@
+package svcgo
+
+// UserPanel is a server-rendered component whose datastar action posts to a
+// route handled by this same service (svc-go's r.Post("/users", CreateUser)).
+// It exercises T.3: a same-service datastar action must link to its handler
+// even though no "calls" edge bridges the templ node and the Go handler.
+templ UserPanel() {
+	<div id="user-panel">
+		<button data-on:click={ templ.JSExpression("@post('/users')") }>Create User</button>
+	</div>
+}
