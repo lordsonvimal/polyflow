@@ -463,7 +463,7 @@ why the 5 SSE publishers read as isolated.
 4. *Commit* — bump `SchemaVersion` if a new edge/node type was added; set status
    + `> Outcome:`.
 
-### Phase T.5 — templ→JS `<script>` loading + JS DOM-target → templ `defined_in` `done (commit <pending>)`
+### Phase T.5 — templ→JS `<script>` loading + JS DOM-target → templ `defined_in` `done (commit 137b695)`
 
 > Outcome: split into a parser-side extraction and two linker passes, mirroring
 > the T.1–T.3 shape (parser surfaces per-file facts on the component's meta; a
@@ -547,7 +547,46 @@ them back to the templ `id=`/`class=` that defines them — the design's promise
 
 ## Tier 1 — Structural backbone & reactive richness (independent of Tier 0)
 
-### Phase T.6 — `contains` backbone + reactive datastar attributes `pending`
+### Phase T.6 — `contains` backbone + reactive datastar attributes `done (commit <pending>)`
+
+> Outcome: split into a linker-side structural pass and a parser-side reactive
+> extraction, both derived from metadata already on the collected nodes.
+> `LinkContainment` (`internal/linker/containment.go`) synthesizes the backbone
+> from node file/receiver metadata after every parser/semantic node is collected:
+> one `service` node per service, one `file` node per distinct file, then
+> `contains` edges service→file and file→{function,method,struct,component}, plus
+> struct→method. The struct→method match keys on **service + package directory +
+> receiver type** (Go requires a receiver's type be declared in the method's own
+> package), so a same-named struct in another package never captures the wrong
+> method; the `method_decl` pattern (`patterns/go/functions.yaml`) grew a
+> `@receiver` capture that reaches *inside* `pointer_type`, so pointer and value
+> receivers both surface the bare struct name (no `*`-stripping needed). Root
+> classification was taught to **ignore `contains` edges** when deciding whether a
+> function is reached — a file→function containment edge is structural, not a
+> reference, so it must not mask an entrypoint/unreachable root (verified: 21
+> entrypoints / 323 unreachable / 11 callbacks survive, unchanged). On the parser
+> side, `isReactiveAttrKey` routes `data-show`/`data-when`/`data-class*`/
+> `data-attr:*`/`data-computed*` (constant **and** expression forms) to
+> `addSignalReads`, which emits a `signal` node + `reads` edge per distinct
+> `$signal` in the value; dynamic names (`"$" + sig`) and `data-when`'s on/off
+> literals contribute no bare name and are simply skipped, not dropped-with-noise.
+>
+> Measured on chessleap (full re-index): **contains 0 → 5,501** (1 service, 528
+> files, 1,038 struct→method) and **reads 0 → 669** across a signal-node set that
+> grew 54 → 266. **Isolated nodes 691 → 364** — isolated **structs 205 → 0,
+> functions 86 → 0, methods 36 → 0**; the only remaining isolated types are
+> `variable` (363, deliberately outside the containment set) and one stray
+> `class`. That is 364/8,808 ≈ **4.1%**, well below the 13% ceiling. Verified
+> `GradeStore -[contains]-> Upsert/GetBySubmission`, `activity/views/puzzles.templ
+> -[contains]-> PuzzleRows`, and `CoachPanel -[reads]-> coachMuted/challengeStep/
+> hintShown`. Nodes 8,067 → 8,808 (+741 = 1 service + 528 files + 212 new signal
+> reads), edges 13,467 → 19,180 (+5,713). Full re-index ~11.6s (unchanged; both
+> passes are O(nodes) map joins folded into the existing linker/parser walks).
+> `SchemaVersion` 7 → 8.
+>
+> Faithful to the plan's list, containment covers function/method/struct/component
+> only; package-level variables (the 363 that stay isolated) are left for a future
+> `declares`-backbone pass rather than force-fit under file containment.
 
 **Entry context (re-read to start fresh):** "Working context" above;
 `internal/indexer/indexer.go` (add containment during writer/assembly, not
