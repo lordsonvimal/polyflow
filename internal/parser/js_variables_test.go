@@ -152,6 +152,44 @@ func TestJSVariables_Class(t *testing.T) {
 	}
 }
 
+// A named function *expression* that closes over an outer local must get a
+// backing function node. The chessleap `createPostMoveQueue` shape
+// (`return function enqueue(fn) { … chain … }`) emitted a captures edge whose
+// `from` had no node, failing the edges."from" FK during indexing.
+func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
+	src := []byte(`export function createPostMoveQueue() {
+  let chain = Promise.resolve();
+  return function enqueue(fn) {
+    const next = chain.then(() => fn()).catch(() => {});
+    chain = next;
+    return next;
+  };
+}
+`)
+	nodes, edges := extractJSVariables("move-sync.js", "web", "javascript", "javascript", src)
+
+	if jsNode(nodes, graph.NodeTypeFunction, "enqueue") == nil {
+		t.Fatalf("named function expression enqueue has no backing node; nodes: %+v", nodes)
+	}
+	if jsEdge(edges, graph.EdgeTypeCaptures, "function:enqueue", "variable:chain") == nil {
+		t.Fatalf("missing captures edge enqueue -> chain; edges: %+v", edges)
+	}
+
+	// The FK invariant: every edge endpoint must resolve to an emitted node.
+	ids := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		ids[n.ID] = true
+	}
+	for _, e := range edges {
+		if !ids[e.From] {
+			t.Errorf("edge %s has dangling From %q", e.ID, e.From)
+		}
+		if !ids[e.To] {
+			t.Errorf("edge %s has dangling To %q", e.ID, e.To)
+		}
+	}
+}
+
 // TypeScript type annotations become data_type verbatim.
 func TestJSVariables_TSTypeAnnotation(t *testing.T) {
 	src := []byte("const layouts: string[] = [];\nexport const port: number = 4;\n")
