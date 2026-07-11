@@ -21,6 +21,10 @@ describe("uiStore defaults", () => {
   it("hides variables by default", () => {
     expect(uiStore.showVariables()).toBe(false);
   });
+
+  it("groups by file by default (fresh landing)", () => {
+    expect(uiStore.groupByFile()).toBe(true);
+  });
 });
 
 describe("uiStore toggles", () => {
@@ -50,6 +54,15 @@ describe("uiStore toggles", () => {
     expect(uiStore.hiddenTypes()).toContain("function");
     uiStore.toggleHiddenType("function");
     expect(uiStore.hiddenTypes()).not.toContain("function");
+  });
+
+  it("setGroupByFile toggles without persisting to localStorage (Phase U.2)", () => {
+    uiStore.setGroupByFile(false);
+    expect(uiStore.groupByFile()).toBe(false);
+    expect(localStorage.getItem("pf:groupByFile")).toBeNull();
+    uiStore.setGroupByFile(true);
+    expect(uiStore.groupByFile()).toBe(true);
+    expect(localStorage.getItem("pf:groupByFile")).toBeNull();
   });
 
   it("setShowVariables opts variables in and out (persisted)", () => {
