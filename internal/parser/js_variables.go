@@ -404,13 +404,33 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		// Named function declarations attribute to themselves; anonymous
 		// functions (arrow, callbacks) inherit the parent attribution unless
 		// they are a top-level `const name = () => …` initializer.
+		selfAttributed := false
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 			frame.fnName, frame.fnLine = nameNode.Content(ex.src), tsLine(node)
+			selfAttributed = true
 		} else if decl := node.Parent(); decl != nil && decl.Type() == "variable_declarator" {
 			if dn := decl.ChildByFieldName("name"); dn != nil && dn.Type() == "identifier" {
 				frame.fnName = dn.Content(ex.src)
 				frame.fnLine = tsLine(declStatement(decl))
+				selfAttributed = true
 			}
+		}
+		// Materialise the function node when this frame attributes to the
+		// function node itself. The pattern matcher only emits nodes for
+		// top-level function_declarations and `const = arrow` initializers,
+		// so named function *expressions* (`return function enqueue(fn){…}`)
+		// and `const = function(){}` had no backing node — leaving the `from`
+		// endpoint of any capture/read/write edge dangling and failing the
+		// edges."from" FK. addNode dedups, so this is a no-op for the cases
+		// the matcher already covers.
+		if selfAttributed {
+			ex.addNode(graph.Node{
+				ID:    ex.fnNodeID(frame.fnName, frame.fnLine),
+				Type:  graph.NodeTypeFunction,
+				Label: frame.fnName,
+				Service: ex.service, File: ex.file, Line: frame.fnLine,
+				Language: ex.langTag,
+			})
 		}
 		if frame.fnName == "" {
 			// inherit attribution from nearest named ancestor frame
