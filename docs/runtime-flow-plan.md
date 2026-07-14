@@ -189,6 +189,94 @@ reason — `unknown_service`, `no_route_or_path`, `unsupported_span_kind`,
 `malformed`, `no_causality` — reported by `polyflow flows` and the F.4/doctor
 coverage output. Kinds extend `graph.UnresolvedRef.Kind`.
 
+### Pinned Go types (R.0/R.1 implement exactly this)
+
+```go
+// internal/evidence/trace_ingest/model.go
+type Span struct {
+    TraceID, SpanID, ParentSpanID string
+    Kind                          string // "CLIENT"|"SERVER"|"PRODUCER"|"CONSUMER"|"INTERNAL"
+    Service                       string // resource attr service.name (raw, pre-mapping)
+    Name                          string
+    StartUnixNano, EndUnixNano    uint64
+    Links                         []SpanLink
+    Attrs                         map[string]string // ALLOWLISTED attrs only — the
+                                                    // mapping tables above define the
+                                                    // allowlist; everything else is
+                                                    // dropped at parse time (PII boundary)
+}
+
+type SpanLink struct{ TraceID, SpanID string }
+
+// FlowRecord is the mapper's output — channel-granular, in contract-engine
+// key vocabulary. This is what reconciliation joins.
+type FlowRecord struct {
+    Kind        contract.Kind
+    Key         string   // normalized channel key, e.g. "GET /games/*"
+    FromService string   // "" when the caller was never observed (server_only)
+    ToService   string
+    Causality   string   // "parent_child" | "link" | "key_match" | "server_only"
+    Refs        []FlowRef
+}
+
+// FlowRef is the provenance one observation contributes; it becomes the
+// runtime SourceRef ("<session>/<trace_id>") on the fused edge.
+type FlowRef struct {
+    Session    string
+    TraceID    string
+    ObservedAt int64
+    CodeFile   string // from code.filepath — presence upgrades granularity to "site"
+    CodeFunc   string // from code.function
+}
+
+type IngestLedgerEntry struct {
+    Session, TraceID, SpanID string
+    Reason                   string // unknown_service | no_route_or_path |
+                                    // unsupported_span_kind | malformed | no_causality
+}
+```
+
+**Worked fixture — `testdata/evidence/runtime/http_2svc.otlp.json`** (the R.0/R.1
+positive case). OTLP JSON, two resource groups (one per service); span `kind`
+enums: 2 = SERVER, 3 = CLIENT:
+
+```json
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "5b8efff798038103d269b633813fc60c", "spanId": "eee19b7ec3c1b174",
+     "name": "GET", "kind": 3,
+     "startTimeUnixNano": "1752480000000000000", "endTimeUnixNano": "1752480000120000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "url.full", "value": {"stringValue": "http://api:8080/games/42"}}]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "5b8efff798038103d269b633813fc60c", "spanId": "aaa19b7ec3c1b174",
+     "parentSpanId": "eee19b7ec3c1b174",
+     "name": "GET /games/:id", "kind": 2,
+     "startTimeUnixNano": "1752480000010000000", "endTimeUnixNano": "1752480000110000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/games/:id"}}]}]}]}
+]}
+```
+
+Expected R.1 output for this fixture — exactly one flow record:
+
+```go
+FlowRecord{
+    Kind: "http", Key: "GET /games/*",     // http.route "/games/:id" → param_wildcard
+    FromService: "web", ToService: "api",  // via evidence.runtime.service_names mapping
+    Causality: "parent_child",
+    Refs: []FlowRef{{Session: "<session>", TraceID: "5b8efff798038103d269b633813fc60c",
+                     ObservedAt: 1752480000}},
+}
+```
+
+and an empty ingest ledger. (`verified_granularity` stays `channel` — no
+`code.filepath` attr present.)
+
 ---
 
 ## Phases (one commit each)
