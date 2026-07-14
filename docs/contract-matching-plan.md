@@ -368,15 +368,47 @@ vanish with no ledger entry, violating the trust contract.
    **dynamic** nav links always reach the ledger. `key_dynamic` producers
    are the explicit upgrade targets for config resolution (F.3) and runtime
    evidence (R.1) — this meta is the join point those plans consume.
-4. **Per-language walkers, shared shape.** One walker per pattern language —
-   Go (if/else, switch, package consts), JS/TS/JSX (ternary, `||`/`??`,
-   object lookup, template literals whose interpolations are all
-   literal-resolvable; otherwise dynamic), Ruby (ternary, if/else, case,
-   constants), templ (if/else around attributes; datastar action args) —
-   emitting the same `key_candidates`/`key_dynamic` meta so the engine and
-   every rule stay language-agnostic. HTML needs no walker (attributes are
-   static by nature). New languages (Tier L) add a walker as part of the
-   pinned new-language checklist.
+4. **Per-language walkers, shared shape — pinned interface.** One walker per
+   pattern language — Go (if/else, switch, package consts), JS/TS/JSX
+   (ternary, `||`/`??`, object lookup, template literals whose interpolations
+   are all literal-resolvable; otherwise dynamic), Ruby (ternary, if/else,
+   case, constants), templ (if/else around attributes; datastar action args)
+   — emitting the same `key_candidates`/`key_dynamic` meta so the engine and
+   every rule stay language-agnostic. Walkers register through a first-class
+   registry mirroring `parser.Register`, so a language *without* a walker is
+   a visible, reportable fact rather than a silent degradation:
+
+   ```go
+   // internal/contract/keywalk.go
+   // KeyWalker enumerates literal alternatives for one producer key
+   // expression in one language. Implementations honor the shared bounds
+   // (≤8 branches, depth ≤2, all-literal) and never partially enumerate.
+   type KeyWalker interface {
+       Language() string // matches parser.Parser.Language()
+       // WalkKey inspects the tree-sitter node holding a key-field value.
+       // Returns (candidates, dynamic): len(candidates) ≥ 2 ⇒ emit
+       // key_candidates meta; dynamic=true ⇒ emit key_dynamic meta +
+       // ledger entry; (1 literal, false) ⇒ plain static key, no meta.
+       WalkKey(node *sitter.Node, src []byte, consts ConstResolver) ([]string, bool)
+   }
+
+   // ConstResolver resolves same-service constant references (shape b).
+   // Returns ("", false) for anything reassigned or non-literal.
+   type ConstResolver func(name string) (string, bool)
+
+   // RegisterKeyWalker wires a walker (from init()), keyed by Language().
+   func RegisterKeyWalker(w KeyWalker)
+
+   // KeyWalkerFor returns the walker for a language, or nil. Callers treat
+   // nil as "literal-only recognition" — and doctor reports it (below).
+   func KeyWalkerFor(lang string) KeyWalker
+   ```
+
+   HTML registers a no-op walker explicitly (attributes are static by
+   nature) — explicit registration distinguishes "considered, not needed"
+   from "forgotten". New languages (Tier L checklist item 7) register a
+   walker as a hard checklist requirement; the doctor walker row (below)
+   is the enforcement backstop when review misses it.
 
 **Tests.** A language × kind fixture matrix — each supported language gets at
 least: one ternary/branch nav-or-client case asserting one edge per branch
@@ -391,7 +423,11 @@ literal-unmatched nav link ⇒ still dropped (policy preserved).
 three topics yields three `publishes` edges; a computed fetch URL yields a
 `dynamic_url` ledger entry visible in `status --unresolved`; per-kind doctor
 coverage (G.5) gains a `dynamic` column so the surfaced-but-unlinked count is
-tracked per kind.
+tracked per kind. Doctor also gains a **walker-coverage row**: for every
+language registered in the parser registry, report whether a `KeyWalker` is
+registered (`yes` / `no-op` / **`MISSING`**) — a `MISSING` cell for a language
+with producer patterns is a defect, and a test iterates both registries to
+fail on it (the mechanical guard the checklist's process rule can't provide).
 
 ### Phase G.7 — Producer aliasing, instances & wrappers (all kinds, all languages) `pending`
 

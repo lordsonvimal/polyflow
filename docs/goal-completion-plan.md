@@ -272,10 +272,25 @@ language repeats; Python phases below are its first instantiation):
 7. Dynamic-key walker + indirection idioms (contract-matching G.6/G.7):
    the language's branch-enumeration/constant-resolution walker for
    producer keys (ternary/if/switch shapes) emitting the shared
-   `key_candidates`/`key_dynamic` meta, plus its alias/instance/wrapper
-   idiom patterns (client-instance creation, method aliasing) — without
-   them, computed or indirected URLs/topics in the new language are
-   silent gaps.
+   `key_candidates`/`key_dynamic` meta — implemented against the pinned
+   `KeyWalker` interface and wired via `RegisterKeyWalker` (a no-op
+   walker is registered explicitly if the language truly has no dynamic
+   key shapes; G.6's doctor walker-coverage row flags an unregistered
+   language as `MISSING`) — plus its alias/instance/wrapper idiom
+   patterns (client-instance creation, method aliasing) — without them,
+   computed or indirected URLs/topics in the new language are silent
+   gaps.
+8. Templating/view layer: if the ecosystem has server-side templates or
+   view files (Jinja2/Django templates for Python, Blade for PHP, JSP
+   for Java…), cover the L.W scenario classes for it — nav links
+   (anchor/form targets feeding the `nav` contract rule), inline event
+   handlers (extracted like `dom_event_attr`), and elements with
+   `id`/`class` entering the `NodeTypeElement` index so selector-based
+   handlers link cross-file. If the ecosystem genuinely has none, the
+   language's plan doc states that explicitly ("considered, not
+   applicable") — the item may be skipped only with that written claim,
+   never silently. The L.W audit (2026-07) showed this layer is where
+   legacy flows hide; omitting it reopens that exact gap class.
 
 ### Phase L.P0 — Python grammar + core patterns `pending`
 
@@ -328,8 +343,11 @@ Tier E with ≥15 cases.
 **Acceptance.** Corpus recall for the Python repo is reported in
 `eval/baseline.json`; the number, not the pattern count, closes the phase.
 
-*(Java/C#/PHP repeat L.P0–L.P3 as future phases via the same checklist; do
-not start a second language before the Python eval number exists.)*
+*(Checklist item 8 for Python — Jinja2/Django templates — is not covered by
+L.P0–L.P3; it is a required follow-up phase (L.P4) before Python is declared
+checklist-complete, scoped by whether the Tier E Python corpus repo actually
+uses server-side templates. Java/C#/PHP repeat the full checklist as future
+phases; do not start a second language before the Python eval number exists.)*
 
 ### Legacy-web phases (L.W) — ERB, global JS, jQuery
 
