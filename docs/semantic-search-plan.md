@@ -5,8 +5,9 @@ Status legend: `pending` · `in progress` · `done (commit <sha>)`
 > **Prerequisites.** S.0–S.2 need only the current graph + FTS search. The
 > flow-chain corpus (S.1) reuses the existing `internal/trace` chain assembly.
 > S.3's sidecar upgrade reuses the sidecar IPC pinned in
-> `docs/versioning-matrix-plan.md` (V.2). S.4 needs the eval harness
-> (`docs/goal-completion-plan.md` Tier E).
+> `docs/versioning-matrix-plan.md` (V.2) — the shared *transport* (framing,
+> pooling, fallback), not V.2's parse message schema. S.4 needs the eval
+> harness (`docs/goal-completion-plan.md` Tier E).
 
 ## Context
 
@@ -55,14 +56,21 @@ unchanged — this plan only changes how entities are *found*.
 ### Retrieval pipeline
 
 ```
-query text ──┬─> FTS5/BM25 (existing) ── top 50 ──┐
-             │                                     ├─ RRF fusion (k=60),
-             └─> Embedder.Embed(query) ──> cosine  │  dedupe by entity id
-                 vs in-memory matrix ──── top 50 ──┘
+query text ──┬─> FTS5/BM25 over entities_fts ──── top 50 ──┐
+             │                                              ├─ RRF fusion (k=60),
+             └─> Embedder.Embed(query) ──> cosine           │  dedupe by entity id
+                 vs in-memory matrix ─────────── top 50 ──┘
                                 │
              typed sections: nodes[] · flows[] · docs[]
              each hit: {entity, score, retrieval: exact|lexical|semantic|fused}
 ```
+
+**Both arms rank the same text.** The existing `nodes_fts` table indexes only
+node `label, file, service` and knows nothing of chains or doc chunks — it
+cannot be the lexical arm for `flows[]`/`docs[]`. S.1 therefore populates a
+new `entities_fts` table with the **same card/document text the embedder
+sees**, for all three entity types; hybrid search reads it. `nodes_fts` stays
+untouched for existing exact-lookup paths.
 
 - **Glossary expansion:** workspace `search.synonyms`
   (`checkout: [falcon, purchase]`) expands both the FTS query and the
@@ -128,6 +136,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
   vector       BLOB NOT NULL,          -- little-endian float32[dims]
   meta         TEXT NOT NULL DEFAULT '{}'  -- anchors: node_id, members, file, line
 );
+
+-- Lexical twin of the embedding corpus: same entity ids, same text.
+CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+  entity_id UNINDEXED, entity_type UNINDEXED, text
+);
 ```
 
 ### Size & accuracy budget (honest numbers)
@@ -158,7 +171,8 @@ CREATE TABLE IF NOT EXISTS embeddings (
   L2-normalized (model2vec/potion-style distillation of a bge-class teacher,
   MIT-licensed weights, 256-dim; conversion script under `tools/embed-model/`
   documents provenance + license and emits the `go:embed` binary blob).
-- `embeddings` table (pinned above) + batch upsert/load; `SchemaVersion` bump.
+- Storage tables (pinned above: `embeddings` + `entities_fts`) + batch
+  upsert/load; `SchemaVersion` bump.
 - Index integration: after linking, embed entities whose `content_hash`
   changed or whose `embedder_id` differs (`--no-embed` skips; skipping stamps
   the degradation reason).
@@ -188,6 +202,11 @@ than the model does.
 - **Doc chunks:** README/markdown files + extracted code doc-comments,
   ~200-token chunks split on headers/paragraphs, anchored `file:line`,
   associated to the containing service (and nearest node for doc-comments).
+- **Lexical index:** every built entity's text is upserted into
+  `entities_fts` in the same pass (hash-gated like the vectors), so the BM25
+  arm and the embedding arm rank identical content for all three entity
+  types — without this, `flows[]`/`docs[]` would be semantic-only and lose
+  the exact-match floor.
 
 **Tests.** One golden test per builder on fixtures; chain-cap test; a
 jargon fixture (README says "Falcon handles purchases", code says
@@ -200,9 +219,13 @@ types with sane counts (spot-checked in the phase note).
 
 **Problem.** Retrieval exists in pieces; nothing fuses or serves it.
 
-**Deliverable.** `internal/semantic/search.go` (pinned `Search`): FTS top-50
-∪ cosine top-50, RRF k=60, dedupe, typed sections, `retrieval` labels,
-glossary expansion (`search.synonyms` workspace key), degradation note.
+**Deliverable.** `internal/semantic/search.go` (pinned `Search`): FTS over
+`entities_fts` top-50 ∪ cosine top-50, RRF k=60, dedupe, typed sections,
+`retrieval` labels, glossary expansion (`search.synonyms` workspace key),
+degradation note. The FTS arm must tokenize NL queries into FTS5-safe terms
+(strip/escape quotes, hyphens, colons; OR-join with prefix stars) — raw
+`MATCH` on a sentence like `user's checkout-flow` is a syntax error, and the
+existing `SearchNodes` raw-`query + "*"` approach must not be copied here.
 Wire it as **the** search: CLI `polyflow search`, MCP `search` tool (same
 JSON; tool description gains: *"query may be natural language; results
 include flows — a flows hit's entry node is the starting point for trace"*),
@@ -246,11 +269,15 @@ search box hits the same endpoint (manual check, screenshot in phase note).
 the ladder without polyflow ever defaulting to it.
 
 **Deliverable.**
-- `internal/semantic/sidecar.go`: llama.cpp-based embedding sidecar speaking
-  the V.2 length-prefixed JSON IPC (`{"texts": […]}` →
-  `{"vectors": [[…]], "error": ""}`), model nomic-embed-text-v1.5 GGUF
-  (downloaded by `polyflow models pull`, sha256-pinned — the sidecar is the
-  one path with a download, and it is explicit).
+- `internal/semantic/sidecar.go`: llama.cpp-based embedding sidecar reusing
+  the V.2 sidecar **transport** — the length-prefixed JSON framing, process
+  pooling, and fallback-on-error behavior — with its own message schema
+  (`{"texts": […]}` → `{"vectors": [[…]], "error": ""}`). The frame layer is
+  payload-generic (pinned as such in the versioning plan); V.2's parse
+  schema and this embedding schema are two instances over one transport.
+  Model: nomic-embed-text-v1.5 GGUF (downloaded by `polyflow models pull`,
+  sha256-pinned — the sidecar is the one path with a download, and it is
+  explicit).
 - `internal/semantic/endpoint.go`: OpenAI-compatible `/v1/embeddings` client
   (covers Ollama + hosted APIs).
 - Workspace config: `search.embedder: static | sidecar | endpoint` (+

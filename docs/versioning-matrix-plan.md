@@ -129,7 +129,12 @@ func ResolveToolchain(svcDir string, svcDeps []deps.Dependency) map[Tool]string
 ```
 
 **Sidecar IPC (V.2) — length-prefixed JSON over stdio**, one long-lived pooled
-process per backend, requests serialized per process:
+process per backend, requests serialized per process. **Implement the frame
+layer payload-generic** (`protocol.go`: uint32 length + opaque JSON in both
+directions; pooling and error-fallback live at this layer) with the message
+schema defined per sidecar *type* — the parse schema below is one instance;
+the semantic-search plan's embedding sidecar (`{"texts"}→{"vectors"}`) is
+another and must reuse `protocol.go` unchanged:
 
 ```
 request frame:   uint32 (little-endian byte length) + JSON:
