@@ -76,18 +76,157 @@ normalizers, match strategy, edge type, confidence tiers, same-service policy, h
 source. Loaded like tree-sitter patterns (embedded defaults + workspace-custom),
 version-gateable via the existing `package` / `version_range`.
 
+**Worked example — the complete `contracts/http.yaml` that G.1 must ship.** Every
+field is populated and commented; this is the schema-by-example. Note how the
+nav-link behavior is a second *variant* of the same kind (different `where` gate,
+edge type, and unmatched policy) rather than an engine special case, and how the
+datastar exception generalizes to `skip_unless_meta:<key>` instead of a hardcoded
+enum:
+
 ```yaml
-contract:
-  kind: http
-  producer:
-    node: http_client
-    key: [method, path]
-    method_fallback: [GET, POST, PUT, PATCH, DELETE]   # empty client method
-  consumer: { node: http_handler, key: [method, path] }
-  normalizers: [base_url_strip, query_strip, param_wildcard]
-  match: [exact, normalized, wildcard_anchored]
-  edge: { type: http_call, same_service: skip_unless_datastar }
-  unmatched: unknown_edge   # unknown_edge | ledger | drop (nav_link variant: drop)
+# contracts/http.yaml — ports Linker.Link (API calls + nav-links).
+version: "1"
+contracts:
+  # Variant 1: API calls (fetch/axios/datastar actions → handlers).
+  - kind: http
+    producer:
+      node: http_client
+      where: { nav_link: "" }        # meta gate: absent-or-empty ⇒ not a nav link
+      key: [method, path]            # Meta fields, joined "METHOD path"
+      key_fallbacks:
+        path: [url]                  # Meta["path"] empty → derive from Meta["url"]
+                                     # (url_to_path normalizer does the reduction)
+      method_fallback: [GET, POST, PUT, PATCH, DELETE, ""]  # empty client method:
+                                     # try verbs in this order (candidateMethods parity)
+    consumer:
+      node: http_handler
+      key: [method, path]
+    normalizers:                     # applied in order to each key field
+      [url_to_path, base_url_strip, query_strip, param_wildcard, trim_slash]
+    match: [exact, normalized, wildcard_anchored]  # tiers in order; first hit wins
+    edge:
+      type: http_call
+      id_prefix: link                # edge IDs stay "link:<from>-><to>" (parity!)
+      same_service: skip_unless_meta:datastar   # skip | keep | skip_unless_meta:<key>
+      via_meta: { datastar: datastar_action }   # producer meta key → edge Meta["via"]
+    unmatched: unknown_edge          # visible edge to synthetic unresolved:<svc> node
+
+  # Variant 2: navigation links (href/action) — same channel, different semantics.
+  - kind: http
+    producer:
+      node: http_client
+      where: { nav_link: "true" }
+      key: [method, path]
+      key_fallbacks: { path: [url] }
+    consumer:
+      node: http_handler
+      key: [method, path]
+    normalizers: [url_to_path, query_strip, param_wildcard, trim_slash]
+    match: [exact, normalized, wildcard_anchored]
+    edge:
+      type: navigates_to
+      id_prefix: nav                 # "nav:<from>-><to>"
+      same_service: keep             # a page linking its own routes is the common case
+      via_meta: { nav_link: nav_link }
+    unmatched: drop                  # an unmatched page link is not an API dependency
+```
+
+### Pinned Go surface (G.0 implements exactly this)
+
+These signatures are the G.0 contract — implement them as written so every later
+phase (and every plan that references them: F.0's join, V.1's gating) composes
+without renegotiation. Tier→confidence mapping is fixed: `exact` → `static`,
+`normalized`/`wildcard_anchored` → `inferred`.
+
+```go
+// internal/contract/model.go
+type Kind string // "http" | "amqp" | "kafka" | "nats" | "redis_pubsub" | "sse"
+                 // | "websocket" | "job" | "pusher" | "grpc" | "graphql"
+type Role string // "producer" | "consumer"
+
+// Contract is one node projected onto a channel.
+type Contract struct {
+    Kind    Kind
+    Role    Role
+    Key     string // normalized channel key, e.g. "GET /games/*"
+    RawKey  string // pre-normalization key (exact tier + diagnostics)
+    Service string
+    NodeID  string
+}
+
+// Normalizer transforms one key-field value. Pure function of (value, env):
+// it must NOT read other nodes — contextual enrichment happens before the
+// engine (G.3's meta-enrichment pass).
+type Normalizer func(value string, env NormalizeEnv) string
+
+// NormalizeEnv is the only context a normalizer may condition on. This is
+// how pair-conditioned transforms (base_url_strip) work without breaking
+// purity: the engine evaluates consumer keys per (FromService, ToService).
+type NormalizeEnv struct {
+    FromService string           // producer's service
+    ToService   string           // consumer's service
+    Links       []workspace.Link // hints: base_url, target_service, via/exchange
+}
+
+// RegisterNormalizer wires a named transform (from init()). Load fails fast
+// on an unknown name — a YAML typo must never silently no-op.
+func RegisterNormalizer(name string, fn Normalizer)
+
+type MatchTier string
+const (
+    TierExact            MatchTier = "exact"             // hash join on RawKey
+    TierNormalized       MatchTier = "normalized"        // hash join on Key
+    TierWildcardAnchored MatchTier = "wildcard_anchored" // segment match; ≥1 shared
+                                                         // concrete segment required
+)
+
+type UnmatchedPolicy string
+const (
+    UnmatchedUnknownEdge UnmatchedPolicy = "unknown_edge" // edge → unresolved:<svc>
+    UnmatchedLedger      UnmatchedPolicy = "ledger"       // graph.UnresolvedRef only
+    UnmatchedDrop        UnmatchedPolicy = "drop"         // discard (nav-links)
+)
+
+// Rule is the YAML-mapped shape (see the worked example above).
+type Rule struct {
+    Kind         Kind            `yaml:"kind"`
+    Package      string          `yaml:"package,omitempty"`       // semver gate —
+    VersionRange string          `yaml:"version_range,omitempty"` // patterns.VersionInRange
+    Producer     EndpointSpec    `yaml:"producer"`
+    Consumer     EndpointSpec    `yaml:"consumer"`
+    Normalizers  []string        `yaml:"normalizers"`
+    Match        []MatchTier     `yaml:"match"`
+    Edge         EdgeSpec        `yaml:"edge"`
+    Unmatched    UnmatchedPolicy `yaml:"unmatched"`
+}
+
+type EndpointSpec struct {
+    Node           graph.NodeType      `yaml:"node"`
+    Where          map[string]string   `yaml:"where,omitempty"`         // meta equality; "" ⇒ absent/empty
+    Key            []string            `yaml:"key"`                     // meta fields, joined with " "
+    KeyFallbacks   map[string][]string `yaml:"key_fallbacks,omitempty"` // per-field meta fallbacks
+    MethodFallback []string            `yaml:"method_fallback,omitempty"`
+}
+
+type EdgeSpec struct {
+    Type        graph.EdgeType    `yaml:"type"`
+    IDPrefix    string            `yaml:"id_prefix"`    // edge ID "<prefix>:<from>-><to>" — part of parity
+    SameService string            `yaml:"same_service"` // "skip" | "keep" | "skip_unless_meta:<key>"
+    ViaMeta     map[string]string `yaml:"via_meta,omitempty"` // producer meta key → Meta["via"] value
+}
+
+// internal/contract/loader.go + engine.go
+// Load merges embedded defaults + workspace-custom dir; fails on unknown
+// normalizer names, tiers, or policies.
+func Load(embedded fs.FS, workspaceDir string) ([]Rule, error)
+
+func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) Result
+
+type Result struct {
+    Edges      []graph.Edge          // confidence per the fixed tier mapping
+    Nodes      []graph.Node          // synthetic targets (unresolved:<svc>)
+    Unresolved []graph.UnresolvedRef // one per UnmatchedLedger miss
+}
 ```
 
 **Normalizer library** (reusable, referenced by name): `param_wildcard`

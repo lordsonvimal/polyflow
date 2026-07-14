@@ -94,6 +94,57 @@ Shared infrastructure across A and B:
    by `polyflow doctor` (shared with the contract-kind coverage from
    contract-matching phase G.5) and in `status`.
 
+### Pinned Go surface (V.0/V.2 implement exactly this)
+
+```go
+// internal/toolchain/registry.go (V.0)
+type Tool string // "go" | "javascript" | "typescript" | "templ" | "datastar"
+                 // | "html" | "ruby"
+
+// Backend is one registry row: a version range mapped to EITHER a rule/pattern
+// variant (mechanism A) OR a sidecar build (mechanism B) — never both.
+type Backend struct {
+    VersionRange   string // semver expr, evaluated via patterns.VersionInRange
+    RuleVariant    string // pattern/contract variant id; "" when sidecar'd
+    SidecarBackend string // sidecar build id;            "" when rule-gated
+}
+
+// Registry: ordered rows per tool; first satisfied range wins. No row
+// satisfied → nearest-NEWEST backend + confidence=inferred + coverage note
+// (the fail-safe — never an error, never silent).
+type Registry map[Tool][]Backend
+
+// Selection outcome, stamped into graph meta (profile_used/backend_version).
+type Selection struct {
+    Tool     Tool
+    Version  string // resolved from the target project
+    Backend  Backend
+    Inferred bool   // true when nearest-fallback was used
+}
+
+// internal/toolchain/resolve.go (V.0) — extends deps.Resolve for
+// runtime/language versions (go directive, typescript dep, a-h/templ,
+// datastar-go, …). HTML is the constant "living".
+func ResolveToolchain(svcDir string, svcDeps []deps.Dependency) map[Tool]string
+```
+
+**Sidecar IPC (V.2) — length-prefixed JSON over stdio**, one long-lived pooled
+process per backend, requests serialized per process:
+
+```
+request frame:   uint32 (little-endian byte length) + JSON:
+  {"file": "views/board.templ", "content_b64": "<base64 source>",
+   "tool": "templ", "version": "0.3.1020"}
+
+response frame:  uint32 (little-endian byte length) + JSON:
+  {"nodes": [graph.Node…], "edges": [graph.Edge…],
+   "unresolved": [graph.UnresolvedRef…], "error": ""}
+```
+
+A non-empty `error` (or a dead/missing sidecar) triggers the graceful
+in-process fallback + a coverage note — a sidecar failure must never abort an
+index run or silently drop a file.
+
 ---
 
 ## Phases (one commit each)

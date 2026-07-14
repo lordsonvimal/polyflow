@@ -73,13 +73,67 @@ Edge {
 `inferred` (static normalized) > `candidate` (static-only / llm) > `unknown`.
 
 **Evidence providers** are pluggable behind one interface so adding a source is
-additive, never core surgery:
+additive, never core surgery.
+
+### Pinned Go surface (F.0 implements exactly this)
+
+These signatures are the F.0 contract — every provider phase (F.1–F.3, the
+runtime plan's R.1) and the reconciler build against them as written:
 
 ```go
-type EvidenceProvider interface {
-    Name() string                    // static | contract | runtime | config | llm
-    Collect(ctx, workspace) (nodes []graph.Node, edges []graph.Edge, unresolved []graph.UnresolvedRef)
+// internal/evidence/provider.go
+type Provider interface {
+    Name() string // "static" | "contract" | "runtime" | "config" | "llm"
+    // Collect returns evidence normalized to contract-engine channel keys.
+    // A provider with nothing to say returns empty Evidence, not an error
+    // (graceful degradation is the contract).
+    Collect(ctx context.Context, ws *workspace.WorkspaceConfig) (Evidence, error)
 }
+
+type Evidence struct {
+    Nodes      []graph.Node          // synthetic service-level endpoints allowed
+    Edges      []graph.Edge          // Sources[] populated by the provider
+    Unresolved []graph.UnresolvedRef // provider-specific ledger entries
+}
+
+// internal/graph/model.go additions (F.0 — SchemaVersion bump)
+type SourceRef struct {
+    Provider   string `json:"provider"`   // Provider.Name() value
+    Confidence string `json:"confidence"` // ladder value (below)
+    // Ref is provider-specific provenance:
+    //   static:   "file.go:42"
+    //   contract: "openapi.yaml#getGame"
+    //   runtime:  "<session>/<trace_id>"
+    //   config:   "k8s/deploy.yaml#env.API_URL"
+    Ref        string `json:"ref,omitempty"`
+    ObservedAt int64  `json:"observed_at,omitempty"` // runtime only, unix seconds
+}
+
+// graph.Edge gains exactly three fields:
+//   Sources             []SourceRef `json:"sources,omitempty"`
+//   VerificationState   string      `json:"verification_state,omitempty"`
+//   VerifiedGranularity string      `json:"verified_granularity,omitempty"` // "channel" | "site"
+// Back-compat: F.0 wraps today's pipeline so every existing edge carries a
+// single static SourceRef; an edge with no Sources is a schema error, not a
+// default.
+
+// Verification states — pinned strings.
+const (
+    StateVerified        = "verified"
+    StateCandidate       = "candidate"
+    StateObservedOnlyGap = "observed_only_gap"
+    StateConflicting     = "conflicting"
+)
+
+// Confidence ladder additions. The existing edge-confidence constants
+// (static | inferred | partial | unknown) are UNCHANGED — note the naming
+// collision: Confidence "static" (a literal string match) is unrelated to
+// Provider "static"; do not conflate them.
+const (
+    ConfidenceObserved  = "observed"  // runtime evidence
+    ConfidenceDeclared  = "declared"  // contract/IDL evidence
+    ConfidenceCandidate = "candidate" // llm or static-only-unconfirmed
+)
 ```
 
 Each provider emits edges already normalized to the **same channel key** the
