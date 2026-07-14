@@ -269,11 +269,13 @@ language repeats; Python phases below are its first instantiation):
    a 2-service `testdata/` fixture proving cross-service linking.
 6. Eval: one corpus repo using the language (Tier E) — breadth without a
    measured recall number doesn't count.
-7. Dynamic-key walker (contract-matching G.6): the language's
-   branch-enumeration/constant-resolution walker for producer keys
-   (ternary/if/switch shapes), emitting the shared `key_candidates`/
-   `key_dynamic` meta — without it, computed URLs/topics in the new
-   language are silent gaps.
+7. Dynamic-key walker + indirection idioms (contract-matching G.6/G.7):
+   the language's branch-enumeration/constant-resolution walker for
+   producer keys (ternary/if/switch shapes) emitting the shared
+   `key_candidates`/`key_dynamic` meta, plus its alias/instance/wrapper
+   idiom patterns (client-instance creation, method aliasing) — without
+   them, computed or indirected URLs/topics in the new language are
+   silent gaps.
 
 ### Phase L.P0 — Python grammar + core patterns `pending`
 
@@ -346,15 +348,24 @@ is written as route *helpers* (`link_to "Reports", reports_path`), never
 literal URLs, and no helper→path resolution exists.
 
 **Deliverable.**
-- `internal/parser/erb.go` registering `.erb` (covers `.html.erb`): split via
-  the tree-sitter embedded-template grammar into HTML ranges (run the
-  existing html patterns: nav links, events) and embedded Ruby ranges (run
-  the ruby patterns), line-number-corrected to the original file.
-- **Route-helper map:** `rails_routes.yaml` already parses `routes.rb` —
+- `internal/parser/erb.go` registering `.erb` (covers `.html.erb` —
+  `filepath.Ext` returns `.erb`): a **hand-rolled ERB splitter**, NOT a
+  tree-sitter grammar — the pinned `smacker/go-tree-sitter` module ships no
+  embedded-template/ERB grammar (verified against the module's grammar
+  inventory), and the delimiters (`<% %>`, `<%= %>`, `<%# %>`) are trivially
+  scannable (~50 lines; `templ.go` precedents custom parsing). Blank the ERB
+  tags in place (preserve byte offsets) and run the html patterns over the
+  result; run the ruby patterns over the concatenated embedded-Ruby ranges
+  with line-number correction back to the original file.
+- **Route-helper map:** `rails_routes.yaml` already captures the raw
+  material (`http_verb_route`, `resources_route`, `namespace_route`) —
   build per-service `helper name → (method, path)` (`reports_path` →
   `GET /reports`, `report_path(x)` → `GET /reports/:id`, `_url` variants;
   RESTful `resources`/`resource` + explicit `get/post/...` entries).
-  Non-derivable helpers (custom constraints, engine mounts) → ledger
+  **In-scope pattern extension:** `member do`/`collection do` blocks are NOT
+  captured today — add captures for them to `rails_routes.yaml` (they are
+  the source of common helpers like `archive_report_path`). Everything else
+  non-derivable (custom constraints, engine mounts, `concern`) → ledger
   (`rails_helper_unresolved`), never guessed.
 - **Nav extraction:** `link_to`, `button_to`, `form_with(url:/model:)`,
   `form_for` in ERB/Ruby emit `http_client` nodes with `nav_link`/resolved
@@ -393,7 +404,12 @@ islands exactly where legacy apps concentrate their wiring.
 - **Inline handlers:** event attributes in html/erb/templ
   (`onclick="save()"`, `onsubmit="App.submit(this)"`) extract the callee
   path and resolve through the same table → `calls` edge from the element's
-  listener node to the function.
+  listener node to the function. HTML extraction already exists
+  (`patterns/html/events.yaml` `dom_event_attr` captures the handler
+  string); ERB inherits it via L.W0's html-range parsing; **templ does not
+  extract event attributes today** (recorded in the U.3 outcome note) —
+  adding that extraction to `internal/parser/templ.go` is part of this
+  phase, not assumed.
 
 **Tests.** Two-file window-assign + bare call → linked; collision → two
 candidate edges + ledger; inline handler → cross-file `calls` edge;
@@ -430,6 +446,11 @@ UI→handler chain never closes outside templ.
   index `(service, id|class) → element node` built from **all** template
   sources — templ (existing), HTML, JSX/TSX (`id=`/`className=`), ERB
   (via L.W0) — replacing the templ-only seam in `LinkDOMDefinitions`.
+  **Node type pinned:** a new generic `NodeTypeElement = "element"` with the
+  `Language` field distinguishing the source (templ/html/jsx/erb);
+  `LinkDOMDefinitions`' `templ_element` minting migrates to it and
+  `NodeTypeTemplElement` is kept as a deprecated alias for stored graphs
+  (the job_enqueue/sidekiq_enqueue precedent). `SchemaVersion` bump.
   jQuery/`querySelector` selector strings parsed for the simple forms
   (`#id`, `.class`, `tag.class`); a class matching N elements emits
   `defined_in` edges to **all N** (`inferred` — recall over precision);

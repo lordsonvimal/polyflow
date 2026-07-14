@@ -393,6 +393,84 @@ three topics yields three `publishes` edges; a computed fetch URL yields a
 coverage (G.5) gains a `dynamic` column so the surfaced-but-unlinked count is
 tracked per kind.
 
+### Phase G.7 — Producer aliasing, instances & wrappers (all kinds, all languages) `pending`
+
+**Problem.** Every producer pattern matches the API's **canonical call shape
+by name** — `fetch(...)`, `axios.get(...)`, `$.ajax(...)` — so any
+indirection makes the producer invisible, usually with **no ledger entry**
+(the worst failure mode). Verified loopholes:
+
+- **Direct alias:** `var a = $.ajax; a({url: "/x"})` — matches nothing; at
+  best a `call_ref` to the variable, never an `http_client`.
+- **Destructured method:** `const { post } = axios; post("/x")` — nothing.
+- **Instance creation:** `const api = axios.create({baseURL: "/api/v1"});
+  api.get("/users")` — `axios_create_instance` *captures* the instance
+  (`patterns/javascript/axios.yaml`) but the `axios_instance` role is
+  **consumed nowhere** (dead capture, verified), and `axios_request`
+  requires the literal identifier `axios` — instance calls are invisible.
+  Same class: Ruby `Faraday.new(url:)`, Go `resty.New().SetBaseURL(...)`.
+- **Wrapper functions:** `function api(path) { return fetch(BASE + path) }`
+  — the inner fetch surfaces as `dynamic_url` (G.6) but the literal at the
+  call site `api("/orders")` is never propagated: *linkable but unlinked*.
+- **Returned callers / factories:** `function client() { return $.ajax }`,
+  `makeClient(base)` returning a closure — invisible.
+
+The same indirections apply to every producer kind: publishers
+(`const send = producer.send`, a `publish_event(topic)` wrapper), job
+enqueuers, pusher triggers — this phase is kind-agnostic by construction.
+
+**Deliverable.**
+
+1. **Alias table (per service, per language).** Reusing the
+   variable/constant tracking machinery: single-assignment bindings whose
+   value is (i) a producer function reference (`$.ajax`, `fetch`,
+   `axios.post`, destructured), or (ii) a **producer instance** created by a
+   registered instance idiom (`axios.create`, `Faraday.new`,
+   `resty.New()` — each an `instance` pattern role with an optional
+   `base_url`/config literal), map alias/instance name → (producer kind,
+   base key prefix). Calls through a mapped name are re-matched against the
+   original producer pattern shape, emitting standard producer nodes — the
+   contract engine and rules are untouched; existing dead captures
+   (`axios_instance`) become consumed. **Reassigned names → dynamic**:
+   a name bound more than once is never resolved
+   (`alias_reassigned` ledger), no guessing.
+2. **One-hop wrapper resolution.** A function whose body contains exactly
+   one producer call whose key derives from its parameters (identity or
+   literal-concat, e.g. `BASE + path`) is marked a **producer wrapper**
+   (meta on the function node). Each call site with literal (or
+   G.6-enumerable) arguments projects to a producer node with the composed
+   key (`via=wrapper`, confidence `inferred`); non-literal call-site args →
+   `key_dynamic` on the call site. Depth capped at **one hop** —
+   wrappers-of-wrappers and factory-returned closures → ledger
+   (`wrapper_depth` / `factory_dynamic`), surfaced never guessed. Wrapper
+   detection reuses the existing per-file scope attribution; cross-file
+   wrapper calls resolve through imports (existing) and globals (L.W1).
+3. **Ledger kinds** (extend `UnresolvedRef.Kind`): `alias_reassigned`,
+   `wrapper_depth`, `factory_dynamic`, plus per-kind `instance_unresolved`
+   (instance created with non-literal config). Doctor's G.5/G.6 coverage
+   table gains an `indirect` column (resolved-via-alias/wrapper counts) so
+   the win is measurable.
+4. **Per-language instance/alias idiom patterns** (additive YAML, one file
+   per idiom like today): JS/TS (`axios.create`, bare re-exports), Ruby
+   (`Faraday.new`, `Net::HTTP.new`), Go (`resty.New`, `http.Client{}`
+   with helper methods — Go's SSA pass already resolves most method values;
+   reuse it, don't duplicate). New languages inherit the requirement via
+   the Tier L checklist.
+
+**Tests.** Per language: alias fixture (`var a = $.ajax` → cross-service
+`http_call` asserted), destructuring fixture, instance fixture
+(`axios.create({baseURL})` + `api.get` → linked with base prefix applied),
+wrapper fixture (`api("/orders")` → composed-key edge `via=wrapper`),
+publisher-alias fixture (kind-agnosticism proven). Negatives: reassigned
+alias → ledger not link; two producer calls in one wrapper → not a wrapper
+(ledger); factory closure → `factory_dynamic`.
+
+**Acceptance.** The verified loopholes above all produce either a linked
+cross-service edge or a named ledger entry — zero silent cases; the doctor
+`indirect` column reports how many producers each repo reaches only through
+aliases/wrappers (on chessleap: expected ~0; on the legacy-web eval repo:
+expected substantial).
+
 ---
 
 ## Key files
@@ -448,7 +526,9 @@ of the same engine later (each contract rule becomes version-gateable).
 ```
 G.0 ─> G.1 ─> G.2 ─> G.3
                  ├─> G.4 ─> G.5   (each new kind = rules + fixture, no engine change)
-                 └─> G.6          (dynamic keys: needs the engine + ported kinds;
-                                   coverage widens automatically as G.4 adds kinds —
-                                   walkers key on meta fields, not on rules)
+                 └─> G.6 ─> G.7   (dynamic keys, then alias/instance/wrapper
+                                   indirection; both widen automatically as G.4
+                                   adds kinds — they key on meta fields/roles,
+                                   not on rules. G.7's cross-file wrapper calls
+                                   also benefit from L.W1 globals)
 ```
