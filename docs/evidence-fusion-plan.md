@@ -153,13 +153,16 @@ nodes+edges tagged `source=contract`, normalized to channel keys. Deterministic 
 `verified` when static agrees, `observed_only_gap` when only the contract knows. One
 fixture per format (2-service). Highest determinism-per-effort.
 
-### Phase F.2 — Runtime trace-ingestion source + CI capture `pending`
-`internal/evidence/trace_ingest/{otlp.go,span_map.go}` reads OTLP spans (a trace dump
-file, or a collector endpoint) → edges from span causality + context propagation,
-`source=runtime`, `confidence=observed`. A `polyflow capture` helper runs the target's
-e2e/test suite with OTel enabled and records the trace, so runtime evidence is a
-repeatable local step (no prod access). Optional `ebpf.go` mesh adapter. Fixture: a
-captured trace JSON → edges, incl. one **observed-only** edge static missed.
+### Phase F.2 — Runtime trace-ingestion source + capture sessions `pending`
+**Expanded into its own plan: `docs/runtime-flow-plan.md` (phases R.0–R.5).**
+Summary: OTLP is the single intake seam (file ingest + an embedded OTLP receiver);
+capture is session-based — `polyflow capture start/stop` for **partial** captures
+(the user exercises just the flows they care about) and `capture run -- <cmd>` for
+**full** e2e captures — with sessions as additive union (a partial capture can never
+downgrade an edge). Span→channel-key mapping, SSE connection edges, async span-link
+causality, the ingest ledger, and per-stack instrumentation recipes are all specified
+there. Fixture: a captured trace JSON → edges, incl. one **observed-only** edge
+static missed.
 
 ### Phase F.3 — Config/IaC resolution source `pending`
 `internal/evidence/config_resolve/{env.go,k8s.go,terraform.go}`. Resolve dynamic
@@ -263,5 +266,5 @@ versioning-matrix:  V.0 ─> V.1 …            (independent; fidelity of the st
 ```
 - **F.0 depends on the contract engine** (shared channel key).
 - **F.1–F.3 are independent sources** — land in any order; each is additive, gated on/off
-  per workspace.
+  per workspace. **F.2 expands to phases R.0–R.5** in `docs/runtime-flow-plan.md`.
 - **F.4 needs ≥2 sources** to show verified/gap deltas; **F.5 is optional.**

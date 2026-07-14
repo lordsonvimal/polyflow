@@ -1,8 +1,8 @@
 # Polyflow — Per-Phase Process
 
 The phase plans (`docs/agent-context-plan.md`, `docs/contract-matching-plan.md`,
-`docs/versioning-matrix-plan.md`, `docs/evidence-fusion-plan.md`) all follow this
-process. The original gap-closing plan that carried these rules is complete and was
+`docs/versioning-matrix-plan.md`, `docs/evidence-fusion-plan.md`,
+`docs/runtime-flow-plan.md`) all follow this process. The original gap-closing plan that carried these rules is complete and was
 removed; this doc keeps the rules themselves.
 
 Status legend used in every plan: `pending` · `in progress` · `done (commit <sha>)`.
