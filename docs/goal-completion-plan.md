@@ -20,7 +20,9 @@ trustworthy blast radius on any repo** — and to prove it:
 
 - **Tier A** — agents must *see* the new truth (provenance in query outputs).
 - **Tier E** — the goal needs a *metric* (ground-truth recall evaluation).
-- **Tier L** — "any repo" needs more *languages* (Python first).
+- **Tier L** — "any repo" needs more *languages* (Python first) **and the
+  legacy-web idioms** real projects wire flows through (ERB views, `window`
+  globals, jQuery — the L.W phases).
 - **Tier D** — the self-improving loop needs an *operator workflow*.
 - **Tier C** — the graph must stay *fresh* (CI + staleness).
 - **Tier S** — humans and agents need *natural-language retrieval* of nodes
@@ -327,6 +329,124 @@ Tier E with ≥15 cases.
 *(Java/C#/PHP repeat L.P0–L.P3 as future phases via the same checklist; do
 not start a second language before the Python eval number exists.)*
 
+### Legacy-web phases (L.W) — ERB, global JS, jQuery
+
+*Breadth is not only new languages: complex legacy projects wire their flows
+through ERB views, `window` globals, and jQuery — idioms the audit (2026-07)
+showed are partially or wholly invisible today. These phases close that class.
+L.W1/L.W2 need only current infra; L.W0's nav half feeds the http contract
+rule (G.1); dynamic values ride G.6's walkers.*
+
+### Phase L.W0 — ERB templates + Rails route-helper navigation `pending`
+
+**Problem.** `.erb` has no registered parser (parser.go registry: only
+`.go/.html/.htm/.js/.ts/.jsx/.tsx/.mjs/.rb/.rake/.templ`) — Rails views
+produce **zero nodes, not even ledger entries**. And even parsed, Rails nav
+is written as route *helpers* (`link_to "Reports", reports_path`), never
+literal URLs, and no helper→path resolution exists.
+
+**Deliverable.**
+- `internal/parser/erb.go` registering `.erb` (covers `.html.erb`): split via
+  the tree-sitter embedded-template grammar into HTML ranges (run the
+  existing html patterns: nav links, events) and embedded Ruby ranges (run
+  the ruby patterns), line-number-corrected to the original file.
+- **Route-helper map:** `rails_routes.yaml` already parses `routes.rb` —
+  build per-service `helper name → (method, path)` (`reports_path` →
+  `GET /reports`, `report_path(x)` → `GET /reports/:id`, `_url` variants;
+  RESTful `resources`/`resource` + explicit `get/post/...` entries).
+  Non-derivable helpers (custom constraints, engine mounts) → ledger
+  (`rails_helper_unresolved`), never guessed.
+- **Nav extraction:** `link_to`, `button_to`, `form_with(url:/model:)`,
+  `form_for` in ERB/Ruby emit `http_client` nodes with `nav_link`/resolved
+  `method`+`path` meta — flowing through the **same http contract rule**
+  (G.1 worked example) with zero engine changes. Conditional helper choices
+  ride G.6's Ruby walker (candidates); computed ones → `dynamic_url`.
+
+**Tests.** ERB fixture (link_to, form_with, inline `onclick=`, embedded Ruby
+call); helper-map unit tests (RESTful member/collection, namespace, explicit
+verbs; unmappable → ledger); negative: `.erb` with only static HTML parses
+via the html patterns.
+
+**Acceptance.** A Rails fixture app's `link_to reports_path` yields a
+`navigates_to` edge to the `GET /reports` route/controller action; the view
+file appears in `impact` for that controller.
+
+### Phase L.W1 — Global/window symbol resolution + inline handlers `pending`
+
+**Problem.** Cross-file JS resolution is **import-map-only** (Phase 0.3).
+Legacy code has no imports: `window.App = {…}` is not a declaration anywhere,
+`App.save()` in another file lands as an unresolved `call_ref` (surfaced but
+unlinked), and `onclick="save()"` in a template can never reach the file that
+assigned `window.save`. The graph stays honest but fragments into per-file
+islands exactly where legacy apps concentrate their wiring.
+
+**Deliverable.**
+- **Extraction:** `window.X = fn|{…}` assignments and top-level function
+  declarations in non-module scripts (no import/export in file) stamp
+  `Meta["global_symbol"]` on the declaring node.
+- **Linker pass** (`js_linker`): per-service global symbol table
+  (name → node); resolution order pinned: imports first (existing behavior
+  unchanged), then globals, confidence `inferred`, `Meta["via"]="global"`.
+  Name collisions (same global defined in two files): emit candidate edges
+  to **each** definition (`via=global_ambiguous`, recall over precision) +
+  a `global_collision` ledger entry — never pick one silently.
+- **Inline handlers:** event attributes in html/erb/templ
+  (`onclick="save()"`, `onsubmit="App.submit(this)"`) extract the callee
+  path and resolve through the same table → `calls` edge from the element's
+  listener node to the function.
+
+**Tests.** Two-file window-assign + bare call → linked; collision → two
+candidate edges + ledger; inline handler → cross-file `calls` edge;
+negative: a file with imports does NOT get global fallback for names its
+imports already explain.
+
+**Acceptance.** On a legacy fixture, `onclick="save()"` reaches the
+`window.save` definition in another file; the service's unresolved
+`call_ref` count drops by the number of newly-resolved globals (asserted).
+
+### Phase L.W2 — jQuery/AJAX cross-service links + selector→DOM-node linking `pending`
+
+**Problem.** Three verified holes in `patterns/javascript/jquery.yaml` and
+the DOM seam: (1) `$.ajax({url: "/save", method: "POST"})` — the dominant
+real-world form — captures the whole options object as `@url`, extracting
+nothing; (2) delegation `$(document).on("click", ".item", handler)`
+mis-captures the selector string as the handler; (3) selector→element
+linking (`LinkDOMDefinitions`, T.5) resolves only **templ** elements — a
+jQuery selector over HTML/ERB/JSX markup links to nothing, so the cross-file
+UI→handler chain never closes outside templ.
+
+**Deliverable.**
+- **AJAX, cross-service:** fix the direct-arg query; add the options-object
+  form (extract `url` + `method`/`type` keys), `$(el).load("/url")`, and
+  shorthand data forms — all emitting standard `http_client` nodes so they
+  flow through the http contract rule and come out as **cross-service
+  `http_call` edges** with full machinery: `base_url`/`target_service`
+  hints, tiered matching, G.6 `key_candidates` for conditional URLs,
+  `dynamic_url` ledger for computed ones. No engine changes.
+- **Event coverage:** delegation captured correctly (event, *delegated
+  selector as the dom target*, handler as handler); shorthand
+  `.click/.submit/.change/.on` chains on selector results.
+- **Selector→DOM-node linking, generalized:** one shared element-definition
+  index `(service, id|class) → element node` built from **all** template
+  sources — templ (existing), HTML, JSX/TSX (`id=`/`className=`), ERB
+  (via L.W0) — replacing the templ-only seam in `LinkDOMDefinitions`.
+  jQuery/`querySelector` selector strings parsed for the simple forms
+  (`#id`, `.class`, `tag.class`); a class matching N elements emits
+  `defined_in` edges to **all N** (`inferred` — recall over precision);
+  complex selectors (descendant combinators, attribute/pseudo selectors)
+  → `selector_dynamic` ledger entry, never guessed.
+
+**Tests.** Options-object `$.ajax` fixture across two services asserting the
+cross-service `http_call` edge; delegation capture test (handler is the
+function, target is the selector); shorthand forms; selector fixtures
+against html/jsx/erb elements (multi-match → N edges); complex-selector
+negative → ledger; a legacy-web repo case added to the Tier E corpus.
+
+**Acceptance.** The goal-closing chain on a legacy fixture:
+`route → erb view → #save-btn element → delegated click handler →
+$.ajax({url}) → cross-service backend route` closes end-to-end in
+`polyflow trace`, with every hop's confidence labeled.
+
 ---
 
 ## Tier D — Self-improving loop, operationalized
@@ -488,7 +608,7 @@ impact query with no undocumented step.
         │                                            │
 Tier A: A.1 ─> A.2 ─> A.3                Tier E: E.1 ─> E.2 ─> E.3 ──┐
         │                                            │               │ gate for
-Tier D: D.1 ─> D.2                       Tier L: L.P0 ─> L.P1 ─> L.P2 ─> L.P3
+Tier D: D.1 ─> D.2                       Tier L: L.P0 ─> L.P1 ─> L.P2 ─> L.P3 · L.W0 ─> L.W1 ─> L.W2 (legacy web)
         │                                                             │
 Tier C: C.1 (anytime after 2.1) · C.2 (after R.2)                    │
         │                                                             │
