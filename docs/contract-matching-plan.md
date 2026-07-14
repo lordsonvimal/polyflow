@@ -98,6 +98,8 @@ contracts:
                                      # (url_to_path normalizer does the reduction)
       method_fallback: [GET, POST, PUT, PATCH, DELETE, ""]  # empty client method:
                                      # try verbs in this order (candidateMethods parity)
+      target_service_meta: target_service  # when set on the node (by ApplyHints),
+                                     # only consumers of that service are candidates
     consumer:
       node: http_handler
       key: [method, path]
@@ -118,6 +120,7 @@ contracts:
       where: { nav_link: "true" }
       key: [method, path]
       key_fallbacks: { path: [url] }
+      target_service_meta: target_service  # shared lookup path in Linker.Link
     consumer:
       node: http_handler
       key: [method, path]
@@ -206,6 +209,12 @@ type EndpointSpec struct {
     Key            []string            `yaml:"key"`                     // meta fields, joined with " "
     KeyFallbacks   map[string][]string `yaml:"key_fallbacks,omitempty"` // per-field meta fallbacks
     MethodFallback []string            `yaml:"method_fallback,omitempty"`
+    // TargetServiceMeta (producer side) names a producer meta key whose
+    // value, when non-empty, restricts matching to consumers of that
+    // service — Linker.Link's target_service behavior; ApplyHints stamps
+    // the meta from workspace hint:/base_url: links. Without this field
+    // the engine cannot reproduce hinted-workspace parity.
+    TargetServiceMeta string `yaml:"target_service_meta,omitempty"`
 }
 
 type EdgeSpec struct {
@@ -256,10 +265,14 @@ engine, not a normalizer.
 golden-graph harness (snapshot chessleap edges). Engine unused → no behaviour change.
 
 ### Phase G.1 — Port HTTP `pending`
-`contracts/http.yaml` reproduces `Linker.Link` + `LinkRouteHandlers` (datastar
-same-service exception, nav-link, base_url, query-strip, wildcard-anchor). Assert
-**edge-identical** to old on chessleap + linker unit tests; then delete
-`Linker.Link`/`LinkRouteHandlers`.
+`contracts/http.yaml` reproduces `Linker.Link` (datastar same-service exception,
+nav-link, base_url + target_service hints, query-strip, wildcard-anchor) — the
+worked example above **is** this phase's rule file. `LinkRouteHandlers` is **not**
+ported: it is name resolution (handler meta → same-service function *label*, with
+receiver stripping), not producer/consumer channel matching, and the rule schema
+deliberately cannot express label-keyed matching — it stays a structural linker
+alongside `LinkDatastores` (see Risks). Assert **edge-identical** to old on
+chessleap + linker unit tests; then delete `Linker.Link` only.
 
 ### Phase G.2 — Port messaging/eventing `pending`
 `contracts/{amqp,hub,jobs,pusher,sse,websocket}.yaml`; parity-gate each; delete the
@@ -329,9 +342,10 @@ Workspace-custom rule dir (recompile-free); `polyflow doctor` prints per-kind co
 
 ## Risks / honest notes
 
-- **Not everything is a contract.** `LinkDatastores` (call-site→service store) and the JS
-  import linker (within-service) are structural, not producer/consumer matching — keep
-  them out of the engine (documented), don't force-fit.
+- **Not everything is a contract.** `LinkRouteHandlers` (route → handler-function
+  name resolution by label), `LinkDatastores` (call-site→service store) and the JS
+  import linker (within-service) are structural, not producer/consumer matching —
+  keep them out of the engine (documented), don't force-fit.
 - **YAML expressiveness ceiling.** Non-key-equality matching (e.g. GraphQL schema
   stitching) may need a new match-strategy/normalizer in Go — bounded escape hatch,
   still declared by name in the rule.

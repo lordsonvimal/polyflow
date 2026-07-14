@@ -187,7 +187,8 @@ edges by `(kind, key, from_service, to_service)`:
 **Ingest ledger.** Every span that cannot be mapped lands in the ledger with a
 reason — `unknown_service`, `no_route_or_path`, `unsupported_span_kind`,
 `malformed`, `no_causality` — reported by `polyflow flows` and the F.4/doctor
-coverage output. Kinds extend `graph.UnresolvedRef.Kind`.
+coverage output. Persisted as `graph.UnresolvedRef`s with `otlp_`-prefixed kinds
+(exact field mapping pinned on `IngestLedgerEntry` below).
 
 ### Pinned Go types (R.0/R.1 implement exactly this)
 
@@ -229,6 +230,14 @@ type FlowRef struct {
     CodeFunc   string // from code.function
 }
 
+// IngestLedgerEntry persists through the existing unresolved_refs store as a
+// graph.UnresolvedRef with this pinned mapping (R.0 must not improvise —
+// UnresolvedRef's fields are required and spans have no file/line):
+//   Service: mapped polyflow service ("unknown" when unmapped)
+//   File:    ".polyflow/captures/<session>/spans.otlp.json"
+//   Line:    0
+//   Name:    "<trace_id>/<span_id>"
+//   Kind:    "otlp_" + Reason   (e.g. "otlp_unknown_service")
 type IngestLedgerEntry struct {
     Session, TraceID, SpanID string
     Reason                   string // unknown_service | no_route_or_path |
@@ -267,7 +276,10 @@ Expected R.1 output for this fixture — exactly one flow record:
 ```go
 FlowRecord{
     Kind: "http", Key: "GET /games/*",     // http.route "/games/:id" → param_wildcard
-    FromService: "web", ToService: "api",  // via evidence.runtime.service_names mapping
+    FromService: "web", ToService: "api",  // service.name matches workspace names
+                                           // directly here — NO mapping exercised;
+                                           // the service_names mapping has its own
+                                           // fixture (http_2svc_mapped, R.1 tests)
     Causality: "parent_child",
     Refs: []FlowRef{{Session: "<session>", TraceID: "5b8efff798038103d269b633813fc60c",
                      ObservedAt: 1752480000}},
@@ -327,6 +339,9 @@ F.0 substrate can join.
 
 **Tests.** Unit tests per mapping rule (route-pattern preference over
 url.path, old-vs-new semconv attribute names, unknown service → ledger).
+Mapping fixture `http_2svc_mapped.otlp.json`: `service.name=chessleap-api`
+resolved to workspace service `api` via `evidence.runtime.service_names`
+(the base `http_2svc` fixture deliberately needs no mapping).
 Fixture: 2-service trace where one flow matches a static edge (→ `verified`,
 `channel`) and one matches nothing (→ `observed_only_gap` + synthetic
 endpoint nodes). Granularity guard: two static call sites on one channel +
