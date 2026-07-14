@@ -267,6 +267,11 @@ language repeats; Python phases below are its first instantiation):
    a 2-service `testdata/` fixture proving cross-service linking.
 6. Eval: one corpus repo using the language (Tier E) — breadth without a
    measured recall number doesn't count.
+7. Dynamic-key walker (contract-matching G.6): the language's
+   branch-enumeration/constant-resolution walker for producer keys
+   (ternary/if/switch shapes), emitting the shared `key_candidates`/
+   `key_dynamic` meta — without it, computed URLs/topics in the new
+   language are silent gaps.
 
 ### Phase L.P0 — Python grammar + core patterns `pending`
 

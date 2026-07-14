@@ -222,7 +222,10 @@ static missed.
 `internal/evidence/config_resolve/{env.go,k8s.go,terraform.go}`. Resolve dynamic
 endpoint/topic/queue strings from config → *upgrades* static `candidate`/`unknown`
 edges to resolved keys (`source=config`). Turns `@post(url)` /
-`publish(cfg.Topic)` from unresolved into linked.
+`publish(cfg.Topic)` from unresolved into linked. The upgrade targets are
+exactly the producers contract-matching G.6 stamps `key_dynamic=true` (with
+`dynamic_<kind>` ledger entries) — resolve those first; a resolved producer
+clears its ledger entry.
 
 ### Phase F.4 — Fusion, reconciliation report + doctor coverage `pending`
 `reconcile.go` finalizes `verification_state` across all providers; conflicts surfaced.

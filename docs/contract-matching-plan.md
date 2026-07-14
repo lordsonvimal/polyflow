@@ -131,7 +131,9 @@ contracts:
       id_prefix: nav                 # "nav:<from>-><to>"
       same_service: keep             # a page linking its own routes is the common case
       via_meta: { nav_link: nav_link }
-    unmatched: drop                  # an unmatched page link is not an API dependency
+    unmatched: drop                  # an unmatched LITERAL page link is not an app
+                                     # flow (external URL/typo). Dynamic nav keys are
+                                     # never dropped — they reach the ledger (G.6)
 ```
 
 ### Pinned Go surface (G.0 implements exactly this)
@@ -309,6 +311,88 @@ changes** (only YAML added). `SchemaVersion` bump for new edge/node kinds.
 Workspace-custom rule dir (recompile-free); `polyflow doctor` prints per-kind coverage
 (matched / unresolved); surface the ledger in `status`.
 
+### Phase G.6 — Dynamic producer keys: branch enumeration + surfacing (all kinds, all languages) `pending`
+
+**Problem.** Every producer key today is captured only when it is a **string
+literal at the call/attribute site** — the tree-sitter queries require a
+string node (e.g. `patterns/jsx/nav_links.yaml` matches
+`(string (string_fragment))` only). Real code computes channel keys three
+ways, and this affects **every** producer kind identically — a URL in an
+`<a href>`, a fetch/axios/net-http URL, an AMQP exchange/routing key, a
+Kafka/NATS topic, a job queue name, a pusher channel/event, a websocket
+message type:
+
+- **(a) Finite conditionals over literals** — `cond ? "/admin" : "/dashboard"`,
+  Go `if/else`/`switch` assigning a topic, Ruby ternaries, a map/object lookup
+  with literal values. *Decidable by enumeration* — missing these is a pure
+  extraction gap, not an analysis limit.
+- **(b) Local constant references** — `publish(ORDERS_TOPIC)` where
+  `const ORDERS_TOPIC = "orders.created"` is in scope. Resolvable via the
+  existing constant/variable tracking (`patterns/go/constants.yaml`, the JS
+  variable extractor).
+- **(c) Genuinely dynamic** — built from request data, function returns,
+  runtime config. *Undecidable*; the only honest move is surfacing.
+
+Today (a) and (b) frequently produce **no node at all** (the pattern doesn't
+match), and for nav links even a captured-but-unresolvable key is silently
+dropped (`Linker.Link`'s literal-era drop policy) — a real user flow can
+vanish with no ledger entry, violating the trust contract.
+
+**Deliverable.**
+
+1. **Multi-candidate key convention (extraction side).** Producer nodes may
+   carry `Meta["key_candidates"]` — a JSON array of literal alternatives —
+   populated by per-language expression walkers that enumerate shape (a)
+   (ternary, `if/else`, `switch`/`case`, `||`/`??`-of-literals, literal-valued
+   map lookup) and resolve shape (b) through same-service constant lookup.
+   Enumeration is **bounded**: > 8 branches, nested conditionals beyond depth
+   2, or any non-literal branch ⇒ treat as dynamic (never partially enumerate
+   and imply completeness). Applies uniformly to every producer meta field
+   that feeds a rule key: `path`/`url` (http, nav), `exchange`/`routing_key`
+   (amqp), `topic`/`subject` (kafka/nats/redis), `queue`/`job_class` (jobs),
+   `channel`/`event` (pusher), message `type` (websocket), SSE endpoints.
+2. **Engine: candidate fan-out (small, spec'd here).** A producer node with N
+   key candidates projects to N `Contract` values (the pinned `Contract`
+   type is unchanged — multiplicity lives in projection, not the schema).
+   Each candidate matches independently; each hit emits its edge at
+   confidence `inferred` with `Meta["via"]="branch_enum"`. The rule's
+   `unmatched` policy fires **once per producer** only when *zero* candidates
+   match — N-1 misses alongside a hit are expected, not noise.
+3. **Dynamic surfacing (shape c) + nav-drop refinement.** A producer whose
+   key field is non-literal and non-enumerable gets
+   `Meta["key_dynamic"]="true"` and a ledger entry
+   (`UnresolvedRef.Kind = "dynamic_<kind>"`: `dynamic_url`, `dynamic_topic`,
+   `dynamic_queue`, `dynamic_channel`, `dynamic_event`). The nav-link `drop`
+   policy is refined to its original rationale: **unmatched literal** nav
+   links still drop (external links/typos are not app flows);
+   **dynamic** nav links always reach the ledger. `key_dynamic` producers
+   are the explicit upgrade targets for config resolution (F.3) and runtime
+   evidence (R.1) — this meta is the join point those plans consume.
+4. **Per-language walkers, shared shape.** One walker per pattern language —
+   Go (if/else, switch, package consts), JS/TS/JSX (ternary, `||`/`??`,
+   object lookup, template literals whose interpolations are all
+   literal-resolvable; otherwise dynamic), Ruby (ternary, if/else, case,
+   constants), templ (if/else around attributes; datastar action args) —
+   emitting the same `key_candidates`/`key_dynamic` meta so the engine and
+   every rule stay language-agnostic. HTML needs no walker (attributes are
+   static by nature). New languages (Tier L) add a walker as part of the
+   pinned new-language checklist.
+
+**Tests.** A language × kind fixture matrix — each supported language gets at
+least: one ternary/branch nav-or-client case asserting one edge per branch
+(`via=branch_enum`), one constant-resolved publish/enqueue case, one
+genuinely-dynamic case asserting the `dynamic_<kind>` ledger entry (and for
+nav: asserting it is *not* silently dropped). Negative fixtures: 9-branch
+switch ⇒ dynamic (cap honored); reassigned constant ⇒ dynamic (no guessing);
+literal-unmatched nav link ⇒ still dropped (policy preserved).
+
+**Acceptance.** `<a href={isAdmin ? "/admin" : "/dashboard"}>` yields two
+`navigates_to` edges to two route handlers; a Go `switch` selecting between
+three topics yields three `publishes` edges; a computed fetch URL yields a
+`dynamic_url` ledger entry visible in `status --unresolved`; per-kind doctor
+coverage (G.5) gains a `dynamic` column so the surfaced-but-unlinked count is
+tracked per kind.
+
 ---
 
 ## Key files
@@ -363,5 +447,8 @@ of the same engine later (each contract rule becomes version-gateable).
 
 ```
 G.0 ─> G.1 ─> G.2 ─> G.3
-                 └─> G.4 ─> G.5   (each new kind = rules + fixture, no engine change)
+                 ├─> G.4 ─> G.5   (each new kind = rules + fixture, no engine change)
+                 └─> G.6          (dynamic keys: needs the engine + ported kinds;
+                                   coverage widens automatically as G.4 adds kinds —
+                                   walkers key on meta fields, not on rules)
 ```
