@@ -2,9 +2,9 @@
 
 Status legend: `pending` · `in progress` · `done (commit <sha>)`
 
-> **Prerequisites.** Tiers A, D, and C.2 assume the architecture plans are
-> implemented: contract-matching (G.0–G.5), evidence-fusion (F.0–F.5), runtime
-> flows (R.0–R.5). **Tier E (evaluation) has no prerequisites and may start
+> **Prerequisites.** Tiers A, D, C.2, and P.2 assume the architecture plans
+> are implemented: contract-matching (G.0–G.5, incl. the G.5 `doctor` command
+> P.2 builds on), evidence-fusion (F.0–F.5), runtime flows (R.0–R.5). **Tier E (evaluation) has no prerequisites and may start
 > immediately** — it measures whatever exists. Tier L needs only the current
 > pattern/matcher infrastructure. Each tier states its own dependencies; a
 > contributor can execute any phase from this document alone plus the pinned
@@ -124,8 +124,10 @@ within equal rank, `verified` > `declared`/`observed` > `inferred` >
 `candidate`. `rollupCallers`/`Summarize` order file groups the same way.
 Ranking change is documented in the output (`ranking: "refs,hops,verification"`).
 
-**Files.** `internal/graph/related.go`, `internal/impact/` rollup,
-`internal/budget/Summarize`.
+**Files.** `internal/graph/related.go`, `internal/impact/summary.go`
+(`rollupCallers` + the `Result.Summarize`/`DiffResult.Summarize` methods —
+note: `Summarize` lives in `internal/impact`, NOT `internal/budget`, whose
+exports are `Estimate`/`TrimToFit`/`Snippet`/`AppendNote`).
 
 **Tests.** Tie-break unit test (two files, equal refs/hops, different states);
 existing ranking tests unchanged (proves tie-breaker-only).
@@ -420,7 +422,8 @@ no state change.
 
 ### Phase P.1 — Agent outcome benchmark `pending`
 
-*Depends on Tiers A + E (agents can see provenance; corpus repos exist).*
+*Depends on Tiers A + E + S (agents can see provenance; corpus repos exist;
+the semantic toggle distinguishes arms 1 and 2).*
 
 **Problem.** The goal is defined by agent outcomes (tokens saved, misses
 avoided), and that has never been measured end-to-end.
@@ -446,6 +449,10 @@ scoring reuses `internal/eval` scorer.
 priorities, which is the point of measuring.
 
 ### Phase P.2 — Packaging + onboarding `pending`
+
+*Additionally depends on `polyflow doctor` existing — it is created in
+contract-matching G.5 and extended by V.4/F.4/R.5; the onboarding deliverable
+below builds on it.*
 
 **Problem.** Everything above is operable only by someone who read six plans.
 
