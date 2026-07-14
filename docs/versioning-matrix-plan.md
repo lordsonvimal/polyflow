@@ -27,7 +27,8 @@ version-robustness is only *partial*:
   vocabulary + HTML attrs in `internal/parser/templ.go`, the SSA pass in
   `go_semantic.go`, and the five tree-sitter grammars (go/js/ts/html/ruby) — are
   single-version and version-blind. datastar colon-vs-hyphen is an `if` branch,
-  not a version selection. polyflow bundles exactly **one** `a-h/templ` lib version.
+  not a version selection. polyflow bundles exactly **one** `a-h/templ` lib version
+  (v0.3.1020 in `go.mod` today).
 - **No proof of coverage:** tested against exactly one real stack (templ
   v0.3.960, datastar-go v1.1.0). No matrix asserting per-(tool, version) behaviour.
 
@@ -122,10 +123,16 @@ Migrate the templ parser behind the router (proves isolation on the real-constra
 tool). Scope: **parser-engine version only** — interpretation/linking already
 version-gated in V.1. Graph output byte-identical on chessleap (regression guard).
 
-### Phase V.3 — Grammar sidecars `pending`
-`cmd/polyflow-parse-grammar/` per language (go/js/ts/html/ruby), one pinned version
-each initially; router dispatches. Adding a second grammar version = a new sidecar
-build target + registry row, zero shared-code edits.
+### Phase V.3 — Grammar sidecars (divergence-triggered, not unconditional) `pending`
+**Gated on proof, executed after V.4.** Grammars are version-tolerant; standing up
+sidecar infra for all five languages with one pinned version each would be pure cost
+(per-file IPC on every parse, N build targets, distribution) with zero fidelity gain.
+This phase executes **per language, only when a V.4 matrix cell proves a real
+behavioural divergence** between two grammar versions of that language. Until then:
+one in-process grammar per language, with the matrix documenting the tolerated range.
+When triggered: a `cmd/polyflow-parse-grammar/` build target for the diverging
+version + a registry row; the router dispatches; zero shared-code edits (mechanism
+already proven by the templ sidecar in V.2).
 
 ### Phase V.4 — Matrix harness + CI gate + doctor `pending`
 `internal/matrix/matrix_test.go` iterates `testdata/matrix/<tool>@<ver>/` (real
@@ -135,8 +142,10 @@ every cell; a coverage test fails when a registered version lacks a fixture.
 contract coverage from contract-matching G.5). Wire into CI.
 
 **Value ordering:** V.0–V.1 deliver the declarative registry + version-gated rules
-(the maintainability/scalability core, reusing one gate) before any sidecar infra, so
-the parser-engine isolation (V.2–V.3) can be paced independently.
+(the maintainability/scalability core, reusing one gate) before any sidecar infra;
+V.2 proves the sidecar mechanism on the one tool with a hard constraint (templ);
+V.4's matrix then supplies the evidence that decides whether any V.3 grammar sidecar
+is ever built.
 
 ---
 
@@ -193,9 +202,9 @@ the parser-engine isolation (V.2–V.3) can be paced independently.
   rather than dozens of tiny binaries; graceful in-process fallback if a sidecar is
   missing.
 - **templ is the only tool with a true hard constraint.** Grammars are
-  version-tolerant; stand up multiple *versions* only where a matrix cell proves a
-  real behavioural divergence — otherwise one backend per language, matrix documents
-  the tolerated range.
+  version-tolerant; V.3 is therefore gated on a matrix cell proving a real
+  behavioural divergence — otherwise one in-process backend per language, matrix
+  documents the tolerated range.
 - **Scale.** Full build is multi-week. Phasing puts the registry + version-gated rules
   (V.0–V.1) first so the "add version N additively" property lands early, independent
   of the sidecar rollout.
@@ -206,10 +215,13 @@ the parser-engine isolation (V.2–V.3) can be paced independently.
 contract-matching:  G.0 ─> G.1 ─> G.2 ─> G.3 ─> G.4 ─> G.5
                                     │(rules exist to gate)      │(doctor coverage)
 versioning:         V.0 ─> V.1 ────┘                           │
-                             └─> V.2 ─> V.3 ─> V.4 ────────────┘
+                             └─> V.2 ─> V.4 ───────────────────┘
+                                          └─(divergence proven)─> V.3 (per language)
 ```
 - **V.1 depends on the contract engine** (G.0–G.3): it version-gates contract/pattern
   rules that must exist first.
-- **V.2–V.3 (sidecars) are independent** of contract-matching — pure parser-engine
+- **V.2 (templ sidecar) is independent** of contract-matching — pure parser-engine
   isolation.
+- **V.3 is divergence-triggered:** it runs only when a V.4 matrix cell proves a
+  grammar-version divergence, per language.
 - **V.4 doctor coverage** merges with contract-matching G.5 per-kind coverage.
