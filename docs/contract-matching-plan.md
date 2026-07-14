@@ -48,11 +48,26 @@ projects to `Contract{Kind, Key, Role, Service, NodeID, Confidence}`:
 - **Key**: normalized channel identity from node meta (method+path, exchange/routing_key,
   topic, subject, queue, service/method, operation name).
 
-The **match engine** (one function) indexes consumers by `(Kind, Key)`, matches each
-producer through a tiered strategy (**exact → normalized → wildcard-anchored**), emits
-a typed edge with confidence, and records unmatched producers as `UnresolvedRef`s.
-Same-service handling, cross-service-only, and hint overrides are rule-declared, not
-hardcoded.
+The **match engine** (one function) indexes consumers per kind, matches each producer
+through a tiered strategy (**exact → normalized → wildcard-anchored**), and emits a
+typed edge with confidence. Two behaviors the naive `(Kind, Key)` hash-join picture
+hides, both rule-declared:
+
+- **Pair-conditioned normalization.** HTTP base_url stripping depends on the
+  *(producer service, target service)* pair, so the consumer index is built per
+  producer-target view where a rule declares pair-conditioned normalizers — exactly
+  what `Linker.Link` does today with its per-client handler maps.
+- **Unmatched policy, per producer class.** Today's behavior is *not* "unmatched →
+  ledger" uniformly, and parity must preserve it: an unmatched API call emits a
+  **visible unknown-confidence edge** to a synthetic `unresolved:<service>` node (so
+  the dangling call appears in `impact`/`trace` traversals — better for the agent
+  than a ledger row), while an unmatched nav-link is **silently dropped** by design.
+  Each rule declares `unmatched: unknown_edge | ledger | drop`; `unknown_edge` is
+  the default for call-like producers.
+
+Same-service handling, cross-service-only, method fallback (an empty client method
+tries GET/POST/PUT/PATCH/DELETE in priority order, as `candidateMethods` does today),
+and hint overrides are likewise rule-declared, not hardcoded.
 
 ## Declarative rule shape (YAML)
 
@@ -64,19 +79,25 @@ version-gateable via the existing `package` / `version_range`.
 ```yaml
 contract:
   kind: http
-  producer: { node: http_client, key: [method, path] }
+  producer:
+    node: http_client
+    key: [method, path]
+    method_fallback: [GET, POST, PUT, PATCH, DELETE]   # empty client method
   consumer: { node: http_handler, key: [method, path] }
-  normalizers: [base_url_strip, query_strip, param_wildcard, group_prefix]
+  normalizers: [base_url_strip, query_strip, param_wildcard]
   match: [exact, normalized, wildcard_anchored]
   edge: { type: http_call, same_service: skip_unless_datastar }
+  unmatched: unknown_edge   # unknown_edge | ledger | drop (nav_link variant: drop)
 ```
 
 **Normalizer library** (reusable, referenced by name): `param_wildcard`
 (`:id`/`{id}`/`[..]`→`*`), `query_strip`, `quote_strip`, `case_fold`, `trim_slash`,
-`base_url_strip`, `group_prefix` (reconstruct gin/chi router-group prefixes — closes
-the known gap), `shared_anchor_guard` (≥1 concrete segment), `url_to_path`. A genuinely
-new transform = one Go func added to the registry, referenced by name in any rule (the
-bounded escape hatch).
+`base_url_strip`, `shared_anchor_guard` (≥1 concrete segment), `url_to_path`. A
+genuinely new transform = one Go func added to the registry, referenced by name in any
+rule (the bounded escape hatch). Normalizers are **pure key transforms over a single
+node's meta** — anything that needs context from *other* nodes (e.g. router-group
+prefix reconstruction, see G.3) is a meta-**enrichment pass** that runs before the
+engine, not a normalizer.
 
 ## Reuse (don't rebuild)
 
@@ -105,10 +126,27 @@ same-service exception, nav-link, base_url, query-strip, wildcard-anchor). Asser
 `contracts/{amqp,hub,jobs,pusher,sse,websocket}.yaml`; parity-gate each; delete the
 bespoke linkers.
 
-### Phase G.3 — Close the route-group gap as a rule `pending`
-Add `group_prefix` normalizer + gin/chi router-group prefix reconstruction. chessleap
-datastar real-handler links **3/27 → ~27/27**; no matcher edits (rule/normalizer only).
-Proves gap-fixing is now config.
+### Phase G.3 — Close the route-group gap (pattern + enrichment pass + rule) `pending`
+Router-group prefixes are **not** reachable by a pure normalizer: `gin_route_group`
+today captures only the prefix string, not the variable it is assigned to
+(`api := r.Group("/api/v1")` — the assignment binding sits outside the query), so
+route nodes carry no group context a key transform could use. Three parts:
+
+1. **Recognition-pattern change:** capture the assignment binding of
+   `x := r.Group("/prefix")` (gin) and chi's equivalent, so group nodes carry
+   variable + prefix + declaring scope.
+2. **Meta-enrichment pass (Go, pre-engine):** join route nodes to group nodes by
+   (file, enclosing function, receiver variable), handle nested groups, and stamp
+   the reconstructed full path into route meta. This is contextual node-joining,
+   not a normalizer.
+3. **Rule:** the http contract rule keys on the enriched path — no engine changes.
+
+**Scope:** variable-scoped groups within a function/file (incl. nesting). Groups
+passed **across functions/files** (`registerRoutes(g *gin.RouterGroup)`) are out of
+scope here — variable-name scoping cannot see them; they need the SSA pass (tracked
+as a follow-up), and affected routes stay surfaced as unresolved rather than being
+silently mis-prefixed. chessleap datastar real-handler links **3/27 → ~27/27**
+(its groups are same-file).
 
 ### Phase G.4 — New protocols, additive `pending`
 Recognition patterns + contract rules for `grpc`, `graphql`, `kafka`, `nats`,
@@ -143,8 +181,12 @@ Workspace-custom rule dir (recompile-free); `polyflow doctor` prints per-kind co
   `testdata/`; index; assert cross-service edges appear with only YAML added.
 - **Coverage:** `polyflow doctor` per-kind matched/unresolved; a test fails if a
   registered kind lacks a fixture.
-- **Benchmark:** engine is O(producers+consumers) per kind (same as today); hold
-  chessleap index time + `BenchmarkIndexCold`.
+- **Benchmark:** be honest about complexity — today's HTTP linker is
+  **O(clients × handlers)**, not O(P+C): it rebuilds the handler maps per client
+  (pair-conditioned base_url stripping) and linearly scans handlers in the wildcard
+  tier, and the engine must preserve those semantics for parity. Target: exact tier
+  as a hash join; normalized/wildcard tiers may scan per producer. The gate is
+  empirical, not asymptotic: hold chessleap index time + `BenchmarkIndexCold`.
 
 ## Risks / honest notes
 

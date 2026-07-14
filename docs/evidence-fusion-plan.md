@@ -85,6 +85,35 @@ type EvidenceProvider interface {
 Each provider emits edges already normalized to the **same channel key** the
 contract-matching engine produces — so fusion is a key-join, not per-source glue.
 
+### Join granularity & node identity (what `verified` may claim)
+
+Runtime and contract evidence is **channel-granular**, static evidence is
+**call-site-granular**, and conflating them is the one way this plan could
+manufacture misinformation:
+
+- An OTel span or an OpenAPI operation confirms
+  `(kind, key, from_service, to_service)` — it never identifies *which static call
+  site* fired (spans rarely carry code-level attribution). Static edges, by
+  contrast, name specific producer/consumer nodes.
+- Therefore **`verified` is defined at channel granularity**: when evidence
+  confirms a channel, every static edge on that channel becomes
+  `verification_state=verified` with `verified_granularity=channel` stamped in
+  meta. When three call sites in service A hit the same route and one span
+  confirms the channel, all three are channel-verified — none may be read as
+  "this specific call site ran." `verified_granularity=site` is set **only** when
+  the evidence itself carries code-level attribution (e.g. `code.filepath` span
+  attributes), never inferred.
+- **Node identity for non-static sources:** providers emit service-level endpoint
+  identities plus the channel key, not graph node IDs. Reconciliation resolves
+  them to existing static nodes via the key-join; when no static node exists
+  (`observed_only_gap`), the reconciler **mints synthetic service-level endpoint
+  nodes** tagged with their source, so gap edges are traversable without
+  fabricating call sites.
+- **Staleness:** evidence inputs (trace dumps, specs, config) are hashed and
+  invalidate independently of the per-file source cache; the reconcile join
+  recomputes `verification_state` over the full edge set on every index run
+  (O(edges)), so verification never goes stale against incremental re-indexing.
+
 ---
 
 ## Evidence sources (ranked by determinism)
@@ -111,8 +140,8 @@ contract-matching engine produces — so fusion is a key-join, not per-source gl
 
 ### Phase F.0 — Evidence-graph substrate + reconciliation join `pending`
 `internal/evidence/{provider.go,provenance.go,reconcile.go}`. Extend `graph.Edge` with
-`sources[]` + `verification_state` (back-compat: existing edges → single `static`
-source). Reconciliation engine merges edges on `(kind, key)` / `(from, to)` reusing the
+`sources[]` + `verification_state` + `verified_granularity` (channel | site; see the
+join-granularity section — back-compat: existing edges → single `static` source). Reconciliation engine merges edges on `(kind, key)` / `(from, to)` reusing the
 contract engine's channel-key normalization. Wrap today's static pipeline as the first
 `EvidenceProvider` (`source=static`). No new sources yet — graph identical + provenance
 stamped. *SchemaVersion bump.*
@@ -188,8 +217,10 @@ default; bounded, auditable.
 - **Runtime source:** feed a captured OTel trace JSON fixture → `source=runtime` edges;
   an observed edge static missed surfaces as a gap + an auto-proposed candidate rule.
 - **Chessleap reconciliation:** report static-only vs verified counts; the 24 unresolved
-  datastar actions flip to `verified` if a trace/contract confirms them, or stay
-  `candidate` (surfaced, not dropped).
+  datastar actions flip to `verified` (channel-granular) if a trace/contract confirms
+  their channels, or stay `candidate` (surfaced, not dropped). Assert a multi-call-site
+  channel confirmed by one span marks all its edges `verified_granularity=channel`,
+  never `site`.
 - **Degradation:** a repo with no contracts/traces → providers no-op, graph == static
   (no regression, just no upgrade).
 - **Benchmark:** contract/trace ingestion is O(spec/span count); reconciliation is a
