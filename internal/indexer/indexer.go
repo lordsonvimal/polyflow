@@ -649,8 +649,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, fmt.Errorf("contract rules: %w", err)
 	}
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	// G.3 pre-engine enrichment: reconstruct full route paths for nodes inside
+	// router groups (gin r.Group / chi r.Route). This is a contextual node-join
+	// that normalizers cannot perform; it mutates only the working copy returned
+	// by ApplyHints, not the persisted allNodes.
+	enrichedNodes := contract.EnrichRouteGroups(hintedNodes)
 	eng := &contract.Engine{}
-	contractResult := eng.Link(hintedNodes, contractRules, cfg.Links)
+	contractResult := eng.Link(enrichedNodes, contractRules, cfg.Links)
 
 	for i := range contractResult.Nodes {
 		n := contractResult.Nodes[i]
