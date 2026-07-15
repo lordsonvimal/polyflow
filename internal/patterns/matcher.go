@@ -901,8 +901,10 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 
 	switch {
 	// ── TypeScript structural declarations (suppress from graph) ──────────────
-	case lower == "interface_declaration" || lower == "interface_extends":
+	case lower == "interface_declaration":
 		return graph.NodeTypeInterface, graph.EdgeTypeCalls
+	case lower == "interface_extends":
+		return graph.NodeTypeInterface, graph.EdgeTypeInherits
 	case lower == "type_alias" || lower == "generic_type" || lower == "enum_declaration" || lower == "const_enum":
 		return graph.NodeTypeTypeAlias, graph.EdgeTypeCalls
 

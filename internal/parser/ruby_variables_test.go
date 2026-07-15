@@ -25,7 +25,8 @@ end
 
 func parseRubyVarFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 	t.Helper()
-	return extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(rubyVarFixture))
+	nodes, edges, _ := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(rubyVarFixture))
+	return nodes, edges
 }
 
 func TestRubyVariables_Constants(t *testing.T) {

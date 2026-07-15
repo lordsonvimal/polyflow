@@ -44,7 +44,8 @@ func parseJSVarFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	return extractJSVariables(file, "web", "javascript", "javascript", src)
+	nodes, edges, _ := extractJSVariables(file, "web", "javascript", "javascript", src)
+	return nodes, edges
 }
 
 func jsNode(nodes []graph.Node, typ graph.NodeType, label string) *graph.Node {
@@ -166,7 +167,7 @@ func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
   };
 }
 `)
-	nodes, edges := extractJSVariables("move-sync.js", "web", "javascript", "javascript", src)
+	nodes, edges, _ := extractJSVariables("move-sync.js", "web", "javascript", "javascript", src)
 
 	if jsNode(nodes, graph.NodeTypeFunction, "enqueue") == nil {
 		t.Fatalf("named function expression enqueue has no backing node; nodes: %+v", nodes)
@@ -193,7 +194,7 @@ func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
 // TypeScript type annotations become data_type verbatim.
 func TestJSVariables_TSTypeAnnotation(t *testing.T) {
 	src := []byte("const layouts: string[] = [];\nexport const port: number = 4;\n")
-	nodes, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src)
+	nodes, _, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src)
 
 	l := jsNode(nodes, graph.NodeTypeVariable, "layouts")
 	if l == nil || l.Meta["data_type"] != "string[]" {
