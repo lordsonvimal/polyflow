@@ -61,9 +61,10 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 
 	// Structural variable tracking: module vars, classes, reads/writes,
 	// closure captures, flows. Lower confidence than the Go semantic pass.
-	varNodes, varEdges := extractJSVariables(file, service, langTag, grammarLang, src)
+	varNodes, varEdges, varUnresolved := extractJSVariables(file, service, langTag, grammarLang, src)
 	nodes = append(nodes, varNodes...)
 	edges = append(edges, varEdges...)
+	unresolved = append(unresolved, varUnresolved...)
 	return nodes, edges, unresolved, err
 }
 

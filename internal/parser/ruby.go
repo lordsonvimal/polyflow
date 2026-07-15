@@ -28,9 +28,10 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	setLanguage(nodes, "ruby")
 
 	// Structural variable tracking: constants, classes, ivar reads/writes.
-	varNodes, varEdges := extractRubyVariables(file, service, src)
+	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, src)
 	nodes = append(nodes, varNodes...)
 	edges = append(edges, varEdges...)
+	unresolved = append(unresolved, varUnresolved...)
 	return nodes, edges, unresolved, nil
 }
 
