@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	contractdata "github.com/lordsonvimal/polyflow/contracts"
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/parser"
@@ -108,27 +110,22 @@ func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Worksp
 	}
 	require.NoError(t, bwBroker.Flush(ctx))
 
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
-	l := linker.New(cfg)
-	crossEdges, err := l.Link(hintedNodes, allEdges)
+	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)
+	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	eng := &contract.Engine{}
+	contractResult := eng.Link(hintedNodes, contractRules, cfg.Links)
 
-	// Insert synthetic unresolved nodes for any linker edge targets not yet in the store.
 	bw2 := graph.NewBatchWriter(store)
-	for i := range crossEdges {
-		e := crossEdges[i]
-		if _, err := store.GetNode(ctx, e.To); err != nil {
-			_ = bw2.AddNode(ctx, &graph.Node{
-				ID: e.To, Type: graph.NodeTypeHTTPHandler, Label: e.To, Service: "unresolved",
-				File: "unresolved", Language: "unknown",
-			})
-		}
+	for i := range contractResult.Nodes {
+		n := contractResult.Nodes[i]
+		_ = bw2.AddNode(ctx, &n)
 	}
 	require.NoError(t, bw2.Flush(ctx))
 
 	bw3 := graph.NewBatchWriter(store)
-	for i := range crossEdges {
-		e := crossEdges[i]
+	for i := range contractResult.Edges {
+		e := contractResult.Edges[i]
 		require.NoError(t, bw3.AddEdge(ctx, &e))
 	}
 	require.NoError(t, bw3.Flush(ctx))

@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	contractdata "github.com/lordsonvimal/polyflow/contracts"
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -105,18 +107,13 @@ func fixtureGraph(t *testing.T) ([]graph.Node, []graph.Edge) {
 	allNodes = append(allNodes, hintNodes...)
 	allEdges = append(allEdges, hintEdges...)
 
-	var svcs []workspace.Service
-	seen := map[string]bool{}
-	for i := range allNodes {
-		if !seen[allNodes[i].Service] {
-			seen[allNodes[i].Service] = true
-			svcs = append(svcs, workspace.Service{Name: allNodes[i].Service})
-		}
-	}
-	l := linker.New(&workspace.WorkspaceConfig{Services: svcs})
-	crossEdges, err := l.Link(allNodes, allEdges)
+	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)
-	allEdges = append(allEdges, crossEdges...)
+	hintedNodes := linker.ApplyHints(nil, allNodes, allEdges)
+	eng := &contract.Engine{}
+	contractResult := eng.Link(hintedNodes, contractRules, nil)
+	allNodes = append(allNodes, contractResult.Nodes...)
+	allEdges = append(allEdges, contractResult.Edges...)
 
 	return allNodes, allEdges
 }

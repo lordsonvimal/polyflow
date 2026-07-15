@@ -8,5 +8,5 @@ import "embed"
 // FS holds every built-in contract rule file. G.1 adds the first YAML rule
 // files to this directory; for G.0 only the placeholder is embedded.
 //
-//go:embed .keep
+//go:embed *.yaml
 var FS embed.FS
