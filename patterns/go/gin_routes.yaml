@@ -28,18 +28,31 @@ patterns:
       - name: handler
         role: handler_ref
 
-  # api := r.Group("/api/v1") — route group with a string prefix.
-  # chi's Group takes a func literal, not a string, so this shape is gin's.
+  # api := r.Group("/api/v1") — route group assigned to a variable.
+  # Captures the variable name and parent receiver so the pre-engine
+  # enrichment pass (G.3) can reconstruct full paths for nested routes.
+  # chi's Group takes a func literal (not a string) so this shape is gin's;
+  # un-assigned inline chaining (r.Group("/p").GET(...)) is not captured here
+  # because the receiver would not be a simple identifier.
   - name: gin_route_group
     query: |
-      (call_expression
-        function: (selector_expression
-          field: (field_identifier) @method
-          (#eq? @method "Group"))
-        arguments: (argument_list
-          .
-          (interpreted_string_literal) @prefix))
+      (short_var_declaration
+        (expression_list
+          (identifier) @var_name)
+        (expression_list
+          (call_expression
+            function: (selector_expression
+              operand: (identifier) @receiver
+              field: (field_identifier) @method
+              (#eq? @method "Group"))
+            arguments: (argument_list
+              .
+              (interpreted_string_literal) @prefix))))
     captures:
+      - name: var_name
+        role: group_var
+      - name: receiver
+        role: group_receiver
       - name: prefix
         role: route_prefix
 

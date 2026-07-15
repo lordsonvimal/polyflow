@@ -19,17 +19,22 @@ patterns:
         role: http_path
       - name: handler
         role: handler_ref
+  # r.Route("/admin", func(r chi.Router) { ... }) — route group via inline
+  # function literal. Captures receiver + prefix for the enrichment pass (G.3);
+  # @_body is a positional span capture so the func_literal end line is stored
+  # in MatchResult.EndLine → meta["end_line"], enabling line-range containment.
   - name: chi_route_group
     query: |
       (call_expression
         function: (selector_expression
+          operand: (identifier) @receiver
           field: (field_identifier) @method
           (#eq? @method "Route"))
         arguments: (argument_list
           (interpreted_string_literal) @prefix
-          (_) @fn))
+          (func_literal) @_body))
     captures:
+      - name: receiver
+        role: group_receiver
       - name: prefix
         role: route_prefix
-      - name: fn
-        role: group_fn
