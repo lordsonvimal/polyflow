@@ -1,0 +1,48 @@
+name: Eval Regression Gate
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  eval:
+    name: Corpus recall regression gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install zig (cross-compilation toolchain)
+        run: |
+          sudo snap install zig --classic --beta || \
+          (wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz && \
+           tar xf zig-linux-x86_64-0.13.0.tar.xz && \
+           sudo mv zig-linux-x86_64-0.13.0/zig /usr/local/bin/)
+
+      - name: Build polyflow
+        run: CGO_ENABLED=1 go build -o dist/polyflow ./cmd/polyflow
+
+      # Cache eval/.cache so we don't re-clone and re-index on every run.
+      # Key rotates when any corpus manifest changes.
+      - name: Cache eval corpus
+        uses: actions/cache@v4
+        with:
+          path: eval/.cache
+          key: eval-cache-${{ hashFiles('eval/corpus/**/manifest.yaml') }}
+          restore-keys: eval-cache-
+
+      - name: Clone and index corpus repos
+        run: make eval-corpus
+
+      - name: Run eval corpus + gate against baseline
+        run: |
+          ./dist/polyflow eval \
+            --corpus eval/corpus \
+            --output /tmp/current-eval.json \
+            --gate eval/baseline.json

@@ -57,6 +57,7 @@ func init() {
 		depsCmd,
 		mcpCmd,
 		evalCmd,
+		doctorCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
@@ -1676,15 +1677,17 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 // ─── eval ────────────────────────────────────────────────────────────────────
 
 var (
-	evalCorpus string
-	evalCase   string
-	evalOutput string
+	evalCorpus   string
+	evalCase     string
+	evalOutput   string
+	evalGate     string
 )
 
 func initEvalFlags() {
 	evalCmd.Flags().StringVar(&evalCorpus, "corpus", "eval/corpus", "path to corpus root (a dir with manifest.yaml, or a dir of such dirs)")
 	evalCmd.Flags().StringVar(&evalCase, "case", "", "run only this case ID (default: all cases in the corpus)")
 	evalCmd.Flags().StringVar(&evalOutput, "output", "", "write JSON results to this file (e.g. eval/baseline.json)")
+	evalCmd.Flags().StringVar(&evalGate, "gate", "", "baseline JSON file to gate against; exits non-zero on any regression")
 }
 
 var evalCmd = &cobra.Command{
@@ -1749,6 +1752,31 @@ func runEval(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, "Failed: one or more cases hard-failed (must_not_miss file silently missed)")
 		os.Exit(1)
 	}
+
+	if evalGate != "" {
+		baseline, err := eval.LoadBaseline(evalGate)
+		if err != nil {
+			return fmt.Errorf("load gate baseline: %w", err)
+		}
+		gate := eval.CheckGate(multi, baseline)
+		if !gate.OK {
+			fmt.Fprintf(os.Stderr, "\nCI gate: %d regression(s) vs %s\n", len(gate.Regressions), evalGate)
+			for _, r := range gate.Regressions {
+				switch r.Reason {
+				case "hard_fail":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  new hard_fail (was not failing in baseline)\n", r.Repo, r.CaseID)
+				case "recall_drop":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  recall_drop  baseline=%.3f  current=%.3f\n", r.Repo, r.BaselineRecall, r.CurrentRecall)
+				case "silent_miss_rise":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  silent_miss_rise  baseline=%d  current=%d\n", r.Repo, r.CaseID, r.BaselineSilent, r.CurrentSilent)
+				}
+			}
+			fmt.Fprintln(os.Stderr, "Update eval/baseline.json when recall improves: polyflow eval --output eval/baseline.json")
+			os.Exit(1)
+		}
+		fmt.Printf("CI gate: no regressions vs %s\n", evalGate)
+	}
+
 	return nil
 }
 
@@ -1779,6 +1807,49 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 		fmt.Fprintln(os.Stderr, "\nFailed: one or more cases hard-failed (must_not_miss file silently missed)")
 		os.Exit(1)
 	}
+	return nil
+}
+
+// ─── doctor ──────────────────────────────────────────────────────────────────
+
+var doctorBaseline string
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Show a diagnostic summary of the workspace and eval health",
+	RunE:  runDoctor,
+}
+
+func init() {
+	doctorCmd.Flags().StringVar(&doctorBaseline, "baseline", "eval/baseline.json", "baseline JSON file for the eval summary row")
+}
+
+func runDoctor(cmd *cobra.Command, args []string) error {
+	fmt.Println("polyflow doctor")
+	fmt.Println()
+
+	// Eval summary row — reads the baseline file without re-running the corpus.
+	baseline, err := eval.LoadBaseline(doctorBaseline)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("  Eval corpus:  no baseline found at %s (run 'polyflow eval --output %s')\n", doctorBaseline, doctorBaseline)
+		} else {
+			fmt.Printf("  Eval corpus:  error reading %s: %v\n", doctorBaseline, err)
+		}
+	} else {
+		sum := eval.SummarizeForDoctor(baseline, nil)
+		skips := ""
+		if len(baseline.Skipped) > 0 {
+			skips = fmt.Sprintf("  skipped=%d", len(baseline.Skipped))
+		}
+		fmt.Printf("  Eval corpus:  %s  repos=%d  cases=%d  recall=%.3f  hard_fails=%d  silent=%d%s\n",
+			sum.GeneratedAt, sum.Repos, sum.TotalCases, sum.AvgRecall, sum.HardFails, sum.SilentMiss, skips)
+		if sum.HardFails > 0 {
+			fmt.Printf("                %d hard_fail case(s) — run 'polyflow eval' for details\n", sum.HardFails)
+		}
+	}
+
+	fmt.Println()
 	return nil
 }
 
