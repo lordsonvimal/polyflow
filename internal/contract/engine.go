@@ -1,0 +1,338 @@
+package contract
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/workspace"
+)
+
+// Link runs the contract engine against all nodes, applying each rule in order.
+// Tier→confidence is fixed: exact→static, normalized/wildcard_anchored→inferred.
+func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) Result {
+	var result Result
+	synthSeen := make(map[string]bool)
+
+	for _, rule := range rules {
+		norms := resolveNormalizers(rule.Normalizers)
+
+		producers, consumers := partitionNodes(nodes, rule)
+
+		for _, prod := range producers {
+			targetSvc := ""
+			if rule.Producer.TargetServiceMeta != "" {
+				targetSvc = prod.Meta[rule.Producer.TargetServiceMeta]
+			}
+			env := NormalizeEnv{
+				FromService: prod.Service,
+				ToService:   targetSvc,
+				Links:       links,
+			}
+
+			cands := filterByService(consumers, targetSvc)
+			exactIdx, normIdx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
+
+			matched := matchProducer(prod, rule, norms, env, exactIdx, normIdx, &result)
+			if matched {
+				continue
+			}
+
+			applyUnmatched(prod, rule, targetSvc, &result, synthSeen)
+		}
+	}
+	return result
+}
+
+// matchProducer tries all candidate (method-override, tier) combinations for
+// one producer. Returns true if an edge was emitted.
+func matchProducer(
+	prod *graph.Node,
+	rule Rule,
+	norms []Normalizer,
+	env NormalizeEnv,
+	exactIdx, normIdx map[string]*graph.Node,
+	result *Result,
+) bool {
+	for _, override := range candidateMethodOverrides(prod, rule.Producer) {
+		rawFields := buildRawFields(prod, rule.Producer, override)
+		rawKey := strings.Join(rawFields, " ")
+
+		normFields := applyNormsToFields(rawFields, norms, env)
+		normKey := strings.Join(normFields, " ")
+
+		hit, confidence := findMatch(rawKey, normKey, rule.Match, exactIdx, normIdx)
+		if hit == nil {
+			continue
+		}
+		if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
+			continue
+		}
+
+		edgeMeta := map[string]string{"confidence": confidence}
+		for metaKey, viaValue := range rule.Edge.ViaMeta {
+			if prod.Meta[metaKey] != "" {
+				edgeMeta["via"] = viaValue
+			}
+		}
+
+		result.Edges = append(result.Edges, graph.Edge{
+			ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
+			From:       prod.ID,
+			To:         hit.ID,
+			Type:       rule.Edge.Type,
+			Label:      normKey,
+			Confidence: confidence,
+			Meta:       edgeMeta,
+		})
+		return true
+	}
+	return false
+}
+
+// findMatch tries each tier in order against the consumer indexes and returns
+// the first hit plus the corresponding confidence string.
+func findMatch(rawKey, normKey string, tiers []MatchTier, exactIdx, normIdx map[string]*graph.Node) (*graph.Node, string) {
+	for _, tier := range tiers {
+		switch tier {
+		case TierExact:
+			if h, ok := exactIdx[rawKey]; ok {
+				return h, graph.ConfidenceStatic
+			}
+		case TierNormalized:
+			if h, ok := normIdx[normKey]; ok {
+				return h, graph.ConfidenceInferred
+			}
+		case TierWildcardAnchored:
+			if h := wildcardScan(normKey, normIdx); h != nil {
+				return h, graph.ConfidenceInferred
+			}
+		}
+	}
+	return nil, ""
+}
+
+func applyUnmatched(prod *graph.Node, rule Rule, targetSvc string, result *Result, synthSeen map[string]bool) {
+	switch rule.Unmatched {
+	case UnmatchedUnknownEdge:
+		synthID := "unresolved"
+		if targetSvc != "" {
+			synthID = "unresolved:" + targetSvc
+		}
+		if !synthSeen[synthID] {
+			synthSeen[synthID] = true
+			result.Nodes = append(result.Nodes, graph.Node{
+				ID:    synthID,
+				Type:  graph.NodeTypeService,
+				Label: synthID,
+			})
+		}
+		rawKey := strings.Join(buildRawFields(prod, rule.Producer, nil), " ")
+		result.Edges = append(result.Edges, graph.Edge{
+			ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, synthID),
+			From:       prod.ID,
+			To:         synthID,
+			Type:       rule.Edge.Type,
+			Label:      rawKey,
+			Confidence: graph.ConfidenceUnknown,
+			Meta:       map[string]string{"confidence": graph.ConfidenceUnknown},
+		})
+	case UnmatchedLedger:
+		rawKey := strings.Join(buildRawFields(prod, rule.Producer, nil), " ")
+		result.Unresolved = append(result.Unresolved, graph.UnresolvedRef{
+			Service: prod.Service,
+			File:    prod.File,
+			Line:    prod.Line,
+			Name:    rawKey,
+			Kind:    string(rule.Kind),
+		})
+	case UnmatchedDrop:
+		// intentionally silent
+	}
+}
+
+// partitionNodes separates nodes into producers and consumers for a rule.
+func partitionNodes(nodes []graph.Node, rule Rule) (producers, consumers []*graph.Node) {
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == rule.Producer.Node && matchesWhere(n, rule.Producer.Where) {
+			producers = append(producers, n)
+		}
+		if n.Type == rule.Consumer.Node && matchesWhere(n, rule.Consumer.Where) {
+			consumers = append(consumers, n)
+		}
+	}
+	return
+}
+
+// matchesWhere checks a node's meta against a where gate.
+// A gate value of "" means the meta key must be absent or empty.
+func matchesWhere(n *graph.Node, where map[string]string) bool {
+	for key, expected := range where {
+		actual := n.Meta[key]
+		if expected == "" {
+			if actual != "" {
+				return false
+			}
+		} else {
+			if actual != expected {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// filterByService returns consumers from targetSvc, or all consumers when
+// targetSvc is empty (no restriction).
+func filterByService(consumers []*graph.Node, targetSvc string) []*graph.Node {
+	if targetSvc == "" {
+		return consumers
+	}
+	out := consumers[:0:0]
+	for _, c := range consumers {
+		if c.Service == targetSvc {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// buildConsumerIndexes builds exact (raw key) and normalized (post-normalizer)
+// indexes for the given consumer nodes and the producer's NormalizeEnv.
+// First-seen wins when multiple consumers share a key.
+func buildConsumerIndexes(
+	consumers []*graph.Node,
+	spec EndpointSpec,
+	norms []Normalizer,
+	env NormalizeEnv,
+) (exactIdx, normIdx map[string]*graph.Node) {
+	exactIdx = make(map[string]*graph.Node, len(consumers))
+	normIdx = make(map[string]*graph.Node, len(consumers))
+	for _, c := range consumers {
+		rawFields := buildRawFields(c, spec, nil)
+		rawKey := strings.Join(rawFields, " ")
+		if _, exists := exactIdx[rawKey]; !exists {
+			exactIdx[rawKey] = c
+		}
+		normFields := applyNormsToFields(rawFields, norms, env)
+		normKey := strings.Join(normFields, " ")
+		if _, exists := normIdx[normKey]; !exists {
+			normIdx[normKey] = c
+		}
+	}
+	return
+}
+
+// buildRawFields extracts the key field values from a node's meta,
+// applying key_fallbacks and any per-field overrides (used for method_fallback).
+func buildRawFields(n *graph.Node, spec EndpointSpec, overrides map[string]string) []string {
+	fields := make([]string, len(spec.Key))
+	for i, field := range spec.Key {
+		if overrides != nil {
+			if v, ok := overrides[field]; ok {
+				fields[i] = v
+				continue
+			}
+		}
+		val := n.Meta[field]
+		if val == "" {
+			for _, fb := range spec.KeyFallbacks[field] {
+				if v := n.Meta[fb]; v != "" {
+					val = v
+					break
+				}
+			}
+		}
+		fields[i] = val
+	}
+	return fields
+}
+
+// applyNormsToFields applies the normalizer chain to each field independently.
+func applyNormsToFields(fields []string, norms []Normalizer, env NormalizeEnv) []string {
+	result := make([]string, len(fields))
+	copy(result, fields)
+	for i, v := range result {
+		for _, norm := range norms {
+			v = norm(v, env)
+		}
+		result[i] = v
+	}
+	return result
+}
+
+// candidateMethodOverrides returns the set of field overrides to try for a
+// producer. When method_fallback is set and the method meta field is empty,
+// each fallback method is tried as a separate override. Otherwise a single
+// nil override (use meta as-is) is returned.
+func candidateMethodOverrides(n *graph.Node, spec EndpointSpec) []map[string]string {
+	if len(spec.MethodFallback) == 0 {
+		return []map[string]string{nil}
+	}
+	hasMethodField := false
+	for _, f := range spec.Key {
+		if f == "method" {
+			hasMethodField = true
+			break
+		}
+	}
+	if !hasMethodField {
+		return []map[string]string{nil}
+	}
+	if n.Meta["method"] != "" {
+		return []map[string]string{nil}
+	}
+	overrides := make([]map[string]string, len(spec.MethodFallback))
+	for i, m := range spec.MethodFallback {
+		overrides[i] = map[string]string{"method": m}
+	}
+	return overrides
+}
+
+// sameServiceAllowed checks whether the same-service policy permits emitting
+// an edge between prod and cons. Cross-service pairs are always allowed.
+func sameServiceAllowed(policy string, prod, cons *graph.Node) bool {
+	if prod.Service != cons.Service {
+		return true
+	}
+	switch {
+	case policy == "skip":
+		return false
+	case policy == "keep":
+		return true
+	case strings.HasPrefix(policy, "skip_unless_meta:"):
+		key := strings.TrimPrefix(policy, "skip_unless_meta:")
+		return prod.Meta[key] != ""
+	default:
+		return true
+	}
+}
+
+// wildcardScan tries wildcard_anchored matching of key against all entries in
+// normIdx, requiring at least one shared concrete segment. First hit wins.
+func wildcardScan(key string, normIdx map[string]*graph.Node) *graph.Node {
+	if !hasLiteralSegment(key) {
+		return nil
+	}
+	for consKey, h := range normIdx {
+		if pathMatchesPattern(key, consKey) {
+			return h
+		}
+	}
+	return nil
+}
+
+// resolveNormalizers converts a list of normalizer names into functions.
+// Names are validated at Load time, so panic here would indicate a bug.
+func resolveNormalizers(names []string) []Normalizer {
+	fns := make([]Normalizer, len(names))
+	for i, name := range names {
+		fn, ok := normRegistry[name]
+		if !ok {
+			panic(fmt.Sprintf("contract: normalizer %q not in registry (should have been caught by Load)", name))
+		}
+		fns[i] = fn
+	}
+	return fns
+}
