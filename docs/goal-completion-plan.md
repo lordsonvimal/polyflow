@@ -656,7 +656,7 @@ and their methods; before this phase it lists nothing.
 
 **Outcome (done).** Delivered `NodeTypeInterface` nodes for non-empty named Go interfaces (meta: `methods` JSON [{name,signature}] mirroring struct `fields`), `EdgeTypeInherits` for anonymous-field embedding (`meta.via=embedding`), `EdgeTypeImplements` from in-service structs to both in-service interfaces and synthetic external interface nodes (`meta.nominal=false`; external targets carry `meta.external=true` and no file/line), and `EdgeTypeInstantiates` from constructor functions to the struct types they allocate via `*ssa.Alloc` (deduped per (fn, type) pair with `meta.count`). All edges are `confidence=static` (type-checker-proven). `varExtractResult` replaces the old `([]graph.Node, []graph.Edge)` return from `extractVariables`; new `extractImplements` function added to `go_semantic.go`. `SchemaVersion` bumped from `"8"` to `"9"`. 8 new tests in `internal/parser/go_i1_test.go` covering all four edges, empty-interface negative, out-of-service negative, and callback-classification preservation; all 19 parser tests pass. `BenchmarkIndexCold` holds at 10.8s/1200 files. Deviations: none — spec implemented exactly.
 
-### Phase I.2 — JS/TS/Ruby: class heritage + instantiation `pending`
+### Phase I.2 — JS/TS/Ruby: class heritage + instantiation `done`
 
 **Problem.** `js_variables.go`'s `collectClass` reads the class body but
 ignores the heritage clause — `class Admin extends User` produces two
@@ -704,6 +704,8 @@ superclass → ledger; ambiguous Ruby constant → N candidate edges + ledger.
 **Acceptance.** On a JS fixture, `impact --target User` includes `Admin`;
 on a Ruby fixture, `impact` on a mixin module includes every including
 class. Existing chessleap index parity holds (`BenchmarkIndexCold`).
+
+**Outcome (2026-07-15).** Implemented a two-pass approach for JS/TS (`preCollectClasses` + `processClassHeritage`) and extended Ruby's walk with a `classID` parameter to carry the enclosing class into superclass/mixin/instantiation detection. Key deviation: the JS tree-sitter grammar represents `class_heritage` with the parent as a **direct named child** (not via a `value` field as the TS grammar does), requiring a named-child iteration fallback in the `!foundTSClauses` branch. `matcher.go`'s `interface_extends` case was corrected from `EdgeTypeCalls` → `EdgeTypeInherits` (a stored semantics change, hence `SchemaVersion` bumped 9→10). Two new linker functions (`LinkJSTypeRelations`, `LinkRubyTypeRelations`) handle cross-file resolution; unresolvable targets go to the `inherits_unresolved`/`implements_unresolved` ledger. All 13 new tests pass (8 JS/TS, 5 Ruby); `BenchmarkIndexCold` holds at 11.3s for 1200 files.
 
 ### Phase I.3 — Persisted import edges (JS/TS/Ruby) `pending`
 

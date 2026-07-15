@@ -21,7 +21,7 @@ import (
 // "partial". Tracked variables are module-scope declarations and locals
 // captured by nested functions; function-local variables stay out of the
 // graph.
-func extractJSVariables(file, service, langTag, grammarLang string, src []byte) ([]graph.Node, []graph.Edge) {
+func extractJSVariables(file, service, langTag, grammarLang string, src []byte) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
 	var lang *sitter.Language
 	switch grammarLang {
 	case "typescript":
@@ -35,7 +35,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 	p.SetLanguage(lang)
 	tree, err := p.ParseCtx(context.Background(), nil, src)
 	if err != nil || tree == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	defer tree.Close()
 
@@ -43,16 +43,18 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 		file: file, service: service, langTag: langTag, src: src,
 		moduleVars: map[string]*jsVar{},
 		fnDecls:    map[string]int{},
+		classNodes: map[string]string{},
 		nodeSeen:   map[string]bool{},
 		edgeSeen:   map[string]bool{},
 	}
 	root := tree.RootNode()
+	ex.preCollectClasses(root)
 	ex.collectTopLevel(root)
 	ex.walk(root, []*jsScope{ex.moduleScope()})
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
 	sort.Slice(ex.edges, func(i, j int) bool { return ex.edges[i].ID < ex.edges[j].ID })
-	return ex.nodes, ex.edges
+	return ex.nodes, ex.edges, ex.unresolved
 }
 
 type jsVar struct {
@@ -73,12 +75,14 @@ type jsExtractor struct {
 	src                    []byte
 
 	moduleVars map[string]*jsVar
-	fnDecls    map[string]int // top-level function name → line
+	fnDecls    map[string]int    // top-level function name → line
+	classNodes map[string]string // class/interface name → nodeID (same-file)
 
-	nodes    []graph.Node
-	edges    []graph.Edge
-	nodeSeen map[string]bool
-	edgeSeen map[string]bool
+	nodes      []graph.Node
+	edges      []graph.Edge
+	unresolved []graph.UnresolvedRef
+	nodeSeen   map[string]bool
+	edgeSeen   map[string]bool
 }
 
 // moduleScope builds the root frame, pre-populated with the module-level
@@ -226,6 +230,12 @@ func (ex *jsExtractor) collectTopLevel(root *sitter.Node) {
 			}
 		case "class_declaration":
 			ex.collectClass(stmt)
+			if nameNode := stmt.ChildByFieldName("name"); nameNode != nil {
+				classNodeID := fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, nameNode.Content(ex.src), tsLine(stmt))
+				ex.processClassHeritage(stmt, classNodeID)
+			}
+		case "interface_declaration":
+			ex.collectInterface(stmt)
 		}
 	}
 }
@@ -330,6 +340,206 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 			"fields":  strings.Join(fields, ","),
 		},
 	})
+}
+
+// preCollectClasses records all top-level class and interface names into
+// ex.classNodes so that processClassHeritage can resolve same-file parents
+// even when the parent class is declared after the child.
+func (ex *jsExtractor) preCollectClasses(root *sitter.Node) {
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		stmt := root.NamedChild(i)
+		if stmt.Type() == "export_statement" {
+			if decl := stmt.ChildByFieldName("declaration"); decl != nil {
+				stmt = decl
+			}
+		}
+		switch stmt.Type() {
+		case "class_declaration":
+			if n := stmt.ChildByFieldName("name"); n != nil {
+				name := n.Content(ex.src)
+				id := fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, tsLine(stmt))
+				ex.classNodes[name] = id
+			}
+		case "interface_declaration":
+			if n := stmt.ChildByFieldName("name"); n != nil {
+				name := n.Content(ex.src)
+				id := fmt.Sprintf("%s:%s:interface:%s:%d", ex.service, ex.file, name, tsLine(stmt))
+				ex.classNodes[name] = id
+			}
+		}
+	}
+}
+
+// processClassHeritage reads the class_heritage node of a class_declaration
+// and emits inherits/implements edges for same-file parents. Cross-file
+// parents are resolved by LinkJSTypeRelations; expression superclasses go to
+// the inherits_unresolved ledger.
+//
+// The JS and TS grammars differ:
+//  - JavaScript: class_heritage has a `value` field directly (the superclass expr).
+//  - TypeScript: class_heritage has named children extends_clause / implements_clause.
+func (ex *jsExtractor) processClassHeritage(stmt *sitter.Node, classID string) {
+	// Find class_heritage named child.
+	var heritage *sitter.Node
+	for i := 0; i < int(stmt.NamedChildCount()); i++ {
+		c := stmt.NamedChild(i)
+		if c.Type() == "class_heritage" {
+			heritage = c
+			break
+		}
+	}
+	if heritage == nil {
+		return
+	}
+
+	// Try TypeScript grammar first: look for extends_clause / implements_clause children.
+	foundTSClauses := false
+	for i := 0; i < int(heritage.NamedChildCount()); i++ {
+		clause := heritage.NamedChild(i)
+		switch clause.Type() {
+		case "extends_clause":
+			foundTSClauses = true
+			// TypeScript extends_clause: `value` field contains the parent.
+			val := clause.ChildByFieldName("value")
+			if val == nil {
+				// No value field — check first named child (some grammar versions).
+				if clause.NamedChildCount() > 0 {
+					val = clause.NamedChild(0)
+				}
+			}
+			if val == nil {
+				continue
+			}
+			ex.resolveExtendsValue(classID, val)
+		case "implements_clause":
+			foundTSClauses = true
+			// Each named child is a type_identifier (or generic_type etc.).
+			for j := 0; j < int(clause.NamedChildCount()); j++ {
+				ti := clause.NamedChild(j)
+				ex.resolveImplementsType(classID, ti)
+			}
+		}
+	}
+
+	if !foundTSClauses {
+		// JavaScript grammar: the parent expression is a direct named child of
+		// class_heritage (no extends_clause wrapper, no value field).
+		if heritage.NamedChildCount() > 0 {
+			ex.resolveExtendsValue(classID, heritage.NamedChild(0))
+		}
+	}
+}
+
+// resolveExtendsValue processes the value of an extends clause: emits an
+// inherits edge when the parent resolves same-file, or ledger entry otherwise.
+func (ex *jsExtractor) resolveExtendsValue(classID string, val *sitter.Node) {
+	switch val.Type() {
+	case "identifier", "type_identifier":
+		parentName := val.Content(ex.src)
+		if parentID, ok := ex.classNodes[parentName]; ok {
+			ex.addEdge(graph.EdgeTypeInherits, classID, parentID, graph.ConfidenceStatic,
+				map[string]string{"via": "extends"})
+		} else {
+			ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+				Service: ex.service, File: ex.file,
+				Line: tsLine(val), Name: parentName, Kind: "inherits_unresolved",
+			})
+		}
+	default:
+		// Expression superclass (e.g. mixin(Base)) — never guessed.
+		ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+			Service: ex.service, File: ex.file,
+			Line: tsLine(val), Name: val.Content(ex.src), Kind: "inherits_unresolved",
+		})
+	}
+}
+
+// resolveImplementsType processes one type in an implements clause.
+func (ex *jsExtractor) resolveImplementsType(classID string, ti *sitter.Node) {
+	name := ""
+	switch ti.Type() {
+	case "type_identifier":
+		name = ti.Content(ex.src)
+	case "generic_type":
+		if base := ti.ChildByFieldName("name"); base != nil {
+			name = base.Content(ex.src)
+		}
+	}
+	if name == "" {
+		return
+	}
+	if ifaceID, ok := ex.classNodes[name]; ok {
+		ex.addEdge(graph.EdgeTypeImplements, classID, ifaceID, graph.ConfidenceStatic,
+			map[string]string{"nominal": "true"})
+	} else {
+		ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+			Service: ex.service, File: ex.file,
+			Line: tsLine(ti), Name: name, Kind: "implements_unresolved",
+		})
+	}
+}
+
+// collectInterface emits a NodeTypeInterface node for a TypeScript
+// interface_declaration and inherits edges for extends_type_clause parents.
+func (ex *jsExtractor) collectInterface(stmt *sitter.Node) {
+	nameNode := stmt.ChildByFieldName("name")
+	if nameNode == nil {
+		return
+	}
+	name := nameNode.Content(ex.src)
+	nodeID := fmt.Sprintf("%s:%s:interface:%s:%d", ex.service, ex.file, name, tsLine(stmt))
+
+	// Collect method signatures for the methods meta field.
+	var methods []string
+	if body := stmt.ChildByFieldName("body"); body != nil {
+		for i := 0; i < int(body.NamedChildCount()); i++ {
+			m := body.NamedChild(i)
+			switch m.Type() {
+			case "property_signature", "method_signature", "call_signature",
+				"construct_signature", "index_signature":
+				if mn := m.ChildByFieldName("name"); mn != nil {
+					methods = append(methods, mn.Content(ex.src))
+				}
+			}
+		}
+	}
+	ex.addNode(graph.Node{
+		ID: nodeID, Type: graph.NodeTypeInterface, Label: name,
+		Service: ex.service, File: ex.file, Line: tsLine(stmt), Language: ex.langTag,
+		Meta: map[string]string{"methods": strings.Join(methods, ",")},
+	})
+
+	// Interface extends: inherits edges between interface nodes.
+	for i := 0; i < int(stmt.NamedChildCount()); i++ {
+		c := stmt.NamedChild(i)
+		if c.Type() != "extends_type_clause" {
+			continue
+		}
+		for j := 0; j < int(c.NamedChildCount()); j++ {
+			parent := c.NamedChild(j)
+			parentName := ""
+			switch parent.Type() {
+			case "type_identifier":
+				parentName = parent.Content(ex.src)
+			case "generic_type":
+				if base := parent.ChildByFieldName("name"); base != nil {
+					parentName = base.Content(ex.src)
+				}
+			}
+			if parentName == "" {
+				continue
+			}
+			if parentID, ok := ex.classNodes[parentName]; ok {
+				ex.addEdge(graph.EdgeTypeInherits, nodeID, parentID, graph.ConfidenceStatic,
+					map[string]string{"via": "extends"})
+			} else {
+				ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+					Service: ex.service, File: ex.file,
+					Line: tsLine(parent), Name: parentName, Kind: "inherits_unresolved",
+				})
+			}
+		}
+	}
 }
 
 // attribution returns the graph node ID of the nearest named enclosing
@@ -488,6 +698,8 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		ex.handleRead(node, scopes)
 	case "call_expression":
 		ex.handleCall(node, scopes)
+	case "new_expression":
+		ex.handleNew(node, scopes)
 	}
 
 	for i := 0; i < int(node.NamedChildCount()); i++ {
@@ -671,6 +883,41 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 			graph.ConfidenceInferred,
 			map[string]string{"mode": mode, "data_type": v.dataType})
 	}
+}
+
+// handleNew emits an instantiates edge when the new_expression constructor
+// resolves to a same-file class node. Cross-file constructors are resolved by
+// LinkJSTypeRelations; unresolvable ones stay silent (no edge, no ledger).
+func (ex *jsExtractor) handleNew(node *sitter.Node, scopes []*jsScope) {
+	ctor := node.ChildByFieldName("constructor")
+	if ctor == nil {
+		return
+	}
+	if ctor.Type() != "identifier" && ctor.Type() != "type_identifier" {
+		return
+	}
+	className := ctor.Content(ex.src)
+	classID, ok := ex.classNodes[className]
+	if !ok {
+		return // not same-file; linker may resolve cross-file
+	}
+	fromID := attribution(scopes, ex)
+	if fromID == "" {
+		fromID = ex.moduleAttr(node)
+	}
+	if fromID == "" || fromID == classID {
+		return
+	}
+	edgeID := fmt.Sprintf("instantiates:%s->%s", fromID, classID)
+	if ex.edgeSeen[edgeID] {
+		return
+	}
+	ex.edgeSeen[edgeID] = true
+	ex.edges = append(ex.edges, graph.Edge{
+		ID: edgeID, From: fromID, To: classID,
+		Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceStatic,
+		Meta: map[string]string{"count": "1"},
+	})
 }
 
 // collectIdentifiers visits the identifiers *bound* under n (parameter
