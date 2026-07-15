@@ -621,22 +621,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkDatastores(allNodes)); err != nil {
 		return nil, err
 	}
-	if err := writeEdges(linker.LinkBrokerChannels(allNodes)); err != nil {
-		return nil, err
-	}
-	if err := writeEdges(linker.LinkWebSocketMessages(allNodes)); err != nil {
-		return nil, err
-	}
 	if err := writeEdges(linker.LinkSSEClients(allNodes)); err != nil {
-		return nil, err
-	}
-	if err := writeEdges(linker.LinkHubFanout(allNodes)); err != nil {
-		return nil, err
-	}
-	if err := writeEdges(linker.LinkJobQueues(allNodes)); err != nil {
-		return nil, err
-	}
-	if err := writeEdges(linker.LinkPusherChannels(allNodes)); err != nil {
 		return nil, err
 	}
 
@@ -658,7 +643,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 
-	// Cross-service contract linking (HTTP API calls + nav-links via contracts/http.yaml).
+	// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
 	contractRules, err := contract.Load(contractdata.FS, "")
 	if err != nil {
 		return nil, fmt.Errorf("contract rules: %w", err)

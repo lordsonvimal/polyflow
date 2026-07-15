@@ -1,0 +1,32 @@
+# contracts/hub.yaml — ports LinkHubFanout.
+# Fan-out: every hub.Broadcast() call site in a service reaches every
+# hub.Subscribe() call site in the same service. Channel key is empty
+# (all broadcasts reach all subscribes); same_service_only prevents
+# cross-service false positives.
+#
+# Limitation: the engine indexes one consumer per key (first-seen wins), so
+# when there are multiple subscribers only the first is linked per broadcast.
+# For the common single-hub, single-subscriber case this is correct.
+# Multi-subscriber fan-out is tracked as a follow-up (engine fanout mode).
+#
+# Confidence is always inferred (normalized tier with empty key) — the engine
+# cannot distinguish single-hub vs multi-hub-type confidence; partial
+# confidence for multiple hub types is not reproduced here.
+version: "1"
+contracts:
+  - kind: hub
+    producer:
+      node: publisher
+      where: {pattern: hub_broadcast_call}
+      key: []                     # empty key: all broadcasts match all subscribes
+    consumer:
+      node: subscriber
+      where: {pattern: hub_subscribe_call}
+      key: []
+    normalizers: []
+    match: [normalized]           # skip exact so confidence stays inferred, not static
+    edge:
+      type: hub_broadcast
+      id_prefix: hub
+      same_service: same_service_only   # hub fanout is within-service only
+    unmatched: drop

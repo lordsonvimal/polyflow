@@ -92,11 +92,7 @@ func fixtureGraph(t *testing.T) ([]graph.Node, []graph.Edge) {
 	allEdges = append(allEdges, jsEdges...)
 	allEdges = append(allEdges, linker.LinkRouteHandlers(allNodes)...)
 	allEdges = append(allEdges, linker.LinkDatastores(allNodes)...)
-	allEdges = append(allEdges, linker.LinkBrokerChannels(allNodes)...)
-	allEdges = append(allEdges, linker.LinkWebSocketMessages(allNodes)...)
-	allEdges = append(allEdges, linker.LinkHubFanout(allNodes)...)
-	allEdges = append(allEdges, linker.LinkJobQueues(allNodes)...)
-	allEdges = append(allEdges, linker.LinkPusherChannels(allNodes)...)
+	allEdges = append(allEdges, linker.LinkSSEClients(allNodes)...)
 
 	// Broker hint pass, as a workspace links: entry would drive it — the
 	// bunny fixture's exchange is variable-held, so only a hint can connect

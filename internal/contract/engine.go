@@ -31,6 +31,7 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 			}
 
 			cands := filterByService(consumers, targetSvc)
+			cands = filterBySameServicePolicy(cands, rule.Edge.SameService, prod.Service)
 			exactIdx, normIdx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
 
 			matched := matchProducer(prod, rule, norms, env, exactIdx, normIdx, &result)
@@ -183,6 +184,34 @@ func matchesWhere(n *graph.Node, where map[string]string) bool {
 	return true
 }
 
+// filterBySameServicePolicy pre-filters consumers based on the same_service
+// policy so that the consumer index is built only from eligible nodes. This
+// prevents same-service consumers from occupying index slots that should go
+// to cross-service consumers (skip policy) and vice-versa (same_service_only).
+// skip_unless_meta and keep are handled by sameServiceAllowed post-lookup.
+func filterBySameServicePolicy(consumers []*graph.Node, policy, prodService string) []*graph.Node {
+	switch policy {
+	case "skip":
+		out := consumers[:0:0]
+		for _, c := range consumers {
+			if c.Service != prodService {
+				out = append(out, c)
+			}
+		}
+		return out
+	case "same_service_only":
+		out := consumers[:0:0]
+		for _, c := range consumers {
+			if c.Service == prodService {
+				out = append(out, c)
+			}
+		}
+		return out
+	default:
+		return consumers
+	}
+}
+
 // filterByService returns consumers from targetSvc, or all consumers when
 // targetSvc is empty (no restriction).
 func filterByService(consumers []*graph.Node, targetSvc string) []*graph.Node {
@@ -291,19 +320,23 @@ func candidateMethodOverrides(n *graph.Node, spec EndpointSpec) []map[string]str
 }
 
 // sameServiceAllowed checks whether the same-service policy permits emitting
-// an edge between prod and cons. Cross-service pairs are always allowed.
+// an edge between prod and cons.
+//
+// Policies: "skip" (only cross-service), "keep" (both), "same_service_only"
+// (only within-service), "skip_unless_meta:<key>" (skip same-service unless
+// producer meta key is set; cross-service always allowed).
 func sameServiceAllowed(policy string, prod, cons *graph.Node) bool {
-	if prod.Service != cons.Service {
-		return true
-	}
+	sameService := prod.Service == cons.Service
 	switch {
 	case policy == "skip":
-		return false
+		return !sameService
 	case policy == "keep":
 		return true
+	case policy == "same_service_only":
+		return sameService
 	case strings.HasPrefix(policy, "skip_unless_meta:"):
 		key := strings.TrimPrefix(policy, "skip_unless_meta:")
-		return prod.Meta[key] != ""
+		return !sameService || prod.Meta[key] != ""
 	default:
 		return true
 	}
