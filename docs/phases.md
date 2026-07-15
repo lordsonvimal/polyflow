@@ -36,6 +36,10 @@ prerequisite banner is authoritative if it conflicts):
    any time after step 3; L.W1/L.W2 even earlier.
 7. **S.0–S.4** (semantic-search) — independent parallel track; depends only
    on the graph store. Can run alongside steps 2–6; must finish before P.1.
+   **Tier I** (I.1–I.3, intra-language semantic links: inherits/implements/
+   instantiates/imports) is likewise a no-prerequisite parallel track —
+   slot it anywhere after E.1; I.2's cross-file resolution improves once
+   L.W1's global tables exist but does not wait for them.
 8. **Tier D** (doctor --propose, ledger burn-down) and **Tier C** (CI/PR
    freshness) — need G.5 and F-states respectively.
 9. **P.1–P.2** (proof benchmarks) — last; P.1 needs A + E + S, P.2 needs G.5.
