@@ -339,14 +339,21 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 	}
 
-	// Variable-tracking layer: package globals/consts, structs, mutations,
-	// closure captures, by-ref/by-value flow (reuses this SSA build).
-	varNodes, varEdges := extractVariables(ssaPkgs, dir, service, fset, inService, resolveFunc)
-	edges = append(edges, varEdges...)
+	// Variable-tracking layer: package globals/consts, structs, interface nodes,
+	// mutations, closure captures, inherits (embedding), instantiates.
+	varResult := extractVariables(ssaPkgs, dir, service, fset, inService, resolveFunc)
+	edges = append(edges, varResult.Edges...)
+
+	// Implements-edge sweep: in-service structs → in-service and external
+	// interfaces they satisfy (type-checker-proven, confidence static).
+	implNodes, implEdges := extractImplements(ssaPkgs, service, varResult.StructIDs, varResult.InterfaceIDs)
+	edges = append(edges, implEdges...)
+
+	allNodes := append(varResult.Nodes, implNodes...)
 
 	referenced := collectReferenced(prog, ssaPkgs, allFns, resolveFunc)
 
-	return SemanticResult{Nodes: varNodes, Edges: edges, Referenced: referenced}
+	return SemanticResult{Nodes: allNodes, Edges: edges, Referenced: referenced}
 }
 
 // collectReferenced finds functions that are referenced without being called
@@ -533,4 +540,145 @@ func matchesInvoke(call *ssa.CallCommon, fn *ssa.Function) bool {
 		return false
 	}
 	return fn.Name() == call.Method.Name()
+}
+
+// extractImplements emits implements edges from in-service struct types to
+// every interface they satisfy — both in-service interfaces (in interfaceIDs)
+// and external interfaces (imported by service packages). All edges carry
+// static confidence (type-checker-proven) and meta.nominal=false (Go
+// satisfaction is structural). External interface targets become synthetic
+// NodeTypeInterface nodes with no file/line and meta.external=true.
+func extractImplements(
+	ssaPkgs []*ssa.Package,
+	service string,
+	structIDs map[*types.Named]string,
+	interfaceIDs map[*types.Named]string,
+) ([]graph.Node, []graph.Edge) {
+	if len(structIDs) == 0 {
+		return nil, nil
+	}
+
+	// svcTypesPkgs: the type packages belonging to this service (not external).
+	svcTypesPkgs := make(map[*types.Package]bool, len(ssaPkgs))
+	for _, p := range ssaPkgs {
+		if p != nil {
+			svcTypesPkgs[p.Pkg] = true
+		}
+	}
+
+	var nodes []graph.Node
+	var edges []graph.Edge
+	nodeSeen := map[string]bool{}
+	edgeSeen := map[string]bool{}
+
+	addEdge := func(from, to string, meta map[string]string) {
+		id := fmt.Sprintf("semantic:implements:%s->%s", from, to)
+		if edgeSeen[id] {
+			return
+		}
+		edgeSeen[id] = true
+		edges = append(edges, graph.Edge{
+			ID: id, From: from, To: to, Type: graph.EdgeTypeImplements,
+			Confidence: graph.ConfidenceStatic, Meta: meta,
+		})
+	}
+
+	// syntheticIfaceID returns the node ID for a synthetic external interface
+	// node. The node is created the first time a particular (pkgPath, name)
+	// pair is seen.
+	syntheticIfaceID := func(pkgPath, name string) string {
+		id := fmt.Sprintf("%s::interface:%s.%s:0", service, pkgPath, name)
+		if !nodeSeen[id] {
+			nodeSeen[id] = true
+			nodes = append(nodes, graph.Node{
+				ID:       id,
+				Type:     graph.NodeTypeInterface,
+				Label:    pkgPath + "." + name,
+				Service:  service,
+				Language: "go",
+				Meta:     map[string]string{"external": "true"},
+			})
+		}
+		return id
+	}
+
+	// seenExtIface deduplicates the external interface collection across
+	// service packages that import the same external package.
+	type extIfaceEntry struct {
+		iface    *types.Interface
+		nodeID   string
+	}
+	seenExtIface := map[string]extIfaceEntry{} // pkgPath.Name → entry
+
+	for _, p := range ssaPkgs {
+		if p == nil {
+			continue
+		}
+		// Collect external candidate interfaces from this package's imports.
+		for _, imp := range p.Pkg.Imports() {
+			if svcTypesPkgs[imp] {
+				continue
+			}
+			scope := imp.Scope()
+			for _, name := range scope.Names() {
+				tn, ok := scope.Lookup(name).(*types.TypeName)
+				if !ok {
+					continue
+				}
+				iface, ok := tn.Type().Underlying().(*types.Interface)
+				if !ok || iface.NumMethods() == 0 {
+					continue
+				}
+				key := imp.Path() + "." + name
+				if _, already := seenExtIface[key]; !already {
+					nodeID := syntheticIfaceID(imp.Path(), name)
+					seenExtIface[key] = extIfaceEntry{iface: iface, nodeID: nodeID}
+				}
+			}
+		}
+
+		// For each in-service named type that is a tracked struct, check
+		// interface satisfaction.
+		scope := p.Pkg.Scope()
+		for _, name := range scope.Names() {
+			tn, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok || tn.IsAlias() {
+				continue
+			}
+			T := tn.Type()
+			named, ok := T.(*types.Named)
+			if !ok {
+				continue
+			}
+			structID, isStruct := structIDs[named]
+			if !isStruct {
+				continue
+			}
+			ptrT := types.NewPointer(T)
+
+			// In-service interfaces.
+			for ifaceNamed, ifaceID := range interfaceIDs {
+				iface, ok := ifaceNamed.Underlying().(*types.Interface)
+				if !ok || iface.NumMethods() == 0 {
+					continue
+				}
+				if types.Implements(T, iface) || types.Implements(ptrT, iface) {
+					addEdge(structID, ifaceID, map[string]string{"nominal": "false"})
+				}
+			}
+
+			// External interfaces (collected above across all packages).
+			for _, entry := range seenExtIface {
+				if types.Implements(T, entry.iface) || types.Implements(ptrT, entry.iface) {
+					addEdge(structID, entry.nodeID, map[string]string{
+						"nominal": "false", "external": "true",
+					})
+				}
+			}
+		}
+	}
+
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
 }
