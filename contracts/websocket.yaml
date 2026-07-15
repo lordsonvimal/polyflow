@@ -1,0 +1,23 @@
+# contracts/websocket.yaml — ports LinkWebSocketMessages.
+# Links typed WebSocket senders ({type: "battery", …}) to the dispatch cases
+# handling the same message type, including across services (tether client ↔
+# server). quote_strip normalises the surrounding quotes from captured string
+# literals; unmatched typed sends go to the ledger.
+version: "1"
+contracts:
+  - kind: websocket
+    producer:
+      node: publisher
+      where: {pattern: ws_send_typed}
+      key: [message_type]
+    consumer:
+      node: subscriber
+      where: {pattern: ws_dispatch_case}
+      key: [message_type]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: ws_send
+      id_prefix: ws
+      same_service: keep
+    unmatched: ledger

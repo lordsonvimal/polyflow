@@ -309,9 +309,24 @@ the path portion (from the first `/`) before segment-by-segment comparison.
 All 53 G.0 + 17 new tests pass; e2e, trace, and linker suites unaffected.
 `BenchmarkIndexCold` holds (~11 s cold on the synthetic 1 200-file tree).
 
-### Phase G.2 — Port messaging/eventing `pending`
+### Phase G.2 — Port messaging/eventing `done`
 `contracts/{amqp,hub,jobs,pusher,sse,websocket}.yaml`; parity-gate each; delete the
 bespoke linkers.
+
+**Outcome.** All six YAML files shipped. `LinkBrokerChannels`, `LinkHubFanout`,
+`LinkJobQueues`, `LinkPusherChannels`, and `LinkWebSocketMessages` deleted from
+`internal/linker/linker.go` and all call sites removed from indexer, e2e, and trace
+tests. `LinkSSEClients` kept as a structural (file co-location) linker — cross-service
+EventSource URL matching is already handled by `http.yaml`; an empty placeholder
+`contracts/sse.yaml` documents this decision. Two engine additions were required:
+(1) `KindHub Kind = "hub"` constant; (2) `filterBySameServicePolicy` pre-filter and
+`same_service_only` policy — without pre-filtering, same-service consumers occupied
+index slots under skip/same_service_only policies, blocking cross-service consumers
+(first-seen wins in the hash index). Hub fan-out uses `key: []` (empty key, broadcast
+semantics) with `same_service_only`; limitation: first-seen wins means only the first
+subscriber per empty-key slot is linked per broadcast node. Fixture chain tests for hub
+and websocket ported to the contract engine; `EdgeMeta["message_type"]` assertion
+updated to `EdgeLabel` (contract engine carries the normalized key as edge label).
 
 ### Phase G.3 — Close the route-group gap (pattern + enrichment pass + rule) `pending`
 Router-group prefixes are **not** reachable by a pure normalizer: `gin_route_group`

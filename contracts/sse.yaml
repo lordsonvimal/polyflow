@@ -1,0 +1,16 @@
+# contracts/sse.yaml — SSE wiring notes.
+#
+# SSE cross-service linking: EventSource(url) → server SSE endpoint by URL/
+# path is handled by contracts/http.yaml. The eventsource_connect pattern
+# emits an http_client node, which the http.yaml API-call variant already
+# matches to http_handler nodes (datastar_sse / sse_* patterns) by path.
+# No separate contract rule is required.
+#
+# SSE within-service wiring: the structural link from an EventSource object
+# to its onmessage handler within the same JS file (es.onmessage = …) is
+# file-co-location, not a channel-key match. It cannot be expressed as a
+# producer/consumer contract rule (same limitation as LinkRouteHandlers and
+# LinkDatastores). LinkSSEClients in internal/linker/linker.go is kept as
+# a structural linker alongside those.
+version: "1"
+contracts: []
