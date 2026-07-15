@@ -23,6 +23,9 @@ trustworthy blast radius on any repo** — and to prove it:
 - **Tier L** — "any repo" needs more *languages* (Python first) **and the
   legacy-web idioms** real projects wire flows through (ERB views, `window`
   globals, jQuery — the L.W phases).
+- **Tier I** — blast radius needs the *type-relationship links* every
+  language has but the graph lacks (inherits/implements/instantiates/
+  imports — the intra-language semantics audit, 2026-07-15).
 - **Tier D** — the self-improving loop needs an *operator workflow*.
 - **Tier C** — the graph must stay *fresh* (CI + staleness).
 - **Tier S** — humans and agents need *natural-language retrieval* of nodes
@@ -291,6 +294,14 @@ language repeats; Python phases below are its first instantiation):
    applicable") — the item may be skipped only with that written claim,
    never silently. The L.W audit (2026-07) showed this layer is where
    legacy flows hide; omitting it reopens that exact gap class.
+9. Intra-language semantics (Tier I): the language's idioms for the four
+   type-relationship edges — `inherits` (subclassing, mixins, embedding),
+   `implements` (declared clauses or checker-computed satisfaction),
+   `instantiates` (constructor forms), and file-level `imports` where
+   cross-file resolution is heuristic (descope with a written claim where
+   a type-checked analyzer already carries it — I.3's Go precedent). For
+   Python: `class Sub(Base)`, ABC/`Protocol` conformance, `Foo()`
+   construction, module imports.
 
 ### Phase L.P0 — Python grammar + core patterns `pending`
 
@@ -488,6 +499,192 @@ $.ajax({url}) → cross-service backend route` closes end-to-end in
 
 ---
 
+## Tier I — Intra-language semantic links (inheritance, instantiation, implements, imports)
+
+*Depends only on current infra (SSA analysis + tree-sitter matcher + linker
+passes) — independent of the G/F/R architecture plans; may run in parallel
+with any tier. The audit (2026-07-15) found three type-level relationships
+that are computed or capturable today but never become edges, so blast
+radius silently omits them: changing a base class does not impact its
+subclasses, changing an interface does not impact its implementors, and
+"who constructs this type" is unanswerable.*
+
+**Pinned model additions** (`internal/graph/model.go`; every phase that lands
+one of these bumps `graph.SchemaVersion` per `docs/phases.md`):
+
+```go
+// Type-relationship edges. Direction follows the uses_type convention:
+// the edge points FROM the dependent TO the definition it depends on.
+// Impact traversal is bidirectional (internal/impact's direction param),
+// so "impact of Base" follows incoming inherits edges to every subclass.
+
+// inherits: subclass → superclass, subinterface → superinterface,
+// embedding struct → embedded type (meta: via=extends|superclass|
+// embedding|mixin; mixin adds mixin=include|extend|prepend).
+EdgeTypeInherits EdgeType = "inherits"
+
+// implements: struct/class → interface it satisfies (meta:
+// nominal=true for declared `implements` clauses, nominal=false for
+// Go's structural satisfaction computed by the type checker).
+EdgeTypeImplements EdgeType = "implements"
+
+// instantiates: function/method → struct/class it constructs
+// (composite literal, new(), `new X()`, `X.new`). Deduped per
+// (function, type) pair; meta: count=<n>.
+EdgeTypeInstantiates EdgeType = "instantiates"
+```
+
+Confidence: `static` when the type checker proves it (all Go edges, resolved
+same-file JS/TS/Ruby), `inferred` when resolution crossed files through the
+import map or the L.W1 global/constant tables. Unresolvable parents (dynamic
+superclass expressions, unresolved constants) are **never guessed**:
+`UnresolvedRef.Kind = "inherits_unresolved" | "implements_unresolved"`.
+
+### Phase I.1 — Go: interface nodes + implements/inherits/instantiates `pending`
+
+**Problem.** Go emits **no interface nodes at all** — `NodeTypeInterface` is
+only ever produced by the TypeScript patterns (`patterns/go/functions.yaml`
+has no interface query). Worse, `go_semantic.go`'s `collectReferenced` part 2
+**already computes** `types.Implements(T, iface)` — but only against
+external imported interfaces, and only to classify callback roots; the
+relationship itself is discarded. Struct embedding and composite-literal
+construction produce nothing.
+
+**Deliverable.** All in the existing SSA pass (`internal/parser/
+go_variables.go` + `go_semantic.go`) — zero new pattern files; every edge is
+type-checker-proven, confidence `static`:
+
+- **Interface nodes.** In `extractVariables`' package-member walk (the loop
+  that already emits `NodeTypeStruct` from `*ssa.Type` members), named types
+  whose underlying is `*types.Interface` emit `NodeTypeInterface` nodes,
+  meta `methods` = JSON `[{name, signature}]` (mirroring the struct `fields`
+  meta convention).
+- **`implements` edges.** Lift `collectReferenced` part 2's
+  `types.Implements(T, iface) || types.Implements(*T, iface)` sweep into a
+  shared helper that (a) keeps feeding callback classification unchanged and
+  (b) emits edges. Candidate interfaces extend from *external-only* to
+  **in-service interfaces too** (the new nodes above); external satisfied
+  interfaces get `meta.external=true` with a synthetic interface node
+  (`<pkgpath>.<Name>`, no file/line — the `unresolved:<svc>` precedent).
+  Empty interfaces stay skipped (`NumMethods() > 0` guard already exists);
+  `meta.nominal=false` (Go satisfaction is structural).
+- **`inherits` edges (embedding).** For each struct's `fields` walk: fields
+  with `Anonymous() == true` whose type is a named in-service struct or
+  interface → `inherits` edge, `meta.via=embedding` (honest label: Go
+  embedding is promotion, not subtyping — the meta says which semantics).
+- **`instantiates` edges.** In the existing instruction walk (the one
+  emitting reads/writes/captures): `*ssa.Alloc` instructions and struct-typed
+  composite-literal values whose named type is in the pass's `structIDs` map
+  → `instantiates` edge from the enclosing function, deduped per
+  (function, type) with `meta.count`.
+
+**Worked example** (fixture `testdata/semantics/go_iface/`):
+
+```go
+type Store interface { Get(id string) (string, error) }   // interface node
+type memStore struct{ data map[string]string }            // struct node (exists)
+func (m *memStore) Get(id string) (string, error) { … }   // method (exists)
+type auditStore struct{ memStore }                        // embeds memStore
+func NewMemStore() *memStore { return &memStore{…} }      // constructor
+```
+
+Expected new edges: `memStore -implements-> Store` (nominal=false),
+`auditStore -implements-> Store` (promoted method set),
+`auditStore -inherits-> memStore` (via=embedding),
+`NewMemStore -instantiates-> memStore`.
+
+**Tests.** The fixture above asserting all four edges; negative: empty
+interface → no implements edges; interface satisfied only by an
+out-of-service type → no edge (in-service sweep only); existing
+callback-classification tests unchanged (proves the lift is behavior-
+preserving). `SchemaVersion` bump test.
+
+**Acceptance.** `polyflow impact --target <Store node>` lists both structs
+and their methods; before this phase it lists nothing.
+
+### Phase I.2 — JS/TS/Ruby: class heritage + instantiation `pending`
+
+**Problem.** `js_variables.go`'s `collectClass` reads the class body but
+ignores the heritage clause — `class Admin extends User` produces two
+disconnected class nodes. The TS `interface_extends` pattern exists but
+`matcher.go`'s node-type mapping (the `interface_declaration |
+interface_extends` case) hard-wires it to `EdgeTypeCalls` — an *extends*
+relationship stored as a call. TS `implements` clauses aren't captured at
+all. Ruby `superclass` is captured only inside `active_job.yaml` (to
+classify jobs); generic classes, `include`/`extend`/`prepend` mixins, and
+`Foo.new` produce nothing. `new_expression` in JS is used only for local
+data-type inference.
+
+**Deliverable.**
+- **JS/TS `inherits`:** `collectClass` reads the `class_heritage`
+  (`extends`) clause; resolve the parent identifier **imports-first, then
+  L.W1 globals when present** (order pinned in L.W1); same-file resolution
+  `static`, cross-file `inferred` + `meta.via=extends`. Unresolved →
+  `inherits_unresolved` ledger. Expression superclasses
+  (`class X extends mixin(Base)`) → ledger, never guessed.
+- **TS `implements` + interface `inherits`:** capture the
+  `implements_clause` on class declarations → `implements` edges
+  (`meta.nominal=true`); fix the matcher mapping so `interface_extends`
+  emits `inherits` between interface nodes instead of `calls`
+  (stored-graph note: this is a semantics change → `SchemaVersion` bump
+  covers it; no alias needed since the old `calls` edge was simply wrong).
+- **JS/TS `instantiates`:** in `js_variables.go`'s walk (attribution frames
+  already track the enclosing function), `new_expression` whose constructor
+  resolves through the same imports-then-globals order → `instantiates`
+  edge; unresolvable constructors stay silent *for edges* but keep the
+  existing data-type inference (no regression).
+- **Ruby:** `ruby_variables.go`'s walk already carries the enclosing class —
+  extend it: generic `superclass` on any class declaration → `inherits`
+  (`meta.via=superclass`); `include M`/`extend M`/`prepend M` → `inherits`
+  with `meta.via=mixin, mixin=include|extend|prepend`; `Foo.new` →
+  `instantiates` from the enclosing method. Constant resolution uses a
+  per-service class-name table (the L.W1 global-table shape); collisions →
+  candidate edges to each + ledger (recall over precision).
+
+**Tests.** Per language: extends/superclass fixture (2 files, cross-file
+resolution `inferred`); TS implements + interface-extends fixture asserting
+edge types (regression: no `calls` edge between interfaces); instantiation
+fixtures; Ruby mixin fixture (all three keywords); negatives: expression
+superclass → ledger; ambiguous Ruby constant → N candidate edges + ledger.
+
+**Acceptance.** On a JS fixture, `impact --target User` includes `Admin`;
+on a Ruby fixture, `impact` on a mixin module includes every including
+class. Existing chessleap index parity holds (`BenchmarkIndexCold`).
+
+### Phase I.3 — Persisted import edges (JS/TS/Ruby) `pending`
+
+**Problem.** `EdgeTypeImports` exists but is emitted **only** at the templ
+`<script src>` seam (`internal/linker/templ_layer.go`). The JS import map
+(Phase 0.3) drives call resolution but the file-dependency relation itself
+is never persisted — "what breaks if I move/delete this file" has no
+first-hop answer. Ruby `require_relative` is invisible.
+
+**Deliverable.** A linker pass emitting `imports` edges **between the
+`NodeTypeFile` containment nodes** (the T.6 backbone — file nodes already
+exist and are synthesized during linking):
+- JS/TS: each resolved entry of the existing import map → one edge importing
+  file → imported file (`static`; the map already did the resolution).
+  Bare-specifier (npm) imports are **out of scope** — they're dependency
+  edges, not file edges; note the count in file-node meta
+  (`external_imports=<n>`), no ledger spam.
+- Ruby: `require_relative` (path-resolvable, `static`); plain `require` of
+  in-service files under Rails autoload conventions is **not** guessed —
+  Rails constant resolution is L.W-style future work; ledger only when a
+  `require_relative` target file doesn't exist (`import_unresolved`).
+- **Go is deliberately descoped:** go/packages already resolves cross-file
+  semantics precisely — persisted per-file import edges would add graph bulk
+  without recall (the `calls`/`uses_type`/`implements` edges carry it).
+  Stated here so nobody "completes" the tier by adding them.
+
+**Tests.** Import-map fixture asserting file→file edges; `require_relative`
+fixture; missing-target negative → ledger; Go negative (no import edges).
+
+**Acceptance.** `impact --target <file>` (file direction) first hop lists
+every file importing it, on a fixture where no call edges exist between the
+files (proves the edge carries information calls don't).
+
+---
+
 ## Tier D — Self-improving loop, operationalized
 
 *Depends on F.4 (observed_only_gap list + candidate-rule auto-proposals
@@ -650,6 +847,9 @@ Tier A: A.1 ─> A.2 ─> A.3                Tier E: E.1 ─> E.2 ─> E.3 ─�
 Tier D: D.1 ─> D.2                       Tier L: L.P0 ─> L.P1 ─> L.P2 ─> L.P3 · L.W0 ─> L.W1 ─> L.W2 (legacy web)
         │                                                             │
 Tier C: C.1 (anytime after 2.1) · C.2 (after R.2)                    │
+        │                                                             │
+Tier I: I.1 ─> I.2 ─> I.3 (no prerequisites; anytime — I.2's         │
+        cross-file resolution improves once L.W1 lands)              │
         │                                                             │
 Tier S: S.0 ─> S.2 (docs/semantic-search-plan.md; S.4 needs Tier E)  │
         │                                                             │
