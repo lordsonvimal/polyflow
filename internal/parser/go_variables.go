@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/ssa"
@@ -15,19 +16,31 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
+// varExtractResult is the output of extractVariables. It carries nodes and
+// edges plus the type maps that the implements sweep in AnalyzeService needs.
+type varExtractResult struct {
+	Nodes        []graph.Node
+	Edges        []graph.Edge
+	StructIDs    map[*types.Named]string // named struct → node ID
+	InterfaceIDs map[*types.Named]string // named interface → node ID
+}
+
 // extractVariables walks the already-built SSA packages and emits the
-// variable-tracking layer of the graph:
+// variable-tracking and type-relationship layers of the graph:
 //
 //   - variable nodes for package-level vars/consts and closure-captured
 //     locals (the variables whose mutation matters beyond one function —
 //     purely-local variables are deliberately NOT nodes)
 //   - struct nodes with their field list in meta
+//   - interface nodes (Tier I.1) with their method list in meta
 //   - writes/reads edges from functions to tracked globals
 //   - captures edges from the enclosing function to variables its closures
 //     capture (Go closures capture by reference)
 //   - flows_to edges when a tracked variable is passed at a call site,
 //     annotated by-ref vs by-value
 //   - uses_type edges from functions whose signatures mention a struct
+//   - inherits edges for struct embedding (Anonymous fields, via=embedding)
+//   - instantiates edges from constructors to the types they allocate
 //
 // All edges carry static confidence — they come from the type checker, not
 // heuristics.
@@ -37,7 +50,7 @@ func extractVariables(
 	fset *token.FileSet,
 	inService map[*ssa.Function]bool,
 	resolveFunc func(*ssa.Function) (string, bool),
-) ([]graph.Node, []graph.Edge) {
+) varExtractResult {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
@@ -81,10 +94,32 @@ func extractVariables(
 	// globalIDs maps each package-level *ssa.Global to its node ID so the
 	// instruction walk below can attribute loads/stores to it.
 	globalIDs := map[*ssa.Global]string{}
-	// structIDs maps a named struct type to its node ID for uses_type edges.
+	// structIDs maps a named struct type to its node ID for uses_type and
+	// inherits/instantiates edges.
 	structIDs := map[*types.Named]string{}
+	// interfaceIDs maps a named interface type to its node ID (Tier I.1).
+	interfaceIDs := map[*types.Named]string{}
 
-	// ── Package members: globals, consts, struct types ──────────────────────
+	// Local JSON-marshaling types for type metadata.
+	type fieldInfo struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Tag  string `json:"tag,omitempty"`
+	}
+	type methodInfo struct {
+		Name      string `json:"name"`
+		Signature string `json:"signature"`
+	}
+
+	// pendingEmbeds collects struct types with anonymous (embedded) fields for
+	// the inherits-edge pass that runs after all nodes are emitted.
+	type embedEntry struct {
+		structID string
+		st       *types.Struct
+	}
+	var pendingEmbeds []embedEntry
+
+	// ── Package members: globals, consts, struct types, interface types ──────
 	for _, p := range ssaPkgs {
 		if p == nil {
 			continue
@@ -127,32 +162,76 @@ func extractVariables(
 				if !ok {
 					continue
 				}
-				st, ok := named.Underlying().(*types.Struct)
-				if !ok {
-					continue
+				switch under := named.Underlying().(type) {
+				case *types.Struct:
+					fields := make([]fieldInfo, 0, under.NumFields())
+					for i := 0; i < under.NumFields(); i++ {
+						f := under.Field(i)
+						fields = append(fields, fieldInfo{Name: f.Name(), Type: f.Type().String(), Tag: under.Tag(i)})
+					}
+					fieldsJSON, _ := json.Marshal(fields)
+					id := fmt.Sprintf("%s:%s:struct:%s:%d", service, file, v.Name(), pos.Line)
+					structIDs[named] = id
+					addNode(graph.Node{
+						ID: id, Type: graph.NodeTypeStruct, Label: v.Name(),
+						Service: service, File: file, Line: pos.Line, Language: "go",
+						Meta: map[string]string{
+							"fields":      string(fieldsJSON),
+							"field_count": fmt.Sprintf("%d", under.NumFields()),
+						},
+					})
+					if under.NumFields() > 0 {
+						pendingEmbeds = append(pendingEmbeds, embedEntry{id, under})
+					}
+				case *types.Interface:
+					if under.NumMethods() == 0 {
+						continue // empty interfaces (any/interface{}) produce no edges
+					}
+					methods := make([]methodInfo, 0, under.NumMethods())
+					for i := 0; i < under.NumMethods(); i++ {
+						m := under.Method(i)
+						methods = append(methods, methodInfo{Name: m.Name(), Signature: m.Type().String()})
+					}
+					methodsJSON, _ := json.Marshal(methods)
+					id := fmt.Sprintf("%s:%s:interface:%s:%d", service, file, v.Name(), pos.Line)
+					interfaceIDs[named] = id
+					addNode(graph.Node{
+						ID: id, Type: graph.NodeTypeInterface, Label: v.Name(),
+						Service: service, File: file, Line: pos.Line, Language: "go",
+						Meta: map[string]string{"methods": string(methodsJSON)},
+					})
 				}
-				type fieldInfo struct {
-					Name string `json:"name"`
-					Type string `json:"type"`
-					Tag  string `json:"tag,omitempty"`
-				}
-				fields := make([]fieldInfo, 0, st.NumFields())
-				for i := 0; i < st.NumFields(); i++ {
-					f := st.Field(i)
-					fields = append(fields, fieldInfo{Name: f.Name(), Type: f.Type().String(), Tag: st.Tag(i)})
-				}
-				fieldsJSON, _ := json.Marshal(fields)
-				id := fmt.Sprintf("%s:%s:struct:%s:%d", service, file, v.Name(), pos.Line)
-				structIDs[named] = id
-				addNode(graph.Node{
-					ID: id, Type: graph.NodeTypeStruct, Label: v.Name(),
-					Service: service, File: file, Line: pos.Line, Language: "go",
-					Meta: map[string]string{
-						"fields":      string(fieldsJSON),
-						"field_count": fmt.Sprintf("%d", st.NumFields()),
-					},
-				})
 			}
+		}
+	}
+
+	// ── Inherits edges: struct embedding (anonymous fields) ──────────────────
+	for _, e := range pendingEmbeds {
+		for i := 0; i < e.st.NumFields(); i++ {
+			f := e.st.Field(i)
+			if !f.Anonymous() {
+				continue
+			}
+			ft := f.Type()
+			// Dereference pointer embedding (e.g., struct{ *Base }).
+			if pt, ok := ft.(*types.Pointer); ok {
+				ft = pt.Elem()
+			}
+			named, ok := ft.(*types.Named)
+			if !ok {
+				continue
+			}
+			// Only emit when the embedded type is an in-service struct or interface.
+			var targetID string
+			if id, ok := structIDs[named]; ok {
+				targetID = id
+			} else if id, ok := interfaceIDs[named]; ok {
+				targetID = id
+			}
+			if targetID == "" {
+				continue
+			}
+			addEdge(graph.EdgeTypeInherits, e.structID, targetID, map[string]string{"via": "embedding"})
 		}
 	}
 
@@ -193,6 +272,11 @@ func extractVariables(
 		}
 		return resolveFunc(fn)
 	}
+
+	// instCounts accumulates instantiation counts across all SSA functions
+	// that resolve to the same enclosing node ID (closures → parent).
+	// Key: fnID + "->" + typeID.
+	instCounts := map[string]int{}
 
 	// ── Instruction walk: reads, writes, captures, flows_to, uses_type ──────
 	for fn := range inService {
@@ -249,6 +333,9 @@ func extractVariables(
 				checkType(sig.Results().At(i).Type())
 			}
 		}
+
+		// funcInstCounts collects instantiations in this SSA function body.
+		var funcInstCounts map[string]int
 
 		for _, b := range fn.Blocks {
 			for _, instr := range b.Instrs {
@@ -323,12 +410,53 @@ func extractVariables(
 							"mode": mode, "data_type": argType.String(),
 						})
 					}
+				case *ssa.Alloc:
+					// Track struct instantiations: &T{} or local T{} both produce
+					// *ssa.Alloc with Type() = *T. Attribute to the enclosing function.
+					if !fnResolved {
+						continue
+					}
+					pt, ok := in.Type().(*types.Pointer)
+					if !ok {
+						continue
+					}
+					named, ok := pt.Elem().(*types.Named)
+					if !ok {
+						continue
+					}
+					if typeID, ok := structIDs[named]; ok {
+						if funcInstCounts == nil {
+							funcInstCounts = map[string]int{}
+						}
+						funcInstCounts[typeID]++
+					}
 				}
+			}
+		}
+
+		// Accumulate this function's instantiation counts into instCounts.
+		if fnResolved {
+			for typeID, count := range funcInstCounts {
+				instCounts[fnID+"->"+typeID] += count
 			}
 		}
 	}
 
+	// ── Instantiates edges (emitted once per (fn, type) pair with count) ────
+	for key, count := range instCounts {
+		sep := strings.Index(key, "->")
+		fnID, typeID := key[:sep], key[sep+2:]
+		addEdge(graph.EdgeTypeInstantiates, fnID, typeID, map[string]string{
+			"count": strconv.Itoa(count),
+		})
+	}
+
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
-	return nodes, edges
+	return varExtractResult{
+		Nodes:        nodes,
+		Edges:        edges,
+		StructIDs:    structIDs,
+		InterfaceIDs: interfaceIDs,
+	}
 }
