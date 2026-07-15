@@ -592,7 +592,7 @@ import map or the L.W1 global/constant tables. Unresolvable parents (dynamic
 superclass expressions, unresolved constants) are **never guessed**:
 `UnresolvedRef.Kind = "inherits_unresolved" | "implements_unresolved"`.
 
-### Phase I.1 — Go: interface nodes + implements/inherits/instantiates `pending`
+### Phase I.1 — Go: interface nodes + implements/inherits/instantiates `done`
 
 **Problem.** Go emits **no interface nodes at all** — `NodeTypeInterface` is
 only ever produced by the TypeScript patterns (`patterns/go/functions.yaml`
@@ -653,6 +653,8 @@ preserving). `SchemaVersion` bump test.
 
 **Acceptance.** `polyflow impact --target <Store node>` lists both structs
 and their methods; before this phase it lists nothing.
+
+**Outcome (done).** Delivered `NodeTypeInterface` nodes for non-empty named Go interfaces (meta: `methods` JSON [{name,signature}] mirroring struct `fields`), `EdgeTypeInherits` for anonymous-field embedding (`meta.via=embedding`), `EdgeTypeImplements` from in-service structs to both in-service interfaces and synthetic external interface nodes (`meta.nominal=false`; external targets carry `meta.external=true` and no file/line), and `EdgeTypeInstantiates` from constructor functions to the struct types they allocate via `*ssa.Alloc` (deduped per (fn, type) pair with `meta.count`). All edges are `confidence=static` (type-checker-proven). `varExtractResult` replaces the old `([]graph.Node, []graph.Edge)` return from `extractVariables`; new `extractImplements` function added to `go_semantic.go`. `SchemaVersion` bumped from `"8"` to `"9"`. 8 new tests in `internal/parser/go_i1_test.go` covering all four edges, empty-interface negative, out-of-service negative, and callback-classification preservation; all 19 parser tests pass. `BenchmarkIndexCold` holds at 10.8s/1200 files. Deviations: none — spec implemented exactly.
 
 ### Phase I.2 — JS/TS/Ruby: class heritage + instantiation `pending`
 
