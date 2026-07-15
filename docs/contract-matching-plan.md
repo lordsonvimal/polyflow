@@ -262,9 +262,24 @@ engine, not a normalizer.
 
 ## Phases (one commit each, parity-gated)
 
-### Phase G.0 — Engine + model + normalizer registry + rule loader `pending`
-`internal/contract/{model.go,engine.go,normalize.go,rules.go,loader.go}` + a
+### Phase G.0 — Engine + model + normalizer registry + rule loader `done`
+`internal/contract/{model.go,engine.go,normalize.go,loader.go}` + a
 golden-graph harness (snapshot chessleap edges). Engine unused → no behaviour change.
+
+**Outcome.** All pinned interfaces implemented exactly as spec'd in 4 files
+(model, normalize, engine, loader); no `rules.go` was needed — rule helpers
+folded into `loader.go`. The normalizer library ships all 8 built-ins
+(`param_wildcard`, `query_strip`, `quote_strip`, `case_fold`, `trim_slash`,
+`base_url_strip`, `shared_anchor_guard`, `url_to_path`) with a `NormalizerByName`
+export for tests. One deviation from the spec's file list: `rules.go` omitted
+— `validateRule` and `ruleFile` live in `loader.go` (no behaviour difference).
+The `url_to_path` normalizer is a pass-through for non-URL values (returns the
+value unchanged rather than `""`) so it is a no-op when applied to the `method`
+key field — this matches the required per-field application semantics.
+`contracts/embed.go` embeds a `.keep` placeholder; G.1 adds the first `.yaml`
+file. 53 tests pass (18 engine, 11 loader, 24 normalizer); golden harness skips
+correctly when chessleap eval repo is absent. `BenchmarkIndexCold` unaffected
+(engine not wired into indexer).
 
 ### Phase G.1 — Port HTTP `pending`
 `contracts/http.yaml` reproduces `Linker.Link` (datastar same-service exception,
