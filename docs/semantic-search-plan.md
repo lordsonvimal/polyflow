@@ -1,6 +1,6 @@
 # Polyflow — Semantic Flow Retrieval Plan
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 > **Prerequisites.** S.0–S.2 need only the current graph + FTS search. The
 > flow-chain corpus (S.1) reuses the existing `internal/trace` chain assembly.

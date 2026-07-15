@@ -1,6 +1,6 @@
 # Polyflow — Agent-Context Accuracy & Retrieval Plan
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 ## Goal
 

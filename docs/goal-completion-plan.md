@@ -1,6 +1,6 @@
 # Polyflow — Goal-Completion Plan (post-architecture end-to-end)
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 > **Prerequisites.** Tiers A, D, C.2, and P.2 assume the architecture plans
 > are implemented: contract-matching (G.0–G.5, incl. the G.5 `doctor` command

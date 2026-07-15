@@ -1,6 +1,6 @@
 # Polyflow — Versioned Toolchain Matrix Plan
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 > **Reconciled with `docs/contract-matching-plan.md`.** These are two axes of the
 > same goal: contract-matching gives **breadth** (link *any* cross-service
