@@ -1,0 +1,54 @@
+# contracts/http.yaml — ports Linker.Link (API calls + nav-links).
+version: "1"
+contracts:
+  # Variant 1: API calls (fetch/axios/datastar actions → handlers).
+  - kind: http
+    producer:
+      node: http_client
+      where: { nav_link: "" }        # meta gate: absent-or-empty ⇒ not a nav link
+      key: [method, path]            # Meta fields, joined "METHOD path"
+      key_fallbacks:
+        path: [url]                  # Meta["path"] empty → derive from Meta["url"]
+                                     # (url_to_path normalizer does the reduction)
+      method_fallback: [GET, POST, PUT, PATCH, DELETE, ""]  # empty client method:
+                                     # try verbs in this order (candidateMethods parity)
+      target_service_meta: target_service  # when set on the node (by ApplyHints),
+                                     # only consumers of that service are candidates
+    consumer:
+      node: http_handler
+      key: [method, path]
+    normalizers:                     # applied in order to each key field
+      [case_fold, url_to_path, base_url_strip, query_strip, param_wildcard, trim_slash]
+                                     # case_fold first: chi emits "Post", templ emits
+                                     # "POST" — normalizing to lowercase before key
+                                     # comparison gives method-case-insensitive parity
+                                     # with Linker.Link's strings.ToUpper() call.
+    match: [exact, normalized, wildcard_anchored]  # tiers in order; first hit wins
+    edge:
+      type: http_call
+      id_prefix: link                # edge IDs stay "link:<from>-><to>" (parity!)
+      same_service: skip_unless_meta:datastar   # skip | keep | skip_unless_meta:<key>
+      via_meta: { datastar: datastar_action }   # producer meta key → edge Meta["via"]
+    unmatched: unknown_edge          # visible edge to synthetic unresolved:<svc> node
+
+  # Variant 2: navigation links (href/action) — same channel, different semantics.
+  - kind: http
+    producer:
+      node: http_client
+      where: { nav_link: "true" }
+      key: [method, path]
+      key_fallbacks: { path: [url] }
+      target_service_meta: target_service  # shared lookup path in Linker.Link
+    consumer:
+      node: http_handler
+      key: [method, path]
+    normalizers: [case_fold, url_to_path, query_strip, param_wildcard, trim_slash]
+    match: [exact, normalized, wildcard_anchored]
+    edge:
+      type: navigates_to
+      id_prefix: nav                 # "nav:<from>-><to>"
+      same_service: keep             # a page linking its own routes is the common case
+      via_meta: { nav_link: nav_link }
+    unmatched: drop                  # an unmatched LITERAL page link is not an app
+                                     # flow (external URL/typo). Dynamic nav keys are
+                                     # never dropped — they reach the ledger (G.6)
