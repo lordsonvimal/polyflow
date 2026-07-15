@@ -707,7 +707,7 @@ class. Existing chessleap index parity holds (`BenchmarkIndexCold`).
 
 **Outcome (2026-07-15).** Implemented a two-pass approach for JS/TS (`preCollectClasses` + `processClassHeritage`) and extended Ruby's walk with a `classID` parameter to carry the enclosing class into superclass/mixin/instantiation detection. Key deviation: the JS tree-sitter grammar represents `class_heritage` with the parent as a **direct named child** (not via a `value` field as the TS grammar does), requiring a named-child iteration fallback in the `!foundTSClauses` branch. `matcher.go`'s `interface_extends` case was corrected from `EdgeTypeCalls` → `EdgeTypeInherits` (a stored semantics change, hence `SchemaVersion` bumped 9→10). Two new linker functions (`LinkJSTypeRelations`, `LinkRubyTypeRelations`) handle cross-file resolution; unresolvable targets go to the `inherits_unresolved`/`implements_unresolved` ledger. All 13 new tests pass (8 JS/TS, 5 Ruby); `BenchmarkIndexCold` holds at 11.3s for 1200 files.
 
-### Phase I.3 — Persisted import edges (JS/TS/Ruby) `pending`
+### Phase I.3 — Persisted import edges (JS/TS/Ruby) `done`
 
 **Problem.** `EdgeTypeImports` exists but is emitted **only** at the templ
 `<script src>` seam (`internal/linker/templ_layer.go`). The JS import map
@@ -738,6 +738,26 @@ fixture; missing-target negative → ledger; Go negative (no import edges).
 **Acceptance.** `impact --target <file>` (file direction) first hop lists
 every file importing it, on a fixture where no call edges exist between the
 files (proves the edge carries information calls don't).
+
+**Outcome (done).** Delivered `internal/linker/import_edges.go` with `LinkJSImportEdges`
+and `LinkRubyImportEdges`. Both passes run after `LinkContainment` in `internal/indexer/indexer.go`
+so the file nodes are present. `LinkJSImportEdges` parses each JS/TS file's ESM
+`import_statement` nodes via tree-sitter, resolves relative specifiers (./x, ../x) to
+indexed file paths by probing common extensions (.ts, .tsx, .js, .jsx, .mjs, then /index
+variants), and emits `imports` edges with `confidence=static` between `NodeTypeFile` nodes.
+Bare-specifier (npm) imports are out of scope: their count is stored as `external_imports=<n>`
+in the importing file node's meta and the updated node is upserted. `LinkRubyImportEdges`
+parses `require_relative` calls via AST walk, resolves the path (adding `.rb` when no
+extension given), emits `imports` edges; missing targets go to the `import_unresolved`
+ledger. Go is explicitly descoped (no import edges emitted for `.go` files). 9 tests in
+`internal/linker/import_edges_test.go` cover: JS relative import → edge, cross-dir
+resolution, npm imports → no edge + meta count, type-only import → edge (proves file→file
+edge carries information calls don't), Go file negative, Ruby require_relative → edge,
+missing target → ledger, subdirectory resolution, Ruby-pass Go negative. `BenchmarkIndexCold`
+held at ~11.5s / 1200 files (consistent with prior range). `SchemaVersion` unchanged —
+both passes operate in the linker (not cached per-file parsers); `EdgeTypeImports` and
+`NodeTypeFile` already exist; no stored shape or semantics changed. Deviations: none —
+spec implemented exactly.
 
 ---
 
