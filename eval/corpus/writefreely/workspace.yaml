@@ -1,0 +1,23 @@
+name: writefreely
+version: "1"
+services:
+  - name: app
+    path: .
+    language: go
+  - name: static
+    path: ./static/js
+    language: javascript
+  - name: cmd
+    path: ./cmd/writefreely
+    language: go
+links: []
+index:
+  exclude:
+    - '**/node_modules/**'
+    - '**/vendor/**'
+    - '**/*_test.go'
+    - '**/testdata/**'
+    - '**/less/**'
+    - '**/fonts/**'
+    - '**/img/**'
+    - '**/css/**'

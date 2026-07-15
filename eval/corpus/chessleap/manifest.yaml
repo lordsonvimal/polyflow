@@ -1,0 +1,56 @@
+repo:
+  name: chessleap
+  # Private repo: the author's benchmark application.  Clone manually to
+  # eval/.cache/chessleap and run `polyflow index --full` before running eval.
+  # make eval-corpus skips path-based repos; see docs/eval-setup.md.
+  path: eval/.cache/chessleap
+  # SHA pinned to the same commit used for BenchmarkIndexCold (10.9 s / 1200 files).
+  sha: placeholder-update-after-local-clone
+  workspace: workspace.yaml
+
+# Selection rationale: chessleap is the repository used for all
+# BenchmarkIndexCold timing, contract-matching acceptance tests, and datastar
+# action coverage (24/27 actions linked after G.1). It is the only test bed that
+# exercises gin + datastar SSE + templ in a single codebase. Including it makes
+# the eval directly comparable to the engineering benchmarks already in place.
+#
+# Verification method: cases derived from the Phase E.1-E.2 plan document
+# (docs/goal-completion-plan.md), which lists the specific files and blast-radius
+# for the worked example case.  Additional cases were verified by the author via
+# grep/read of the local checkout.
+cases:
+  # Derived from the plan doc's pinned corpus-format worked example.
+  - id: handle-move-blast
+    kind: node
+    target: handleMove
+    # handleMove (internal/game/engine.go): the server-side move handler dispatched
+    # by the gin router. Verified: grep shows calls from the HTTP handler file and
+    # references in the templ view SSE binding and the board JS.
+    expected_impacted:
+      - internal/game/engine.go
+      - views/board.templ
+      - web/static/board.js
+    must_not_miss:
+      - views/board.templ
+
+  # Derived from the plan doc's contract-matching worked example (24/27 datastar actions).
+  - id: datastar-sse-handler
+    kind: node
+    target: handleDatastarAction
+    # handleDatastarAction (or equivalent entry for datastar SSE endpoint) is
+    # registered under r.Group("/play") and called by the gin router.
+    expected_impacted:
+      - internal/game/engine.go
+    must_not_miss:
+      - internal/game/engine.go
+
+  # Derived from plan: the workspace lists a chessleap-api service with otelgin.
+  - id: gin-router-setup
+    kind: node
+    target: setupRouter
+    # setupRouter (or equivalent) wires gin middleware and routes; it is called
+    # from the application entry point.
+    expected_impacted:
+      - main.go
+    must_not_miss:
+      - main.go

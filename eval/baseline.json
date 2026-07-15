@@ -1,0 +1,424 @@
+{
+  "generated_at": "2026-07-15T09:52:35.974512Z",
+  "repos": [
+    {
+      "repo": "gotify",
+      "results": [
+        {
+          "case_id": "router-create-callers",
+          "recall": 1,
+          "precision": 0.125,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "get-messages-callers",
+          "recall": 1,
+          "precision": 0.14285714285714285,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "create-message-callers",
+          "recall": 1,
+          "precision": 0.125,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "delete-message-callers",
+          "recall": 1,
+          "precision": 0.14285714285714285,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "health-handler-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "get-applications-callers",
+          "recall": 1,
+          "precision": 0.08333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "create-application-callers",
+          "recall": 1,
+          "precision": 0.125,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "login-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "get-clients-callers",
+          "recall": 1,
+          "precision": 0.1111111111111111,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "get-current-user-callers",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "get-users-callers",
+          "recall": 1,
+          "precision": 0.125,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "create-user-callers",
+          "recall": 1,
+          "precision": 0.14285714285714285,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "get-plugins-callers",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "init-axios-callers",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "use-stores-callers",
+          "recall": 0.5,
+          "precision": 0.0625,
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 0.8333333333333334,
+      "precision": 0.17903439153439155
+    },
+    {
+      "repo": "lobsters",
+      "results": [
+        {
+          "case_id": "stories-create-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "stories-show-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "stories-upvote-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "stories-new-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "stories-check-url-dupe",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "comments-create-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "comments-upvote-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "story-already-posted-recently",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "story-is-resubmit",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "story-comments-closing-soon",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "home-index-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "home-newest-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "home-active-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "search-index-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "login-action",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        }
+      ],
+      "recall": 0.06666666666666667,
+      "precision": 0.06666666666666667
+    },
+    {
+      "repo": "polyflow",
+      "results": [
+        {
+          "case_id": "unresolved-note-callers",
+          "recall": 1,
+          "precision": 0.6666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "linker-route-indexer",
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "filter-edges-confidence-js",
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 0.3888888888888889
+    },
+    {
+      "repo": "writefreely",
+      "results": [
+        {
+          "case_id": "handle-view-home-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "handle-view-landing-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "view-collections-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "view-edit-collection-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "view-articles-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "handle-user-delete-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "view-stats-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "handle-view-subscribers-callers",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": true
+        },
+        {
+          "case_id": "serve-callers",
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "init-routes-callers",
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "connect-database-callers",
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "new-app-callers",
+          "recall": 1,
+          "precision": 0.14285714285714285,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "toggle-theme-callers",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "del-post-callers",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "format-version-callers",
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 0.4666666666666667,
+      "precision": 0.23174603174603176
+    }
+  ],
+  "skipped": [
+    {
+      "name": "chessleap",
+      "dir": "eval/corpus/chessleap",
+      "reason": "open graph DB at eval/.cache/chessleap/.polyflow/graph.db (run `polyflow index` first): apply busy_timeout: unable to open database file: out of memory (14)"
+    }
+  ]
+}

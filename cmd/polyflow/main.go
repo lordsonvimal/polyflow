@@ -1678,11 +1678,13 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 var (
 	evalCorpus string
 	evalCase   string
+	evalOutput string
 )
 
 func initEvalFlags() {
-	evalCmd.Flags().StringVar(&evalCorpus, "corpus", "eval/corpus/polyflow", "path to corpus directory (contains manifest.yaml)")
-	evalCmd.Flags().StringVar(&evalCase, "case", "", "run only this case ID (default: all)")
+	evalCmd.Flags().StringVar(&evalCorpus, "corpus", "eval/corpus", "path to corpus root (a dir with manifest.yaml, or a dir of such dirs)")
+	evalCmd.Flags().StringVar(&evalCase, "case", "", "run only this case ID (default: all cases in the corpus)")
+	evalCmd.Flags().StringVar(&evalOutput, "output", "", "write JSON results to this file (e.g. eval/baseline.json)")
 }
 
 var evalCmd = &cobra.Command{
@@ -1693,9 +1695,67 @@ var evalCmd = &cobra.Command{
 
 func runEval(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+
+	// Single-corpus path: specified --case, or the corpus dir has a manifest.yaml.
+	if evalCase != "" {
+		_, err := os.Stat(filepath.Join(evalCorpus, "manifest.yaml"))
+		if err == nil {
+			return runEvalSingle(ctx, evalCorpus, evalCase)
+		}
+	}
+	manifestPath := filepath.Join(evalCorpus, "manifest.yaml")
+	if _, err := os.Stat(manifestPath); err == nil {
+		return runEvalSingle(ctx, evalCorpus, evalCase)
+	}
+
+	// Multi-corpus path: corpus root contains sub-directories.
+	multi, err := eval.RunAll(ctx, evalCorpus)
+	if err != nil {
+		return err
+	}
+
+	if evalOutput != "" {
+		data, err := json.MarshalIndent(multi, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal JSON: %w", err)
+		}
+		if err := os.WriteFile(evalOutput, data, 0o644); err != nil {
+			return fmt.Errorf("write output %s: %w", evalOutput, err)
+		}
+		fmt.Printf("Results written to %s\n\n", evalOutput)
+	}
+
+	hardFailed := false
+	for _, report := range multi.Reports {
+		fmt.Printf("Repo: %-20s  cases: %d  recall=%.3f  precision=%.3f\n",
+			report.Repo, len(report.Results), report.Recall, report.Precision)
+		for _, r := range report.Results {
+			status := "ok"
+			if r.HardFail {
+				status = "HARD_FAIL"
+				hardFailed = true
+			}
+			fmt.Printf("  %-44s recall=%.3f precision=%.3f honest=%d silent=%d  %s\n",
+				r.CaseID, r.Recall, r.Precision, r.HonestMisses, r.SilentMisses, status)
+		}
+		fmt.Println()
+	}
+
+	for _, s := range multi.Skipped {
+		fmt.Fprintf(os.Stderr, "WARNING: skipped corpus %q (%s): %s\n", s.Name, s.Dir, s.Reason)
+	}
+
+	if hardFailed {
+		fmt.Fprintln(os.Stderr, "Failed: one or more cases hard-failed (must_not_miss file silently missed)")
+		os.Exit(1)
+	}
+	return nil
+}
+
+func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 	report, err := eval.Run(ctx, eval.RunOptions{
-		CorpusDir: evalCorpus,
-		CaseID:    evalCase,
+		CorpusDir: corpusDir,
+		CaseID:    caseID,
 	})
 	if err != nil {
 		return err

@@ -1,0 +1,191 @@
+repo:
+  name: gotify
+  url: https://github.com/gotify/server
+  sha: 9f7dc63defae71ab719c7c370fa3b9d90a3baf98
+  workspace: workspace.yaml
+
+# Selection rationale: gotify/server is a real-time notification server with a Go
+# gin backend (supported framework) and a TypeScript/React frontend. It has a clear
+# front+back split (server/ + ui/), two primary languages (Go + TypeScript), and
+# uses the gin router (patterns/go/gin_routes.yaml) and axios HTTP client
+# (patterns/javascript/axios.yaml). ~200 code files — fast to index.
+#
+# Verification method: every case was verified by reading the Go source files
+# directly (github.com/gotify/server at SHA 9f7dc63):
+#   router/router.go — gin route registrations referencing each handler
+#   api/message.go, api/application.go, api/session.go, api/client.go,
+#   api/user.go, api/health.go, api/plugin.go — handler definitions
+#   app.go — calls router.Create(db, vInfo, conf)
+#   ui/src/ — TypeScript stores and components
+# Grep commands used: grep -n "GetMessages\|DeleteMessage\|..." router/router.go
+cases:
+  # ── Go backend cases ──────────────────────────────────────────────────────
+
+  - id: router-create-callers
+    kind: node
+    target: Create
+    # router.Create (router/router.go) is called exactly once: app.go line
+    # `engine, closeable := router.Create(db, vInfo, conf)`.
+    # Verified: grep -n "router.Create" ./**/*.go → only app.go.
+    expected_impacted:
+      - app.go
+    must_not_miss:
+      - app.go
+
+  - id: get-messages-callers
+    kind: node
+    target: GetMessages
+    # api.MessageAPI.GetMessages (api/message.go) is registered in router/router.go:
+    # `message.GET("", messageHandler.GetMessages)`.
+    # Verified: grep -n "GetMessages" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: create-message-callers
+    kind: node
+    target: CreateMessage
+    # api.MessageAPI.CreateMessage (api/message.go) is registered in router/router.go:
+    # `g.Group("/").Use(...).POST("/message", messageHandler.CreateMessage)`.
+    # Verified: grep -n "CreateMessage" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: delete-message-callers
+    kind: node
+    target: DeleteMessage
+    # api.MessageAPI.DeleteMessage (api/message.go) registered in router/router.go:
+    # `message.DELETE("/:id", messageHandler.DeleteMessage)`.
+    # Verified: grep -n "DeleteMessage" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: health-handler-callers
+    kind: node
+    target: Health
+    # api.HealthAPI.Health (api/health.go) registered in router/router.go:
+    # `g.Match([]string{"GET", "HEAD"}, "/health", healthHandler.Health)`.
+    # Verified: grep -n "healthHandler.Health" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: get-applications-callers
+    kind: node
+    target: GetApplications
+    # api.ApplicationAPI.GetApplications (api/application.go) registered:
+    # `app.GET("", applicationHandler.GetApplications)`.
+    # Verified: grep -n "GetApplications" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: create-application-callers
+    kind: node
+    target: CreateApplication
+    # api.ApplicationAPI.CreateApplication (api/application.go) registered:
+    # `app.POST("", applicationHandler.CreateApplication)`.
+    # Verified: grep -n "CreateApplication" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: login-callers
+    kind: node
+    target: Login
+    # api.SessionAPI.Login (api/session.go) registered in router/router.go:
+    # `g.POST("/auth/local/login", sessionHandler.Login)`.
+    # Verified: grep -n "sessionHandler.Login" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: get-clients-callers
+    kind: node
+    target: GetClients
+    # api.ClientAPI.GetClients (api/client.go) registered in router/router.go:
+    # `client.GET("", clientHandler.GetClients)`.
+    # Verified: grep -n "GetClients" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: get-current-user-callers
+    kind: node
+    target: GetCurrentUser
+    # api.UserAPI.GetCurrentUser (api/user.go) registered in router/router.go:
+    # `clientAuth.GET("current/user", userHandler.GetCurrentUser)`.
+    # Verified: grep -n "GetCurrentUser" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: get-users-callers
+    kind: node
+    target: GetUsers
+    # api.UserAPI.GetUsers (api/user.go) registered in router/router.go:
+    # `authAdmin.GET("", userHandler.GetUsers)`.
+    # Verified: grep -n "GetUsers" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: create-user-callers
+    kind: node
+    target: CreateUser
+    # api.UserAPI.CreateUser (api/user.go) registered:
+    # `g.Group("/user").Use(authentication.Optional).POST("", userHandler.CreateUser)`.
+    # Verified: grep -n "CreateUser" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  - id: get-plugins-callers
+    kind: node
+    target: GetPlugins
+    # api.PluginAPI.GetPlugins (api/plugin.go) registered:
+    # `g.GET("/plugin", authentication.RequireClient, pluginHandler.GetPlugins)`.
+    # Verified: grep -n "GetPlugins" router/router.go → line found.
+    expected_impacted:
+      - router/router.go
+    must_not_miss:
+      - router/router.go
+
+  # ── TypeScript frontend cases ─────────────────────────────────────────────
+
+  - id: init-axios-callers
+    kind: node
+    target: initAxios
+    # initAxios (ui/src/apiAuth.ts) sets up axios interceptors. It is called
+    # from the app initialization (ui/src/index.tsx or the root store setup).
+    # Verified: grep -n "initAxios" ui/src/ shows import and call in index.tsx.
+    expected_impacted:
+      - ui/src/index.tsx
+    must_not_miss:
+      - ui/src/index.tsx
+
+  - id: use-stores-callers
+    kind: node
+    target: useStores
+    # useStores (ui/src/stores.tsx) is a React context hook consumed by UI
+    # components. At minimum imported by message, application, and client
+    # component directories.
+    # Verified: grep -rn "useStores" ui/src/ → multiple component files.
+    expected_impacted:
+      - ui/src/message/Messages.tsx
+      - ui/src/application/AppStore.ts
+    must_not_miss:
+      - ui/src/message/Messages.tsx

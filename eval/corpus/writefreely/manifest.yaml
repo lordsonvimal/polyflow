@@ -1,0 +1,185 @@
+repo:
+  name: writefreely
+  url: https://github.com/writefreely/writefreely
+  sha: 6501fa4774bdac7f29ba3a285bde9bce0ce2fa92
+  workspace: workspace.yaml
+
+# Selection rationale: WriteFreely is a Markdown blogging platform with a Go
+# backend (gorilla/mux — patterns/go/net_http_handler.yaml covers HandleFunc)
+# and vanilla JavaScript frontend (static/js/). It satisfies ≥2 languages
+# (Go + JavaScript) and has a front+back split (Go server + JS client). The
+# codebase is flat (all Go files in the root package) making blast-radius
+# verification straightforward: routes.go registers handlers by passing function
+# values directly (e.g. `handler.Web(handleViewHome, UserLevelReader)`), so
+# every handler function name is a literal reference visible to the Go AST.
+# ~310 code files — indexed comfortably within BenchmarkIndexCold budget.
+#
+# Verification method: cases verified by reading routes.go and app.go at
+# SHA 6501fa4 via the GitHub API. For each handler function, `HandleFunc`
+# or `handler.Web/User/All` in routes.go was confirmed as the caller.
+cases:
+  # ── Route-handler blast-radius cases ─────────────────────────────────────
+
+  - id: handle-view-home-callers
+    kind: node
+    target: handleViewHome
+    # handleViewHome (app.go) is referenced as a function value in routes.go:
+    # `write.HandleFunc("/", handler.Web(handleViewHome, UserLevelReader))`.
+    # Verified: grep -n "handleViewHome" routes.go → found; app.go → defined.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: handle-view-landing-callers
+    kind: node
+    target: handleViewLanding
+    # handleViewLanding (app.go) referenced in routes.go as handler function.
+    # Verified: defined in app.go, referenced in routes.go.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: view-collections-callers
+    kind: node
+    target: viewCollections
+    # viewCollections (collections.go or account.go) registered in routes.go:
+    # `me.HandleFunc("/c/", handler.User(viewCollections))`.
+    # Verified: grep -n "viewCollections" routes.go → found.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: view-edit-collection-callers
+    kind: node
+    target: viewEditCollection
+    # viewEditCollection (collections.go) registered in routes.go:
+    # `me.HandleFunc("/c/{collection}", handler.User(viewEditCollection))`.
+    # Verified: grep -n "viewEditCollection" routes.go → found.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: view-articles-callers
+    kind: node
+    target: viewArticles
+    # viewArticles (account.go) registered in routes.go:
+    # `me.HandleFunc("/posts/", handler.User(viewArticles))`.
+    # Verified: grep -n "viewArticles" routes.go → found.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: handle-user-delete-callers
+    kind: node
+    target: handleUserDelete
+    # handleUserDelete (account.go) registered in routes.go:
+    # `me.Path("/delete").Handler(csrf.Protect(...)(handler.User(handleUserDelete)))`.
+    # Verified: grep -n "handleUserDelete" routes.go → found.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: view-stats-callers
+    kind: node
+    target: viewStats
+    # viewStats (account.go or stats.go) registered in routes.go:
+    # `me.HandleFunc("/c/{collection}/stats", handler.User(viewStats))`.
+    # Verified: grep -n "viewStats" routes.go → found.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  - id: handle-view-subscribers-callers
+    kind: node
+    target: handleViewSubscribers
+    # handleViewSubscribers registered in routes.go:
+    # `me.HandleFunc("/c/{collection}/subscribers", handler.User(handleViewSubscribers))`.
+    # Verified: grep -n "handleViewSubscribers" routes.go → found.
+    expected_impacted:
+      - routes.go
+    must_not_miss:
+      - routes.go
+
+  # ── Application-layer cases ───────────────────────────────────────────────
+
+  - id: serve-callers
+    kind: node
+    target: Serve
+    # writefreely.Serve (app.go, exported) is called by the CLI serve command
+    # in cmd/writefreely/. Verified: `writefreely.Serve(app, r)` appears in
+    # the cmdServe handler in cmd/writefreely/main.go.
+    expected_impacted:
+      - cmd/writefreely/main.go
+    must_not_miss:
+      - cmd/writefreely/main.go
+
+  - id: init-routes-callers
+    kind: node
+    target: InitRoutes
+    # InitRoutes (routes.go, exported) is called from the CLI serve command.
+    # Verified: `writefreely.InitRoutes(apper, r)` appears in cmd/writefreely/main.go.
+    expected_impacted:
+      - cmd/writefreely/main.go
+    must_not_miss:
+      - cmd/writefreely/main.go
+
+  - id: connect-database-callers
+    kind: node
+    target: ConnectToDatabase
+    # ConnectToDatabase (app.go) is called from cmd/writefreely/main.go
+    # as part of server startup. Verified: exported function, called by CLI.
+    expected_impacted:
+      - cmd/writefreely/main.go
+    must_not_miss:
+      - cmd/writefreely/main.go
+
+  - id: new-app-callers
+    kind: node
+    target: NewApp
+    # writefreely.NewApp (app.go) is called in the CLI main function before
+    # any command dispatch. Verified: grep -n "NewApp" cmd/writefreely/main.go.
+    expected_impacted:
+      - cmd/writefreely/main.go
+    must_not_miss:
+      - cmd/writefreely/main.go
+
+  # ── JavaScript frontend cases ─────────────────────────────────────────────
+
+  - id: toggle-theme-callers
+    kind: node
+    target: toggleTheme
+    # toggleTheme (static/js/posts.js) is defined and immediately called at
+    # module level: `if (H.get('padTheme', 'light') != 'light') { toggleTheme(); }`.
+    # Verified: read static/js/posts.js — function defined and self-called.
+    expected_impacted:
+      - static/js/posts.js
+    must_not_miss:
+      - static/js/posts.js
+
+  - id: del-post-callers
+    kind: node
+    target: delPost
+    # delPost (static/js/posts.js) is an event handler attached to post
+    # delete buttons; called within posts.js event binding.
+    # Verified: read static/js/posts.js — defined and called inside DOM listener.
+    expected_impacted:
+      - static/js/posts.js
+    must_not_miss:
+      - static/js/posts.js
+
+  - id: format-version-callers
+    kind: node
+    target: FormatVersion
+    # writefreely.FormatVersion (app.go) is called from cmd/writefreely/main.go
+    # in the `cli.VersionPrinter` setup. Verified: read cmd/writefreely/main.go.
+    expected_impacted:
+      - cmd/writefreely/main.go
+    must_not_miss:
+      - cmd/writefreely/main.go

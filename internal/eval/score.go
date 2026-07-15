@@ -7,20 +7,20 @@ package eval
 // a reference to/from it. A miss with no such trace is SilentMiss — the
 // failure mode the whole project exists to prevent.
 type CaseResult struct {
-	CaseID       string
-	Recall       float64 // |returned ∩ expected| / |expected|
-	Precision    float64 // |returned ∩ expected| / |returned|
-	HonestMisses int     // expected files missed AND present in the unresolved ledger
-	SilentMisses int     // expected files missed with no trace in any ledger
-	HardFail     bool    // any must_not_miss file silently missed
+	CaseID       string  `json:"case_id"`
+	Recall       float64 `json:"recall"`    // |returned ∩ expected| / |expected|
+	Precision    float64 `json:"precision"` // |returned ∩ expected| / |returned|
+	HonestMisses int     `json:"honest_misses"` // expected files missed AND present in the unresolved ledger
+	SilentMisses int     `json:"silent_misses"` // expected files missed with no trace in any ledger
+	HardFail     bool    `json:"hard_fail"`     // any must_not_miss file silently missed
 }
 
 // Report is the full corpus scoring report for one repository.
 type Report struct {
-	Repo      string
-	Results   []CaseResult
-	Recall    float64 // macro-average over cases
-	Precision float64 // macro-average over cases
+	Repo      string       `json:"repo"`
+	Results   []CaseResult `json:"results"`
+	Recall    float64      `json:"recall"`    // macro-average over cases
+	Precision float64      `json:"precision"` // macro-average over cases
 }
 
 // Score computes a CaseResult.
