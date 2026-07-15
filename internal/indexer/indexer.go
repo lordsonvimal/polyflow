@@ -21,6 +21,8 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 
+	contractdata "github.com/lordsonvimal/polyflow/contracts"
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
@@ -656,30 +658,27 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 
-	// Cross-service HTTP linking.
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
-	l := linker.New(cfg)
-	crossEdges, err := l.Link(hintedNodes, allEdges)
+	// Cross-service contract linking (HTTP API calls + nav-links via contracts/http.yaml).
+	contractRules, err := contract.Load(contractdata.FS, "")
 	if err != nil {
-		return nil, fmt.Errorf("link: %w", err)
+		return nil, fmt.Errorf("contract rules: %w", err)
 	}
+	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	eng := &contract.Engine{}
+	contractResult := eng.Link(hintedNodes, contractRules, cfg.Links)
 
-	for i := range crossEdges {
-		e := crossEdges[i]
-		if _, err := store.GetNode(ctx, e.To); err != nil {
-			_ = bw.AddNode(ctx, &graph.Node{
-				ID: e.To, Type: graph.NodeTypeHTTPHandler, Label: e.To, Service: "unresolved",
-				File: "unresolved", Language: "unknown",
-			})
-		}
+	for i := range contractResult.Nodes {
+		n := contractResult.Nodes[i]
+		_ = bw.AddNode(ctx, &n)
 	}
 	if err := bw.Flush(ctx); err != nil {
 		return nil, err
 	}
-	if err := writeEdges(crossEdges); err != nil {
+	if err := writeEdges(contractResult.Edges); err != nil {
 		return nil, err
 	}
-	stats.CrossLinks = len(crossEdges)
+	allUnresolved = append(allUnresolved, contractResult.Unresolved...)
+	stats.CrossLinks = len(contractResult.Edges)
 
 	// ── Root classification ──────────────────────────────────────────────────
 	// With the full edge set assembled, function/method nodes with no incoming

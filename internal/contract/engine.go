@@ -311,16 +311,38 @@ func sameServiceAllowed(policy string, prod, cons *graph.Node) bool {
 
 // wildcardScan tries wildcard_anchored matching of key against all entries in
 // normIdx, requiring at least one shared concrete segment. First hit wins.
+//
+// Compound keys join multiple fields with " " (e.g. "POST /play/*/draw").
+// Wildcard segment matching must operate only on the '/'-prefixed path portion
+// so that non-path fields (e.g. the HTTP method) do not create false shared
+// anchors between semantically different routes.
 func wildcardScan(key string, normIdx map[string]*graph.Node) *graph.Node {
-	if !hasLiteralSegment(key) {
+	keyPath, keyPrefix := splitAtFirstSlash(key)
+	if !hasLiteralSegment(keyPath) {
 		return nil
 	}
 	for consKey, h := range normIdx {
-		if pathMatchesPattern(key, consKey) {
+		consPath, consPrefix := splitAtFirstSlash(consKey)
+		if keyPrefix != consPrefix {
+			continue // method (or other prefix field) mismatch
+		}
+		if pathMatchesPattern(keyPath, consPath) {
 			return h
 		}
 	}
 	return nil
+}
+
+// splitAtFirstSlash splits a compound key at the first '/' occurrence.
+// Returns (whole, "") when there is no '/' or it is the leading character
+// (path-only keys like "/users"). Otherwise returns (key[i:], key[:i])
+// where i is the position of the first '/'.
+func splitAtFirstSlash(key string) (path, prefix string) {
+	i := strings.Index(key, "/")
+	if i <= 0 {
+		return key, ""
+	}
+	return key[i:], key[:i]
 }
 
 // resolveNormalizers converts a list of normalizer names into functions.

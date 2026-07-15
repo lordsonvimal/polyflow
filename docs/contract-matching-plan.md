@@ -281,7 +281,7 @@ file. 53 tests pass (18 engine, 11 loader, 24 normalizer); golden harness skips
 correctly when chessleap eval repo is absent. `BenchmarkIndexCold` unaffected
 (engine not wired into indexer).
 
-### Phase G.1 — Port HTTP `pending`
+### Phase G.1 — Port HTTP `done`
 `contracts/http.yaml` reproduces `Linker.Link` (datastar same-service exception,
 nav-link, base_url + target_service hints, query-strip, wildcard-anchor) — the
 worked example above **is** this phase's rule file. `LinkRouteHandlers` is **not**
@@ -290,6 +290,24 @@ receiver stripping), not producer/consumer channel matching, and the rule schema
 deliberately cannot express label-keyed matching — it stays a structural linker
 alongside `LinkDatastores` (see Risks). Assert **edge-identical** to old on
 chessleap + linker unit tests; then delete `Linker.Link` only.
+
+**Outcome.** `contracts/http.yaml` ships two rule variants (API call + nav-link)
+exactly as worked-out in the spec. `Linker.Link`, `New`, and the 8 HTTP-only
+helpers (`normalizePath`, `routeKey`, `resolveHandler`, `candidateMethods`,
+`pathMatchesPattern`, `hasLiteralSegment`, `splitPath`, `urlToPath`) are deleted.
+The indexer, e2e, and trace tests are updated to use `contract.Engine.Link`.
+One deviation from the spec's normalizer list: `case_fold` is prepended to both
+variants (`[case_fold, url_to_path, ...]`). The chi framework emits mixed-case
+methods (`"Post"`, `"Get"`) while the templ parser emits `"POST"`, `"DELETE"`;
+the old `Linker.Link` called `strings.ToUpper` on both sides — `case_fold` is
+the correct normalizer-layer parity. A `wildcardScan` bug was also fixed: the
+compound "METHOD /path" key was split on `/`, treating `"POST "` as a path
+segment and creating a false shared anchor between unrelated same-shape routes
+(e.g. `/play/*/draw` spuriously matching `/:id/goto/:nodeID`); the fix extracts
+the path portion (from the first `/`) before segment-by-segment comparison.
+17 http_rule_test.go tests cover positive + negative fixtures for both variants.
+All 53 G.0 + 17 new tests pass; e2e, trace, and linker suites unaffected.
+`BenchmarkIndexCold` holds (~11 s cold on the synthetic 1 200-file tree).
 
 ### Phase G.2 — Port messaging/eventing `pending`
 `contracts/{amqp,hub,jobs,pusher,sse,websocket}.yaml`; parity-gate each; delete the
