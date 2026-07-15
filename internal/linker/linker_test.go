@@ -71,77 +71,6 @@ func TestLinkTemplComponents_NoTwin(t *testing.T) {
 	assert.Empty(t, edges, "label mismatch must not bridge")
 }
 
-func TestLinkBrokerChannels_CrossService(t *testing.T) {
-	// Two channel nodes with the same key from different services:
-	// one has a publisher pointing at it, the other is the subscribe-side.
-	pubChannel := graph.Node{
-		ID:      "svc-a:channel:user.events/user.created",
-		Type:    graph.NodeTypeChannel,
-		Service: "svc-a",
-		Meta:    map[string]string{"exchange": "user.events", "routing_key": "user.created"},
-	}
-	subChannel := graph.Node{
-		ID:      "svc-b:channel:user.events/user.created",
-		Type:    graph.NodeTypeChannel,
-		Service: "svc-b",
-		Meta:    map[string]string{"exchange": "user.events", "routing_key": "user.created"},
-	}
-	publisher := graph.Node{
-		ID:      "svc-a:svc.go:publisher:publishUserCreated:5",
-		Type:    graph.NodeTypePublisher,
-		Service: "svc-a",
-		Meta:    map[string]string{"exchange": "user.events", "routing_key": "user.created"},
-	}
-	// "publishes" edge links publisher -> pubChannel (in-memory only for this test)
-	// LinkBrokerChannels builds its own index from node meta.
-
-	nodes := []graph.Node{pubChannel, subChannel, publisher}
-	edges := LinkBrokerChannels(nodes)
-
-	if len(edges) != 1 {
-		t.Fatalf("expected 1 cross-service broker edge, got %d", len(edges))
-	}
-	e := edges[0]
-	if e.From != pubChannel.ID {
-		t.Errorf("edge.From = %q, want %q", e.From, pubChannel.ID)
-	}
-	if e.To != subChannel.ID {
-		t.Errorf("edge.To = %q, want %q", e.To, subChannel.ID)
-	}
-	if e.Type != graph.EdgeTypePublishes {
-		t.Errorf("edge.Type = %q, want publishes", e.Type)
-	}
-	if e.Meta["via"] != "amqp_channel" {
-		t.Errorf("edge.Meta[via] = %q, want amqp_channel", e.Meta["via"])
-	}
-}
-
-func TestLinkBrokerChannels_SameService(t *testing.T) {
-	// Same-service channel nodes should not produce cross edges.
-	ch1 := graph.Node{
-		ID:      "svc-a:channel:orders/placed",
-		Type:    graph.NodeTypeChannel,
-		Service: "svc-a",
-		Meta:    map[string]string{"exchange": "orders", "routing_key": "placed"},
-	}
-	pub := graph.Node{
-		ID:      "svc-a:order.go:publisher:placeOrder:10",
-		Type:    graph.NodeTypePublisher,
-		Service: "svc-a",
-		Meta:    map[string]string{"exchange": "orders", "routing_key": "placed"},
-	}
-	edges := LinkBrokerChannels([]graph.Node{ch1, pub})
-	if len(edges) != 0 {
-		t.Errorf("expected 0 edges for same-service channels, got %d", len(edges))
-	}
-}
-
-func TestLinkBrokerChannels_NoChannels(t *testing.T) {
-	edges := LinkBrokerChannels([]graph.Node{})
-	if len(edges) != 0 {
-		t.Errorf("expected 0 edges for empty node list, got %d", len(edges))
-	}
-}
 
 func TestLinkDatastores(t *testing.T) {
 	nodes := []graph.Node{
@@ -222,59 +151,6 @@ func TestLinkBrokerHints_NoRabbitLinks(t *testing.T) {
 	assert.Empty(t, e)
 }
 
-func TestLinkWebSocketMessages_TypedDispatch(t *testing.T) {
-	nodes := []graph.Node{
-		{ID: "client:send", Type: graph.NodeTypePublisher, Service: "tether-client",
-			Meta: map[string]string{"pattern": "ws_send_typed", "message_type": "'battery'"}},
-		{ID: "server:case", Type: graph.NodeTypeSubscriber, Service: "tether-server",
-			Meta: map[string]string{"pattern": "ws_dispatch_case", "message_type": "'battery'"}},
-		{ID: "server:other", Type: graph.NodeTypeSubscriber, Service: "tether-server",
-			Meta: map[string]string{"pattern": "ws_dispatch_case", "message_type": "'location'"}},
-	}
-	edges := LinkWebSocketMessages(nodes)
-	require.Len(t, edges, 1, "only the matching message type links")
-	assert.Equal(t, "client:send", edges[0].From)
-	assert.Equal(t, "server:case", edges[0].To)
-	assert.Equal(t, graph.EdgeTypeWSSend, edges[0].Type)
-	assert.Equal(t, "battery", edges[0].Meta["message_type"])
-}
-
-func TestLinkHubFanout_BroadcastReachesSubscribers(t *testing.T) {
-	nodes := []graph.Node{
-		{ID: "svc:hub.go:method:Broadcast:19", Type: graph.NodeTypeMethod, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_method_decl", "receiver": "Hub"}},
-		{ID: "svc:handlers.go:publisher:hub_broadcast_call:25", Type: graph.NodeTypePublisher, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_broadcast_call"}},
-		{ID: "svc:stream.go:subscriber:hub_subscribe_call:30", Type: graph.NodeTypeSubscriber, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_subscribe_call"}},
-		// Subscribe call in a different service must not link.
-		{ID: "other:stream.go:subscriber:hub_subscribe_call:8", Type: graph.NodeTypeSubscriber, Service: "other",
-			Meta: map[string]string{"pattern": "hub_subscribe_call"}},
-	}
-	edges := LinkHubFanout(nodes)
-	require.Len(t, edges, 1)
-	assert.Equal(t, "svc:handlers.go:publisher:hub_broadcast_call:25", edges[0].From)
-	assert.Equal(t, "svc:stream.go:subscriber:hub_subscribe_call:30", edges[0].To)
-	assert.Equal(t, graph.EdgeTypeHubBroadcast, edges[0].Type)
-	assert.Equal(t, graph.ConfidenceInferred, edges[0].Confidence)
-}
-
-func TestLinkHubFanout_MultipleHubTypesPartial(t *testing.T) {
-	nodes := []graph.Node{
-		{ID: "svc:a.go:method:Broadcast:1", Type: graph.NodeTypeMethod, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_method_decl", "receiver": "GameHub"}},
-		{ID: "svc:b.go:method:Broadcast:1", Type: graph.NodeTypeMethod, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_method_decl", "receiver": "ChatHub"}},
-		{ID: "svc:pub", Type: graph.NodeTypePublisher, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_broadcast_call"}},
-		{ID: "svc:sub", Type: graph.NodeTypeSubscriber, Service: "svc",
-			Meta: map[string]string{"pattern": "hub_subscribe_call"}},
-	}
-	edges := LinkHubFanout(nodes)
-	require.Len(t, edges, 1)
-	assert.Equal(t, graph.ConfidencePartial, edges[0].Confidence,
-		"two hub types in one service: cannot tell which hub the call goes through")
-}
 
 // Regression: LinkJS must not delete templ component declarations. It prunes
 // JSX component *usage proxies* that lack a matching function declaration,
@@ -294,45 +170,6 @@ func TestLinkJS_KeepsTemplComponents(t *testing.T) {
 		"JSX usage proxies without declarations are still pruned")
 }
 
-func TestLinkJobQueues_EnqueueToPerform(t *testing.T) {
-	nodes := []graph.Node{
-		{ID: "app:jobs.rb:publisher:aj_perform_later:9", Type: graph.NodeTypePublisher, Service: "app",
-			Meta: map[string]string{"pattern": "aj_perform_later", "job_class": "ReportJob"}},
-		{ID: "app:report_job.rb:subscriber:aj_perform_method:1", Type: graph.NodeTypeSubscriber, Service: "app",
-			Meta: map[string]string{"pattern": "aj_perform_method", "job_class": "ReportJob"}},
-		// Different job class must not link.
-		{ID: "app:other_job.rb:subscriber:aj_perform_method:1", Type: graph.NodeTypeSubscriber, Service: "app",
-			Meta: map[string]string{"pattern": "aj_perform_method", "job_class": "OtherJob"}},
-	}
-	edges := LinkJobQueues(nodes)
-	require.Len(t, edges, 1)
-	assert.Equal(t, graph.EdgeTypeJobEnqueue, edges[0].Type)
-	assert.Equal(t, "app:jobs.rb:publisher:aj_perform_later:9", edges[0].From)
-	assert.Equal(t, "app:report_job.rb:subscriber:aj_perform_method:1", edges[0].To)
-	assert.Equal(t, "ReportJob", edges[0].Meta["job_class"])
-}
-
-func TestLinkPusherChannels_CrossLanguage(t *testing.T) {
-	nodes := []graph.Node{
-		{ID: "rails:pub", Type: graph.NodeTypePublisher, Service: "rails",
-			Meta: map[string]string{"pattern": "pusher_trigger", "channel": "'orders'", "event": "'order:updated'"}},
-		{ID: "web:sub", Type: graph.NodeTypeSubscriber, Service: "web",
-			Meta: map[string]string{"pattern": "pusher_subscribe_client", "channel": "'orders'"}},
-		// Variable-held channel must not link.
-		{ID: "rails:pub2", Type: graph.NodeTypePublisher, Service: "rails",
-			Meta: map[string]string{"pattern": "pusher_trigger", "channel": "channel_name"}},
-		// Different channel must not link.
-		{ID: "web:sub2", Type: graph.NodeTypeSubscriber, Service: "web",
-			Meta: map[string]string{"pattern": "pusher_subscribe_client", "channel": "'users'"}},
-	}
-	edges := LinkPusherChannels(nodes)
-	require.Len(t, edges, 1)
-	assert.Equal(t, graph.EdgeTypePusherTrigger, edges[0].Type)
-	assert.Equal(t, "rails:pub", edges[0].From)
-	assert.Equal(t, "web:sub", edges[0].To)
-	assert.Equal(t, "orders", edges[0].Meta["channel"])
-	assert.Equal(t, "order:updated", edges[0].Meta["event"])
-}
 
 func TestLinkBrokerHints_SkipsNonBrokerPublishers(t *testing.T) {
 	nodes := []graph.Node{

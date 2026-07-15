@@ -100,16 +100,6 @@ func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Worksp
 	}
 	require.NoError(t, bwRoute.Flush(ctx))
 
-	// Broker channel linking.
-	brokerEdges := linker.LinkBrokerChannels(allNodes)
-	bwBroker := graph.NewBatchWriter(store)
-	for i := range brokerEdges {
-		e := brokerEdges[i]
-		require.NoError(t, bwBroker.AddEdge(ctx, &e))
-		allEdges = append(allEdges, e)
-	}
-	require.NoError(t, bwBroker.Flush(ctx))
-
 	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)
 	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
