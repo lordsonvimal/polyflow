@@ -15,13 +15,19 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
-// loadHTTPRules loads the embedded contracts/http.yaml and fails the test on error.
+// loadHTTPRules loads the embedded contract rules and returns only the HTTP variants.
 func loadHTTPRules(t *testing.T) []contract.Rule {
 	t.Helper()
-	rules, err := contract.Load(contractdata.FS, "")
+	all, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)
-	require.Len(t, rules, 2, "http.yaml must define exactly 2 variants (api-call + nav-link)")
-	return rules
+	var httpRules []contract.Rule
+	for _, r := range all {
+		if r.Kind == contract.KindHTTP {
+			httpRules = append(httpRules, r)
+		}
+	}
+	require.Len(t, httpRules, 2, "http.yaml must define exactly 2 variants (api-call + nav-link)")
+	return httpRules
 }
 
 func runHTTP(t *testing.T, nodes []graph.Node, links []workspace.Link) contract.Result {

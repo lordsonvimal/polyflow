@@ -1,0 +1,45 @@
+# contracts/pusher.yaml — ports LinkPusherChannels.
+# Matches server-side Pusher.trigger call sites to pusher-js client
+# subscriptions on the same channel name. quote_strip handles the surrounding
+# quotes that tree-sitter captures; variable-held channels have no quoted
+# string value and naturally find no matching consumer (→ ledger).
+#
+# Two variants cover both pusher_trigger and pusher_trigger_async.
+# Consumer is restricted to pusher_subscribe_client (the only subscriber
+# pattern that captures a channel name); pusher_channel_bind captures an
+# event name instead and is not matched here, matching the bespoke linker.
+version: "1"
+contracts:
+  - kind: pusher
+    producer:
+      node: publisher
+      where: {pattern: pusher_trigger}
+      key: [channel]
+    consumer:
+      node: subscriber
+      where: {pattern: pusher_subscribe_client}
+      key: [channel]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: pusher_trigger
+      id_prefix: pusher
+      same_service: keep
+    unmatched: ledger
+
+  - kind: pusher
+    producer:
+      node: publisher
+      where: {pattern: pusher_trigger_async}
+      key: [channel]
+    consumer:
+      node: subscriber
+      where: {pattern: pusher_subscribe_client}
+      key: [channel]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: pusher_trigger
+      id_prefix: pusher
+      same_service: keep
+    unmatched: ledger

@@ -1,0 +1,22 @@
+# contracts/amqp.yaml — ports LinkBrokerChannels.
+# Matches channel nodes (synthesised by the pattern matcher's Pass 4 for every
+# AMQP publisher with exchange+routing_key meta) across services with the same
+# channel key. Cross-service only; same-service channel loops are skipped.
+version: "1"
+contracts:
+  - kind: amqp
+    producer:
+      node: channel
+      key: [exchange, routing_key]
+    consumer:
+      node: channel
+      key: [exchange, routing_key]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: publishes
+      id_prefix: broker
+      same_service: skip
+      via_meta:
+        exchange: amqp_channel   # non-empty exchange → Meta["via"]="amqp_channel"
+    unmatched: drop               # no meaningful ledger entry for unlinked channels

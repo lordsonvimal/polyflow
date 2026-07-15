@@ -22,6 +22,7 @@ const (
 	KindSSE         Kind = "sse"
 	KindWebSocket   Kind = "websocket"
 	KindJob         Kind = "job"
+	KindHub         Kind = "hub"
 	KindPusher      Kind = "pusher"
 	KindGRPC        Kind = "grpc"
 	KindGraphQL     Kind = "graphql"

@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	contractdata "github.com/lordsonvimal/polyflow/contracts"
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -126,7 +128,11 @@ func TestChains_SSEHubFanout(t *testing.T) {
 		filepath.Join(patternsRoot, "go/sse_hub_test/input.go"),
 		filepath.Join(patternsRoot, "go/sse_hub.yaml"),
 		filepath.Join(patternsRoot, "go/functions.yaml"))
-	edges = append(edges, linker.LinkHubFanout(nodes)...)
+	contractRules, err := contract.Load(contractdata.FS, "")
+	require.NoError(t, err)
+	eng := &contract.Engine{}
+	contractResult := eng.Link(nodes, contractRules, nil)
+	edges = append(edges, contractResult.Edges...)
 
 	idx := buildIdx(nodes, edges)
 
@@ -157,7 +163,11 @@ func TestChains_WebSocketTypedDispatch(t *testing.T) {
 		filepath.Join(patternsRoot, "javascript/websocket_test/input.js"),
 		filepath.Join(patternsRoot, "javascript/websocket.yaml"),
 		filepath.Join(patternsRoot, "javascript/functions.yaml"))
-	edges = append(edges, linker.LinkWebSocketMessages(nodes)...)
+	contractRules, err := contract.Load(contractdata.FS, "")
+	require.NoError(t, err)
+	eng := &contract.Engine{}
+	contractResult := eng.Link(nodes, contractRules, nil)
+	edges = append(edges, contractResult.Edges...)
 
 	idx := buildIdx(nodes, edges)
 
@@ -178,10 +188,10 @@ func TestChains_WebSocketTypedDispatch(t *testing.T) {
 	require.NotNil(t, hitChain, "expected a chain through the typed ws_send link, got:\n%s", chainTexts(r))
 	assert.True(t, strings.HasPrefix(hitChain.Text, "(tether) reportBattery -[calls]->"), hitChain.Text)
 
-	// The message type is carried as edge metadata on the ws_send hop.
+	// The message type is carried as the edge label on the ws_send hop.
 	last := hitChain.Hops[len(hitChain.Hops)-1]
 	assert.Equal(t, "ws_send", last.EdgeType)
-	assert.Equal(t, "battery", last.EdgeMeta["message_type"])
+	assert.Equal(t, "battery", last.EdgeLabel)
 }
 
 func chainTexts(r *Result) string {
