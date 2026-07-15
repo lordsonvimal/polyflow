@@ -328,7 +328,7 @@ subscriber per empty-key slot is linked per broadcast node. Fixture chain tests 
 and websocket ported to the contract engine; `EdgeMeta["message_type"]` assertion
 updated to `EdgeLabel` (contract engine carries the normalized key as edge label).
 
-### Phase G.3 — Close the route-group gap (pattern + enrichment pass + rule) `pending`
+### Phase G.3 — Close the route-group gap (pattern + enrichment pass + rule) `done`
 Router-group prefixes are **not** reachable by a pure normalizer: `gin_route_group`
 today captures only the prefix string, not the variable it is assigned to
 (`api := r.Group("/api/v1")` — the assignment binding sits outside the query), so
@@ -349,6 +349,26 @@ scope here — variable-name scoping cannot see them; they need the SSA pass (tr
 as a follow-up), and affected routes stay surfaced as unresolved rather than being
 silently mis-prefixed. chessleap datastar real-handler links **3/27 → ~27/27**
 (its groups are same-file).
+
+**Outcome.** Three parts shipped in one commit. (1) `gin_route_group` pattern changed
+from a plain `call_expression` to a `short_var_declaration` query that captures
+`var_name` (the assigned variable), `receiver` (parent router), and `prefix`; this is
+the assignment binding the spec required. `chi_route_group` gains an `operand: @receiver`
+capture and replaces `(_) @fn` with `(func_literal) @_body` so the func_literal end
+line is tracked as a positional span. (2) `internal/contract/routegroup.go` implements
+`EnrichRouteGroups`: gin enrichment resolves prefix chains by following receiver→var_name
+links (iterative fixpoint handles nesting); chi enrichment uses line-range containment
+(routes whose line falls within the func_literal body inherit the prefix, outermost-first
+for nested groups). The pass deep-copies the Meta maps so the stored `allNodes` are
+never mutated. (3) The indexer wires the pass between `ApplyHints` and `Engine.Link`
+— the enriched path is used for matching only, not persisted. One deviation from the
+spec: the enclosing-function scope constraint for gin is not applied (groups are matched
+by var_name across the whole file), which is correct for the common pattern where all
+groups and routes share one setup function. `SchemaVersion` bumped 10→11 because
+gin_route_group nodes now carry new meta fields (`var_name`, `receiver`). `matcher.go`
+extended to store `end_line` for all node types (not just function/method/worker) so
+chi_route_group nodes receive the func_literal end row. 10 routegroup unit tests cover
+all positive and negative cases. `BenchmarkIndexCold` holds (~10.1s, within baseline).
 
 ### Phase G.4 — New protocols, additive `pending`
 Recognition patterns + contract rules for `grpc`, `graphql`, `kafka`, `nats`,

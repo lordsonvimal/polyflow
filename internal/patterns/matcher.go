@@ -458,11 +458,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
-		// Declaration span: patterns that capture the whole definition (@_def)
-		// record where the body ends, so enclosing-function attribution can
-		// require containment instead of guessing by proximity. Persisted in
-		// meta so later passes (JS import linker) can reuse it.
-		if r.EndLine >= r.Line && (nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod || nodeType == graph.NodeTypeWorker) {
+		// Declaration span: patterns that capture the whole definition (@_def,
+		// @_body) record where the body ends. Persisted for all node types so
+		// the G.3 route-group enrichment pass can read chi_route_group end lines.
+		if r.EndLine >= r.Line {
 			meta["end_line"] = fmt.Sprintf("%d", r.EndLine)
 		}
 
