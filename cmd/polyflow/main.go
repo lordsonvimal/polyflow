@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
+	"github.com/lordsonvimal/polyflow/internal/eval"
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
@@ -55,6 +56,7 @@ func init() {
 		configCmd,
 		depsCmd,
 		mcpCmd,
+		evalCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
@@ -66,6 +68,7 @@ func init() {
 	initImpactFlags()
 	initTraceFlags()
 	initConfigSubcmds()
+	initEvalFlags()
 }
 
 // ─── init ────────────────────────────────────────────────────────────────────
@@ -1667,6 +1670,55 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("Set %s = %s\n", key, val)
+	return nil
+}
+
+// ─── eval ────────────────────────────────────────────────────────────────────
+
+var (
+	evalCorpus string
+	evalCase   string
+)
+
+func initEvalFlags() {
+	evalCmd.Flags().StringVar(&evalCorpus, "corpus", "eval/corpus/polyflow", "path to corpus directory (contains manifest.yaml)")
+	evalCmd.Flags().StringVar(&evalCase, "case", "", "run only this case ID (default: all)")
+}
+
+var evalCmd = &cobra.Command{
+	Use:   "eval",
+	Short: "Run the ground-truth recall evaluation corpus",
+	RunE:  runEval,
+}
+
+func runEval(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+	report, err := eval.Run(ctx, eval.RunOptions{
+		CorpusDir: evalCorpus,
+		CaseID:    evalCase,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Repo: %s   cases: %d\n", report.Repo, len(report.Results))
+	fmt.Printf("Corpus  recall=%.3f  precision=%.3f\n\n", report.Recall, report.Precision)
+
+	hardFailed := false
+	for _, r := range report.Results {
+		status := "ok"
+		if r.HardFail {
+			status = "HARD_FAIL"
+			hardFailed = true
+		}
+		fmt.Printf("  %-40s recall=%.3f precision=%.3f honest=%d silent=%d  %s\n",
+			r.CaseID, r.Recall, r.Precision, r.HonestMisses, r.SilentMisses, status)
+	}
+
+	if hardFailed {
+		fmt.Fprintln(os.Stderr, "\nFailed: one or more cases hard-failed (must_not_miss file silently missed)")
+		os.Exit(1)
+	}
 	return nil
 }
 

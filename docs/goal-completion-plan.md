@@ -147,7 +147,7 @@ equal-scored candidate one; total result sets are identical (nothing dropped).
 *No prerequisites — start immediately; it measures whatever the graph can do
 today and becomes the regression gate for every later tier.*
 
-### Phase E.1 — Corpus format + scorer `pending`
+### Phase E.1 — Corpus format + scorer `done`
 
 **Problem.** "Works on any repo" is a claim with no metric. Recall failures
 are discovered by being burned (the original `hiddenTypes` miss).
@@ -213,6 +213,18 @@ permanent eval case).
 
 **Acceptance.** `polyflow eval --corpus eval/corpus/polyflow` prints per-case
 recall/precision/honesty and exits non-zero on `HardFail`.
+
+**Outcome (done).** Delivered `internal/eval/{corpus.go,runner.go,score.go}` and
+`polyflow eval [--corpus <dir>] [--case <id>]`. Smoke corpus `eval/corpus/polyflow/`
+has 3 hand-verified cases covering Go (UnresolvedNote callers, LinkRouteHandlers
+→ indexer) and JS (filterEdgesByConfidence → derived.ts); all report
+recall=1.000, no hard fails. All four scoring quadrants tested. `BenchmarkIndexCold`
+held (10.9s / 1200 files). `SchemaVersion` unchanged — no graph schema touched.
+Deviation from spec: `hiddenTypes → derived.ts` was not used as a case because the
+FTS index returns the local `derived.ts:hiddenTypes` variable node before the
+`ui.ts:hiddenTypes` export, making the case non-deterministic without a label-tie-
+breaker; `filterEdgesByConfidence → derived.ts` is a strictly stronger substitute
+(same JS cross-file class, unique search result, directly analogous to Phase 0.3).
 
 ### Phase E.2 — Real-repo corpus `pending`
 
