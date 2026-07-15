@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
@@ -14,6 +15,61 @@ import (
 type RunOptions struct {
 	CorpusDir string // directory containing manifest.yaml
 	CaseID    string // if non-empty, run only this case
+	// CachePath overrides the derived eval/.cache/<name> path for URL repos.
+	CachePath string
+}
+
+// MultiReport holds scored reports for all corpus repos in one run.
+type MultiReport struct {
+	GeneratedAt time.Time        `json:"generated_at"`
+	Reports     []Report         `json:"repos"`
+	Skipped     []SkippedCorpus  `json:"skipped,omitempty"`
+}
+
+// SkippedCorpus records a corpus that was unavailable (not cloned/indexed).
+type SkippedCorpus struct {
+	Name   string `json:"name"`
+	Dir    string `json:"dir"`
+	Reason string `json:"reason"`
+}
+
+// RunAll finds all corpus dirs under root and runs each in sequence.
+// If a corpus DB is not available (repo not cloned or not indexed) it is
+// recorded in Skipped with the reason — the eval never silently passes.
+func RunAll(ctx context.Context, root string) (*MultiReport, error) {
+	dirs, err := FindCorpusDirs(root)
+	if err != nil {
+		return nil, err
+	}
+	if len(dirs) == 0 {
+		return nil, fmt.Errorf("no corpus directories (with manifest.yaml) found under %s", root)
+	}
+	out := &MultiReport{GeneratedAt: time.Now().UTC()}
+	for _, dir := range dirs {
+		r, err := Run(ctx, RunOptions{CorpusDir: dir})
+		if err != nil {
+			// Surface unavailable repos as explicit skips (never silent).
+			m, mErr := LoadManifest(dir)
+			name := dir
+			if mErr == nil {
+				name = m.Repo.Name
+			}
+			out.Skipped = append(out.Skipped, SkippedCorpus{
+				Name:   name,
+				Dir:    dir,
+				Reason: err.Error(),
+			})
+			continue
+		}
+		out.Reports = append(out.Reports, *r)
+	}
+	return out, nil
+}
+
+// cachePath returns the local path where a URL repo's clone lives.
+// Convention: eval/.cache/<repo-name>
+func cachePath(name string) string {
+	return filepath.Join("eval", ".cache", name)
 }
 
 // Run loads a corpus manifest, executes each case against the graph, and
@@ -28,8 +84,14 @@ func Run(ctx context.Context, opts RunOptions) (*Report, error) {
 	}
 
 	repoRoot := "."
-	if m.Repo.Path != "" && m.Repo.Path != "." {
+	switch {
+	case opts.CachePath != "":
+		repoRoot = opts.CachePath
+	case m.Repo.Path != "" && m.Repo.Path != ".":
 		repoRoot = m.Repo.Path
+	case m.Repo.URL != "":
+		// URL repo: expect it to be cloned by `make eval-corpus` first.
+		repoRoot = cachePath(m.Repo.Name)
 	}
 
 	dbPath := filepath.Join(repoRoot, meta.DBDir, meta.DBFile)

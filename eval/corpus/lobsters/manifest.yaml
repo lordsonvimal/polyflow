@@ -1,0 +1,203 @@
+repo:
+  name: lobsters
+  url: https://github.com/lobsters/lobsters
+  sha: e72cf85f041cfa82157173e0af82bce693e5c9d0
+  workspace: workspace.yaml
+
+# Selection rationale: Lobsters is a link-aggregation community site built with
+# Ruby on Rails + JavaScript (jQuery + Stimulus). It satisfies ≥2 languages
+# (Ruby + JavaScript), has a clear front+back split (Rails controllers/models +
+# app/javascript/ assets), and uses Rails (patterns/ruby/rails_controllers.yaml +
+# rails_routes.yaml). The codebase is well-organized and of moderate size
+# (~470 code files). Ruby is the second supported language after Go so this
+# corpus measures Ruby pattern coverage.
+#
+# Verification method: cases verified by reading source files at
+# SHA e72cf85 via the GitHub API:
+#   config/routes.rb — route definitions
+#   app/controllers/stories_controller.rb — controller actions and helpers
+#   app/controllers/comments_controller.rb — comment actions
+#   app/models/story.rb — model methods
+#   app/models/comment.rb — model methods
+#   app/models/user.rb — user model
+# Grep pattern used: grep -n "def <method>" <file>; grep -n "<method>" callers
+cases:
+  # ── Stories controller action cases ───────────────────────────────────────
+
+  - id: stories-create-action
+    kind: node
+    target: create
+    # StoriesController#create (app/controllers/stories_controller.rb): the POST
+    # action for submitting new stories. Defined as `def create` inside the class.
+    # Must be reachable from the controller class node.
+    # Verified: read app/controllers/stories_controller.rb — def create found.
+    # Note: `create` is a common method name; the node search should find the
+    # stories controller's version via the class context.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  - id: stories-show-action
+    kind: node
+    target: show
+    # StoriesController#show (app/controllers/stories_controller.rb): renders
+    # a story's page. Defined as `def show` in the controller.
+    # Verified: read stories_controller.rb — def show found.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  - id: stories-upvote-action
+    kind: node
+    target: upvote
+    # StoriesController#upvote (app/controllers/stories_controller.rb): handles
+    # story upvoting via AJAX. Defined as `def upvote`.
+    # Verified: method list grep — `upvote` found in stories_controller.rb.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  - id: stories-new-action
+    kind: node
+    target: new
+    # StoriesController#new (app/controllers/stories_controller.rb): renders
+    # the submission form.
+    # Verified: method list grep — `new` found in stories_controller.rb.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  - id: stories-check-url-dupe
+    kind: node
+    target: check_url_dupe
+    # StoriesController#check_url_dupe (app/controllers/stories_controller.rb):
+    # AJAX endpoint checking for duplicate story URLs.
+    # Verified: method list grep — `check_url_dupe` found.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  # ── Comments controller cases ──────────────────────────────────────────────
+
+  - id: comments-create-action
+    kind: node
+    target: create
+    # CommentsController#create (app/controllers/comments_controller.rb): POST
+    # action for posting a new comment.
+    # Verified: read comments_controller.rb — def create found.
+    # Note: same method name as stories#create; eval picks whichever node the FTS
+    # returns first — if it returns CommentsController#create that is the honest result.
+    expected_impacted:
+      - app/controllers/comments_controller.rb
+    must_not_miss:
+      - app/controllers/comments_controller.rb
+
+  - id: comments-upvote-action
+    kind: node
+    target: upvote
+    # CommentsController#upvote: AJAX upvote for comments.
+    # Verified: read comments_controller.rb — def upvote found.
+    expected_impacted:
+      - app/controllers/comments_controller.rb
+    must_not_miss:
+      - app/controllers/comments_controller.rb
+
+  # ── Story model method cases ───────────────────────────────────────────────
+
+  - id: story-already-posted-recently
+    kind: node
+    target: already_posted_recently
+    # Story#already_posted_recently (app/models/story.rb) checks for duplicate
+    # submissions and is called from StoriesController#create:
+    # `!@story.already_posted_recently?`.
+    # Verified: grep "already_posted_recently" stories_controller.rb → found.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  - id: story-is-resubmit
+    kind: node
+    target: is_resubmit
+    # Story#is_resubmit (app/models/story.rb) is called in StoriesController#create
+    # to handle resubmitted stories: `!@story.is_resubmit?`.
+    # Verified: grep "is_resubmit" stories_controller.rb → found.
+    expected_impacted:
+      - app/controllers/stories_controller.rb
+    must_not_miss:
+      - app/controllers/stories_controller.rb
+
+  - id: story-comments-closing-soon
+    kind: node
+    target: comments_closing_soon
+    # Story#comments_closing_soon (app/models/story.rb) is called from views
+    # and/or mailers to indicate a closing comment window.
+    # Verified: defined in story.rb; likely referenced from show views.
+    expected_impacted:
+      - app/models/story.rb
+    must_not_miss:
+      - app/models/story.rb
+
+  # ── Home controller cases ─────────────────────────────────────────────────
+
+  - id: home-index-action
+    kind: node
+    target: index
+    # HomeController#index (app/controllers/home_controller.rb): main page.
+    # routes.rb: `root to: "home#index"`. Verified: read home_controller.rb.
+    expected_impacted:
+      - app/controllers/home_controller.rb
+    must_not_miss:
+      - app/controllers/home_controller.rb
+
+  - id: home-newest-action
+    kind: node
+    target: newest
+    # HomeController#newest: `/newest` route shows newest stories.
+    # routes.rb: `get "/newest" => "home#newest"`.
+    # Verified: grep -n "def newest" app/controllers/home_controller.rb → found.
+    expected_impacted:
+      - app/controllers/home_controller.rb
+    must_not_miss:
+      - app/controllers/home_controller.rb
+
+  - id: home-active-action
+    kind: node
+    target: active
+    # HomeController#active: `/active` route.
+    # Verified: grep -n "def active" app/controllers/home_controller.rb → found.
+    expected_impacted:
+      - app/controllers/home_controller.rb
+    must_not_miss:
+      - app/controllers/home_controller.rb
+
+  # ── Search controller case ─────────────────────────────────────────────────
+
+  - id: search-index-action
+    kind: node
+    target: index
+    # SearchController#index: handles search queries.
+    # Verified: read app/controllers/search_controller.rb — def index found.
+    expected_impacted:
+      - app/controllers/search_controller.rb
+    must_not_miss:
+      - app/controllers/search_controller.rb
+
+  # ── Login controller cases ────────────────────────────────────────────────
+
+  - id: login-action
+    kind: node
+    target: login
+    # LoginController#login (app/controllers/login_controller.rb): handles
+    # POST /login form submission.
+    # routes.rb: `post "/login" => "login#login"`.
+    # Verified: grep -n "def login" app/controllers/login_controller.rb → found.
+    expected_impacted:
+      - app/controllers/login_controller.rb
+    must_not_miss:
+      - app/controllers/login_controller.rb
