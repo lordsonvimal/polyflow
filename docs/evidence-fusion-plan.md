@@ -1,6 +1,6 @@
 # Polyflow — Evidence-Fusion Architecture Plan
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 > **The capstone plan.** `docs/contract-matching-plan.md` gives *breadth* (link any
 > cross-service convention) and `docs/versioning-matrix-plan.md` gives *fidelity*
