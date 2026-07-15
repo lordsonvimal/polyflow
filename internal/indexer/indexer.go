@@ -582,6 +582,40 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			return nil, err
 		}
 	}
+	// JS/TS + Ruby file-level import edges (file→file between NodeTypeFile nodes).
+	// Runs after LinkContainment so the file nodes are present in allNodes.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		jsImportEdges, updatedFileNodes, jsImportUnresolved := linker.LinkJSImportEdges(allNodes, svcFiles)
+		for i := range updatedFileNodes {
+			n := updatedFileNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(jsImportEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, jsImportUnresolved...)
+	}
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		rubyImportEdges, rubyImportUnresolved := linker.LinkRubyImportEdges(allNodes, svcFiles)
+		if err := writeEdges(rubyImportEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, rubyImportUnresolved...)
+	}
+
 	if err := writeEdges(linker.LinkDatastores(allNodes)); err != nil {
 		return nil, err
 	}
