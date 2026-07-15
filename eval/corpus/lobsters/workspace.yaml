@@ -1,0 +1,21 @@
+name: lobsters
+version: "1"
+services:
+  - name: app
+    path: .
+    language: ruby
+    frameworks:
+      - rails
+  - name: assets
+    path: ./app/javascript
+    language: javascript
+links: []
+index:
+  exclude:
+    - '**/node_modules/**'
+    - '**/vendor/**'
+    - '**/spec/**'
+    - '**/test/**'
+    - '**/db/schema.rb'
+    - '**/db/migrate/**'
+    - 'Gemfile.lock'

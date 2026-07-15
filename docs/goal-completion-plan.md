@@ -226,7 +226,7 @@ FTS index returns the local `derived.ts:hiddenTypes` variable node before the
 breaker; `filterEdgesByConfidence → derived.ts` is a strictly stronger substitute
 (same JS cross-file class, unique search result, directly analogous to Phase 0.3).
 
-### Phase E.2 — Real-repo corpus `pending`
+### Phase E.2 — Real-repo corpus `done`
 
 **Problem.** One repo (this one) proves nothing about generality.
 
@@ -246,6 +246,28 @@ when offline — never a silent pass).
 **Acceptance.** `polyflow eval` runs all four repos; the initial report is
 committed as `eval/baseline.json` — whatever the numbers are, they are the
 honest starting point.
+
+**Outcome (done).** Delivered corpus entries for gotify/server (Go+TypeScript,
+gin, 15 cases), writefreely/writefreely (Go+JavaScript, gorilla/mux, 15 cases),
+and lobsters/lobsters (Ruby+JavaScript, Rails, 15 cases), plus a placeholder
+entry for chessleap (private repo, 3 spec-derived cases). `make eval-corpus`
+target added (clones URL repos to `eval/.cache/`, skips offline with explicit
+warning, never silently passes). Schema validation and must_not_miss lint tests
+added (`internal/eval/corpus_test.go`, 13 tests). `polyflow eval` defaults to
+`eval/corpus` root and auto-iterates all subdirs; skipped corpora (e.g.
+chessleap DB absent) are surfaced as explicit warnings. `eval/baseline.json`
+committed from a live run (2026-07-15). Baseline numbers: polyflow recall=1.000
+(3 cases), gotify recall=0.833 (2 hard-fails: `Health` and `Login` — FTS
+ambiguity at common method names is a real gap), writefreely recall=0.467 (8
+hard-fails for gorilla/mux indirect handler registration via `handler.Web(fn)` —
+function-value captures not tracked as caller edges; 7 direct-call cases pass),
+lobsters recall=0.067 (14 hard-fails — Ruby controller actions indexed but FTS
+returns wrong node for common names like `create`/`show`/`index`; one unique-name
+case passes). Deviations: (1) chessleap is private — 3 placeholder cases used
+from plan docs rather than 15 hand-verified; (2) diff case runner not
+implemented — corpus uses only node/file kinds; (3) cases revealing FTS
+ambiguity for common method names are kept as-is: they are accurate diagnostics
+showing real gaps. `SchemaVersion` unchanged — no graph schema touched.
 
 ### Phase E.3 — CI regression gate `pending`
 
