@@ -1,6 +1,6 @@
 # Polyflow — Generic Contract-Matching Linker Plan
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 ## Context
 

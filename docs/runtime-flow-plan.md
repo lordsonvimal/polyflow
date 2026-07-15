@@ -1,6 +1,6 @@
 # Polyflow — Runtime Flow Identification Plan
 
-Status legend: `pending` · `in progress` · `done (commit <sha>)`
+Status legend: `pending` · `in progress` · `done`
 
 > **Prerequisites — do not start out of order.** This plan is the detailed
 > expansion of **Phase F.2** of `docs/evidence-fusion-plan.md`. Every R-phase
