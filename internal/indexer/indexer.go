@@ -507,6 +507,31 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 
+	// JS/TS cross-file inherits/implements/instantiates edges.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		jsTypeEdges, jsTypeUnresolved := linker.LinkJSTypeRelations(allNodes, svcFiles)
+		if err := writeEdges(jsTypeEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, jsTypeUnresolved...)
+	}
+	// Ruby cross-file inherits/implements/instantiates edges.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		rubyTypeEdges, rubyTypeUnresolved := linker.LinkRubyTypeRelations(allNodes, svcFiles)
+		if err := writeEdges(rubyTypeEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, rubyTypeUnresolved...)
+	}
+
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
 		return nil, err
 	}
