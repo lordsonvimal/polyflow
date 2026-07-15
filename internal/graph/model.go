@@ -120,12 +120,25 @@ const (
 	// linking from existing node file/receiver metadata; answers "what's in this
 	// file" / "what hangs off this struct" for agent-context recall.
 	EdgeTypeContains EdgeType = "contains"
+	// Type-relationship edges (Tier I). Direction: dependent → definition.
+	// Impact traversal is bidirectional, so "impact of Base" follows incoming
+	// inherits edges to every subclass.
+	//
+	// inherits: subclass→superclass, embedding struct→embedded type.
+	// meta: via=extends|superclass|embedding|mixin; mixin=include|extend|prepend.
+	EdgeTypeInherits EdgeType = "inherits"
+	// implements: struct/class→interface it satisfies.
+	// meta: nominal=true for declared `implements` clauses, false for Go structural.
+	EdgeTypeImplements EdgeType = "implements"
+	// instantiates: function/method→struct/class it constructs.
+	// Deduped per (function, type) pair; meta: count=<n>.
+	EdgeTypeInstantiates EdgeType = "instantiates"
 )
 
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "8"
+const SchemaVersion = "9"
 
 // Node represents a code entity in the graph.
 type Node struct {
