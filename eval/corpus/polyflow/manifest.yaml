@@ -1,0 +1,46 @@
+repo:
+  name: polyflow
+  path: .                    # local repo — no clone needed
+  sha: 792a1ebac2319edd8f48ba1bd28fb5281f5c8057
+  workspace: workspace.yaml
+
+# Hand-verified ground truth: each case was verified by reading the source
+# code (grep/read), never by running polyflow itself (circular truth).
+cases:
+  - id: unresolved-note-callers
+    kind: node
+    target: UnresolvedNote
+    # graph.UnresolvedNote (internal/graph/unresolved.go) is called by these files.
+    # Verified: grep -rn "UnresolvedNote" internal/ shows calls in all five files.
+    expected_impacted:
+      - internal/impact/impact.go
+      - internal/impact/file.go
+      - internal/impact/diff.go
+      - internal/trace/trace.go
+      - internal/context/builder.go
+      - internal/context/files.go
+    must_not_miss:
+      - internal/impact/impact.go
+      - internal/trace/trace.go
+
+  - id: linker-route-indexer
+    kind: node
+    target: LinkRouteHandlers
+    # linker.LinkRouteHandlers (internal/linker/linker.go) is called only by the
+    # indexer's Run function.  Verified: grep -rn "LinkRouteHandlers" shows
+    # a single call site at internal/indexer/indexer.go.
+    expected_impacted:
+      - internal/indexer/indexer.go
+    must_not_miss:
+      - internal/indexer/indexer.go
+
+  - id: filter-edges-confidence-js
+    kind: node
+    target: filterEdgesByConfidence
+    # filterEdgesByConfidence (web/src/lib/confidence.ts) is imported and called by
+    # web/src/stores/derived.ts.  Verified: derived.ts line 10 imports it; line 53
+    # calls it. This is a cross-file JavaScript link — the Phase 0.3 class of fix.
+    expected_impacted:
+      - web/src/stores/derived.ts
+    must_not_miss:
+      - web/src/stores/derived.ts
