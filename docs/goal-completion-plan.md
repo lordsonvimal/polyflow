@@ -269,7 +269,7 @@ implemented — corpus uses only node/file kinds; (3) cases revealing FTS
 ambiguity for common method names are kept as-is: they are accurate diagnostics
 showing real gaps. `SchemaVersion` unchanged — no graph schema touched.
 
-### Phase E.3 — CI regression gate `pending`
+### Phase E.3 — CI regression gate `done`
 
 **Problem.** Without a gate, recall regressions ship.
 
@@ -282,6 +282,24 @@ count rises. Improvements update the baseline in the same PR (ratcheting).
 
 **Acceptance.** A deliberately-broken linker in a scratch branch fails CI with
 the specific case IDs that regressed.
+
+**Outcome (done).** Delivered `internal/eval/gate.go` with `CheckGate`,
+`LoadBaseline`, `EvalSummary`, and `SummarizeForDoctor`; 9 gate unit tests
+covering all three failure conditions (hard_fail, recall_drop, silent_miss_rise),
+the ratchet-up improvement path, the pre-existing-HardFail exclusion, the
+ratchet-never-down invariant, and the new-case-with-HardFail case. Added
+`polyflow eval --gate <baseline.json>` flag that exits non-zero and prints the
+specific regressing repo/case IDs when the gate fires. Added `polyflow doctor`
+(stub, extended by G.5) with the pinned eval summary row reading `eval/baseline.json`
+without re-running the corpus. Added `.github/workflows/eval.yml`: GitHub Actions
+job that builds polyflow, caches `eval/.cache/` keyed on manifest hashes, runs
+`make eval-corpus`, then runs `polyflow eval --gate eval/baseline.json`. The
+polyflow corpus (`eval/corpus/polyflow`) gates cleanly against its baseline
+(recall=1.000, exit 0). `BenchmarkIndexCold` held (~11s / 1200 files).
+`SchemaVersion` unchanged — no graph schema touched. Deviation: `polyflow doctor`
+is a minimal stub containing only the eval summary row; the full doctor surface
+(service health, unresolved ledger, contract coverage) is G.5's deliverable and
+is not implemented here.
 
 ---
 
