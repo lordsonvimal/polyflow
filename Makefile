@@ -23,6 +23,49 @@ test-e2e:
 bench:
 	go test ./... -bench=. -benchtime=5s -run=^$
 
+# eval-corpus — clone + index all URL-based corpus repos into eval/.cache/
+# Skips offline repos with a warning; never silently passes a missing clone.
+eval-corpus:
+	@mkdir -p eval/.cache
+	@POLYFLOW=./dist/polyflow; \
+	if [ ! -x "$$POLYFLOW" ]; then \
+		echo "error: $$POLYFLOW not found — run 'make build' first"; exit 1; \
+	fi; \
+	ONLINE=1; \
+	if ! curl -sf --max-time 5 https://github.com > /dev/null 2>&1; then \
+		ONLINE=0; \
+		echo "WARNING: offline — skipping remote repo clones (run again when online)"; \
+	fi; \
+	for manifest in eval/corpus/*/manifest.yaml; do \
+		dir=$$(dirname "$$manifest"); \
+		name=$$(basename "$$dir"); \
+		url=$$(grep -m1 'url:' "$$manifest" | awk '{print $$2}'); \
+		sha=$$(grep -m1 'sha:' "$$manifest" | awk '{print $$2}'); \
+		if [ -z "$$url" ]; then continue; fi; \
+		cachedir="eval/.cache/$$name"; \
+		if [ "$$ONLINE" = "0" ]; then \
+			if [ ! -d "$$cachedir/.git" ]; then \
+				echo "WARNING: offline and $$cachedir not cloned — eval for $$name will fail"; \
+			else \
+				echo "$$name: already cloned (offline, skipping update)"; \
+			fi; \
+			continue; \
+		fi; \
+		if [ ! -d "$$cachedir/.git" ]; then \
+			echo "Cloning $$name from $$url ..."; \
+			git clone --quiet "$$url" "$$cachedir"; \
+		fi; \
+		echo "Pinning $$name to $$sha ..."; \
+		git -C "$$cachedir" fetch --quiet origin; \
+		git -C "$$cachedir" checkout --quiet "$$sha"; \
+		if [ -f "$$dir/workspace.yaml" ]; then \
+			cp "$$dir/workspace.yaml" "$$cachedir/workspace.yaml"; \
+		fi; \
+		echo "Indexing $$name ..."; \
+		(cd "$$cachedir" && $$POLYFLOW index --full --workspace workspace.yaml) || echo "WARNING: index failed for $$name"; \
+	done; \
+	echo "eval-corpus done."
+
 lint:
 	golangci-lint run ./...
 

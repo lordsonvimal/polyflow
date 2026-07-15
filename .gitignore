@@ -6,3 +6,4 @@ web/node_modules/
 *.db
 *.db.tmp
 coverage.out
+eval/.cache/
