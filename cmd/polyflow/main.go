@@ -1878,9 +1878,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		if coverageJSON, metaErr := store.GetMeta(ctx, "contract_coverage"); metaErr == nil {
 			var cov []contract.KindCoverage
 			if json.Unmarshal([]byte(coverageJSON), &cov) == nil && len(cov) > 0 {
-				fmt.Printf("  Contract coverage:  %-16s  %8s  %10s  %7s\n", "kind", "matched", "unresolved", "dynamic")
+				fmt.Printf("  Contract coverage:  %-16s  %8s  %10s  %7s  %8s\n", "kind", "matched", "unresolved", "dynamic", "indirect")
 				for _, c := range cov {
-					fmt.Printf("                      %-16s  %8d  %10d  %7d\n", c.Kind, c.Matched, c.Unresolved, c.Dynamic)
+					fmt.Printf("                      %-16s  %8d  %10d  %7d  %8d\n", c.Kind, c.Matched, c.Unresolved, c.Dynamic, c.Indirect)
 				}
 			} else {
 				fmt.Printf("  Contract coverage:  (no rules matched — check contracts/*.yaml)\n")

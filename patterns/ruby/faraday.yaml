@@ -16,11 +16,14 @@ patterns:
   - name: faraday_http_verb
     query: |
       (call
+        receiver: (identifier) @via_alias
         method: (identifier) @method
         (#match? @method "^(get|post|put|patch|delete|head|options)$")
         arguments: (argument_list
           (_) @path . _*))
     captures:
+      - name: via_alias
+        role: alias_receiver
       - name: method
         role: http_method
       - name: path

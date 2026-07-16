@@ -1,0 +1,76 @@
+language: javascript
+version: "1"
+patterns:
+  - name: fetch_alias_binding
+    query: |
+      (variable_declarator
+        name: (identifier) @alias_name
+        value: (identifier) @alias_source
+        (#eq? @alias_source "fetch"))
+    captures:
+      - name: alias_name
+        role: alias_var_name
+  - name: jquery_alias_binding
+    query: |
+      (variable_declarator
+        name: (identifier) @alias_name
+        value: (member_expression
+          object: (_) @obj
+          (#match? @obj "^\\$|^jQuery$")
+          property: (property_identifier) @prop
+          (#eq? @prop "ajax")))
+    captures:
+      - name: alias_name
+        role: alias_var_name
+  - name: axios_destructure
+    query: |
+      (variable_declarator
+        name: (identifier) @alias_name
+        value: (member_expression
+          object: (identifier) @obj
+          (#eq? @obj "axios")
+          property: (property_identifier) @alias_source_method
+          (#match? @alias_source_method "^(get|post|put|patch|delete|head|options|request)$")))
+    captures:
+      - name: alias_name
+        role: alias_var_name
+      - name: alias_source_method
+        role: alias_method
+  - name: axios_method_binding
+    query: |
+      (variable_declarator
+        name: (object_pattern
+          (shorthand_property_identifier_pattern) @alias_name
+          (#match? @alias_name "^(get|post|put|patch|delete|head|options|request)$"))
+        value: (identifier) @obj
+        (#eq? @obj "axios"))
+    captures:
+      - name: alias_name
+        role: alias_var_name
+  - name: producer_alias_url_call
+    query: |
+      (call_expression
+        function: (identifier) @via_alias
+        arguments: (arguments
+          .
+          (string) @url))
+    captures:
+      - name: via_alias
+        role: alias_caller
+      - name: url
+        role: http_url
+  - name: producer_alias_obj_call
+    query: |
+      (call_expression
+        function: (identifier) @via_alias
+        arguments: (arguments
+          (object
+            (pair
+              key: (property_identifier) @key
+              (#eq? @key "url")
+              value: (string) @url))))
+    captures:
+      - name: via_alias
+        role: alias_caller
+      - name: url
+        role: http_url

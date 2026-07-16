@@ -1,0 +1,41 @@
+language: javascript
+version: "1"
+patterns:
+  - name: axios_create_with_baseurl
+    query: |
+      (variable_declarator
+        name: (identifier) @instance_name
+        value: (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            (#eq? @obj "axios")
+            property: (property_identifier) @fn
+            (#eq? @fn "create"))
+          arguments: (arguments
+            (object
+              (pair
+                key: (property_identifier) @key
+                (#eq? @key "baseURL")
+                value: (_) @instance_base_url)))))
+    captures:
+      - name: instance_name
+        role: alias_instance_name
+      - name: instance_base_url
+        role: alias_base_url
+  - name: axios_instance_call
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @via_alias
+          property: (property_identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options|request)$"))
+        arguments: (arguments
+          .
+          (string) @url))
+    captures:
+      - name: via_alias
+        role: alias_receiver
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url

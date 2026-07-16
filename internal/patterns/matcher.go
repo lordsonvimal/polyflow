@@ -362,6 +362,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			// Event-handler assignments (es.onmessage = …, ws.onclose = …):
 			// label with the property, not the internal pattern name.
 			label = prop + " handler"
+		} else if aliasN, ok := r.Captures["alias_name"]; ok {
+			// G.7: alias/instance binding nodes — label with the variable name.
+			label = stripStringLiteral(aliasN)
+		} else if instN, ok := r.Captures["instance_name"]; ok {
+			label = stripStringLiteral(instN)
 		}
 		if r.PatternName == "goroutine_anon" {
 			label = "go func()"
@@ -482,8 +487,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
-		// Strip surrounding quotes from path and url captures (tree-sitter includes them).
-		for _, key := range []string{"path", "url", "method"} {
+		// Strip surrounding quotes from path, url, method, and G.7 base-URL captures.
+		for _, key := range []string{"path", "url", "method", "instance_base_url", "alias_base_url"} {
 			if v, ok := meta[key]; ok {
 				meta[key] = stripStringLiteral(v)
 			}
@@ -672,6 +677,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 		// Type declarations don't need caller→callee edges.
 		if n.Type == graph.NodeTypeInterface || n.Type == graph.NodeTypeTypeAlias {
+			continue
+		}
+		// G.7: alias/instance binding markers are not call sites; they only
+		// contribute to EnrichAliases's alias table and must not emit calls edges.
+		if n.Type == graph.NodeTypeVariable && (n.Meta["alias_name"] != "" || n.Meta["instance_name"] != "") {
 			continue
 		}
 		var fromID string
@@ -934,6 +944,18 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	lower := strings.ToLower(patternName)
 
 	switch {
+	// ── G.7: alias/instance binding markers ───────────────────────────────────
+	// These nodes are consumed by EnrichAliases before Engine.Link and must
+	// never be treated as producer nodes (no calls edges, no engine matching).
+	case strings.HasSuffix(lower, "_alias_binding") || strings.HasSuffix(lower, "_instance_binding") ||
+		lower == "axios_create_with_baseurl" || lower == "resty_new_instance" ||
+		lower == "axios_destructure" || lower == "axios_method_binding":
+		return graph.NodeTypeVariable, graph.EdgeTypeCalls
+
+	// ── G.7: alias/instance call sites (calls through a named alias or instance) ──
+	case strings.HasPrefix(lower, "producer_alias_"):
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
+
 	// ── TypeScript structural declarations (suppress from graph) ──────────────
 	case lower == "interface_declaration":
 		return graph.NodeTypeInterface, graph.EdgeTypeCalls
