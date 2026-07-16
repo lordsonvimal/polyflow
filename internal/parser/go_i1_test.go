@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "12" {
-		t.Errorf("expected SchemaVersion 12 (G.4 bump), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "13" {
+		t.Errorf("expected SchemaVersion 13 (V.0 bump), got %q", graph.SchemaVersion)
 	}
 }
 
