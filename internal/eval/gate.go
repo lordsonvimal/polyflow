@@ -33,6 +33,9 @@ type GateResult struct {
 //     not regressions; they do not trip the gate.
 //  2. per-repo aggregate recall drops below baseline recall.
 //  3. per-case silent-miss count rises above baseline.
+//  4. a repo present in the baseline is absent from the current run — a repo
+//     that fails to clone or crashes during indexing must read as a failure,
+//     not as a silent pass (its cases were never compared).
 func CheckGate(current, baseline *MultiReport) *GateResult {
 	// Index baseline by repo → caseID.
 	type baselineKey struct{ repo, caseID string }
@@ -91,6 +94,21 @@ func CheckGate(current, baseline *MultiReport) *GateResult {
 					})
 				}
 			}
+		}
+	}
+
+	// Condition 4: baseline repo missing from the current run.
+	currentRepos := make(map[string]bool, len(current.Reports))
+	for _, rep := range current.Reports {
+		currentRepos[rep.Repo] = true
+	}
+	for _, rep := range baseline.Reports {
+		if !currentRepos[rep.Repo] {
+			regressions = append(regressions, Regression{
+				Repo:   rep.Repo,
+				CaseID: "*",
+				Reason: "missing_repo",
+			})
 		}
 	}
 
