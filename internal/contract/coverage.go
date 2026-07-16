@@ -12,6 +12,7 @@ type KindCoverage struct {
 	Matched    int    `json:"matched"`    // edges emitted with static or inferred confidence
 	Unresolved int    `json:"unresolved"` // ledger entries + unknown_edge emits
 	Dynamic    int    `json:"dynamic"`    // dynamic_<kind> ledger entries (G.6 surfacing)
+	Indirect   int    `json:"indirect"`   // edges resolved via alias or wrapper (G.7)
 }
 
 // ComputeCoverage returns per-kind coverage stats from a Link result.
@@ -32,6 +33,7 @@ func ComputeCoverage(rules []Rule, result Result) []KindCoverage {
 	matched := map[string]int{}
 	unresolved := map[string]int{}
 
+	indirect := map[string]int{}
 	for _, e := range result.Edges {
 		k := edgeTypeToKind[e.Type]
 		if k == "" {
@@ -41,6 +43,10 @@ func ComputeCoverage(rules []Rule, result Result) []KindCoverage {
 			unresolved[k]++
 		} else {
 			matched[k]++
+		}
+		// G.7: count edges resolved via alias/wrapper indirection.
+		if via := e.Meta["via"]; via == "alias" || via == "wrapper" {
+			indirect[k]++
 		}
 	}
 	dynamic := map[string]int{}
@@ -77,6 +83,7 @@ func ComputeCoverage(rules []Rule, result Result) []KindCoverage {
 			Matched:    matched[k],
 			Unresolved: unresolved[k],
 			Dynamic:    dynamic[k],
+			Indirect:   indirect[k],
 		})
 	}
 	return out

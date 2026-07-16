@@ -17,19 +17,3 @@ patterns:
         role: http_method
       - name: url
         role: http_url
-  - name: axios_create_instance
-    query: |
-      (variable_declarator
-        name: (identifier) @instance
-        value: (call_expression
-          function: (member_expression
-            object: (identifier) @obj
-            (#eq? @obj "axios")
-            property: (property_identifier) @fn
-            (#eq? @fn "create"))
-          arguments: (arguments (_) @config)))
-    captures:
-      - name: instance
-        role: axios_instance
-      - name: config
-        role: axios_config
