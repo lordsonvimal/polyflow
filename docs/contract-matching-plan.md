@@ -397,9 +397,27 @@ the `unknown_edge` policy fires for the filtered-out same-service client, consis
 with the HTTP behavior documented in the model. 25 new contract tests pass; all 5
 pattern fixture sets pass (positive + negative). `BenchmarkIndexCold` holds (~10.1s).
 
-### Phase G.5 — Third-party rule loading + coverage `pending`
+### Phase G.5 — Third-party rule loading + coverage `done`
 Workspace-custom rule dir (recompile-free); `polyflow doctor` prints per-kind coverage
 (matched / unresolved); surface the ledger in `status`.
+
+**Outcome.** Three deliverables shipped in one commit. (1) Workspace-custom rule loading
+was already implemented in `contract.Load()`; the indexer now passes `opts.ContractsDir`
+(set to `filepath.Dir(indexWorkspace)` by the CLI) so rules in `<workspace>/contracts/*.yaml`
+are merged with the embedded defaults at index time without recompilation. A bad YAML in the
+workspace dir fails fast (unknown normalizer/tier/policy detected at Load time). (2) After
+`eng.Link()`, the indexer calls `contract.ComputeCoverage(rules, result)` and stores the
+result as JSON in the `contract_coverage` DB meta key; `polyflow doctor` reads this and
+prints a per-kind table of matched/unresolved counts, or a "run polyflow index first" prompt
+if the DB is absent. (3) `polyflow status` now shows all unresolved-ref kinds dynamically
+(structural kinds `call_ref`/`import_ref` first, then contract kinds sorted alphabetically)
+instead of the hardcoded two-kind breakdown. No `graph.SchemaVersion` bump needed — only a
+new DB meta key was added, which is forward/backward compatible. New tests: 5 loader tests for
+workspace-custom loading (positive: rules loaded; merge with embedded; non-YAML ignored; negative:
+bad normalizer fails fast; negative: non-YAML-only files skipped) + 7 coverage unit tests
+(matched/unresolved split, all-matched, all-unresolved, empty result, sorted-by-kind,
+duplicate-rule-kinds merged, non-contract edge types ignored). `BenchmarkIndexCold` holds
+(~10.1s). All 90+ tests pass.
 
 ### Phase G.6 — Dynamic producer keys: branch enumeration + surfacing (all kinds, all languages) `pending`
 
