@@ -1,0 +1,4 @@
+{
+  "patterns": ["kafka_publish", "kafka_subscribe"],
+  "node_types": ["publisher", "subscriber"]
+}

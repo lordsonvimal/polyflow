@@ -1,0 +1,4 @@
+{
+  "patterns": ["graphql_mutation", "graphql_query", "graphql_resolver", "graphql_resolver"],
+  "node_types": ["graphql_client", "graphql_client", "graphql_resolver", "graphql_resolver"]
+}

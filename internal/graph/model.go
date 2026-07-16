@@ -49,6 +49,18 @@ const (
 	// service→file→declaration `contains` backbone, so an agent can ask "what's
 	// in this file". Synthesized during linking from existing node file metadata.
 	NodeTypeFile NodeType = "file"
+	// NodeTypeGRPCClient is a gRPC call site (stub.Method or cc.Invoke).
+	// Meta: service_method (e.g. "/UserService/GetUser").
+	NodeTypeGRPCClient NodeType = "grpc_client"
+	// NodeTypeGRPCHandler is a gRPC server handler registration or method impl.
+	// Meta: service_method (e.g. "/UserService/GetUser").
+	NodeTypeGRPCHandler NodeType = "grpc_handler"
+	// NodeTypeGraphQLClient is a GraphQL client operation call site
+	// (useQuery / useMutation / useSubscription). Meta: operation (name).
+	NodeTypeGraphQLClient NodeType = "graphql_client"
+	// NodeTypeGraphQLResolver is a server-side GraphQL resolver registration.
+	// Meta: operation (name matching the client's query/mutation field).
+	NodeTypeGraphQLResolver NodeType = "graphql_resolver"
 )
 
 // EdgeType classifies the relationship between two nodes.
@@ -120,6 +132,15 @@ const (
 	// linking from existing node file/receiver metadata; answers "what's in this
 	// file" / "what hangs off this struct" for agent-context recall.
 	EdgeTypeContains EdgeType = "contains"
+	// Protocol-specific publish edges for message-broker kinds added in G.4.
+	// Using per-protocol types (rather than the generic publishes) so graph
+	// queries can filter by protocol without inspecting edge meta.
+	EdgeTypeKafkaPublish EdgeType = "kafka_publish"
+	EdgeTypeNATSPublish  EdgeType = "nats_publish"
+	EdgeTypeRedisPublish EdgeType = "redis_publish"
+	// gRPC and GraphQL call edges.
+	EdgeTypeGRPCCall    EdgeType = "grpc_call"
+	EdgeTypeGraphQLCall EdgeType = "graphql_call"
 	// Type-relationship edges (Tier I). Direction: dependent → definition.
 	// Impact traversal is bidirectional, so "impact of Base" follows incoming
 	// inherits edges to every subclass.
@@ -138,7 +159,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "11"
+const SchemaVersion = "12"
 
 // Node represents a code entity in the graph.
 type Node struct {
