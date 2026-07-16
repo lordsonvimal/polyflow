@@ -1,4 +1,4 @@
 {
-  "patterns": ["nav_link_form", "nav_link_jsx", "nav_link_jsx", "nav_link_jsx"],
-  "node_types": ["http_client", "http_client", "http_client", "http_client"]
+  "patterns": ["nav_link_form", "nav_link_jsx", "nav_link_jsx", "nav_link_jsx", "nav_link_jsx_dynamic", "nav_link_jsx_ternary"],
+  "node_types": ["http_client", "http_client", "http_client", "http_client", "http_client", "http_client"]
 }
