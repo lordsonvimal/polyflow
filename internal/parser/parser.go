@@ -72,6 +72,21 @@ func ForFile(path string) Parser {
 	return registry[ext]
 }
 
+// RegisteredLanguages returns the deduplicated list of Language() values for
+// all registered parsers. Used by the doctor walker-coverage row.
+func RegisteredLanguages() []string {
+	seen := map[string]bool{}
+	var langs []string
+	for _, p := range registry {
+		lang := p.Language()
+		if !seen[lang] {
+			seen[lang] = true
+			langs = append(langs, lang)
+		}
+	}
+	return langs
+}
+
 // Result holds the parsed output or error for a single file.
 type Result struct {
 	File       string

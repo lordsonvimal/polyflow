@@ -2,6 +2,7 @@ package patterns
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"maps"
@@ -442,6 +443,36 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// G.6 multi-candidate key: patterns that capture @branch_N produce nodes
+		// with key_candidates meta (JSON array) so the engine can fan-out and match
+		// each alternative independently. The raw branch captures are cleared after
+		// assembly.
+		if branches := extractBranchCaptures(meta); len(branches) >= 2 {
+			data, _ := json.Marshal(branches)
+			meta["key_candidates"] = string(data)
+			// Remove individual branch_N captures — they are transient metadata
+			for k := range meta {
+				if strings.HasPrefix(k, "branch_") {
+					delete(meta, k)
+				}
+			}
+			// Ensure the primary key field is empty so the engine selects it for
+			// injection. Method remains set (e.g. GET for nav links).
+			meta["path"] = ""
+			meta["url"] = ""
+			label = "branch_enum"
+		}
+
+		// G.6 dynamic key: patterns that capture @key_expr carry a non-literal
+		// expression in the key position. Stamp key_dynamic=true; the engine
+		// surfaces a dynamic_<kind> ledger entry instead of silently dropping.
+		if keyExpr, ok := meta["key_expr"]; ok {
+			meta["key_dynamic"] = "true"
+			meta["key_dynamic_raw"] = keyExpr // preserved for ledger Name field
+			delete(meta, "key_expr")
+			label = "dynamic"
+		}
+
 		// Version-gated patterns stamp which package version they matched
 		// against, so the graph/UI can show e.g. "this call uses SDK v1".
 		if r.Package != "" {
@@ -534,11 +565,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 				continue // drop: already have an http_client node for this line
 			}
 			if n.Meta["nav_link"] == "true" {
-				navKey := n.File + "\x00" + n.Meta["path"]
-				if seenNavPaths[navKey] {
-					continue // drop: same link target already captured (method-aware node won)
+				// Dynamic/multi-candidate nav links have no literal path; skip
+				// path-based dedup for them (they already dedup by file+line).
+				if n.Meta["key_candidates"] == "" && n.Meta["key_dynamic"] != "true" {
+					navKey := n.File + "\x00" + n.Meta["path"]
+					if seenNavPaths[navKey] {
+						continue // drop: same link target already captured (method-aware node won)
+					}
+					seenNavPaths[navKey] = true
 				}
-				seenNavPaths[navKey] = true
 			}
 			seenClientLines[key] = true
 		}
@@ -1173,6 +1208,25 @@ func tryResolveOne(raw string, fileConsts map[string]string) (string, string) {
 	}
 
 	return raw, ""
+}
+
+// extractBranchCaptures collects branch_N capture values from a meta map in
+// index order (branch_0, branch_1, …) and strips surrounding quotes. Returns
+// nil when fewer than two branches are present.
+func extractBranchCaptures(meta map[string]string) []string {
+	var branches []string
+	for i := 0; ; i++ {
+		key := fmt.Sprintf("branch_%d", i)
+		v, ok := meta[key]
+		if !ok {
+			break
+		}
+		branches = append(branches, stripStringLiteral(v))
+	}
+	if len(branches) < 2 {
+		return nil
+	}
+	return branches
 }
 
 // isIdentifier reports whether s is a plain identifier (letters, digits, _, $).
