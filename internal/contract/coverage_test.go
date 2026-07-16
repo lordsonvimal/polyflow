@@ -133,6 +133,35 @@ func TestComputeCoverage_UnknownEdgeTypeIgnored(t *testing.T) {
 	assert.Equal(t, 1, cov[0].Matched, "non-contract edges must not inflate matched count")
 }
 
+// TestComputeCoverage_Indirect verifies that edges resolved via alias/wrapper
+// are counted in the Indirect column for their kind.
+func TestComputeCoverage_Indirect(t *testing.T) {
+	rules := []contract.Rule{
+		{Kind: contract.KindHTTP, Edge: contract.EdgeSpec{Type: graph.EdgeTypeHTTPCall}},
+	}
+	result := contract.Result{
+		Edges: []graph.Edge{
+			// Static match with no indirection
+			{Type: graph.EdgeTypeHTTPCall, Confidence: graph.ConfidenceStatic,
+				Meta: map[string]string{"confidence": graph.ConfidenceStatic}},
+			// Match via alias indirection
+			{Type: graph.EdgeTypeHTTPCall, Confidence: graph.ConfidenceInferred,
+				Meta: map[string]string{"confidence": graph.ConfidenceInferred, "via": "alias"}},
+			// Match via wrapper indirection
+			{Type: graph.EdgeTypeHTTPCall, Confidence: graph.ConfidenceInferred,
+				Meta: map[string]string{"confidence": graph.ConfidenceInferred, "via": "wrapper"}},
+			// Match via branch_enum (G.6) — not counted as indirect
+			{Type: graph.EdgeTypeHTTPCall, Confidence: graph.ConfidenceInferred,
+				Meta: map[string]string{"confidence": graph.ConfidenceInferred, "via": "branch_enum"}},
+		},
+	}
+
+	cov := contract.ComputeCoverage(rules, result)
+	httpCov := findCoverage(cov, "http")
+	assert.Equal(t, 4, httpCov.Matched)
+	assert.Equal(t, 2, httpCov.Indirect, "only alias and wrapper edges count as indirect")
+}
+
 func findCoverage(cov []contract.KindCoverage, kind string) contract.KindCoverage {
 	for _, c := range cov {
 		if c.Kind == kind {

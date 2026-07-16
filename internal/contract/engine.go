@@ -229,6 +229,10 @@ func matchProducer(
 				edgeMeta["via"] = viaValue
 			}
 		}
+		// G.7: propagate alias/wrapper indirection from producer node to edge.
+		if via := prod.Meta["via"]; via != "" && edgeMeta["via"] == "" {
+			edgeMeta["via"] = via
+		}
 
 		result.Edges = append(result.Edges, graph.Edge{
 			ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),

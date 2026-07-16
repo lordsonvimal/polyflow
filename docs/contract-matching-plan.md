@@ -557,7 +557,30 @@ registered (`yes` / `no-op` / **`MISSING`**) — a `MISSING` cell for a language
 with producer patterns is a defect, and a test iterates both registries to
 fail on it (the mechanical guard the checklist's process rule can't provide).
 
-### Phase G.7 — Producer aliasing, instances & wrappers (all kinds, all languages) `pending`
+### Phase G.7 — Producer aliasing, instances & wrappers (all kinds, all languages) `done`
+
+**Outcome (commit implementing this phase).** `EnrichAliases` runs between
+`EnrichRouteGroups` and `Engine.Link`. It builds a per-service/per-file alias table
+from `alias_name` and `instance_name` binding nodes produced by new YAML patterns
+(`axios_create_with_baseurl`, `fetch_alias_binding`, `jquery_alias_binding`,
+`axios_destructure`, `axios_method_binding`, `faraday_instance_binding`,
+`resty_new_instance`). Alias/instance call nodes with `via_alias` meta are resolved
+inline: base URL is prepended and `via=alias` is stamped. One-hop wrapper functions
+(detected via `wrapper_for` meta on function nodes) are resolved by composing the
+base prefix with the call-site argument; `via=wrapper` is stamped. All four ledger
+kinds (`alias_reassigned`, `wrapper_depth`, `factory_dynamic`, `instance_unresolved`)
+are emitted to `graph.UnresolvedRef`. The `via` meta propagates from resolved
+producer nodes to emitted edges (`engine.matchProducer` now copies `prod.Meta["via"]`
+to `edgeMeta`). A new `Indirect` column on `KindCoverage` counts edges resolved via
+alias or wrapper; `polyflow doctor` surfaces it. `faraday_http_verb` now requires a
+receiver capture (`via_alias`), tightening the previously over-broad Ruby match. The
+dead `axios_create_instance` pattern (no-op capture) was removed and replaced by
+`axios_create_with_baseurl`. No `graph.SchemaVersion` bump: alias binding nodes are
+`NodeTypeVariable` (excluded from containment and calls edges in MatchToGraph) and
+removed from the engine working copy by `EnrichAliases`; the new edge meta keys
+(`via`, `instance_base_url`, etc.) are backward-compatible additions.
+
+
 
 **Problem.** Every producer pattern matches the API's **canonical call shape
 by name** — `fetch(...)`, `axios.get(...)`, `$.ajax(...)` — so any
