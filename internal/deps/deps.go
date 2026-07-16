@@ -60,6 +60,27 @@ func Resolve(dir string) ([]Dependency, error) {
 	return out, nil
 }
 
+// GoDirective returns the Go language version declared in the `go` directive
+// of the module's go.mod (e.g. "1.25.0"). Returns "" if go.mod is absent or
+// carries no directive.
+func GoDirective(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	mf, err := modfile.Parse(filepath.Join(dir, "go.mod"), data, nil)
+	if err != nil {
+		return "", err
+	}
+	if mf.Go == nil {
+		return "", nil
+	}
+	return mf.Go.Version, nil
+}
+
 // resolveGoMod reads exact required versions from go.mod. Go modules pin
 // exact versions in go.mod (MVS), so no lockfile lookup is needed.
 func resolveGoMod(path string) ([]Dependency, error) {
