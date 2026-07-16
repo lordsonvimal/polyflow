@@ -1028,6 +1028,18 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "jquery_selector"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMRead
 
+	// ── gRPC ──────────────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "grpc_client"):
+		return graph.NodeTypeGRPCClient, graph.EdgeTypeGRPCCall
+	case strings.HasPrefix(lower, "grpc_server") || strings.HasPrefix(lower, "grpc_handler"):
+		return graph.NodeTypeGRPCHandler, graph.EdgeTypeGRPCCall
+
+	// ── GraphQL ───────────────────────────────────────────────────────────────
+	case strings.HasPrefix(lower, "graphql_query") || strings.HasPrefix(lower, "graphql_mutation"):
+		return graph.NodeTypeGraphQLClient, graph.EdgeTypeGraphQLCall
+	case strings.HasPrefix(lower, "graphql_resolver"):
+		return graph.NodeTypeGraphQLResolver, graph.EdgeTypeGraphQLCall
+
 	// ── HTTP routes / handlers ────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "chi_get") || strings.HasPrefix(lower, "chi_post") ||
 		strings.HasPrefix(lower, "chi_put") || strings.HasPrefix(lower, "chi_patch") ||

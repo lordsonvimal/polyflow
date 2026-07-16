@@ -1,0 +1,4 @@
+{
+  "patterns": ["grpc_client_call", "grpc_server_register"],
+  "node_types": ["grpc_client", "grpc_handler"]
+}

@@ -1,0 +1,21 @@
+# contracts/nats.yaml — links NATS publishers to subscribers by subject.
+# Producer nodes (nats_publish) and consumer nodes (nats_subscribe) carry a
+# "subject" meta field. Cross-service only. Unmatched producers go to the ledger.
+version: "1"
+contracts:
+  - kind: nats
+    producer:
+      node: publisher
+      where: {pattern: nats_publish}
+      key: [subject]
+    consumer:
+      node: subscriber
+      where: {pattern: nats_subscribe}
+      key: [subject]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: nats_publish
+      id_prefix: nats
+      same_service: skip
+    unmatched: ledger

@@ -1,0 +1,48 @@
+# kafka-go (segmentio/kafka-go) producer and consumer patterns.
+# NewWriter(WriterConfig{Topic: "..."}) → producer node keyed by topic.
+# NewReader(ReaderConfig{Topic: "..."}) → consumer node keyed by topic.
+# Gated on the kafka-go package so plain method names don't produce
+# false positives in non-Kafka services.
+language: go
+version: "1"
+package: github.com/segmentio/kafka-go
+patterns:
+  # kafka.NewWriter(kafka.WriterConfig{Topic: "orders"})
+  - name: kafka_publish
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "kafka")
+          field: (field_identifier) @fn
+          (#eq? @fn "NewWriter"))
+        arguments: (argument_list
+          (composite_literal
+            body: (literal_value
+              (keyed_element
+                (literal_element (identifier) @key)
+                (#eq? @key "Topic")
+                (literal_element (_) @topic))))))
+    captures:
+      - name: topic
+        role: kafka_topic
+
+  # kafka.NewReader(kafka.ReaderConfig{Topic: "orders"})
+  - name: kafka_subscribe
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "kafka")
+          field: (field_identifier) @fn
+          (#eq? @fn "NewReader"))
+        arguments: (argument_list
+          (composite_literal
+            body: (literal_value
+              (keyed_element
+                (literal_element (identifier) @key)
+                (#eq? @key "Topic")
+                (literal_element (_) @topic))))))
+    captures:
+      - name: topic
+        role: kafka_topic

@@ -1,0 +1,44 @@
+# go-redis (github.com/redis/go-redis/v9) pub/sub patterns.
+# client.Publish(ctx, channel, message) → 3-arg publish, captures channel.
+# client.Subscribe(ctx, channel)        → 2-arg subscribe, captures channel.
+# The leading ctx argument distinguishes these from NATS (2-arg Publish/Subscribe
+# without ctx). Gated on go-redis to avoid false positives.
+language: go
+version: "1"
+package: github.com/redis/go-redis/v9
+patterns:
+  # rdb.Publish(ctx, "notifications", message)
+  - name: redis_publish
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Publish"))
+        arguments: (argument_list
+          .
+          (_) @ctx
+          .
+          (_) @channel
+          .
+          (_) @message
+          .))
+    captures:
+      - name: channel
+        role: redis_channel
+
+  # rdb.Subscribe(ctx, "notifications")
+  - name: redis_subscribe
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Subscribe"))
+        arguments: (argument_list
+          .
+          (_) @ctx
+          .
+          (_) @channel
+          .))
+    captures:
+      - name: channel
+        role: redis_channel

@@ -1,0 +1,4 @@
+{
+  "patterns": ["nats_publish", "nats_subscribe"],
+  "node_types": ["publisher", "subscriber"]
+}

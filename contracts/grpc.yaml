@@ -1,0 +1,22 @@
+# contracts/grpc.yaml — links gRPC client call sites to server handlers by
+# service/method path. Producer nodes (grpc_client) carry "service_method" meta
+# (e.g. "/UserService/GetUser"). Consumer nodes (grpc_handler) carry the same
+# field. Cross-service only; same-service gRPC calls are skipped.
+# Unmatched clients emit an unknown_edge to unresolved:<svc> so the dangling
+# call appears in impact/trace traversals.
+version: "1"
+contracts:
+  - kind: grpc
+    producer:
+      node: grpc_client
+      key: [service_method]
+    consumer:
+      node: grpc_handler
+      key: [service_method]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: grpc_call
+      id_prefix: grpc
+      same_service: skip
+    unmatched: unknown_edge

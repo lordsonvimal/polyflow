@@ -4,6 +4,7 @@ dom_create
 dom_listen
 dom_read
 dom_write
+grpc_call
 http_call
 hub_broadcast
 job_enqueue

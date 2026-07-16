@@ -1,0 +1,55 @@
+# Apollo Client / GraphQL JS patterns.
+#
+# Client-side: useQuery / useMutation / useSubscription hook calls capture
+#   the query document variable as the operation key.
+# Server-side: resolver object properties under Query / Mutation / Subscription
+#   keys capture the operation name (field name) as the key.
+#
+# Gated on @apollo/client because useQuery/useMutation are generic hook names
+# used by other libraries too (React Query, SWR).
+language: javascript
+version: "1"
+package: "@apollo/client"
+patterns:
+  # const { data } = useQuery(GET_BOOKS_QUERY)
+  - name: graphql_query
+    query: |
+      (call_expression
+        function: (identifier) @fn
+        (#eq? @fn "useQuery")
+        arguments: (arguments
+          .
+          (_) @operation
+          .))
+    captures:
+      - name: operation
+        role: graphql_operation
+
+  # const [createBook] = useMutation(CREATE_BOOK)
+  - name: graphql_mutation
+    query: |
+      (call_expression
+        function: (identifier) @fn
+        (#eq? @fn "useMutation")
+        arguments: (arguments
+          .
+          (_) @operation
+          .))
+    captures:
+      - name: operation
+        role: graphql_operation
+
+  # const resolvers = { Query: { books: () => [] }, Mutation: { createBook: … } }
+  # Matches each inner (operation → resolver) pair once per operation.
+  - name: graphql_resolver
+    query: |
+      (pair
+        key: (property_identifier) @type
+        (#match? @type "^(Query|Mutation|Subscription)$")
+        value: (object
+          (pair
+            key: (property_identifier) @operation
+            value: (_) @resolver)))
+    captures:
+      - name: operation
+        role: graphql_operation

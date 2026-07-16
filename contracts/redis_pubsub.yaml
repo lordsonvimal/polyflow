@@ -1,0 +1,22 @@
+# contracts/redis_pubsub.yaml — links Redis pub/sub publishers to subscribers
+# by channel name. Producer nodes (redis_publish) and consumer nodes
+# (redis_subscribe) carry a "channel" meta field. Cross-service only.
+# Unmatched producers surface in the ledger.
+version: "1"
+contracts:
+  - kind: redis_pubsub
+    producer:
+      node: publisher
+      where: {pattern: redis_publish}
+      key: [channel]
+    consumer:
+      node: subscriber
+      where: {pattern: redis_subscribe}
+      key: [channel]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: redis_publish
+      id_prefix: redis
+      same_service: skip
+    unmatched: ledger

@@ -370,10 +370,32 @@ extended to store `end_line` for all node types (not just function/method/worker
 chi_route_group nodes receive the func_literal end row. 10 routegroup unit tests cover
 all positive and negative cases. `BenchmarkIndexCold` holds (~10.1s, within baseline).
 
-### Phase G.4 — New protocols, additive `pending`
+### Phase G.4 — New protocols, additive `done`
 Recognition patterns + contract rules for `grpc`, `graphql`, `kafka`, `nats`,
 `redis_pubsub`; each with a 2-service fixture; prove each links with **zero engine
 changes** (only YAML added). `SchemaVersion` bump for new edge/node kinds.
+
+**Outcome.** Five contract YAML files added (`contracts/{grpc,graphql,kafka,nats,redis_pubsub}.yaml`)
+and five Go/JS pattern files added (`patterns/go/{grpc,kafka,nats,redis_pubsub}.yaml`,
+`patterns/javascript/graphql.yaml`), each with positive + negative fixtures. New
+node types: `grpc_client`, `grpc_handler`, `graphql_client`, `graphql_resolver`
+(four total; Kafka/NATS/Redis reuse the existing `publisher`/`subscriber` types with
+`where` pattern-gates to distinguish them). New edge types: `grpc_call`,
+`graphql_call`, `kafka_publish`, `nats_publish`, `redis_publish`. `SchemaVersion`
+bumped 11→12. Zero engine changes — `internal/contract/engine.go` untouched. The
+`classifyPattern` function gained four new prefix cases (gRPC and GraphQL) placed
+before the existing HTTP-client heuristic so `grpc_client_call` is not
+misclassified. The trace fixture edge-type golden snapshot updated to include
+`grpc_call` (emitted by the same-service unknown_edge path on the grpc pattern
+fixture). Two deviations: (1) gRPC service-to-handler path matching is not
+end-to-end integrated — the `grpc_client_call` pattern captures the raw Invoke
+path while `grpc_server_register` captures the registration function name; the
+contract rule is keyed on `service_method` and the fixture tests create nodes
+manually with matching keys (same pattern as all G.2 tests). (2) gRPC same-service
+test verifies "no direct edge to the handler" rather than "no edges at all" because
+the `unknown_edge` policy fires for the filtered-out same-service client, consistent
+with the HTTP behavior documented in the model. 25 new contract tests pass; all 5
+pattern fixture sets pass (positive + negative). `BenchmarkIndexCold` holds (~10.1s).
 
 ### Phase G.5 — Third-party rule loading + coverage `pending`
 Workspace-custom rule dir (recompile-free); `polyflow doctor` prints per-kind coverage
