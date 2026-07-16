@@ -9,6 +9,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/toolchain"
 )
 
 // TemplParser parses .templ files using the a-h/templ/parser/v2 typed AST.
@@ -36,13 +37,22 @@ var reReactiveSignal = regexp.MustCompile(`\$([A-Za-z_]\w*)`)
 // (data-on-* datastar actions are handled separately and never reach this).
 var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
 
-func (p *TemplParser) Parse(file, service string, _ *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+func (p *TemplParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	tf, err := templparser.Parse(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	v := &templVisitor{file: file, service: service, currentComponentIdx: -1}
+	variant := ""
+	if matcher != nil {
+		variant = matcher.DatastarVariant
+	}
+	v := &templVisitor{
+		file:                file,
+		service:             service,
+		currentComponentIdx: -1,
+		vocab:               toolchain.DefaultDatastarVocab(variant),
+	}
 	if err := tf.Visit(v); err != nil {
 		return v.nodes, v.edges, nil, err
 	}
@@ -58,6 +68,7 @@ type templVisitor struct {
 	currentComponent    string // node ID of the enclosing HTMLTemplate component
 	currentComponentIdx int    // index of the enclosing component in v.nodes, -1 outside one
 	formMethod          string // method attr of the enclosing <form> (upper-case), "" outside forms
+	vocab               toolchain.DatastarVocab // version-selected attribute vocabulary
 }
 
 // reFirstStringLit matches the first double-quoted string literal in a Go
@@ -176,7 +187,7 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 
 	switch {
 	// data-on:<event>={ @verb('/path') } / data-on-<event>="@verb('/path')"
-	case isDataOnKey(key):
+	case v.isDataOnKey(key):
 		v.addDatastarAction(val, lineNo)
 
 	// data-bind / data-signals / data-model
@@ -191,7 +202,7 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 
 	// Reactive attrs (data-show, data-class, data-attr:*, data-when,
 	// data-computed) read one or more signals to drive rendering.
-	case isReactiveAttrKey(key):
+	case v.isReactiveAttrKey(key):
 		v.addSignalReads(val, lineNo)
 
 	// href / action pointing to a server path — nav links, not API calls
@@ -255,13 +266,13 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 	raw := strings.TrimSpace(ea.Expression.Value)
 	lineNo := line(ea.Range.From)
 
-	if isDataOnKey(key) {
+	if v.isDataOnKey(key) {
 		v.addDatastarAction(raw, lineNo)
 		return nil
 	}
 
 	// Reactive attrs with expression values: data-show={ "$" + sig }, etc.
-	if isReactiveAttrKey(key) {
+	if v.isReactiveAttrKey(key) {
 		v.addSignalReads(raw, lineNo)
 		return nil
 	}
@@ -275,16 +286,9 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 
 // isReactiveAttrKey reports whether an attribute is a datastar reactive binding
 // that reads signals to drive rendering (as opposed to data-on:* actions or
-// data-bind writes). data-when's on/off values carry no signal and simply
-// produce no reads.
-func isReactiveAttrKey(key string) bool {
-	switch key {
-	case "data-show", "data-when":
-		return true
-	}
-	return strings.HasPrefix(key, "data-class") ||
-		strings.HasPrefix(key, "data-attr:") || strings.HasPrefix(key, "data-attr-") ||
-		strings.HasPrefix(key, "data-computed")
+// data-bind writes). Uses the version-selected vocabulary stored on the visitor.
+func (v *templVisitor) isReactiveAttrKey(key string) bool {
+	return v.vocab.IsReactiveAttrKey(key)
 }
 
 // addSignalReads emits a signal node + `reads` edge from the enclosing component
@@ -312,11 +316,11 @@ func (v *templVisitor) addSignalReads(val string, lineNo int) {
 	}
 }
 
-// isDataOnKey reports whether an attribute key is a datastar event binding,
-// covering both the v1 colon syntax (`data-on:click`) and the legacy hyphen
-// syntax (`data-on-click`).
-func isDataOnKey(key string) bool {
-	return strings.HasPrefix(key, "data-on:") || strings.HasPrefix(key, "data-on-")
+// isDataOnKey reports whether an attribute key is a datastar event binding.
+// Uses the version-selected vocabulary stored on the visitor (v0: hyphen only,
+// v1: colon only, combined fallback: both).
+func (v *templVisitor) isDataOnKey(key string) bool {
+	return v.vocab.IsDataOnKey(key)
 }
 
 // stripQuotes removes a single matching pair of surrounding quotes.
