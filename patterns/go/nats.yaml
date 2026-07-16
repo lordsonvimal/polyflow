@@ -1,0 +1,42 @@
+# nats.go (github.com/nats-io/nats.go) publish and subscribe patterns.
+# nc.Publish(subject, data)   → 2-arg call, captures subject.
+# nc.Subscribe(subject, fn)   → 2-arg call, captures subject.
+# Gated on the nats.go package to avoid matching other 2-arg Publish/Subscribe
+# methods (e.g. Redis Subscribe takes a context as first argument).
+language: go
+version: "1"
+package: github.com/nats-io/nats.go
+patterns:
+  # nc.Publish("orders.created", data)
+  - name: nats_publish
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Publish"))
+        arguments: (argument_list
+          .
+          (_) @subject
+          .
+          (_) @data
+          .))
+    captures:
+      - name: subject
+        role: nats_subject
+
+  # nc.Subscribe("orders.created", handler)
+  - name: nats_subscribe
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Subscribe"))
+        arguments: (argument_list
+          .
+          (_) @subject
+          .
+          (_) @handler
+          .))
+    captures:
+      - name: subject
+        role: nats_subject

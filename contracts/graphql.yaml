@@ -1,0 +1,21 @@
+# contracts/graphql.yaml — links GraphQL client operations to server resolvers
+# by operation name. Producer nodes (graphql_client) carry "operation" meta
+# (the query/mutation variable name or hook argument). Consumer nodes
+# (graphql_resolver) carry the resolver field name as "operation".
+# Cross-service only. Unmatched client operations surface in the ledger.
+version: "1"
+contracts:
+  - kind: graphql
+    producer:
+      node: graphql_client
+      key: [operation]
+    consumer:
+      node: graphql_resolver
+      key: [operation]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: graphql_call
+      id_prefix: graphql
+      same_service: skip
+    unmatched: ledger

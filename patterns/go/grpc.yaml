@@ -1,0 +1,49 @@
+# gRPC (google.golang.org/grpc) client and server patterns.
+#
+# Client: generated stubs delegate to cc.Invoke(ctx, "/Svc/Method", in, out).
+#   The string literal is the full gRPC path, used as the linking key.
+# Server: generated helpers follow the pattern Register<Service>Server(s, impl).
+#   The function name is captured; the service name is derivable by stripping
+#   the Register prefix and Server suffix.
+language: go
+version: "1"
+package: google.golang.org/grpc
+patterns:
+  # cc.Invoke(ctx, "/example.UserService/GetUser", req, &resp)
+  # — used inside every generated stub method; captures the gRPC path.
+  - name: grpc_client_call
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Invoke"))
+        arguments: (argument_list
+          .
+          (_) @ctx
+          .
+          (interpreted_string_literal) @service_method
+          .
+          (_) @in
+          .
+          (_) @out))
+    captures:
+      - name: service_method
+        role: grpc_service_method
+
+  # pb.RegisterUserServiceServer(s, &impl{})
+  # — generated helper called in main/setup; captures the function name.
+  - name: grpc_server_register
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#match? @fn "^Register.+Server$"))
+        arguments: (argument_list
+          .
+          (_) @server
+          .
+          (_) @impl
+          .))
+    captures:
+      - name: fn
+        role: grpc_register

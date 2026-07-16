@@ -1,0 +1,22 @@
+# contracts/kafka.yaml — links kafka-go producers to consumers by topic.
+# Producer nodes (kafka_publish pattern) and consumer nodes (kafka_subscribe
+# pattern) both carry a "topic" meta field. Cross-service only; same-service
+# loops are skipped. Unmatched producers surface in the ledger.
+version: "1"
+contracts:
+  - kind: kafka
+    producer:
+      node: publisher
+      where: {pattern: kafka_publish}
+      key: [topic]
+    consumer:
+      node: subscriber
+      where: {pattern: kafka_subscribe}
+      key: [topic]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: kafka_publish
+      id_prefix: kafka
+      same_service: skip
+    unmatched: ledger
