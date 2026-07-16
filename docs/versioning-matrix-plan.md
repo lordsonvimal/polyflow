@@ -154,11 +154,24 @@ index run or silently drop a file.
 
 ## Phases (one commit each)
 
-### Phase V.0 — Registry + resolver + coverage scaffolding `pending`
+### Phase V.0 — Registry + resolver + coverage scaffolding `done`
 New `internal/toolchain/{registry.go,resolve.go}`; extend `internal/deps/deps.go`
 for runtime versions; reuse `patterns.VersionInRange`. Registry seeded with today's
 single versions (behaviour unchanged). Adds `tool → version` to graph meta + a
 coverage ledger. No parser change yet — establishes the seams. *SchemaVersion bump.*
+
+**Outcome (V.0).** Implemented `internal/toolchain/registry.go` (Tool constants,
+Backend, Registry, Selection, Registry.Select, DefaultRegistry) and
+`internal/toolchain/resolve.go` (ResolveToolchain, CoverageNote, SelectAll,
+readRubyVersion). Added `deps.GoDirective` to extract the `go` directive version
+from go.mod. DefaultRegistry seeds all 7 tools: HTML/JavaScript use a catch-all
+VersionRange ("") so "living" never triggers Inferred; versioned tools (go, typescript,
+templ, datastar, ruby) use semver ranges with nearest-newest fallback on miss.
+Indexer now calls ResolveToolchain+SelectAll per service and writes
+`toolchain_versions` + `toolchain_coverage` into graph meta. SchemaVersion bumped
+12→13. 21 new toolchain tests (all green); full suite green; benchmark holds
+(no indexing-path hot-path change — toolchain resolution is a cheap file-read
+on the scan pass only). No deviations from pinned interface.
 
 ### Phase V.1 — Version-gate interpretation via rules (no new package) `pending`
 Extend the existing `package:` / `version_range:` gate to cover **datastar contract

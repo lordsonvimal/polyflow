@@ -29,6 +29,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
@@ -155,6 +156,11 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// at the workspace root (the directory the indexer runs from).
 	ignorePatterns := workspace.LoadIgnoreFile(".")
 
+	tcReg := toolchain.DefaultRegistry()
+	// svcToolchainVersions: service name → tool → resolved version string.
+	svcToolchainVersions := make(map[string]map[toolchain.Tool]string, len(cfg.Services))
+	var allToolchainNotes []toolchain.CoverageNote
+
 	var allSvcFiles []serviceFiles
 	for idx, svc := range cfg.Services {
 		absSvcPath, _ := filepath.Abs(svc.Path)
@@ -179,6 +185,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if err != nil {
 			fmt.Fprintf(logw, "  Warning: dependency resolution for %s: %v\n", svc.Name, err)
 		}
+
+		tcVersions := toolchain.ResolveToolchain(absSvcPath, svcDeps)
+		svcToolchainVersions[svc.Name] = tcVersions
+		_, notes := toolchain.SelectAll(tcReg, svc.Name, tcVersions)
+		allToolchainNotes = append(allToolchainNotes, notes...)
+
 		fmt.Fprintf(logw, "  %s: %d files (%s, %d deps)\n", svc.Name, len(files), svc.Language, len(svcDeps))
 		allSvcFiles = append(allSvcFiles, serviceFiles{svc, files, svcDeps})
 	}
@@ -744,6 +756,16 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 	if err := store.SetMeta(ctx, "unresolved_refs", strconv.Itoa(len(allUnresolved))); err != nil {
 		return nil, err
+	}
+
+	// Toolchain versions + coverage ledger (V.0 seams).
+	if tcJSON, err := json.Marshal(svcToolchainVersions); err == nil {
+		_ = store.SetMeta(ctx, "toolchain_versions", string(tcJSON))
+	}
+	if len(allToolchainNotes) == 0 {
+		_ = store.SetMeta(ctx, "toolchain_coverage", "[]")
+	} else if tcCovJSON, err := json.Marshal(allToolchainNotes); err == nil {
+		_ = store.SetMeta(ctx, "toolchain_coverage", string(tcCovJSON))
 	}
 
 	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
