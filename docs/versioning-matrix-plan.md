@@ -173,7 +173,7 @@ Indexer now calls ResolveToolchain+SelectAll per service and writes
 (no indexing-path hot-path change — toolchain resolution is a cheap file-read
 on the scan pass only). No deviations from pinned interface.
 
-### Phase V.1 — Version-gate interpretation via rules (no new package) `pending`
+### Phase V.1 — Version-gate interpretation via rules (no new package) `done`
 Extend the existing `package:` / `version_range:` gate to cover **datastar contract
 rules** (contract-matching G.1/G.3) and **templ recognition patterns**. Move the
 colon/hyphen + reactive-attr vocabulary out of the `internal/parser/templ.go`
@@ -183,6 +183,24 @@ datastar/templ version through a thin `internal/toolchain` selector (reusing
 first matrix cells. Pure-Go, no infra; largest maintainability win.
 **Depends on the contract engine (contract-matching G.0–G.3).** Fixtures: v0 + v1
 datastar fixture projects.
+
+**Outcome (V.1).** Implemented `internal/toolchain/vocab.go` (`DatastarVocab` struct
+with `IsDataOnKey`/`IsReactiveAttrKey` methods; three vocabulary constants:
+`datastarV0Vocab` hyphen-only, `datastarV1Vocab` colon-only, `datastarCombinedVocab`
+backward-compat fallback; `DefaultDatastarVocab(variant)` selector). Added v0 row to
+`DefaultRegistry()` for ToolDatastar — v0.x is now a real supported variant, not a
+nearest-newest fallback. Added `DatastarVariant string` field to
+`patterns.TreeSitterMatcher` (zero import-cycle risk: just a string). Indexer sets
+`matcher.DatastarVariant` from the per-service toolchain selection before spawning the
+worker pool. `TemplParser.Parse` derives the vocabulary from `matcher.DatastarVariant`
+and stores it on `templVisitor`; the hardcoded `isDataOnKey`/`isReactiveAttrKey`
+standalone functions are replaced by `templVisitor` methods that delegate to
+`DatastarVocab`. Shipped `testdata/datastar_v0.templ` (hyphen fixture) + 7 new
+parser tests (positive, wrong-version negatives for both v0 and v1, fallback
+coverage) + 11 toolchain vocab tests. All 21 prior toolchain tests green; full suite
+green (`go test ./...`). `BenchmarkIndexCold` holds (~9.9 s, 1200 files — vocab
+lookup is one map read per service on the scan pass). No SchemaVersion bump — stored
+node/edge fields are unchanged. No deviations from pinned interface.
 
 ### Phase V.2 — Sidecar protocol + router + templ sidecar (parser-engine fidelity) `pending`
 New `internal/sidecar/{protocol.go,router.go,manager.go}` and

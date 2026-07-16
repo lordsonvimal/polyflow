@@ -1,0 +1,14 @@
+package testdata
+
+templ HyphenPanel(boardID string) {
+	<div>
+		// Hyphen syntax, datastar v0 — data-on-click, static path
+		<button data-on-click="@post('/boards/create')">Create</button>
+		// Hyphen syntax with interpolated path
+		<button data-on-click={ "@get('/boards/" + boardID + "/status')" }>Refresh</button>
+		// Signal-only handler — must NOT create an http_client node
+		<button data-on-click="$active = true">Activate</button>
+		// Reactive hyphen attr
+		<div data-attr-class="{'active': $boardOpen}"></div>
+	</div>
+}

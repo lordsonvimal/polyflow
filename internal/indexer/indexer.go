@@ -289,6 +289,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	for _, sf := range allSvcFiles {
 		matcher := patterns.NewTreeSitterMatcherForService(reg, sf.deps)
+		// V.1: wire the resolved datastar vocabulary into the matcher so the
+		// templ parser applies the correct attribute-key syntax for this service.
+		if dsVersion, ok := svcToolchainVersions[sf.svc.Name][toolchain.ToolDatastar]; ok && dsVersion != "" {
+			dsSel := tcReg.Select(toolchain.ToolDatastar, dsVersion)
+			matcher.DatastarVariant = dsSel.Backend.RuleVariant
+		}
 
 		var toParse []string
 		for _, file := range sf.files {
