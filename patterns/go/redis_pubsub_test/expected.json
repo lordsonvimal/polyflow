@@ -1,0 +1,4 @@
+{
+  "patterns": ["redis_publish", "redis_subscribe"],
+  "node_types": ["publisher", "subscriber"]
+}
