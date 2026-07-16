@@ -1,0 +1,1 @@
+{"patterns": ["axios_create_with_baseurl", "axios_instance_call", "axios_instance_call"], "node_types": ["variable", "http_client", "http_client"]}

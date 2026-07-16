@@ -1,0 +1,1 @@
+{"patterns": ["axios_destructure", "axios_method_binding", "fetch_alias_binding", "jquery_alias_binding", "producer_alias_obj_call", "producer_alias_url_call", "producer_alias_url_call"], "node_types": ["variable", "variable", "variable", "variable", "http_client", "http_client", "http_client"]}

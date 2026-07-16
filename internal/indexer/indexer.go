@@ -656,6 +656,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// that normalizers cannot perform; it mutates only the working copy returned
 	// by ApplyHints, not the persisted allNodes.
 	enrichedNodes := contract.EnrichRouteGroups(hintedNodes)
+	// G.7 pre-engine enrichment: resolve alias/instance bindings and one-hop
+	// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name
+	// or instance_name meta) are removed from the working copy; their info feeds
+	// the alias table used to rewrite call nodes before Engine.Link.
+	enrichedNodes, aliasUnresolved := contract.EnrichAliases(enrichedNodes)
+	allUnresolved = append(allUnresolved, aliasUnresolved...)
 	eng := &contract.Engine{}
 	contractResult := eng.Link(enrichedNodes, contractRules, cfg.Links)
 

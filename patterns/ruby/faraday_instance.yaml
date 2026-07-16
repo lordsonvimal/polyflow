@@ -1,0 +1,19 @@
+language: ruby
+version: "1"
+patterns:
+  - name: faraday_instance_binding
+    query: |
+      (assignment
+        left: (identifier) @instance_name
+        right: (call
+          receiver: (constant) @faraday
+          (#eq? @faraday "Faraday")
+          method: (identifier) @fn
+          (#eq? @fn "new")
+          arguments: (argument_list
+            (_) @instance_base_url . _*)))
+    captures:
+      - name: instance_name
+        role: alias_instance_name
+      - name: instance_base_url
+        role: alias_base_url
