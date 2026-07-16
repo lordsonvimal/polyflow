@@ -301,6 +301,18 @@ is a minimal stub containing only the eval summary row; the full doctor surface
 (service health, unresolved ledger, contract coverage) is G.5's deliverable and
 is not implemented here.
 
+**Addendum (2026-07-16, review fixes).** Two gate defects found in review, both
+fixed: (1) `polyflow eval --gate` exited non-zero on *any* hard-fail **before**
+the gate ran, making the gate's pre-existing-HardFail exclusion unreachable —
+CI would have failed forever on the committed baseline. With `--gate` the gate
+now decides alone (new hard-fails, recall drops, silent-miss rises); the
+unconditional hard-fail exit applies only to ungated runs. (2) `CheckGate` now
+fails with reason `missing_repo` when a repo present in the baseline is absent
+from the current run — a repo whose clone/index crashes must not read as a
+pass. Baseline ratcheted after the contract-engine fan-out fix improved recall:
+gotify 0.833→0.900 (2→1 hard-fails), lobsters 0.067→0.200 (14→0 hard-fails),
+writefreely/polyflow unchanged.
+
 ---
 
 ## Tier L — Language breadth (Python first, then repeatable)

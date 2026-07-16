@@ -211,3 +211,40 @@ func TestSummarizeForDoctor(t *testing.T) {
 	assert.Equal(t, 1, sum.HonestMiss)
 	assert.Equal(t, 0, sum.Regressions)
 }
+
+// TestCheckGate_MissingRepo: a repo present in the baseline but absent from
+// the current run is a regression — a repo that fails to clone or crashes
+// during indexing must not read as a silent pass.
+func TestCheckGate_MissingRepo(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0},
+	)
+	current := &eval.MultiReport{
+		GeneratedAt: time.Now().UTC(),
+		Reports:     []eval.Report{}, // testrepo missing entirely
+	}
+	gate := eval.CheckGate(current, baseline)
+	assert.False(t, gate.OK, "missing baseline repo must trip the gate")
+	require.Len(t, gate.Regressions, 1)
+	assert.Equal(t, "missing_repo", gate.Regressions[0].Reason)
+	assert.Equal(t, "testrepo", gate.Regressions[0].Repo)
+	assert.Equal(t, "*", gate.Regressions[0].CaseID)
+}
+
+// TestCheckGate_NewRepoNotMissing: a repo added in the current run (absent
+// from baseline) is not a missing_repo regression.
+func TestCheckGate_NewRepoNotMissing(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0},
+	)
+	current := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0},
+	)
+	current.Reports = append(current.Reports, eval.Report{
+		Repo:    "brand-new-repo",
+		Results: []eval.CaseResult{{CaseID: "n1", Recall: 0.5}},
+		Recall:  0.5,
+	})
+	gate := eval.CheckGate(current, baseline)
+	assert.True(t, gate.OK, "a newly added repo must not trip missing_repo")
+}

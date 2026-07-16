@@ -81,8 +81,8 @@ const (
 // Rule is the YAML-mapped shape for a contract rule file entry.
 type Rule struct {
 	Kind         Kind            `yaml:"kind"`
-	Package      string          `yaml:"package,omitempty"`       // semver gate
-	VersionRange string          `yaml:"version_range,omitempty"` // patterns.VersionInRange
+	Package      string          `yaml:"package,omitempty"`       // semver gate — reserved; Load rejects until enforced (V.4)
+	VersionRange string          `yaml:"version_range,omitempty"` // patterns.VersionInRange — reserved; Load rejects until enforced
 	Producer     EndpointSpec    `yaml:"producer"`
 	Consumer     EndpointSpec    `yaml:"consumer"`
 	Normalizers  []string        `yaml:"normalizers"`

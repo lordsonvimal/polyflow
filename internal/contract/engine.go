@@ -62,7 +62,7 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 
 			cands := filterByService(consumers, targetSvc)
 			cands = filterBySameServicePolicy(cands, rule.Edge.SameService, prod.Service)
-			exactIdx, normIdx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
+			idx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
 
 			// G.6: key_candidates fan-out — try each candidate independently
 			keyCands := ParseKeyCandidates(prod.Meta["key_candidates"])
@@ -70,7 +70,7 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 				dynField := findDynamicKeyField(prod, rule.Producer)
 				anyMatched := false
 				for _, cand := range keyCands {
-					if matchProducerWithKeyOverride(prod, rule, norms, env, exactIdx, normIdx, dynField, cand, &result) {
+					if matchProducerWithKeyOverride(prod, rule, norms, env, idx, dynField, cand, &result) {
 						anyMatched = true
 						// continue: all candidates try to match (don't break on first hit)
 					}
@@ -81,7 +81,7 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 				continue
 			}
 
-			matched := matchProducer(prod, rule, norms, env, exactIdx, normIdx, &result)
+			matched := matchProducer(prod, rule, norms, env, idx, &result)
 			if matched {
 				continue
 			}
@@ -131,12 +131,15 @@ func findDynamicKeyField(prod *graph.Node, spec EndpointSpec) string {
 // matchProducerWithKeyOverride matches a single key_candidate value by
 // injecting it as an override for the dynamic field. Each hit emits an edge
 // with via=branch_enum at inferred confidence (regardless of match tier).
+// All consumers sharing the matched key receive an edge (recall over
+// precision); the method-override loop stops at the first override that
+// produced at least one edge.
 func matchProducerWithKeyOverride(
 	prod *graph.Node,
 	rule Rule,
 	norms []Normalizer,
 	env NormalizeEnv,
-	exactIdx, normIdx map[string]*graph.Node,
+	idx consumerIndexes,
 	dynField, cand string,
 	result *Result,
 ) bool {
@@ -153,28 +156,29 @@ func matchProducerWithKeyOverride(
 		normFields := applyNormsToFields(rawFields, norms, env)
 		normKey := strings.Join(normFields, " ")
 
-		hit, _ := findMatch(rawKey, normKey, rule.Match, exactIdx, normIdx)
-		if hit == nil {
-			continue
+		hits, _ := findMatches(rawKey, normKey, rule.Match, idx)
+		emitted := false
+		for _, hit := range hits {
+			if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
+				continue
+			}
+			result.Edges = append(result.Edges, graph.Edge{
+				ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
+				From:       prod.ID,
+				To:         hit.ID,
+				Type:       rule.Edge.Type,
+				Label:      normKey,
+				Confidence: graph.ConfidenceInferred,
+				Meta: map[string]string{
+					"confidence": graph.ConfidenceInferred,
+					"via":        "branch_enum",
+				},
+			})
+			emitted = true
 		}
-		if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
-			continue
+		if emitted {
+			return true
 		}
-
-		edgeMeta := map[string]string{
-			"confidence": graph.ConfidenceInferred,
-			"via":        "branch_enum",
-		}
-		result.Edges = append(result.Edges, graph.Edge{
-			ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
-			From:       prod.ID,
-			To:         hit.ID,
-			Type:       rule.Edge.Type,
-			Label:      normKey,
-			Confidence: graph.ConfidenceInferred,
-			Meta:       edgeMeta,
-		})
-		return true
 	}
 	return false
 }
@@ -199,13 +203,17 @@ func mergeOverrides(a, b map[string]string) map[string]string {
 }
 
 // matchProducer tries all candidate (method-override, tier) combinations for
-// one producer. Returns true if an edge was emitted.
+// one producer. Every consumer sharing the matched key receives an edge —
+// recall over precision: two services exposing the same route, or N hub
+// subscribers on one broadcast channel, all get linked instead of first-seen
+// winning silently. Returns true if at least one edge was emitted; the
+// method-override loop stops at the first override that produced edges.
 func matchProducer(
 	prod *graph.Node,
 	rule Rule,
 	norms []Normalizer,
 	env NormalizeEnv,
-	exactIdx, normIdx map[string]*graph.Node,
+	idx consumerIndexes,
 	result *Result,
 ) bool {
 	for _, override := range candidateMethodOverrides(prod, rule.Producer) {
@@ -215,55 +223,59 @@ func matchProducer(
 		normFields := applyNormsToFields(rawFields, norms, env)
 		normKey := strings.Join(normFields, " ")
 
-		hit, confidence := findMatch(rawKey, normKey, rule.Match, exactIdx, normIdx)
-		if hit == nil {
-			continue
-		}
-		if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
-			continue
-		}
-
-		edgeMeta := map[string]string{"confidence": confidence}
-		for metaKey, viaValue := range rule.Edge.ViaMeta {
-			if prod.Meta[metaKey] != "" {
-				edgeMeta["via"] = viaValue
+		hits, confidence := findMatches(rawKey, normKey, rule.Match, idx)
+		emitted := false
+		for _, hit := range hits {
+			if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
+				continue
 			}
-		}
-		// G.7: propagate alias/wrapper indirection from producer node to edge.
-		if via := prod.Meta["via"]; via != "" && edgeMeta["via"] == "" {
-			edgeMeta["via"] = via
-		}
 
-		result.Edges = append(result.Edges, graph.Edge{
-			ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
-			From:       prod.ID,
-			To:         hit.ID,
-			Type:       rule.Edge.Type,
-			Label:      normKey,
-			Confidence: confidence,
-			Meta:       edgeMeta,
-		})
-		return true
+			edgeMeta := map[string]string{"confidence": confidence}
+			for metaKey, viaValue := range rule.Edge.ViaMeta {
+				if prod.Meta[metaKey] != "" {
+					edgeMeta["via"] = viaValue
+				}
+			}
+			// G.7: propagate alias/wrapper indirection from producer node to edge.
+			if via := prod.Meta["via"]; via != "" && edgeMeta["via"] == "" {
+				edgeMeta["via"] = via
+			}
+
+			result.Edges = append(result.Edges, graph.Edge{
+				ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
+				From:       prod.ID,
+				To:         hit.ID,
+				Type:       rule.Edge.Type,
+				Label:      normKey,
+				Confidence: confidence,
+				Meta:       edgeMeta,
+			})
+			emitted = true
+		}
+		if emitted {
+			return true
+		}
 	}
 	return false
 }
 
-// findMatch tries each tier in order against the consumer indexes and returns
-// the first hit plus the corresponding confidence string.
-func findMatch(rawKey, normKey string, tiers []MatchTier, exactIdx, normIdx map[string]*graph.Node) (*graph.Node, string) {
+// findMatches tries each tier in order against the consumer indexes and
+// returns every consumer on the first tier that hits, plus the corresponding
+// confidence string. Consumers are returned in node-input order (stable).
+func findMatches(rawKey, normKey string, tiers []MatchTier, idx consumerIndexes) ([]*graph.Node, string) {
 	for _, tier := range tiers {
 		switch tier {
 		case TierExact:
-			if h, ok := exactIdx[rawKey]; ok {
-				return h, graph.ConfidenceStatic
+			if hs := idx.exact[rawKey]; len(hs) > 0 {
+				return hs, graph.ConfidenceStatic
 			}
 		case TierNormalized:
-			if h, ok := normIdx[normKey]; ok {
-				return h, graph.ConfidenceInferred
+			if hs := idx.norm[normKey]; len(hs) > 0 {
+				return hs, graph.ConfidenceInferred
 			}
 		case TierWildcardAnchored:
-			if h := wildcardScan(normKey, normIdx); h != nil {
-				return h, graph.ConfidenceInferred
+			if hs := wildcardScan(normKey, idx); len(hs) > 0 {
+				return hs, graph.ConfidenceInferred
 			}
 		}
 	}
@@ -384,30 +396,41 @@ func filterByService(consumers []*graph.Node, targetSvc string) []*graph.Node {
 	return out
 }
 
+// consumerIndexes holds the per-producer consumer lookup structures.
+// Both maps are multi-valued: every consumer sharing a key is kept, in
+// node-input order, so matching fans out instead of first-seen winning.
+// normKeys records normalized keys in first-seen order so the wildcard
+// tier scans deterministically (map iteration order is random).
+type consumerIndexes struct {
+	exact    map[string][]*graph.Node
+	norm     map[string][]*graph.Node
+	normKeys []string
+}
+
 // buildConsumerIndexes builds exact (raw key) and normalized (post-normalizer)
 // indexes for the given consumer nodes and the producer's NormalizeEnv.
-// First-seen wins when multiple consumers share a key.
 func buildConsumerIndexes(
 	consumers []*graph.Node,
 	spec EndpointSpec,
 	norms []Normalizer,
 	env NormalizeEnv,
-) (exactIdx, normIdx map[string]*graph.Node) {
-	exactIdx = make(map[string]*graph.Node, len(consumers))
-	normIdx = make(map[string]*graph.Node, len(consumers))
+) consumerIndexes {
+	idx := consumerIndexes{
+		exact: make(map[string][]*graph.Node, len(consumers)),
+		norm:  make(map[string][]*graph.Node, len(consumers)),
+	}
 	for _, c := range consumers {
 		rawFields := buildRawFields(c, spec, nil)
 		rawKey := strings.Join(rawFields, " ")
-		if _, exists := exactIdx[rawKey]; !exists {
-			exactIdx[rawKey] = c
-		}
+		idx.exact[rawKey] = append(idx.exact[rawKey], c)
 		normFields := applyNormsToFields(rawFields, norms, env)
 		normKey := strings.Join(normFields, " ")
-		if _, exists := normIdx[normKey]; !exists {
-			normIdx[normKey] = c
+		if _, exists := idx.norm[normKey]; !exists {
+			idx.normKeys = append(idx.normKeys, normKey)
 		}
+		idx.norm[normKey] = append(idx.norm[normKey], c)
 	}
-	return
+	return idx
 }
 
 // buildRawFields extracts the key field values from a node's meta,
@@ -499,28 +522,32 @@ func sameServiceAllowed(policy string, prod, cons *graph.Node) bool {
 	}
 }
 
-// wildcardScan tries wildcard_anchored matching of key against all entries in
-// normIdx, requiring at least one shared concrete segment. First hit wins.
+// wildcardScan tries wildcard_anchored matching of key against all indexed
+// normalized keys, requiring at least one shared concrete segment. Keys are
+// scanned in first-seen (node-input) order — never map order — so results
+// are deterministic across runs. Every consumer under every matching key is
+// returned (recall over precision).
 //
 // Compound keys join multiple fields with " " (e.g. "POST /play/*/draw").
 // Wildcard segment matching must operate only on the '/'-prefixed path portion
 // so that non-path fields (e.g. the HTTP method) do not create false shared
 // anchors between semantically different routes.
-func wildcardScan(key string, normIdx map[string]*graph.Node) *graph.Node {
+func wildcardScan(key string, idx consumerIndexes) []*graph.Node {
 	keyPath, keyPrefix := splitAtFirstSlash(key)
 	if !hasLiteralSegment(keyPath) {
 		return nil
 	}
-	for consKey, h := range normIdx {
+	var hits []*graph.Node
+	for _, consKey := range idx.normKeys {
 		consPath, consPrefix := splitAtFirstSlash(consKey)
 		if keyPrefix != consPrefix {
 			continue // method (or other prefix field) mismatch
 		}
 		if pathMatchesPattern(keyPath, consPath) {
-			return h
+			hits = append(hits, idx.norm[consKey]...)
 		}
 	}
-	return nil
+	return hits
 }
 
 // splitAtFirstSlash splits a compound key at the first '/' occurrence.

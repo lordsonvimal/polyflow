@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-15T09:52:35.974512Z",
+  "generated_at": "2026-07-16T18:28:58.917709Z",
   "repos": [
     {
       "repo": "gotify",
@@ -38,11 +38,11 @@
         },
         {
           "case_id": "health-handler-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.16666666666666666,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "get-applications-callers",
@@ -79,7 +79,7 @@
         {
           "case_id": "get-current-user-callers",
           "recall": 1,
-          "precision": 0.5,
+          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -103,7 +103,7 @@
         {
           "case_id": "get-plugins-callers",
           "recall": 1,
-          "precision": 0.5,
+          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -119,14 +119,14 @@
         {
           "case_id": "use-stores-callers",
           "recall": 0.5,
-          "precision": 0.0625,
+          "precision": 0.05555555555555555,
           "honest_misses": 1,
           "silent_misses": 0,
           "hard_fail": false
         }
       ],
-      "recall": 0.8333333333333334,
-      "precision": 0.17903439153439155
+      "recall": 0.9,
+      "precision": 0.16746031746031742
     },
     {
       "repo": "lobsters",
@@ -135,73 +135,73 @@
           "case_id": "stories-create-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "stories-show-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "stories-upvote-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "stories-new-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "stories-check-url-dupe",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 1,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "comments-create-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "comments-upvote-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "story-already-posted-recently",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "story-is-resubmit",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "story-comments-closing-soon",
@@ -215,45 +215,45 @@
           "case_id": "home-index-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "home-newest-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "home-active-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "search-index-action",
           "recall": 0,
           "precision": 0,
-          "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "login-action",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 1,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         }
       ],
-      "recall": 0.06666666666666667,
-      "precision": 0.06666666666666667
+      "recall": 0.2,
+      "precision": 0.2
     },
     {
       "repo": "polyflow",
@@ -418,7 +418,7 @@
     {
       "name": "chessleap",
       "dir": "eval/corpus/chessleap",
-      "reason": "open graph DB at eval/.cache/chessleap/.polyflow/graph.db (run `polyflow index` first): apply busy_timeout: unable to open database file: out of memory (14)"
+      "reason": "case handle-move-blast: node not found for target \"handleMove\""
     }
   ]
 }
