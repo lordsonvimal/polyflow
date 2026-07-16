@@ -1,0 +1,63 @@
+package contract
+
+import (
+	"sort"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
+)
+
+// KindCoverage holds the matched and unresolved producer counts for one contract kind.
+type KindCoverage struct {
+	Kind       string `json:"kind"`
+	Matched    int    `json:"matched"`    // edges emitted with static or inferred confidence
+	Unresolved int    `json:"unresolved"` // ledger entries + unknown_edge emits
+}
+
+// ComputeCoverage returns per-kind coverage stats from a Link result.
+// rules is used to derive the edge-type→kind mapping; the result carries
+// the actual matched edges and ledger entries.
+func ComputeCoverage(rules []Rule, result Result) []KindCoverage {
+	edgeTypeToKind := make(map[graph.EdgeType]string, len(rules))
+	var kindOrder []string
+	kindSeen := map[string]bool{}
+	for _, r := range rules {
+		edgeTypeToKind[r.Edge.Type] = string(r.Kind)
+		if !kindSeen[string(r.Kind)] {
+			kindSeen[string(r.Kind)] = true
+			kindOrder = append(kindOrder, string(r.Kind))
+		}
+	}
+
+	matched := map[string]int{}
+	unresolved := map[string]int{}
+
+	for _, e := range result.Edges {
+		k := edgeTypeToKind[e.Type]
+		if k == "" {
+			continue
+		}
+		if e.Confidence == graph.ConfidenceUnknown {
+			unresolved[k]++
+		} else {
+			matched[k]++
+		}
+	}
+	for _, u := range result.Unresolved {
+		unresolved[u.Kind]++
+		if !kindSeen[u.Kind] {
+			kindSeen[u.Kind] = true
+			kindOrder = append(kindOrder, u.Kind)
+		}
+	}
+
+	sort.Strings(kindOrder)
+	out := make([]KindCoverage, 0, len(kindOrder))
+	for _, k := range kindOrder {
+		out = append(out, KindCoverage{
+			Kind:       k,
+			Matched:    matched[k],
+			Unresolved: unresolved[k],
+		})
+	}
+	return out
+}

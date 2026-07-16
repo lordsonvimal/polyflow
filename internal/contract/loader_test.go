@@ -1,6 +1,8 @@
 package contract_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 
@@ -197,4 +199,82 @@ func TestLoad_WorkspaceDir_NoContractsSubdir(t *testing.T) {
 	rules, err := contract.Load(nil, t.TempDir())
 	require.NoError(t, err)
 	assert.Empty(t, rules)
+}
+
+func TestLoad_WorkspaceDir_LoadsCustomRules(t *testing.T) {
+	// Positive: a contracts/ subdir in the workspace dir is loaded.
+	dir := t.TempDir()
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(contractsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "custom.yaml"), []byte(validRuleYAML), 0o644))
+
+	rules, err := contract.Load(nil, dir)
+	require.NoError(t, err)
+	require.Len(t, rules, 1, "custom rule from workspace dir must be loaded")
+	assert.Equal(t, contract.KindHTTP, rules[0].Kind)
+}
+
+func TestLoad_WorkspaceDir_MergesWithEmbedded(t *testing.T) {
+	// Workspace-custom rules are appended after embedded rules.
+	dir := t.TempDir()
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(contractsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "custom.yaml"), []byte(validRuleYAML), 0o644))
+
+	embedded := fstest.MapFS{
+		"amqp.yaml": &fstest.MapFile{Data: []byte(`version: "1"
+contracts:
+  - kind: amqp
+    producer:
+      node: publisher
+      key: [exchange, routing_key]
+    consumer:
+      node: subscriber
+      key: [exchange, routing_key]
+    normalizers: [quote_strip]
+    match: [exact]
+    edge:
+      type: publishes
+      id_prefix: amqp
+      same_service: skip
+    unmatched: ledger
+`)},
+	}
+	rules, err := contract.Load(embedded, dir)
+	require.NoError(t, err)
+	assert.Len(t, rules, 2, "embedded + workspace custom rules must both be present")
+}
+
+func TestLoad_WorkspaceDir_FailsOnBadCustomRule(t *testing.T) {
+	// Negative: a bad YAML in workspace contracts/ causes Load to fail fast.
+	dir := t.TempDir()
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(contractsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "bad.yaml"), []byte(`version: "1"
+contracts:
+  - kind: http
+    producer: {node: http_client, key: [path]}
+    consumer: {node: http_handler, key: [path]}
+    normalizers: [not_a_real_normalizer]
+    match: [exact]
+    edge: {type: http_call, id_prefix: link, same_service: skip}
+    unmatched: drop
+`), 0o644))
+
+	_, err := contract.Load(nil, dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown normalizer")
+}
+
+func TestLoad_WorkspaceDir_NonYAMLFilesIgnored(t *testing.T) {
+	// Non-YAML files in the workspace contracts/ dir are skipped.
+	dir := t.TempDir()
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(contractsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "README.md"), []byte("# custom rules"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "custom.yaml"), []byte(validRuleYAML), 0o644))
+
+	rules, err := contract.Load(nil, dir)
+	require.NoError(t, err)
+	assert.Len(t, rules, 1, "only YAML files are loaded; README.md must be ignored")
 }
