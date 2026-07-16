@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/eval"
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -226,10 +228,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Scanning services...")
 	stats, err := indexer.Run(context.Background(), indexer.Options{
-		Config:  cfg,
-		Workers: indexWorkers,
-		Full:    indexFull,
-		Log:     os.Stdout,
+		Config:       cfg,
+		Workers:      indexWorkers,
+		Full:         indexFull,
+		ContractsDir: filepath.Dir(indexWorkspace),
+		Log:          os.Stdout,
 		Progress: func(done, total int) {
 			pct := 0
 			if total > 0 {
@@ -583,11 +586,25 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		for _, u := range unresolvedRefs {
 			byKind[u.Kind]++
 		}
+		// Sort kinds: structural refs first, then contract kinds alphabetically.
+		structuralKinds := []string{"call_ref", "import_ref"}
+		kindSet := map[string]bool{}
 		var kindParts []string
-		for _, kind := range []string{"call_ref", "import_ref"} {
+		for _, kind := range structuralKinds {
 			if byKind[kind] > 0 {
 				kindParts = append(kindParts, fmt.Sprintf("%d %s", byKind[kind], kind))
+				kindSet[kind] = true
 			}
+		}
+		var contractKinds []string
+		for k := range byKind {
+			if !kindSet[k] {
+				contractKinds = append(contractKinds, k)
+			}
+		}
+		sort.Strings(contractKinds)
+		for _, kind := range contractKinds {
+			kindParts = append(kindParts, fmt.Sprintf("%d %s", byKind[kind], kind))
 		}
 		fmt.Printf("  Unresolved refs: %d (%s) — graph blind spots (--unresolved for details)\n",
 			len(unresolvedRefs), strings.Join(kindParts, ", "))
@@ -1213,7 +1230,7 @@ func runImpactDiff() error {
 	if err != nil {
 		return err
 	}
-	stats, err := indexer.Run(ctx, indexer.Options{Config: cfg, Workers: runtime.GOMAXPROCS(0)})
+	stats, err := indexer.Run(ctx, indexer.Options{Config: cfg, Workers: runtime.GOMAXPROCS(0), ContractsDir: filepath.Dir(meta.ConfigFile)})
 	if err != nil {
 		return fmt.Errorf("reindex before diff impact: %w", err)
 	}
@@ -1846,6 +1863,29 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			sum.GeneratedAt, sum.Repos, sum.TotalCases, sum.AvgRecall, sum.HardFails, sum.SilentMiss, skips)
 		if sum.HardFails > 0 {
 			fmt.Printf("                %d hard_fail case(s) — run 'polyflow eval' for details\n", sum.HardFails)
+		}
+	}
+
+	// Contract coverage per kind (requires a prior `polyflow index` run).
+	fmt.Println()
+	store, storeErr := openStore()
+	if storeErr != nil {
+		fmt.Printf("  Contract coverage:  no index found (run 'polyflow index' first)\n")
+	} else {
+		defer store.Close()
+		ctx := context.Background()
+		if coverageJSON, metaErr := store.GetMeta(ctx, "contract_coverage"); metaErr == nil {
+			var cov []contract.KindCoverage
+			if json.Unmarshal([]byte(coverageJSON), &cov) == nil && len(cov) > 0 {
+				fmt.Printf("  Contract coverage:  %-16s  %8s  %10s\n", "kind", "matched", "unresolved")
+				for _, c := range cov {
+					fmt.Printf("                      %-16s  %8d  %10d\n", c.Kind, c.Matched, c.Unresolved)
+				}
+			} else {
+				fmt.Printf("  Contract coverage:  (no rules matched — check contracts/*.yaml)\n")
+			}
+		} else {
+			fmt.Printf("  Contract coverage:  no data (run 'polyflow index' first)\n")
 		}
 	}
 

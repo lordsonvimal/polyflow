@@ -34,13 +34,14 @@ import (
 
 // Options configures an indexing run.
 type Options struct {
-	Config      *workspace.WorkspaceConfig
-	DBDir       string // default: meta.DBDir
-	PatternsDir string // default: "" → built-in patterns embedded in the binary; set to load from disk instead
-	Workers     int    // default: GOMAXPROCS
-	Full        bool   // force full re-parse, ignoring the incremental cache
-	Log         io.Writer
-	Progress    func(done, total int)
+	Config       *workspace.WorkspaceConfig
+	DBDir        string // default: meta.DBDir
+	PatternsDir  string // default: "" → built-in patterns embedded in the binary; set to load from disk instead
+	ContractsDir string // default: "" → no workspace-custom rules; set to the workspace root to load <dir>/contracts/*.yaml
+	Workers      int    // default: GOMAXPROCS
+	Full         bool   // force full re-parse, ignoring the incremental cache
+	Log          io.Writer
+	Progress     func(done, total int)
 }
 
 // Stats reports what an indexing run did.
@@ -644,7 +645,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 
 	// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
-	contractRules, err := contract.Load(contractdata.FS, "")
+	// opts.ContractsDir may add workspace-custom rules on top of the embedded defaults (G.5).
+	contractRules, err := contract.Load(contractdata.FS, opts.ContractsDir)
 	if err != nil {
 		return nil, fmt.Errorf("contract rules: %w", err)
 	}
@@ -669,6 +671,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 	allUnresolved = append(allUnresolved, contractResult.Unresolved...)
 	stats.CrossLinks = len(contractResult.Edges)
+
+	// G.5: persist per-kind coverage so `polyflow doctor` can report matched/unresolved.
+	coverage := contract.ComputeCoverage(contractRules, contractResult)
+	if coverageJSON, marshalErr := json.Marshal(coverage); marshalErr == nil {
+		_ = store.SetMeta(ctx, "contract_coverage", string(coverageJSON))
+	}
 
 	// ── Root classification ──────────────────────────────────────────────────
 	// With the full edge set assembled, function/method nodes with no incoming
