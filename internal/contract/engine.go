@@ -8,8 +8,32 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
+// dynamicKindFor maps a contract Kind to the ledger kind string used for
+// dynamic (unresolvable) producer keys of that kind.
+func dynamicKindFor(k Kind) string {
+	switch k {
+	case KindHTTP, KindSSE, KindGRPC, KindGraphQL:
+		return "dynamic_url"
+	case KindKafka, KindNATS, KindRedisPubSub:
+		return "dynamic_topic"
+	case KindAMQP:
+		return "dynamic_url"
+	case KindJob:
+		return "dynamic_queue"
+	case KindPusher, KindHub:
+		return "dynamic_channel"
+	case KindWebSocket:
+		return "dynamic_event"
+	default:
+		return "dynamic_" + string(k)
+	}
+}
+
 // Link runs the contract engine against all nodes, applying each rule in order.
 // Tier→confidence is fixed: exact→static, normalized/wildcard_anchored→inferred.
+// G.6: producers with key_dynamic meta get a dynamic_<kind> ledger entry instead
+// of silently dropped (nav-link refinement). Producers with key_candidates fan out
+// to N matches; each hit emits an edge with via=branch_enum at inferred confidence.
 func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) Result {
 	var result Result
 	synthSeen := make(map[string]bool)
@@ -20,6 +44,12 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 		producers, consumers := partitionNodes(nodes, rule)
 
 		for _, prod := range producers {
+			// G.6: dynamic key → surface to ledger, never silently drop
+			if prod.Meta["key_dynamic"] == "true" {
+				applyDynamicUnmatched(prod, rule, &result)
+				continue
+			}
+
 			targetSvc := ""
 			if rule.Producer.TargetServiceMeta != "" {
 				targetSvc = prod.Meta[rule.Producer.TargetServiceMeta]
@@ -34,6 +64,23 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 			cands = filterBySameServicePolicy(cands, rule.Edge.SameService, prod.Service)
 			exactIdx, normIdx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
 
+			// G.6: key_candidates fan-out — try each candidate independently
+			keyCands := ParseKeyCandidates(prod.Meta["key_candidates"])
+			if len(keyCands) > 0 {
+				dynField := findDynamicKeyField(prod, rule.Producer)
+				anyMatched := false
+				for _, cand := range keyCands {
+					if matchProducerWithKeyOverride(prod, rule, norms, env, exactIdx, normIdx, dynField, cand, &result) {
+						anyMatched = true
+						// continue: all candidates try to match (don't break on first hit)
+					}
+				}
+				if !anyMatched {
+					applyUnmatched(prod, rule, targetSvc, &result, synthSeen)
+				}
+				continue
+			}
+
 			matched := matchProducer(prod, rule, norms, env, exactIdx, normIdx, &result)
 			if matched {
 				continue
@@ -43,6 +90,112 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 		}
 	}
 	return result
+}
+
+// applyDynamicUnmatched surfaces a dynamic-key producer to the ledger.
+// The nav-link "drop" policy is refined: dynamic nav links reach the ledger
+// rather than being silently dropped (unmatched literals still drop as before).
+func applyDynamicUnmatched(prod *graph.Node, rule Rule, result *Result) {
+	dynKind := dynamicKindFor(rule.Kind)
+	result.Unresolved = append(result.Unresolved, graph.UnresolvedRef{
+		Service: prod.Service,
+		File:    prod.File,
+		Line:    prod.Line,
+		Name:    prod.Meta["key_dynamic_raw"],
+		Kind:    dynKind,
+	})
+}
+
+// findDynamicKeyField returns the first key field in spec.Key that has no
+// value in prod.Meta and no valid fallback. This is the field that
+// key_candidates values should be substituted for.
+func findDynamicKeyField(prod *graph.Node, spec EndpointSpec) string {
+	for _, field := range spec.Key {
+		if prod.Meta[field] != "" {
+			continue
+		}
+		hasFallback := false
+		for _, fb := range spec.KeyFallbacks[field] {
+			if prod.Meta[fb] != "" {
+				hasFallback = true
+				break
+			}
+		}
+		if !hasFallback {
+			return field
+		}
+	}
+	return ""
+}
+
+// matchProducerWithKeyOverride matches a single key_candidate value by
+// injecting it as an override for the dynamic field. Each hit emits an edge
+// with via=branch_enum at inferred confidence (regardless of match tier).
+func matchProducerWithKeyOverride(
+	prod *graph.Node,
+	rule Rule,
+	norms []Normalizer,
+	env NormalizeEnv,
+	exactIdx, normIdx map[string]*graph.Node,
+	dynField, cand string,
+	result *Result,
+) bool {
+	var baseOverride map[string]string
+	if dynField != "" {
+		baseOverride = map[string]string{dynField: cand}
+	}
+
+	for _, methodOverride := range candidateMethodOverrides(prod, rule.Producer) {
+		override := mergeOverrides(baseOverride, methodOverride)
+		rawFields := buildRawFields(prod, rule.Producer, override)
+		rawKey := strings.Join(rawFields, " ")
+
+		normFields := applyNormsToFields(rawFields, norms, env)
+		normKey := strings.Join(normFields, " ")
+
+		hit, _ := findMatch(rawKey, normKey, rule.Match, exactIdx, normIdx)
+		if hit == nil {
+			continue
+		}
+		if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
+			continue
+		}
+
+		edgeMeta := map[string]string{
+			"confidence": graph.ConfidenceInferred,
+			"via":        "branch_enum",
+		}
+		result.Edges = append(result.Edges, graph.Edge{
+			ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
+			From:       prod.ID,
+			To:         hit.ID,
+			Type:       rule.Edge.Type,
+			Label:      normKey,
+			Confidence: graph.ConfidenceInferred,
+			Meta:       edgeMeta,
+		})
+		return true
+	}
+	return false
+}
+
+// mergeOverrides combines two override maps into one. The second (b) wins on
+// conflicts. Returns nil if both are nil.
+func mergeOverrides(a, b map[string]string) map[string]string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	merged := make(map[string]string, len(a)+len(b))
+	for k, v := range a {
+		merged[k] = v
+	}
+	for k, v := range b {
+		merged[k] = v
+	}
+	return merged
 }
 
 // matchProducer tries all candidate (method-override, tier) combinations for

@@ -419,7 +419,27 @@ bad normalizer fails fast; negative: non-YAML-only files skipped) + 7 coverage u
 duplicate-rule-kinds merged, non-contract edge types ignored). `BenchmarkIndexCold` holds
 (~10.1s). All 90+ tests pass.
 
-### Phase G.6 — Dynamic producer keys: branch enumeration + surfacing (all kinds, all languages) `pending`
+### Phase G.6 — Dynamic producer keys: branch enumeration + surfacing (all kinds, all languages) `done`
+
+**Outcome.** Implemented in full: (1) `Meta["key_candidates"]` (JSON array of
+literal alternatives) populated by per-language walkers and consumed by the
+engine with N-way fan-out, emitting one `navigates_to`/`publishes`/etc. edge
+per candidate at `confidence=inferred`, `via=branch_enum`; (2) `Meta["key_dynamic"]="true"`
+surfacing to a `dynamic_<kind>` ledger entry (dynamic_url, dynamic_topic,
+dynamic_queue, dynamic_channel, dynamic_event) with nav-drop refinement
+(dynamic nav links always reach the ledger; unmatched literals still drop);
+(3) walker registry (`internal/contract/keywalk.go`) with walkers for Go,
+JavaScript, Ruby, and templ, plus an explicit no-op for HTML; (4) doctor gains
+a `dynamic` column in the per-kind coverage table and a walker-coverage row
+reporting `yes`/`no-op`/`MISSING` per language; (5) test guard
+`TestWalkerCoverage_AllLanguagesHaveWalker` fails if any registered parser
+language lacks a walker; (6) JSX nav-link patterns extended with
+`nav_link_jsx_ternary` (shape a) and `nav_link_jsx_dynamic` (shape c). All
+tests pass; `BenchmarkIndexCold` unchanged. One deviation from spec: walkers
+are wired to meta post-processing in `MatchToGraph` (pattern-level captures
+`branch_N`/`key_expr`) rather than called live during tree-sitter matching,
+which fits the existing pipeline without requiring query-level changes in every
+language pattern file.
 
 **Problem.** Every producer key today is captured only when it is a **string
 literal at the call/attribute site** — the tree-sitter queries require a
