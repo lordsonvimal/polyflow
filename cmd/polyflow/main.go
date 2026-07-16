@@ -1766,7 +1766,10 @@ func runEval(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "WARNING: skipped corpus %q (%s): %s\n", s.Name, s.Dir, s.Reason)
 	}
 
-	if hardFailed {
+	// Without a gate, any hard-fail is fatal (E.1 acceptance). With --gate the
+	// gate decides: pre-existing baseline hard-fails must not fail CI forever —
+	// only NEW hard-fails, recall drops, silent-miss rises, or missing repos do.
+	if hardFailed && evalGate == "" {
 		fmt.Fprintln(os.Stderr, "Failed: one or more cases hard-failed (must_not_miss file silently missed)")
 		os.Exit(1)
 	}
@@ -1787,6 +1790,8 @@ func runEval(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  recall_drop  baseline=%.3f  current=%.3f\n", r.Repo, r.BaselineRecall, r.CurrentRecall)
 				case "silent_miss_rise":
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  silent_miss_rise  baseline=%d  current=%d\n", r.Repo, r.CaseID, r.BaselineSilent, r.CurrentSilent)
+				case "missing_repo":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  missing_repo  (in baseline but absent from this run — clone/index failed?)\n", r.Repo)
 				}
 			}
 			fmt.Fprintln(os.Stderr, "Update eval/baseline.json when recall improves: polyflow eval --output eval/baseline.json")

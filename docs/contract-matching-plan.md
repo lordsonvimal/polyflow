@@ -323,8 +323,10 @@ EventSource URL matching is already handled by `http.yaml`; an empty placeholder
 `same_service_only` policy — without pre-filtering, same-service consumers occupied
 index slots under skip/same_service_only policies, blocking cross-service consumers
 (first-seen wins in the hash index). Hub fan-out uses `key: []` (empty key, broadcast
-semantics) with `same_service_only`; limitation: first-seen wins means only the first
-subscriber per empty-key slot is linked per broadcast node. Fixture chain tests for hub
+semantics) with `same_service_only`. *(The first-seen-wins limitation noted here —
+only the first subscriber per empty-key slot linked per broadcast — was removed on
+2026-07-16: the consumer index is now multi-valued and every consumer sharing a key
+is linked; see the engine-hardening note after G.7.)* Fixture chain tests for hub
 and websocket ported to the contract engine; `EdgeMeta["message_type"]` assertion
 updated to `EdgeLabel` (contract engine carries the normalized key as edge label).
 
@@ -658,6 +660,36 @@ cross-service edge or a named ledger entry — zero silent cases; the doctor
 aliases/wrappers (on chessleap: expected ~0; on the legacy-web eval repo:
 expected substantial).
 
+### Engine hardening (post-G.7 review, 2026-07-16) `done`
+
+A code review of G.0–G.7 + V.0–V.1 found four defects; all fixed in one commit:
+
+1. **Multi-consumer fan-out.** The consumer index was single-valued
+   (first-seen wins): two services exposing the same route, or N hub
+   subscribers on one broadcast channel, silently lost all but the first
+   edge — a precision-over-recall choice with no ledger entry, violating the
+   trust contract. `buildConsumerIndexes` now keeps every consumer per key
+   (`consumerIndexes` type) and `matchProducer`/`matchProducerWithKeyOverride`
+   emit one edge per eligible consumer on the first tier that hits. The
+   method-fallback loop still stops at the first override that produced edges.
+2. **Deterministic wildcard tier.** `wildcardScan` iterated a Go map (random
+   order), so wildcard matches could differ between runs. It now scans
+   normalized keys in node-input order and returns *all* matching consumers.
+   `TestGoldenChessleapDeterminism` guards the invariant end-to-end.
+3. **Version-gate fields fail fast.** `Rule.Package`/`VersionRange` were
+   declared but enforced nowhere — a workspace rule setting them was applied
+   unconditionally (silently wrong). `Load` now rejects rules that set them
+   until gating is actually wired (tracked for V.4).
+4. **Golden parity harness implemented** (see the Verification amendment):
+   regression snapshot + determinism test against the local chessleap clone.
+
+Tests: `fanout_test.go` (shared-key fan-out, hub 3-subscriber broadcast,
+wildcard determinism ×20, key_candidates × consumers composition),
+loader rejection test, eval gate `missing_repo` tests (a baseline repo absent
+from the current run now trips the gate instead of passing silently).
+No `SchemaVersion` bump: stored edge shape/semantics unchanged — only the
+derived edge *set* grows, and linking re-runs on every index.
+
 ---
 
 ## Key files
@@ -676,6 +708,16 @@ expected substantial).
 - **Golden parity gate:** snapshot chessleap edges before G.1; after each port assert
   the edge set is identical (a port that can't reproduce old edges blocks deletion — no
   silent regression). Existing linker unit tests pass or convert to rule-fixture tests.
+  - **Amendment (2026-07-16).** The pre-G.1 snapshot was never generated — chessleap
+    was unavailable when G.1/G.2 ported and deleted the bespoke linkers, and the
+    harness stayed a stub while the ported unit tests carried parity alone. This was
+    a breach of locked decision (1); recorded here rather than papered over. The
+    harness is now implemented as a **regression snapshot**: `TestGoldenChessleapParity`
+    indexes the local chessleap clone (`eval/.cache/chessleap`) and asserts the
+    contract edge set is identical to the committed
+    `internal/contract/testdata/golden/chessleap_contract_edges.json` (483 edges,
+    573 files); `TestGoldenChessleapDeterminism` indexes twice and asserts identical
+    output. Regenerate after intentional changes with `-update-golden`.
 - **Route-group:** chessleap datastar real-handler links 3 → ~27; total unresolved refs
   drop; `polyflow trace` closes more `route→…→action→handler` loops.
 - **Additive proof:** minimal 2-service fixtures for gRPC/GraphQL/Kafka/NATS/Redis under

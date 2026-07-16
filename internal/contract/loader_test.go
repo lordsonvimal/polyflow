@@ -278,3 +278,28 @@ func TestLoad_WorkspaceDir_NonYAMLFilesIgnored(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, rules, 1, "only YAML files are loaded; README.md must be ignored")
 }
+
+// Rules that set package/version_range must be rejected at load time: the
+// engine does not enforce version gating yet, and loading such a rule
+// unconditionally would silently apply it to every version.
+func TestLoad_VersionGateFields_RejectedUntilEnforced(t *testing.T) {
+	dir := t.TempDir()
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(contractsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "gated.yaml"), []byte(`version: "1"
+contracts:
+  - kind: http
+    package: github.com/gin-gonic/gin
+    version_range: ">=1.9.0"
+    producer: {node: http_client, key: [path]}
+    consumer: {node: http_handler, key: [path]}
+    normalizers: [trim_slash]
+    match: [exact]
+    edge: {type: http_call, id_prefix: link, same_service: skip}
+    unmatched: drop
+`), 0o644))
+
+	_, err := contract.Load(nil, dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version_range")
+}
