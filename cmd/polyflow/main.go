@@ -25,6 +25,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/indexer"
 	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/server"
 	"github.com/lordsonvimal/polyflow/internal/trace"
@@ -1877,9 +1878,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		if coverageJSON, metaErr := store.GetMeta(ctx, "contract_coverage"); metaErr == nil {
 			var cov []contract.KindCoverage
 			if json.Unmarshal([]byte(coverageJSON), &cov) == nil && len(cov) > 0 {
-				fmt.Printf("  Contract coverage:  %-16s  %8s  %10s\n", "kind", "matched", "unresolved")
+				fmt.Printf("  Contract coverage:  %-16s  %8s  %10s  %7s\n", "kind", "matched", "unresolved", "dynamic")
 				for _, c := range cov {
-					fmt.Printf("                      %-16s  %8d  %10d\n", c.Kind, c.Matched, c.Unresolved)
+					fmt.Printf("                      %-16s  %8d  %10d  %7d\n", c.Kind, c.Matched, c.Unresolved, c.Dynamic)
 				}
 			} else {
 				fmt.Printf("  Contract coverage:  (no rules matched — check contracts/*.yaml)\n")
@@ -1887,6 +1888,17 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  Contract coverage:  no data (run 'polyflow index' first)\n")
 		}
+	}
+
+	// G.6 walker-coverage row: for every language in the parser registry,
+	// report whether a KeyWalker is registered (yes / no-op / MISSING).
+	fmt.Println()
+	fmt.Printf("  Key-walker coverage: %-16s  %s\n", "language", "status")
+	walkerLangs := parser.RegisteredLanguages()
+	sort.Strings(walkerLangs)
+	for _, lang := range walkerLangs {
+		status := contract.KeyWalkerStatus(lang)
+		fmt.Printf("                       %-16s  %s\n", lang, status)
 	}
 
 	fmt.Println()

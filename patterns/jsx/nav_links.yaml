@@ -59,3 +59,45 @@ patterns:
         role: nav_attr
       - name: path
         role: http_path
+
+  # G.6 shape (a): ternary href — <a href={cond ? "/admin" : "/dashboard"}>.
+  # Both branches must be root-relative string literals. MatchToGraph assembles
+  # branch_0 + branch_1 into key_candidates meta for engine fan-out.
+  - name: nav_link_jsx_ternary
+    query: |
+      (jsx_attribute
+        (property_identifier) @prop
+        (#match? @prop "^(href|action)$")
+        (jsx_expression
+          (ternary_expression
+            consequence: (string (string_fragment) @branch_0)
+            alternative: (string (string_fragment) @branch_1))))
+    captures:
+      - name: prop
+        role: nav_attr
+      - name: branch_0
+        role: key_branch
+      - name: branch_1
+        role: key_branch
+
+  # G.6 shape (c): dynamic href expression — <a href={someVar}> or <a href={fn()}>
+  # Matches identifier / member / call / binary / template in JSX position.
+  # MatchToGraph stamps key_dynamic=true; engine surfaces to dynamic_url ledger.
+  - name: nav_link_jsx_dynamic
+    query: |
+      (jsx_attribute
+        (property_identifier) @prop
+        (#match? @prop "^(href|action)$")
+        (jsx_expression
+          [
+            (identifier) @key_expr
+            (member_expression) @key_expr
+            (call_expression) @key_expr
+            (binary_expression) @key_expr
+            (template_string) @key_expr
+          ]))
+    captures:
+      - name: prop
+        role: nav_attr
+      - name: key_expr
+        role: dynamic_key
