@@ -50,6 +50,11 @@ type TreeSitterMatcher struct {
 	mu       sync.Mutex
 	// compiled queries cached per language: language -> patternName -> compiledQuery
 	compiled map[string][]compiledQuery
+
+	// DatastarVariant is the toolchain RuleVariant for the resolved datastar version
+	// (e.g. "datastar-v1"). Set by the indexer; read by the templ parser to select
+	// the correct attribute-key vocabulary. Empty → combined/backward-compat fallback.
+	DatastarVariant string
 }
 
 // NewTreeSitterMatcher creates a matcher backed by the given registry.
