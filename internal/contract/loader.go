@@ -107,6 +107,13 @@ func parseRuleFile(name string, data []byte) ([]Rule, error) {
 }
 
 func validateRule(r Rule) error {
+	// package/version_range are reserved in the pinned Rule shape but the
+	// engine does not enforce them yet (V.1 gated patterns/parser vocab only).
+	// A rule that sets them must fail fast: loading it unconditionally would
+	// silently apply the rule to every version — worse than rejection.
+	if r.Package != "" || r.VersionRange != "" {
+		return fmt.Errorf("package/version_range gating is not enforced for contract rules yet; remove these fields (tracked for V.4)")
+	}
 	for _, name := range r.Normalizers {
 		if _, ok := normRegistry[name]; !ok {
 			return fmt.Errorf("unknown normalizer %q", name)

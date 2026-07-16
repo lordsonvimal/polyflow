@@ -4,10 +4,8 @@
 # (all broadcasts reach all subscribes); same_service_only prevents
 # cross-service false positives.
 #
-# Limitation: the engine indexes one consumer per key (first-seen wins), so
-# when there are multiple subscribers only the first is linked per broadcast.
-# For the common single-hub, single-subscriber case this is correct.
-# Multi-subscriber fan-out is tracked as a follow-up (engine fanout mode).
+# The engine's consumer index is multi-valued: every subscriber sharing the
+# (empty) channel key is linked per broadcast — true fan-out semantics.
 #
 # Confidence is always inferred (normalized tier with empty key) — the engine
 # cannot distinguish single-hub vs multi-hub-type confidence; partial
