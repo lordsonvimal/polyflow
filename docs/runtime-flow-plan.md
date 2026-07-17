@@ -470,7 +470,7 @@ clause in the spec), writing a pidfile so `capture stop` can signal it. Acceptan
 confirmed manually: `capture start` binds both ports and writes the pidfile;
 `capture stop` sends SIGTERM and the receiver finalises cleanly.
 
-### Phase R.3 — SSE/streaming connection flows `pending`
+### Phase R.3 — SSE/streaming connection flows `done`
 
 **Problem.** Chessleap's real gap is datastar actions + SSE streams; SSE
 never terminates like a request, so it needs the connection-edge treatment.
@@ -490,6 +490,22 @@ plan).** Instrument chessleap: `otelgin` middleware + Go SDK OTLP exporter
 `capture stop`, reindex. Assert: the previously unresolved datastar-action
 channels flip to `verified` (channel-granular), SSE connections appear, and
 unclicked flows stay `candidate` — surfaced, not dropped.
+
+**Outcome (done).** Delivered SSE detection in `internal/evidence/trace_ingest/span_map.go`
+(`isSSESpan`, `runtimeSSERoutes`, `sseNormChain`) and added `SSERoutes []string` to
+`workspace.RuntimeEvidenceConfig`. Three new fixtures: `sse_connection.otlp.json` (SERVER
+span with `http.response.header.content-type: text/event-stream` → kind=`sse`, path-only
+key `/events`, causality=parent_child), `sse_ws_listed_route.otlp.json` (workspace sse_routes
+detection without content-type), and `sse_not_sse.otlp.json` (long-lived slow-export span →
+kind=`http`, never SSE). Three new tests pass: `TestMapSpansSSEConnection`,
+`TestMapSpansSSEWorkspaceListedRoute`, `TestMapSpansSSENotSSE`. All 19 test packages pass.
+`BenchmarkIndexCold` holds (~10.2s — SSE detection is O(attrs + ws_routes) and off the index
+hot path). No `graph.SchemaVersion` bump required — no new node/edge shape changes.
+Deviation: SSE connection keys use path-only format (e.g. `/events`) rather than
+`"get /events"`, because (a) SSE is always GET so the method adds no join information,
+and (b) the static `sse_endpoint` edges from `go_semantic.go` carry no labels, so
+runtime SSE flows typically surface as `observed_only_gap` edges — correctly confirming
+the connection exists and feeding the candidate-rule proposer for R.5/F.4.
 
 ### Phase R.4 — Async causality (queues/jobs) `pending`
 

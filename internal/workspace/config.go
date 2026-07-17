@@ -47,6 +47,11 @@ type RuntimeEvidenceConfig struct {
 	// match a workspace service directly are surfaced in the ingest ledger.
 	//   chessleap-api: api
 	ServiceNames map[string]string `yaml:"service_names,omitempty"`
+	// SSERoutes lists route paths (e.g. "/events", "/stream") that the mapper
+	// must treat as SSE connections even when the span does not carry the
+	// http.response.header.content-type attribute.  Use this when the OTel
+	// instrumentation does not capture response headers.
+	SSERoutes []string `yaml:"sse_routes,omitempty"`
 }
 
 // EvidenceConfig holds settings for the evidence-fusion providers (F.1+).
