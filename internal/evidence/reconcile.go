@@ -245,6 +245,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		}
 	}
 
+	// F.4 conflict detection: a gap edge on a channel that is already verified
+	// by a static+confirming pair signals a conflict — runtime/contract sees
+	// a service pair the static graph missed on a channel it otherwise covered.
+	//
+	// Build the verified-channel set first, then promote matching gap edges.
+	verifiedChannels := make(map[channelKey]bool, len(workingEdges)/4)
+	for i := range workingEdges {
+		if workingEdges[i].VerificationState == graph.StateVerified {
+			verifiedChannels[keyOf(&workingEdges[i])] = true
+		}
+	}
+	for i := range workingEdges {
+		if workingEdges[i].VerificationState == graph.StateObservedOnlyGap {
+			if verifiedChannels[keyOf(&workingEdges[i])] {
+				workingEdges[i].VerificationState = graph.StateConflicting
+				workingEdges[i].VerifiedGranularity = ""
+			}
+		}
+	}
+
 	// Sort the edge slice by ID for deterministic output (bug-class rule 2).
 	// SliceStable preserves the original relative order of same-ID duplicates
 	// (e.g. multiple addEventListener calls at the same line in minified JS),
