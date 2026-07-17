@@ -507,7 +507,7 @@ and (b) the static `sse_endpoint` edges from `go_semantic.go` carry no labels, s
 runtime SSE flows typically surface as `observed_only_gap` edges — correctly confirming
 the connection exists and feeding the candidate-rule proposer for R.5/F.4.
 
-### Phase R.4 — Async causality (queues/jobs) `pending`
+### Phase R.4 — Async causality (queues/jobs) `done`
 
 **Problem.** Queue and background-job causality crosses trace boundaries via
 span links, and many instrumentations omit links entirely.
@@ -525,6 +525,26 @@ fixture mirroring the existing bunny→amqp091 static fixture chain.
 **Acceptance.** The RabbitMQ fixture's static publish→consume edge flips to
 `verified` from the linked trace; the key-match-only trace yields `verified`
 with the weaker causality recorded in the source ref.
+
+**Outcome (done).** Delivered messaging handling as a second pass in
+`internal/evidence/trace_ingest/span_map.go` (four sub-passes: collect,
+index, consumer-match, unmatched-producer). Three new OTLP fixtures:
+`msg_amqp_linked.otlp.json` (RabbitMQ linked pair, causality=link),
+`msg_kafka_unlinked.otlp.json` (Kafka key-match, no span links),
+`msg_producer_only.otlp.json` (NATS producer-only, no fabricated consumer).
+Extended `kindToEdgeType` in `provider.go` to map AMQP→`publishes`,
+Kafka→`kafka_publish`, NATS→`nats_publish`, Job→`job_enqueue` so the
+reconciler's (edgeType, label) join key resolves against static contract
+edges. 9 new tests pass: AMQPLinked, KafkaKeyMatch, ProducerOnly,
+ConsumerNoCausality, OldSemconv, AMQPAcceptance, KafkaAcceptance,
+Determinism, FanOut. All 19 test packages pass. `BenchmarkIndexCold` holds
+(~10.1s — messaging pass is O(spans), off the indexing hot path). No
+`graph.SchemaVersion` bump required (no new node/edge shape changes). No
+deviations from the pinned spec: consumer-only spans with no matching
+producer in the window are ledgered with `no_causality` (consistent with the
+plan's ledger reason vocabulary); the old `messaging.operation` semconv
+fallback (`publish|send` for producers, `receive|process` for consumers) is
+handled in `isPublishOp`/`isConsumeOp`.
 
 ### Phase R.5 — Session coverage report + doctor merge `pending`
 
