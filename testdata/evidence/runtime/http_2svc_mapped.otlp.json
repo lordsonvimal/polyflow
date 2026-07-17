@@ -1,0 +1,19 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "chessleap-web"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "aabb112233445566778899aabbcc0011", "spanId": "ccdd334455667788",
+     "name": "GET", "kind": 3,
+     "startTimeUnixNano": "1752481000000000000", "endTimeUnixNano": "1752481000120000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "url.full", "value": {"stringValue": "http://chessleap-api:8080/games/99"}}]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "chessleap-api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "aabb112233445566778899aabbcc0011", "spanId": "eeff556677889900",
+     "parentSpanId": "ccdd334455667788",
+     "name": "GET /games/:id", "kind": 2,
+     "startTimeUnixNano": "1752481000010000000", "endTimeUnixNano": "1752481000110000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/games/:id"}}]}]}]}
+]}

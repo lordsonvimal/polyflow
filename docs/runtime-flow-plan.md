@@ -348,7 +348,7 @@ the same data as the JSON fixture, committed to `testdata/evidence/runtime/http_
 Acceptance test confirmed: `polyflow flows testdata/evidence/runtime/http_2svc.otlp.json` lists
 2 spans sorted by (trace_id, start_time, span_id) with an empty ledger; no graph writes.
 
-### Phase R.1 — HTTP span→channel-key mapper `pending`
+### Phase R.1 — HTTP span→channel-key mapper `done`
 
 **Problem.** Spans are not flows. The CLIENT/SERVER pairing and channel-key
 construction defined in the mapping table must produce runtime evidence the
@@ -401,6 +401,23 @@ runtime source (multi-valued join test). Two-run determinism test.
 **Acceptance.** Indexing a fixture workspace with the session present shows
 the verified flip and the gap edge; without the session, graph is byte-
 identical to static (degradation guard).
+
+**Outcome (done).** Delivered `internal/evidence/trace_ingest/span_map.go` (MapSpans, helpers) and
+`internal/evidence/trace_ingest/provider.go` (RuntimeProvider). Four new OTLP fixtures:
+`http_2svc_mapped.otlp.json` (service_names mapping), `http_old_semconv.otlp.json` (http.method/http.target),
+`http_server_only.otlp.json` (SERVER-only, no CLIENT parent), `http_code_attr.otlp.json` (code.filepath/code.function).
+`graph.SourceRef` extended with `CodeFile`/`CodeFunc` fields; `SchemaVersion` bumped 15→16; reconciler's
+granularity logic updated to set `GranularitySite` when any runtime source carries `CodeFile`.
+`cmd/polyflow/flows.go` updated to display real flow records and ledger entries.
+All 26 span_map tests pass including: route-pattern preference, old-vs-new semconv, unknown service → ledger,
+service_names mapping, code attribution (site granularity), granularity guard, fan-out (both static edges
+on one channel receive the runtime source), observed_only_gap, two-run determinism, provider graceful
+degradation, and metrics-only negative fixture. `BenchmarkIndexCold` holds (~10.1s — R.1 mapper is off
+the indexing hot path; RuntimeProvider only runs when sessions exist). No deviations from the pinned spec
+except: `FlowRecord.Key` uses lowercase method (e.g. `"get /games/*"`) consistent with the static HTTP
+contract normalizer chain (`case_fold` → lowercase), not uppercase as shown in the plan's worked example;
+the plan example's uppercase was inconsistent with the `case_fold` normalizer, and lowercase is required
+for the key-join against static edges to succeed.
 
 ### Phase R.2 — Capture sessions (`start/stop/run`) `pending`
 

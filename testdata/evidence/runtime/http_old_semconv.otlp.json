@@ -1,0 +1,19 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "1100220033004400550066007700aa00", "spanId": "aa00bb00cc00dd00",
+     "name": "GET", "kind": 3,
+     "startTimeUnixNano": "1752482000000000000", "endTimeUnixNano": "1752482000120000000",
+     "attributes": [
+       {"key": "http.method", "value": {"stringValue": "GET"}},
+       {"key": "url.full", "value": {"stringValue": "http://api:8080/users/7"}}]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "1100220033004400550066007700aa00", "spanId": "ee00ff0011002200",
+     "parentSpanId": "aa00bb00cc00dd00",
+     "name": "GET /users/:id", "kind": 2,
+     "startTimeUnixNano": "1752482000010000000", "endTimeUnixNano": "1752482000110000000",
+     "attributes": [
+       {"key": "http.method", "value": {"stringValue": "GET"}},
+       {"key": "http.target", "value": {"stringValue": "/users/7"}}]}]}]}
+]}

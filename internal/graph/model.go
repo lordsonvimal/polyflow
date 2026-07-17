@@ -159,7 +159,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "15" // F.0: added Sources[]/VerificationState/VerifiedGranularity to Edge
+const SchemaVersion = "16" // R.1: added CodeFile/CodeFunc to SourceRef for site-granularity evidence
 
 // Node represents a code entity in the graph.
 type Node struct {
@@ -211,12 +211,16 @@ const (
 // SourceRef records one evidence contribution to an edge (F.0).
 // Provider is one of the five pinned names: static | contract | runtime | config | llm.
 // Confidence uses the evidence-fusion ladder (observed > declared > inferred > candidate > unknown).
-// Ref is provider-specific provenance (file:line for static, trace_id for runtime, …).
+// Ref is provider-specific provenance (file:line for static, "<session>/<trace_id>" for runtime, …).
+// CodeFile / CodeFunc are set when the span carried code.filepath / code.function attributes;
+// their presence upgrades VerifiedGranularity from "channel" to "site" (R.1, runtime only).
 type SourceRef struct {
 	Provider   string `json:"provider"`
 	Confidence string `json:"confidence"`
 	Ref        string `json:"ref,omitempty"`
 	ObservedAt int64  `json:"observed_at,omitempty"` // runtime only, unix seconds
+	CodeFile   string `json:"code_file,omitempty"`   // runtime only, from code.filepath
+	CodeFunc   string `json:"code_func,omitempty"`   // runtime only, from code.function
 }
 
 // Edge represents a directed relationship between two nodes.
