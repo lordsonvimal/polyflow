@@ -69,19 +69,26 @@ func runFlows(cmd *cobra.Command, args []string) error {
 // flowsOutput is the stable JSON shape for `flows --format json` (used by
 // the two-run determinism tests — byte-identical across runs).
 type flowsOutput struct {
-	Spans   []trace_ingest.Span `json:"spans"`
-	Ledger  []interface{}       `json:"ledger"` // empty until R.1
-	Records []interface{}       `json:"flow_records"` // empty until R.1
+	Spans   []trace_ingest.Span            `json:"spans"`
+	Records []trace_ingest.FlowRecord      `json:"flow_records"`
+	Ledger  []trace_ingest.IngestLedgerEntry `json:"ledger"`
 }
 
 func printFlowsJSON(spans []trace_ingest.Span) error {
+	flows, ledger := trace_ingest.MapSpans(spans, "(file)", nil)
 	out := flowsOutput{
 		Spans:   spans,
-		Ledger:  []interface{}{},
-		Records: []interface{}{},
+		Records: flows,
+		Ledger:  ledger,
 	}
 	if out.Spans == nil {
 		out.Spans = []trace_ingest.Span{}
+	}
+	if out.Records == nil {
+		out.Records = []trace_ingest.FlowRecord{}
+	}
+	if out.Ledger == nil {
+		out.Ledger = []trace_ingest.IngestLedgerEntry{}
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -89,6 +96,8 @@ func printFlowsJSON(spans []trace_ingest.Span) error {
 }
 
 func printFlowsText(spans []trace_ingest.Span) error {
+	flows, ledger := trace_ingest.MapSpans(spans, "(file)", nil)
+
 	fmt.Printf("Spans (%d):\n", len(spans))
 	for _, s := range spans {
 		parent := ""
@@ -99,7 +108,17 @@ func printFlowsText(spans []trace_ingest.Span) error {
 			s.TraceID, s.SpanID, s.Service, s.Kind, s.Name, parent)
 	}
 	fmt.Println()
-	fmt.Println("Flow records: (empty — available after R.1 mapper)")
-	fmt.Println("Ingest ledger: empty")
+
+	fmt.Printf("Flow records (%d):\n", len(flows))
+	for _, f := range flows {
+		fmt.Printf("  kind=%-8s key=%-30s from=%-15s to=%-15s causality=%s refs=%d\n",
+			string(f.Kind), f.Key, f.FromService, f.ToService, f.Causality, len(f.Refs))
+	}
+
+	fmt.Printf("\nIngest ledger (%d):\n", len(ledger))
+	for _, e := range ledger {
+		fmt.Printf("  session=%-20s trace=%-34s span=%-18s reason=%s\n",
+			e.Session, e.TraceID, e.SpanID, e.Reason)
+	}
 	return nil
 }

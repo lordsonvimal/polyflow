@@ -1,0 +1,10 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "beef000011112222333344445555aaaa", "spanId": "f00ddeadbeef0001",
+     "name": "GET /health", "kind": 2,
+     "startTimeUnixNano": "1752483000000000000", "endTimeUnixNano": "1752483000050000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/health"}}]}]}]}
+]}
