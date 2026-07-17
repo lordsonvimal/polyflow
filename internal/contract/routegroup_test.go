@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -275,4 +276,47 @@ func TestEnrichRouteGroups_Chi_NoEndLine_NoEnrich(t *testing.T) {
 	}
 	assert.Equal(t, "/stats", byID["h1"].Meta["path"],
 		"chi group without end_line must not enrich any routes")
+}
+
+// Regression: the pattern matcher captures route-group prefixes as raw source
+// text — real graphs carried `"\"/play\""` (with quote characters), which the
+// enrichment concatenated into unmatchable paths like `"/play"/:id/draw`.
+// Discovered by the chessleap eval corpus (all datastar cases hard-failed).
+// The matcher now strips quotes at extraction; this test guards the
+// defense-in-depth strip for quoted prefixes still present in node meta.
+func TestEnrichRouteGroups_QuotedPrefixStripped(t *testing.T) {
+	nodes := []graph.Node{
+		{
+			ID: "svc:routes.go:group:10", Type: graph.NodeTypeHTTPHandler,
+			Service: "svc", File: "routes.go", Line: 10,
+			Meta: map[string]string{
+				"pattern":  "gin_route_group",
+				"var_name": "playAuth",
+				"receiver": "r",
+				"prefix":   `"/play"`, // raw capture with quotes
+			},
+		},
+		{
+			ID: "svc:routes.go:route:20", Type: graph.NodeTypeHTTPHandler,
+			Service: "svc", File: "routes.go", Line: 20,
+			Meta: map[string]string{
+				"pattern": "gin_route",
+				"router":  "playAuth",
+				"method":  "POST",
+				"path":    "/:gameID/draw",
+			},
+		},
+	}
+
+	out := contract.EnrichRouteGroups(nodes)
+
+	var route *graph.Node
+	for i := range out {
+		if out[i].Meta["pattern"] == "gin_route" {
+			route = &out[i]
+		}
+	}
+	require.NotNil(t, route)
+	assert.Equal(t, "/play/:gameID/draw", route.Meta["path"],
+		"quoted prefix must be stripped before concatenation")
 }

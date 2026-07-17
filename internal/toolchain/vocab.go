@@ -55,8 +55,10 @@ var (
 	// datastarV1Vocab covers datastar >=1.0.0 (colon attribute syntax).
 	// Both data-attr: and data-attr- are kept because some v1 projects carry
 	// residual hyphen-form attr bindings alongside the canonical colon form.
+	// data-init runs an action expression on element mount (the v1 idiom for
+	// on-load SSE subscriptions: data-init={"@get('/x/events')"}).
 	datastarV1Vocab = DatastarVocab{
-		OnEventPrefixes:      []string{"data-on:"},
+		OnEventPrefixes:      []string{"data-on:", "data-init"},
 		ReactiveAttrPrefixes: []string{"data-class", "data-attr:", "data-attr-", "data-computed"},
 		ReactiveAttrExact:    []string{"data-show", "data-when"},
 	}
@@ -65,7 +67,7 @@ var (
 	// datastar version has been resolved for the project. Accepts both colon and
 	// hyphen syntax so unversioned projects are not silently degraded.
 	datastarCombinedVocab = DatastarVocab{
-		OnEventPrefixes:      []string{"data-on:", "data-on-"},
+		OnEventPrefixes:      []string{"data-on:", "data-on-", "data-init"},
 		ReactiveAttrPrefixes: []string{"data-class", "data-attr:", "data-attr-", "data-computed"},
 		ReactiveAttrExact:    []string{"data-show", "data-when"},
 	}

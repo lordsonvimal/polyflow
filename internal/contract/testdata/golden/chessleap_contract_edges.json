@@ -121,6 +121,14 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:14-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:14",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "GET *",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:46-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:46",
     "to": "unresolved",
@@ -2577,52 +2585,52 @@
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/boardflip.templ:http_client:POST:/practice/*/auto-glyph/run:154-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/boardflip.templ:http_client:POST:/practice/*/auto-glyph/run:154-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:132",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/boardflip.templ:http_client:POST:/practice/*/auto-glyph/run:154",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:132",
     "type": "http_call",
-    "label": "POST /practice/*/auto-glyph/run",
-    "confidence": "unknown"
+    "label": "post /practice/*/auto-glyph/run",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/claim-draw:86-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/claim-draw:86-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:80",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/claim-draw:86",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:80",
     "type": "http_call",
-    "label": "POST /play/*/claim-draw",
-    "confidence": "unknown"
+    "label": "post /play/*/claim-draw",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/claim-victory:150-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/claim-victory:150-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:72",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/claim-victory:150",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:72",
     "type": "http_call",
-    "label": "POST /play/*/claim-victory",
-    "confidence": "unknown"
+    "label": "post /play/*/claim-victory",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/draw:55-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/draw:55-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:77",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/draw:55",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:77",
     "type": "http_call",
-    "label": "POST /play/*/draw",
-    "confidence": "unknown"
+    "label": "post /play/*/draw",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/rematch:158-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/rematch:158-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:73",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/rematch:158",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:73",
     "type": "http_call",
-    "label": "POST /play/*/rematch",
-    "confidence": "unknown"
+    "label": "post /play/*/rematch",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/takeback:70-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/takeback:70-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:81",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/gametoolspanel.templ:http_client:POST:/play/*/takeback:70",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:81",
     "type": "http_call",
-    "label": "POST /play/*/takeback",
-    "confidence": "unknown"
+    "label": "post /play/*/takeback",
+    "confidence": "inferred"
   },
   {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/movenotationpanel.templ:http_client:GET:*/*/board-at/live:120-\u003eunresolved",
@@ -2649,76 +2657,76 @@
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/accept:61-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/accept:61-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:78",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/accept:61",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:78",
     "type": "http_call",
-    "label": "POST /play/*/draw/accept",
-    "confidence": "unknown"
+    "label": "post /play/*/draw/accept",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/decline:66-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/decline:66-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:79",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/decline:66",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:79",
     "type": "http_call",
-    "label": "POST /play/*/draw/decline",
-    "confidence": "unknown"
+    "label": "post /play/*/draw/decline",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/decline:83-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/decline:83-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:79",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/draw/decline:83",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:79",
     "type": "http_call",
-    "label": "POST /play/*/draw/decline",
-    "confidence": "unknown"
+    "label": "post /play/*/draw/decline",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/rematch/decline:147-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/rematch/decline:147-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:75",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/rematch/decline:147",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:75",
     "type": "http_call",
-    "label": "POST /play/*/rematch/decline",
-    "confidence": "unknown"
+    "label": "post /play/*/rematch/decline",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/rematch/decline:22-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/rematch/decline:22-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:75",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/rematch/decline:22",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:75",
     "type": "http_call",
-    "label": "POST /play/*/rematch/decline",
-    "confidence": "unknown"
+    "label": "post /play/*/rematch/decline",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/resign:44-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/resign:44-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:76",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/resign:44",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:76",
     "type": "http_call",
-    "label": "POST /play/*/resign",
-    "confidence": "unknown"
+    "label": "post /play/*/resign",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/accept:99-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/accept:99-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:82",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/accept:99",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:82",
     "type": "http_call",
-    "label": "POST /play/*/takeback/accept",
-    "confidence": "unknown"
+    "label": "post /play/*/takeback/accept",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/decline:104-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/decline:104-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:83",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/decline:104",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:83",
     "type": "http_call",
-    "label": "POST /play/*/takeback/decline",
-    "confidence": "unknown"
+    "label": "post /play/*/takeback/decline",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/decline:121-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/decline:121-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:83",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/playtoolspanel.templ:http_client:POST:/play/*/takeback/decline:121",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:83",
     "type": "http_call",
-    "label": "POST /play/*/takeback/decline",
-    "confidence": "unknown"
+    "label": "post /play/*/takeback/decline",
+    "confidence": "inferred"
   },
   {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/promotion_picker.templ:http_client:POST:%s:35-\u003eunresolved",
@@ -2729,36 +2737,676 @@
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/glyph_picker.templ:http_client:POST:/practice/*/node/*/glyph/*:48-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/glyph_picker.templ:http_client:POST:/practice/*/node/*/glyph/*:48-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:135",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/glyph_picker.templ:http_client:POST:/practice/*/node/*/glyph/*:48",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:135",
     "type": "http_call",
-    "label": "POST /practice/*/node/*/glyph/*",
-    "confidence": "unknown"
+    "label": "post /practice/*/node/*/glyph/*",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/side_control.templ:http_client:POST:/practice/*/control/*/*engine*human:50-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/side_control.templ:http_client:POST:/practice/*/control/*/*engine*human:50-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:128",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/side_control.templ:http_client:POST:/practice/*/control/*/*engine*human:50",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:128",
     "type": "http_call",
-    "label": "POST /practice/*/control/*/*engine*human",
-    "confidence": "unknown"
+    "label": "post /practice/*/control/*/*engine*human",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:POST:/practice/*/assign-color/*:562-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/playgame.templ:http_client:GET:/play/*/events:18-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:62",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/playgame.templ:http_client:GET:/play/*/events:18",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:62",
+    "type": "http_call",
+    "label": "get /play/*/events",
+    "confidence": "inferred"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:GET:/practice/*/events:194-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:120",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:GET:/practice/*/events:194",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:120",
+    "type": "http_call",
+    "label": "get /practice/*/events",
+    "confidence": "inferred"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:POST:/practice/*/assign-color/*:562-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:117",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:POST:/practice/*/assign-color/*:562",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:117",
     "type": "http_call",
-    "label": "POST /practice/*/assign-color/*",
-    "confidence": "unknown"
+    "label": "post /practice/*/assign-color/*",
+    "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:POST:/practice/*/assign-color/black:538-\u003eunresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:POST:/practice/*/assign-color/black:538-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:117",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/practice_game.templ:http_client:POST:/practice/*/assign-color/black:538",
-    "to": "unresolved",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:117",
     "type": "http_call",
-    "label": "POST /practice/*/assign-color/black",
-    "confidence": "unknown"
+    "label": "post /practice/*/assign-color/black",
+    "confidence": "inferred"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/pages/sologame.templ:http_client:GET:/solo/*/events:17-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:52",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/sologame.templ:http_client:GET:/solo/*/events:17",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:52",
+    "type": "http_call",
+    "label": "get /solo/*/events",
+    "confidence": "inferred"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library/new:36-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library/new:36",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "type": "navigates_to",
+    "label": "get /activity/library/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library/new:56-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library/new:56",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "type": "navigates_to",
+    "label": "get /activity/library/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library:114-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library:114",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library:34-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library:34",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library:87-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library:87",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/wordlists/new:219-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:153",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/wordlists/new:219",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:153",
+    "type": "navigates_to",
+    "label": "get /activity/wordlists/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/library.templ:http_client:href:/activity/library/new:37-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/library.templ:http_client:href:/activity/library/new:37",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "type": "navigates_to",
+    "label": "get /activity/library/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/library.templ:http_client:href:/classroom:25-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/library.templ:http_client:href:/classroom:25",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/picker.templ:http_client:href:/activity/library:54-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/picker.templ:http_client:href:/activity/library:54",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/picker.templ:http_client:href:/classroom:52-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/picker.templ:http_client:href:/classroom:52",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/library:193-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/library:193",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:165",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:165",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/stats:200-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:164",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/stats:200",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:164",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles/stats",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:633-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:633",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:679-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:679",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/classroom:191-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/classroom:191",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/results.templ:http_client:href:/activity/homework:55-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:185",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/results.templ:http_client:href:/activity/homework:55",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:185",
+    "type": "navigates_to",
+    "label": "get /activity/homework",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/results.templ:http_client:href:/activity/homework:75-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:185",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/results.templ:http_client:href:/activity/homework:75",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:185",
+    "type": "navigates_to",
+    "label": "get /activity/homework",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/review.templ:http_client:href:/activity/review:173-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:177",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/review.templ:http_client:href:/activity/review:173",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:177",
+    "type": "navigates_to",
+    "label": "get /activity/review",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/review.templ:http_client:href:/activity/review:220-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:177",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/review.templ:http_client:href:/activity/review:220",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:177",
+    "type": "navigates_to",
+    "label": "get /activity/review",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/review.templ:http_client:href:/classroom:26-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/review.templ:http_client:href:/classroom:26",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/library:101-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/library:101",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/library:26-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/library:26",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:143",
+    "type": "navigates_to",
+    "label": "get /activity/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/wordlists/new:38-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:153",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/wordlists/new:38",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:153",
+    "type": "navigates_to",
+    "label": "get /activity/wordlists/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/wordlists:103-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:152",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/wordlists:103",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:152",
+    "type": "navigates_to",
+    "label": "get /activity/wordlists",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/wordlists:138-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:152",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/activity/wordlists:138",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:152",
+    "type": "navigates_to",
+    "label": "get /activity/wordlists",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/classroom:24-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/classroom:24",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/classroom:99-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/word_lists.templ:http_client:href:/classroom:99",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/adjustments.templ:http_client:href:/billing/adjustments:137-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:222",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/adjustments.templ:http_client:href:/billing/adjustments:137",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:222",
+    "type": "navigates_to",
+    "label": "post /billing/adjustments",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/adjustments.templ:http_client:href:/billing/invoices:37-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/adjustments.templ:http_client:href:/billing/invoices:37",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/adjustments.templ:http_client:href:/classroom:35-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/adjustments.templ:http_client:href:/classroom:35",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing/fee-schedules:138-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:215",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing/fee-schedules:138",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:215",
+    "type": "navigates_to",
+    "label": "post /billing/fee-schedules",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing/fee-schedules:189-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:214",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing/fee-schedules:189",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:214",
+    "type": "navigates_to",
+    "label": "get /billing/fee-schedules",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing:187-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing:187",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "type": "navigates_to",
+    "label": "get /billing",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing:77-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/billing:77",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "type": "navigates_to",
+    "label": "get /billing",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/classroom:185-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/classroom:185",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/classroom:75-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/fee_schedules.templ:http_client:href:/classroom:75",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing/invoices/generate:47-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:201",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing/invoices/generate:47",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:201",
+    "type": "navigates_to",
+    "label": "post /billing/invoices/generate",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing/invoices:29-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing/invoices:29",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing/invoices:52-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing/invoices:52",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing:27-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/generate_preview.templ:http_client:href:/billing:27",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "type": "navigates_to",
+    "label": "get /billing",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoice_detail.templ:http_client:href:/billing/invoices:97-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoice_detail.templ:http_client:href:/billing/invoices:97",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoice_detail.templ:http_client:href:/classroom:95-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoice_detail.templ:http_client:href:/classroom:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices/preview:95-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:200",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices/preview:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:200",
+    "type": "navigates_to",
+    "label": "post /billing/invoices/preview",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices:259-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices:259",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices:277-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices:277",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices:63-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing/invoices:63",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing:35-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/invoices.templ:http_client:href:/billing:35",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "type": "navigates_to",
+    "label": "get /billing",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/adjustments:57-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:221",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/adjustments:57",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:221",
+    "type": "navigates_to",
+    "label": "get /billing/adjustments",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/fee-schedules:53-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:214",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/fee-schedules:53",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:214",
+    "type": "navigates_to",
+    "label": "get /billing/fee-schedules",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/invoices/generate:111-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:201",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/invoices/generate:111",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:201",
+    "type": "navigates_to",
+    "label": "post /billing/invoices/generate",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/invoices:45-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/invoices:45",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/invoices:74-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/invoices:74",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:199",
+    "type": "navigates_to",
+    "label": "get /billing/invoices",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/plans:49-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:213",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/billing/plans:49",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:213",
+    "type": "navigates_to",
+    "label": "get /billing/plans",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/classroom:32-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/overview.templ:http_client:href:/classroom:32",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/billing/views/plans.templ:http_client:href:/billing:50-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/views/plans.templ:http_client:href:/billing:50",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:197",
+    "type": "navigates_to",
+    "label": "get /billing",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/attendance_grid.templ:http_client:href:/classroom:37-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/attendance_grid.templ:http_client:href:/classroom:37",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/billing/fee-schedules:695-\u003echessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:214",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/billing/fee-schedules:695",
+    "to": "chessleap:/Users/lordson/projects/chessleap/billing/module.go:http_handler:gin_route:214",
+    "type": "navigates_to",
+    "label": "get /billing/fee-schedules",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom/admin/users:563-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:305",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom/admin/users:563",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:305",
+    "type": "navigates_to",
+    "label": "get /classroom/admin/users",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom:82-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom:82",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom/admin/users:97-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:305",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom/admin/users:97",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:305",
+    "type": "navigates_to",
+    "label": "get /classroom/admin/users",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom:27-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom:27",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/course_detail.templ:http_client:href:/classroom:18-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/course_detail.templ:http_client:href:/classroom:18",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/courses.templ:http_client:href:/classroom/admin/subjects:96-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:311",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/courses.templ:http_client:href:/classroom/admin/subjects:96",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:311",
+    "type": "navigates_to",
+    "label": "get /classroom/admin/subjects",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/courses.templ:http_client:href:/classroom:20-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/courses.templ:http_client:href:/classroom:20",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/invites.templ:http_client:href:/classroom/admin/invites:148-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:309",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/invites.templ:http_client:href:/classroom/admin/invites:148",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:309",
+    "type": "navigates_to",
+    "label": "post /classroom/admin/invites",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/invites.templ:http_client:href:/classroom:36-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/invites.templ:http_client:href:/classroom:36",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:href:/activity/library/new:520-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:href:/activity/library/new:520",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
+    "type": "navigates_to",
+    "label": "get /activity/library/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:href:/classroom:49-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:href:/classroom:49",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/subjects.templ:http_client:href:/classroom/admin/subjects:84-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:312",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/subjects.templ:http_client:href:/classroom/admin/subjects:84",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:312",
+    "type": "navigates_to",
+    "label": "post /classroom/admin/subjects",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/subjects.templ:http_client:href:/classroom:19-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/subjects.templ:http_client:href:/classroom:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/users.templ:http_client:href:/classroom/admin/users/add:157-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:306",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/users.templ:http_client:href:/classroom/admin/users/add:157",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:306",
+    "type": "navigates_to",
+    "label": "post /classroom/admin/users/add",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/users.templ:http_client:href:/classroom:31-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/users.templ:http_client:href:/classroom:31",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/liveclass/views/no_active_session.templ:http_client:href:/my/classes:31-\u003echessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:73",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/views/no_active_session.templ:http_client:href:/my/classes:31",
+    "to": "chessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:73",
+    "type": "navigates_to",
+    "label": "get /my/classes",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/myhub/views/class_detail.templ:http_client:href:/my/classes:16-\u003echessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:73",
+    "from": "chessleap:/Users/lordson/projects/chessleap/myhub/views/class_detail.templ:http_client:href:/my/classes:16",
+    "to": "chessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:73",
+    "type": "navigates_to",
+    "label": "get /my/classes",
+    "confidence": "static"
   },
   {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/components/signinmodal.templ:http_client:href:/auth/google:19-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:21",
@@ -2766,6 +3414,14 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:21",
     "type": "navigates_to",
     "label": "get /auth/google",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/difficulty_picker.templ:http_client:href:/practice:16-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:104",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/extensions/practice/difficulty_picker.templ:http_client:href:/practice:16",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:104",
+    "type": "navigates_to",
+    "label": "post /practice",
     "confidence": "static"
   },
   {
@@ -2793,6 +3449,14 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/admin/users:304-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:32",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/admin/users:304",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:32",
+    "type": "navigates_to",
+    "label": "get /admin/users",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/auth/google:71-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:21",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/auth/google:71",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:21",
@@ -2809,6 +3473,22 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/classroom:108-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/classroom:108",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/classroom:59-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/classroom:59",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
+    "type": "navigates_to",
+    "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/learn:106-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:41",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/learn:106",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:41",
@@ -2822,6 +3502,22 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:41",
     "type": "navigates_to",
     "label": "get /learn",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/my:111-\u003echessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:71",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/my:111",
+    "to": "chessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:71",
+    "type": "navigates_to",
+    "label": "get /my",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/my:62-\u003echessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:71",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/layouts/layout.templ:http_client:href:/my:62",
+    "to": "chessleap:/Users/lordson/projects/chessleap/myhub/module.go:http_handler:gin_route:71",
+    "type": "navigates_to",
+    "label": "get /my",
     "confidence": "static"
   },
   {
@@ -2854,6 +3550,14 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:26",
     "type": "navigates_to",
     "label": "get /profile",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/pages/gamemodes.templ:http_client:href:/play:156-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:68",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/gamemodes.templ:http_client:href:/play:156",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:68",
+    "type": "navigates_to",
+    "label": "post /play",
     "confidence": "static"
   },
   {
@@ -2927,6 +3631,30 @@
     "type": "navigates_to",
     "label": "get /",
     "confidence": "inferred"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/practice/library:31-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:114",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/practice/library:31",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:114",
+    "type": "navigates_to",
+    "label": "get /practice/library",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/practice/study/new:143-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:110",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/practice/study/new:143",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:110",
+    "type": "navigates_to",
+    "label": "get /practice/study/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/train/puzzles:84-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:95",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/train/puzzles:84",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:95",
+    "type": "navigates_to",
+    "label": "get /train/puzzles",
+    "confidence": "static"
   },
   {
     "id": "navigates_to:chessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:component:AuthorPage:29-\u003echessleap:/Users/lordson/projects/chessleap/activity/views/author.templ:http_client:href:/activity/library/new:36",

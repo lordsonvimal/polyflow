@@ -202,6 +202,14 @@ green (`go test ./...`). `BenchmarkIndexCold` holds (~9.9 s, 1200 files — voca
 lookup is one map read per service on the scan pass). No SchemaVersion bump — stored
 node/edge fields are unchanged. No deviations from pinned interface.
 
+**Addendum (2026-07-17).** `data-init` added to the v1 and combined vocabularies
+(`OnEventPrefixes`) — the datastar-v1 action-on-mount idiom
+(`data-init={"@get('/x/events')"}`, chessleap's SSE-subscribe pattern) was
+invisible, silently dropping templ→handler SSE edges. Found by the chessleap
+eval corpus (play-events-sse hard-fail); pure vocab data change, exactly the
+maintenance mode this phase was built for. v0 vocab unchanged (data-init is a
+v1 idiom); wrong-version negatives added for both directions.
+
 ### Phase V.2 — Sidecar protocol + router + templ sidecar (parser-engine fidelity) `pending`
 New `internal/sidecar/{protocol.go,router.go,manager.go}` and
 `cmd/polyflow-parse-templ/` (built against `a-h/templ`). Router wraps

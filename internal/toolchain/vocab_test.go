@@ -77,3 +77,17 @@ func TestDefaultRegistry_DatastarV1SelectedForCurrentVersion(t *testing.T) {
 	assert.False(t, sel.Inferred)
 	assert.Equal(t, "datastar-v1", sel.Backend.RuleVariant)
 }
+
+func TestDefaultDatastarVocab_V1AcceptsDataInit(t *testing.T) {
+	v := DefaultDatastarVocab("datastar-v1")
+	if !v.IsDataOnKey("data-init") {
+		t.Error("v1 vocab must accept data-init (action-on-mount idiom)")
+	}
+}
+
+func TestDefaultDatastarVocab_V0DoesNotAcceptDataInit(t *testing.T) {
+	v := DefaultDatastarVocab("datastar-v0")
+	if v.IsDataOnKey("data-init") {
+		t.Error("v0 vocab must not accept data-init (v1 idiom)")
+	}
+}

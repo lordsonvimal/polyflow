@@ -114,3 +114,47 @@ func TestTemplParser_V0Vocab_ReactiveHyphenAttr(t *testing.T) {
 		t.Errorf("v0 vocab: signal nodes = %d, want ≥1 from data-attr-class", signals)
 	}
 }
+
+// TestTemplParser_V1Vocab_DataInit: data-init={"@get('…')"} is an action
+// source under the v1 vocab (SSE-subscribe-on-mount idiom). Regression for
+// the chessleap play-events-sse eval case: the @get inside data-init was
+// invisible, so the templ→handler edge (and the page's blast-radius
+// membership) silently vanished.
+func TestTemplParser_V1Vocab_DataInit(t *testing.T) {
+	p := &TemplParser{}
+	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v1"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := countDatastarActions(nodes)
+	// 2 http_client nodes: concatenated @get + static @get; signal-only init excluded.
+	if got != 2 {
+		t.Errorf("v1 vocab: data-init datastar actions = %d, want 2", got)
+	}
+}
+
+// TestTemplParser_V0Vocab_DataInitNotMatched (wrong-version negative):
+// data-init is a v1 idiom; the v0 hyphen vocab must not match it.
+func TestTemplParser_V0Vocab_DataInitNotMatched(t *testing.T) {
+	p := &TemplParser{}
+	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v0"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := countDatastarActions(nodes); got != 0 {
+		t.Errorf("v0 matcher on data-init file: datastar actions = %d, want 0", got)
+	}
+}
+
+// TestTemplParser_CombinedVocab_DataInit: unversioned projects (combined
+// fallback vocab) must also see data-init actions.
+func TestTemplParser_CombinedVocab_DataInit(t *testing.T) {
+	p := &TemplParser{}
+	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := countDatastarActions(nodes); got != 2 {
+		t.Errorf("combined vocab: data-init datastar actions = %d, want 2", got)
+	}
+}
