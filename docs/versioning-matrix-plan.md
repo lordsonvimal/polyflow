@@ -218,6 +218,24 @@ Migrate the templ parser behind the router (proves isolation on the real-constra
 tool). Scope: **parser-engine version only** — interpretation/linking already
 version-gated in V.1. Graph output byte-identical on chessleap (regression guard).
 
+**Pinned hazards (bug-class rules 2/5, `docs/phases.md`):**
+- **Sidecar responses are sorted before framing** — nodes/edges/unresolved
+  in a stable order (by ID) inside the sidecar, so the byte-identical
+  regression is even testable. A two-run determinism test (same file parsed
+  twice through the sidecar → identical frames) ships with the phase.
+- **The byte-identical chessleap guard is a committed snapshot comparison in
+  the V.2 commit itself** — capture the pre-migration edge/node set, migrate,
+  assert equality in the same commit (the G.0 deferred-golden breach is the
+  precedent this forbids). The existing
+  `internal/contract/golden_test.go` chessleap snapshot is the reuse point.
+- **Fallback is tested with a real missing binary** — delete/rename the
+  sidecar in a test, assert in-process fallback + coverage note + zero
+  dropped files; a unit test that stubs the error path is not sufficient.
+- **IPC framing:** partial reads/writes are the norm on pipes — use
+  `io.ReadFull`/full-buffer writes on the length-prefixed frames; a frame
+  size cap (reject >64MB with an error, not an OOM); sidecar stderr is
+  captured into the coverage note, never inherited to the user's terminal.
+
 ### Phase V.3 — Grammar sidecars (divergence-triggered, not unconditional) `pending`
 **Gated on proof, executed after V.4.** Grammars are version-tolerant; standing up
 sidecar infra for all five languages with one pinned version each would be pure cost
@@ -235,6 +253,14 @@ manifest + `expected.json`), spins the right rule variant / sidecar backend, ass
 every cell; a coverage test fails when a registered version lacks a fixture.
 `polyflow doctor` prints the tool×version coverage table (merged with the per-kind
 contract coverage from contract-matching G.5). Wire into CI.
+
+**Gate semantics (rule 4, `docs/phases.md`):** the coverage direction runs
+both ways — a registered version without a fixture fails, **and** a fixture
+directory whose `<tool>@<ver>` matches no registry row fails (an orphaned
+cell silently tests nothing). Cell iteration order is sorted (rule 2), and
+the coverage table's rows are stable across runs. Before landing, simulate
+the CI failure paths (remove one fixture; add one unregistered version) and
+record both outcomes in the phase note.
 
 **Value ordering:** V.0–V.1 deliver the declarative registry + version-gated rules
 (the maintainability/scalability core, reusing one gate) before any sidecar infra;

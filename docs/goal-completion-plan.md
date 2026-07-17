@@ -61,7 +61,10 @@ identical.
   `verified_granularity`, and `sources` as compact strings
   (`"runtime:<session>/<trace_id>"`, `"static:file.go:42"` — the SourceRef
   `Provider + ":" + Ref` form; full structs only under a `--verbose-sources`
-  flag to protect token budgets).
+  flag to protect token budgets). `sources` is ordered by
+  `(provider, ref)` — Sources[] arrives from a merge and must not surface
+  in map/merge order (rule 2, `docs/phases.md`); the JSON golden tests
+  below only stay stable if this ordering is real.
 - A new **always-present** top-level section in each response:
 
 ```json
@@ -424,6 +427,19 @@ language repeats; Python phases below are its first instantiation):
    a type-checked analyzer already carries it — I.3's Go precedent). For
    Python: `class Sub(Base)`, ABC/`Protocol` conformance, `Foo()`
    construction, module imports.
+10. Test code indexed from day one (bug-class rule 8, `docs/phases.md`):
+    the language's test files (`test_*.py` / `*_test.py` / `tests/` for
+    Python) are parsed and linked like any caller — excludes cover only
+    fixture/data dirs and build output; any type-checked/semantic pass
+    loads test variants with a degrade-don't-die fallback (the Go
+    `collapseTestVariants` precedent). One eval case per language targets
+    a test-file caller.
+11. Capture hygiene + real-path testing (rule 6): every captured string
+    that enters a key/path/identifier is in the matcher quote-strip list
+    (or stripped equivalently — Python adds `'''`/`"""` and f-string
+    prefixes to the usual quote forms); at least one fixture per pattern
+    file runs through the real parser→matcher→engine path — hand-built
+    nodes in unit tests do not count as coverage of this.
 
 ### Phase L.P0 — Python grammar + core patterns `pending`
 
@@ -433,7 +449,12 @@ language repeats; Python phases below are its first instantiation):
 `patterns/python/functions.yaml` (def/async def/class/method, call refs,
 imports — mirror the Go/Ruby pattern files' capture roles); enclosing-scope
 attribution verified for nested defs and module level (the `(module)` fallback
-must work like JS, per Phase 0.1's lesson).
+must work like JS, per Phase 0.1's lesson). Checklist items 10–11 apply from
+this phase, not later: `test_*.py`/`tests/` files are indexed (fixture
+includes one), and Python string-literal forms (`'x'`, `"x"`, `'''x'''`,
+`"""x"""`, `f"..."`, `r"..."`) are stripped wherever a capture feeds a
+key/path — extend `stripStringLiteral`/the matcher quote-strip list as
+needed and test it through a real fixture parse, not hand-built nodes.
 
 **Tests.** Pattern fixtures (positive+negative); matcher attribution tests
 (module-level call ref, nested def).
@@ -513,6 +534,15 @@ literal URLs, and no helper→path resolution exists.
   build per-service `helper name → (method, path)` (`reports_path` →
   `GET /reports`, `report_path(x)` → `GET /reports/:id`, `_url` variants;
   RESTful `resources`/`resource` + explicit `get/post/...` entries).
+  **Capture hygiene (rule 6, `docs/phases.md` — the quoted-prefix bug will
+  recur here verbatim if skipped):** Rails route captures arrive as raw
+  source — `resources :reports` (symbol colon), `get "reports/archive"`
+  (quotes), `get 'reports', to: 'reports#index'` (single quotes) — strip
+  the `:` symbol prefix and all quote forms before building helper names
+  and paths, and test the map through a real `routes.rb` fixture parsed by
+  the actual matcher, not hand-built `(method, path)` pairs. Helper-name
+  collisions across namespaces map to **each** route (fan-out, rule 1) with
+  a ledger note, never first-seen. The helper map iterates sorted (rule 2).
   **In-scope pattern extension:** `member do`/`collection do` blocks are NOT
   captured today — add captures for them to `rails_routes.yaml` (they are
   the source of common helpers like `archive_report_path`). Everything else
@@ -551,7 +581,10 @@ islands exactly where legacy apps concentrate their wiring.
   unchanged), then globals, confidence `inferred`, `Meta["via"]="global"`.
   Name collisions (same global defined in two files): emit candidate edges
   to **each** definition (`via=global_ambiguous`, recall over precision) +
-  a `global_collision` ledger entry — never pick one silently.
+  a `global_collision` ledger entry — never pick one silently. Table type
+  is `map[string][]node` from the start (rule 1 — a single-valued map makes
+  the collision case unimplementable); emission iterates sorted symbol
+  names, and collision candidates are ordered by file path (rule 2).
 - **Inline handlers:** event attributes in html/erb/templ
   (`onclick="save()"`, `onsubmit="App.submit(this)"`) extract the callee
   path and resolve through the same table → `calls` edge from the element's
@@ -606,7 +639,13 @@ UI→handler chain never closes outside templ.
   (`#id`, `.class`, `tag.class`); a class matching N elements emits
   `defined_in` edges to **all N** (`inferred` — recall over precision);
   complex selectors (descendant combinators, attribute/pseudo selectors)
-  → `selector_dynamic` ledger entry, never guessed.
+  → `selector_dynamic` ledger entry, never guessed. Capture hygiene
+  (rule 6): selector captures and options-object values arrive quoted
+  (`'"#save-btn"'`, `'"/save"'`) — strip before parsing/keying (`url` and
+  `method` are already in the matcher quote-strip list; selector captures
+  are not — add them), and test selector→element linking through a real
+  fixture parse. The element-definition index is `map[(service,name)][]node`
+  (rule 1) and emits in sorted order (rule 2).
 
 **Tests.** Options-object `$.ajax` fixture across two services asserting the
 cross-service `http_call` edge; delegation capture test (handler is the
@@ -847,7 +886,14 @@ into merged, tested rules — the loop has no operator.
   pinned `Rule` schema from the contract plan) into
   `.polyflow/proposals/<n>-<kind>.yaml` **plus** a generated fixture skeleton
   (input capture from the observed evidence, `expected.json` prefilled) —
-  a proposal without a fixture is not emitted.
+  a proposal without a fixture is not emitted. Clustering and emission are
+  deterministic (rule 2): clusters sorted by (kind, key shape), `<n>` is the
+  cluster's position in that sorted order (never an iteration counter over
+  a map), and running `--propose` twice on the same graph produces
+  byte-identical proposal files (test-pinned). Proposal YAML must pass the
+  contract loader's validation — including its parsed-but-unenforced-field
+  rejection (rule 3) — before being written; emitting a proposal the loader
+  would reject wastes the operator's review.
 - `polyflow rules promote <proposal>`: runs the fixture against the proposed
   rule in isolation; on green, moves rule → workspace rules dir and fixture →
   `testdata/contracts/`; on red, prints the diff and refuses. Promotion is
