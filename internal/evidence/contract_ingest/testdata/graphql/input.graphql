@@ -1,0 +1,19 @@
+type Query {
+  game(id: ID!): Game
+  games(limit: Int): [Game!]!
+}
+
+type Mutation {
+  createGame(input: CreateGameInput!): Game!
+  deleteGame(id: ID!): Boolean!
+}
+
+type Game {
+  id: ID!
+  name: String!
+  status: String!
+}
+
+input CreateGameInput {
+  name: String!
+}

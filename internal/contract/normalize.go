@@ -135,6 +135,28 @@ func normURLToPath(value string, _ NormalizeEnv) string {
 	return value
 }
 
+// NormalizeFields applies the named normalizer chain to each field independently
+// and returns the space-joined channel key.  This is the canonical way for
+// non-static evidence providers (F.1+) to produce a join key that matches the
+// keys the engine computes from static call sites.
+//
+// Example: NormalizeFields([]string{"GET", "/games/{gameID}"},
+//
+//	[]string{"case_fold", "param_wildcard", "trim_slash"}, NormalizeEnv{})
+//
+// → "get /games/*"
+func NormalizeFields(fields []string, normNames []string, env NormalizeEnv) (string, error) {
+	norms := make([]Normalizer, 0, len(normNames))
+	for _, name := range normNames {
+		fn := NormalizerByName(name)
+		if fn == nil {
+			return "", fmt.Errorf("contract: unknown normalizer %q", name)
+		}
+		norms = append(norms, fn)
+	}
+	return strings.Join(applyNormsToFields(fields, norms, env), " "), nil
+}
+
 // splitPath splits a path (or path-prefixed key) on "/" after trimming edges.
 func splitPath(p string) []string {
 	p = strings.Trim(p, "/")

@@ -1,0 +1,19 @@
+asyncapi: "2.6.0"
+info:
+  title: Game Events
+  version: "1.0.0"
+channels:
+  game-created:
+    publish:
+      operationId: publishGameCreated
+      summary: Published when a new game is created
+    bindings:
+      kafka:
+        topic: game-created
+  game-ended:
+    subscribe:
+      operationId: onGameEnded
+      summary: Subscribe to game-ended events
+    bindings:
+      kafka:
+        topic: game-ended

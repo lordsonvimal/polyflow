@@ -120,31 +120,37 @@ func setLanguage(nodes []graph.Node, lang string) {
 }
 
 // Run parses all files concurrently and streams results on the returned channel.
-// Files with no registered parser produce a Result with Err set and no nodes/edges.
+// Results are emitted in the same order as the input files (bug-class rule 2:
+// goroutine scheduling must never reach output ordering). Files with no
+// registered parser produce a Result with Err set and no nodes/edges.
 func (wp *WorkerPool) Run(files []string) <-chan Result {
 	out := make(chan Result, len(files))
+	results := make([]Result, len(files))
 	sem := make(chan struct{}, wp.workers)
 	var wg sync.WaitGroup
 
-	for _, f := range files {
+	for i, f := range files {
 		wg.Add(1)
-		go func(path string) {
+		go func(idx int, path string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			p := ForFile(path)
 			if p == nil {
-				out <- Result{File: path, Err: fmt.Errorf("no parser for %s", path)}
+				results[idx] = Result{File: path, Err: fmt.Errorf("no parser for %s", path)}
 				return
 			}
 			nodes, edges, unresolved, err := p.Parse(path, wp.service, wp.matcher)
-			out <- Result{File: path, Nodes: nodes, Edges: edges, Unresolved: unresolved, Err: err}
-		}(f)
+			results[idx] = Result{File: path, Nodes: nodes, Edges: edges, Unresolved: unresolved, Err: err}
+		}(i, f)
 	}
 
 	go func() {
 		wg.Wait()
+		for _, r := range results {
+			out <- r
+		}
 		close(out)
 	}()
 

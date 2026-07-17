@@ -25,6 +25,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
+	"github.com/lordsonvimal/polyflow/internal/evidence/contract_ingest"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/meta"
@@ -754,7 +755,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// Sources[]/VerificationState on every edge.
 	{
 		staticProv := evidence.NewStaticProvider(allNodes, allEdges, allUnresolved)
-		rec, err := evidence.NewReconciler(staticProv)
+		contractProv := contract_ingest.NewContractProvider()
+		rec, err := evidence.NewReconciler(staticProv, contractProv)
 		if err != nil {
 			return nil, fmt.Errorf("evidence reconciler: %w", err)
 		}
