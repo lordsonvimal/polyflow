@@ -55,4 +55,10 @@ type Evidence struct {
 	// Unresolved is the provider-specific ledger of references it could not
 	// resolve.
 	Unresolved []graph.UnresolvedRef
+	// ClearsUnresolved names static unresolved refs that this provider has
+	// handled (resolved or explicitly ledgered as config_not_found). The
+	// reconciler removes any matching static unresolved entry from the
+	// accumulated set, so the original dynamic_<kind> entry is replaced rather
+	// than duplicated. Matched by (Service, File, Line, Name).
+	ClearsUnresolved []graph.UnresolvedRef
 }

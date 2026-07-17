@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: K8S_API_URL
+              value: "/k8s/api/v1"
+            - name: K8S_TOPIC
+              value: "k8s.orders"
