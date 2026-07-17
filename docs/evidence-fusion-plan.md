@@ -192,7 +192,9 @@ manufacture misinformation:
 
 ## Phases (one commit each)
 
-### Phase F.0 — Evidence-graph substrate + reconciliation join `pending`
+### Phase F.0 — Evidence-graph substrate + reconciliation join `done`
+
+**Outcome.** Implemented exactly as specified. `graph.Edge` gained `Sources []SourceRef`, `VerificationState string`, `VerifiedGranularity string`; `SchemaVersion` bumped "14" → "15". The SQLite schema adds three columns with DEFAULT values and a try-and-ignore `ALTER TABLE` migration for existing DBs (the bundled SQLite in `modernc.org/sqlite v1.37.1` does not support `ADD COLUMN IF NOT EXISTS`, so we trap the "duplicate column name" error instead). `internal/evidence/` contains `provider.go` (Provider interface + ValidateProviderName), `provenance.go` (StaticProvider — total recomputation, replaces Sources on every run), and `reconcile.go` (Reconciler with multi-valued channel-key join, computeState, deterministic sort). The indexer wires the reconciler after all linking passes and re-upserts reconciled edges. Tests cover: fan-out (≥2 edges sharing one channel key all stamped — not first-match), two-run determinism, state transitions (candidate/verified/observed_only_gap), unknown-provider rejection, and the chessleap static-baseline-unchanged guard (all contract golden edges identical, every edge now carries Sources[]). BenchmarkIndexCold: 10.15s for 1200 files (~8.5 ms/file), well within the documented target.
 `internal/evidence/{provider.go,provenance.go,reconcile.go}`. Extend `graph.Edge` with
 `sources[]` + `verification_state` + `verified_granularity` (channel | site; see the
 join-granularity section — back-compat: existing edges → single `static` source). Reconciliation engine merges edges on `(kind, key)` / `(from, to)` reusing the

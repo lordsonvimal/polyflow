@@ -1,0 +1,267 @@
+package evidence
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/workspace"
+)
+
+// Reconciler merges evidence from multiple Providers into a single
+// provenance-tracked graph.  With only the static provider (F.0), every edge
+// is stamped as candidate.  When F.1+ providers are added, the key-join
+// upgrades matching edges to verified and surfaces gaps.
+//
+// All operations are total-recomputation: VerificationState is derived from
+// Sources[] on each run, so a removed session/spec can never leave stale state.
+type Reconciler struct {
+	providers []Provider
+}
+
+// NewReconciler creates a Reconciler from an ordered list of providers.
+// All provider names are validated at construction; an unknown name is an
+// immediate error (bug-class rule 3).
+func NewReconciler(providers ...Provider) (*Reconciler, error) {
+	for _, p := range providers {
+		if err := ValidateProviderName(p.Name()); err != nil {
+			return nil, err
+		}
+	}
+	return &Reconciler{providers: providers}, nil
+}
+
+// ReconcileResult is the output of Reconcile.
+type ReconcileResult struct {
+	Nodes      []graph.Node
+	Edges      []graph.Edge
+	Unresolved []graph.UnresolvedRef
+}
+
+// channelKey is the join key for two edges sharing a logical channel.
+// The primary key is (Type, Label) — the contract-engine's normalized
+// channel key.  An empty Label falls back to (From, To) so containment
+// and other structural edges are still correctly keyed.
+type channelKey struct {
+	edgeType graph.EdgeType
+	label    string
+	from     string
+	to       string
+}
+
+func keyOf(e *graph.Edge) channelKey {
+	if e.Label != "" {
+		return channelKey{edgeType: e.Type, label: e.Label}
+	}
+	return channelKey{edgeType: e.Type, from: e.From, to: e.To}
+}
+
+// Reconcile collects evidence from all providers and fuses it into a single
+// edge set with provenance and verification state.
+//
+// Multi-valued join (bug-class rule 1): every static edge sharing a channel
+// key receives a source stamp from a confirming provider — never only the
+// first found.
+//
+// Deterministic output (bug-class rule 2): minted synthetic nodes/edges use
+// stable IDs; Sources[] and the edge slice are sorted by stable keys.
+func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfig) (ReconcileResult, error) {
+	// Collect from all providers in order.
+	type collected struct {
+		name string
+		ev   Evidence
+	}
+	all := make([]collected, 0, len(r.providers))
+	for _, p := range r.providers {
+		ev, err := p.Collect(ctx, ws)
+		if err != nil {
+			return ReconcileResult{}, fmt.Errorf("evidence provider %q: %w", p.Name(), err)
+		}
+		all = append(all, collected{p.Name(), ev})
+	}
+
+	// Separate static evidence from non-static.  Static edges carry the base
+	// edge set (completeness skeleton).  Non-static providers confirm or gap.
+	var staticEv Evidence
+	var nonStaticEv []collected
+	for _, c := range all {
+		if c.name == "static" {
+			staticEv = c.ev
+		} else {
+			nonStaticEv = append(nonStaticEv, c)
+		}
+	}
+
+	// Build the working edge map (multi-valued, by channel key) from the
+	// static evidence.  Edges are stored as pointers so mutations below are
+	// visible through the map without re-insertion.
+	type edgeSlot struct {
+		edge *graph.Edge
+	}
+	// edgeByKey: channel → all static edges on that channel (in input order).
+	// map[channelKey][]*graph.Edge — multi-valued, never first-seen-wins.
+	edgeByKey := make(map[channelKey][]*graph.Edge, len(staticEv.Edges))
+	// edgeByID: for dedup and direct lookup (merge, not duplicate).
+	edgeByID := make(map[string]*graph.Edge, len(staticEv.Edges))
+
+	workingEdges := make([]graph.Edge, len(staticEv.Edges))
+	copy(workingEdges, staticEv.Edges)
+	for i := range workingEdges {
+		ep := &workingEdges[i]
+		edgeByID[ep.ID] = ep
+		k := keyOf(ep)
+		edgeByKey[k] = append(edgeByKey[k], ep)
+	}
+
+	// Collect all nodes from all providers.
+	var allNodes []graph.Node
+	nodeByID := make(map[string]bool, len(staticEv.Nodes))
+	for _, n := range staticEv.Nodes {
+		allNodes = append(allNodes, n)
+		nodeByID[n.ID] = true
+	}
+
+	// Collect all unresolved from all providers.
+	var allUnresolved []graph.UnresolvedRef
+	allUnresolved = append(allUnresolved, staticEv.Unresolved...)
+
+	// Process non-static providers: join their edges onto the static set.
+	synthSeen := make(map[string]bool)
+	for _, c := range nonStaticEv {
+		for i := range c.ev.Edges {
+			pe := &c.ev.Edges[i]
+			k := keyOf(pe)
+			if slots := edgeByKey[k]; len(slots) > 0 {
+				// Channel confirmed: append source to every static edge on this
+				// channel (multi-valued — bug-class rule 1).
+				for _, sp := range slots {
+					sp.Sources = appendSource(sp.Sources, pe.Sources...)
+				}
+			} else {
+				// No static edge: observed_only_gap — mint synthetic nodes/edges
+				// with deterministic IDs.
+				synthID := syntheticEdgeID(pe)
+				if synthSeen[synthID] {
+					continue
+				}
+				synthSeen[synthID] = true
+				gap := graph.Edge{
+					ID:                synthID,
+					From:              pe.From,
+					To:                pe.To,
+					Type:              pe.Type,
+					Label:             pe.Label,
+					Confidence:        graph.ConfidenceCandidate,
+					Sources:           pe.Sources,
+					VerificationState: graph.StateObservedOnlyGap,
+				}
+				workingEdges = append(workingEdges, gap)
+				// Mint endpoint nodes if they don't already exist.
+				for _, nodeID := range []string{pe.From, pe.To} {
+					if !nodeByID[nodeID] {
+						allNodes = append(allNodes, graph.Node{
+							ID:    nodeID,
+							Type:  graph.NodeTypeService,
+							Label: nodeID,
+						})
+						nodeByID[nodeID] = true
+					}
+				}
+			}
+		}
+		// Absorb nodes and unresolved from this provider.
+		for _, n := range c.ev.Nodes {
+			if !nodeByID[n.ID] {
+				allNodes = append(allNodes, n)
+				nodeByID[n.ID] = true
+			}
+		}
+		allUnresolved = append(allUnresolved, c.ev.Unresolved...)
+	}
+
+	// Recompute VerificationState for every edge from Sources[] (total).
+	for i := range workingEdges {
+		ep := &workingEdges[i]
+		// Sort Sources deterministically before persisting (bug-class rule 2).
+		sortSources(ep.Sources)
+		ep.VerificationState = computeState(ep.Sources)
+	}
+
+	// Sort the edge slice by ID for deterministic output (bug-class rule 2).
+	sort.Slice(workingEdges, func(i, j int) bool {
+		return workingEdges[i].ID < workingEdges[j].ID
+	})
+
+	return ReconcileResult{
+		Nodes:      allNodes,
+		Edges:      workingEdges,
+		Unresolved: allUnresolved,
+	}, nil
+}
+
+// appendSource appends src refs, deduped by (provider, ref).
+func appendSource(existing []graph.SourceRef, src ...graph.SourceRef) []graph.SourceRef {
+	type key struct{ p, r string }
+	seen := make(map[key]bool, len(existing))
+	for _, s := range existing {
+		seen[key{s.Provider, s.Ref}] = true
+	}
+	for _, s := range src {
+		k := key{s.Provider, s.Ref}
+		if !seen[k] {
+			existing = append(existing, s)
+			seen[k] = true
+		}
+	}
+	return existing
+}
+
+// sortSources sorts in-place by (Provider, Ref, ObservedAt) for determinism.
+func sortSources(s []graph.SourceRef) {
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].Provider != s[j].Provider {
+			return s[i].Provider < s[j].Provider
+		}
+		if s[i].Ref != s[j].Ref {
+			return s[i].Ref < s[j].Ref
+		}
+		return s[i].ObservedAt < s[j].ObservedAt
+	})
+}
+
+// computeState derives the VerificationState from the Sources slice.
+//
+// verified:          static ∩ (runtime ∨ contract)
+// candidate:         static-only (no confirmation)
+// observed_only_gap: runtime or contract evidence with no matching static edge
+// conflicting:       sources disagree (reserved for F.4)
+func computeState(sources []graph.SourceRef) string {
+	hasStatic := false
+	hasConfirm := false
+	for _, s := range sources {
+		switch s.Provider {
+		case "static":
+			hasStatic = true
+		case "runtime", "contract":
+			hasConfirm = true
+		}
+	}
+	switch {
+	case hasStatic && hasConfirm:
+		return graph.StateVerified
+	case hasStatic:
+		return graph.StateCandidate
+	case hasConfirm:
+		// Non-static confirming evidence: gap — static missed this edge.
+		return graph.StateObservedOnlyGap
+	default:
+		return graph.StateCandidate
+	}
+}
+
+// syntheticEdgeID derives a deterministic ID for a gap edge.
+// Never a counter or map-order-dependent value (bug-class rule 2).
+func syntheticEdgeID(e *graph.Edge) string {
+	return fmt.Sprintf("gap:%s:%s->%s", string(e.Type), e.From, e.To)
+}

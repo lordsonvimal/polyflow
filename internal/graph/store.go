@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -26,15 +27,18 @@ CREATE TABLE IF NOT EXISTS nodes (
 );
 
 CREATE TABLE IF NOT EXISTS edges (
-	id         TEXT PRIMARY KEY,
-	"from"     TEXT NOT NULL REFERENCES nodes(id),
-	"to"       TEXT NOT NULL REFERENCES nodes(id),
-	type       TEXT NOT NULL,
-	label      TEXT NOT NULL DEFAULT '',
-	meta       TEXT NOT NULL DEFAULT '{}',
-	confidence TEXT NOT NULL DEFAULT '',
-	method     TEXT NOT NULL DEFAULT '',
-	path       TEXT NOT NULL DEFAULT ''
+	id                   TEXT PRIMARY KEY,
+	"from"               TEXT NOT NULL REFERENCES nodes(id),
+	"to"                 TEXT NOT NULL REFERENCES nodes(id),
+	type                 TEXT NOT NULL,
+	label                TEXT NOT NULL DEFAULT '',
+	meta                 TEXT NOT NULL DEFAULT '{}',
+	confidence           TEXT NOT NULL DEFAULT '',
+	method               TEXT NOT NULL DEFAULT '',
+	path                 TEXT NOT NULL DEFAULT '',
+	sources_json         TEXT NOT NULL DEFAULT '[]',
+	verification_state   TEXT NOT NULL DEFAULT '',
+	verified_granularity TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_service    ON nodes(service);
@@ -158,7 +162,31 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	// F.0 migration: add provenance columns to existing DBs that were created
+	// before SchemaVersion 15.  ALTER TABLE ADD COLUMN ignores the error when
+	// the column already exists (SQLite returns "duplicate column name"),
+	// keeping this idempotent across versions without requiring IF NOT EXISTS
+	// (which was added in SQLite 3.37 and is not available in all embedded builds).
+	for _, col := range []struct{ stmt, name string }{
+		{`ALTER TABLE edges ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]'`, "sources_json"},
+		{`ALTER TABLE edges ADD COLUMN verification_state TEXT NOT NULL DEFAULT ''`, "verification_state"},
+		{`ALTER TABLE edges ADD COLUMN verified_granularity TEXT NOT NULL DEFAULT ''`, "verified_granularity"},
+	} {
+		if _, merr := db.Exec(col.stmt); merr != nil {
+			// "duplicate column name" is the expected error when the column
+			// already exists — ignore it; propagate anything else.
+			if !isDuplicateColumn(merr) {
+				db.Close()
+				return nil, fmt.Errorf("migrate edges.%s: %w", col.name, merr)
+			}
+		}
+	}
 	return &SQLiteStore{db: db}, nil
+}
+
+// isDuplicateColumn reports whether err is a SQLite "duplicate column name" error.
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }
 
 // NewBuildStore opens a store tuned for bulk index builds: durability is
@@ -217,6 +245,10 @@ func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
 	if err != nil {
 		return fmt.Errorf("marshal edge meta: %w", err)
 	}
+	sourcesJSON, err := marshalSources(e.Sources)
+	if err != nil {
+		return fmt.Errorf("marshal edge sources: %w", err)
+	}
 	confidence := e.Confidence
 	if confidence == "" {
 		confidence = e.Meta["confidence"]
@@ -230,14 +262,17 @@ func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
 		path = e.Meta["path"]
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			"from"=excluded."from", "to"=excluded."to",
 			type=excluded.type, label=excluded.label, meta=excluded.meta,
-			confidence=excluded.confidence, method=excluded.method, path=excluded.path`,
+			confidence=excluded.confidence, method=excluded.method, path=excluded.path,
+			sources_json=excluded.sources_json,
+			verification_state=excluded.verification_state,
+			verified_granularity=excluded.verified_granularity`,
 		e.ID, e.From, e.To, string(e.Type), e.Label, metaJSON,
-		confidence, method, path)
+		confidence, method, path, sourcesJSON, e.VerificationState, e.VerifiedGranularity)
 	if err != nil {
 		return fmt.Errorf("upsert edge %s: %w", e.ID, err)
 	}
@@ -252,7 +287,7 @@ func (s *SQLiteStore) GetNode(ctx context.Context, id string) (*Node, error) {
 
 func (s *SQLiteStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges WHERE id = ?`, id)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity FROM edges WHERE id = ?`, id)
 	return scanEdge(row)
 }
 
@@ -279,7 +314,7 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 
 func (s *SQLiteStore) ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges WHERE "from" = ?`, nodeID)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity FROM edges WHERE "from" = ?`, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list edges from %s: %w", nodeID, err)
 	}
@@ -289,7 +324,7 @@ func (s *SQLiteStore) ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge
 
 func (s *SQLiteStore) ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges WHERE "to" = ?`, nodeID)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity FROM edges WHERE "to" = ?`, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list edges to %s: %w", nodeID, err)
 	}
@@ -315,7 +350,7 @@ func (s *SQLiteStore) BuildIndex(ctx context.Context) (*AdjacencyIndex, error) {
 	}
 
 	edgeRows, err := s.db.QueryContext(ctx,
-		`SELECT id, "from", "to", type, label, meta, confidence, method, path FROM edges`)
+		`SELECT id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity FROM edges`)
 	if err != nil {
 		return nil, fmt.Errorf("load edges: %w", err)
 	}
@@ -674,8 +709,8 @@ func scanNodes(rows *sql.Rows) ([]*Node, error) {
 
 func scanEdge(row rowScanner) (*Edge, error) {
 	var e Edge
-	var typ, metaJSON string
-	err := row.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON, &e.Confidence, &e.Method, &e.Path)
+	var typ, metaJSON, sourcesJSON string
+	err := row.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON, &e.Confidence, &e.Method, &e.Path, &sourcesJSON, &e.VerificationState, &e.VerifiedGranularity)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("edge not found")
 	}
@@ -687,6 +722,10 @@ func scanEdge(row rowScanner) (*Edge, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal edge meta: %w", err)
 	}
+	e.Sources, err = unmarshalSources(sourcesJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal edge sources: %w", err)
+	}
 	return &e, nil
 }
 
@@ -694,8 +733,8 @@ func scanEdges(rows *sql.Rows) ([]*Edge, error) {
 	var out []*Edge
 	for rows.Next() {
 		var e Edge
-		var typ, metaJSON string
-		if err := rows.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON, &e.Confidence, &e.Method, &e.Path); err != nil {
+		var typ, metaJSON, sourcesJSON string
+		if err := rows.Scan(&e.ID, &e.From, &e.To, &typ, &e.Label, &metaJSON, &e.Confidence, &e.Method, &e.Path, &sourcesJSON, &e.VerificationState, &e.VerifiedGranularity); err != nil {
 			return nil, fmt.Errorf("scan edge row: %w", err)
 		}
 		e.Type = EdgeType(typ)
@@ -704,12 +743,38 @@ func scanEdges(rows *sql.Rows) ([]*Edge, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal edge meta: %w", err)
 		}
+		e.Sources, err = unmarshalSources(sourcesJSON)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal edge sources: %w", err)
+		}
 		out = append(out, &e)
 	}
 	return out, rows.Err()
 }
 
 // --- JSON helpers ---
+
+func marshalSources(s []SourceRef) (string, error) {
+	if len(s) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func unmarshalSources(s string) ([]SourceRef, error) {
+	if s == "" || s == "[]" {
+		return nil, nil
+	}
+	var refs []SourceRef
+	if err := json.Unmarshal([]byte(s), &refs); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
 
 func marshalMeta(m map[string]string) (string, error) {
 	if len(m) == 0 {
