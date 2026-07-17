@@ -544,6 +544,316 @@ func TestMetricsOnlyNoFlows(t *testing.T) {
 	assert.Empty(t, ledger)
 }
 
+// ─── R.4 Messaging tests ──────────────────────────────────────────────────────
+
+// msgWS returns a workspace with "publisher" and "consumer" services.
+func msgWS(services ...string) *workspace.WorkspaceConfig {
+	svcs := make([]workspace.Service, len(services))
+	for i, s := range services {
+		svcs[i] = workspace.Service{Name: s}
+	}
+	return &workspace.WorkspaceConfig{Services: svcs}
+}
+
+// ─── TestMapSpansMsgAMQPLinked ────────────────────────────────────────────────
+//
+// Positive: AMQP PRODUCER span linked to CONSUMER span via span link → one flow
+// record with kind=amqp, key="user.events user.created", causality=link.
+// Drives through real OTLP fixture bytes (bug-class rule 6).
+func TestMapSpansMsgAMQPLinked(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_amqp_linked.otlp.json"))
+	require.NoError(t, err)
+
+	ws := msgWS("publisher", "consumer")
+	flows, ledger := MapSpans(spans, "sess-amqp", ws)
+
+	require.Len(t, flows, 1, "linked AMQP pair must produce exactly one flow record")
+	assert.Empty(t, ledger)
+	f := flows[0]
+	assert.Equal(t, "amqp", string(f.Kind))
+	assert.Equal(t, "user.events user.created", f.Key,
+		"AMQP key must join destination and routing_key with a space")
+	assert.Equal(t, "publisher", f.FromService)
+	assert.Equal(t, "consumer", f.ToService)
+	assert.Equal(t, "link", f.Causality, "span link must produce causality=link")
+	require.Len(t, f.Refs, 1)
+	assert.Equal(t, "sess-amqp", f.Refs[0].Session)
+	assert.Equal(t, "ccdd000000000000000000000000cc22", f.Refs[0].TraceID,
+		"ref must come from the CONSUMER span's trace")
+}
+
+// ─── TestMapSpansMsgKafkaKeyMatch ─────────────────────────────────────────────
+//
+// Positive: Kafka PRODUCER + CONSUMER on the same destination with no span links
+// → one flow record, kind=kafka, causality=key_match.
+// Drives through real OTLP fixture bytes (bug-class rule 6).
+func TestMapSpansMsgKafkaKeyMatch(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_kafka_unlinked.otlp.json"))
+	require.NoError(t, err)
+
+	ws := msgWS("producer-svc", "consumer-svc")
+	flows, ledger := MapSpans(spans, "sess-kafka", ws)
+
+	require.Len(t, flows, 1, "unlinked Kafka pair must produce one flow via key_match")
+	assert.Empty(t, ledger)
+	f := flows[0]
+	assert.Equal(t, "kafka", string(f.Kind))
+	assert.Equal(t, "orders-topic", f.Key)
+	assert.Equal(t, "producer-svc", f.FromService)
+	assert.Equal(t, "consumer-svc", f.ToService)
+	assert.Equal(t, "key_match", f.Causality, "no span link → causality must be key_match")
+}
+
+// ─── TestMapSpansMsgProducerOnly ──────────────────────────────────────────────
+//
+// Positive: NATS PRODUCER with no consumer in-window → producer-side observation
+// only; ToService="" and no fabricated consumer service.
+// Drives through real OTLP fixture bytes (bug-class rule 6).
+func TestMapSpansMsgProducerOnly(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_producer_only.otlp.json"))
+	require.NoError(t, err)
+
+	ws := msgWS("publisher")
+	flows, ledger := MapSpans(spans, "sess-nats", ws)
+
+	require.Len(t, flows, 1, "producer-only span must produce a flow record (producer-side observation)")
+	assert.Empty(t, ledger)
+	f := flows[0]
+	assert.Equal(t, "nats", string(f.Kind))
+	assert.Equal(t, "events.created", f.Key)
+	assert.Equal(t, "publisher", f.FromService)
+	assert.Equal(t, "", f.ToService, "no consumer in-window: ToService must be empty (no fabricated edge)")
+}
+
+// ─── TestMapSpansMsgConsumerNoCausality ───────────────────────────────────────
+//
+// Negative: a CONSUMER span with no span links and no matching PRODUCER in the
+// session → ledger entry with reason no_causality, zero flow records.
+func TestMapSpansMsgConsumerNoCausality(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_kafka_unlinked.otlp.json"))
+	require.NoError(t, err)
+
+	// Drop the PRODUCER span so only the CONSUMER remains.
+	var consumerOnly []Span
+	for _, sp := range spans {
+		if sp.Kind == "CONSUMER" {
+			consumerOnly = append(consumerOnly, sp)
+		}
+	}
+
+	ws := msgWS("consumer-svc")
+	flows, ledger := MapSpans(consumerOnly, "sess-no-prod", ws)
+
+	assert.Empty(t, flows, "consumer without producer must produce no flow record")
+	require.NotEmpty(t, ledger, "consumer without producer must surface a no_causality ledger entry")
+	hasNoCausality := false
+	for _, e := range ledger {
+		if e.Reason == "no_causality" {
+			hasNoCausality = true
+		}
+	}
+	assert.True(t, hasNoCausality, "ledger must include a no_causality entry")
+}
+
+// ─── TestMapSpansMsgOldSemconv ────────────────────────────────────────────────
+//
+// Old messaging.operation attribute (pre-new-semconv SDK) must still produce a
+// valid flow record.  Producer with messaging.operation=publish,
+// consumer with messaging.operation=receive.
+func TestMapSpansMsgOldSemconv(t *testing.T) {
+	// Reuse the Kafka fixture but override attrs to use old semconv.
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_kafka_unlinked.otlp.json"))
+	require.NoError(t, err)
+
+	for i := range spans {
+		// Replace new semconv operation.type with old messaging.operation.
+		old := spans[i].Attrs["messaging.operation.type"]
+		delete(spans[i].Attrs, "messaging.operation.type")
+		if old == "publish" {
+			spans[i].Attrs["messaging.operation"] = "publish"
+		} else if old == "process" {
+			spans[i].Attrs["messaging.operation"] = "receive"
+		}
+	}
+
+	ws := msgWS("producer-svc", "consumer-svc")
+	flows, ledger := MapSpans(spans, "s", ws)
+
+	require.Len(t, flows, 1, "old-semconv messaging span must produce a flow record")
+	assert.Empty(t, ledger)
+	assert.Equal(t, "kafka", string(flows[0].Kind))
+	assert.Equal(t, "key_match", flows[0].Causality)
+}
+
+// ─── TestMapSpansMsgAMQPAcceptance ───────────────────────────────────────────
+//
+// Acceptance: the linked AMQP trace's publish→process span confirms a static
+// AMQP edge (exchange=user.events, routing_key=user.created) → edge flips to
+// verified, granularity=channel. Mirrors the bunny→amqp091 static fixture chain
+// with runtime-observed causality.
+func TestMapSpansMsgAMQPAcceptance(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "pub-chan", Service: "publisher", Type: graph.NodeTypeChannel,
+			Label: "user.events user.created"},
+		{ID: "con-chan", Service: "consumer", Type: graph.NodeTypeChannel,
+			Label: "user.events user.created"},
+	}
+	staticEdge := graph.Edge{
+		ID: "broker:pub-chan->con-chan", From: "pub-chan", To: "con-chan",
+		Type: graph.EdgeTypePublishes, Label: "user.events user.created",
+		Confidence: graph.ConfidenceInferred,
+	}
+
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_amqp_linked.otlp.json"))
+	require.NoError(t, err)
+
+	flows, _ := MapSpans(spans, "amqp-accept", msgWS("publisher", "consumer"))
+	require.Len(t, flows, 1)
+	runtimeEv := evidence.Evidence{
+		Edges: []graph.Edge{flowRecordToEdge(&flows[0])},
+	}
+
+	sp := evidence.NewStaticProvider(nodes, []graph.Edge{staticEdge}, nil)
+	rec, err := evidence.NewReconciler(sp, &fakeRuntimeProvider{ev: runtimeEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+
+	var found *graph.Edge
+	for i := range result.Edges {
+		if result.Edges[i].ID == staticEdge.ID {
+			found = &result.Edges[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "static AMQP edge must appear in reconciled result")
+	assert.Equal(t, graph.StateVerified, found.VerificationState,
+		"linked AMQP trace must flip the static edge to verified")
+	assert.Equal(t, graph.GranularityChannel, found.VerifiedGranularity)
+}
+
+// ─── TestMapSpansMsgKafkaAcceptance ──────────────────────────────────────────
+//
+// Acceptance: key_match-only Kafka trace also verifies a static Kafka edge;
+// the source ref records causality=key_match.
+func TestMapSpansMsgKafkaAcceptance(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "kafka-pub", Service: "producer-svc", Type: graph.NodeTypeChannel, Label: "orders-topic"},
+		{ID: "kafka-con", Service: "consumer-svc", Type: graph.NodeTypeChannel, Label: "orders-topic"},
+	}
+	staticEdge := graph.Edge{
+		ID: "kafka:kafka-pub->kafka-con", From: "kafka-pub", To: "kafka-con",
+		Type: graph.EdgeType("kafka_publish"), Label: "orders-topic",
+		Confidence: graph.ConfidenceInferred,
+	}
+
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_kafka_unlinked.otlp.json"))
+	require.NoError(t, err)
+
+	flows, _ := MapSpans(spans, "kafka-accept", msgWS("producer-svc", "consumer-svc"))
+	require.Len(t, flows, 1)
+	assert.Equal(t, "key_match", flows[0].Causality)
+	runtimeEv := evidence.Evidence{
+		Edges: []graph.Edge{flowRecordToEdge(&flows[0])},
+	}
+
+	sp := evidence.NewStaticProvider(nodes, []graph.Edge{staticEdge}, nil)
+	rec, err := evidence.NewReconciler(sp, &fakeRuntimeProvider{ev: runtimeEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+
+	var found *graph.Edge
+	for i := range result.Edges {
+		if result.Edges[i].ID == staticEdge.ID {
+			found = &result.Edges[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "static Kafka edge must appear in reconciled result")
+	assert.Equal(t, graph.StateVerified, found.VerificationState,
+		"key_match trace must also flip the static Kafka edge to verified")
+}
+
+// ─── TestMapSpansMsgDeterminism ───────────────────────────────────────────────
+//
+// Two-run determinism test (bug-class rule 2): MapSpans on the same messaging
+// fixture must produce byte-identical JSON output both times.
+func TestMapSpansMsgDeterminism(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_amqp_linked.otlp.json"))
+	require.NoError(t, err)
+
+	ws := msgWS("publisher", "consumer")
+	run := func() []byte {
+		flows, ledger := MapSpans(spans, "s", ws)
+		b, err := json.Marshal(struct {
+			Flows  []FlowRecord        `json:"flows"`
+			Ledger []IngestLedgerEntry `json:"ledger"`
+		}{flows, ledger})
+		require.NoError(t, err)
+		return b
+	}
+
+	first := run()
+	second := run()
+	assert.Equal(t, string(first), string(second),
+		"MapSpans on messaging spans must produce byte-identical JSON across runs")
+}
+
+// ─── TestMapSpansMsgFanOut ────────────────────────────────────────────────────
+//
+// Two static edges on the same AMQP channel + one runtime linked observation →
+// both edges receive the runtime source (fan-out, bug-class rule 1).
+func TestMapSpansMsgFanOut(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "pub-a", Service: "publisher", Type: graph.NodeTypeChannel, Label: "user.events user.created"},
+		{ID: "pub-b", Service: "publisher", Type: graph.NodeTypeChannel, Label: "user.events user.created"},
+		{ID: "con-node", Service: "consumer", Type: graph.NodeTypeChannel, Label: "user.events user.created"},
+	}
+	staticEdges := []graph.Edge{
+		{ID: "broker:pub-a->con-node", From: "pub-a", To: "con-node",
+			Type: graph.EdgeTypePublishes, Label: "user.events user.created",
+			Confidence: graph.ConfidenceInferred},
+		{ID: "broker:pub-b->con-node", From: "pub-b", To: "con-node",
+			Type: graph.EdgeTypePublishes, Label: "user.events user.created",
+			Confidence: graph.ConfidenceInferred},
+	}
+
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "msg_amqp_linked.otlp.json"))
+	require.NoError(t, err)
+
+	flows, _ := MapSpans(spans, "sess-fanout", msgWS("publisher", "consumer"))
+	require.Len(t, flows, 1)
+
+	runtimeEv := evidence.Evidence{
+		Edges: []graph.Edge{flowRecordToEdge(&flows[0])},
+	}
+
+	sp := evidence.NewStaticProvider(nodes, staticEdges, nil)
+	rec, err := evidence.NewReconciler(sp, &fakeRuntimeProvider{ev: runtimeEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+
+	edgeByID := make(map[string]graph.Edge)
+	for _, e := range result.Edges {
+		edgeByID[e.ID] = e
+	}
+
+	for _, id := range []string{"broker:pub-a->con-node", "broker:pub-b->con-node"} {
+		e, ok := edgeByID[id]
+		require.True(t, ok, "edge %s must be in result", id)
+		hasRuntime := false
+		for _, s := range e.Sources {
+			if s.Provider == "runtime" {
+				hasRuntime = true
+			}
+		}
+		assert.True(t, hasRuntime, "edge %s must receive the runtime source (fan-out)", id)
+		assert.Equal(t, graph.StateVerified, e.VerificationState)
+	}
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 // fakeRuntimeProvider implements evidence.Provider returning a fixed Evidence.

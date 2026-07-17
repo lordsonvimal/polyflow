@@ -171,13 +171,22 @@ func flowRecordToEdge(rec *FlowRecord) graph.Edge {
 }
 
 // kindToEdgeType maps a contract.Kind to the corresponding graph.EdgeType.
-// R.1 handles HTTP; R.3/R.4 will extend for SSE and messaging.
+// Edge types must match what the static contract rules emit so the reconciler's
+// (edgeType, label) join key resolves correctly.
 func kindToEdgeType(k contract.Kind) graph.EdgeType {
 	switch k {
 	case contract.KindHTTP:
 		return graph.EdgeTypeHTTPCall
 	case contract.KindSSE:
 		return graph.EdgeTypeSSEEndpoint
+	case contract.KindAMQP:
+		return graph.EdgeTypePublishes // amqp.yaml edge.type = publishes
+	case contract.KindKafka:
+		return graph.EdgeType("kafka_publish") // kafka.yaml edge.type = kafka_publish
+	case contract.KindNATS:
+		return graph.EdgeType("nats_publish") // nats.yaml edge.type = nats_publish
+	case contract.KindJob:
+		return graph.EdgeTypeJobEnqueue // jobs.yaml edge.type = job_enqueue
 	default:
 		return graph.EdgeTypeHTTPCall
 	}

@@ -70,7 +70,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 	for i := range spans {
 		sp := &spans[i]
 		if sp.Kind != "SERVER" {
-			continue
+			continue // messaging spans are handled in the second pass below
 		}
 
 		// Service name mapping.
@@ -158,6 +158,107 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 		}
 
 		addFlow("http", key, fromSvc, toSvc, causality, ref)
+	}
+
+	// ── Messaging spans (PRODUCER / CONSUMER) ──────────────────────────────────
+	// Pass 1: collect producers and consumers, resolve service + key.
+	type msgInfo struct {
+		sp      *Span
+		kind    contract.Kind
+		key     string
+		service string
+	}
+	var msgProducers, msgConsumers []msgInfo
+
+	for i := range spans {
+		sp := &spans[i]
+		if sp.Kind != "PRODUCER" && sp.Kind != "CONSUMER" {
+			continue
+		}
+		svc := resolveService(sp.Service, serviceNames, wsServices)
+		if svc == "" {
+			addLedger(sp, "unknown_service")
+			continue
+		}
+		kind := messagingKind(sp.Attrs["messaging.system"])
+		key, err := buildMessagingKey(sp, kind)
+		if err != nil || key == "" {
+			addLedger(sp, "no_route_or_path")
+			continue
+		}
+		info := msgInfo{sp: sp, kind: kind, key: key, service: svc}
+		switch {
+		case isPublishOp(sp):
+			msgProducers = append(msgProducers, info)
+		case isConsumeOp(sp):
+			msgConsumers = append(msgConsumers, info)
+		default:
+			addLedger(sp, "unsupported_span_kind")
+		}
+	}
+
+	// Pass 2: build producer index by (kind, key) for key_match — multi-valued
+	// (bug-class rule 1: never first-match).
+	type msgChanKey struct{ kind, key string }
+	producerByKey := make(map[msgChanKey][]msgInfo)
+	for _, p := range msgProducers {
+		k := msgChanKey{string(p.kind), p.key}
+		producerByKey[k] = append(producerByKey[k], p)
+	}
+	matchedProd := make(map[*Span]bool)
+
+	// Pass 3: match consumers — link-based causality first, key_match fallback.
+	for _, c := range msgConsumers {
+		ref := FlowRef{
+			Session:    session,
+			TraceID:    c.sp.TraceID,
+			ObservedAt: int64(c.sp.StartUnixNano / 1_000_000_000),
+		}
+		// Link-based: span links reference the producer span's (traceId, spanId).
+		linked := false
+		for _, lk := range c.sp.Links {
+			prod := byID[traceSpanKey{lk.TraceID, lk.SpanID}]
+			if prod == nil || prod.Kind != "PRODUCER" {
+				continue
+			}
+			fromSvc := resolveService(prod.Service, serviceNames, wsServices)
+			if fromSvc == "" {
+				addLedger(prod, "unknown_service")
+				continue
+			}
+			matchedProd[prod] = true
+			addFlow(string(c.kind), c.key, fromSvc, c.service, "link", ref)
+			linked = true
+			// No break — fan-out: every linked producer gets an edge.
+		}
+		if linked {
+			continue
+		}
+		// Key-match fallback: any producer in the window publishing to the same
+		// (kind, key) — fan-out across all of them (bug-class rule 1).
+		k := msgChanKey{string(c.kind), c.key}
+		prods := producerByKey[k]
+		if len(prods) == 0 {
+			addLedger(c.sp, "no_causality")
+			continue
+		}
+		for _, p := range prods {
+			matchedProd[p.sp] = true
+			addFlow(string(c.kind), c.key, p.service, c.service, "key_match", ref)
+		}
+	}
+
+	// Pass 4: producer-only observations — no consumer in-window, no fabricated edge.
+	for _, p := range msgProducers {
+		if matchedProd[p.sp] {
+			continue
+		}
+		ref := FlowRef{
+			Session:    session,
+			TraceID:    p.sp.TraceID,
+			ObservedAt: int64(p.sp.StartUnixNano / 1_000_000_000),
+		}
+		addFlow(string(p.kind), p.key, p.service, "", "key_match", ref)
 	}
 
 	// Sort and emit flow records (bug-class rule 2: never map-iteration order).
@@ -352,4 +453,64 @@ func sortRefs(refs []FlowRef) {
 		}
 		return refs[i].TraceID < refs[j].TraceID
 	})
+}
+
+// ─── Messaging helpers ────────────────────────────────────────────────────────
+
+// msgNormChain applies quote_strip only: messaging destination names are already
+// lowercase strings; no URL normalisation is needed.
+var msgNormChain = []string{"quote_strip"}
+
+// messagingKind maps the OTel messaging.system attribute to a contract.Kind.
+func messagingKind(system string) contract.Kind {
+	switch strings.ToLower(system) {
+	case "rabbitmq":
+		return contract.KindAMQP
+	case "kafka":
+		return contract.KindKafka
+	case "nats":
+		return contract.KindNATS
+	default:
+		return contract.KindJob
+	}
+}
+
+// buildMessagingKey constructs the normalised channel key for a messaging span.
+// AMQP uses [destination, routing_key]; all other systems use [destination] only,
+// mirroring the corresponding contract rule's key fields.
+func buildMessagingKey(sp *Span, kind contract.Kind) (string, error) {
+	dest := sp.Attrs["messaging.destination.name"]
+	if dest == "" {
+		return "", nil
+	}
+	var fields []string
+	if kind == contract.KindAMQP {
+		if rk := sp.Attrs["messaging.rabbitmq.destination.routing_key"]; rk != "" {
+			fields = []string{dest, rk}
+		} else {
+			fields = []string{dest}
+		}
+	} else {
+		fields = []string{dest}
+	}
+	return contract.NormalizeFields(fields, msgNormChain, contract.NormalizeEnv{})
+}
+
+// isPublishOp reports whether the span is a messaging publish/send operation.
+// Accepts both new semconv (messaging.operation.type) and old (messaging.operation).
+func isPublishOp(sp *Span) bool {
+	op := sp.Attrs["messaging.operation.type"]
+	if op == "" {
+		op = sp.Attrs["messaging.operation"]
+	}
+	return op == "publish" || op == "send"
+}
+
+// isConsumeOp reports whether the span is a messaging process/receive operation.
+func isConsumeOp(sp *Span) bool {
+	op := sp.Attrs["messaging.operation.type"]
+	if op == "" {
+		op = sp.Attrs["messaging.operation"]
+	}
+	return op == "process" || op == "receive"
 }
