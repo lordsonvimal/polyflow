@@ -1,8 +1,78 @@
 [
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
     "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -14,9 +84,401 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
     "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:19",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:41",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:publisher:hub_broadcast_call:95",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -28,9 +490,23 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -42,9 +518,86 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -56,9 +609,86 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -70,9 +700,23 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -84,9 +728,86 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:14",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:16",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:31",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/game/hub_test.go:subscriber:hub_subscribe_call:69",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:135",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:206",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:233",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:72",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/practice/engine_reply_test.go:subscriber:hub_subscribe_call:98",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -98,9 +819,23 @@
     "confidence": "inferred"
   },
   {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:subscriber:hub_subscribe_call:41",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
+    "type": "hub_broadcast",
+    "confidence": "inferred"
+  },
+  {
+    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:subscriber:hub_subscribe_call:326",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -110,6 +845,70 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " ctx",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/library_puzzle_test.go:http_client:http_new_request:110-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/library_puzzle_test.go:http_client:http_new_request:110",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /tags",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/library_puzzle_test.go:http_client:http_new_request:65-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/library_puzzle_test.go:http_client:http_new_request:65",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/preview?datastar=\"+url.QueryEscape(signals)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:120-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:120",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost /activity/play/\"+f.attemptID+\"/move",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:179-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:179",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost /activity/play/\"+f.attemptID+\"/submit",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:202-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:202",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost /activity/play/\"+f.attemptID+\"/move",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_client:http_new_request:63-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_client:http_new_request:63",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_client:http_new_request:71-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_client:http_new_request:71",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_rows_test.go:http_client:http_new_request:65-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_rows_test.go:http_client:http_new_request:65",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/rows?datastar=\"+url.QueryEscape(signals)",
     "confidence": "unknown"
   },
   {
@@ -190,6 +989,22 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " \"answer_\" + strconv.Itoa(i)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/store/puzzles_test.go:http_client:http_get:323-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/store/puzzles_test.go:http_client:http_get:323",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ctx",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/store/puzzles_test.go:http_client:http_get:327-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/store/puzzles_test.go:http_client:http_get:327",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ctx",
     "confidence": "unknown"
   },
   {
@@ -646,6 +1461,62 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " ",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:10-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:10",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " reveals matching positions and stays playing until all letters found",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:18-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:18",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " fills every occurrence of a repeated letter in one guess",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:27-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:27",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " counts wrong guesses, reports lives left, and loses at zero",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:34-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:34",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ignores repeated guesses of the same key without cost",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:43-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:43",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ignores any guess after the round is resolved",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:50-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:50",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " treats grapheme clusters as single keys (Tamil)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:9-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.test.js:http_client:producer_alias_url_call:9",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " createRound",
     "confidence": "unknown"
   },
   {
@@ -1601,6 +2472,102 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:10-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:10",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " applies forward and same-seq patches",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:15-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:15",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " drops strictly older patches",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:20-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:20",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " applies when incomingSeq is missing/non-finite (cannot reason without it)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:26-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:26",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " predictNextSeq",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:27-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:27",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " bumps a real seq by one",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:32-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:32",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " does not invent a seq when none has been observed",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:37-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:37",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " createPostMoveQueue",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:38-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:38",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " serializes async tasks in submission order",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:4-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:4",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " shouldApplyIncomingSeq",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:5-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:5",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " applies the first observation regardless of incoming seq",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:51-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:51",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " subsequent tasks still run after a prior task rejects",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:62-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/move-sync.test.js:http_client:producer_alias_url_call:62",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " returns the per-task promise so callers can await individual completion",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/puzzle-board.js:http_client:producer_alias_url_call:212-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/puzzle-board.js:http_client:producer_alias_url_call:212",
     "to": "unresolved",
@@ -1841,6 +2808,182 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:10-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:10",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " buildFEN",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:101-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:101",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " returns null on malformed placement (wrong rank count)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:102-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:102",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " 8/8/8/8/8/8/8 w - - 0 1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:105-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:105",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " returns null on malformed placement (too many files in a rank)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:106-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:106",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " 8/8/8/8/8/8/8/9 w - - 0 1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:109-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:109",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " returns null on unknown side-to-move",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:11-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:11",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " renders the empty board with one row of nothing",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:110-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:110",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " 8/8/8/8/8/8/8/8 x - - 0 1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:113-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:113",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " returns null on garbage input",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:114-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:114",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " totally not a fen",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:115-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:115",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:119-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:119",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " defaults halfmove/fullmove when omitted",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:120-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:120",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " 8/8/8/8/8/8/8/8 w - -",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:23-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:23",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " renders the standard starting position",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:34-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:34",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " compresses blank runs correctly",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:50-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:50",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " dashes castling when no rights are set",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:62-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:62",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " orders castling letters KQkq regardless of which were toggled",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:78-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:78",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " parseFEN",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:79-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:79",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " round-trips the starting position",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:85-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:85",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " round-trips a sparse position",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:92-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:92",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " populates board at engine indices",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:94-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/study-setup.test.js:http_client:producer_alias_url_call:94",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " 4k3/8/8/8/8/8/8/4K3 w - - 0 1",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/sync.js:http_client:fetch_call:21-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/sync.js:http_client:fetch_call:21",
     "to": "unresolved",
@@ -1849,11 +2992,139 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:24-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:24",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " tamil compose",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:25-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:25",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " fuses க் with every uyir",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:45-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:45",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " inherent அ yields the bare base consonant",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:49-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:49",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " rejects invalid operands",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:55-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/tamil-compose.test.js:http_client:producer_alias_url_call:55",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " classifies mei and uyir",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-cards-game.js:http_client:fetch_call:67-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-cards-game.js:http_client:fetch_call:67",
     "to": "unresolved",
     "type": "http_call",
     "label": " /static/sounds/card-shuffle.mp3",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:12-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:12",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " traces a horizontal run left-to-right",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:17-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:17",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " traces a vertical run top-to-bottom",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:22-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:22",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " traces a down-right diagonal",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:27-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:27",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " snaps an off-line target to the nearest straight ray",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:39-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:39",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " returns just the anchor when anchor === target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:43-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:43",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " clamps the length so it never leaves the board",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:55-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:55",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " matchPlacement",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:61-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:61",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " matches an exact forward trace",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:65-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:65",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " matches a reversed trace",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:69-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:69",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " rejects a path that is not a placement",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:9-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-search-game.test.js:http_client:producer_alias_url_call:9",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " selectPath",
     "confidence": "unknown"
   },
   {
@@ -1913,6 +3184,142 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:10-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:10",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " hashWord",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:11-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:11",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " matches known FNV-1a-32 hex digests (Go parity)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:12-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:12",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " PLANET",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:13-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:13",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " NAP",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:14-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:14",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " காபா",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:18-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:18",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " createFindSession",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:26-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:26",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " accepts a valid answer using the center",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:34-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:34",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " flags a pangram",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:40-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:40",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " rejects a word missing the center",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:47-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:47",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " rejects a non-answer and a duplicate",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:58-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:58",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " reports too-short for an off-set word under minLen, but accepts a short answer",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:69-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:69",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " createRoundSession",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:70-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:70",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " MANGO",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:73-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:73",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " solves on the right arrangement, not a wrong one",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:83-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:83",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " refuses to overfill and can free tiles",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:92-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:92",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " handles Tamil composite graphemes as single slots",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:93-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/word-wheel-game.test.js:http_client:producer_alias_url_call:93",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " காபா",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/classroom/store/orgs.go:http_client:http_get:32-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/classroom/store/orgs.go:http_client:http_get:32",
     "to": "unresolved",
@@ -1926,6 +3333,174 @@
     "to": "unresolved",
     "type": "http_call",
     "label": "GET /activity/sessions/*/progress*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:101-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:101",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ஃ",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:105-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:105",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ப்",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:106-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:106",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ப்",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:107-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:107",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ஆ",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:113-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:113",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ட்",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:114-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:114",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " அ",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:118-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:118",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " ம்",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:15-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:15",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " author a hangman activity against a word list, then play it",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:76-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/hangman.spec.ts:http_client:producer_alias_url_call:76",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " Tamil hangman composes உயிர்மெய் letters to guess",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-optimistic.spec.ts:http_client:producer_alias_url_call:17-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-optimistic.spec.ts:http_client:producer_alias_url_call:17",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " the student's move renders optimistically (before the server replies)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-trainer.spec.ts:http_client:producer_alias_url_call:14-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-trainer.spec.ts:http_client:producer_alias_url_call:14",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " dashboard shows the radar and category cards",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-trainer.spec.ts:http_client:producer_alias_url_call:21-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-trainer.spec.ts:http_client:producer_alias_url_call:21",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " tapping a radar axis reveals its theme breakdown",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-trainer.spec.ts:http_client:producer_alias_url_call:28-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle-trainer.spec.ts:http_client:producer_alias_url_call:28",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " starting a category serves a playable board",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle.spec.ts:http_client:producer_alias_url_call:16-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle.spec.ts:http_client:producer_alias_url_call:16",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " correct move advances; opponent reply appears",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle.spec.ts:http_client:producer_alias_url_call:27-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle.spec.ts:http_client:producer_alias_url_call:27",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " wrong move snaps back",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle.spec.ts:http_client:producer_alias_url_call:37-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/puzzle.spec.ts:http_client:producer_alias_url_call:37",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " solving the line completes the puzzle",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-builder.spec.ts:http_client:producer_alias_url_call:14-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-builder.spec.ts:http_client:producer_alias_url_call:14",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " author a fixed-length word builder, then play it",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-builder.spec.ts:http_client:producer_alias_url_call:68-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-builder.spec.ts:http_client:producer_alias_url_call:68",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " live உயிர்மெய் composition: fuse க் + ஆ → கா",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-search.spec.ts:http_client:producer_alias_url_call:57-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-search.spec.ts:http_client:producer_alias_url_call:57",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " author a word search, find every word by tap and drag, submit, review",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-search.spec.ts:http_client:producer_alias_url_call:90-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-search.spec.ts:http_client:producer_alias_url_call:90",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " Tamil word search renders composite letters one per cell",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-wheel.spec.ts:http_client:producer_alias_url_call:42-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/e2e/specs/word-wheel.spec.ts:http_client:producer_alias_url_call:42",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " find wheel: build words, count climbs, submit, review",
     "confidence": "unknown"
   },
   {
@@ -1945,11 +3520,107 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:147-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:147",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /liveclass/sessions/\"+h.fx.SessionID+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:234-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:234",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /liveclass/sessions/\"+h.fx.SessionID+\"/events",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sweeper.go:http_client:http_get:79-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sweeper.go:http_client:http_get:79",
     "to": "unresolved",
     "type": "http_call",
     "label": " ctx",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/testutil_test.go:http_client:http_new_request:177-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/testutil_test.go:http_client:http_new_request:177",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "method path",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:103-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:103",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " \"r\" + strconv.Itoa(i)",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:11-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:11",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:125-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:125",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:35-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:35",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:45-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:45",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:58-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:58",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:68-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:68",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " never-existed",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:77-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:77",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:79-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/store/stage_test.go:http_client:http_get:79",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " r1",
     "confidence": "unknown"
   },
   {
@@ -1974,6 +3645,70 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " row.TemplateName",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/middleware_test.go:http_client:http_new_request:25-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/middleware_test.go:http_client:http_new_request:25",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "GET /x",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/middleware_test.go:http_client:http_new_request:57-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/middleware_test.go:http_client:http_new_request:57",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "GET /x",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/middleware_test.go:http_client:http_new_request:72-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/middleware_test.go:http_client:http_new_request:72",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "GET /x",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:18-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:18",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " sess.ID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:27-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:27",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " sess.ID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:49-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:49",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " idle.ID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:52-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:52",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " fresh.ID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:73-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/store_test.go:http_client:http_get:73",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " sess.ID",
     "confidence": "unknown"
   },
   {
@@ -2273,6 +4008,102 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:109-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:109",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:121-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:121",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /?error=game_not_found",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:189-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:189",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/solo/\"+gameID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:202-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:202",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/solo/\"+gameID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:213-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:213",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /solo/does-not-exist",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:88-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:88",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:98-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/handlers_test.go:http_client:http_new_request:98",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:35-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:35",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:49-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:49",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:566-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:566",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /learn",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:599-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/learn_v2_handlers_test.go:http_client:http_new_request:599",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost target",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:http_client:http_get:36-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:http_client:http_get:36",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " gameID",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:http_client:http_get:1010-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:http_client:http_get:1010",
     "to": "unresolved",
@@ -2425,6 +4256,126 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_get:69-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_get:69",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " id",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:211-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:211",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:233-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:233",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:247-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:247",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /play/does-not-exist",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:268-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:268",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:300-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:300",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:332-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:332",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:361-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:361",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /play/\"+gameID+\"?token=deadbeef",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:389-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:389",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:411-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:411",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:433-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:433",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:613-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:613",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:622-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers_test.go:http_client:http_new_request:622",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/play/\"+gameID+\"?token=\"+openToken",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:http_client:http_new_request:45-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:http_client:http_new_request:45",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodDelete nodeURL",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:http_client:http_new_request:64-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_clear_annotations_test.go:http_client:http_new_request:64",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodDelete nodeURL",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:http_client:http_get:104-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:http_client:http_get:104",
     "to": "unresolved",
@@ -2441,11 +4392,27 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_coach_test.go:http_client:http_new_request:36-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach_test.go:http_client:http_new_request:36",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_export.go:http_client:http_get:48-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_export.go:http_client:http_get:48",
     "to": "unresolved",
     "type": "http_call",
     "label": " id",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_glyph_test.go:http_client:http_new_request:41-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_glyph_test.go:http_client:http_new_request:41",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
     "confidence": "unknown"
   },
   {
@@ -2569,6 +4536,110 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:133-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:133",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/practice/\"+id",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:156-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:156",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/does-not-exist",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:178-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:178",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+sess.ID+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:192-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:192",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/missing/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:211-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:211",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+sess.ID+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:238-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:238",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:438-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:438",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:479-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers_test.go:http_client:http_new_request:479",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/practice/\"+sess.ID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_library_test.go:http_client:http_new_request:132-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_library_test.go:http_client:http_new_request:132",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/library",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_library_test.go:http_client:http_new_request:24-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_library_test.go:http_client:http_new_request:24",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/library",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_library_test.go:http_client:http_new_request:78-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_library_test.go:http_client:http_new_request:78",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/library",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_resume_test.go:http_client:http_new_request:102-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_resume_test.go:http_client:http_new_request:102",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/practice/\"+row.ID",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_resume_test.go:http_client:http_new_request:49-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_resume_test.go:http_client:http_new_request:49",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/practice/\"+id",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_save.go:http_client:http_get:47-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_save.go:http_client:http_get:47",
     "to": "unresolved",
@@ -2577,11 +4648,83 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:114-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:114",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet \"/practice/\"+id",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:126-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:126",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:223-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:223",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:37-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_tree_broadcast_test.go:http_client:http_new_request:37",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/practice_treefull_test.go:http_client:http_new_request:48-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_treefull_test.go:http_client:http_new_request:48",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /practice/\"+id+\"/events",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:111-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:111",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /train/puzzles/play?category=tactics",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:78-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:78",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost /train/puzzles/play/move",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:93-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:93",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /train/puzzles",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/server/sse.go:http_client:http_get:51-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:http_client:http_get:51",
     "to": "unresolved",
     "type": "http_call",
     "label": " Content-Type",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/train_handlers_test.go:http_client:http_new_request:14-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/server/train_handlers_test.go:http_client:http_new_request:14",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /train",
     "confidence": "unknown"
   },
   {
@@ -2881,11 +5024,27 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:50",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:50",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles/new",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:165",
     "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201",
     "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:165",
     "type": "navigates_to",
     "label": "get /activity/puzzles/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/stats:200-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:49",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/stats:200",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:49",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles/stats",
     "confidence": "static"
   },
   {
@@ -2897,9 +5056,25 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
     "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520",
     "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:633-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:633",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
     "type": "navigates_to",
     "label": "get /activity/puzzles",
     "confidence": "static"
@@ -2913,9 +5088,25 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
     "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655",
     "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
+    "type": "navigates_to",
+    "label": "get /activity/puzzles",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:679-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:679",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
     "type": "navigates_to",
     "label": "get /activity/puzzles",
     "confidence": "static"
@@ -3646,6 +5837,14 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:110",
     "type": "navigates_to",
     "label": "get /practice/study/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/train/puzzles:84-\u003echessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_handler:gin_route:90",
+    "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/train/puzzles:84",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_handler:gin_route:90",
+    "type": "navigates_to",
+    "label": "get /train/puzzles",
     "confidence": "static"
   },
   {
