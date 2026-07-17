@@ -1,6 +1,133 @@
 {
-  "generated_at": "2026-07-16T18:28:58.917709Z",
+  "generated_at": "2026-07-17T03:47:11.92267Z",
   "repos": [
+    {
+      "repo": "chessleap",
+      "results": [
+        {
+          "case_id": "propose-draw-datastar",
+          "recall": 1,
+          "precision": 0.42857142857142855,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "resign-game-datastar",
+          "recall": 1,
+          "precision": 0.6,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "accept-draw-datastar",
+          "recall": 1,
+          "precision": 0.6,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "propose-takeback-datastar",
+          "recall": 1,
+          "precision": 0.42857142857142855,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "claim-draw-datastar",
+          "recall": 1,
+          "precision": 0.42857142857142855,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "decline-rematch-datastar",
+          "recall": 1,
+          "precision": 0.6,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "play-events-sse",
+          "recall": 1,
+          "precision": 0.75,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "apply-move-checked-callers",
+          "recall": 0.6666666666666666,
+          "precision": 0.016129032258064516,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": false
+        },
+        {
+          "case_id": "hub-broadcast-board-callers",
+          "recall": 1,
+          "precision": 0.2857142857142857,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "broadcast-signals-callers",
+          "recall": 1,
+          "precision": 0.03597122302158273,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "new-game-store-callers",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "new-dispatcher-callers",
+          "recall": 1,
+          "precision": 0.6666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "post-move-queue-js",
+          "recall": 0.6666666666666666,
+          "precision": 0.16666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": false
+        },
+        {
+          "case_id": "arrow-layer-js",
+          "recall": 1,
+          "precision": 0.375,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "move-sync-file-imports",
+          "recall": 0.5,
+          "precision": 0.08333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 1,
+          "hard_fail": false
+        }
+      ],
+      "recall": 0.9222222222222223,
+      "precision": 0.43101303289165904
+    },
     {
       "repo": "gotify",
       "results": [
@@ -412,13 +539,6 @@
       ],
       "recall": 0.4666666666666667,
       "precision": 0.23174603174603176
-    }
-  ],
-  "skipped": [
-    {
-      "name": "chessleap",
-      "dir": "eval/corpus/chessleap",
-      "reason": "case handle-move-blast: node not found for target \"handleMove\""
     }
   ]
 }

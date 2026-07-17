@@ -269,6 +269,18 @@ implemented — corpus uses only node/file kinds; (3) cases revealing FTS
 ambiguity for common method names are kept as-is: they are accurate diagnostics
 showing real gaps. `SchemaVersion` unchanged — no graph schema touched.
 
+**Addendum (2026-07-17).** Deviation (1) resolved: the chessleap placeholder
+cases were replaced with 15 hand-verified cases (grep/read of the local clone
+at pinned sha 7a74e0e; comment-only mentions checked and excluded). Coverage:
+7 datastar templ→gin cases, 5 Go-internal blast-radius cases, 3 JS-module
+cases (incl. one `file`-kind first-hop case). The new cases immediately caught
+two real recall bugs — the quoted route-group prefix (contract plan G.3
+addendum) and the missing `data-init` vocab entry (versioning plan V.1
+addendum) — validating the corpus-first approach. After fixes: chessleap
+recall 0.922, 0 hard-fails; remaining misses are honest diagnostics (test-file
+callers/importers not linked — `move-sync.test.js`,
+`apply_move_checked_test.go`). Baseline ratcheted to include chessleap.
+
 ### Phase E.3 — CI regression gate `done`
 
 **Problem.** Without a gate, recall regressions ship.

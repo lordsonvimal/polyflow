@@ -62,7 +62,7 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 		switch {
 		case strings.HasPrefix(pat, "gin_route_group"):
 			vn := n.Meta["var_name"]
-			pfx := n.Meta["prefix"]
+			pfx := stripQuotes(n.Meta["prefix"])
 			if vn == "" || pfx == "" {
 				continue
 			}
@@ -73,7 +73,7 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 				line:     n.Line,
 			})
 		case strings.HasPrefix(pat, "chi_route_group"):
-			pfx := n.Meta["prefix"]
+			pfx := stripQuotes(n.Meta["prefix"])
 			if pfx == "" {
 				continue
 			}
@@ -178,6 +178,23 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 	}
 
 	return enriched
+}
+
+// stripQuotes removes one pair of surrounding quotes (double, single, or
+// backtick) from a captured prefix literal. The pattern matcher strips these
+// at extraction time for known captures; this is defense in depth for
+// third-party workspace patterns (and pre-fix cached graphs) whose prefix
+// captures still carry the raw quoted source text.
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		switch {
+		case s[0] == '"' && s[len(s)-1] == '"',
+			s[0] == '\'' && s[len(s)-1] == '\'',
+			s[0] == '`' && s[len(s)-1] == '`':
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }
 
 // setPath updates meta["path"] on a node, initialising meta if needed.

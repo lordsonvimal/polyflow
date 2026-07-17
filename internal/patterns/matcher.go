@@ -492,8 +492,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
-		// Strip surrounding quotes from path, url, method, and G.7 base-URL captures.
-		for _, key := range []string{"path", "url", "method", "instance_base_url", "alias_base_url"} {
+		// Strip surrounding quotes from path, url, method, route-group prefix,
+		// and G.7 base-URL captures. prefix matters: G.3's route-group
+		// enrichment concatenates it onto route paths, and a quoted prefix
+		// (`"/play"` + `/:id/draw`) produces keys no consumer can match.
+		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url"} {
 			if v, ok := meta[key]; ok {
 				meta[key] = stripStringLiteral(v)
 			}
