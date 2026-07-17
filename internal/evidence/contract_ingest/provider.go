@@ -69,6 +69,11 @@ func (p *ContractProvider) Collect(_ context.Context, ws *workspace.WorkspaceCon
 		globs = defaultContractGlobs
 	}
 
+	// Honor the same exclude set the indexer's file walk uses, so spec
+	// discovery never ingests third-party specs from node_modules/vendor
+	// that the static pass would never see.
+	excludes := append(append([]string{}, ws.Index.Exclude...), workspace.LoadIgnoreFile(".")...)
+
 	var allEdges []graph.Edge
 	var allUnresolved []graph.UnresolvedRef
 	seen := make(map[string]bool) // dedup edges by ID
@@ -80,7 +85,7 @@ func (p *ContractProvider) Collect(_ context.Context, ws *workspace.WorkspaceCon
 		}
 
 		// Discover spec files matching the globs.
-		specFiles, err := discoverSpecs(svcPath, globs)
+		specFiles, err := discoverSpecs(svcPath, globs, excludes)
 		if err != nil {
 			return evidence.Evidence{}, fmt.Errorf("contract_ingest: discover specs for %s: %w", svc.Name, err)
 		}
@@ -120,10 +125,12 @@ func (p *ContractProvider) Collect(_ context.Context, ws *workspace.WorkspaceCon
 }
 
 // discoverSpecs returns the set of spec files under root that match any of the
-// given doublestar globs, sorted for deterministic order.
-// Globs are matched against the DirFS rooted at root; returned paths are
-// absolute (root joined with the matched relative path).
-func discoverSpecs(root string, globs []string) ([]string, error) {
+// given doublestar globs and none of the exclude globs, sorted for
+// deterministic order. Globs are matched against the DirFS rooted at root;
+// returned paths are absolute (root joined with the matched relative path).
+// Exclude patterns match against the root-relative path, the same semantics
+// as the indexer's walkService.
+func discoverSpecs(root string, globs, excludes []string) ([]string, error) {
 	fsys := os.DirFS(root)
 	seen := make(map[string]bool)
 	var files []string
@@ -136,6 +143,9 @@ func discoverSpecs(root string, globs []string) ([]string, error) {
 			return nil, err
 		}
 		for _, m := range matches {
+			if excludedPath(m, excludes) {
+				continue
+			}
 			abs := filepath.Join(root, m)
 			if !seen[abs] {
 				seen[abs] = true
@@ -145,6 +155,17 @@ func discoverSpecs(root string, globs []string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// excludedPath reports whether the root-relative slash path rel matches any
+// exclude glob.
+func excludedPath(rel string, excludes []string) bool {
+	for _, pattern := range excludes {
+		if matched, _ := doublestar.Match(filepath.ToSlash(pattern), rel); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // parseSpecFile dispatches to the appropriate parser based on file extension and
