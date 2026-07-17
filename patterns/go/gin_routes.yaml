@@ -28,6 +28,52 @@ patterns:
       - name: handler
         role: handler_ref
 
+  # r.Match([]string{"GET", "HEAD"}, "/health", handler) — multi-method
+  # registration (gotify's health endpoint). The method set lives in a slice
+  # literal we don't enumerate; the node keeps the raw "Match" verb — the
+  # handler edge is what recall needs, not the exact method list.
+  - name: gin_route_match
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @router
+          field: (field_identifier) @method
+          (#eq? @method "Match"))
+        arguments: (argument_list
+          (composite_literal)
+          .
+          (interpreted_string_literal) @path
+          (_) @handler))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+
+  # g.Group("/user").Use(mw).POST("", handler) — inline chained registration
+  # where the receiver is a call chain, not a variable (gotify's user routes).
+  # The Group prefix sits at arbitrary chain depth, so the full path is not
+  # reconstructed — the handler edge is the recall-critical part.
+  - name: gin_route_chained
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (call_expression) @chain
+          field: (field_identifier) @method
+          (#match? @method "^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Any)$"))
+        arguments: (argument_list
+          (interpreted_string_literal) @path
+          (_) @handler))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+
   # api := r.Group("/api/v1") — route group assigned to a variable.
   # Captures the variable name and parent receiver so the pre-engine
   # enrichment pass (G.3) can reconstruct full paths for nested routes.
