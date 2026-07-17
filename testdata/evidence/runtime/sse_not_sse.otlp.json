@@ -1,0 +1,10 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "fedcba9876543210fedcba9876543210", "spanId": "9999aaaabbbbcccc",
+     "name": "GET /slow-export", "kind": 2,
+     "startTimeUnixNano": "1752492000000000000", "endTimeUnixNano": "1752492030000000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/slow-export"}}]}]}]}
+]}

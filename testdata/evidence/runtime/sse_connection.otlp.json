@@ -1,0 +1,20 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "1a2b3c4d5e6f7890abcdef1234567890", "spanId": "1111222233334444",
+     "name": "GET /events", "kind": 3,
+     "startTimeUnixNano": "1752490000000000000", "endTimeUnixNano": "1752490000050000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "url.full", "value": {"stringValue": "http://api:8080/events"}}]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "1a2b3c4d5e6f7890abcdef1234567890", "spanId": "5555666677778888",
+     "parentSpanId": "1111222233334444",
+     "name": "GET /events", "kind": 2,
+     "startTimeUnixNano": "1752490000010000000", "endTimeUnixNano": "1752490025000000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/events"}},
+       {"key": "http.response.header.content-type", "value": {"stringValue": "text/event-stream"}}]}]}]}
+]}
