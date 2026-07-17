@@ -1,0 +1,8 @@
+{"resourceMetrics": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+   "scopeMetrics": [{"metrics": [{
+     "name": "http.server.request.duration",
+     "description": "Duration of HTTP server requests.",
+     "unit": "s"
+   }]}]}
+]}
