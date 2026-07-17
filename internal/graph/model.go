@@ -199,6 +199,15 @@ const (
 	StateConflicting     = "conflicting"       // sources disagree
 )
 
+// Verified-granularity values (F.0). Channel-granular evidence (a span, an
+// OpenAPI operation) proves the channel is real — never that a specific call
+// site ran. "site" is set only when the evidence itself carries code-level
+// attribution (e.g. code.filepath span attributes), never inferred.
+const (
+	GranularityChannel = "channel"
+	GranularitySite    = "site"
+)
+
 // SourceRef records one evidence contribution to an edge (F.0).
 // Provider is one of the five pinned names: static | contract | runtime | config | llm.
 // Confidence uses the evidence-fusion ladder (observed > declared > inferred > candidate > unknown).

@@ -764,8 +764,23 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if err != nil {
 			return nil, fmt.Errorf("evidence reconcile: %w", err)
 		}
-		// Re-upsert reconciled edges (ON CONFLICT DO UPDATE stamps the new fields).
+		// Re-upsert reconciled edges (ON CONFLICT DO UPDATE stamps the new fields)
+		// and persist any synthetic nodes the reconciler minted for gap edges —
+		// without them the gap edges would dangle.
 		bwEv := graph.NewBatchWriter(store)
+		staticNodeIDs := make(map[string]bool, len(allNodes))
+		for i := range allNodes {
+			staticNodeIDs[allNodes[i].ID] = true
+		}
+		for i := range result.Nodes {
+			if staticNodeIDs[result.Nodes[i].ID] {
+				continue
+			}
+			n := result.Nodes[i]
+			if err := bwEv.AddNode(ctx, &n); err != nil {
+				return nil, fmt.Errorf("persist reconciled node: %w", err)
+			}
+		}
 		for i := range result.Edges {
 			e := result.Edges[i]
 			if err := bwEv.AddEdge(ctx, &e); err != nil {
