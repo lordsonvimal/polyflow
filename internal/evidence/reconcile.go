@@ -125,9 +125,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		nodeService[n.ID] = n.Service
 	}
 
+	// Build the set of static unresolved refs that non-static providers claim to
+	// have handled (matched by Service+File+Line+Name). These are removed from
+	// the static unresolved set and replaced by the provider's own entries.
+	type clearKey struct{ service, file, name string; line int }
+	clearSet := make(map[clearKey]bool)
+
 	// Collect all unresolved from all providers.
 	var allUnresolved []graph.UnresolvedRef
-	allUnresolved = append(allUnresolved, staticEv.Unresolved...)
 
 	// Process non-static providers: join their edges onto the static set.
 	// Gap edges are allocated individually and tracked by ID so a duplicate
@@ -206,9 +211,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 			}
 		}
 		allUnresolved = append(allUnresolved, c.ev.Unresolved...)
+		for _, u := range c.ev.ClearsUnresolved {
+			clearSet[clearKey{u.Service, u.File, u.Name, u.Line}] = true
+		}
 	}
 	for _, id := range gapOrder {
 		workingEdges = append(workingEdges, *gapByID[id])
+	}
+
+	// Add static unresolved entries, skipping any that a non-static provider
+	// has claimed via ClearsUnresolved (those are replaced by the provider's
+	// own entries, e.g. config_not_found instead of dynamic_url).
+	for _, u := range staticEv.Unresolved {
+		if !clearSet[clearKey{u.Service, u.File, u.Name, u.Line}] {
+			allUnresolved = append(allUnresolved, u)
+		}
 	}
 
 	// Recompute VerificationState for every edge from Sources[] (total).
@@ -286,7 +303,7 @@ func computeState(sources []graph.SourceRef) string {
 		switch s.Provider {
 		case "static":
 			hasStatic = true
-		case "runtime", "contract":
+		case "runtime", "contract", "config":
 			hasConfirm = true
 		}
 	}
