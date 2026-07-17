@@ -20,6 +20,7 @@ import (
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/eval"
+	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/evidence/trace_ingest"
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -62,6 +63,7 @@ func init() {
 		mcpCmd,
 		evalCmd,
 		doctorCmd,
+		reconcileCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
@@ -1910,6 +1912,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// R.5 runtime coverage: per-kind verified/candidate/gap counts from the
 	// graph store (cumulative across all sessions).
 	fmt.Println()
+	var allEdges []graph.Edge
 	if storeErr != nil {
 		fmt.Printf("  Runtime coverage:    (no index — run 'polyflow index' first)\n")
 	} else {
@@ -1918,10 +1921,29 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		if idxErr != nil {
 			fmt.Printf("  Runtime coverage:    error building index: %v\n", idxErr)
 		} else {
-			edges := idx.AllEdges()
-			report := trace_ingest.ComputeCoverage(edges, nil)
-			printDoctorRuntimeCoverage(report)
+			allEdges = idx.AllEdges()
+			rtReport := trace_ingest.ComputeCoverage(allEdges, nil)
+			printDoctorRuntimeCoverage(rtReport)
 		}
+	}
+
+	// F.4 fusion report: verified / candidate / gap / conflicting summary,
+	// merged alongside G.5 contract coverage and R.5 runtime coverage.
+	// Also surfaces V.4 versioning coverage if the indexer wrote it.
+	fmt.Println()
+	if storeErr != nil {
+		fmt.Printf("  Fusion coverage:     (no index — run 'polyflow index' first)\n")
+	} else if len(allEdges) > 0 {
+		fusionReport := evidence.BuildReport(allEdges)
+		printDoctorFusionCoverage(fusionReport)
+		// V.4 versioning coverage — print if available (V.4 is pending; graceful absent).
+		if ctx3 := context.Background(); ctx3 != nil {
+			if vCov, err := store.GetMeta(ctx3, "version_coverage"); err == nil && vCov != "" {
+				fmt.Printf("  Versioning coverage: %s\n", vCov)
+			}
+		}
+	} else {
+		fmt.Printf("  Fusion coverage:     (no cross-service edges — run 'polyflow index' first)\n")
 	}
 
 	fmt.Println()
@@ -1967,6 +1989,49 @@ func printDoctorRuntimeCoverage(r trace_ingest.CoverageReport) {
 			fmt.Printf("%s  %-16s  %-30s  %s → %s\n",
 				indent, g.Kind, g.Key, g.From, g.To)
 		}
+	}
+}
+
+// printDoctorFusionCoverage prints the F.4 fusion coverage section in doctor style.
+func printDoctorFusionCoverage(r evidence.ReconcileReport) {
+	prefix := "  Fusion coverage:     "
+	indent := "                       "
+
+	if r.TotalEdges == 0 && r.GapEdges == 0 && r.ConflictingEdges == 0 {
+		fmt.Printf("%s(no cross-service edges)\n", prefix)
+		return
+	}
+
+	pctStr := "n/a"
+	if r.TotalEdges > 0 {
+		pctStr = fmt.Sprintf("%.1f%%", r.VerifiedPct)
+	}
+	fmt.Printf("%s%s verified  total=%d  candidate=%d  gap=%d  conflicting=%d\n",
+		prefix, pctStr, r.TotalEdges, r.CandidateEdges, r.GapEdges, r.ConflictingEdges)
+
+	if len(r.ByKind) > 0 {
+		fmt.Printf("%s%-20s  %6s  %8s  %9s  %3s  %5s\n",
+			indent, "kind", "total", "verified", "candidate", "gap", "conf")
+		for _, row := range r.ByKind {
+			if row.Total+row.Gap+row.Conflicting == 0 {
+				continue
+			}
+			pct := "n/a"
+			if row.Total > 0 {
+				pct = fmt.Sprintf("%.1f%%", row.Pct)
+			}
+			fmt.Printf("%s%-20s  %6d  %8d  %9d  %3d  %5d  %s\n",
+				indent, row.Kind, row.Total, row.Verified, row.Candidate, row.Gap, row.Conflicting, pct)
+		}
+	}
+
+	if r.ConflictingEdges > 0 {
+		fmt.Printf("%s%d conflicting edge(s) — run 'polyflow reconcile' for details\n",
+			indent, r.ConflictingEdges)
+	}
+	if r.GapEdges > 0 {
+		fmt.Printf("%s%d gap channel(s) — run 'polyflow reconcile --list-gaps' or '--propose-dir'\n",
+			indent, r.GapEdges)
 	}
 }
 
