@@ -28,6 +28,60 @@ type GoSemanticAnalyzer struct{}
 
 func (a *GoSemanticAnalyzer) Language() string { return "go" }
 
+// collapseTestVariants reduces the package set returned by packages.Load with
+// Tests:true to one variant per import path:
+//
+//   - the synthetic test binary ("pkg.test", generated main only) is dropped;
+//   - when both the plain package and its test-augmented variant
+//     ("pkg [pkg.test]", a strict superset that adds in-package _test.go
+//     files) are present, the test variant wins — unless the test variant has
+//     build errors and the plain one is clean, in which case broken tests
+//     must not take down the production call graph (fall back to plain);
+//   - external test packages ("pkg_test") have their own import path and pass
+//     through.
+//
+// Duplicate nodes/edges across variants are additionally deduped downstream
+// by deterministic ID, so this filter is about error isolation and not
+// double-walking, but it keeps the SSA build small.
+func collapseTestVariants(pkgs []*packages.Package) []*packages.Package {
+	type slot struct {
+		plain *packages.Package
+		test  *packages.Package
+	}
+	byPath := make(map[string]*slot, len(pkgs))
+	order := make([]string, 0, len(pkgs))
+	for _, p := range pkgs {
+		if strings.HasSuffix(p.PkgPath, ".test") {
+			continue // synthetic test binary
+		}
+		s, ok := byPath[p.PkgPath]
+		if !ok {
+			s = &slot{}
+			byPath[p.PkgPath] = s
+			order = append(order, p.PkgPath)
+		}
+		if strings.Contains(p.ID, " [") {
+			s.test = p
+		} else {
+			s.plain = p
+		}
+	}
+	out := make([]*packages.Package, 0, len(order))
+	for _, path := range order {
+		s := byPath[path]
+		switch {
+		case s.test != nil && len(s.test.Errors) == 0:
+			out = append(out, s.test)
+		case s.plain != nil:
+			out = append(out, s.plain)
+			// errored test-only variants (in-package or external _test) are
+			// dropped: broken tests degrade to the pre-Tests:true graph
+			// instead of aborting the whole semantic pass.
+		}
+	}
+	return out
+}
+
 // AnalyzeService loads all packages under dir, builds SSA, then walks every Call
 // instruction in every function to emit caller→callee edges. Only functions whose
 // source file is inside dir are included — stdlib and vendor dependencies are skipped.
@@ -42,6 +96,11 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		Mode: packages.LoadAllSyntax,
 		Dir:  dir,
 		Fset: fset,
+		// Tests: load *_test.go too — tests are real callers, and blast radius
+		// without them silently omits "which tests break if I change this"
+		// (recall over precision). Edges still resolve against knownNodes, so
+		// workspaces that exclude test files from the walk are unaffected.
+		Tests: true,
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
@@ -49,6 +108,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 			Warning: fmt.Sprintf("go/packages load failed for service %q: %v — falling back to tree-sitter call edges", service, err),
 		}
 	}
+	pkgs = collapseTestVariants(pkgs)
 	if packages.PrintErrors(pkgs) > 0 {
 		return SemanticResult{
 			Warning: fmt.Sprintf("service %q has build errors — semantic call graph unavailable, falling back to tree-sitter", service),

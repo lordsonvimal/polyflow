@@ -97,13 +97,22 @@ func CheckGate(current, baseline *MultiReport) *GateResult {
 		}
 	}
 
-	// Condition 4: baseline repo missing from the current run.
+	// Condition 4: baseline repo missing from the current run. Path-based
+	// (local-only) repos that were explicitly skipped are exempt — CI cannot
+	// clone a private local repo, so its absence is an expected skip. URL
+	// repos are never exempt: a failed clone/index must fail the gate.
 	currentRepos := make(map[string]bool, len(current.Reports))
 	for _, rep := range current.Reports {
 		currentRepos[rep.Repo] = true
 	}
+	skippedLocalOnly := make(map[string]bool, len(current.Skipped))
+	for _, s := range current.Skipped {
+		if s.LocalOnly {
+			skippedLocalOnly[s.Name] = true
+		}
+	}
 	for _, rep := range baseline.Reports {
-		if !currentRepos[rep.Repo] {
+		if !currentRepos[rep.Repo] && !skippedLocalOnly[rep.Repo] {
 			regressions = append(regressions, Regression{
 				Repo:   rep.Repo,
 				CaseID: "*",

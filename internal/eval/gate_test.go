@@ -248,3 +248,26 @@ func TestCheckGate_NewRepoNotMissing(t *testing.T) {
 	gate := eval.CheckGate(current, baseline)
 	assert.True(t, gate.OK, "a newly added repo must not trip missing_repo")
 }
+
+// TestCheckGate_LocalOnlySkipExempt: a path-based (local-only) baseline repo
+// that the current run explicitly skipped does not trip missing_repo — CI
+// cannot clone a private local repo. A URL repo skip is NOT exempt.
+func TestCheckGate_LocalOnlySkipExempt(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0},
+	)
+	current := &eval.MultiReport{
+		GeneratedAt: time.Now().UTC(),
+		Skipped: []eval.SkippedCorpus{
+			{Name: "testrepo", Reason: "graph DB absent", LocalOnly: true},
+		},
+	}
+	gate := eval.CheckGate(current, baseline)
+	assert.True(t, gate.OK, "local-only skip must be exempt from missing_repo")
+
+	current.Skipped[0].LocalOnly = false // simulate a URL repo whose clone failed
+	gate = eval.CheckGate(current, baseline)
+	assert.False(t, gate.OK, "URL-repo skip must still trip missing_repo")
+	require.Len(t, gate.Regressions, 1)
+	assert.Equal(t, "missing_repo", gate.Regressions[0].Reason)
+}

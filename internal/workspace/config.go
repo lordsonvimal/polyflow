@@ -60,14 +60,19 @@ type WorkspaceConfig struct {
 }
 
 // DefaultExcludes returns the exclude globs written by `polyflow init`.
-// They cover dependency dirs, build output, and test code across the
-// supported ecosystems (Go *_test.go files and *_test/ fixture dirs,
-// JS/TS *.test.* / *.spec.* files, Ruby spec/ dirs).
+// They cover dependency dirs, build output, and fixture/data dirs.
+//
+// Test CODE (Go *_test.go, JS/TS *.test.* / *.spec.*, Ruby spec/) is
+// deliberately NOT excluded: tests are real callers, and a blast radius
+// that omits "which tests break if I change this" is a silent recall gap
+// (this bit the chessleap eval corpus — test-file callers/importers were
+// invisible). Fixture DIRS stay excluded: testdata/ and *_test/ hold data
+// and intentionally-broken sources, not callers. Workspaces that want the
+// old behavior add the globs back in index.exclude.
 func DefaultExcludes() []string {
 	return []string{
 		"**/node_modules/**", "**/vendor/**", "**/dist/**",
-		"**/testdata/**", "**/*_test.go", "**/*_test/**",
-		"**/*.test.*", "**/*.spec.*", "**/spec/**", "**/tmp/**",
+		"**/testdata/**", "**/*_test/**", "**/tmp/**",
 	}
 }
 

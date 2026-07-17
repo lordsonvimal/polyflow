@@ -1,20 +1,28 @@
 name: chessleap
 version: "1"
 services:
-  - name: api
-    path: .
-    language: go
-    frameworks:
-      - gin
-      - datastar
-      - templ
-  - name: web
-    path: ./web
-    language: javascript
-links: []
+    - name: chessleap
+      path: .
+      language: go
+      frameworks:
+        - templ
+        - datastar
+        - gin
+links:
+    - from: chessleap
+      to: '@synergy/theme'
+      via: portal
+      hint: '@synergy/theme=../synergy/packages/theme'
 index:
-  exclude:
-    - '**/node_modules/**'
-    - '**/vendor/**'
-    - '**/dist/**'
-    - '**/*_test.go'
+    exclude:
+        - '**/node_modules/**'
+        - '**/vendor/**'
+        - '**/dist/**'
+        - '**/testdata/**'
+        - '**/*_test/**'
+        - '**/tmp/**'
+settings:
+    snippet_lines: 0
+    default_layout: ""
+    default_depth: 0
+    port: 0

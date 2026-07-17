@@ -277,9 +277,27 @@ cases (incl. one `file`-kind first-hop case). The new cases immediately caught
 two real recall bugs — the quoted route-group prefix (contract plan G.3
 addendum) and the missing `data-init` vocab entry (versioning plan V.1
 addendum) — validating the corpus-first approach. After fixes: chessleap
-recall 0.922, 0 hard-fails; remaining misses are honest diagnostics (test-file
-callers/importers not linked — `move-sync.test.js`,
-`apply_move_checked_test.go`). Baseline ratcheted to include chessleap.
+recall 0.922, 0 hard-fails; remaining misses were test-file callers/importers
+not linked. Baseline ratcheted to include chessleap.
+
+**Addendum (2026-07-17, test-file gap).** The remaining misses had one root
+cause: test code was excluded *by policy* — `workspace.DefaultExcludes()`
+(written into every `polyflow init` workspace, including chessleap's) excluded
+`**/*_test.go` / `**/*.test.*` / `**/*.spec.*` / `**/spec/**`, and the Go SSA
+pass loaded packages without `Tests: true`, so test callers could never link
+even when walked. Both fixed: DefaultExcludes now keeps only fixture/data dirs
+(`testdata/`, `*_test/`, `tmp/` + deps/build output) — tests are real callers
+and belong in blast radius; the SSA pass loads with `Tests: true` behind a
+`collapseTestVariants` filter (test-augmented package variant preferred when it
+compiles, plain variant when broken tests would otherwise abort the semantic
+pass; synthetic `.test` binaries dropped). chessleap workspace updated
+accordingly: 689 files (was 573), recall **1.000 across all 15 cases**, 0
+hard-fails. The gate's `missing_repo` condition gained a local-only exemption
+(`SkippedCorpus.LocalOnly`): path-based private repos explicitly skipped in CI
+do not trip the gate, while URL-repo clone failures still do — verified by
+simulating CI with the chessleap cache removed (gate exit 0 with the skip
+warning). Existing URL corpora keep their committed workspace excludes;
+re-evaluating them with test code indexed is a separate decision.
 
 ### Phase E.3 — CI regression gate `done`
 
