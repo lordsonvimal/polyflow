@@ -1,0 +1,14 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", "spanId": "bbbbbbbbbbbbbbbb",
+     "name": "GET /health", "kind": 2,
+     "startTimeUnixNano": "1752480000000000000", "endTimeUnixNano": "1752480000010000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/health"}},
+       {"key": "db.statement", "value": {"stringValue": "SELECT * FROM users WHERE id = $1"}},
+       {"key": "user.email", "value": {"stringValue": "secret@example.com"}},
+       {"key": "net.peer.ip", "value": {"stringValue": "10.0.0.1"}}
+     ]}]}]}
+]}
