@@ -200,12 +200,55 @@ contract engine's channel-key normalization. Wrap today's static pipeline as the
 `EvidenceProvider` (`source=static`). No new sources yet — graph identical + provenance
 stamped. *SchemaVersion bump.*
 
+**Pinned reconciliation semantics (bug-class rules 1/2/5, `docs/phases.md`):**
+- **Multi-valued join, both sides.** One channel confirmation stamps a source
+  on **every** static edge sharing `(kind, key, from_service, to_service)` —
+  never only the first found. N confirmations of one channel append N source
+  refs to each such edge, deduped by `(provider, ref)`. Build the join index
+  as `map[key][]*Edge`, never `map[key]*Edge` (the exact single-valued-index
+  bug the contract engine shipped with).
+- **Merge into existing edges, never duplicate.** A non-static source that
+  matches an existing edge appends to `Sources[]` and recomputes
+  `verification_state`; it must not mint a second edge with the same
+  `(From, To, Type)`. Only `observed_only_gap` (no static edge at all) mints
+  nodes/edges, and those get deterministic IDs derived from
+  `(provider, kind, key, from, to)` — never a counter or map-order-dependent
+  value.
+- **Deterministic output.** The reconciler iterates edges in stored order;
+  minted synthetic nodes/edges and each edge's `Sources[]` are sorted by a
+  stable key before persisting. F.0's tests include a **two-run determinism
+  test**: reconcile the same inputs twice, require byte-identical JSON export.
+- **The static-baseline-unchanged guard is a real committed snapshot in the
+  F.0 commit itself** (chessleap edge set before vs. after wrapping, identical
+  apart from the added `Sources[]`/state fields) — not a deferred stub; the
+  G.0 golden-harness breach is the precedent this forbids.
+- **Unknown provider name** (anything outside the five pinned `Name()`
+  values) → load/registration error, not silent acceptance.
+- **State recomputation is total.** `verification_state` is recomputed over
+  the full edge set every run from `Sources[]` alone — never incrementally
+  patched — so a removed session/spec cannot leave a stale `verified`.
+
 ### Phase F.1 — Contract-ingestion source `pending`
 `internal/evidence/contract_ingest/{openapi.go,protobuf.go,graphql.go,asyncapi.go}`.
 Parse standard IDL/spec files (discovered via workspace globs) into producer/consumer
 nodes+edges tagged `source=contract`, normalized to channel keys. Deterministic links;
 `verified` when static agrees, `observed_only_gap` when only the contract knows. One
 fixture per format (2-service). Highest determinism-per-effort.
+
+**Pinned key-normalization trap (the join fails silently without this):**
+spec path-parameter syntax differs from framework syntax — OpenAPI writes
+`/games/{gameID}`, gin writes `/games/:gameID`, Rails writes `/games/:id`.
+Every spec-derived key must pass through the **same contract-engine
+normalizer chain** static keys use (`param_wildcard` must map `{x}` as well
+as `:x` to `*`; extend the normalizer if it only handles `:x` today — check,
+don't assume). Worked example: OpenAPI operation `GET /games/{gameID}` and
+static handler key `GET /games/:gameID` must both normalize to
+`GET /games/*` or the `verified` flip never happens and no test screams.
+Required test: one fixture where the spec uses `{param}` syntax and the
+static edge uses `:param`, asserting the `verified` flip. Also apply
+bug-class rule 3 (`docs/phases.md`): spec constructs parsed but not mapped
+(e.g. OpenAPI `servers:` variables, callbacks, webhooks) are ledgered with a
+named reason, never silently skipped.
 
 ### Phase F.2 — Runtime trace-ingestion source + capture sessions `pending`
 **Expanded into its own plan: `docs/runtime-flow-plan.md` (phases R.0–R.5).**
@@ -227,12 +270,29 @@ exactly the producers contract-matching G.6 stamps `key_dynamic=true` (with
 `dynamic_<kind>` ledger entries) — resolve those first; a resolved producer
 clears its ledger entry.
 
+**Pinned resolution semantics:** (a) values read from YAML/env/HCL are raw
+source text — strip surrounding quotes and whitespace before key
+construction (bug-class rule 6; the quoted-prefix incident applies verbatim
+to config values); (b) when one variable resolves to **different values per
+environment/overlay** (dev vs prod k8s overlays, multiple tfvars), emit a
+candidate upgrade for **each** value (fan-out, rule 1) tagged with its
+config source ref — never pick one environment silently; (c) an env var
+referenced in code but defined nowhere in the scanned config stays in the
+`dynamic_<kind>` ledger with reason `config_not_found` — absence of config
+is not license to guess.
+
 ### Phase F.4 — Fusion, reconciliation report + doctor coverage `pending`
 `reconcile.go` finalizes `verification_state` across all providers; conflicts surfaced.
 `polyflow doctor` / `reconcile` prints: % verified, per-kind coverage, the
 `candidate` (static-only, unconfirmed) list, and the `observed_only_gap` list — which
 **auto-generates candidate contract rules** (the self-improving loop). Merges with the
 contract-matching G.5 and versioning V.4 coverage tables.
+
+**Determinism (rule 2):** report rows, gap lists, and auto-generated rule
+files are sorted by stable keys (kind, key, service) — counts and file
+contents must be byte-identical across two runs on the same inputs
+(two-run test required). Auto-proposed rule filenames derive from the
+cluster key, never from an emission counter.
 
 ### Phase F.5 — LLM last-mile proposer (optional, guardrailed) `pending`
 `internal/evidence/llm/proposer.go`. For residual `UnresolvedRef`s only, an LLM
