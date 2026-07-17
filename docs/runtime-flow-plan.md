@@ -419,7 +419,7 @@ contract normalizer chain (`case_fold` → lowercase), not uppercase as shown in
 the plan example's uppercase was inconsistent with the `case_fold` normalizer, and lowercase is required
 for the key-join against static edges to succeed.
 
-### Phase R.2 — Capture sessions (`start/stop/run`) `pending`
+### Phase R.2 — Capture sessions (`start/stop/run`) `done`
 
 **Problem.** File ingest requires the user to run their own collector. The
 embedded receiver makes capture a one-command affair and enables the
@@ -448,6 +448,27 @@ name collision → error.
 on a fixture app produces a session that `polyflow flows --session e2e`
 renders; `capture start` + manual curl + `capture stop` produces a
 partial session with exactly the curled flows.
+
+**Outcome (done).** Delivered `internal/evidence/trace_ingest/session.go`
+(`Session`, `SessionMeta`, `NewSession`, `Append`, `Finalize`, pidfile helpers)
+and `internal/evidence/trace_ingest/receiver.go` (`Receiver`, HTTP+gRPC
+servers, `spansToOTLPJSONLine` normaliser, gRPC `grpcTraceHandler`), plus
+`cmd/polyflow/capture.go` (`capture start/stop/run` commands). New direct deps:
+`google.golang.org/grpc v1.82.1` and `go.opentelemetry.io/proto/otlp/collector/trace/v1`
+(the collector package that R.0 intentionally avoided — now needed to implement
+the server-side gRPC TraceService). 17 new tests in
+`internal/evidence/trace_ingest/receiver_test.go` plus 2 in
+`cmd/polyflow/capture_test.go`; all 19 test packages pass. `BenchmarkIndexCold`
+holds (receiver is off the indexing hot path). Deviation: `Session.Append`
+normalises all input (multi-line JSON or binary protobuf) to compact single-line
+JSON before writing, ensuring JSONL integrity regardless of input format; the
+spec said "raw spans as received" which would allow multi-line JSON to break
+the JSONL format — compact normalisation is strictly better and required for the
+concurrent-writes test to pass. `capture start` instructs the user to background
+the process rather than using a hard daemon fork (the "or instructs to background"
+clause in the spec), writing a pidfile so `capture stop` can signal it. Acceptance
+confirmed manually: `capture start` binds both ports and writes the pidfile;
+`capture stop` sends SIGTERM and the receiver finalises cleanly.
 
 ### Phase R.3 — SSE/streaming connection flows `pending`
 
