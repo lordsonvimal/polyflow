@@ -3,7 +3,9 @@
 The phase plans (`docs/agent-context-plan.md`, `docs/contract-matching-plan.md`,
 `docs/versioning-matrix-plan.md`, `docs/evidence-fusion-plan.md`,
 `docs/runtime-flow-plan.md`, `docs/goal-completion-plan.md`,
-`docs/semantic-search-plan.md`) all follow this process. The original gap-closing plan that carried these rules is complete and was
+`docs/semantic-search-plan.md`, and the numbered gap-closing series
+`docs/plan-1-recall-hardfails.md` through `docs/plan-6-scale-monorepo.md`)
+all follow this process. The original gap-closing plan that carried these rules is complete and was
 removed; this doc keeps the rules themselves.
 
 Status legend used in every plan: `pending` · `in progress` · `done`.
@@ -46,6 +48,29 @@ prerequisite banner is authoritative if it conflicts):
 
 **V.2/V.3 sidecars** are divergence-triggered (versioning-matrix plan): do
 not build them until a V.4 matrix cell actually diverges.
+
+## Gap-closing series (plans 1–6) — order relative to the roadmap above
+
+The numbered plans close coverage gaps found in the 2026-07-17 sufficiency
+review. Execute them **in filename order**; each doc's own prerequisite
+banner pins where it interleaves with the roadmap above:
+
+1. `docs/plan-1-recall-hardfails.md` (Tier B) — no prerequisites; start
+   any time. Fixes measured baseline hard-fails; B.0's unparsed-file
+   ledger is a substrate for plans 2–6. B.1 is a prerequisite for
+   plan 3's L.N1.
+2. `docs/plan-2-modern-web.md` (Tier M) — needs only the contract engine
+   (done). File-based routing, Vue/Svelte SFCs, tRPC, Angular.
+3. `docs/plan-3-language-breadth.md` (Tier L continued) — after L.P
+   (Python) closes on its eval number. Java/Spring, C#/ASP.NET,
+   PHP/Laravel; one language at a time, each closed by an eval number.
+4. `docs/plan-4-deployment-topology.md` (Tier K) — K.0/K.1 any time;
+   K.2/K.3 after F.0.
+5. `docs/plan-5-cloud-events.md` (Tier Q) — Q.0 any time after G;
+   Q.1 after R.4; Q.2 after F.0; Q.3 after Q.0.
+6. `docs/plan-6-scale-monorepo.md` (Tier N) — N.0–N.2 after E.3 + B.0;
+   **N.3 runs strictly last of everything** (it writes the coverage
+   contract for whatever actually shipped).
 
 Referencing rule for implementers: every prompt/task should name **this file
 (process + order) plus the single owning plan doc for the phase being
