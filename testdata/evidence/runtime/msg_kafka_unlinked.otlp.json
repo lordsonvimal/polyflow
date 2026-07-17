@@ -1,0 +1,28 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "producer-svc"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "eeff000000000000000000000000ee33",
+     "spanId": "3333000033330000",
+     "name": "publish orders-topic",
+     "kind": 4,
+     "startTimeUnixNano": "1752490100000000000",
+     "endTimeUnixNano": "1752490100005000000",
+     "attributes": [
+       {"key": "messaging.system", "value": {"stringValue": "kafka"}},
+       {"key": "messaging.operation.type", "value": {"stringValue": "publish"}},
+       {"key": "messaging.destination.name", "value": {"stringValue": "orders-topic"}}
+     ]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "consumer-svc"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "0011000000000000000000000000ff44",
+     "spanId": "4444000044440000",
+     "name": "process orders-topic",
+     "kind": 5,
+     "startTimeUnixNano": "1752490100100000000",
+     "endTimeUnixNano": "1752490100200000000",
+     "attributes": [
+       {"key": "messaging.system", "value": {"stringValue": "kafka"}},
+       {"key": "messaging.operation.type", "value": {"stringValue": "process"}},
+       {"key": "messaging.destination.name", "value": {"stringValue": "orders-topic"}}
+     ]}]}]}
+]}

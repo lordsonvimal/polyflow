@@ -1,0 +1,32 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "publisher"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "aabb000000000000000000000000aa11",
+     "spanId": "1111000011110000",
+     "name": "publish user.events",
+     "kind": 4,
+     "startTimeUnixNano": "1752490000000000000",
+     "endTimeUnixNano": "1752490000010000000",
+     "attributes": [
+       {"key": "messaging.system", "value": {"stringValue": "rabbitmq"}},
+       {"key": "messaging.operation.type", "value": {"stringValue": "publish"}},
+       {"key": "messaging.destination.name", "value": {"stringValue": "user.events"}},
+       {"key": "messaging.rabbitmq.destination.routing_key", "value": {"stringValue": "user.created"}}
+     ]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "consumer"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "ccdd000000000000000000000000cc22",
+     "spanId": "2222000022220000",
+     "name": "process user.events",
+     "kind": 5,
+     "startTimeUnixNano": "1752490000050000000",
+     "endTimeUnixNano": "1752490000060000000",
+     "attributes": [
+       {"key": "messaging.system", "value": {"stringValue": "rabbitmq"}},
+       {"key": "messaging.operation.type", "value": {"stringValue": "process"}},
+       {"key": "messaging.destination.name", "value": {"stringValue": "user.events"}},
+       {"key": "messaging.rabbitmq.destination.routing_key", "value": {"stringValue": "user.created"}}
+     ],
+     "links": [{"traceId": "aabb000000000000000000000000aa11", "spanId": "1111000011110000"}]
+   }]}]}
+]}
