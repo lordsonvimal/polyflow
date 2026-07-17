@@ -111,6 +111,16 @@ polyflow flows [--session <name> | <file>]
                          #  wrapped_command?}
 ```
 
+**Pinned file format — do not improvise.** `spans.otlp.json` is **JSONL**:
+one complete OTLP/JSON `ExportTraceServiceRequest` document per line,
+appended as received (a receiver gets many export calls per session; a
+single growing JSON array cannot be appended to safely). The R.0 parser
+auto-detects and accepts **both** a single OTLP JSON document (the
+collector-file-exporter / fixture case) and JSONL (the session case);
+protobuf files are single-document. Writes are serialized through one
+mutex-guarded writer — concurrent OTLP posts must not interleave bytes
+(R.2 test).
+
 - Session names default to a timestamp (`2026-07-14T10-30-00`); `--session`
   names them for sharing ("the checkout-flow capture").
 - Sessions are **additive union**: reconciliation (F.4) consumes all sessions
@@ -312,10 +322,13 @@ OTLP parsing and the normalized span model must exist and be fixture-proven.
   empty until R.1 — prints spans + ledger).
 
 **Tests.** Fixture dumps under `testdata/evidence/runtime/`: a hand-built
-2-service HTTP trace in OTLP JSON (positive), the same in protobuf, a
-malformed file (error, not panic), and a spans-with-unknown-attrs file
-(attrs dropped, spans kept). Negative: a metrics-only OTLP file → zero spans,
-explicit note.
+2-service HTTP trace in OTLP JSON (positive), the same in protobuf, the same
+as a 2-line JSONL session file (the pinned session format — both forms must
+parse identically), a malformed file (error, not panic), and a
+spans-with-unknown-attrs file (attrs dropped, spans kept). Negative: a
+metrics-only OTLP file → zero spans, explicit note. `flows` prints spans in
+a stable order (sorted by trace_id, start time, span_id — never map order;
+rule 2).
 
 **Acceptance.** `polyflow flows testdata/evidence/runtime/http_2svc.otlp.json`
 lists the expected spans and an empty ledger. No graph writes anywhere.
@@ -337,6 +350,27 @@ F.0 substrate can join.
   `verified_granularity` per the rules, source ref
   `{session, trace_id, observed_at, causality}`.
 
+**Pinned mapper semantics (bug-class rules 1/2/6, `docs/phases.md`):**
+- **Fan-out.** Flow records aggregate by `(kind, key, from_service,
+  to_service)`: three services calling the same route in one session produce
+  three flow records (one per from-service), and one channel confirmation
+  stamps a source on **every** static edge sharing the channel — the join
+  index is `map[key][]…`, never `map[key]*…`. `Refs` within a record are
+  deduped by `(session, trace_id)`.
+- **Determinism.** Flow records are emitted sorted by
+  `(kind, key, from_service, to_service)`; refs sorted by
+  `(session, trace_id)`; ledger entries by `(trace_id, span_id)`. Two-run
+  determinism test required (same session in twice → byte-identical
+  `flows --format json` output and byte-identical graph writes).
+- **Keys go through the contract normalizer registry only.** Never
+  hand-trim, hand-lowercase, or hand-wildcard a path in the mapper — if
+  `url.full` needs path extraction, do the URL parse, then hand the path to
+  the same normalizers static keys use. Divergent normalization is a silent
+  join failure with no failing test.
+- **Test through real bytes.** Mapper tests must feed real OTLP fixture
+  files through the R.0 parser — hand-built `Span` structs alone are
+  insufficient (the hand-built-nodes-masked-the-quoted-prefix incident).
+
 **Tests.** Unit tests per mapping rule (route-pattern preference over
 url.path, old-vs-new semconv attribute names, unknown service → ledger).
 Mapping fixture `http_2svc_mapped.otlp.json`: `service.name=chessleap-api`
@@ -346,6 +380,8 @@ Fixture: 2-service trace where one flow matches a static edge (→ `verified`,
 `channel`) and one matches nothing (→ `observed_only_gap` + synthetic
 endpoint nodes). Granularity guard: two static call sites on one channel +
 one span → both `channel`, never `site`; a span with `code.filepath` → `site`.
+Fan-out guard: two static edges on one channel + one span → **both** get the
+runtime source (multi-valued join test). Two-run determinism test.
 
 **Acceptance.** Indexing a fixture workspace with the session present shows
 the verified flip and the gap edge; without the session, graph is byte-
@@ -432,7 +468,9 @@ Surfaced via `polyflow doctor` (merged into the shared G.5/V.4/F.4 coverage
 tables) and `polyflow flows --session <name> --coverage`.
 
 **Tests.** Coverage math unit tests; doctor output test; a session covering
-0 channels reports 0% without downgrading anything.
+0 channels reports 0% without downgrading anything; report rows sorted by
+(kind, key) — two-run determinism test on the same sessions (rule 2,
+`docs/phases.md`).
 
 **Acceptance.** After the R.3 chessleap walkthrough, doctor prints the
 verified/candidate split and the datastar channels appear in the verified
