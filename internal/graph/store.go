@@ -257,15 +257,19 @@ func (s *SQLiteStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
 }
 
 func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
-	// FTS5 prefix search: append * for prefix matching
+	// FTS5 prefix search: append * for prefix matching. Nodes whose label is
+	// an exact (case-insensitive) match for the query rank above prefix-only
+	// matches — bm25 alone shuffles as the corpus grows (e.g. indexing test
+	// files), and a query for "Create" must find the node named Create before
+	// CreateClient.
 	ftsQuery := query + "*"
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.id, n.type, n.label, n.service, n.file, n.line, n.language, n.meta
 		FROM nodes n
 		JOIN nodes_fts f ON f.id = n.id
 		WHERE nodes_fts MATCH ?
-		ORDER BY rank
-		LIMIT ?`, ftsQuery, limit)
+		ORDER BY (lower(n.label) = lower(?)) DESC, rank
+		LIMIT ?`, ftsQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search nodes: %w", err)
 	}
