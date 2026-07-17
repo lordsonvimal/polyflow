@@ -14,8 +14,6 @@ index:
   exclude:
     - '**/node_modules/**'
     - '**/vendor/**'
-    - '**/spec/**'
-    - '**/test/**'
     - '**/db/schema.rb'
     - '**/db/migrate/**'
     - 'Gemfile.lock'
