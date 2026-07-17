@@ -372,6 +372,17 @@ extended to store `end_line` for all node types (not just function/method/worker
 chi_route_group nodes receive the func_literal end row. 10 routegroup unit tests cover
 all positive and negative cases. `BenchmarkIndexCold` holds (~10.1s, within baseline).
 
+**Addendum (2026-07-17).** The claimed 3/27→~27/27 datastar improvement was never
+verified on the real chessleap repo (unavailable at G.3 time), and the E.2
+hand-verified corpus proved it did NOT hold: the matcher stored route-group
+`prefix` captures as raw source text **including quote characters**
+(`"\"/play\""`), so enrichment produced unmatchable paths (`"/play"/:gameID/draw`)
+and every grouped datastar action linked to `unresolved`. The G.3 unit tests
+hand-built nodes with unquoted prefixes, masking the bug. Fixed by adding
+`prefix` to the matcher's quote-strip list (SchemaVersion 13→14) plus a
+defensive strip in `EnrichRouteGroups` for third-party patterns; chessleap
+cross-links 373→464 and all 7 datastar eval cases now pass at recall 1.0.
+
 ### Phase G.4 — New protocols, additive `done`
 Recognition patterns + contract rules for `grpc`, `graphql`, `kafka`, `nats`,
 `redis_pubsub`; each with a 2-service fixture; prove each links with **zero engine
