@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "15" {
-		t.Errorf("expected SchemaVersion 15 (F.0 evidence-fusion substrate), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "16" {
+		t.Errorf("expected SchemaVersion 16 (R.1 CodeFile/CodeFunc on SourceRef), got %q", graph.SchemaVersion)
 	}
 }
 

@@ -217,11 +217,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		// Sort Sources deterministically before persisting (bug-class rule 2).
 		sortSources(ep.Sources)
 		ep.VerificationState = computeState(ep.Sources)
-		// Verification is channel-granular: confirming evidence proves the
-		// channel is real, never that a specific call site ran. "site" is
-		// reserved for evidence carrying code-level attribution (F.2+).
+		// Granularity: channel by default; upgraded to site only when a runtime
+		// source carries code.filepath (code-level attribution from span attrs).
+		// Two static call sites on one channel + one span without code.filepath
+		// → both stay channel — the span confirms the channel, not the site.
 		if ep.VerificationState == graph.StateVerified {
-			ep.VerifiedGranularity = graph.GranularityChannel
+			ep.VerifiedGranularity = computeGranularity(ep.Sources)
 		} else {
 			ep.VerifiedGranularity = ""
 		}
@@ -300,6 +301,19 @@ func computeState(sources []graph.SourceRef) string {
 	default:
 		return graph.StateCandidate
 	}
+}
+
+// computeGranularity returns GranularitySite if any runtime source carries a
+// CodeFile (code-level attribution from span attributes), otherwise
+// GranularityChannel.  Channel is always the safe default: a span confirms the
+// channel exists, not which call site triggered it.
+func computeGranularity(sources []graph.SourceRef) string {
+	for _, s := range sources {
+		if s.Provider == "runtime" && s.CodeFile != "" {
+			return graph.GranularitySite
+		}
+	}
+	return graph.GranularityChannel
 }
 
 // serviceCompatible reports whether a non-static edge declared by declService
