@@ -40,6 +40,17 @@ type IndexConfig struct {
 	Exclude []string `yaml:"exclude"`
 }
 
+// EvidenceConfig holds settings for the evidence-fusion providers (F.1+).
+// Fields added in later phases (trace source, toggles) will be wired then;
+// parsing an unrecognised future field is rejected at load by the strict
+// struct decoder to prevent silent misconfiguration.
+type EvidenceConfig struct {
+	// ContractGlobs are doublestar globs (relative to each service path) that
+	// locate IDL/spec files.  If empty, the contract provider uses built-in
+	// defaults (openapi.yaml, *.proto, *.graphql, asyncapi.yaml, …).
+	ContractGlobs []string `yaml:"contract_globs,omitempty"`
+}
+
 // Settings holds workspace-level defaults for the server and display.
 type Settings struct {
 	SnippetLines  int    `yaml:"snippet_lines"`  // default 30
@@ -50,13 +61,14 @@ type Settings struct {
 
 // WorkspaceConfig is the parsed representation of workspace.yaml.
 type WorkspaceConfig struct {
-	Name     string      `yaml:"name"`
-	Version  string      `yaml:"version"`
-	Services []Service   `yaml:"services"`
-	Links    []Link      `yaml:"links"`
-	Patterns []string    `yaml:"patterns,omitempty"`
-	Index    IndexConfig `yaml:"index"`
-	Settings Settings    `yaml:"settings"`
+	Name     string         `yaml:"name"`
+	Version  string         `yaml:"version"`
+	Services []Service      `yaml:"services"`
+	Links    []Link         `yaml:"links"`
+	Patterns []string       `yaml:"patterns,omitempty"`
+	Index    IndexConfig    `yaml:"index"`
+	Settings Settings       `yaml:"settings"`
+	Evidence EvidenceConfig `yaml:"evidence,omitempty"`
 }
 
 // DefaultExcludes returns the exclude globs written by `polyflow init`.

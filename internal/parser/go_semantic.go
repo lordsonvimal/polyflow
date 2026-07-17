@@ -134,7 +134,15 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// LinkTemplComponents, so the semantic pass — which only sees the generated
 	// Go function's position — can find the component twin.
 	templComponentByGenKey := make(map[string]string)
+	// Collect node IDs in sorted order so that "first wins" maps are
+	// deterministic across runs regardless of Go map iteration order.
+	// (Bug-class rule 2: Go map iteration must never reach output.)
+	sortedIDs := make([]string, 0, len(knownNodes))
 	for id := range knownNodes {
+		sortedIDs = append(sortedIDs, id)
+	}
+	sort.Strings(sortedIDs)
+	for _, id := range sortedIDs {
 		// ID format: service:file:type:name:line
 		parts := strings.SplitN(id, ":", 5)
 		if len(parts) != 5 {
@@ -142,16 +150,19 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 		file, name := parts[1], parts[3]
 		if parts[2] == string(graph.NodeTypeWorker) {
-			workerByFileLine[canonicalPath(file)+"\x00"+parts[4]] = id
+			if _, exists := workerByFileLine[canonicalPath(file)+"\x00"+parts[4]]; !exists {
+				workerByFileLine[canonicalPath(file)+"\x00"+parts[4]] = id
+			}
 			continue
 		}
 		if parts[2] == string(graph.NodeTypeComponent) && strings.HasSuffix(file, ".templ") {
 			genPath := file[:len(file)-len(".templ")] + "_templ.go"
-			templComponentByGenKey[canonicalPath(genPath)+"\x00"+name] = id
+			if _, exists := templComponentByGenKey[canonicalPath(genPath)+"\x00"+name]; !exists {
+				templComponentByGenKey[canonicalPath(genPath)+"\x00"+name] = id
+			}
 			continue
 		}
 		key := canonicalPath(file) + "\x00" + name
-		// Prefer the first match; for Go, name is unique per file in practice.
 		if _, exists := nodeByFileAndName[key]; !exists {
 			nodeByFileAndName[key] = id
 		}

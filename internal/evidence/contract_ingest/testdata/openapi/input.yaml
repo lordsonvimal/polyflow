@@ -1,0 +1,13 @@
+openapi: "3.0.3"
+info:
+  title: Game Service API
+  version: "1.0.0"
+paths:
+  /games/{gameID}:
+    get:
+      operationId: getGame
+      summary: Retrieve a single game by ID
+  /games:
+    post:
+      operationId: createGame
+      summary: Create a new game
