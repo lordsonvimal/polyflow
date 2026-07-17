@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-17T03:47:11.92267Z",
+  "generated_at": "2026-07-17T04:04:32.437587Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -62,10 +62,10 @@
         },
         {
           "case_id": "apply-move-checked-callers",
-          "recall": 0.6666666666666666,
-          "precision": 0.016129032258064516,
+          "recall": 1,
+          "precision": 0.01935483870967742,
           "honest_misses": 0,
-          "silent_misses": 1,
+          "silent_misses": 0,
           "hard_fail": false
         },
         {
@@ -79,7 +79,7 @@
         {
           "case_id": "broadcast-signals-callers",
           "recall": 1,
-          "precision": 0.03597122302158273,
+          "precision": 0.027624309392265192,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -87,7 +87,7 @@
         {
           "case_id": "new-game-store-callers",
           "recall": 1,
-          "precision": 1,
+          "precision": 0.08333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -102,10 +102,10 @@
         },
         {
           "case_id": "post-move-queue-js",
-          "recall": 0.6666666666666666,
-          "precision": 0.16666666666666666,
+          "recall": 1,
+          "precision": 0.23076923076923078,
           "honest_misses": 0,
-          "silent_misses": 1,
+          "silent_misses": 0,
           "hard_fail": false
         },
         {
@@ -118,15 +118,15 @@
         },
         {
           "case_id": "move-sync-file-imports",
-          "recall": 0.5,
-          "precision": 0.08333333333333333,
+          "recall": 1,
+          "precision": 0.15384615384615385,
           "honest_misses": 0,
-          "silent_misses": 1,
+          "silent_misses": 0,
           "hard_fail": false
         }
       ],
-      "recall": 0.9222222222222223,
-      "precision": 0.43101303289165904
+      "recall": 1,
+      "precision": 0.3785348736097266
     },
     {
       "repo": "gotify",

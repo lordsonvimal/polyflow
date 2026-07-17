@@ -31,6 +31,12 @@ type SkippedCorpus struct {
 	Name   string `json:"name"`
 	Dir    string `json:"dir"`
 	Reason string `json:"reason"`
+	// LocalOnly marks a path-based repo (manifest has path:, no url:) — one
+	// that only exists on the author's machine (e.g. a private clone). The
+	// gate's missing_repo condition exempts these: CI cannot clone them, so
+	// their absence is an expected skip, not a broken pipeline. URL repos
+	// get no such exemption — a failed clone/index must fail the gate.
+	LocalOnly bool `json:"local_only,omitempty"`
 }
 
 // RunAll finds all corpus dirs under root and runs each in sequence.
@@ -51,13 +57,16 @@ func RunAll(ctx context.Context, root string) (*MultiReport, error) {
 			// Surface unavailable repos as explicit skips (never silent).
 			m, mErr := LoadManifest(dir)
 			name := dir
+			localOnly := false
 			if mErr == nil {
 				name = m.Repo.Name
+				localOnly = m.Repo.URL == "" && m.Repo.Path != ""
 			}
 			out.Skipped = append(out.Skipped, SkippedCorpus{
-				Name:   name,
-				Dir:    dir,
-				Reason: err.Error(),
+				Name:      name,
+				Dir:       dir,
+				Reason:    err.Error(),
+				LocalOnly: localOnly,
 			})
 			continue
 		}
