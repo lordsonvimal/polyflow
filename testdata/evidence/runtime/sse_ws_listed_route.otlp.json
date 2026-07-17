@@ -1,0 +1,10 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "deadbeefcafe00001234567890abcdef", "spanId": "aaabbbcccdddeeee",
+     "name": "GET /stream", "kind": 2,
+     "startTimeUnixNano": "1752491000000000000", "endTimeUnixNano": "1752491020000000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/stream"}}]}]}]}
+]}
