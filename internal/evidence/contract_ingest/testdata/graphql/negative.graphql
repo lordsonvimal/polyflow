@@ -1,0 +1,9 @@
+# No root types (Query/Mutation/Subscription) — zero edges expected.
+type Game {
+  id: ID!
+  name: String!
+}
+
+type CreateGameInput {
+  name: String!
+}

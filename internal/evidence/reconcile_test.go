@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -463,6 +464,23 @@ func TestChessleapF0Determinism(t *testing.T) {
 		b, err := json.Marshal(edges)
 		require.NoError(t, err)
 		return b
+	}
+
+	// Pre-warm the Go build cache so both comparison runs start from identical
+	// toolchain state.  Without this, run 1 (cold) and run 2 (warm) differ:
+	// packages.Load(Tests:true) compiles test variants; on a cold cache some
+	// test variants fail to build and collapseTestVariants falls back to the
+	// plain variant, producing a different SSA than the warm run. We warm both
+	// production and test-variant caches before the two comparison runs.
+	for _, args := range [][]string{
+		{"build", "./..."},
+		{"test", "-run", "^$", "-count=1", "./..."},
+	} {
+		cmd := exec.CommandContext(t.Context(), "go", args...)
+		cmd.Dir = chessleap
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Logf("pre-warm %v warning (non-fatal): %v\n%s", args, err, out)
+		}
 	}
 
 	first := indexAndExport()

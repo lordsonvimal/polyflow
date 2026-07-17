@@ -230,7 +230,7 @@ stamped. *SchemaVersion bump.*
   the full edge set every run from `Sources[]` alone — never incrementally
   patched — so a removed session/spec cannot leave a stale `verified`.
 
-### Phase F.1 — Contract-ingestion source `pending`
+### Phase F.1 — Contract-ingestion source `done`
 `internal/evidence/contract_ingest/{openapi.go,protobuf.go,graphql.go,asyncapi.go}`.
 Parse standard IDL/spec files (discovered via workspace globs) into producer/consumer
 nodes+edges tagged `source=contract`, normalized to channel keys. Deterministic links;
