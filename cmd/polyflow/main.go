@@ -20,6 +20,7 @@ import (
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/eval"
+	"github.com/lordsonvimal/polyflow/internal/evidence/trace_ingest"
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
@@ -1906,8 +1907,67 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Printf("                       %-16s  %s\n", lang, status)
 	}
 
+	// R.5 runtime coverage: per-kind verified/candidate/gap counts from the
+	// graph store (cumulative across all sessions).
+	fmt.Println()
+	if storeErr != nil {
+		fmt.Printf("  Runtime coverage:    (no index — run 'polyflow index' first)\n")
+	} else {
+		ctx2 := context.Background()
+		idx, idxErr := store.BuildIndex(ctx2)
+		if idxErr != nil {
+			fmt.Printf("  Runtime coverage:    error building index: %v\n", idxErr)
+		} else {
+			edges := idx.AllEdges()
+			report := trace_ingest.ComputeCoverage(edges, nil)
+			printDoctorRuntimeCoverage(report)
+		}
+	}
+
 	fmt.Println()
 	return nil
+}
+
+// printDoctorRuntimeCoverage prints the runtime coverage section in doctor style.
+func printDoctorRuntimeCoverage(r trace_ingest.CoverageReport) {
+	prefix := "  Runtime coverage:    "
+	indent := "                       "
+
+	hasData := len(r.Rows) > 0 || r.GapChannels > 0
+	if !hasData {
+		fmt.Printf("%s(no runtime sessions — run 'polyflow capture start' to record flows)\n", prefix)
+		return
+	}
+
+	// Header row.
+	fmt.Printf("%s%-18s  %5s  %8s  %9s  %3s  %6s\n",
+		prefix, "kind", "total", "verified", "candidate", "gap", "%")
+
+	for _, row := range r.Rows {
+		pctStr := fmt.Sprintf("%.1f%%", row.Pct)
+		if row.Total == 0 {
+			pctStr = "n/a"
+		}
+		fmt.Printf("%s%-18s  %5d  %8d  %9d  %3d  %6s\n",
+			indent, row.Kind, row.Total, row.Verified, row.Candidate, row.Gap, pctStr)
+	}
+
+	// Total row.
+	totalPct := "n/a"
+	if r.TotalChannels > 0 {
+		totalPct = fmt.Sprintf("%.1f%%", float64(r.VerifiedChannels)/float64(r.TotalChannels)*100)
+	}
+	fmt.Printf("%s%-18s  %5d  %8d  %9d  %3d  %6s\n",
+		indent, "total", r.TotalChannels, r.VerifiedChannels, r.CandidateChannels, r.GapChannels, totalPct)
+
+	if len(r.ObservedOnlyGaps) > 0 {
+		fmt.Printf("%sObserved-only gaps (%d) — fed to candidate-rule proposer:\n",
+			indent, len(r.ObservedOnlyGaps))
+		for _, g := range r.ObservedOnlyGaps {
+			fmt.Printf("%s  %-16s  %-30s  %s → %s\n",
+				indent, g.Kind, g.Key, g.From, g.To)
+		}
+	}
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

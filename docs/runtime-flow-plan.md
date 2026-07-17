@@ -546,7 +546,7 @@ plan's ledger reason vocabulary); the old `messaging.operation` semconv
 fallback (`publish|send` for producers, `receive|process` for consumers) is
 handled in `isPublishOp`/`isConsumeOp`.
 
-### Phase R.5 — Session coverage report + doctor merge `pending`
+### Phase R.5 — Session coverage report + doctor merge `done`
 
 **Problem.** Without a report, nobody knows what a capture actually proved.
 
@@ -564,6 +564,26 @@ tables) and `polyflow flows --session <name> --coverage`.
 **Acceptance.** After the R.3 chessleap walkthrough, doctor prints the
 verified/candidate split and the datastar channels appear in the verified
 column.
+
+**Outcome (done).** Delivered `internal/evidence/trace_ingest/coverage.go`
+(`CoverageRow`, `ObservedOnlyGap`, `CoverageReport`, `ComputeCoverage`,
+`ComputeSessionCoverage`) and `graph.AdjacencyIndex.AllEdges()` (deterministic
+edge enumeration, sorted by ID). `polyflow flows --coverage` computes
+per-session coverage by joining flow records against the graph store's indexed
+edges via `ComputeSessionCoverage`; when the store is absent it prints
+session-only flow-record counts with a note to index first.
+`polyflow doctor` gains a "Runtime coverage" section reading cumulative
+verification state from all indexed edges via `ComputeCoverage`. 10 new unit
+tests pass: `TestComputeCoverage_Basic`, `TestComputeSessionCoverage_Basic`,
+`TestComputeSessionCoverage_ZeroChannels`, `TestComputeSessionCoverage_EmptyFlowsZeroPct`,
+`TestComputeCoverage_DeterminismTwoRun`, `TestComputeCoverage_RowsSortedByKind`,
+`TestComputeCoverage_LedgerSummary`, `TestComputeCoverage_GapsSortedByKindKeyFromTo`,
+`TestComputeSessionCoverage_FanOut`, `TestComputeSessionCoverage_Determinism`.
+All 19 test packages pass. `BenchmarkIndexCold` holds at ~10.2s (coverage
+computation runs only at report time, never on the indexing hot path). No
+`graph.SchemaVersion` bump required — no new node/edge shape changes.
+Deviation: `graph/model.go` gains `import "sort"` for `AllEdges()` (minor);
+no other deviations from the pinned spec.
 
 ---
 
