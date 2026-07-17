@@ -1,0 +1,19 @@
+{"resourceSpans": [
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "5b8efff798038103d269b633813fc60c", "spanId": "eee19b7ec3c1b174",
+     "name": "GET", "kind": 3,
+     "startTimeUnixNano": "1752480000000000000", "endTimeUnixNano": "1752480000120000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "url.full", "value": {"stringValue": "http://api:8080/games/42"}}]}]}]},
+  {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+   "scopeSpans": [{"spans": [{
+     "traceId": "5b8efff798038103d269b633813fc60c", "spanId": "aaa19b7ec3c1b174",
+     "parentSpanId": "eee19b7ec3c1b174",
+     "name": "GET /games/:id", "kind": 2,
+     "startTimeUnixNano": "1752480000010000000", "endTimeUnixNano": "1752480000110000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "GET"}},
+       {"key": "http.route", "value": {"stringValue": "/games/:id"}}]}]}]}
+]}

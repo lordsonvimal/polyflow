@@ -247,7 +247,15 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 	}
 
-	seen := make(map[string]bool)
+	// Two-pass edge collection: gather (caller, callee, isGo) triples from all
+	// SSA functions, then emit edges — preferring "spawns" over "calls" when
+	// both exist for the same (callerID, calleeID) pair.  Without this, the
+	// non-deterministic map iteration of `inService` lets a closure (resolved
+	// to its parent's callerID) race with the parent function itself, flipping
+	// the edge type between runs when one uses `go f()` and the other uses
+	// `f()` for the same callee.
+	spawnPairs := make(map[string]bool) // callerID+"->"+calleeID seen as ssa.Go
+	callPairs  := make(map[string]bool) // callerID+"->"+calleeID seen as regular call
 	var edges []graph.Edge
 
 	for caller := range inService {
@@ -308,28 +316,11 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 						continue
 					}
 					key := callerID + "->" + calleeID
-					if seen[key] {
-						continue
-					}
-					seen[key] = true
 					if isGo {
-						// `go f()` / `go func(){…}()`: a spawn, not a call. The
-						// ID matches the tree-sitter pattern edge so the store
-						// upsert dedupes instead of drawing a second edge.
-						edges = append(edges, graph.Edge{
-							ID:   fmt.Sprintf("%s:%s->%s", graph.EdgeTypeSpawns, callerID, calleeID),
-							From: callerID,
-							To:   calleeID,
-							Type: graph.EdgeTypeSpawns,
-						})
-						continue
+						spawnPairs[key] = true
+					} else {
+						callPairs[key] = true
 					}
-					edges = append(edges, graph.Edge{
-						ID:   "semantic:calls:" + key,
-						From: callerID,
-						To:   calleeID,
-						Type: graph.EdgeTypeCalls,
-					})
 				}
 			}
 		}
@@ -370,9 +361,37 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		}
 	}
 
+	// Emit call/spawns edges now that all (caller, callee, isGo) pairs have been
+	// accumulated.  Spawns take priority: if the same (caller, callee) pair
+	// appears as both a goroutine and a regular call (possible when a closure
+	// inside the caller is attributed to the parent node), we emit only the
+	// spawns edge so the result is deterministic regardless of iteration order.
+	for key := range spawnPairs {
+		parts := strings.SplitN(key, "->", 2)
+		edges = append(edges, graph.Edge{
+			ID:   fmt.Sprintf("%s:%s", graph.EdgeTypeSpawns, key),
+			From: parts[0],
+			To:   parts[1],
+			Type: graph.EdgeTypeSpawns,
+		})
+	}
+	for key := range callPairs {
+		if spawnPairs[key] {
+			continue
+		}
+		parts := strings.SplitN(key, "->", 2)
+		edges = append(edges, graph.Edge{
+			ID:   "semantic:calls:" + key,
+			From: parts[0],
+			To:   parts[1],
+			Type: graph.EdgeTypeCalls,
+		})
+	}
+
 	// Synthetic main→init edges: Go's runtime calls all init() functions before
 	// main(), but there's no explicit call site in main's body. Emit a synthetic
 	// calls edge from main to each init in the same package so main is connected.
+	syntheticSeen := make(map[string]bool)
 	for caller := range inService {
 		if caller.Name() != "main" {
 			continue
@@ -397,10 +416,10 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 				continue
 			}
 			key := callerID + "->" + calleeID
-			if seen[key] {
+			if syntheticSeen[key] {
 				continue
 			}
-			seen[key] = true
+			syntheticSeen[key] = true
 			edges = append(edges, graph.Edge{
 				ID:   "semantic:calls:" + key,
 				From: callerID,

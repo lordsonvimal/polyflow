@@ -15,8 +15,10 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	go.opentelemetry.io/proto/otlp v1.10.0
 	golang.org/x/mod v0.37.0
 	golang.org/x/tools v0.47.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
