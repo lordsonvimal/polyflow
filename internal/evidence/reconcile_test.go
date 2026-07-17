@@ -304,6 +304,153 @@ func TestReconcilerObservedOnlyGap(t *testing.T) {
 	assert.Contains(t, gapEdges[0].ID, "gap:")
 }
 
+// TestReconcilerMultipleGapsPerService asserts that N contract-declared
+// operations from one service, none known to static, surface as N gap edges —
+// never collapsed into one (the channel key is part of the gap-edge identity).
+// Mirrors the contract_ingest emission shape: From=serviceName, To="".
+func TestReconcilerMultipleGapsPerService(t *testing.T) {
+	sp := evidence.NewStaticProvider(nil, nil, nil)
+	contractEv := evidence.Evidence{
+		Edges: []graph.Edge{
+			{
+				ID: "contract:openapi:svc-a:get /games/*", From: "svc-a", To: "",
+				Type: graph.EdgeTypeHTTPCall, Label: "get /games/*",
+				Sources: []graph.SourceRef{{Provider: "contract", Confidence: graph.ConfidenceDeclared, Ref: "openapi.yaml#getGame"}},
+			},
+			{
+				ID: "contract:openapi:svc-a:post /games", From: "svc-a", To: "",
+				Type: graph.EdgeTypeHTTPCall, Label: "post /games",
+				Sources: []graph.SourceRef{{Provider: "contract", Confidence: graph.ConfidenceDeclared, Ref: "openapi.yaml#createGame"}},
+			},
+		},
+	}
+	rec, err := evidence.NewReconciler(sp, &fakeProvider{name: "contract", ev: contractEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+
+	var gapLabels []string
+	for _, e := range result.Edges {
+		if e.VerificationState == graph.StateObservedOnlyGap {
+			gapLabels = append(gapLabels, e.Label)
+			assert.NotEmpty(t, e.From, "gap edge %s must not have an empty From", e.ID)
+			assert.NotEmpty(t, e.To, "gap edge %s must not have an empty To", e.ID)
+		}
+	}
+	sort.Strings(gapLabels)
+	assert.Equal(t, []string{"get /games/*", "post /games"}, gapLabels,
+		"every declared-but-static-missed operation must surface as its own gap edge")
+
+	// No node may be minted with an empty ID; minted endpoint nodes carry the
+	// channel key as label and are tagged with their source provider.
+	endpointNodes := 0
+	for _, n := range result.Nodes {
+		require.NotEmpty(t, n.ID, "no node may have an empty ID")
+		if n.Meta["source"] == "contract" && n.ID != "svc-a" {
+			endpointNodes++
+			assert.NotEmpty(t, n.Label, "minted endpoint node %s must carry the channel key as label", n.ID)
+		}
+	}
+	assert.Equal(t, 2, endpointNodes, "one synthetic endpoint node per gap channel")
+}
+
+// TestReconcilerVerifiedGranularity asserts that a channel-confirmed edge is
+// stamped verified_granularity=channel — the guard against reading channel
+// verification as call-site proof — and that unconfirmed edges carry none.
+func TestReconcilerVerifiedGranularity(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "site", File: "a.go", Line: 1},
+		{ID: "handler", File: "h.go", Line: 2},
+	}
+	edges := []graph.Edge{
+		{ID: "e-conf", From: "site", To: "handler", Type: graph.EdgeTypeHTTPCall,
+			Label: "get /games/*", Confidence: graph.ConfidenceInferred},
+		{ID: "e-unconf", From: "site", To: "handler", Type: graph.EdgeTypeHTTPCall,
+			Label: "get /other", Confidence: graph.ConfidenceInferred},
+	}
+	contractEv := evidence.Evidence{
+		Edges: []graph.Edge{{
+			ID: "c1", From: "", To: "",
+			Type: graph.EdgeTypeHTTPCall, Label: "get /games/*",
+			Sources: []graph.SourceRef{{Provider: "contract", Confidence: graph.ConfidenceDeclared, Ref: "openapi.yaml#getGame"}},
+		}},
+	}
+	sp := evidence.NewStaticProvider(nodes, edges, nil)
+	rec, err := evidence.NewReconciler(sp, &fakeProvider{name: "contract", ev: contractEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+
+	byID := make(map[string]graph.Edge)
+	for _, e := range result.Edges {
+		byID[e.ID] = e
+	}
+	require.Equal(t, graph.StateVerified, byID["e-conf"].VerificationState)
+	assert.Equal(t, graph.GranularityChannel, byID["e-conf"].VerifiedGranularity,
+		"verified edge must be stamped channel-granular")
+	require.Equal(t, graph.StateCandidate, byID["e-unconf"].VerificationState)
+	assert.Empty(t, byID["e-unconf"].VerifiedGranularity,
+		"unconfirmed edge must carry no granularity")
+}
+
+// TestReconcilerServiceScopedJoin asserts that a spec declared by service A
+// does not verify a same-shaped static edge between unrelated services B→C —
+// and that the declared channel surfaces as A's gap instead. When service
+// identity is unknown on both static endpoints, the unscoped join applies
+// (recall over precision).
+func TestReconcilerServiceScopedJoin(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "b-client", Service: "svc-b", File: "b.go", Line: 1},
+		{ID: "c-handler", Service: "svc-c", File: "c.go", Line: 2},
+	}
+	edges := []graph.Edge{
+		{ID: "e-bc", From: "b-client", To: "c-handler", Type: graph.EdgeTypeHTTPCall,
+			Label: "get /games/*", Confidence: graph.ConfidenceInferred},
+	}
+	contractEdge := graph.Edge{
+		ID: "contract:openapi:svc-a:get /games/*", From: "svc-a", To: "",
+		Type: graph.EdgeTypeHTTPCall, Label: "get /games/*",
+		Sources: []graph.SourceRef{{Provider: "contract", Confidence: graph.ConfidenceDeclared, Ref: "openapi.yaml#getGame"}},
+	}
+
+	// Unrelated declaring service: B→C stays candidate, svc-a gets a gap edge.
+	sp := evidence.NewStaticProvider(nodes, edges, nil)
+	rec, err := evidence.NewReconciler(sp, &fakeProvider{name: "contract",
+		ev: evidence.Evidence{Edges: []graph.Edge{contractEdge}}})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+
+	var gapCount int
+	for _, e := range result.Edges {
+		switch {
+		case e.ID == "e-bc":
+			assert.Equal(t, graph.StateCandidate, e.VerificationState,
+				"svc-a's spec must not verify an unrelated B→C edge")
+		case e.VerificationState == graph.StateObservedOnlyGap:
+			gapCount++
+			assert.Equal(t, "svc-a", e.From, "the declared channel surfaces as svc-a's gap")
+		}
+	}
+	assert.Equal(t, 1, gapCount, "declaration unmatched for svc-a must surface as a gap")
+
+	// Declaring service matches the handler side: verified.
+	confirming := contractEdge
+	confirming.From = "svc-c"
+	sp2 := evidence.NewStaticProvider(nodes, edges, nil)
+	rec2, err := evidence.NewReconciler(sp2, &fakeProvider{name: "contract",
+		ev: evidence.Evidence{Edges: []graph.Edge{confirming}}})
+	require.NoError(t, err)
+	result2, err := rec2.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+	for _, e := range result2.Edges {
+		if e.ID == "e-bc" {
+			assert.Equal(t, graph.StateVerified, e.VerificationState,
+				"spec declared by the serving service must verify its edge")
+		}
+	}
+}
+
 // --- Chessleap static-baseline-unchanged guard ---
 
 // TestChessleapF0StaticBaseline verifies that wrapping the static pipeline

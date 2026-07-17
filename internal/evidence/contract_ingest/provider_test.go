@@ -338,6 +338,37 @@ webhooks:
 	assert.True(t, found, "ledger entry for webhooks must be present")
 }
 
+// ── Exclude globs honored (vendored specs must not be ingested) ───────────────
+
+func TestContractProvider_ExcludesHonored(t *testing.T) {
+	dir := t.TempDir()
+	vendored := filepath.Join(dir, "node_modules", "some-dep")
+	require.NoError(t, os.MkdirAll(vendored, 0o755))
+	spec := []byte(`
+openapi: "3.0.0"
+info:
+  title: Vendored
+paths:
+  /vendored:
+    get:
+      operationId: getVendored
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(vendored, "openapi.yaml"), spec, 0o644))
+
+	// Without excludes the vendored spec is discovered (sanity check)…
+	ws := wsForDir(dir)
+	p := contract_ingest.NewContractProvider()
+	ev, err := p.Collect(context.Background(), ws)
+	require.NoError(t, err)
+	require.NotEmpty(t, ev.Edges, "sanity: vendored spec is discoverable without excludes")
+
+	// …and with the indexer's exclude set it must be skipped.
+	ws.Index.Exclude = workspace.DefaultExcludes()
+	ev, err = p.Collect(context.Background(), ws)
+	require.NoError(t, err)
+	assert.Empty(t, ev.Edges, "specs under node_modules must not be ingested when excluded")
+}
+
 // ── Nil workspace ─────────────────────────────────────────────────────────────
 
 func TestContractProvider_NilWorkspace(t *testing.T) {
