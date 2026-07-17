@@ -3,6 +3,7 @@ package trace_ingest
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
@@ -22,6 +23,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 	wsServices := workspaceServiceSet(ws)
 	serviceNames := runtimeServiceNames(ws)
 	links := workspaceLinks(ws)
+	sseRoutes := runtimeSSERoutes(ws)
 
 	// Build span lookup by (traceID, spanID) for O(1) parent resolution.
 	type traceSpanKey struct{ traceID, spanID string }
@@ -78,7 +80,8 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			continue
 		}
 
-		// HTTP detection.
+		// HTTP detection (SSE is a specialisation of HTTP and also carries
+		// http.request.method — check HTTP attrs first, then decide kind).
 		if !isHTTPSpan(sp) {
 			addLedger(sp, "unsupported_span_kind")
 			continue
@@ -109,22 +112,10 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			}
 		}
 
-		// Build normalized channel key using the contract engine's normalizer
-		// chain — identical to what static HTTP edges use, ensuring the join
-		// key matches (bug-class rule 6 / divergent-normalization guard).
 		env := contract.NormalizeEnv{
 			FromService: fromSvc,
 			ToService:   toSvc,
 			Links:       links,
-		}
-		key, err := contract.NormalizeFields(
-			[]string{method, rawPath},
-			httpNormChain,
-			env,
-		)
-		if err != nil {
-			addLedger(sp, "no_route_or_path")
-			continue
 		}
 
 		ref := FlowRef{
@@ -133,6 +124,37 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			ObservedAt: int64(sp.StartUnixNano / 1_000_000_000),
 			CodeFile:   sp.Attrs["code.filepath"],
 			CodeFunc:   sp.Attrs["code.function"],
+		}
+
+		// SSE detection: content-type response header or workspace-listed route.
+		// Long-lived duration is never the signal (see mapping table in plan doc).
+		if isSSESpan(sp, rawPath, sseRoutes) {
+			// SSE connection edge uses path-only key (no method prefix — SSE is
+			// always GET and the static sse_endpoint edges key on path alone).
+			sseKey, err := contract.NormalizeFields(
+				[]string{rawPath},
+				sseNormChain,
+				env,
+			)
+			if err != nil {
+				addLedger(sp, "no_route_or_path")
+				continue
+			}
+			addFlow("sse", sseKey, fromSvc, toSvc, causality, ref)
+			continue
+		}
+
+		// Build normalized HTTP channel key using the contract engine's normalizer
+		// chain — identical to what static HTTP edges use, ensuring the join
+		// key matches (bug-class rule 6 / divergent-normalization guard).
+		key, err := contract.NormalizeFields(
+			[]string{method, rawPath},
+			httpNormChain,
+			env,
+		)
+		if err != nil {
+			addLedger(sp, "no_route_or_path")
+			continue
 		}
 
 		addFlow("http", key, fromSvc, toSvc, causality, ref)
@@ -175,6 +197,14 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 // the join key is always compatible (divergent normalization is a silent miss).
 var httpNormChain = []string{
 	"case_fold", "url_to_path", "base_url_strip", "query_strip",
+	"param_wildcard", "trim_slash",
+}
+
+// sseNormChain is the normalizer sequence applied to [path] for SSE connection
+// flow records.  No method prefix: SSE is always GET, and static sse_endpoint
+// edges key on path alone.
+var sseNormChain = []string{
+	"case_fold", "url_to_path", "query_strip",
 	"param_wildcard", "trim_slash",
 }
 
@@ -247,6 +277,31 @@ func extractHTTPInfo(sp *Span) (method, rawPath string, ok bool) {
 		return "", "", false
 	}
 	return method, rawPath, true
+}
+
+// isSSESpan reports whether sp is an SSE connection span.  Detection uses the
+// http.response.header.content-type attribute (new semconv) or the workspace
+// sse_routes list.  Long-lived duration is NOT a detection signal.
+func isSSESpan(sp *Span, rawPath string, sseRoutes []string) bool {
+	ct := sp.Attrs["http.response.header.content-type"]
+	if strings.Contains(strings.ToLower(ct), "text/event-stream") {
+		return true
+	}
+	for _, route := range sseRoutes {
+		if route == rawPath {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeSSERoutes returns the evidence.runtime.sse_routes list, or nil when
+// not configured.
+func runtimeSSERoutes(ws *workspace.WorkspaceConfig) []string {
+	if ws == nil {
+		return nil
+	}
+	return ws.Evidence.Runtime.SSERoutes
 }
 
 // workspaceServiceSet builds a set of declared workspace service names for O(1)

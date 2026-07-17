@@ -456,6 +456,80 @@ func TestProviderNameValid(t *testing.T) {
 	assert.NoError(t, evidence.ValidateProviderName(p.Name()))
 }
 
+// ─── TestMapSpansSSEConnection ────────────────────────────────────────────────
+//
+// Positive: SERVER span with http.response.header.content-type=text/event-stream
+// → exactly one SSE connection flow record (not N event edges), kind="sse",
+// key is path-only (no method prefix), causality=parent_child.
+// Drives through real OTLP fixture bytes (bug-class rule 6).
+func TestMapSpansSSEConnection(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "sse_connection.otlp.json"))
+	require.NoError(t, err)
+
+	ws := twoSvcWS()
+	flows, ledger := MapSpans(spans, "sess-sse", ws)
+
+	require.Len(t, flows, 1, "SSE span must produce exactly one connection flow record")
+	assert.Empty(t, ledger)
+	f := flows[0]
+	assert.Equal(t, "sse", string(f.Kind), "kind must be sse, not http")
+	assert.Equal(t, "/events", f.Key, "SSE key must be path-only (no method prefix)")
+	assert.Equal(t, "web", f.FromService)
+	assert.Equal(t, "api", f.ToService)
+	assert.Equal(t, "parent_child", f.Causality)
+	require.Len(t, f.Refs, 1)
+	assert.Equal(t, "sess-sse", f.Refs[0].Session)
+	assert.Equal(t, "1a2b3c4d5e6f7890abcdef1234567890", f.Refs[0].TraceID)
+}
+
+// ─── TestMapSpansSSEWorkspaceListedRoute ──────────────────────────────────────
+//
+// Positive: SERVER span with NO content-type header but path listed in
+// evidence.runtime.sse_routes → still detected as SSE.
+// Drives through real OTLP fixture bytes (bug-class rule 6).
+func TestMapSpansSSEWorkspaceListedRoute(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "sse_ws_listed_route.otlp.json"))
+	require.NoError(t, err)
+
+	ws := &workspace.WorkspaceConfig{
+		Services: []workspace.Service{{Name: "api"}},
+		Evidence: workspace.EvidenceConfig{
+			Runtime: workspace.RuntimeEvidenceConfig{
+				SSERoutes: []string{"/stream"},
+			},
+		},
+	}
+	flows, ledger := MapSpans(spans, "sess-ws", ws)
+
+	require.Len(t, flows, 1, "workspace-listed SSE route must produce one SSE flow record")
+	assert.Empty(t, ledger)
+	f := flows[0]
+	assert.Equal(t, "sse", string(f.Kind), "workspace-listed route must produce sse kind")
+	assert.Equal(t, "/stream", f.Key)
+}
+
+// ─── TestMapSpansSSENotSSE ────────────────────────────────────────────────────
+//
+// Negative: a long-lived SERVER span without text/event-stream content-type and
+// not in sse_routes must produce an HTTP flow record, never an SSE record.
+// Long duration is NOT the SSE detection signal (phases.md mapping table rule).
+// Drives through real OTLP fixture bytes (bug-class rule 6).
+func TestMapSpansSSENotSSE(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "sse_not_sse.otlp.json"))
+	require.NoError(t, err)
+
+	ws := &workspace.WorkspaceConfig{
+		Services: []workspace.Service{{Name: "api"}},
+	}
+	flows, ledger := MapSpans(spans, "s", ws)
+
+	require.Len(t, flows, 1, "long-lived non-SSE span must produce exactly one flow record")
+	assert.Empty(t, ledger)
+	f := flows[0]
+	assert.Equal(t, "http", string(f.Kind), "long-lived span without content-type must be http, not sse")
+	assert.Equal(t, "get /slow-export", f.Key)
+}
+
 // ─── TestMetricsOnlyNoFlows ───────────────────────────────────────────────────
 //
 // Negative: a metrics-only OTLP file produces zero spans, so MapSpans must
