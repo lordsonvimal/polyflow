@@ -14,6 +14,8 @@ func setup() {
 	api := r.Group("/api/v1")
 	api.GET("/games/:id", getGame)
 	api.DELETE("/games/:id", deleteGame)
+	r.Match([]string{"GET", "HEAD"}, "/status", healthCheck)
+	r.Group("/user").Use(optionalAuth).POST("", createUser)
 	r.Run(":8080")
 }
 

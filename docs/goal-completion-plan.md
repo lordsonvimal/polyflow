@@ -299,6 +299,34 @@ simulating CI with the chessleap cache removed (gate exit 0 with the skip
 warning). Existing URL corpora keep their committed workspace excludes;
 re-evaluating them with test code indexed is a separate decision.
 
+**Addendum (2026-07-17, URL corpora re-evaluated with tests).** The separate
+decision above was taken: gotify/lobsters/writefreely committed workspaces no
+longer exclude test code (fixture/data excludes kept). First run regressed
+gotify 0.900→0.700 (3 new hard-fails) and lobsters 0.200→0.133 — not because
+test indexing is wrong, but because the extra test nodes shuffled FTS bm25
+ranking, and several cases had only been passing by luck: `SearchNodes[0]` for
+"Health" used to hit the `HealthDatabase` *interface*, whose ancestor chain
+reached router/router.go through `instantiates`/`uses_type` type edges rather
+than a real registration edge. The shuffle exposed three genuine recall gaps,
+all fixed:
+1. `SearchNodes` now ranks exact (case-insensitive) label matches above
+   prefix-only bm25 matches — a query for `Create` must find the node named
+   `Create` before `CreateClient`. Query-time only, no schema change.
+2. New `gin_route_match` pattern: `r.Match([]string{...}, path, handler)`
+   (gotify's /health) now emits an http_handler node + handler edge.
+3. New `gin_route_chained` pattern: inline chained registration
+   `g.Group("/x").Use(mw).POST("", handler)` where the receiver is a call
+   chain, not a variable (gotify's user routes). Group prefix is not
+   reconstructed (arbitrary chain depth); the handler edge is the
+   recall-critical part.
+Result: gotify back to 0.900/1HF (the remaining HF, login-callers, is the
+pre-existing FTS cross-service ambiguity — ui `Login.tsx` outranks
+api/session.go `Login`), lobsters **0.200 → 0.400** (exact-label ranking fixed
+four controller-action lookups), chessleap/polyflow hold at 1.000, writefreely
+unchanged 0.467/8HF (gorilla/mux function-value registration, still open).
+Baseline ratcheted; gate clean; golden chessleap parity unchanged (no
+Match/chained shapes there); `BenchmarkIndexCold` held (~9.9s / 1200 files).
+
 ### Phase E.3 — CI regression gate `done`
 
 **Problem.** Without a gate, recall regressions ship.

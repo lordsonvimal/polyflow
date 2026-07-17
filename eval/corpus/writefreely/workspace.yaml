@@ -15,7 +15,6 @@ index:
   exclude:
     - '**/node_modules/**'
     - '**/vendor/**'
-    - '**/*_test.go'
     - '**/testdata/**'
     - '**/less/**'
     - '**/fonts/**'
