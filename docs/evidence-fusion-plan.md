@@ -288,7 +288,33 @@ referenced in code but defined nowhere in the scanned config stays in the
 `dynamic_<kind>` ledger with reason `config_not_found` — absence of config
 is not license to guess.
 
-### Phase F.4 — Fusion, reconciliation report + doctor coverage `pending`
+### Phase F.4 — Fusion, reconciliation report + doctor coverage `done`
+
+**Outcome.** Implemented exactly as specified. `internal/evidence/report.go` adds
+`ReconcileReport`, `KindSummary`, `EdgeSummary`, and `BuildReport()` — reads
+`VerificationState` values already stamped by the Reconciler (no re-collection) and
+returns a deterministic per-kind coverage table plus sorted candidate/gap/conflicting
+lists. `internal/evidence/propose.go` adds `ProposedRule` and `ProposeRules()` — for
+each unique `(kind, key)` gap channel, generates a candidate contract rule YAML whose
+filename derives from `slugify(kind)+"-"+slugify(key)`, never from a counter; multiple
+gap edges sharing the same channel are merged into one proposal. Conflict detection added
+to `reconcile.go` (post-state-computation pass): a gap edge on a channel that already
+has a `verified` static+confirming edge is promoted to `conflicting` — the "runtime sees
+a service pair static proved covered but missed" scenario. A new `polyflow reconcile`
+command (`cmd/polyflow/reconcile.go`) prints the fusion coverage report, the conflicting
+list, and on `--list-gaps` the full gap list; `--propose-dir` writes the candidate YAML
+files. `polyflow doctor` gains a Fusion coverage section (verified %, per-kind table,
+conflict/gap counts with pointers to `reconcile`) merged alongside the existing G.5
+contract and R.5 runtime sections; a V.4 versioning row is conditionally displayed if the
+indexer writes `version_coverage` meta (V.4 is still pending, graceful absent). Tests
+cover: empty edges, state counts, per-kind breakdown, sorted list determinism,
+source-provider aggregation, two-run JSON-identical determinism for both `BuildReport`
+and `ProposeRules`, filename derivation from cluster key, multi-gap-same-channel
+one-proposal merge, conflict detection (gap on verified channel → conflicting), and
+negative (gap on unverified channel stays observed_only_gap). No `SchemaVersion` bump
+required (no stored node/edge shape change — `StateConflicting` already existed in
+model.go). BenchmarkIndexCold: 10.2 s for 1200 files, unchanged.
+
 `reconcile.go` finalizes `verification_state` across all providers; conflicts surfaced.
 `polyflow doctor` / `reconcile` prints: % verified, per-kind coverage, the
 `candidate` (static-only, unconfirmed) list, and the `observed_only_gap` list — which
