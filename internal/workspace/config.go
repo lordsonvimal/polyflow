@@ -40,6 +40,15 @@ type IndexConfig struct {
 	Exclude []string `yaml:"exclude"`
 }
 
+// RuntimeEvidenceConfig holds settings for the OTLP trace evidence provider (R.1+).
+type RuntimeEvidenceConfig struct {
+	// ServiceNames maps raw OTel resource.service.name values to the polyflow
+	// service names declared in the workspace.  Unmapped names that also do not
+	// match a workspace service directly are surfaced in the ingest ledger.
+	//   chessleap-api: api
+	ServiceNames map[string]string `yaml:"service_names,omitempty"`
+}
+
 // EvidenceConfig holds settings for the evidence-fusion providers (F.1+).
 // Fields added in later phases (trace source, toggles) will be wired then;
 // parsing an unrecognised future field is rejected at load by the strict
@@ -49,6 +58,8 @@ type EvidenceConfig struct {
 	// locate IDL/spec files.  If empty, the contract provider uses built-in
 	// defaults (openapi.yaml, *.proto, *.graphql, asyncapi.yaml, …).
 	ContractGlobs []string `yaml:"contract_globs,omitempty"`
+	// Runtime holds OTLP trace evidence settings (R.1+).
+	Runtime RuntimeEvidenceConfig `yaml:"runtime,omitempty"`
 }
 
 // Settings holds workspace-level defaults for the server and display.
