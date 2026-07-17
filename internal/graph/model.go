@@ -1,5 +1,7 @@
 package graph
 
+import "sort"
+
 // NodeType classifies what kind of code entity a node represents.
 type NodeType string
 
@@ -314,4 +316,21 @@ func (idx *AdjacencyIndex) AddNode(n *Node) {
 func (idx *AdjacencyIndex) AddEdge(e *Edge) {
 	idx.OutEdges[e.From] = append(idx.OutEdges[e.From], e)
 	idx.InEdges[e.To] = append(idx.InEdges[e.To], e)
+}
+
+// AllEdges returns all edges in the index sorted by ID (bug-class rule 2:
+// never iterate a map directly). Each edge appears exactly once.
+func (idx *AdjacencyIndex) AllEdges() []Edge {
+	seen := make(map[string]bool)
+	var edges []Edge
+	for _, list := range idx.OutEdges {
+		for _, e := range list {
+			if !seen[e.ID] {
+				edges = append(edges, *e)
+				seen[e.ID] = true
+			}
+		}
+	}
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return edges
 }
