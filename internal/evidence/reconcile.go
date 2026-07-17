@@ -117,9 +117,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 	// Collect all nodes from all providers.
 	var allNodes []graph.Node
 	nodeByID := make(map[string]bool, len(staticEv.Nodes))
+	// nodeService: static node ID → owning service, for service-scoped joins.
+	nodeService := make(map[string]string, len(staticEv.Nodes))
 	for _, n := range staticEv.Nodes {
 		allNodes = append(allNodes, n)
 		nodeByID[n.ID] = true
+		nodeService[n.ID] = n.Service
 	}
 
 	// Collect all unresolved from all providers.
@@ -127,43 +130,68 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 	allUnresolved = append(allUnresolved, staticEv.Unresolved...)
 
 	// Process non-static providers: join their edges onto the static set.
-	synthSeen := make(map[string]bool)
+	// Gap edges are allocated individually and tracked by ID so a duplicate
+	// confirmation merges Sources instead of being dropped, and so pointers
+	// stay valid while workingEdges may still reallocate.
+	gapByID := make(map[string]*graph.Edge)
+	var gapOrder []string
 	for _, c := range nonStaticEv {
 		for i := range c.ev.Edges {
 			pe := &c.ev.Edges[i]
 			k := keyOf(pe)
-			if slots := edgeByKey[k]; len(slots) > 0 {
-				// Channel confirmed: append source to every static edge on this
-				// channel (multi-valued — bug-class rule 1).
-				for _, sp := range slots {
-					sp.Sources = appendSource(sp.Sources, pe.Sources...)
-				}
-			} else {
-				// No static edge: observed_only_gap — mint synthetic nodes/edges
-				// with deterministic IDs.
-				synthID := syntheticEdgeID(pe)
-				if synthSeen[synthID] {
+			// Channel confirmed: append source to every static edge on this
+			// channel (multi-valued — bug-class rule 1), scoped to the
+			// declaring service when both sides carry service identity.
+			matched := false
+			for _, sp := range edgeByKey[k] {
+				if !serviceCompatible(pe.From, sp, nodeService) {
 					continue
 				}
-				synthSeen[synthID] = true
-				gap := graph.Edge{
+				sp.Sources = appendSource(sp.Sources, pe.Sources...)
+				matched = true
+			}
+			if !matched {
+				// No static edge on this channel (for this service):
+				// observed_only_gap — mint synthetic nodes/edges with
+				// deterministic IDs derived from (kind, key, from, to).
+				from, to := pe.From, pe.To
+				if from == "" {
+					from = endpointNodeID(pe)
+				}
+				if to == "" {
+					to = endpointNodeID(pe)
+				}
+				synthID := syntheticEdgeID(pe, from, to)
+				if existing := gapByID[synthID]; existing != nil {
+					// Same channel confirmed again: merge, never drop.
+					existing.Sources = appendSource(existing.Sources, pe.Sources...)
+					continue
+				}
+				gap := &graph.Edge{
 					ID:                synthID,
-					From:              pe.From,
-					To:                pe.To,
+					From:              from,
+					To:                to,
 					Type:              pe.Type,
 					Label:             pe.Label,
 					Confidence:        graph.ConfidenceCandidate,
-					Sources:           pe.Sources,
+					Sources:           append([]graph.SourceRef(nil), pe.Sources...),
 					VerificationState: graph.StateObservedOnlyGap,
 				}
-				workingEdges = append(workingEdges, gap)
-				// Mint endpoint nodes if they don't already exist.
-				for _, nodeID := range []string{pe.From, pe.To} {
+				gapByID[synthID] = gap
+				gapOrder = append(gapOrder, synthID)
+				// Mint endpoint nodes if they don't already exist, tagged with
+				// the provider that surfaced them.
+				for _, nodeID := range []string{from, to} {
 					if !nodeByID[nodeID] {
+						label := nodeID
+						if pe.Label != "" && nodeID == endpointNodeID(pe) {
+							label = pe.Label
+						}
 						allNodes = append(allNodes, graph.Node{
 							ID:    nodeID,
 							Type:  graph.NodeTypeService,
-							Label: nodeID,
+							Label: label,
+							Meta:  map[string]string{"source": c.name},
 						})
 						nodeByID[nodeID] = true
 					}
@@ -179,6 +207,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		}
 		allUnresolved = append(allUnresolved, c.ev.Unresolved...)
 	}
+	for _, id := range gapOrder {
+		workingEdges = append(workingEdges, *gapByID[id])
+	}
 
 	// Recompute VerificationState for every edge from Sources[] (total).
 	for i := range workingEdges {
@@ -186,6 +217,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		// Sort Sources deterministically before persisting (bug-class rule 2).
 		sortSources(ep.Sources)
 		ep.VerificationState = computeState(ep.Sources)
+		// Verification is channel-granular: confirming evidence proves the
+		// channel is real, never that a specific call site ran. "site" is
+		// reserved for evidence carrying code-level attribution (F.2+).
+		if ep.VerificationState == graph.StateVerified {
+			ep.VerifiedGranularity = graph.GranularityChannel
+		} else {
+			ep.VerifiedGranularity = ""
+		}
 	}
 
 	// Sort the edge slice by ID for deterministic output (bug-class rule 2).
@@ -263,8 +302,36 @@ func computeState(sources []graph.SourceRef) string {
 	}
 }
 
-// syntheticEdgeID derives a deterministic ID for a gap edge.
-// Never a counter or map-order-dependent value (bug-class rule 2).
-func syntheticEdgeID(e *graph.Edge) string {
-	return fmt.Sprintf("gap:%s:%s->%s", string(e.Type), e.From, e.To)
+// serviceCompatible reports whether a non-static edge declared by declService
+// may confirm the static edge sp. A spec found in service A must not verify a
+// same-shaped edge between unrelated services B→C — but contract evidence only
+// knows one side of the channel, and direction differs per format (an OpenAPI
+// spec names the serving side, an AsyncAPI publish names the publishing side),
+// so either endpoint matching the declaring service is a confirmation. When
+// service identity is unavailable on both sides, fall back to the unscoped
+// join (recall over precision).
+func serviceCompatible(declService string, sp *graph.Edge, nodeService map[string]string) bool {
+	if declService == "" {
+		return true
+	}
+	fromSvc, toSvc := nodeService[sp.From], nodeService[sp.To]
+	if fromSvc == "" && toSvc == "" {
+		return true
+	}
+	return fromSvc == declService || toSvc == declService
+}
+
+// endpointNodeID derives a deterministic node ID for the anonymous side of a
+// gap edge (contract evidence often knows only the declaring service). The
+// channel key is included so distinct channels never share an endpoint node.
+func endpointNodeID(e *graph.Edge) string {
+	return fmt.Sprintf("gap-endpoint:%s:%s", string(e.Type), e.Label)
+}
+
+// syntheticEdgeID derives a deterministic ID for a gap edge from
+// (kind, key, from, to). Never a counter or map-order-dependent value
+// (bug-class rule 2); the channel key (Label) is part of the identity so two
+// declared operations from one service never collapse into one gap edge.
+func syntheticEdgeID(e *graph.Edge, from, to string) string {
+	return fmt.Sprintf("gap:%s:%s:%s->%s", string(e.Type), e.Label, from, to)
 }
