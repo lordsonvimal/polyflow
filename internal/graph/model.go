@@ -159,7 +159,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "14"
+const SchemaVersion = "15" // F.0: added Sources[]/VerificationState/VerifiedGranularity to Edge
 
 // Node represents a code entity in the graph.
 type Node struct {
@@ -183,7 +183,32 @@ const (
 	ConfidenceInferred = "inferred" // wildcard/normalized match
 	ConfidencePartial  = "partial"  // partially resolved
 	ConfidenceUnknown  = "unknown"  // dynamic, unresolvable
+	// F.0: evidence-fusion confidence ladder additions (used in SourceRef.Confidence).
+	// These are distinct from the match-quality constants above; ConfidenceStatic
+	// (a literal string match quality) is unrelated to Provider name "static".
+	ConfidenceObserved  = "observed"  // runtime evidence (OTel spans)
+	ConfidenceDeclared  = "declared"  // contract/IDL evidence (OpenAPI, proto, …)
+	ConfidenceCandidate = "candidate" // llm or static-only unconfirmed
 )
+
+// Verification states for fused evidence edges (F.0).
+const (
+	StateVerified        = "verified"          // static ∩ (runtime ∨ contract) agree
+	StateCandidate       = "candidate"         // static-only (possible, unconfirmed)
+	StateObservedOnlyGap = "observed_only_gap" // runtime/contract shows edge static missed
+	StateConflicting     = "conflicting"       // sources disagree
+)
+
+// SourceRef records one evidence contribution to an edge (F.0).
+// Provider is one of the five pinned names: static | contract | runtime | config | llm.
+// Confidence uses the evidence-fusion ladder (observed > declared > inferred > candidate > unknown).
+// Ref is provider-specific provenance (file:line for static, trace_id for runtime, …).
+type SourceRef struct {
+	Provider   string `json:"provider"`
+	Confidence string `json:"confidence"`
+	Ref        string `json:"ref,omitempty"`
+	ObservedAt int64  `json:"observed_at,omitempty"` // runtime only, unix seconds
+}
 
 // Edge represents a directed relationship between two nodes.
 type Edge struct {
@@ -196,6 +221,12 @@ type Edge struct {
 	Method     string            `json:"method,omitempty"`     // HTTP method (GET, POST, …)
 	Path       string            `json:"path,omitempty"`       // HTTP route path
 	Meta       map[string]string `json:"meta,omitempty"`
+	// F.0: evidence provenance. Sources must be non-empty after reconciliation
+	// (an edge with no Sources[] is a schema error). VerificationState is
+	// recomputed from Sources[] on every index run — never incrementally patched.
+	Sources             []SourceRef `json:"sources,omitempty"`
+	VerificationState   string      `json:"verification_state,omitempty"`
+	VerifiedGranularity string      `json:"verified_granularity,omitempty"` // "channel" | "site"
 }
 
 // Dependency is one resolved package version for a service, recorded at

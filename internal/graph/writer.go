@@ -145,12 +145,15 @@ func (w *BatchWriter) FlushEdges(ctx context.Context) error {
 		// dropped confidence/method/path, so every batch-indexed edge lost
 		// its confidence level in the stored graph.
 		upsert, err := tx.PrepareContext(ctx, `
-			INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				"from"=excluded."from", "to"=excluded."to",
 				type=excluded.type, label=excluded.label, meta=excluded.meta,
-				confidence=excluded.confidence, method=excluded.method, path=excluded.path`)
+				confidence=excluded.confidence, method=excluded.method, path=excluded.path,
+				sources_json=excluded.sources_json,
+				verification_state=excluded.verification_state,
+				verified_granularity=excluded.verified_granularity`)
 		if err != nil {
 			return fmt.Errorf("prepare edge upsert: %w", err)
 		}
@@ -160,6 +163,10 @@ func (w *BatchWriter) FlushEdges(ctx context.Context) error {
 			metaJSON, err := marshalMeta(e.Meta)
 			if err != nil {
 				return fmt.Errorf("marshal edge %s meta: %w", e.ID, err)
+			}
+			sourcesJSON, err := marshalSources(e.Sources)
+			if err != nil {
+				return fmt.Errorf("marshal edge %s sources: %w", e.ID, err)
 			}
 			confidence := e.Confidence
 			if confidence == "" {
@@ -175,7 +182,7 @@ func (w *BatchWriter) FlushEdges(ctx context.Context) error {
 			}
 			if _, err = upsert.ExecContext(ctx,
 				e.ID, e.From, e.To, string(e.Type), e.Label, metaJSON,
-				confidence, method, path); err != nil {
+				confidence, method, path, sourcesJSON, e.VerificationState, e.VerifiedGranularity); err != nil {
 				return fmt.Errorf("upsert edge %s: %w", e.ID, err)
 			}
 		}

@@ -24,6 +24,7 @@ import (
 	contractdata "github.com/lordsonvimal/polyflow/contracts"
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
+	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/meta"
@@ -745,6 +746,36 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if err := bwR.Flush(ctx); err != nil {
 			return nil, err
 		}
+	}
+
+	// ── Evidence-fusion reconciliation (F.0) ────────────────────────────────
+	// Wrap the static pipeline output as the first evidence provider, stamp
+	// all edges with provenance, and re-upsert them so the store reflects
+	// Sources[]/VerificationState on every edge.
+	{
+		staticProv := evidence.NewStaticProvider(allNodes, allEdges, allUnresolved)
+		rec, err := evidence.NewReconciler(staticProv)
+		if err != nil {
+			return nil, fmt.Errorf("evidence reconciler: %w", err)
+		}
+		result, err := rec.Reconcile(ctx, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("evidence reconcile: %w", err)
+		}
+		// Re-upsert reconciled edges (ON CONFLICT DO UPDATE stamps the new fields).
+		bwEv := graph.NewBatchWriter(store)
+		for i := range result.Edges {
+			e := result.Edges[i]
+			if err := bwEv.AddEdge(ctx, &e); err != nil {
+				return nil, fmt.Errorf("persist reconciled edge: %w", err)
+			}
+		}
+		if err := bwEv.Flush(ctx); err != nil {
+			return nil, fmt.Errorf("flush reconciled edges: %w", err)
+		}
+		// Use the reconciler's unresolved list (may include gap ledger entries
+		// from non-static providers in F.1+; for F.0 it equals allUnresolved).
+		allUnresolved = result.Unresolved
 	}
 
 	// ── Recall gauge ─────────────────────────────────────────────────────────
