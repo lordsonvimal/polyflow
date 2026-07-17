@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package games;
+
+// No service definitions — should produce zero edges.
+message GameEvent {
+  string id = 1;
+}

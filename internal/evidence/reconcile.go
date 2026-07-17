@@ -189,7 +189,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 	}
 
 	// Sort the edge slice by ID for deterministic output (bug-class rule 2).
-	sort.Slice(workingEdges, func(i, j int) bool {
+	// SliceStable preserves the original relative order of same-ID duplicates
+	// (e.g. multiple addEventListener calls at the same line in minified JS),
+	// so the SQLite last-write-wins outcome is deterministic across runs.
+	sort.SliceStable(workingEdges, func(i, j int) bool {
 		return workingEdges[i].ID < workingEdges[j].ID
 	})
 
