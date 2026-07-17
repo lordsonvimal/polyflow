@@ -1,0 +1,15 @@
+package testdata
+
+// data-init runs an action expression when the element mounts — the datastar
+// v1 idiom for subscribing to an SSE endpoint on page load
+// (chessleap ui/pages/playgame.templ pattern).
+templ EventsSubscriber(gameID string) {
+	<div>
+		// Concatenated @get on mount → GET /play/*/events
+		<div class="hidden" data-init={ "@get('/play/" + gameID + "/events')" }></div>
+		// Static @get on mount
+		<div data-init={ "@get('/practice/static/events')" }></div>
+		// Signal-only init (no @verb) — must NOT create an http_client node
+		<div data-init="$ready = true"></div>
+	</div>
+}
