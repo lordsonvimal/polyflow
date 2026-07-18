@@ -4,7 +4,7 @@ The phase plans (`docs/agent-context-plan.md`, `docs/contract-matching-plan.md`,
 `docs/versioning-matrix-plan.md`, `docs/evidence-fusion-plan.md`,
 `docs/runtime-flow-plan.md`, `docs/goal-completion-plan.md`,
 `docs/semantic-search-plan.md`, and the numbered gap-closing series
-`docs/plan-1-recall-hardfails.md` through `docs/plan-6-scale-monorepo.md`)
+`docs/plan-1-recall-hardfails.md` through `docs/plan-8-multi-repo.md`)
 all follow this process. The original gap-closing plan that carried these rules is complete and was
 removed; this doc keeps the rules themselves.
 
@@ -49,11 +49,12 @@ prerequisite banner is authoritative if it conflicts):
 **V.2/V.3 sidecars** are divergence-triggered (versioning-matrix plan): do
 not build them until a V.4 matrix cell actually diverges.
 
-## Gap-closing series (plans 1–6) — order relative to the roadmap above
+## Gap-closing series (plans 1–8) — order relative to the roadmap above
 
 The numbered plans close coverage gaps found in the 2026-07-17 sufficiency
-review. Execute them **in filename order**; each doc's own prerequisite
-banner pins where it interleaves with the roadmap above:
+review (plans 1–6) and the 2026-07-18 fleet audit (plans 7–8). Execute them
+**in filename order**; each doc's own prerequisite banner pins where it
+interleaves with the roadmap above:
 
 1. `docs/plan-1-recall-hardfails.md` (Tier B) — no prerequisites; start
    any time. Fixes measured baseline hard-fails; B.0's unparsed-file
@@ -70,7 +71,16 @@ banner pins where it interleaves with the roadmap above:
    Q.1 after R.4; Q.2 after F.0; Q.3 after Q.0.
 6. `docs/plan-6-scale-monorepo.md` (Tier N) — N.0–N.2 after E.3 + B.0;
    **N.3 runs strictly last of everything** (it writes the coverage
-   contract for whatever actually shipped).
+   contract for whatever actually shipped — including plans 7–8).
+7. `docs/plan-7-fleet-stacks.md` (Tier H) — after N.0–N.2, before N.3.
+   Express routes, `ws` server WebSocket, Solid Router, delayed_job
+   contract rule, and local path-based corpora for the author's seven
+   fleet repos (recall numbers for synergy, mysycamore, datascience,
+   nextGen, nextGen-CDR-Agent, nextGen-SCE-Agent).
+8. `docs/plan-8-multi-repo.md` (Tier Z) — after plan 7, before N.3.
+   Multi-repo workspaces: path semantics (`~`, workspace-file-relative),
+   per-service git roots for `impact --diff`, and the cross-repo fleet
+   eval corpus (nextGen ↔ agents over RabbitMQ/REST).
 
 Referencing rule for implementers: every prompt/task should name **this file
 (process + order) plus the single owning plan doc for the phase being
