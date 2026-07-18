@@ -1023,14 +1023,16 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "datastar_bind") || strings.HasPrefix(lower, "datastar_signal"):
 		return graph.NodeTypeFunction, graph.EdgeTypeDatastarBind
 
-	// ── Background jobs (delayed_job, solid_queue, ActiveJob, Sidekiq) ───────
+	// ── Background jobs (delayed_job, solid_queue, ActiveJob, Sidekiq, Celery) ─
 	case strings.HasPrefix(lower, "sidekiq_perform") || strings.Contains(lower, "perform_async") ||
 		strings.Contains(lower, "perform_in") || strings.Contains(lower, "perform_at") ||
 		strings.HasPrefix(lower, "dj_delay") || strings.HasPrefix(lower, "dj_enqueue") ||
-		strings.HasPrefix(lower, "dj_handle_async") || strings.HasPrefix(lower, "aj_perform_later"):
+		strings.HasPrefix(lower, "dj_handle_async") || strings.HasPrefix(lower, "aj_perform_later") ||
+		strings.HasPrefix(lower, "celery_task_delay") || strings.HasPrefix(lower, "celery_apply_async"):
 		return graph.NodeTypePublisher, graph.EdgeTypeJobEnqueue
 	case strings.Contains(lower, "sidekiq_worker") || strings.Contains(lower, "sidekiq_job") ||
-		strings.HasPrefix(lower, "aj_perform_method"):
+		strings.HasPrefix(lower, "aj_perform_method") ||
+		strings.HasPrefix(lower, "celery_task_decorator"):
 		return graph.NodeTypeSubscriber, graph.EdgeTypeJobPerform
 	case strings.HasPrefix(lower, "aj_queue_adapter") || strings.HasPrefix(lower, "sq_adapter"):
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls

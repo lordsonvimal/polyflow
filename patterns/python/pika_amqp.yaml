@@ -1,0 +1,67 @@
+# pika AMQP patterns: basic_publish → NodeTypePublisher (channel synthesis via
+# Pass 4 when exchange + routing_key are captured), basic_consume →
+# NodeTypeSubscriber, queue_declare → NodeTypeChannel.
+#
+# Gate: only activates for services that depend on pika.
+# Cross-service AMQP linking uses the existing contracts/amqp.yaml rule:
+# publisher channel nodes and consumer channel nodes with the same
+# exchange+routing_key key across services receive a publishes edge.
+#
+# Capture hygiene (rule 6): positional form of basic_publish captures
+# exchange and routing_key as raw tree-sitter nodes; stripStringLiteral
+# removes surrounding quotes before the channel key is built in Pass 4.
+language: python
+version: "1"
+package: pika
+patterns:
+  # channel.basic_publish(exchange, routing_key, body) — positional arg form.
+  # The first two positional args are exchange and routing_key.
+  # Pass 4 in the matcher synthesises a channel node from the exchange meta.
+  - name: pika_basic_publish
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#eq? @fn "basic_publish"))
+        arguments: (argument_list
+          .
+          (_) @exchange
+          .
+          (_) @routing_key))
+    captures:
+      - name: exchange
+        role: amqp_exchange
+      - name: routing_key
+        role: amqp_routing_key
+
+  # channel.basic_consume(queue, on_message_callback, …) — consumer binding.
+  # queue is captured as amqp_queue; no channel synthesis (consistent with
+  # the Go amqp091 consumer pattern which also does not set exchange).
+  - name: pika_basic_consume
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#eq? @fn "basic_consume"))
+        arguments: (argument_list
+          .
+          (_) @queue))
+    captures:
+      - name: queue
+        role: amqp_queue
+
+  # channel.queue_declare(queue_name, …) — queue declaration.
+  # Produces a NodeTypeChannel node; does not participate in producer-consumer
+  # contract matching (same semantics as amqp_queue_declare in Go amqp091).
+  - name: pika_queue_declare
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#eq? @fn "queue_declare"))
+        arguments: (argument_list
+          .
+          (_) @queue))
+    captures:
+      - name: queue
+        role: amqp_queue

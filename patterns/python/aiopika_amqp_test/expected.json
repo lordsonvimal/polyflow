@@ -1,0 +1,12 @@
+{
+  "patterns": [
+    "aiopika_publish",
+    "aiopika_publish",
+    "aiopika_consume"
+  ],
+  "node_types": [
+    "publisher",
+    "publisher",
+    "subscriber"
+  ]
+}
