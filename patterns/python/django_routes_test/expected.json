@@ -1,0 +1,4 @@
+{
+  "patterns": ["django_url_route", "django_url_route", "django_url_route"],
+  "node_types": ["http_handler", "http_handler", "http_handler"]
+}

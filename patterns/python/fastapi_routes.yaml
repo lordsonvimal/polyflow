@@ -1,0 +1,31 @@
+# FastAPI route registrations via HTTP-method decorators.
+#
+# Gate: only activates for services that depend on fastapi.
+# The decorator shapes here are also used by Starlette directly.
+language: python
+version: "1"
+package: fastapi
+patterns:
+  # @app.get("/users") / @router.post("/items/{id}") async def handler():
+  # Captures the HTTP method from the decorator attribute and the route path
+  # from the first positional string argument.
+  - name: fastapi_route
+    query: |
+      (decorated_definition
+        (decorator
+          (call
+            function: (attribute
+              attribute: (identifier) @method
+              (#match? @method "^(get|post|put|patch|delete|head|options)$"))
+            arguments: (argument_list
+              .
+              (string) @path)))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: name
+        role: func_name

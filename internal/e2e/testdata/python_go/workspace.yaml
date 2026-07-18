@@ -1,0 +1,16 @@
+name: "python-go-2svc"
+version: "1"
+services:
+  - name: svc-python
+    path: ./svc-python
+    language: python
+  - name: svc-go
+    path: ./svc-go
+    language: go
+links:
+  - from: svc-python
+    to: svc-go
+    base_url: "http://svc-go"
+index:
+  exclude:
+    - "**/vendor/**"
