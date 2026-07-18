@@ -1,8 +1,10 @@
 repo:
   name: chessleap
-  # Private repo: the author's benchmark application. Clone (or symlink) to
-  # eval/.cache/chessleap and run `polyflow index --full` before running eval.
-  # make eval-corpus skips path-based repos.
+  # Private repo: the author's benchmark application. On the author machine
+  # the local clone lives at ~/projects/chessleap; symlink it into place with
+  #   ln -s ~/projects/chessleap eval/.cache/chessleap   (gitignored)
+  # then run `polyflow index --full` inside it before running eval.
+  # make eval-corpus skips path-based repos (SkippedCorpus.LocalOnly in CI).
   path: eval/.cache/chessleap
   sha: 7a74e0e06b2259ddea2cfe48136d5fd7f1a7ec13
   workspace: workspace.yaml

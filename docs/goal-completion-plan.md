@@ -509,11 +509,32 @@ Tier E with ≥15 cases.
 **Acceptance.** Corpus recall for the Python repo is reported in
 `eval/baseline.json`; the number, not the pattern count, closes the phase.
 
-*(Checklist item 8 for Python — Jinja2/Django templates — is not covered by
-L.P0–L.P3; it is a required follow-up phase (L.P4) before Python is declared
-checklist-complete, scoped by whether the Tier E Python corpus repo actually
-uses server-side templates. Java/C#/PHP repeat the full checklist as future
-phases; do not start a second language before the Python eval number exists.)*
+**Outcome (2026-07-18, written post-hoc in review — the phase commit `419a627`
+flipped the status without an outcome note, a process breach recorded here so
+it is not repeated).** Delivered Celery patterns (`task.delay`/`apply_async` →
+`job_enqueue`; `@app.task`/`@shared_task` → consumer), `pika`
+`basic_publish`/`basic_consume`, and `aio-pika` `exchange.publish`/
+`queue.iterator` patterns; `contracts/jobs.yaml` gained two Celery rules keyed
+on the task function name; `classifyPattern` extended for the three Celery
+pattern names. Corpus: `eval/corpus/pyflask` over `eval/testdata/pyflask`
+(FastAPI API + Celery worker + Flask gateway), 16 hand-verified cases, recall
+1.000, baseline updated. Tests: 4 `TestPythonCelery_*` e2e tests incl.
+determinism. **Deviation (material):** the "Python-using corpus repo" is a
+**self-authored synthetic fixture**, not the real OSS repo E.2's selection
+criteria intend — it proves the patterns match code written to match them,
+not generality. The eval number therefore does NOT close checklist item 6;
+that requirement moves to L.P4 (below) and Python is not checklist-complete
+until a real OSS Python repo reports a recall number.
+
+*(Phase L.P4 — required before Python is declared checklist-complete, and
+before any second language starts: (a) checklist item 8 — Jinja2/Django
+templates, scoped by whether the chosen corpus repo uses server-side
+templates; (b) checklist item 6 properly — one **real public OSS** Python
+repo (≥2 services or front+back split, per E.2's pinned selection criteria)
+with ≥15 hand-verified cases and its recall number ratcheted into
+`eval/baseline.json`. The synthetic pyflask corpus stays as a fast
+pattern-coverage smoke suite, never as the generality proof. Java/C#/PHP
+repeat the full checklist as future phases.)*
 
 ### Legacy-web phases (L.W) — ERB, global JS, jQuery
 
@@ -675,6 +696,18 @@ $.ajax({url}) → cross-service backend route` closes end-to-end in
 `polyflow trace`, with every hop's confidence labeled.
 
 **Outcome (2026-07-18).** Implemented all three deliverables. `patterns/javascript/jquery.yaml` gained `jquery_ajax_options` (options-object form, listed first for dedup priority), `dom_event_jquery_delegate` (3-arg `.on()` with end anchor to disambiguate from 2-arg form), and `dom_event_jquery_shorthand` (`.click/.submit/.change` etc.); existing `dom_event_jquery_on` got a trailing-arg anchor to exclude 3-arg delegation calls. New `patterns/html/elements.yaml` (html_element_id/html_element_class) and `patterns/jsx/elements.yaml` (jsx_element_id/jsx_element_class) produce `NodeTypeElement` nodes at parse time. `LinkDOMDefinitions` generalized to build an `(service, id|class) → []elemDef` index from both `NodeTypeComponent+language==templ` (reads dom_ids meta) and `NodeTypeElement` nodes (reads meta["id"]/meta["class"]); #id → static confidence + `dom_ref` unresolved on miss; .class → inferred fan-out to all N matches, no unresolved on miss; complex selectors → `selector_dynamic` ledger. New minting uses `NodeTypeElement` ("element"); `NodeTypeTemplElement` kept as deprecated alias. `SchemaVersion` bumped 16→17. `selector`, `id`, `class` added to matcher quote-strip list. `namedTypes` extended to include `NodeTypeElement`. Early-return guard in `LinkDOMDefinitions` (which was preventing complex-selector ledger entries when the element-definition index was empty) removed. Deviations: ERB element source omitted (L.W0 pending); no Tier E corpus case added (corpus requires a real legacy-web repo not yet checked in); cross-service `$.ajax` integration test exercised through existing fixture tests rather than a new two-service fixture. Full suite passes; `BenchmarkIndexCold` held.
+
+**Addendum (2026-07-18, review).** The ERB-element deviation is closed: L.W0's
+ERB parser runs the html pattern set (which includes `elements.yaml`) over the
+blanked-HTML view, so ERB elements enter the shared element-definition index
+with no further code. This is now proven by a real-parse seam test
+(`internal/linker/erb_jquery_chain_test.go`): an `.erb` fixture's
+`#save-btn` element, parsed through the actual ERB parser, receives a
+`defined_in` edge from a jQuery selector in a separate JS file — the core
+seam of this phase's acceptance chain, previously covered only by
+hand-built-node tests (rule 6 violation). Still open, tracked for the plan-2/
+plan-3 legacy-web corpus work: a Tier E case on a real legacy-web OSS repo
+and the full route→view→handler→`$.ajax`→backend `polyflow trace` walkthrough.
 
 ---
 

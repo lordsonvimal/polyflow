@@ -39,11 +39,27 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 
 	var ledger []IngestLedgerEntry
 
+	// ledgered tracks spans that already produced a ledger entry, and
+	// consumedClient tracks CLIENT spans consumed as a SERVER span's parent,
+	// so the final exhaustiveness sweep never double-books and never drops
+	// (trust contract: every span reaches a flow or the ledger).
+	ledgered := make(map[*Span]bool)
+	consumedClient := make(map[*Span]bool)
+
 	addLedger := func(s *Span, reason string) {
+		if ledgered[s] {
+			return
+		}
+		ledgered[s] = true
+		svc := resolveService(s.Service, serviceNames, wsServices)
+		if svc == "" {
+			svc = "unknown"
+		}
 		ledger = append(ledger, IngestLedgerEntry{
 			Session: session,
 			TraceID: s.TraceID,
 			SpanID:  s.SpanID,
+			Service: svc,
 			Reason:  reason,
 		})
 	}
@@ -101,6 +117,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			parentKey := traceSpanKey{sp.TraceID, sp.ParentSpanID}
 			if parent, found := byID[parentKey]; found &&
 				parent.Kind == "CLIENT" && parent.Service != sp.Service {
+				consumedClient[parent] = true
 				mappedFrom := resolveService(parent.Service, serviceNames, wsServices)
 				if mappedFrom != "" {
 					fromSvc = mappedFrom
@@ -259,6 +276,34 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			ObservedAt: int64(p.sp.StartUnixNano / 1_000_000_000),
 		}
 		addFlow(string(p.kind), p.key, p.service, "", "key_match", ref)
+	}
+
+	// ── Exhaustiveness sweep ───────────────────────────────────────────────────
+	// Every span must reach a flow record or the ledger (trust contract: no
+	// silent drops). SERVER/PRODUCER/CONSUMER spans are fully handled by the
+	// passes above. What remains:
+	//   - CLIENT spans consumed as a SERVER span's parent → accounted for.
+	//   - CLIENT spans whose server side was never captured (uninstrumented or
+	//     external callee) → ledgered no_causality: the observation is real but
+	//     polyflow will not guess the receiving service.
+	//   - INTERNAL and unknown-kind spans → ledgered unsupported_span_kind.
+	for i := range spans {
+		sp := &spans[i]
+		switch sp.Kind {
+		case "SERVER", "PRODUCER", "CONSUMER":
+			continue
+		case "CLIENT":
+			if consumedClient[sp] {
+				continue
+			}
+			if isHTTPSpan(sp) {
+				addLedger(sp, "no_causality")
+			} else {
+				addLedger(sp, "unsupported_span_kind")
+			}
+		default: // INTERNAL, unknown
+			addLedger(sp, "unsupported_span_kind")
+		}
 	}
 
 	// Sort and emit flow records (bug-class rule 2: never map-iteration order).

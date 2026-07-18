@@ -863,3 +863,41 @@ func (f *fakeRuntimeProvider) Name() string { return "runtime" }
 func (f *fakeRuntimeProvider) Collect(_ context.Context, _ *workspace.WorkspaceConfig) (evidence.Evidence, error) {
 	return f.ev, nil
 }
+
+// ─── Exhaustiveness sweep (no silent span drops) ─────────────────────────────
+//
+// A CLIENT span whose server side was never captured (call to an external /
+// uninstrumented service) and an INTERNAL span must both land in the ledger —
+// the trust contract forbids silent drops. Drives real OTLP fixture bytes.
+func TestMapSpansClientOnlyAndInternalAreLedgered(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "http_client_internal_only.otlp.json"))
+	require.NoError(t, err)
+	require.Len(t, spans, 2)
+
+	flows, ledger := MapSpans(spans, "sess1", twoSvcWS())
+
+	assert.Empty(t, flows, "no server side observed — nothing may be guessed")
+	require.Len(t, ledger, 2, "both spans must be ledgered, not dropped")
+
+	byReason := map[string]IngestLedgerEntry{}
+	for _, l := range ledger {
+		byReason[l.Reason] = l
+	}
+	client, ok := byReason["no_causality"]
+	require.True(t, ok, "unpaired CLIENT span must ledger as no_causality")
+	assert.Equal(t, "web", client.Service, "ledger entry carries the mapped polyflow service")
+	internal, ok := byReason["unsupported_span_kind"]
+	require.True(t, ok, "INTERNAL span must ledger as unsupported_span_kind")
+	assert.Equal(t, "web", internal.Service)
+}
+
+// A CLIENT span consumed as a SERVER span's parent is accounted for by the
+// flow record and must NOT be double-booked by the exhaustiveness sweep.
+func TestMapSpansConsumedClientNotLedgered(t *testing.T) {
+	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "http_2svc.otlp.json"))
+	require.NoError(t, err)
+
+	flows, ledger := MapSpans(spans, "sess1", twoSvcWS())
+	require.Len(t, flows, 1)
+	assert.Empty(t, ledger, "paired CLIENT span is accounted for by the flow record")
+}

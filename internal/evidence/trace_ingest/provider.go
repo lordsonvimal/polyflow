@@ -195,7 +195,9 @@ func kindToEdgeType(k contract.Kind) graph.EdgeType {
 // ledgerEntryToUnresolved converts an IngestLedgerEntry to the
 // graph.UnresolvedRef shape pinned in the runtime-flow plan.
 func ledgerEntryToUnresolved(entry IngestLedgerEntry, capturesDir string) graph.UnresolvedRef {
-	svc := entry.Session // session name as a service proxy; "unknown" when empty
+	// Plan-pinned mapping: Service is the mapped polyflow service, "unknown"
+	// when the span's service.name resolved to nothing.
+	svc := entry.Service
 	if svc == "" {
 		svc = "unknown"
 	}

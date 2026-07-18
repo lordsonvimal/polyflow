@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1881,7 +1882,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// Eval summary row — reads the baseline file without re-running the corpus.
 	baseline, err := eval.LoadBaseline(doctorBaseline)
 	if err != nil {
-		if os.IsNotExist(err) {
+		// LoadBaseline wraps the os error, so unwrap with errors.Is — a repo
+		// without an eval corpus is the normal case, not an error.
+		if errors.Is(err, os.ErrNotExist) {
 			fmt.Printf("  Eval corpus:  no baseline found at %s (run 'polyflow eval --output %s')\n", doctorBaseline, doctorBaseline)
 		} else {
 			fmt.Printf("  Eval corpus:  error reading %s: %v\n", doctorBaseline, err)
@@ -1946,7 +1949,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  Runtime coverage:    error building index: %v\n", idxErr)
 		} else {
 			allEdges = idx.AllEdges()
-			rtReport := trace_ingest.ComputeCoverage(allEdges, nil)
+			rtReport := trace_ingest.ComputeCoverage(trace_ingest.RuntimeCoverageEdges(allEdges), nil)
 			printDoctorRuntimeCoverage(rtReport)
 		}
 	}

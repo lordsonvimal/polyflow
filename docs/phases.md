@@ -88,7 +88,11 @@ other context needed.
 - **Additive by config.** New stacks/protocols are added as YAML + fixtures only;
   core matcher/graph/engine code changes only for genuine new capabilities.
 - **Benchmark hold.** Changes on the indexing path hold chessleap index time and
-  `BenchmarkIndexCold` (`make bench`).
+  `BenchmarkIndexCold` (`make bench`). Chessleap is a private local repo:
+  `~/projects/chessleap` on the author machine, symlinked (gitignored) to
+  `eval/.cache/chessleap` — setup pinned in `eval/corpus/chessleap/manifest.yaml`.
+  A second private local proving ground is `~/projects/synergy` (Nx monorepo,
+  not in the eval corpus; used for real-repo dry runs, see plan-6 N.2 notes).
 - **`graph.SchemaVersion` bump** whenever the stored node/edge shape or semantics
   change, so stale incremental caches are discarded.
 - **Trust contract.** Recall over precision; no silent gaps — anything unresolvable
@@ -100,7 +104,9 @@ other context needed.
 
 Each rule below was extracted from a real defect that shipped and was later
 caught in review or by the eval corpus (commits `dd75b67`, `3bb9197`,
-`fc46dd7`, `e851bcc`). The owning plan docs apply these rules concretely per
+`fc46dd7`, `e851bcc`; rules 10–12 from the 2026-07-18 review of the
+R/F/A/L.W/L.P series, where the defects surfaced only on a real repo the
+test suite and eval corpus never resembled). The owning plan docs apply these rules concretely per
 phase; when a phase spec and a rule here seem to conflict, stop and surface
 it — do not silently pick one.
 
@@ -177,3 +183,34 @@ it — do not silently pick one.
    uniquely-resolvable entities or assert the specific edge path; a case that
    flips under an unrelated change is a case bug or a ranking gap to fix —
    never noise to re-baseline around.
+10. **In-memory state must track store deletions.** *(Incident: `LinkJS`
+    deleted proxy component nodes from the store — cascading their edges —
+    and filtered `allNodes`, but not `allEdges`; the evidence reconciler
+    re-upserted the dangling edges and the entire index aborted with a
+    FOREIGN KEY failure on the first real repo whose JSX rendered an
+    external-library component. Every test and eval repo passed.)* Any pass
+    that deletes, merges, or renames nodes must filter **every** in-memory
+    collection that later flows to a writer (edges, unresolved refs, caches),
+    in the same block as the deletion. Required test: a full-`indexer.Run`
+    fixture that exercises the deletion path and asserts no stored edge has
+    a dangling endpoint.
+11. **Blanking/splitting parsers blank comment bodies.** *(Incident: the ERB
+    splitter blanked only the `#` marker of `<%# … %>`, so comment bodies
+    became live Ruby and commented-out helpers minted phantom nav edges —
+    recall over precision never licenses edges from dead text.)* Any parser
+    that produces a blanked/virtual view (ERB, future Jinja2/Blade/JSP —
+    checklist item 8) must blank each comment construct **in its entirety**,
+    and ship a fixture containing a commented-out instance of every
+    recognized pattern, asserting zero matches from it.
+12. **Intake is exhaustively accounted: every element reaches output or the
+    ledger.** *(Incident: the span mapper anchored on SERVER spans only;
+    unpaired CLIENT spans and all INTERNAL spans vanished — no flow, no
+    ledger — violating "never silently dropped" while every fixture passed,
+    because no fixture contained an unhandled element.)* For any ingest of a
+    population (spans, spec operations, config vars, route entries): after
+    the mapping passes, a final sweep ledgers everything not yet accounted
+    for, and at least one fixture contains an element no mapping pass
+    handles, asserting it lands in the ledger. Corollary for reports:
+    **coverage denominators only count what the evidence class can actually
+    confirm** — a % over a population the source could never verify is
+    misinformation (the runtime-coverage-over-`contains`-edges incident).

@@ -218,3 +218,48 @@ func TestRun_CrossServiceLinkSurvivesIncremental(t *testing.T) {
 	assert.Equal(t, first.CrossLinks, third.CrossLinks, "linking passes re-run on cached results")
 	assert.Equal(t, wantCross, countCrossEdges())
 }
+
+// Regression: a JSX render of an external-library component (no in-repo
+// declaration — e.g. <Route> from a router package) mints a component proxy
+// node that LinkJS deletes. The in-memory edge set must be filtered along
+// with allNodes, or the evidence reconciler re-upserts the dangling renders
+// edge and the whole index aborts on a FOREIGN KEY failure (the synergy
+// crash, 2026-07-18).
+func TestRun_ExternalComponentProxyDoesNotAbortReconcile(t *testing.T) {
+	dir := t.TempDir()
+	jsSvc := filepath.Join(dir, "ui")
+	require.NoError(t, os.MkdirAll(jsSvc, 0o755))
+	writeFile(t, jsSvc, "App.tsx", `import { Route } from "@solidjs/router";
+
+function App() {
+  return (
+    <div>
+      <Route path="/" />
+    </div>
+  );
+}
+
+export default App;
+`)
+	cfg := &workspace.WorkspaceConfig{
+		Name: "test", Version: "1",
+		Services: []workspace.Service{
+			{Name: "ui", Path: jsSvc, Language: "typescript"},
+		},
+	}
+	dbDir := filepath.Join(dir, ".polyflow")
+
+	stats := runIndexer(t, cfg, dbDir, false) // fails before the allEdges filter fix
+	require.Greater(t, stats.Nodes, 0)
+
+	// The proxy node must be gone and no edge may reference it.
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+	for _, e := range idx.AllEdges() {
+		assert.NotNil(t, idx.Nodes[e.From], "edge %s has dangling From", e.ID)
+		assert.NotNil(t, idx.Nodes[e.To], "edge %s has dangling To", e.ID)
+	}
+}
