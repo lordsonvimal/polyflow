@@ -38,6 +38,33 @@ type CoverageReport struct {
 	ObservedOnlyGaps []ObservedOnlyGap
 }
 
+// runtimeVerifiableEdgeTypes is the set of edge types runtime evidence can
+// actually confirm — the kinds kindToEdgeType emits. Coverage denominators
+// are restricted to these: including intra-language kinds (calls, contains,
+// captures, …) that no span can ever verify would pin the verified %
+// near zero forever and misreport what a capture proved.
+var runtimeVerifiableEdgeTypes = map[graph.EdgeType]bool{
+	graph.EdgeTypeHTTPCall:          true,
+	graph.EdgeTypeSSEEndpoint:       true,
+	graph.EdgeTypePublishes:         true,
+	graph.EdgeType("kafka_publish"): true,
+	graph.EdgeType("nats_publish"):  true,
+	graph.EdgeTypeJobEnqueue:        true,
+}
+
+// RuntimeCoverageEdges filters edges to the runtime-verifiable channel kinds.
+// Callers pass the result to ComputeCoverage / ComputeSessionCoverage so the
+// coverage denominator only counts channels a capture could confirm.
+func RuntimeCoverageEdges(edges []graph.Edge) []graph.Edge {
+	out := make([]graph.Edge, 0, len(edges))
+	for _, e := range edges {
+		if runtimeVerifiableEdgeTypes[e.Type] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // ComputeCoverage tallies coverage from edges with pre-stamped VerificationState.
 // Use for cumulative coverage (all sessions combined, from the graph store).
 func ComputeCoverage(edges []graph.Edge, ledger []IngestLedgerEntry) CoverageReport {

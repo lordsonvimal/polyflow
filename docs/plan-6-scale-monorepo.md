@@ -197,6 +197,22 @@ monorepo fixture if that repo is single-module) produces a
 `workspace.yaml` needing zero manual edits to index; recorded in the
 phase note with the diff against a hand-written one.
 
+**Field notes (2026-07-18, synergy dry run — bank these into N.2's tests).**
+`polyflow init` + `index` were exercised on a real Nx monorepo
+(`~/projects/synergy`: go.work with 3 Go apps, Nx/solid/express JS apps,
+a source-less `theme` package). What worked: 7 services discovered with
+correct languages/frameworks; the source-less package indexed as 0 files
+harmlessly; `go.work` entries whose modules fail `go/packages` loading
+(missing `go.mod` for a listed module) degraded per-service to tree-sitter
+call edges with a printed warning — degrade-don't-die held. What N.2 must
+additionally pin: (a) a fixture with a go.work `use` directive pointing at
+a directory without `go.mod` — discovery must still emit the service and
+the semantic-pass warning must name the missing module, not fail the run;
+(b) the run also exposed bug-class rule 10 (`docs/phases.md` — dangling
+in-memory edges after proxy-node deletion aborted the whole index); N.2's
+acceptance run must therefore complete `index` end-to-end, not just
+produce a plausible `workspace.yaml`.
+
 ### Phase N.3 — The coverage contract (tiering doc + doctor repo report) `pending`
 
 *Runs after everything else in plans 1–6 that will ship has shipped —
