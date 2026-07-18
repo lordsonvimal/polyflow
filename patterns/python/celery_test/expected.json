@@ -1,0 +1,18 @@
+{
+  "patterns": [
+    "celery_task_decorator",
+    "celery_task_decorator",
+    "celery_task_decorator",
+    "celery_task_decorator",
+    "celery_task_delay",
+    "celery_apply_async"
+  ],
+  "node_types": [
+    "subscriber",
+    "subscriber",
+    "subscriber",
+    "subscriber",
+    "publisher",
+    "publisher"
+  ]
+}

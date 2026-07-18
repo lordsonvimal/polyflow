@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-17T04:24:56.164418Z",
+  "generated_at": "2026-07-18T13:15:18.223447Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -412,6 +412,141 @@
       ],
       "recall": 1,
       "precision": 0.3888888888888889
+    },
+    {
+      "repo": "pyflask",
+      "results": [
+        {
+          "case_id": "celery-send-notification",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "celery-process-payment",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "celery-generate-invoice",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "celery-send-verification-email",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "celery-cleanup-expired-sessions",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-create-user",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-get-user",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-update-user",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-list-users",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-delete-user",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-create-order",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-get-order",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fastapi-update-order",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "flask-health-check",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "flask-process-webhook",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "flask-status-page",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 1
     },
     {
       "repo": "writefreely",

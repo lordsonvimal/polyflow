@@ -1,0 +1,12 @@
+name: "python-celery-2svc"
+version: "1"
+services:
+  - name: svc-api
+    path: ./svc-api
+    language: python
+  - name: svc-worker
+    path: ./svc-worker
+    language: python
+links: []
+index:
+  exclude: []
