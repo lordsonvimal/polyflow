@@ -97,3 +97,22 @@ func sortedSourceRefs(sources []SourceRef) []SourceRef {
 	})
 	return sorted
 }
+
+// VerificationRank returns the tie-break rank for a verification state:
+// 0 (best) = verified, 1 = observed_only_gap, 2 = candidate,
+// 3 = conflicting, 4 = empty/unknown. Lower is better; used by
+// RelatedFiles and rollupCallers to break ties within equal primary rank.
+func VerificationRank(state string) int {
+	switch state {
+	case StateVerified:
+		return 0
+	case StateObservedOnlyGap:
+		return 1
+	case StateCandidate:
+		return 2
+	case StateConflicting:
+		return 3
+	default:
+		return 4
+	}
+}
