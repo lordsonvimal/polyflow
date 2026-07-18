@@ -1,0 +1,16 @@
+{
+  "patterns": [
+    "class_decl",
+    "func_decl", "func_decl", "func_decl", "func_decl",
+    "func_decl", "func_decl", "func_decl", "func_decl",
+    "python_func_call", "python_func_call", "python_func_call",
+    "python_func_call", "python_func_call", "python_func_call",
+    "python_import",
+    "python_from_import"
+  ],
+  "node_types": [
+    "class",
+    "function", "function", "function", "function",
+    "function", "function", "function", "function"
+  ]
+}

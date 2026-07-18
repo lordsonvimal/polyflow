@@ -49,6 +49,8 @@ func grammarForExt(ext string) string {
 		return "ruby"
 	case ".html":
 		return "html"
+	case ".py":
+		return "python"
 	default:
 		return ""
 	}
