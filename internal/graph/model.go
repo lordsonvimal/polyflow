@@ -15,6 +15,11 @@ const (
 	NodeTypeWorker       NodeType = "worker"
 	NodeTypePublisher    NodeType = "publisher"
 	NodeTypeSubscriber   NodeType = "subscriber"
+	// NodeTypeElement is a generic DOM element node (successor to NodeTypeTemplElement).
+	// The Language field distinguishes the source: templ, html, jsx, erb.
+	NodeTypeElement  NodeType = "element"
+	// NodeTypeTemplElement is kept as a deprecated alias for stored graphs; new
+	// minting uses NodeTypeElement. (job_enqueue/sidekiq_enqueue precedent.)
 	NodeTypeTemplElement NodeType = "templ_element"
 	NodeTypeInterface    NodeType = "interface"
 	NodeTypeTypeAlias    NodeType = "type_alias"
@@ -161,7 +166,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "16" // R.1: added CodeFile/CodeFunc to SourceRef for site-granularity evidence
+const SchemaVersion = "17" // L.W2: NodeTypeElement introduced; templ_element minting migrated to element
 
 // Node represents a code entity in the graph.
 type Node struct {

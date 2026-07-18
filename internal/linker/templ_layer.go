@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -124,96 +125,242 @@ func resolveAssetFile(src string, reps map[string]jsFileRep) (id, confidence str
 
 var reSimpleID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// LinkDOMDefinitions links a JS DOM target (querySelector/getElementById) to the
-// templ element that declares the matching `id=`. The templ parser records each
-// element id on its component's `dom_ids` meta ("id@line", newline-separated);
-// this pass creates a templ_element node for every id a JS selector actually
-// references and emits a `defined_in` edge from the JS target to it. Only id
-// selectors are resolved here — class selectors (which match many elements) and
-// attribute/tag/dynamic selectors are left for a later phase. A selector id with
-// no templ definition surfaces as an UnresolvedRef.
+// elemDef records one definition site for a DOM element (by id or class).
+// When nodeID is non-empty the element node already exists (from HTML/JSX
+// parsing) and no new node needs to be minted. When nodeID is empty the
+// element node must be minted from the templ component (compID, file, line).
+type elemDef struct {
+	nodeID string // existing element node ID (HTML/JSX source)
+	compID string // templ component ID (used when minting new element nodes)
+	file   string
+	line   int
+	lang   string
+}
+
+// LinkDOMDefinitions links JS DOM targets (querySelector/getElementById/jQuery
+// selectors) to the element nodes that declare the matching id= or class=.
+//
+// Element definitions are collected from all indexed template sources:
+//   - templ component nodes: dom_ids meta ("id@line\n…") as before
+//   - HTML/JSX element nodes: NodeTypeElement nodes with meta["id"] or meta["class"]
+//
+// Simple selectors are resolved:
+//
+//	#id       → id index (static confidence; unresolved if missing)
+//	.class    → class index, fan-out to ALL matching elements (inferred; no
+//	            unresolved on miss — class may be styled externally)
+//	tag.class → class index fan-out
+//
+// Complex selectors (descendant, pseudo, attribute, interpolation) →
+// selector_dynamic ledger entry.
+//
+// Newly minted element nodes use NodeTypeElement ("element"); existing nodes
+// (HTML/JSX source) are reused. NodeTypeTemplElement ("templ_element") is kept
+// as a deprecated alias for stored graphs.
 func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
-	type idDef struct {
-		compID, file string
-		line         int
-	}
-	idDefs := map[string][]idDef{} // service\x00id -> definitions
+	// Build element-definition indexes.
+	// idDefs:   "svc\x00id"    → definitions
+	// classDefs: "svc\x00class" → definitions
+	idDefs := map[string][]elemDef{}
+	classDefs := map[string][]elemDef{}
+
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type != graph.NodeTypeComponent || n.Language != "templ" {
-			continue
-		}
-		raw := n.Meta["dom_ids"]
-		if raw == "" {
-			continue
-		}
-		for _, entry := range strings.Split(raw, "\n") {
-			id, line := splitIDLine(entry)
-			if id == "" {
-				continue
+		switch {
+		case n.Type == graph.NodeTypeComponent && n.Language == "templ":
+			// Existing templ convention: dom_ids meta carries "id@line\n…".
+			for _, entry := range strings.Split(n.Meta["dom_ids"], "\n") {
+				id, line := splitIDLine(entry)
+				if id == "" {
+					continue
+				}
+				key := n.Service + "\x00" + id
+				idDefs[key] = append(idDefs[key], elemDef{compID: n.ID, file: n.File, line: line, lang: "templ"})
 			}
-			key := n.Service + "\x00" + id
-			idDefs[key] = append(idDefs[key], idDef{n.ID, n.File, line})
+		case n.Type == graph.NodeTypeElement:
+			// HTML/JSX element nodes emitted by the parser-level patterns.
+			if id := n.Meta["id"]; id != "" {
+				key := n.Service + "\x00" + id
+				idDefs[key] = append(idDefs[key], elemDef{nodeID: n.ID, file: n.File, line: n.Line, lang: n.Language})
+			}
+			if classes := n.Meta["class"]; classes != "" {
+				for _, cls := range strings.Fields(classes) {
+					key := n.Service + "\x00" + cls
+					classDefs[key] = append(classDefs[key], elemDef{nodeID: n.ID, file: n.File, line: n.Line, lang: n.Language})
+				}
+			}
 		}
 	}
-	if len(idDefs) == 0 {
-		return nil, nil, nil
+
+	// Sort definitions within each bucket for deterministic emission (rule 2).
+	sortDefs := func(defs []elemDef) {
+		sort.Slice(defs, func(i, j int) bool {
+			a, b := defs[i], defs[j]
+			if a.file != b.file {
+				return a.file < b.file
+			}
+			return a.line < b.line
+		})
+	}
+	for k := range idDefs {
+		sortDefs(idDefs[k])
+	}
+	for k := range classDefs {
+		sortDefs(classDefs[k])
 	}
 
 	var newNodes []graph.Node
 	var edges []graph.Edge
 	var unresolved []graph.UnresolvedRef
-	elemNodes := map[string]string{} // compID\x00id -> element nodeID
+
+	// elemNodeFor returns (or mints) the element node ID for a definition.
+	elemNodes := map[string]string{} // uniqueKey → element nodeID
+	elemNodeFor := func(svc string, d elemDef, elemName string) (string, bool) {
+		if d.nodeID != "" {
+			return d.nodeID, false // already exists
+		}
+		// Mint a new element node from templ component data.
+		ekey := d.compID + "\x00" + elemName
+		if id, ok := elemNodes[ekey]; ok {
+			return id, false
+		}
+		elemID := fmt.Sprintf("%s:%s:%s:%s:%d", svc, d.file, string(graph.NodeTypeElement), "#"+elemName, d.line)
+		elemNodes[ekey] = elemID
+		newNodes = append(newNodes, graph.Node{
+			ID:       elemID,
+			Type:     graph.NodeTypeElement,
+			Label:    "#" + elemName,
+			Service:  svc,
+			File:     d.file,
+			Line:     d.line,
+			Language: d.lang,
+			Meta:     map[string]string{"dom_id": elemName, "component": d.compID},
+		})
+		return elemID, true
+	}
+
 	seenEdge := map[string]bool{}
+	addEdge := func(fromID, toID string, conf string) {
+		edgeID := fmt.Sprintf("%s:%s->%s", string(graph.EdgeTypeDefinedIn), fromID, toID)
+		if seenEdge[edgeID] {
+			return
+		}
+		seenEdge[edgeID] = true
+		edges = append(edges, graph.Edge{
+			ID:         edgeID,
+			From:       fromID,
+			To:         toID,
+			Type:       graph.EdgeTypeDefinedIn,
+			Confidence: conf,
+		})
+	}
+
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeDOMTarget {
 			continue
 		}
-		id, ok := domTargetID(n.Meta["fn"], n.Meta["selector"])
-		if !ok {
-			continue
-		}
-		defs, ok := idDefs[n.Service+"\x00"+id]
-		if !ok {
-			unresolved = append(unresolved, graph.UnresolvedRef{
-				Service: n.Service, File: n.File, Line: n.Line,
-				Name: "#" + id, Kind: "dom_ref",
-			})
-			continue
-		}
-		for _, d := range defs {
-			ekey := d.compID + "\x00" + id
-			elemID, exists := elemNodes[ekey]
-			if !exists {
-				elemID = fmt.Sprintf("%s:%s:%s:%s:%d", n.Service, d.file, string(graph.NodeTypeTemplElement), id, d.line)
-				elemNodes[ekey] = elemID
-				newNodes = append(newNodes, graph.Node{
-					ID:       elemID,
-					Type:     graph.NodeTypeTemplElement,
-					Label:    "#" + id,
-					Service:  n.Service,
-					File:     d.file,
-					Line:     d.line,
-					Language: "templ",
-					Meta:     map[string]string{"dom_id": id, "component": d.compID},
+
+		rawSel := n.Meta["selector"]
+		fn := n.Meta["fn"]
+		id, cls, isComplex := parseDOMSelector(fn, rawSel)
+
+		if isComplex {
+			if rawSel != "" && !strings.ContainsAny(stripQuote(rawSel), "${}`+") {
+				// Simple-enough to recognize as complex CSS — surface in ledger.
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: n.Service, File: n.File, Line: n.Line,
+					Name: stripQuote(rawSel), Kind: "selector_dynamic",
 				})
 			}
-			edgeID := fmt.Sprintf("%s:%s->%s", string(graph.EdgeTypeDefinedIn), n.ID, elemID)
-			if seenEdge[edgeID] {
+			continue
+		}
+
+		if id != "" {
+			defs, ok := idDefs[n.Service+"\x00"+id]
+			if !ok {
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: n.Service, File: n.File, Line: n.Line,
+					Name: "#" + id, Kind: "dom_ref",
+				})
 				continue
 			}
-			seenEdge[edgeID] = true
-			edges = append(edges, graph.Edge{
-				ID:         edgeID,
-				From:       n.ID,
-				To:         elemID,
-				Type:       graph.EdgeTypeDefinedIn,
-				Confidence: graph.ConfidenceStatic,
-			})
+			for _, d := range defs {
+				elemID, _ := elemNodeFor(n.Service, d, id)
+				addEdge(n.ID, elemID, graph.ConfidenceStatic)
+			}
+			continue
+		}
+
+		if cls != "" {
+			defs := classDefs[n.Service+"\x00"+cls]
+			// No unresolved on class miss — classes may be defined externally in CSS.
+			for _, d := range defs {
+				var elemID string
+				if d.nodeID != "" {
+					elemID = d.nodeID
+				} else {
+					// Templ components don't track dom_classes in this phase;
+					// treat as unresolvable without minting a ghost node.
+					continue
+				}
+				addEdge(n.ID, elemID, graph.ConfidenceInferred)
+			}
 		}
 	}
 	return newNodes, edges, unresolved
+}
+
+// parseDOMSelector extracts a simple #id or .class (or tag.class) target from a
+// raw selector string. Returns (id, class, isComplex) where exactly one of id/class
+// is non-empty when isComplex=false.
+//
+// Handles:
+//   - getElementById(bare_id) → id
+//   - querySelector/querySelectorAll("#id") → id
+//   - querySelector/querySelectorAll(".class") → class
+//   - jQuery $(...) and delegation selectors
+//   - tag.class form → class (the class part)
+func parseDOMSelector(fn, rawSelector string) (id, class string, isComplex bool) {
+	sel := stripQuote(strings.TrimSpace(rawSelector))
+	if sel == "" {
+		return "", "", false
+	}
+	// Dynamic interpolation → complex.
+	if strings.ContainsAny(sel, " ${}`+") {
+		return "", "", true
+	}
+
+	if fn == "getElementById" {
+		if reSimpleID.MatchString(sel) {
+			return sel, "", false
+		}
+		return "", "", true
+	}
+
+	// querySelector, querySelectorAll, jQuery $(…), delegation selector, etc.
+	if strings.HasPrefix(sel, "#") {
+		id = sel[1:]
+		if reSimpleID.MatchString(id) {
+			return id, "", false
+		}
+		return "", "", true
+	}
+	if strings.HasPrefix(sel, ".") {
+		cls := sel[1:]
+		if reSimpleID.MatchString(cls) {
+			return "", cls, false
+		}
+		return "", "", true
+	}
+	// tag.class form (e.g. "button.save-btn").
+	if dot := strings.LastIndex(sel, "."); dot > 0 {
+		cls := sel[dot+1:]
+		if reSimpleID.MatchString(cls) && !strings.ContainsAny(sel[:dot], ".#:[") {
+			return "", cls, false
+		}
+	}
+	return "", "", true
 }
 
 // splitIDLine splits a "id@line" dom_ids entry into its id and line number.
@@ -225,31 +372,6 @@ func splitIDLine(entry string) (string, int) {
 	line := 0
 	fmt.Sscanf(entry[i+1:], "%d", &line)
 	return entry[:i], line
-}
-
-// domTargetID extracts the element id a DOM query targets, or ok=false when the
-// selector is not a plain id (class/attribute/tag/compound/dynamic). getElementById
-// takes a bare id; querySelector(All) takes a CSS selector, so an id there is
-// `#foo`.
-func domTargetID(fn, rawSelector string) (string, bool) {
-	sel := stripQuote(strings.TrimSpace(rawSelector))
-	if sel == "" || strings.ContainsAny(sel, "${}`+") {
-		return "", false // dynamic / interpolated selector
-	}
-	switch fn {
-	case "getElementById":
-		if reSimpleID.MatchString(sel) {
-			return sel, true
-		}
-	case "querySelector", "querySelectorAll":
-		if strings.HasPrefix(sel, "#") {
-			id := sel[1:]
-			if reSimpleID.MatchString(id) {
-				return id, true
-			}
-		}
-	}
-	return "", false
 }
 
 // stripQuote removes a single matching pair of surrounding quotes (single,

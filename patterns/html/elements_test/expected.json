@@ -1,0 +1,10 @@
+{
+  "patterns": [
+    "html_element_id", "html_element_id", "html_element_id",
+    "html_element_class", "html_element_class"
+  ],
+  "node_types": [
+    "element", "element", "element",
+    "element", "element"
+  ]
+}

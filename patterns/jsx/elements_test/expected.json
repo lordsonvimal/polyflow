@@ -1,0 +1,10 @@
+{
+  "patterns": [
+    "jsx_element_id", "jsx_element_id",
+    "jsx_element_class", "jsx_element_class"
+  ],
+  "node_types": [
+    "element", "element",
+    "element", "element"
+  ]
+}
