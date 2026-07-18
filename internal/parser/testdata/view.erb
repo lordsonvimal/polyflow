@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><title>Reports</title></head>
+<body>
+  <nav>
+    <a href="/home">Home</a>
+    <%= link_to "Reports", reports_path %>
+    <%= link_to "New Report", new_report_path %>
+    <%= link_to "Archive", archive_report_path %>
+  </nav>
+  <main>
+    <%= form_with url: reports_path do |f| %>
+      <button type="submit">Submit</button>
+    <% end %>
+    <div id="report-list" onclick="loadReports()">Load</div>
+  </main>
+</body>
+</html>

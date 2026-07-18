@@ -459,6 +459,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 					label = meta["method"] + " " + p
 				}
 			}
+			// nav_link nodes with a helper reference (no literal path) must skip
+			// the nav-path dedup (which keys on meta["path"]); mark as dynamic so
+			// each call site is kept independently and resolved by the linker pass.
+			if meta["helper"] != "" && meta["path"] == "" {
+				meta["key_dynamic"] = "true"
+			}
 		}
 
 		// G.6 multi-candidate key: patterns that capture @branch_N produce nodes
