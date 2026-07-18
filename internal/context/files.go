@@ -17,6 +17,7 @@ type FilesResult struct {
 	Files   []string                 `json:"files"` // resolved seed files
 	Service string                   `json:"service,omitempty"`
 	Depth   int                      `json:"depth"`
+	Ranking string                   `json:"ranking"` // ranking criteria: "refs,hops,verification"
 	Related []graph.RelatedFileEntry `json:"related"`
 
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
@@ -39,6 +40,7 @@ func BuildFiles(idx *graph.AdjacencyIndex, service string, paths []string, depth
 		Files:      seeds,
 		Service:    service,
 		Depth:      depth,
+		Ranking:    "refs,hops,verification",
 		Related:    related,
 		Unresolved: []graph.UnresolvedRef{},
 	}, nil

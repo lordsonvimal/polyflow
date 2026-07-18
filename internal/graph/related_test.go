@@ -105,3 +105,25 @@ func TestRelatedFilesServiceFilterOnSeeds(t *testing.T) {
 	assert.Equal(t, "svc-a/store.go", related[0].File)
 	assert.Equal(t, 1, related[0].Refs)
 }
+
+// TestRelatedFilesVerificationTieBreaker verifies that verification state
+// breaks ties within equal refs/hops/nodes without changing total result set.
+func TestRelatedFilesVerificationTieBreaker(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	// seed node
+	idx.AddNode(&graph.Node{ID: "seed", Type: graph.NodeTypeFunction, Label: "seed", Service: "svc", File: "svc/seed.go", Line: 1})
+	// two files, each with exactly 1 direct ref and 1 node — differ only in verification state
+	idx.AddNode(&graph.Node{ID: "cand", Type: graph.NodeTypeFunction, Label: "cand", Service: "svc", File: "svc/candidate.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "ver", Type: graph.NodeTypeFunction, Label: "ver", Service: "svc", File: "svc/verified.go", Line: 1})
+	idx.AddEdge(&graph.Edge{ID: "ec", From: "cand", To: "seed", Type: graph.EdgeTypeCalls, VerificationState: graph.StateCandidate})
+	idx.AddEdge(&graph.Edge{ID: "ev", From: "ver", To: "seed", Type: graph.EdgeTypeCalls, VerificationState: graph.StateVerified})
+
+	_, related, missing := graph.RelatedFiles(idx, "", []string{"svc/seed.go"}, 2)
+	assert.Empty(t, missing)
+	require.Len(t, related, 2, "total result set must be unchanged (tie-breaker, not filter)")
+	// verified outranks candidate when refs/hops/nodes are equal
+	assert.Equal(t, "svc/verified.go", related[0].File)
+	assert.Equal(t, graph.StateVerified, related[0].BestVerificationState)
+	assert.Equal(t, "svc/candidate.go", related[1].File)
+	assert.Equal(t, graph.StateCandidate, related[1].BestVerificationState)
+}

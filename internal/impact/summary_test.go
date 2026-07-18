@@ -138,3 +138,24 @@ func TestBuildFile_MissingFileErrors(t *testing.T) {
 	_, err := impact.BuildFile(idx, "", "nope.go", "backward", 10)
 	assert.Error(t, err)
 }
+
+// TestSummarize_VerificationTieBreaker verifies that within equal MinDepth,
+// a verified file outranks a candidate file, and the total set is unchanged.
+func TestSummarize_VerificationTieBreaker(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "ca", Type: graph.NodeTypeFunction, Label: "callerCand", Service: "svc", File: "svc/candidate.go", Line: 5})
+	idx.AddNode(&graph.Node{ID: "vr", Type: graph.NodeTypeFunction, Label: "callerVer", Service: "svc", File: "svc/verified.go", Line: 5})
+	idx.AddEdge(&graph.Edge{ID: "eca", From: "ca", To: "tgt", Type: graph.EdgeTypeCalls, VerificationState: graph.StateCandidate})
+	idx.AddEdge(&graph.Edge{ID: "evr", From: "vr", To: "tgt", Type: graph.EdgeTypeCalls, VerificationState: graph.StateVerified})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], 10, "", false)
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 2, "tie-breaker must not drop any file")
+	assert.Equal(t, "svc/verified.go", s.Files[0].File)
+	assert.Equal(t, graph.StateVerified, s.Files[0].BestVerificationState)
+	assert.Equal(t, "svc/candidate.go", s.Files[1].File)
+	assert.Equal(t, graph.StateCandidate, s.Files[1].BestVerificationState)
+	assert.Equal(t, "depth,verification", s.Ranking)
+}

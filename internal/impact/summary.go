@@ -16,6 +16,9 @@ type FileRollup struct {
 	Nodes     int      `json:"nodes"`
 	MinDepth  int      `json:"min_depth"`
 	EdgeTypes []string `json:"edge_types"`
+	// BestVerificationState is the highest-confidence verification state among
+	// the callers in this file — used as a sort tie-breaker within equal depth.
+	BestVerificationState string `json:"best_verification_state,omitempty"`
 }
 
 // Summary is the file-grouped rollup of an impact result, emitted when the
@@ -25,6 +28,7 @@ type FileRollup struct {
 type Summary struct {
 	Target               *graph.Node           `json:"target"`
 	Summary              bool                  `json:"summary"` // always true: marks the rollup shape
+	Ranking              string                `json:"ranking"` // "depth,verification"
 	Files                []FileRollup          `json:"files"`
 	EntryPoints          []string              `json:"entry_points"`
 	ServicesAffected     []string              `json:"services_affected"`
@@ -58,6 +62,9 @@ func rollupCallers(callers []Caller) []FileRollup {
 		if c.EdgeType != "" {
 			e.EdgeTypes = appendUnique(e.EdgeTypes, c.EdgeType)
 		}
+		if graph.VerificationRank(c.VerificationState) < graph.VerificationRank(e.BestVerificationState) {
+			e.BestVerificationState = c.VerificationState
+		}
 	}
 
 	files := make([]FileRollup, 0, len(entries))
@@ -68,6 +75,10 @@ func rollupCallers(callers []Caller) []FileRollup {
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].MinDepth != files[j].MinDepth {
 			return files[i].MinDepth < files[j].MinDepth
+		}
+		ri, rj := graph.VerificationRank(files[i].BestVerificationState), graph.VerificationRank(files[j].BestVerificationState)
+		if ri != rj {
+			return ri < rj
 		}
 		if files[i].File != files[j].File {
 			return files[i].File < files[j].File
@@ -87,6 +98,7 @@ func (r *Result) Summarize() *Summary {
 	return &Summary{
 		Target:               r.Target,
 		Summary:              true,
+		Ranking:              "depth,verification",
 		Files:                rollupCallers(r.Callers),
 		EntryPoints:          entryPoints,
 		ServicesAffected:     r.ServicesAffected,
