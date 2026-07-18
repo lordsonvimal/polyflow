@@ -53,6 +53,7 @@ type FlowRef struct {
 //	Kind:    "otlp_" + Reason   (e.g. "otlp_unknown_service")
 type IngestLedgerEntry struct {
 	Session, TraceID, SpanID string
+	Service                  string // mapped polyflow service; "unknown" when unmapped
 	Reason                   string // unknown_service | no_route_or_path |
 	// unsupported_span_kind | malformed | no_causality
 }

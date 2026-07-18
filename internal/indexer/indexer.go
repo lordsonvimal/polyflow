@@ -530,6 +530,16 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				}
 			}
 			allNodes = filtered
+			// DeleteNodes cascades edge deletion in the store; the in-memory
+			// edge set must match, or the evidence reconciler re-upserts edges
+			// whose endpoints no longer exist (FK failure aborts the index).
+			filteredEdges := allEdges[:0]
+			for _, e := range allEdges {
+				if !removeIDs[e.From] && !removeIDs[e.To] {
+					filteredEdges = append(filteredEdges, e)
+				}
+			}
+			allEdges = filteredEdges
 		}
 	}
 	// L.W1: global/window symbol resolution + inline handler linking.

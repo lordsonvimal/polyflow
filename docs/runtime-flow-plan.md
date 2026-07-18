@@ -419,6 +419,22 @@ contract normalizer chain (`case_fold` → lowercase), not uppercase as shown in
 the plan example's uppercase was inconsistent with the `case_fold` normalizer, and lowercase is required
 for the key-join against static edges to succeed.
 
+**Addendum (2026-07-18, review fixes).** Two trust-contract defects found in
+review, both fixed: (1) the mapper anchored only on SERVER spans, so an HTTP
+CLIENT span whose server side was never captured (a call to an external or
+uninstrumented service) and all INTERNAL spans were **silently dropped** —
+neither flow nor ledger, violating the plan's "never silently dropped" rule.
+`MapSpans` now ends with an exhaustiveness sweep: every span not accounted
+for by the SERVER/messaging passes is ledgered (unpaired CLIENT with HTTP
+attrs → `no_causality`; INTERNAL/unknown kinds → `unsupported_span_kind`);
+paired CLIENT parents are tracked and never double-booked. Fixture
+`http_client_internal_only.otlp.json` + two tests pin this. (2)
+`IngestLedgerEntry` did not carry the service, and the provider used the
+**session name** as `UnresolvedRef.Service` — improvising over the pinned
+mapping ("mapped polyflow service, `unknown` when unmapped"). The entry now
+carries `Service`, populated at mapping time via the same
+`resolveService` path flows use.
+
 ### Phase R.2 — Capture sessions (`start/stop/run`) `done`
 
 **Problem.** File ingest requires the user to run their own collector. The
@@ -584,6 +600,20 @@ computation runs only at report time, never on the indexing hot path). No
 `graph.SchemaVersion` bump required — no new node/edge shape changes.
 Deviation: `graph/model.go` gains `import "sort"` for `AllEdges()` (minor);
 no other deviations from the pinned spec.
+
+**Addendum (2026-07-18, review fixes).** (1) The doctor/`flows --coverage`
+denominator included every stored edge kind — `calls`, `contains`,
+`captures`, and other intra-language edges no span can ever confirm — so
+"verified %" on a real repo read ~0% forever and misreported what a capture
+proved. Coverage inputs now pass through `RuntimeCoverageEdges`, restricting
+the denominator to the kinds `kindToEdgeType` emits (`http_call`,
+`sse_endpoint`, `publishes`, `kafka_publish`, `nats_publish`,
+`job_enqueue`). The plan text "% of static channels observed" always meant
+channels; the implementation now matches it. (2) `polyflow doctor`'s eval
+row printed a raw error on any repo without `eval/baseline.json` (the
+normal case outside this repo) because `os.IsNotExist` cannot see through
+the wrapped error; it now uses `errors.Is(err, os.ErrNotExist)` and prints
+the graceful no-baseline hint.
 
 ---
 

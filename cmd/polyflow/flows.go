@@ -93,7 +93,7 @@ func runFlowsCoverage(spans []trace_ingest.Span, sessionLabel string) error {
 		return fmt.Errorf("flows --coverage: build index: %w", err)
 	}
 
-	edges := idx.AllEdges()
+	edges := trace_ingest.RuntimeCoverageEdges(idx.AllEdges())
 	report := trace_ingest.ComputeSessionCoverage(flows, edges, ledger)
 	printCoverageReport(report, "Coverage for session \""+sessionLabel+"\"")
 	return nil

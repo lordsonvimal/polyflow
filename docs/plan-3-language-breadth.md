@@ -31,7 +31,15 @@ becomes cheap after L.J).
 
 Per the Tier L rule, **each language closes on a measured eval number, not a
 pattern count**: one hand-verified corpus repo with ≥15 cases per language,
-baseline ratcheted in the closing phase's commit.
+baseline ratcheted in the closing phase's commit. **The corpus repo must be a
+real public OSS repo meeting E.2's pinned selection criteria** — a
+self-authored fixture proves the patterns match code written to match them,
+not generality, and does not close a language (the L.P3 pyflask deviation,
+recorded 2026-07-18; synthetic fixtures are welcome as fast smoke suites
+*in addition to*, never instead of, the real repo). Each new language's
+template/view parser (Blade, JSP, Razor) is additionally bound by bug-class
+rule 11 (`docs/phases.md`): comment constructs blank entirely, with a
+commented-out-instance fixture per recognized pattern.
 
 String-literal hygiene per language (rule 6 — extend the matcher
 quote-strip list in each language's first phase and test through real
