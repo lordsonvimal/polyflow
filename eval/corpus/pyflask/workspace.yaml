@@ -1,0 +1,17 @@
+name: pyflask
+version: "1"
+services:
+  - name: worker
+    path: ./worker
+    language: python
+  - name: api
+    path: ./api
+    language: python
+  - name: gateway
+    path: ./gateway
+    language: python
+links: []
+index:
+  exclude:
+    - "**/__pycache__/**"
+    - "**/*.pyc"

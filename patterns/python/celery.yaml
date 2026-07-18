@@ -1,0 +1,91 @@
+# Celery task dispatch (producer) and task definition (consumer) patterns.
+#
+# Gate: only activates for services that depend on celery.
+# Producers emit NodeTypePublisher nodes with meta["task_name"] = the task
+# identifier; consumers emit NodeTypeSubscriber nodes with the same key.
+# contracts/jobs.yaml links them via a celery-specific rule keyed on task_name.
+language: python
+version: "1"
+package: celery
+patterns:
+  # task.delay(args) — synchronous dispatch of a Celery task.
+  # @name captures the task identifier (becomes node label + contract key).
+  - name: celery_task_delay
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @name
+          attribute: (identifier) @_fn
+          (#eq? @_fn "delay")))
+    captures:
+      - name: name
+        role: celery_task_ref
+
+  # task.apply_async(args, kwargs, countdown=…) — async dispatch with options.
+  - name: celery_apply_async
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @name
+          attribute: (identifier) @_fn
+          (#eq? @_fn "apply_async")))
+    captures:
+      - name: name
+        role: celery_task_ref
+
+  # @app.task def func() — task definition via attribute decorator (no call args).
+  # Matches @celery_app.task, @app.task, @worker.task etc.
+  - name: celery_task_decorator
+    query: |
+      (decorated_definition
+        (decorator
+          (attribute
+            attribute: (identifier) @_deco
+            (#eq? @_deco "task")))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: name
+        role: celery_task_name
+
+  # @app.task(bind=True, ...) def func() — task with decorator call args.
+  - name: celery_task_decorator
+    query: |
+      (decorated_definition
+        (decorator
+          (call
+            function: (attribute
+              attribute: (identifier) @_deco
+              (#eq? @_deco "task"))))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: name
+        role: celery_task_name
+
+  # @shared_task def func() — standalone shared_task decorator (no receiver).
+  - name: celery_task_decorator
+    query: |
+      (decorated_definition
+        (decorator
+          (identifier) @_deco
+          (#eq? @_deco "shared_task"))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: name
+        role: celery_task_name
+
+  # @shared_task(bind=True, ...) def func() — shared_task with call args.
+  - name: celery_task_decorator
+    query: |
+      (decorated_definition
+        (decorator
+          (call
+            function: (identifier) @_deco
+            (#eq? @_deco "shared_task")))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: name
+        role: celery_task_name
