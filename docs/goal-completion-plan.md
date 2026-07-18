@@ -94,7 +94,7 @@ both `unresolved` and `verification_summary` intact.
 
 **Outcome (2026-07-18).** Implemented exactly as specified. `internal/graph/verification.go` adds `BuildVerificationSummary`, `VerificationSummaryLine`, `CompactSources`, `SortedSources`. All three query commands (`context`, `impact`, `trace`) now emit `verification_state`, `verified_granularity`, and `sources` (compact by default, full `SourceRef` structs under `--verbose-sources`) per edge/hop/node, and an always-present `verification_summary` top-level block. Budget floor holds naturally: `VerificationSummary` is a value-typed struct field, not part of the trimmed `Files` slice. Sources ordered by `(provider, ref)` for determinism. Text format appends a summary line via `VerificationSummaryLine`. MCP server and eval runner updated. `SchemaVersion` NOT bumped (query output shape change only, not stored graph). New tests: `internal/graph/verification_test.go`, `internal/impact/a1_test.go`, `internal/context/a1_test.go`, `internal/trace/a1_test.go` — all pass. `BenchmarkIndexCold` unaffected (output path only).
 
-### Phase A.2 — MCP filters + semantics teaching `pending`
+### Phase A.2 — MCP filters + semantics teaching `done`
 
 **Problem.** MCP tools expose none of the new fields, and their descriptions
 don't tell agents what the states *mean*, so agents can't act on them.
@@ -122,6 +122,8 @@ regression).
 `min_verification: "verified"` returns only confirmed edges plus the summary
 showing what was filtered out (filtered counts stay visible — hiding them
 would fake certainty).
+
+**Outcome (2026-07-18).** Implemented exactly as specified. `internal/mcpserver/mcpserver.go` gains: `semanticsParagraph` const embedded in all three tool descriptions; `minVerificationPasses` helper mapping `"any"/"observed"/"declared"/"verified"` to the actual state set (`"declared"` is equivalent to `"verified"` with the current state set — no distinct declared-contract state exists yet; noted in code); `min_verification` + `verbose_sources` fields on `contextInput`/`impactInput`/`traceInput`; post-build filtering via `filterCallers`, `filterTraceNodes`, `filterHops`, `filterChains` helpers. `verbose_sources` is wired through to all three `Build`/`Run` calls (previously hardcoded `false`). Filtering happens post-build so the `VerificationSummary` field retains pre-filter counts — filtered totals stay visible per spec. `filterChains` drops any chain containing a hop whose edge fails the threshold (chain integrity is preserved over partial chains). `SchemaVersion` NOT bumped — MCP handler layer only, no stored node/edge shape change. 6 new tests in `mcpserver_test.go`: `TestMinVerificationPasses_UnitTable` (15 cases covering all filter values + both directions), `TestImpactTool_MinVerificationFiltersCallers`, `TestImpactTool_MinVerificationAnyReturnsAll`, `TestContextTool_MinVerificationFiltersNodes`, `TestTraceTool_MinVerificationFiltersChains`, `TestToolDescriptionsContainSemanticsParagraph` (regression guard on description text). All 19 mcpserver tests pass; full suite clean; `BenchmarkIndexCold` unaffected (output path only).
 
 ### Phase A.3 — Verification-aware ranking `pending`
 
