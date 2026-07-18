@@ -1,0 +1,4 @@
+{
+  "patterns": ["requests_call", "requests_call", "requests_call", "requests_call", "requests_request"],
+  "node_types": ["http_client", "http_client", "http_client", "http_client", "http_client"]
+}

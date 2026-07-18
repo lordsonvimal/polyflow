@@ -1,0 +1,48 @@
+# httpx HTTP client patterns.
+#
+# Gate: only activates for services that depend on httpx.
+# Covers the module-level shorthand API (httpx.get(), httpx.post(), etc.)
+# and the generic httpx.request() form. Client/AsyncClient instance methods
+# (httpx.Client().get()) are not yet captured.
+language: python
+version: "1"
+package: httpx
+patterns:
+  # httpx.get(url) / httpx.post(url, json=data) / httpx.delete(url)
+  # Pattern name contains "request" so classifyPattern maps it to http_client.
+  - name: httpx_request
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @pkg
+          (#eq? @pkg "httpx")
+          attribute: (identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options)$"))
+        arguments: (argument_list
+          .
+          (_) @url))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+
+  # httpx.request("GET", url) — generic form with explicit method string.
+  - name: httpx_request_method
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @pkg
+          (#eq? @pkg "httpx")
+          attribute: (identifier) @fn
+          (#eq? @fn "request"))
+        arguments: (argument_list
+          .
+          (_) @method
+          .
+          (_) @url))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url

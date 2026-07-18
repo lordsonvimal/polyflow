@@ -1,0 +1,4 @@
+{
+  "patterns": ["flask_method_route", "flask_method_route", "flask_route", "flask_route"],
+  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler"]
+}

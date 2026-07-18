@@ -1,0 +1,4 @@
+{
+  "patterns": ["httpx_request", "httpx_request", "httpx_request", "httpx_request_method"],
+  "node_types": ["http_client", "http_client", "http_client", "http_client"]
+}
