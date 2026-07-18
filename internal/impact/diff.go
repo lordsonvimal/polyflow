@@ -40,16 +40,18 @@ type DiffResult struct {
 	CrossServiceTriggers []CrossServiceTrigger `json:"cross_service_triggers"`
 	TotalCallers         int                   `json:"total_callers"`
 
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
-	Budget         *budget.Info          `json:"budget,omitempty"`
+	Unresolved          []graph.UnresolvedRef        `json:"unresolved"`
+	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
+	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
+	Budget              *budget.Info                 `json:"budget,omitempty"`
 }
 
 // BuildDiff maps changed spans to graph nodes and computes their union blast
 // radius: ancestors of every changed node merged at minimum depth (<= 0 depth
 // means unlimited), optionally filtered to one service. Spans that map to no
-// node are recorded in Unmapped — never silently dropped.
-func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth int, service string) *DiffResult {
+// node are recorded in Unmapped — never silently dropped. verboseSources
+// controls whether per-caller Sources uses compact or full SourceRef structs.
+func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth int, service string, verboseSources bool) *DiffResult {
 	r := &DiffResult{
 		Mode:         "worktree",
 		Depth:        depth,
@@ -123,7 +125,7 @@ func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth in
 		return ancestors[i].Node.ID < ancestors[j].Node.ID
 	})
 
-	callers, entryPoints, services, triggers := assemble(idx, ancestors)
+	callers, entryPoints, services, triggers, edges := assemble(idx, ancestors, verboseSources)
 
 	// The changed nodes' own services are affected even with zero callers.
 	svcSet := make(map[string]bool, len(services))
@@ -144,6 +146,7 @@ func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth in
 	r.ServicesAffected = services
 	r.CrossServiceTriggers = triggers
 	r.TotalCallers = len(callers)
+	r.VerificationSummary = graph.BuildVerificationSummary(edges)
 	return r
 }
 
@@ -234,9 +237,8 @@ func (r *DiffResult) InlineSnippets(root string, lines int) {
 }
 
 // DiffSummary is the file-grouped rollup of a diff impact result. Targets
-// and entry points compact to "label — file:line" strings; the unmapped and
-// unresolved sections are carried whole — blind spots are never trimmed to
-// save tokens.
+// and entry points compact to "label — file:line" strings; the unmapped,
+// unresolved, and verification_summary sections are carried whole — never trimmed.
 type DiffSummary struct {
 	Mode                 string                `json:"mode"`
 	Summary              bool                  `json:"summary"` // always true: marks the rollup shape
@@ -250,9 +252,10 @@ type DiffSummary struct {
 	Depth                int                   `json:"depth"`
 	TotalCallers         int                   `json:"total_callers"`
 
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
-	Budget         *budget.Info          `json:"budget,omitempty"`
+	Unresolved          []graph.UnresolvedRef        `json:"unresolved"`
+	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
+	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
+	Budget              *budget.Info                 `json:"budget,omitempty"`
 }
 
 // Summarize rolls the per-node blast radius up into per-file entries.
@@ -280,6 +283,7 @@ func (r *DiffResult) Summarize() *DiffSummary {
 		TotalCallers:         r.TotalCallers,
 		Unresolved:           r.Unresolved,
 		UnresolvedNote:       r.UnresolvedNote,
+		VerificationSummary:  r.VerificationSummary,
 	}
 }
 

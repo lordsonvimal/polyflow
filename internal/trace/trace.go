@@ -5,6 +5,7 @@
 package trace
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,6 +35,11 @@ type Hop struct {
 	EdgeMeta     map[string]string `json:"edge_meta,omitempty"`
 	CrossService bool              `json:"cross_service,omitempty"`
 	Depth        int               `json:"depth,omitempty"`
+
+	// F.0 provenance (A.1).
+	VerificationState   string          `json:"verification_state,omitempty"`
+	VerifiedGranularity string          `json:"verified_granularity,omitempty"`
+	Sources             json.RawMessage `json:"sources,omitempty"`
 }
 
 // Chain is one linear root-to-leaf path. Backward chains are stored
@@ -60,12 +66,18 @@ type Result struct {
 	// present ([] when clean) so its absence is never mistaken for certainty.
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
 	UnresolvedNote string                `json:"unresolved_note,omitempty"`
+
+	// VerificationSummary aggregates edge provenance counts. Always present;
+	// survives any token budget cut.
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 }
 
 // Run traces from rootID in the given direction ("forward", "backward",
 // "both") up to depth hops (<= 0 means unlimited). It returns nil if rootID
-// is not in the index.
-func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int) *Result {
+// is not in the index. verboseSources controls whether per-hop Sources
+// contains compact "provider:ref" strings (false, default) or full SourceRef
+// structs (true, --verbose-sources).
+func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verboseSources bool) *Result {
 	root, ok := idx.Nodes[rootID]
 	if !ok {
 		return nil
@@ -73,15 +85,20 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int) *Result
 
 	r := &Result{Root: root, Direction: direction, Depth: depth, Unresolved: []graph.UnresolvedRef{}}
 
+	var allEdges []graph.Edge
 	if direction == "backward" || direction == "both" {
-		r.Nodes = append(r.Nodes, toHops(idx, graph.Ancestors(idx, rootID, depth))...)
-		chains, truncated := enumerateChains(idx, rootID, "in", depth, MaxChains-len(r.Chains))
+		hops, edges := toHops(idx, graph.Ancestors(idx, rootID, depth), verboseSources)
+		r.Nodes = append(r.Nodes, hops...)
+		allEdges = append(allEdges, edges...)
+		chains, truncated := enumerateChains(idx, rootID, "in", depth, MaxChains-len(r.Chains), verboseSources)
 		r.Chains = append(r.Chains, chains...)
 		r.Truncated = r.Truncated || truncated
 	}
 	if direction == "forward" || direction == "both" {
-		r.Nodes = append(r.Nodes, toHops(idx, graph.Descendants(idx, rootID, depth))...)
-		chains, truncated := enumerateChains(idx, rootID, "out", depth, MaxChains-len(r.Chains))
+		hops, edges := toHops(idx, graph.Descendants(idx, rootID, depth), verboseSources)
+		r.Nodes = append(r.Nodes, hops...)
+		allEdges = append(allEdges, edges...)
+		chains, truncated := enumerateChains(idx, rootID, "out", depth, MaxChains-len(r.Chains), verboseSources)
 		r.Chains = append(r.Chains, chains...)
 		r.Truncated = r.Truncated || truncated
 	}
@@ -96,6 +113,7 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int) *Result
 	}
 	r.EdgeTypes = sortedKeys(edgeTypes)
 	r.Services = sortedKeys(services)
+	r.VerificationSummary = graph.BuildVerificationSummary(allEdges)
 	return r
 }
 
@@ -121,8 +139,10 @@ func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
 }
 
 // toHops converts traversal results to hops with full node + edge metadata.
-func toHops(idx *graph.AdjacencyIndex, results []graph.TraversalResult) []Hop {
+// Returns the hop slice and the edges traversed (for VerificationSummary).
+func toHops(idx *graph.AdjacencyIndex, results []graph.TraversalResult, verboseSources bool) ([]Hop, []graph.Edge) {
 	out := make([]Hop, 0, len(results))
+	var edges []graph.Edge
 	for _, tr := range results {
 		if tr.Node == nil {
 			continue
@@ -130,11 +150,12 @@ func toHops(idx *graph.AdjacencyIndex, results []graph.TraversalResult) []Hop {
 		h := nodeHop(tr.Node)
 		h.Depth = tr.Depth
 		if tr.Via != nil {
-			applyEdge(&h, tr.Via, idx)
+			applyEdge(&h, tr.Via, idx, verboseSources)
+			edges = append(edges, *tr.Via)
 		}
 		out = append(out, h)
 	}
-	return out
+	return out, edges
 }
 
 func nodeHop(n *graph.Node) Hop {
@@ -158,15 +179,34 @@ func labelOrID(n *graph.Node) string {
 }
 
 // applyEdge fills the edge fields of a hop, marking service crossings.
-func applyEdge(h *Hop, e *graph.Edge, idx *graph.AdjacencyIndex) {
+func applyEdge(h *Hop, e *graph.Edge, idx *graph.AdjacencyIndex, verboseSources bool) {
 	h.EdgeType = string(e.Type)
 	h.EdgeLabel = e.Label
 	h.Confidence = e.Confidence
 	h.EdgeMeta = e.Meta
+	h.VerificationState = e.VerificationState
+	h.VerifiedGranularity = e.VerifiedGranularity
+	h.Sources = marshalSources(e.Sources, verboseSources)
 	from, to := idx.Nodes[e.From], idx.Nodes[e.To]
 	if from != nil && to != nil && from.Service != to.Service {
 		h.CrossService = true
 	}
+}
+
+// marshalSources serialises edge Sources as compact "provider:ref" strings
+// (default) or full SourceRef structs (verboseSources=true).
+func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
+	if len(sources) == 0 {
+		return nil
+	}
+	var v any
+	if verbose {
+		v = graph.SortedSources(sources)
+	} else {
+		v = graph.CompactSources(sources)
+	}
+	b, _ := json.Marshal(v)
+	return json.RawMessage(b)
 }
 
 // enumerateChains DFS-enumerates simple paths from rootID following edges in
@@ -176,7 +216,7 @@ func applyEdge(h *Hop, e *graph.Edge, idx *graph.AdjacencyIndex) {
 // rendering so they read source → root. Enumeration is deterministic: edges
 // are visited sorted by (type, neighbor ID). Returns truncated=true when the
 // maxChains cap cut enumeration short.
-func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDepth, maxChains int) ([]Chain, bool) {
+func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDepth, maxChains int, verboseSources bool) ([]Chain, bool) {
 	if maxChains <= 0 {
 		return nil, true
 	}
@@ -227,7 +267,7 @@ func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDep
 			}
 		}
 		if !extended && len(path) > 1 {
-			out = append(out, buildChain(idx, path, vias, direction))
+			out = append(out, buildChain(idx, path, vias, direction, verboseSources))
 		}
 	}
 
@@ -238,7 +278,7 @@ func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDep
 // buildChain snapshots the current DFS path into a Chain. For backward
 // traversal the path is reversed so hops read source → root, and each hop's
 // edge is the one leading INTO it in flow direction.
-func buildChain(idx *graph.AdjacencyIndex, path []string, vias []*graph.Edge, direction string) Chain {
+func buildChain(idx *graph.AdjacencyIndex, path []string, vias []*graph.Edge, direction string, verboseSources bool) Chain {
 	n := len(path)
 	hops := make([]Hop, n)
 	for i, id := range path {
@@ -254,13 +294,13 @@ func buildChain(idx *graph.AdjacencyIndex, path []string, vias []*graph.Edge, di
 		// position n-1-(i-1) = n-i.
 		for i := 1; i < n; i++ {
 			if vias[i] != nil {
-				applyEdge(&hops[n-i], vias[i], idx)
+				applyEdge(&hops[n-i], vias[i], idx, verboseSources)
 			}
 		}
 	} else {
 		for i := 1; i < n; i++ {
 			if vias[i] != nil {
-				applyEdge(&hops[i], vias[i], idx)
+				applyEdge(&hops[i], vias[i], idx, verboseSources)
 			}
 		}
 	}

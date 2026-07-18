@@ -17,7 +17,7 @@ func TestSummarize_GroupsNodesByFile(t *testing.T) {
 	idx.AddNode(&graph.Node{ID: "be:scanRows", Type: graph.NodeTypeFunction, Label: "scanRows", Service: "backend", File: "db.go", Line: 60, Language: "go"})
 	idx.AddEdge(&graph.Edge{ID: "e3", From: "be:getUser", To: "be:scanRows", Type: graph.EdgeTypeCalls})
 
-	s := ctx.Build(idx, "be:getUser", "debug", 5).Summarize()
+	s := ctx.Build(idx, "be:getUser", "debug", 5, false).Summarize()
 
 	assert.True(t, s.Summary)
 	assert.Equal(t, "be:getUser", s.Target.ID)
@@ -44,7 +44,7 @@ func TestSummarize_FileInBothDirectionsMarkedBoth(t *testing.T) {
 	idx.AddNode(&graph.Node{ID: "fe:renderUser", Type: graph.NodeTypeFunction, Label: "renderUser", Service: "frontend", File: "api.js", Line: 30, Language: "javascript"})
 	idx.AddEdge(&graph.Edge{ID: "e3", From: "be:getUser", To: "fe:renderUser", Type: graph.EdgeTypeCalls})
 
-	s := ctx.Build(idx, "be:getUser", "debug", 5).Summarize()
+	s := ctx.Build(idx, "be:getUser", "debug", 5, false).Summarize()
 
 	var apiJS *ctx.FileRollup
 	for i := range s.Files {
@@ -59,7 +59,7 @@ func TestSummarize_FileInBothDirectionsMarkedBoth(t *testing.T) {
 
 func TestApplyBudget_DetailWhenItFits(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	r.AttachUnresolved(nil)
 
 	out := r.ApplyBudget(100000, false)
@@ -73,7 +73,7 @@ func TestApplyBudget_DetailWhenItFits(t *testing.T) {
 
 func TestApplyBudget_SummaryWhenOverBudget(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	r.AttachUnresolved(nil)
 
 	out := r.ApplyBudget(120, false)
@@ -88,7 +88,7 @@ func TestApplyBudget_SummaryWhenOverBudget(t *testing.T) {
 
 func TestApplyBudget_ForceSummary(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	r.AttachUnresolved(nil)
 
 	out := r.ApplyBudget(0, true)
@@ -110,7 +110,7 @@ func TestApplyBudget_TrimsSummaryFilesAndCarriesUnresolvedWhole(t *testing.T) {
 		idx.AddNode(&graph.Node{ID: id, Type: graph.NodeTypeFunction, Label: "callee", Service: "backend", File: file, Line: 1, Language: "go"})
 		idx.AddEdge(&graph.Edge{ID: "fan" + id, From: "be:getUser", To: id, Type: graph.EdgeTypeCalls})
 	}
-	r := ctx.Build(idx, "be:getUser", "debug", 5)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	r.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 21, Name: "dyn", Kind: "call_ref"},
 	})
@@ -130,7 +130,7 @@ func TestApplyBudget_TrimsSummaryFilesAndCarriesUnresolvedWhole(t *testing.T) {
 func TestInlineSnippets_CopiesTargetAndSkipsMissingFiles(t *testing.T) {
 	idx := fixtureIndex()
 	shared := idx.Nodes["be:getUser"]
-	r := ctx.Build(idx, "be:getUser", "debug", 5)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
 
 	r.InlineSnippets(t.TempDir(), 3) // no files exist there → best-effort empty
 

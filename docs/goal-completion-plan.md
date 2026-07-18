@@ -49,7 +49,7 @@ Follows the repo per-phase process (`docs/phases.md`).
 F.4 (states are populated). Without this tier the fusion work is invisible to
 agents.*
 
-### Phase A.1 — Provenance in query outputs `pending`
+### Phase A.1 — Provenance in query outputs `done`
 
 **Problem.** `context`, `impact`, and `trace` JSON emit per-edge `confidence`
 only. `verification_state`, `sources`, and `verified_granularity` never reach
@@ -91,6 +91,8 @@ keeps `verification_summary` whole); JSON golden tests for all three commands;
 **Acceptance.** `polyflow impact --target <x> --format json` on the fusion
 fixtures shows per-edge states + the summary; `--max-tokens 200` still carries
 both `unresolved` and `verification_summary` intact.
+
+**Outcome (2026-07-18).** Implemented exactly as specified. `internal/graph/verification.go` adds `BuildVerificationSummary`, `VerificationSummaryLine`, `CompactSources`, `SortedSources`. All three query commands (`context`, `impact`, `trace`) now emit `verification_state`, `verified_granularity`, and `sources` (compact by default, full `SourceRef` structs under `--verbose-sources`) per edge/hop/node, and an always-present `verification_summary` top-level block. Budget floor holds naturally: `VerificationSummary` is a value-typed struct field, not part of the trimmed `Files` slice. Sources ordered by `(provider, ref)` for determinism. Text format appends a summary line via `VerificationSummaryLine`. MCP server and eval runner updated. `SchemaVersion` NOT bumped (query output shape change only, not stored graph). New tests: `internal/graph/verification_test.go`, `internal/impact/a1_test.go`, `internal/context/a1_test.go`, `internal/trace/a1_test.go` — all pass. `BenchmarkIndexCold` unaffected (output path only).
 
 ### Phase A.2 — MCP filters + semantics teaching `pending`
 

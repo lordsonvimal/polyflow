@@ -14,7 +14,7 @@ import (
 
 func TestSummarize_GroupsCallersByFile(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "")
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
 	s := out.Summarize()
 
 	assert.True(t, s.Summary)
@@ -38,7 +38,7 @@ func TestSummarize_GroupsCallersByFile(t *testing.T) {
 
 func TestApplyBudget_DetailWhenItFits(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "")
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
 	out.AttachUnresolved(nil)
 
 	res := out.ApplyBudget(100000, false)
@@ -58,7 +58,7 @@ func TestApplyBudget_SummaryWhenOverBudgetKeepsUnresolvedWhole(t *testing.T) {
 		idx.AddNode(&graph.Node{ID: id, Type: graph.NodeTypeFunction, Label: "caller", Service: "backend", File: fmt.Sprintf("pkg/caller_%02d.go", i), Line: 1})
 		idx.AddEdge(&graph.Edge{ID: "fan" + id, From: id, To: "be:queryDB", Type: graph.EdgeTypeCalls})
 	}
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "")
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "db.go", Line: 41, Name: "dyn", Kind: "call_ref"},
 	})
@@ -76,7 +76,7 @@ func TestApplyBudget_SummaryWhenOverBudgetKeepsUnresolvedWhole(t *testing.T) {
 
 func TestApplyBudget_ForceSummary(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "")
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
 	out.AttachUnresolved(nil)
 
 	s, ok := out.ApplyBudget(0, true).(*impact.Summary)
@@ -88,7 +88,7 @@ func TestInlineSnippets_CopiesSharedNodes(t *testing.T) {
 	idx := fixtureIndex()
 	sharedTarget := idx.Nodes["be:queryDB"]
 	sharedEntry := idx.Nodes["fe:fetchUser"]
-	out := impact.Build(idx, sharedTarget, 10, "")
+	out := impact.Build(idx, sharedTarget, 10, "", false)
 
 	out.InlineSnippets(t.TempDir(), 3) // no files there → best-effort empty
 
