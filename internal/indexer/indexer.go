@@ -496,6 +496,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 
 	// JS/TS component + import-aware linking.
+	var jsImportedNames map[string]bool
 	{
 		svcFiles := make(map[string][]string, len(allSvcFiles))
 		for _, sf := range allSvcFiles {
@@ -503,6 +504,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		jsLinker := linker.NewJSLinker()
 		jsEdges, removeIDs, linkerUnresolved, importedNames := jsLinker.LinkJS(allNodes, allEdges, svcFiles)
+		jsImportedNames = importedNames
 		// Parser-level call_ref candidates that an import statement explains
 		// are either resolved by the linker or point at external packages —
 		// both are accounted for; the rest are real blind spots.
@@ -528,6 +530,27 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				}
 			}
 			allNodes = filtered
+		}
+	}
+	// L.W1: global/window symbol resolution + inline handler linking.
+	// Runs after LinkJS so imports-first ordering is enforced via jsImportedNames.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		globalEdges, globallyResolved, globalCollisions := linker.LinkJSGlobals(allNodes, allUnresolved, jsImportedNames, svcFiles)
+		// Suppress call_refs that global resolution explained.
+		filtered := allUnresolved[:0]
+		for _, u := range allUnresolved {
+			if u.Kind == "call_ref" && globallyResolved[u.File+"\x00"+u.Name] {
+				continue
+			}
+			filtered = append(filtered, u)
+		}
+		allUnresolved = append(filtered, globalCollisions...)
+		if err := writeEdges(globalEdges); err != nil {
+			return nil, err
 		}
 	}
 
