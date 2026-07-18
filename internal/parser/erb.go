@@ -94,18 +94,26 @@ func splitERB(src []byte) (blankedHTML, virtualRuby []byte) {
 			}
 
 			// virtualRuby: blank delimiters (<%, %>) and any modifier char
-			// (=, -, #) immediately after <%; keep the inner Ruby content.
+			// (=, -) immediately after <%; keep the inner Ruby content.
+			// Comment tags (<%# ... %>) are blanked entirely — their body is
+			// dead text, and leaving it live would mint phantom nodes/edges
+			// from commented-out helpers.
 			if tagStart < len(virtualRuby) {
 				virtualRuby[tagStart] = ' ' // <
 			}
 			if tagStart+1 < len(virtualRuby) {
 				virtualRuby[tagStart+1] = ' ' // %
 			}
-			// Blank optional modifier: =, -, or # right after <%
 			inner := tagStart + 2
 			if inner < len(src) {
 				switch src[inner] {
-				case '=', '-', '#':
+				case '#':
+					for k := inner; k < tagEnd; k++ {
+						if virtualRuby[k] != '\n' {
+							virtualRuby[k] = ' '
+						}
+					}
+				case '=', '-':
 					virtualRuby[inner] = ' '
 				}
 			}
