@@ -688,6 +688,34 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 
+	// L.W0: resolve Rails route-helper names on nav_link_rails_helper nodes to
+	// real method+path so the http contract rule (G.1 nav variant) can match them.
+	// Must run before ApplyHints so the resolved path is visible to the engine.
+	{
+		railsUpdated, railsUnresolved := linker.ResolveRailsNavHelpers(allNodes)
+		// Build a quick ID→index map for O(1) in-place updates to allNodes.
+		nodeByID := make(map[string]int, len(allNodes))
+		for i, n := range allNodes {
+			nodeByID[n.ID] = i
+		}
+		for i := range railsUpdated {
+			n := railsUpdated[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			if idx, ok := nodeByID[n.ID]; ok {
+				allNodes[idx] = n
+			} else {
+				// Fan-out candidate: new node not in allNodes yet.
+				allNodes = append(allNodes, n)
+			}
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, railsUnresolved...)
+	}
+
 	// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
 	// opts.ContractsDir may add workspace-custom rules on top of the embedded defaults (G.5).
 	contractRules, err := contract.Load(contractdata.FS, opts.ContractsDir)

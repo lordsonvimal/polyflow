@@ -1,0 +1,89 @@
+language: ruby
+version: "1"
+patterns:
+  # link_to "Text", "/literal-path" or button_to "Text", "/literal-path"
+  - name: nav_link_rails_literal
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^(link_to|button_to)$")
+        arguments: (argument_list
+          _
+          (string) @path))
+    captures:
+      - name: path
+        role: http_path
+
+  # link_to "Text", helper_name (bare identifier — no call args)
+  - name: nav_link_rails_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^(link_to|button_to)$")
+        arguments: (argument_list
+          _
+          (identifier) @helper))
+    captures:
+      - name: helper
+        role: rails_nav_helper
+
+  # link_to "Text", helper_name(args) — helper called with arguments
+  - name: nav_link_rails_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^(link_to|button_to)$")
+        arguments: (argument_list
+          _
+          (call
+            !receiver
+            method: (identifier) @helper)))
+    captures:
+      - name: helper
+        role: rails_nav_helper
+
+  # form_with url: "/literal-path" or form_for @obj, url: "/literal-path"
+  - name: nav_link_rails_form_literal
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^form_(with|for)$")
+        arguments: (_
+          (pair
+            key: (hash_key_symbol) @_key
+            (#eq? @_key "url")
+            value: (string) @path)))
+    captures:
+      - name: path
+        role: http_path
+
+  # form_with url: helper_name or form_with url: helper_name(args)
+  - name: nav_link_rails_form_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^form_(with|for)$")
+        arguments: (_
+          (pair
+            key: (hash_key_symbol) @_key
+            (#eq? @_key "url")
+            value: (identifier) @helper)))
+    captures:
+      - name: helper
+        role: rails_nav_helper
+
+  - name: nav_link_rails_form_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^form_(with|for)$")
+        arguments: (_
+          (pair
+            key: (hash_key_symbol) @_key
+            (#eq? @_key "url")
+            value: (call
+              !receiver
+              method: (identifier) @helper))))
+    captures:
+      - name: helper
+        role: rails_nav_helper
