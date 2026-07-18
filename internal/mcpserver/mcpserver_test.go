@@ -304,3 +304,182 @@ func TestUnknownTargetIsToolError(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 }
+
+// ─── A.2 tests ───────────────────────────────────────────────────────────────
+
+// fixtureWithVerification builds a graph with edges carrying verification states.
+// fetchUser --verified--> getUser --candidate--> queryDB
+func fixtureWithVerification() (*fakeStore, *graph.AdjacencyIndex) {
+	nodes := []*graph.Node{
+		{ID: "fe:fetchUser", Type: graph.NodeTypeHTTPClient, Label: "fetchUser", Service: "frontend", File: "api.js", Line: 10},
+		{ID: "be:getUser", Type: graph.NodeTypeHTTPHandler, Label: "getUser", Service: "backend", File: "handler.go", Line: 20},
+		{ID: "be:queryDB", Type: graph.NodeTypeFunction, Label: "queryDB", Service: "backend", File: "db.go", Line: 40},
+	}
+	idx := graph.NewAdjacencyIndex()
+	for _, n := range nodes {
+		idx.AddNode(n)
+	}
+	idx.AddEdge(&graph.Edge{
+		ID: "e1", From: "fe:fetchUser", To: "be:getUser",
+		Type: graph.EdgeTypeHTTPCall, Confidence: graph.ConfidenceStatic,
+		VerificationState: graph.StateVerified,
+	})
+	idx.AddEdge(&graph.Edge{
+		ID: "e2", From: "be:getUser", To: "be:queryDB",
+		Type: graph.EdgeTypeCalls,
+		VerificationState: graph.StateCandidate,
+	})
+	store := &fakeStore{nodes: nodes}
+	return store, idx
+}
+
+// TestMinVerificationPasses_UnitTable covers the filter helper in isolation.
+func TestMinVerificationPasses_UnitTable(t *testing.T) {
+	cases := []struct {
+		state  string
+		filter string
+		want   bool
+	}{
+		// "any" (default) passes everything
+		{graph.StateVerified, "any", true},
+		{graph.StateCandidate, "any", true},
+		{graph.StateObservedOnlyGap, "any", true},
+		{"", "any", true},
+		// empty filter = "any"
+		{graph.StateCandidate, "", true},
+		// "verified" passes only verified
+		{graph.StateVerified, "verified", true},
+		{graph.StateCandidate, "verified", false},
+		{graph.StateObservedOnlyGap, "verified", false},
+		{"", "verified", false},
+		// "declared" is equivalent to "verified" with current state set
+		{graph.StateVerified, "declared", true},
+		{graph.StateCandidate, "declared", false},
+		// "observed" passes verified + observed_only_gap
+		{graph.StateVerified, "observed", true},
+		{graph.StateObservedOnlyGap, "observed", true},
+		{graph.StateCandidate, "observed", false},
+		{"", "observed", false},
+	}
+	for _, tc := range cases {
+		got := minVerificationPasses(tc.state, tc.filter)
+		assert.Equal(t, tc.want, got, "state=%q filter=%q", tc.state, tc.filter)
+	}
+}
+
+// TestImpactTool_MinVerificationFiltersCallers verifies that min_verification="verified"
+// removes callers reached via a candidate edge, and the summary still shows
+// the pre-filter candidate count (filtered counts stay visible per spec).
+//
+// Graph: fetchUser --(verified)--> getUser --(candidate)--> queryDB
+// Ancestors of queryDB: getUser (via candidate e2), fetchUser (via verified e1).
+// After "verified" filter: getUser is removed, fetchUser survives.
+func TestImpactTool_MinVerificationFiltersCallers(t *testing.T) {
+	store, idx := fixtureWithVerification()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Callers             []map[string]any          `json:"callers"`
+		TotalCallers        int                       `json:"total_callers"`
+		VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	}
+	callJSON(t, cs, "impact", map[string]any{
+		"target":           "queryDB",
+		"min_verification": "verified",
+	}, &out)
+
+	// getUser (reached via candidate edge) must be removed; fetchUser (via verified) stays.
+	require.Len(t, out.Callers, 1, "only caller via verified edge must survive")
+	assert.Equal(t, "fe:fetchUser", out.Callers[0]["id"])
+	assert.Equal(t, 1, out.TotalCallers)
+	// summary still shows candidate=1 (pre-filter — filtered counts stay visible)
+	assert.Equal(t, 1, out.VerificationSummary.Candidate, "summary must reflect unfiltered counts")
+}
+
+// TestImpactTool_MinVerificationAnyReturnsAll verifies the default returns all callers.
+func TestImpactTool_MinVerificationAnyReturnsAll(t *testing.T) {
+	store, idx := fixtureWithVerification()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Callers []map[string]any `json:"callers"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
+	// queryDB has 2 ancestors: getUser (depth 1) and fetchUser (depth 2)
+	assert.Equal(t, 2, len(out.Callers), "default any must return all callers")
+}
+
+// TestContextTool_MinVerificationFiltersNodes verifies upstream/downstream filtering.
+func TestContextTool_MinVerificationFiltersNodes(t *testing.T) {
+	store, idx := fixtureWithVerification()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Upstream   []map[string]any          `json:"upstream"`
+		Downstream []map[string]any          `json:"downstream"`
+		VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	}
+	// getUser: upstream=fetchUser (verified), downstream=queryDB (candidate)
+	callJSON(t, cs, "context", map[string]any{
+		"target":           "getUser",
+		"task":             "debug",
+		"min_verification": "verified",
+	}, &out)
+
+	// downstream (candidate edge to queryDB) must be filtered
+	assert.Equal(t, 0, len(out.Downstream), "candidate downstream must be filtered")
+	// upstream (verified edge from fetchUser) must survive
+	assert.Equal(t, 1, len(out.Upstream), "verified upstream must survive filter")
+	// summary still counts the candidate edge
+	assert.Equal(t, 1, out.VerificationSummary.Candidate)
+}
+
+// TestTraceTool_MinVerificationFiltersChains verifies chain filtering.
+func TestTraceTool_MinVerificationFiltersChains(t *testing.T) {
+	store, idx := fixtureWithVerification()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Chains []struct {
+			Text string `json:"text"`
+		} `json:"chains"`
+		VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	}
+	// backward trace from queryDB: chain fetchUser->getUser->queryDB has a candidate hop
+	callJSON(t, cs, "trace", map[string]any{
+		"root":             "queryDB",
+		"direction":        "backward",
+		"min_verification": "verified",
+	}, &out)
+
+	// the chain contains a candidate edge → must be filtered out
+	assert.Equal(t, 0, len(out.Chains), "chain with candidate hop must be filtered")
+	// summary still shows the candidate count
+	assert.GreaterOrEqual(t, out.VerificationSummary.Candidate, 1)
+}
+
+// TestToolDescriptionsContainSemanticsParagraph guards accidental regression of
+// the semantics teaching text in the tool descriptions.
+func TestToolDescriptionsContainSemanticsParagraph(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	tools, err := cs.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+
+	semanticTools := map[string]bool{"context": false, "impact": false, "trace": false}
+	for _, tool := range tools.Tools {
+		if _, ok := semanticTools[tool.Name]; ok {
+			assert.Contains(t, tool.Description, "verification_state",
+				"tool %s description must contain semantics paragraph", tool.Name)
+			assert.Contains(t, tool.Description, "candidate",
+				"tool %s description must mention candidate state", tool.Name)
+			assert.Contains(t, tool.Description, "observed_only_gap",
+				"tool %s description must mention observed_only_gap state", tool.Name)
+			semanticTools[tool.Name] = true
+		}
+	}
+	for name, found := range semanticTools {
+		assert.True(t, found, "tool %s not found in ListTools", name)
+	}
+}
