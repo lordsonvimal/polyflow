@@ -19,6 +19,32 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/trace"
 )
 
+// semanticsParagraph is embedded in context/impact/trace descriptions so
+// agents understand verification_state without reading plan docs.
+const semanticsParagraph = "Edges carry verification_state: `verified` edges are confirmed by runtime " +
+	"or declared contracts — do not re-verify. `candidate` edges are static-only — " +
+	"one cheap grep confirms them. `observed_only_gap` edges were seen at runtime " +
+	"but missed by static analysis — treat as real. The verification_summary and " +
+	"unresolved sections are always present; empty means clean, absent means error."
+
+// minVerificationPasses reports whether an edge's VerificationState meets the
+// requested threshold. Default "any" passes all states including empty
+// (pre-fusion edges). "observed" requires runtime evidence (verified or
+// observed_only_gap). "declared"/"verified" require the fully-confirmed state.
+// With the current state set, "declared" and "verified" are equivalent; the
+// distinction is reserved for a future declared-contract-only sub-state.
+func minVerificationPasses(state, minVerification string) bool {
+	switch minVerification {
+	case "", "any":
+		return true
+	case "observed":
+		return state == graph.StateVerified || state == graph.StateObservedOnlyGap
+	case "declared", "verified":
+		return state == graph.StateVerified
+	}
+	return true
+}
+
 // Store is the subset of graph.SQLiteStore the MCP tools need.
 type Store interface {
 	SearchNodes(ctx context.Context, query string, limit int) ([]*graph.Node, error)
@@ -72,7 +98,8 @@ func New(store Store, idx *graph.AdjacencyIndex, version string) (*mcp.Server, *
 			"references in the traversed files the indexer could not resolve — verify those " +
 			"manually, edges may be missing. " +
 			"Set max_tokens to cap output size (over budget, per-node detail rolls up per file), " +
-			"summary to force the rollup, snippet_lines to inline source snippets per node.",
+			"summary to force the rollup, snippet_lines to inline source snippets per node. " +
+			semanticsParagraph,
 	}, s.context)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -83,14 +110,16 @@ func New(store Store, idx *graph.AdjacencyIndex, version string) (*mcp.Server, *
 			"indexer could not resolve — verify those manually, the blast radius may be " +
 			"under-reported where they appear. Set max_tokens to cap output size (over budget, " +
 			"per-node detail rolls up per file), summary to force the rollup, snippet_lines to " +
-			"inline source snippets per node.",
+			"inline source snippets per node. " +
+			semanticsParagraph,
 	}, s.impact)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "trace",
 		Description: "Trace multi-hop flows from a node as linear chains (A -> B -> C), " +
 			"including cross-service hops. The unresolved section lists references the indexer " +
-			"could not resolve — verify those manually, chains may be incomplete.",
+			"could not resolve — verify those manually, chains may be incomplete. " +
+			semanticsParagraph,
 	}, s.trace)
 
 	return srv, s
@@ -186,15 +215,17 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 // ─── context ─────────────────────────────────────────────────────────────────
 
 type contextInput struct {
-	Target       string   `json:"target,omitempty" jsonschema:"search query for the target node (use this or files)"`
-	Files        []string `json:"files,omitempty" jsonschema:"file path(s): return ranked related files (graph neighborhood) instead of node context"`
-	Service      string   `json:"service,omitempty" jsonschema:"with files: restrict seed file resolution to a service"`
-	Limit        int      `json:"limit,omitempty" jsonschema:"with files: max related files returned (default 20, -1 = unlimited)"`
-	Task         string   `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
-	Depth        int      `json:"depth,omitempty" jsonschema:"max traversal depth (node mode default 5, files mode default 2, -1 = unlimited)"`
-	MaxTokens    int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
-	Summary      bool     `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
-	SnippetLines int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	Target          string   `json:"target,omitempty" jsonschema:"search query for the target node (use this or files)"`
+	Files           []string `json:"files,omitempty" jsonschema:"file path(s): return ranked related files (graph neighborhood) instead of node context"`
+	Service         string   `json:"service,omitempty" jsonschema:"with files: restrict seed file resolution to a service"`
+	Limit           int      `json:"limit,omitempty" jsonschema:"with files: max related files returned (default 20, -1 = unlimited)"`
+	Task            string   `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
+	Depth           int      `json:"depth,omitempty" jsonschema:"max traversal depth (node mode default 5, files mode default 2, -1 = unlimited)"`
+	MaxTokens       int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
+	Summary         bool     `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
+	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
+	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 }
 
 func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
@@ -239,12 +270,16 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 
-	result := pfcontext.Build(idx, root.ID, task, depth, false)
+	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	result.AttachUnresolved(unresolved)
+	if in.MinVerification != "" && in.MinVerification != "any" {
+		result.Upstream = filterTraceNodes(result.Upstream, in.MinVerification)
+		result.Downstream = filterTraceNodes(result.Downstream, in.MinVerification)
+	}
 	result.InlineSnippets(".", in.SnippetLines)
 	return jsonResult(result.ApplyBudget(in.MaxTokens, in.Summary))
 }
@@ -252,14 +287,16 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 // ─── impact ──────────────────────────────────────────────────────────────────
 
 type impactInput struct {
-	Target       string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
-	File         string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
-	Direction    string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
-	Depth        int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
-	Service      string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
-	MaxTokens    int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
-	Summary      bool   `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
-	SnippetLines int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	Target          string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
+	File            string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
+	Direction       string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
+	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
+	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
+	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
+	Summary         bool   `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
+	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
+	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 }
 
 func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impactInput) (*mcp.CallToolResult, any, error) {
@@ -292,8 +329,12 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	if err != nil {
 		return nil, nil, err
 	}
-	out := impact.Build(idx, root, depth, in.Service, false)
+	out := impact.Build(idx, root, depth, in.Service, in.VerboseSources)
 	out.AttachUnresolved(unresolved)
+	if in.MinVerification != "" && in.MinVerification != "any" {
+		out.Callers = filterCallers(out.Callers, in.MinVerification)
+		out.TotalCallers = len(out.Callers)
+	}
 	out.InlineSnippets(".", in.SnippetLines)
 	return jsonResult(out.ApplyBudget(in.MaxTokens, in.Summary))
 }
@@ -301,9 +342,11 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 // ─── trace ───────────────────────────────────────────────────────────────────
 
 type traceInput struct {
-	Root      string `json:"root" jsonschema:"search query for the root node"`
-	Direction string `json:"direction,omitempty" jsonschema:"trace direction: forward, backward, or both (default forward)"`
-	Depth     int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
+	Root            string `json:"root" jsonschema:"search query for the root node"`
+	Direction       string `json:"direction,omitempty" jsonschema:"trace direction: forward, backward, or both (default forward)"`
+	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
+	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
+	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 }
 
 func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceInput) (*mcp.CallToolResult, any, error) {
@@ -322,7 +365,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, err
 	}
 
-	result := trace.Run(idx, root.ID, direction, depth, false)
+	result := trace.Run(idx, root.ID, direction, depth, in.VerboseSources)
 	if result == nil {
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}
@@ -331,5 +374,72 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, err
 	}
 	result.AttachUnresolved(unresolved)
+	if in.MinVerification != "" && in.MinVerification != "any" {
+		result.Nodes = filterHops(result.Nodes, in.MinVerification)
+		result.Chains = filterChains(result.Chains, in.MinVerification)
+	}
 	return jsonResult(result)
+}
+
+// ─── min_verification filter helpers ─────────────────────────────────────────
+
+// filterCallers removes impact callers whose edge VerificationState does not
+// meet the threshold. The VerificationSummary on the parent Result is built
+// from all edges before filtering, so filtered counts remain visible.
+func filterCallers(callers []impact.Caller, minVerification string) []impact.Caller {
+	out := callers[:0:len(callers)]
+	for _, c := range callers {
+		if minVerificationPasses(c.VerificationState, minVerification) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// filterTraceNodes removes context TraceNodes whose edge VerificationState
+// does not meet the threshold.
+func filterTraceNodes(nodes []pfcontext.TraceNode, minVerification string) []pfcontext.TraceNode {
+	out := nodes[:0:len(nodes)]
+	for _, n := range nodes {
+		if minVerificationPasses(n.VerificationState, minVerification) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// filterHops removes trace flat-hops whose edge VerificationState does not
+// meet the threshold.
+func filterHops(hops []trace.Hop, minVerification string) []trace.Hop {
+	out := hops[:0:len(hops)]
+	for _, h := range hops {
+		if minVerificationPasses(h.VerificationState, minVerification) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// filterChains removes chains that contain any hop whose edge VerificationState
+// does not meet the threshold. A chain is kept only when all of its hops pass,
+// preserving chain integrity (a broken chain is less useful than an absent one).
+func filterChains(chains []trace.Chain, minVerification string) []trace.Chain {
+	out := chains[:0:len(chains)]
+	for _, ch := range chains {
+		keep := true
+		for _, h := range ch.Hops {
+			// The first hop in a chain has no incoming edge (EdgeType==""); skip it.
+			if h.EdgeType == "" {
+				continue
+			}
+			if !minVerificationPasses(h.VerificationState, minVerification) {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
