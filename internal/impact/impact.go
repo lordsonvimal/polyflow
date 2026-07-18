@@ -5,6 +5,8 @@
 package impact
 
 import (
+	"encoding/json"
+
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -23,6 +25,11 @@ type Caller struct {
 	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
 	Depth      int               `json:"depth"`
 	Snippet    string            `json:"snippet,omitempty"`
+
+	// F.0 provenance (A.1): always present when the edge has been fused.
+	VerificationState   string          `json:"verification_state,omitempty"`
+	VerifiedGranularity string          `json:"verified_granularity,omitempty"`
+	Sources             json.RawMessage `json:"sources,omitempty"` // compact "provider:ref" strings; full SourceRef with verboseSources
 }
 
 // CrossServiceTrigger counts edges arriving at the blast radius from
@@ -48,14 +55,20 @@ type Result struct {
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
 	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 
+	// VerificationSummary aggregates edge provenance counts. Always present
+	// (never absent — absence would look like certainty); survives any token budget.
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+
 	// Budget records the token-budgeting decision when a budget was set and
 	// the detail shape was emitted.
 	Budget *budget.Info `json:"budget,omitempty"`
 }
 
 // Build computes the blast radius of root: its ancestors up to depth
-// (<= 0 means unlimited), optionally filtered to one service.
-func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service string) *Result {
+// (<= 0 means unlimited), optionally filtered to one service. verboseSources
+// controls whether per-caller Sources contains compact "provider:ref" strings
+// (false, default) or full SourceRef structs (true, --verbose-sources).
+func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service string, verboseSources bool) *Result {
 	ancestors := graph.Ancestors(idx, root.ID, depth)
 
 	if service != "" {
@@ -68,7 +81,7 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		ancestors = filtered
 	}
 
-	callers, entryPoints, servicesAffected, triggers := assemble(idx, ancestors)
+	callers, entryPoints, servicesAffected, triggers, edges := assemble(idx, ancestors, verboseSources)
 
 	return &Result{
 		Target:               root,
@@ -79,15 +92,18 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		Depth:                depth,
 		TotalCallers:         len(callers),
 		Unresolved:           []graph.UnresolvedRef{},
+		VerificationSummary:  graph.BuildVerificationSummary(edges),
 	}
 }
 
 // assemble turns a traversed ancestor set into the shared output pieces:
-// callers with edge context, entry points (ancestors with no incoming
-// edges), the affected-service set, and cross-service triggers (edges
-// arriving at any ancestor from a different service).
-func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult) ([]Caller, []*graph.Node, []string, []CrossServiceTrigger) {
+// callers with edge context and provenance, entry points (ancestors with no
+// incoming edges), the affected-service set, cross-service triggers (edges
+// arriving at any ancestor from a different service), and the collected edges
+// used to compute the VerificationSummary.
+func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verboseSources bool) ([]Caller, []*graph.Node, []string, []CrossServiceTrigger, []graph.Edge) {
 	callers := make([]Caller, 0, len(ancestors))
+	var edges []graph.Edge
 	for _, a := range ancestors {
 		c := Caller{
 			ID:      a.Node.ID,
@@ -103,6 +119,10 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult) ([]C
 			c.EdgeType = string(a.Via.Type)
 			c.Confidence = a.Via.Confidence
 			c.EdgeMeta = a.Via.Meta
+			c.VerificationState = a.Via.VerificationState
+			c.VerifiedGranularity = a.Via.VerifiedGranularity
+			c.Sources = marshalSources(a.Via.Sources, verboseSources)
+			edges = append(edges, *a.Via)
 		}
 		callers = append(callers, c)
 	}
@@ -137,7 +157,24 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult) ([]C
 		triggers = append(triggers, CrossServiceTrigger{FromService: svc, EdgeCount: cnt})
 	}
 
-	return callers, entryPoints, servicesAffected, triggers
+	return callers, entryPoints, servicesAffected, triggers, edges
+}
+
+// marshalSources serialises edge Sources as compact "provider:ref" strings
+// (default) or full SourceRef structs (verboseSources=true). Returns nil when
+// the edge has no Sources.
+func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
+	if len(sources) == 0 {
+		return nil
+	}
+	var v any
+	if verbose {
+		v = graph.SortedSources(sources)
+	} else {
+		v = graph.CompactSources(sources)
+	}
+	b, _ := json.Marshal(v)
+	return json.RawMessage(b)
 }
 
 // AttachUnresolved scopes the workspace's unresolved-reference ledger to the

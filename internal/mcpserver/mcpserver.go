@@ -239,7 +239,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 
-	result := pfcontext.Build(idx, root.ID, task, depth)
+	result := pfcontext.Build(idx, root.ID, task, depth, false)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -292,7 +292,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	if err != nil {
 		return nil, nil, err
 	}
-	out := impact.Build(idx, root, depth, in.Service)
+	out := impact.Build(idx, root, depth, in.Service, false)
 	out.AttachUnresolved(unresolved)
 	out.InlineSnippets(".", in.SnippetLines)
 	return jsonResult(out.ApplyBudget(in.MaxTokens, in.Summary))
@@ -322,7 +322,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, err
 	}
 
-	result := trace.Run(idx, root.ID, direction, depth)
+	result := trace.Run(idx, root.ID, direction, depth, false)
 	if result == nil {
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}

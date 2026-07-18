@@ -695,16 +695,17 @@ func runPatternsAdd(cmd *cobra.Command, args []string) error {
 // ─── context ─────────────────────────────────────────────────────────────────
 
 var (
-	contextTarget       string
-	contextFiles        []string
-	contextService      string
-	contextLimit        int
-	contextTask         string
-	contextDepth        int
-	contextFormat       string
-	contextMaxTokens    int
-	contextSummary      bool
-	contextSnippetLines int
+	contextTarget         string
+	contextFiles          []string
+	contextService        string
+	contextLimit          int
+	contextTask           string
+	contextDepth          int
+	contextFormat         string
+	contextMaxTokens      int
+	contextSummary        bool
+	contextSnippetLines   int
+	contextVerboseSources bool
 )
 
 func initContextFlags() {
@@ -718,6 +719,7 @@ func initContextFlags() {
 	contextCmd.Flags().IntVar(&contextMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
 	contextCmd.Flags().BoolVar(&contextSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
 	contextCmd.Flags().IntVar(&contextSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
+	contextCmd.Flags().BoolVar(&contextVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
 }
 
 var contextCmd = &cobra.Command{
@@ -778,7 +780,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth)
+	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -841,6 +843,9 @@ func printContextSummaryText(s *pfcontext.Summary) error {
 	}
 
 	printUnresolvedText(s.Unresolved)
+	if line := graph.VerificationSummaryLine(s.VerificationSummary); line != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", line)
+	}
 	if s.Budget != nil && s.Budget.Note != "" {
 		fmt.Fprintf(os.Stdout, "(%s)\n", s.Budget.Note)
 	}
@@ -882,6 +887,9 @@ func printContextText(r *pfcontext.Result) error {
 	}
 
 	printUnresolvedText(r.Unresolved)
+	if line := graph.VerificationSummaryLine(r.VerificationSummary); line != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", line)
+	}
 	return nil
 }
 
@@ -900,10 +908,11 @@ func printUnresolvedText(refs []graph.UnresolvedRef) {
 // ─── trace ───────────────────────────────────────────────────────────────────
 
 var (
-	traceRoot      string
-	traceDirection string
-	traceDepth     int
-	traceFormat    string
+	traceRoot          string
+	traceDirection     string
+	traceDepth         int
+	traceFormat        string
+	traceVerboseSources bool
 )
 
 func initTraceFlags() {
@@ -911,6 +920,7 @@ func initTraceFlags() {
 	traceCmd.Flags().StringVar(&traceDirection, "direction", "forward", "trace direction: forward, backward, or both")
 	traceCmd.Flags().IntVar(&traceDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	traceCmd.Flags().StringVar(&traceFormat, "format", "text", "output format: json, text, or chain")
+	traceCmd.Flags().BoolVar(&traceVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
 	_ = traceCmd.MarkFlagRequired("root")
 }
 
@@ -946,7 +956,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result := trace.Run(idx, root.ID, traceDirection, traceDepth)
+	result := trace.Run(idx, root.ID, traceDirection, traceDepth, traceVerboseSources)
 	if result == nil {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
@@ -966,6 +976,9 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		}
 		if result.Truncated {
 			fmt.Fprintf(os.Stderr, "(truncated at %d chains)\n", trace.MaxChains)
+		}
+		if line := graph.VerificationSummaryLine(result.VerificationSummary); line != "" {
+			fmt.Fprintf(os.Stderr, "(%s)\n", line)
 		}
 		if result.UnresolvedNote != "" {
 			fmt.Fprintf(os.Stderr, "(%s)\n", result.UnresolvedNote)
@@ -1008,23 +1021,27 @@ func printTraceText(r *trace.Result) error {
 		fmt.Fprintln(os.Stdout)
 		printUnresolvedText(r.Unresolved)
 	}
+	if line := graph.VerificationSummaryLine(r.VerificationSummary); line != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", line)
+	}
 	return nil
 }
 
 // ─── impact ──────────────────────────────────────────────────────────────────
 
 var (
-	impactTarget       string
-	impactDepth        int
-	impactService      string
-	impactFormat       string
-	impactFile         string
-	impactDirection    string
-	impactDiff         bool
-	impactStaged       bool
-	impactMaxTokens    int
-	impactSummary      bool
-	impactSnippetLines int
+	impactTarget         string
+	impactDepth          int
+	impactService        string
+	impactFormat         string
+	impactFile           string
+	impactDirection      string
+	impactDiff           bool
+	impactStaged         bool
+	impactMaxTokens      int
+	impactSummary        bool
+	impactSnippetLines   int
+	impactVerboseSources bool
 )
 
 func initImpactFlags() {
@@ -1039,6 +1056,7 @@ func initImpactFlags() {
 	impactCmd.Flags().IntVar(&impactMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
 	impactCmd.Flags().BoolVar(&impactSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
 	impactCmd.Flags().IntVar(&impactSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
+	impactCmd.Flags().BoolVar(&impactVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
 	impactCmd.MarkFlagsOneRequired("target", "file", "diff")
 	impactCmd.MarkFlagsMutuallyExclusive("target", "file", "diff")
 }
@@ -1110,7 +1128,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	out := impact.Build(idx, root, impactDepth, impactService)
+	out := impact.Build(idx, root, impactDepth, impactService, impactVerboseSources)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1161,6 +1179,9 @@ func printImpactSummaryText(s *impact.Summary) error {
 	if len(s.Unresolved) > 0 {
 		fmt.Fprintln(os.Stdout)
 		printUnresolvedText(s.Unresolved)
+	}
+	if line := graph.VerificationSummaryLine(s.VerificationSummary); line != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", line)
 	}
 	if s.Budget != nil && s.Budget.Note != "" {
 		fmt.Fprintf(os.Stdout, "(%s)\n", s.Budget.Note)
@@ -1221,6 +1242,9 @@ func printImpactText(out *impact.Result) error {
 		fmt.Fprintln(os.Stdout)
 		printUnresolvedText(out.Unresolved)
 	}
+	if line := graph.VerificationSummaryLine(out.VerificationSummary); line != "" {
+		fmt.Fprintf(os.Stdout, "(%s)\n", line)
+	}
 	return nil
 }
 
@@ -1256,7 +1280,7 @@ func runImpactDiff() error {
 		return err
 	}
 
-	out := impact.BuildDiff(idx, changes, impactDepth, impactService)
+	out := impact.BuildDiff(idx, changes, impactDepth, impactService, impactVerboseSources)
 	if impactStaged {
 		out.Mode = "staged"
 	}

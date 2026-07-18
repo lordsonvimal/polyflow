@@ -36,7 +36,7 @@ func TestBuildDiff_BodyChangeSeedsEnclosingFunction(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 16}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	require.Len(t, out.Targets, 1)
 	assert.Equal(t, "be:handleUser", out.Targets[0].Node.ID)
@@ -55,7 +55,7 @@ func TestBuildDiff_DeclarationLineSeedsPointNode(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 5, End: 5}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	require.Len(t, out.Targets, 1)
 	assert.Equal(t, "be:cfg", out.Targets[0].Node.ID)
@@ -71,7 +71,7 @@ func TestBuildDiff_OpenEndedEnclosingFallback(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 45, End: 46}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	require.Len(t, out.Targets, 1)
 	assert.Equal(t, "be:helper", out.Targets[0].Node.ID)
@@ -88,7 +88,7 @@ func TestBuildDiff_UnmappedHunksAreReported(t *testing.T) {
 		// Deleted file.
 		{Path: "gone.go", Deleted: true},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	assert.Empty(t, out.Targets)
 	require.Len(t, out.Unmapped, 3)
@@ -108,7 +108,7 @@ func TestBuildDiff_UnionKeepsMinDepthAndDeduplicates(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 12, End: 12}, {Start: 45, End: 45}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	require.Len(t, out.Targets, 2)
 	seen := map[string]int{}
@@ -127,7 +127,7 @@ func TestBuildDiff_SeedsExcludedFromCallers(t *testing.T) {
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 12, End: 12}}},
 		{Path: "main.go", Spans: []gitdiff.Span{{Start: 4, End: 4}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	require.Len(t, out.Targets, 2)
 	for _, c := range out.Callers {
@@ -142,7 +142,7 @@ func TestBuildDiff_ServiceFilter(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "backend")
+	out := impact.BuildDiff(idx, changes, 10, "backend", false)
 
 	require.Equal(t, 1, out.TotalCallers)
 	assert.Equal(t, "be:main", out.Callers[0].ID)
@@ -150,7 +150,7 @@ func TestBuildDiff_ServiceFilter(t *testing.T) {
 
 func TestBuildDiff_UnresolvedAndUnmappedDefaultToEmptyNotNull(t *testing.T) {
 	idx := diffFixtureIndex()
-	out := impact.BuildDiff(idx, nil, 10, "")
+	out := impact.BuildDiff(idx, nil, 10, "", false)
 
 	data, err := json.Marshal(out)
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestDiffResult_AttachUnresolvedScopedToChangedAndCallerFiles(t *testing.T) 
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 		{Path: "README.md", Spans: []gitdiff.Span{{Start: 1, End: 1}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 		{Service: "backend", File: "README.md", Line: 1, Name: "docRef", Kind: "call_ref"},
@@ -182,7 +182,7 @@ func TestDiffResult_ApplyBudgetRollsUpAndKeepsBlindSpots(t *testing.T) {
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 		{Path: "README.md", Spans: []gitdiff.Span{{Start: 1, End: 1}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 	})
@@ -203,7 +203,7 @@ func TestDiffResult_ApplyBudgetKeepsDetailWhenItFits(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "")
+	out := impact.BuildDiff(idx, changes, 10, "", false)
 
 	budgeted := out.ApplyBudget(100000, false)
 	r, ok := budgeted.(*impact.DiffResult)
