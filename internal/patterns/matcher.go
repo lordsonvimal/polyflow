@@ -14,6 +14,7 @@ import (
 	gositter "github.com/smacker/go-tree-sitter/golang"
 	htmlsitter "github.com/smacker/go-tree-sitter/html"
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
+	pythonsitter "github.com/smacker/go-tree-sitter/python"
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
@@ -85,6 +86,8 @@ func languageFor(lang string) *sitter.Language {
 		return tssitter.GetLanguage()
 	case "tsx":
 		return tsxsitter.GetLanguage()
+	case "python":
+		return pythonsitter.GetLanguage()
 	case "ruby":
 		return rubysitter.GetLanguage()
 	case "html":
@@ -269,7 +272,8 @@ func isCallRef(patternName string) bool {
 	return patternName == "component_fn_call" ||
 		patternName == "jsx_event_handler_ref" ||
 		patternName == "goroutine_call" ||
-		patternName == "cobra_run"
+		patternName == "cobra_run" ||
+		patternName == "python_func_call"
 }
 
 // isConstantPattern returns true for pattern results that only feed the URL
@@ -388,7 +392,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// Element nodes are also named (by their id/class label) so selectors can address them.
 		idName := r.PatternName
 		namedTypes := nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod ||
-			nodeType == graph.NodeTypeComponent || nodeType == graph.NodeTypeElement
+			nodeType == graph.NodeTypeComponent || nodeType == graph.NodeTypeElement ||
+			nodeType == graph.NodeTypeClass || nodeType == graph.NodeTypeStruct
 		if namedTypes && label != r.PatternName {
 			idName = label
 		}
@@ -909,10 +914,11 @@ func goTopLevelScope(file, skipID string, nameByFileAndName map[string]string) s
 	return ""
 }
 
-// isJSModuleFile reports whether file is a JavaScript/TypeScript module —
-// the only language here whose top-level statements execute on load.
+// isJSModuleFile reports whether file is a JavaScript/TypeScript or Python
+// module — languages whose top-level statements execute on load and therefore
+// need a synthetic (module) caller node for top-level call-ref attribution.
 func isJSModuleFile(file string) bool {
-	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs"} {
+	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".py"} {
 		if strings.HasSuffix(file, ext) {
 			return true
 		}
@@ -999,6 +1005,12 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 	case lower == "method_decl":
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
+	case lower == "class_decl":
+		return graph.NodeTypeClass, graph.EdgeTypeCalls
+
+	// ── Python imports (no graph node; captured for future cross-file linker) ──
+	case lower == "python_import" || lower == "python_from_import":
+		return graph.NodeTypeTypeAlias, graph.EdgeTypeCalls
 
 	// ── Datastar / SSE ────────────────────────────────────────────────────────
 	case lower == "datastar_on_signal":
@@ -1159,9 +1171,36 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	}
 }
 
-// stripStringLiteral removes surrounding Go/JS string delimiters (", ', `)
-// and raw Go backtick literals from a captured value.
+// stripStringLiteral removes surrounding string delimiters from a captured value.
+// Handles: Go/JS/Ruby (", ', `); Python prefix forms (f"", r"", b"", u"",
+// and combinations: rb"", fr"", etc.); Python triple-quoted strings ("""/''').
 func stripStringLiteral(s string) string {
+	// Strip Python/Ruby string prefix letters (f, r, b, u and combinations).
+	// Only strip when the prefix is immediately followed by a quote character.
+	i := 0
+	for i < len(s) && i < 3 {
+		c := s[i]
+		if c != 'f' && c != 'F' && c != 'r' && c != 'R' &&
+			c != 'b' && c != 'B' && c != 'u' && c != 'U' {
+			break
+		}
+		i++
+	}
+	if i > 0 && i < len(s) && (s[i] == '"' || s[i] == '\'' || s[i] == '`') {
+		s = s[i:]
+	}
+
+	// Python triple-quoted strings: """...""" or '''...'''
+	if len(s) >= 6 {
+		if s[:3] == `"""` && s[len(s)-3:] == `"""` {
+			return s[3 : len(s)-3]
+		}
+		if s[:3] == "'''" && s[len(s)-3:] == "'''" {
+			return s[3 : len(s)-3]
+		}
+	}
+
+	// Single-quoted, double-quoted, or backtick (Go/JS/Ruby/Python)
 	if len(s) >= 2 {
 		c := s[0]
 		if (c == '"' || c == '\'' || c == '`') && s[len(s)-1] == c {

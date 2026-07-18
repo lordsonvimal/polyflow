@@ -1,0 +1,60 @@
+language: python
+version: "1"
+patterns:
+  # All function definitions (module-level, nested, and class methods).
+  # Python uses function_definition for both def and async def.
+  # @_def spans the whole body for containment-based enclosing-scope attribution.
+  - name: func_decl
+    query: |
+      (function_definition
+        name: (identifier) @name) @_def
+    captures:
+      - name: name
+        role: func_name
+
+  # Class definitions. @_def spans the full class body so methods inside
+  # are attributed to the correct enclosing scope.
+  - name: class_decl
+    query: |
+      (class_definition
+        name: (identifier) @name) @_def
+    captures:
+      - name: name
+        role: class_name
+
+  # Plain function call with an identifier callee (e.g. helper(), process()).
+  # Attribute calls (obj.method()) are excluded by requiring identifier, not attribute.
+  # These become call_ref edges: resolved refs → calls edges; unresolved → ledger.
+  - name: python_func_call
+    query: |
+      (call
+        function: (identifier) @callee)
+    captures:
+      - name: callee
+        role: func_ref
+
+  # Module import: import os, import pathlib
+  # Captured for future cross-file resolution (L.P2+); no graph node emitted.
+  - name: python_import
+    query: |
+      (import_statement
+        name: (dotted_name
+          (identifier) @name))
+    captures:
+      - name: name
+        role: import_name
+
+  # From-import: from pathlib import Path, from os.path import join
+  # Captured for future cross-file resolution (L.P2+); no graph node emitted.
+  - name: python_from_import
+    query: |
+      (import_from_statement
+        module_name: (dotted_name
+          (identifier) @module)
+        name: (dotted_name
+          (identifier) @name))
+    captures:
+      - name: module
+        role: import_module
+      - name: name
+        role: import_name

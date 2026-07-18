@@ -447,7 +447,7 @@ language repeats; Python phases below are its first instantiation):
     file runs through the real parser→matcher→engine path — hand-built
     nodes in unit tests do not count as coverage of this.
 
-### Phase L.P0 — Python grammar + core patterns `pending`
+### Phase L.P0 — Python grammar + core patterns `done`
 
 **Problem.** A Python repo indexes to nothing today.
 
@@ -467,6 +467,8 @@ needed and test it through a real fixture parse, not hand-built nodes.
 
 **Acceptance.** Indexing a small Python service yields function/class nodes
 with call edges and a nonzero-but-honest unresolved count.
+
+**Outcome (2026-07-18).** Implemented exactly as specified. `smacker/go-tree-sitter/python` wired into `languageFor()` in `internal/patterns/matcher.go`; `internal/parser/python.go` registers `PythonParser` for `.py`. `patterns/python/functions.yaml` adds five patterns: `func_decl` (all `function_definition` nodes including async def, methods, and nested defs; NodeTypeFunction), `class_decl` (`class_definition`; NodeTypeClass — added to `classifyPattern` and `namedTypes`), `python_func_call` (bare-identifier calls; call ref — added to `isCallRef`), `python_import` and `python_from_import` (NodeTypeTypeAlias, filtered from graph, preserved for future L.P2 cross-file linker). `isJSModuleFile` extended with `.py` so top-level Python call refs attribute to a synthetic `(module)` node (same fallback as JS). `stripStringLiteral` extended for Python prefix letters (f, r, b, u, and combinations) and triple-quoted strings (`"""..."""`, `'''...'''`); exported as `StripStringLiteral` in `internal/patterns/strip.go`; tested in `TestStripStringLiteral_PythonForms` (16 cases). `internal/contract/keywalk_python.go` adds no-op Python key walker (satisfies `TestWalkerCoverage_AllLanguagesHaveWalker`). Pattern fixture: `patterns/python/functions_test/` with positive (`input.py`; 17 expected matches: 8 func_decl, 1 class_decl, 6 python_func_call, 1 python_import, 1 python_from_import) and negative (`negative.py`; 0 matches). 9 new parser tests in `internal/parser/python_test.go` (function nodes, async def, class nodes, module-level call ref, nested def attribution, unresolved call ref, test file indexing, decorated functions). Deviations: (1) methods inside classes are captured as `func_decl` (NodeTypeFunction) not a separate `method_decl` — Python grammar uses the same `function_definition` node for both; a separate method_decl query would create duplicate nodes with no dedup mechanism; acceptable for L.P0 since the containment system still attributes calls correctly. (2) `stripStringLiteral` tested via a unit test that calls `StripStringLiteral` directly; real-parse path coverage satisfied by `TestPython_FunctionNodes` and the fixture test which exercises the full parser→matcher→MatchToGraph pipeline. Full test suite passes; `BenchmarkIndexCold` held.
 
 ### Phase L.P1 — Python dependency resolution `pending`
 

@@ -616,3 +616,48 @@ func TestMatchToGraph(t *testing.T) {
 	// go_statement → default → NodeTypeFunction
 	assert.Equal(t, graph.NodeTypeFunction, nodes[2].Type)
 }
+
+// TestStripStringLiteral_PythonForms verifies that stripStringLiteral (accessed
+// via the exported StripStringLiteral wrapper) correctly strips Python string
+// prefix characters (f, r, b, u, and combinations) and triple-quoted strings.
+// This test is the "capture hygiene" gate for Python per checklist item 11.
+func TestStripStringLiteral_PythonForms(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		// Standard forms (existing behavior, regression-guarded)
+		{`"hello"`, "hello"},
+		{`'world'`, "world"},
+		{"`backtick`", "backtick"},
+		// Python triple-quoted
+		{`"""triple double"""`, "triple double"},
+		{`'''triple single'''`, "triple single"},
+		// Python prefix: single-char
+		{`f"formatted"`, "formatted"},
+		{`r"raw"`, "raw"},
+		{`b"bytes"`, "bytes"},
+		{`u"unicode"`, "unicode"},
+		// Python prefix: two-char combinations
+		{`rb"raw bytes"`, "raw bytes"},
+		{`br"byte raw"`, "byte raw"},
+		{`fr"f raw"`, "f raw"},
+		{`rf"r f"`, "r f"},
+		// Python prefix: upper-case
+		{`F"upper f"`, "upper f"},
+		{`R"upper r"`, "upper r"},
+		{`B"upper b"`, "upper b"},
+		// Python prefix + triple quote
+		{`f"""triple f-string"""`, "triple f-string"},
+		{`r'''triple raw'''`, "triple raw"},
+		// No-op cases
+		{"no_quotes", "no_quotes"},
+		{"/path/no/quotes", "/path/no/quotes"},
+		{`""`, ""},   // empty string
+		{`''`, ""},   // empty string
+	}
+	for _, c := range cases {
+		got := patterns.StripStringLiteral(c.input)
+		assert.Equal(t, c.want, got, "StripStringLiteral(%q)", c.input)
+	}
+}
