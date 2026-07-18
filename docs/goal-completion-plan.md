@@ -517,7 +517,7 @@ showed are partially or wholly invisible today. These phases close that class.
 L.W1/L.W2 need only current infra; L.W0's nav half feeds the http contract
 rule (G.1); dynamic values ride G.6's walkers.*
 
-### Phase L.W0 — ERB templates + Rails route-helper navigation `pending`
+### Phase L.W0 — ERB templates + Rails route-helper navigation `done`
 
 **Problem.** `.erb` has no registered parser (parser.go registry: only
 `.go/.html/.htm/.js/.ts/.jsx/.tsx/.mjs/.rb/.rake/.templ`) — Rails views
@@ -568,6 +568,8 @@ via the html patterns.
 **Acceptance.** A Rails fixture app's `link_to reports_path` yields a
 `navigates_to` edge to the `GET /reports` route/controller action; the view
 file appears in `impact` for that controller.
+
+**Outcome (2026-07-18).** All three deliverables implemented. `internal/parser/erb.go` registers a hand-rolled ERB splitter (no tree-sitter ERB grammar — none in smacker/go-tree-sitter) that splits `.erb` into a blankedHTML view (ERB tags → spaces, newlines preserved) and a virtualRuby view (HTML → spaces, ERB delimiters → spaces), runs html + ruby patterns over each, and merges results with language metadata. `rails_routes.yaml` extended with `resource_route`, `member_verb_route`, `collection_verb_route` patterns. `patterns/ruby/rails_nav.yaml` added (6 patterns: `nav_link_rails_helper`, `nav_link_rails_literal`, `nav_link_rails_form_helper`, `nav_link_rails_form_literal`). `internal/linker/rails_helpers.go` implements `BuildRailsHelperMap` (RESTful + member/collection + explicit verb helpers, fan-out on collision, sorted output) and `ResolveRailsNavHelpers` (resolves helper→path, emits `rails_helper_unresolved` to ledger). Linker pass wired into `indexer.go` before `ApplyHints`. Deviations: `nav_link_rails_helper` nodes had empty `meta["path"]` at parse time, causing all three `link_to` calls to hash to the same nav-dedup key in `MatchToGraph` — fixed by stamping `key_dynamic=true` when `meta["helper"]` is set and `meta["path"]` is empty, causing the dedup to use file+line only. `internal/contract/keywalk_erb.go` added (no-op walker) to satisfy `TestWalkerCoverage_AllLanguagesHaveWalker`. `navigates_to` added to `internal/trace/testdata/edge_types.golden`. Full suite passes; `BenchmarkIndexCold` held.
 
 ### Phase L.W1 — Global/window symbol resolution + inline handlers `done`
 

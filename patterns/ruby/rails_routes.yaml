@@ -24,6 +24,16 @@ patterns:
     captures:
       - name: resource
         role: rails_resource
+  - name: resource_route
+    query: |
+      (call
+        method: (identifier) @method
+        (#eq? @method "resource")
+        arguments: (argument_list
+          (simple_symbol) @resource . _*))
+    captures:
+      - name: resource
+        role: rails_resource
   - name: namespace_route
     query: |
       (call
@@ -35,3 +45,39 @@ patterns:
     captures:
       - name: ns
         role: route_namespace
+  - name: member_verb_route
+    query: |
+      (call
+        method: (identifier) @_member_kw
+        (#eq? @_member_kw "member")
+        block: (_
+          body: (_
+            (call
+              !receiver
+              method: (identifier) @verb
+              (#match? @verb "^(get|post|put|patch|delete|head|options)$")
+              arguments: (argument_list
+                (simple_symbol) @action . _*)))))
+    captures:
+      - name: verb
+        role: http_method
+      - name: action
+        role: rails_member_action
+  - name: collection_verb_route
+    query: |
+      (call
+        method: (identifier) @_collection_kw
+        (#eq? @_collection_kw "collection")
+        block: (_
+          body: (_
+            (call
+              !receiver
+              method: (identifier) @verb
+              (#match? @verb "^(get|post|put|patch|delete|head|options)$")
+              arguments: (argument_list
+                (simple_symbol) @action . _*)))))
+    captures:
+      - name: verb
+        role: http_method
+      - name: action
+        role: rails_collection_action

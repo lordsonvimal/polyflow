@@ -1,1 +1,1 @@
-{"patterns": ["http_verb_route", "http_verb_route", "resources_route", "namespace_route"], "node_types": ["http_handler", "http_handler", "http_handler", "http_handler"]}
+{"patterns": ["http_verb_route", "http_verb_route", "resources_route", "resource_route", "namespace_route", "resources_route", "member_verb_route", "collection_verb_route"], "node_types": ["http_handler", "http_handler", "http_handler", "http_handler", "http_handler", "http_handler", "http_handler", "http_handler"]}

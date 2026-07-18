@@ -8,6 +8,7 @@ grpc_call
 http_call
 hub_broadcast
 job_enqueue
+navigates_to
 persists
 publishes
 pusher_trigger
