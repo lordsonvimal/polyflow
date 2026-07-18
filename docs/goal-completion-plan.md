@@ -569,7 +569,7 @@ via the html patterns.
 `navigates_to` edge to the `GET /reports` route/controller action; the view
 file appears in `impact` for that controller.
 
-### Phase L.W1 — Global/window symbol resolution + inline handlers `pending`
+### Phase L.W1 — Global/window symbol resolution + inline handlers `done`
 
 **Problem.** Cross-file JS resolution is **import-map-only** (Phase 0.3).
 Legacy code has no imports: `window.App = {…}` is not a declaration anywhere,
@@ -609,6 +609,8 @@ imports already explain.
 **Acceptance.** On a legacy fixture, `onclick="save()"` reaches the
 `window.save` definition in another file; the service's unresolved
 `call_ref` count drops by the number of newly-resolved globals (asserted).
+
+**Outcome (2026-07-18).** Implemented exactly as specified. `internal/parser/js_variables.go` gains `stampGlobalSymbols()` (called after `walk()`): detects non-module files (no `import_statement`/`export_statement` at top level), stamps `Meta["global_symbol"] = name` on top-level function declarations in non-module files, and handles `window.X = fn|{…}` assignments at top level (function expressions get a function node; object/other values get a variable node with `scope=global`). New file `internal/linker/js_globals.go` implements `LinkJSGlobals`: builds a per-service global symbol table (`map[string][]globalEntry`, sorted by file for determinism), resolves unresolved `call_ref` refs against the table (imports-first enforced via `importedNames` from `LinkJS`), and resolves inline `dom_target` `handler` strings (e.g. `"save()"`) via `extractHandlerCallee` (strips call expression to leading identifier). Collision handling: ≥2 definitions for same name → emit candidate edges to all with `via=global_ambiguous` + one `global_collision` ledger entry per name. `internal/indexer/indexer.go` wires `LinkJSGlobals` immediately after `LinkJS`, passing the `importedNames` set, with the same suppression filter pattern. Deviation: templ event attribute extraction was already present in `internal/parser/templ.go` (added in a prior phase — `reOnEventAttr` + `addEventAttr` + `VisitExpressionAttribute` handling); no changes needed there. `SchemaVersion` NOT bumped — no new node/edge types or stored schema shape changes (`global_symbol` is a flexible meta key; `global_collision` is an unresolved ledger kind; `EdgeTypeCalls` with `via=global` meta already existed). 11 new tests across `internal/linker/js_globals_test.go` (6 linker tests) and `internal/parser/js_globals_test.go` (5 parser tests); full suite passes. `BenchmarkIndexCold` held at 12.1s / 1200 files (within historical range; `LinkJSGlobals` is a pure in-memory pass with no file I/O).
 
 ### Phase L.W2 — jQuery/AJAX cross-service links + selector→DOM-node linking `pending`
 
