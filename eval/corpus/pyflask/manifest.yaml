@@ -1,0 +1,190 @@
+repo:
+  name: pyflask
+  # Hand-authored local fixture. Index with:
+  #   cd eval/testdata/pyflask && polyflow index --full
+  # This is a path-based (LocalOnly) repo; CI skips it without failing the gate.
+  path: eval/testdata/pyflask
+  sha: "local-fixture-v1"
+  workspace: workspace.yaml
+
+# Selection rationale: pyflask is a hand-crafted multi-service Python fixture
+# that exercises every L.P0–L.P3 pattern class in a single coherent project:
+#   api/     — FastAPI service with HTTP routes (L.P2) and Celery dispatch (L.P3)
+#   worker/  — Celery task consumer service (L.P3)
+#   gateway/ — Flask service with HTTP routes (L.P2)
+#
+# Verification method: every case was verified by reading the fixture source
+# directly (eval/testdata/pyflask/). Node labels are function names captured
+# by the @name capture in each pattern; cross-service impact comes from
+# job_enqueue edges created by contracts/jobs.yaml Celery rules.
+#
+# Cases 1–5: Celery consumers — each task function in worker/tasks.py has an
+# inbound job_enqueue edge from the dispatch call in api/main.py, so the impact
+# of the consumer node includes both files.
+# Cases 6–13: FastAPI HTTP handler nodes — SearchNodes finds them by function
+# name; impact includes the definition file (no HTTP client cross-links in this
+# fixture).
+# Cases 14–16: Flask HTTP handler nodes — same rationale as FastAPI cases.
+cases:
+  # ── Celery task consumers (cross-service job_enqueue impact) ────────────────
+
+  - id: celery-send-notification
+    kind: node
+    target: send_notification
+    # @app.task def send_notification(...) in worker/tasks.py (line 8).
+    # Dispatched via send_notification.delay(user_id, message) in api/main.py.
+    # The job_enqueue edge links the Publisher (api/main.py) to the Subscriber
+    # (worker/tasks.py), so impact of the consumer includes both files.
+    expected_impacted:
+      - worker/tasks.py
+      - api/main.py
+    must_not_miss:
+      - worker/tasks.py
+
+  - id: celery-process-payment
+    kind: node
+    target: process_payment
+    # @app.task(bind=True) def process_payment(...) in worker/tasks.py (line 13).
+    # Dispatched via process_payment.delay(order_id, amount) in api/main.py.
+    expected_impacted:
+      - worker/tasks.py
+      - api/main.py
+    must_not_miss:
+      - worker/tasks.py
+
+  - id: celery-generate-invoice
+    kind: node
+    target: generate_invoice
+    # @shared_task def generate_invoice(...) in worker/tasks.py (line 18).
+    # Dispatched via generate_invoice.apply_async(args=[order_id]) in api/main.py.
+    expected_impacted:
+      - worker/tasks.py
+      - api/main.py
+    must_not_miss:
+      - worker/tasks.py
+
+  - id: celery-send-verification-email
+    kind: node
+    target: send_verification_email
+    # @shared_task(bind=True) def send_verification_email(...) in worker/tasks.py.
+    # Dispatched via send_verification_email.delay(user_id, email) in api/main.py.
+    expected_impacted:
+      - worker/tasks.py
+      - api/main.py
+    must_not_miss:
+      - worker/tasks.py
+
+  - id: celery-cleanup-expired-sessions
+    kind: node
+    target: cleanup_expired_sessions
+    # @app.task def cleanup_expired_sessions() in worker/tasks.py (line 28).
+    # Dispatched via cleanup_expired_sessions.delay() in api/main.py.
+    expected_impacted:
+      - worker/tasks.py
+      - api/main.py
+    must_not_miss:
+      - worker/tasks.py
+
+  # ── FastAPI HTTP handler nodes (L.P2 pattern detection) ────────────────────
+
+  - id: fastapi-create-user
+    kind: node
+    target: create_user
+    # @router.post("/") async def create_user(...) in api/routes/users.py (line 7).
+    # No HTTP client cross-links in this fixture; impact = definition file.
+    expected_impacted:
+      - api/routes/users.py
+    must_not_miss:
+      - api/routes/users.py
+
+  - id: fastapi-get-user
+    kind: node
+    target: get_user
+    # @router.get("/{user_id}") async def get_user(...) in api/routes/users.py.
+    expected_impacted:
+      - api/routes/users.py
+    must_not_miss:
+      - api/routes/users.py
+
+  - id: fastapi-update-user
+    kind: node
+    target: update_user
+    # @router.put("/{user_id}") async def update_user(...) in api/routes/users.py.
+    expected_impacted:
+      - api/routes/users.py
+    must_not_miss:
+      - api/routes/users.py
+
+  - id: fastapi-list-users
+    kind: node
+    target: list_users
+    # @router.get("/") async def list_users() in api/routes/users.py.
+    expected_impacted:
+      - api/routes/users.py
+    must_not_miss:
+      - api/routes/users.py
+
+  - id: fastapi-delete-user
+    kind: node
+    target: delete_user
+    # @router.delete("/{user_id}") async def delete_user(...) in api/routes/users.py.
+    expected_impacted:
+      - api/routes/users.py
+    must_not_miss:
+      - api/routes/users.py
+
+  - id: fastapi-create-order
+    kind: node
+    target: create_order
+    # @router.post("/") async def create_order(...) in api/routes/orders.py.
+    expected_impacted:
+      - api/routes/orders.py
+    must_not_miss:
+      - api/routes/orders.py
+
+  - id: fastapi-get-order
+    kind: node
+    target: get_order
+    # @router.get("/{order_id}") async def get_order(...) in api/routes/orders.py.
+    expected_impacted:
+      - api/routes/orders.py
+    must_not_miss:
+      - api/routes/orders.py
+
+  - id: fastapi-update-order
+    kind: node
+    target: update_order
+    # @router.put("/{order_id}/status") async def update_order(...) in api/routes/orders.py.
+    expected_impacted:
+      - api/routes/orders.py
+    must_not_miss:
+      - api/routes/orders.py
+
+  # ── Flask HTTP handler nodes (L.P2 pattern detection) ──────────────────────
+
+  - id: flask-health-check
+    kind: node
+    target: health_check
+    # @app.route("/health") def health_check() in gateway/app.py.
+    expected_impacted:
+      - gateway/app.py
+    must_not_miss:
+      - gateway/app.py
+
+  - id: flask-process-webhook
+    kind: node
+    target: process_webhook
+    # @app.route("/webhook", methods=["POST"]) def process_webhook() in gateway/app.py.
+    expected_impacted:
+      - gateway/app.py
+    must_not_miss:
+      - gateway/app.py
+
+  - id: flask-status-page
+    kind: node
+    target: status_page
+    # @app.route("/status") def status_page() in gateway/app.py.
+    expected_impacted:
+      - gateway/app.py
+    must_not_miss:
+      - gateway/app.py

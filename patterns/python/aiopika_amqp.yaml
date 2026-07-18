@@ -1,0 +1,45 @@
+# aio-pika async AMQP patterns.
+#
+# Gate: only activates for services that depend on aio-pika.
+# aio-pika uses a different API than pika: exchange.publish(message,
+# routing_key=…) on an Exchange object (obtained separately). The exchange
+# name is not present at the publish call site, so exchange meta is not
+# captured — cross-service AMQP linking via amqp.yaml requires named exchange
+# capture and is therefore limited for this library.
+# Consumer detection uses queue.iterator() call.
+language: python
+version: "1"
+package: aio-pika
+patterns:
+  # await exchange.publish(message, routing_key='…') — aio-pika publish.
+  # Captures routing_key keyword arg value as routing_key meta.
+  # exchange meta is absent → Pass 4 skips channel synthesis → amqp.yaml
+  # does not link this node cross-service without a named exchange.
+  - name: aiopika_publish
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#eq? @fn "publish"))
+        arguments: (argument_list
+          .
+          (_) @_msg
+          (keyword_argument
+            name: (identifier) @_kw
+            (#eq? @_kw "routing_key")
+            value: (_) @routing_key)))
+    captures:
+      - name: routing_key
+        role: amqp_routing_key
+
+  # queue.iterator() — aio-pika async consumer entry point.
+  # Identifies consume-side iterator usage; matches the .iterator() call.
+  - name: aiopika_consume
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#eq? @fn "iterator")))
+    captures:
+      - name: fn
+        role: amqp_consumer_iterator

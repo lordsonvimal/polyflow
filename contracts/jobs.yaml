@@ -1,10 +1,7 @@
-# contracts/jobs.yaml — ports LinkJobQueues for ActiveJob.
-# Matches perform_later enqueue sites to the job class's perform method.
-# Key is job_class (a Ruby constant like "ReportJob"); quote_strip removes
-# any surrounding quotes from captured literals.
-#
-# Delayed::Job and Sidekiq patterns do not capture job_class in a compatible
-# meta field and are not matched here (same limitation as the bespoke linker).
+# contracts/jobs.yaml — background job dispatch rules.
+# Links enqueue sites to the job/task class or function that handles them.
+# Each rule targets a specific framework; the key differentiates which job
+# the dispatch resolves to.
 version: "1"
 contracts:
   # ActiveJob: ClassName.perform_later → class ReportJob < ApplicationJob ... def perform
@@ -24,3 +21,39 @@ contracts:
       id_prefix: job
       same_service: keep          # allow cross-service job dispatch
     unmatched: ledger             # unlinked enqueue sites are surfaced
+
+  # Celery: task.delay(args) → @app.task def task(args)
+  - kind: job
+    producer:
+      node: publisher
+      where: {pattern: celery_task_delay}
+      key: [name]
+    consumer:
+      node: subscriber
+      where: {pattern: celery_task_decorator}
+      key: [name]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: job_enqueue
+      id_prefix: job
+      same_service: keep
+    unmatched: ledger
+
+  # Celery: task.apply_async(args, kwargs) → @app.task def task(args)
+  - kind: job
+    producer:
+      node: publisher
+      where: {pattern: celery_apply_async}
+      key: [name]
+    consumer:
+      node: subscriber
+      where: {pattern: celery_task_decorator}
+      key: [name]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: job_enqueue
+      id_prefix: job
+      same_service: keep
+    unmatched: ledger

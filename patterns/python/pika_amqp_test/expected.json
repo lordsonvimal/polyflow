@@ -1,0 +1,16 @@
+{
+  "patterns": [
+    "pika_queue_declare",
+    "pika_basic_publish",
+    "pika_basic_publish",
+    "pika_basic_consume",
+    "pika_basic_consume"
+  ],
+  "node_types": [
+    "channel",
+    "publisher",
+    "publisher",
+    "subscriber",
+    "subscriber"
+  ]
+}
