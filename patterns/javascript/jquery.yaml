@@ -1,12 +1,32 @@
 language: javascript
 version: "1"
 patterns:
+  # jQuery AJAX options-object form: $.ajax({url: "/save", method: "POST"}).
+  # Listed BEFORE the direct-arg form so file+line dedup keeps this result.
+  - name: jquery_ajax_options
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @obj
+          (#match? @obj "^(\\$|jQuery)$")
+          property: (property_identifier) @fn
+          (#eq? @fn "ajax"))
+        arguments: (arguments
+          (object
+            (pair
+              key: [(property_identifier) (string)] @uk
+              (#eq? @uk "url")
+              value: (_) @url))))
+    captures:
+      - name: url
+        role: http_url
+  # Direct-arg form: $.ajax('/url'), $.get('/url'), $.post('/url'), $(el).load('/url').
   - name: jquery_ajax
     query: |
       (call_expression
         function: (member_expression
           object: (identifier) @obj
-          (#match? @obj "^\\$|jQuery$")
+          (#match? @obj "^(\\$|jQuery)$")
           property: (property_identifier) @fn
           (#match? @fn "^(ajax|get|post|getJSON|load)$"))
         arguments: (arguments . (_) @url . _*))
@@ -15,7 +35,33 @@ patterns:
         role: jquery_ajax_method
       - name: url
         role: http_url
-  # jQuery event binding: $(sel).on('click', handler)
+  # jQuery event delegation: $(sel).on("event", ".delegate", handler).
+  # Three-arg form where the second arg is a CSS selector string (the delegated
+  # target). Listed BEFORE the two-arg form so the two-arg end-anchor does not
+  # mis-fire here.
+  - name: dom_event_jquery_delegate
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (call_expression
+            function: (identifier) @jq
+            (#match? @jq "^([$]|jQuery)$"))
+          property: (property_identifier) @fn
+          (#eq? @fn "on"))
+        arguments: (arguments
+          . (string) @event_type
+          . (string) @selector
+          . (_) @handler .))
+    captures:
+      - name: event_type
+        role: dom_event_type
+      - name: selector
+        role: jquery_selector
+      - name: handler
+        role: event_handler
+  # jQuery event binding: $(sel).on('click', handler) — two-arg form.
+  # Trailing anchor (.) restricts to exactly two arguments so delegation above
+  # does not misfire here (.item ≠ handler).
   - name: dom_event_jquery_on
     query: |
       (call_expression
@@ -26,13 +72,31 @@ patterns:
           property: (property_identifier) @fn
           (#eq? @fn "on"))
         arguments: (arguments
-          (string) @event_type
-          (_) @handler))
+          . (string) @event_type
+          . (_) @handler .))
     captures:
       - name: event_type
         role: dom_event_type
       - name: handler
         role: event_handler
+  # jQuery shorthand event methods: $(sel).click(handler), .submit(handler), etc.
+  - name: dom_event_jquery_shorthand
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (call_expression
+            function: (identifier) @jq
+            (#match? @jq "^([$]|jQuery)$"))
+          property: (property_identifier) @fn
+          (#match? @fn "^(click|submit|change|keyup|keydown|focus|blur|input)$"))
+        arguments: (arguments
+          . (_) @handler .))
+    captures:
+      - name: fn
+        role: dom_event_type
+      - name: handler
+        role: event_handler
+  # jQuery selector: $(selector) — resolves to a DOM target node.
   - name: jquery_selector
     query: |
       (call_expression

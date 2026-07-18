@@ -1,0 +1,29 @@
+language: html
+version: "1"
+patterns:
+  # HTML element id attribute: <div id="save-btn">.
+  # Produces an element node so LinkDOMDefinitions can resolve #id selectors
+  # from JavaScript/jQuery against HTML markup (not just templ components).
+  - name: html_element_id
+    query: |
+      (attribute
+        (attribute_name) @attr
+        (#eq? @attr "id")
+        (quoted_attribute_value
+          (attribute_value) @id))
+    captures:
+      - name: id
+        role: elem_id
+  # HTML element class attribute: <div class="btn primary">.
+  # The full class string is stored in meta; LinkDOMDefinitions splits on spaces
+  # for .class selector fan-out.
+  - name: html_element_class
+    query: |
+      (attribute
+        (attribute_name) @attr
+        (#eq? @attr "class")
+        (quoted_attribute_value
+          (attribute_value) @class))
+    captures:
+      - name: class
+        role: elem_class
