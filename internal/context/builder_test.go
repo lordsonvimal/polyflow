@@ -40,7 +40,7 @@ func fixtureIndex() *graph.AdjacencyIndex {
 
 func TestBuild_Debug(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	require.NotNil(t, result)
 
 	assert.Equal(t, "be:getUser", result.Target.ID)
@@ -59,7 +59,7 @@ func TestBuild_Debug(t *testing.T) {
 
 func TestBuild_Impact(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "impact", 0)
+	result := ctx.Build(idx, "be:getUser", "impact", 0, false)
 	require.NotNil(t, result)
 
 	// impact = backward only
@@ -70,7 +70,7 @@ func TestBuild_Impact(t *testing.T) {
 
 func TestBuild_Generate(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "generate", 3)
+	result := ctx.Build(idx, "be:getUser", "generate", 3, false)
 	require.NotNil(t, result)
 
 	// generate = forward only
@@ -81,7 +81,7 @@ func TestBuild_Generate(t *testing.T) {
 
 func TestBuild_CrossService(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	require.NotNil(t, result)
 
 	// fe:fetchUser -> be:getUser is cross-service; should appear in cross_service
@@ -96,7 +96,7 @@ func TestBuild_CrossService(t *testing.T) {
 
 func TestBuild_UnknownNode(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
-	result := ctx.Build(idx, "nonexistent", "debug", 5)
+	result := ctx.Build(idx, "nonexistent", "debug", 5, false)
 	require.NotNil(t, result)
 	assert.Nil(t, result.Target)
 	assert.Empty(t, result.Upstream)
@@ -105,7 +105,7 @@ func TestBuild_UnknownNode(t *testing.T) {
 
 func TestBuild_TotalCounts(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	require.NotNil(t, result)
 
 	// 2 trace nodes (fetchUser + queryDB) + 1 target = 3
@@ -122,7 +122,7 @@ func TestBuild_JSONCarriesNodeAndEdgeMeta(t *testing.T) {
 	idx.AddEdge(&graph.Edge{ID: "e1", From: fn.ID, To: s3.ID, Type: graph.EdgeTypeCloudCall,
 		Confidence: graph.ConfidenceInferred, Meta: map[string]string{"via": "sdk"}})
 
-	result := ctx.Build(idx, fn.ID, "debug", 5)
+	result := ctx.Build(idx, fn.ID, "debug", 5, false)
 	require.NotNil(t, result)
 	require.Len(t, result.Downstream, 1)
 
@@ -136,7 +136,7 @@ func TestBuild_JSONCarriesNodeAndEdgeMeta(t *testing.T) {
 
 func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	require.NotNil(t, result)
 
 	result.AttachUnresolved([]graph.UnresolvedRef{
@@ -152,7 +152,7 @@ func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
 
 func TestBuild_UnresolvedDefaultsToEmptyNotNull(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false)
 	require.NotNil(t, result)
 
 	data, err := json.Marshal(result)

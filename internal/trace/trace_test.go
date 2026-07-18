@@ -40,11 +40,11 @@ func linearGraph() *graph.AdjacencyIndex {
 }
 
 func TestRun_UnknownRoot(t *testing.T) {
-	assert.Nil(t, Run(linearGraph(), "nope", "forward", 5))
+	assert.Nil(t, Run(linearGraph(), "nope", "forward", 5, false))
 }
 
 func TestRun_ForwardChain(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 0)
+	r := Run(linearGraph(), "a", "forward", 0, false)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 	assert.Equal(t,
@@ -63,7 +63,7 @@ func TestRun_ForwardChain(t *testing.T) {
 }
 
 func TestRun_BackwardChainReadsInFlowOrder(t *testing.T) {
-	r := Run(linearGraph(), "d", "backward", 0)
+	r := Run(linearGraph(), "d", "backward", 0, false)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 	// Backward chains are reversed: they still read source → root.
@@ -73,7 +73,7 @@ func TestRun_BackwardChainReadsInFlowOrder(t *testing.T) {
 }
 
 func TestRun_BothDirections(t *testing.T) {
-	r := Run(linearGraph(), "b", "both", 0)
+	r := Run(linearGraph(), "b", "both", 0, false)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 2)
 	assert.Equal(t, "(svc-1) A -[calls]-> B", r.Chains[0].Text)
@@ -81,7 +81,7 @@ func TestRun_BothDirections(t *testing.T) {
 }
 
 func TestRun_DepthLimitCutsChain(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 2)
+	r := Run(linearGraph(), "a", "forward", 2, false)
 	require.Len(t, r.Chains, 1)
 	assert.Equal(t, "(svc-1) A -[calls]-> B -[publishes]-> ‖svc-2‖ C", r.Chains[0].Text)
 }
@@ -97,7 +97,7 @@ func TestRun_CycleTerminates(t *testing.T) {
 			{ID: "e2", From: "b", To: "a", Type: graph.EdgeTypeCalls},
 		},
 	)
-	r := Run(idx, "a", "forward", 0)
+	r := Run(idx, "a", "forward", 0, false)
 	require.Len(t, r.Chains, 1, "cycle must not loop forever")
 	assert.Equal(t, "(s) A -[calls]-> B", r.Chains[0].Text)
 }
@@ -114,7 +114,7 @@ func TestRun_BranchingProducesOneChainPerLeaf(t *testing.T) {
 			{ID: "e2", From: "a", To: "c", Type: graph.EdgeTypeSpawns},
 		},
 	)
-	r := Run(idx, "a", "forward", 0)
+	r := Run(idx, "a", "forward", 0, false)
 	require.Len(t, r.Chains, 2)
 	// Deterministic order: edges sorted by (type, neighbor).
 	assert.Equal(t, "(s) A -[calls]-> B", r.Chains[0].Text)
@@ -130,7 +130,7 @@ func TestRun_TruncationCap(t *testing.T) {
 		nodes = append(nodes, graph.Node{ID: id, Label: id, Service: "s"})
 		edges = append(edges, graph.Edge{ID: "e" + id, From: "root", To: id, Type: graph.EdgeTypeCalls})
 	}
-	r := Run(buildIdx(nodes, edges), "root", "forward", 0)
+	r := Run(buildIdx(nodes, edges), "root", "forward", 0, false)
 	assert.Len(t, r.Chains, MaxChains)
 	assert.True(t, r.Truncated)
 }
@@ -145,7 +145,7 @@ func TestRun_PartialConfidenceMarked(t *testing.T) {
 			{ID: "e", From: "q", To: "store", Type: graph.EdgeTypeQueries, Confidence: graph.ConfidencePartial},
 		},
 	)
-	r := Run(idx, "q", "forward", 0)
+	r := Run(idx, "q", "forward", 0, false)
 	require.Len(t, r.Chains, 1)
 	assert.Equal(t, "(s) db.Find -[queries?]-> sqlite", r.Chains[0].Text,
 		"partial/unknown confidence edges carry a trailing ?")
@@ -167,7 +167,7 @@ func TestRun_JSONCarriesVersionAndEdgeMeta(t *testing.T) {
 				Meta: map[string]string{"via": "sdk"}},
 		},
 	)
-	r := Run(idx, "up", "forward", 0)
+	r := Run(idx, "up", "forward", 0, false)
 	data, err := json.Marshal(r)
 	require.NoError(t, err)
 	js := string(data)
@@ -190,7 +190,7 @@ func TestAttachUnresolved_ScopedToTracedFiles(t *testing.T) {
 		},
 		[]graph.Edge{{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls}},
 	)
-	r := Run(idx, "a", "forward", 5)
+	r := Run(idx, "a", "forward", 5, false)
 	require.NotNil(t, r)
 
 	r.AttachUnresolved([]graph.UnresolvedRef{
@@ -204,7 +204,7 @@ func TestAttachUnresolved_ScopedToTracedFiles(t *testing.T) {
 }
 
 func TestAttachUnresolved_CleanTraceHasEmptySectionAndNoNote(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 5)
+	r := Run(linearGraph(), "a", "forward", 5, false)
 	require.NotNil(t, r)
 
 	r.AttachUnresolved([]graph.UnresolvedRef{

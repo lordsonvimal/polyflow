@@ -20,8 +20,8 @@ type FileRollup struct {
 
 // Summary is the file-grouped rollup of an impact result, emitted when the
 // full per-node detail exceeds the token budget (or on --summary). Entry
-// points compact to "label — file:line" strings; the unresolved section is
-// carried whole — blind spots are never trimmed to save tokens.
+// points compact to "label — file:line" strings; the unresolved and
+// verification_summary sections are carried whole — never trimmed.
 type Summary struct {
 	Target               *graph.Node           `json:"target"`
 	Summary              bool                  `json:"summary"` // always true: marks the rollup shape
@@ -32,9 +32,10 @@ type Summary struct {
 	Depth                int                   `json:"depth"`
 	TotalCallers         int                   `json:"total_callers"`
 
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
-	Budget         *budget.Info          `json:"budget,omitempty"`
+	Unresolved          []graph.UnresolvedRef        `json:"unresolved"`
+	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
+	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
+	Budget              *budget.Info                 `json:"budget,omitempty"`
 }
 
 // rollupCallers groups blast-radius callers by file, the low-token
@@ -94,6 +95,7 @@ func (r *Result) Summarize() *Summary {
 		TotalCallers:         r.TotalCallers,
 		Unresolved:           r.Unresolved,
 		UnresolvedNote:       r.UnresolvedNote,
+		VerificationSummary:  r.VerificationSummary,
 	}
 }
 

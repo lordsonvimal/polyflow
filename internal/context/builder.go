@@ -1,6 +1,8 @@
 package context
 
 import (
+	"encoding/json"
+
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -21,6 +23,10 @@ type Result struct {
 	// present ([] when clean) so its absence is never mistaken for certainty.
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
 	UnresolvedNote string                `json:"unresolved_note,omitempty"`
+
+	// VerificationSummary aggregates edge provenance counts. Always present;
+	// survives any token budget cut.
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 
 	// Budget records the token-budgeting decision when --max-tokens was set
 	// and the detail shape was emitted.
@@ -44,6 +50,11 @@ type TraceNode struct {
 	EdgeMeta   map[string]string `json:"edge_meta,omitempty"`
 	Depth      int               `json:"depth"`
 	Snippet    string            `json:"snippet,omitempty"`
+
+	// F.0 provenance (A.1).
+	VerificationState   string          `json:"verification_state,omitempty"`
+	VerifiedGranularity string          `json:"verified_granularity,omitempty"`
+	Sources             json.RawMessage `json:"sources,omitempty"`
 }
 
 // CrossEdge represents a connection that crosses service boundaries.
@@ -59,9 +70,11 @@ type CrossEdge struct {
 }
 
 // Build produces a context result for the given target node and task.
-// Depth <= 0 means unlimited traversal.
-func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int) *Result {
-	upstream, downstream := traverse(idx, targetID, task, depth)
+// Depth <= 0 means unlimited traversal. verboseSources controls whether
+// per-node Sources contains compact "provider:ref" strings (false, default)
+// or full SourceRef structs (true, --verbose-sources).
+func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool) *Result {
+	upstream, downstream, edges := traverse(idx, targetID, task, depth, verboseSources)
 
 	crossService := extractCrossService(idx, upstream, downstream)
 
@@ -81,15 +94,16 @@ func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int) *Result 
 	}
 
 	return &Result{
-		Target:       idx.Nodes[targetID],
-		Task:         task,
-		Upstream:     upstream,
-		Downstream:   downstream,
-		CrossService: crossService,
-		Depth:        depth,
-		TotalNodes:   len(nodeSet) + 1, // +1 for the target itself
-		TotalEdges:   len(edgeSet),
-		Unresolved:   []graph.UnresolvedRef{},
+		Target:              idx.Nodes[targetID],
+		Task:                task,
+		Upstream:            upstream,
+		Downstream:          downstream,
+		CrossService:        crossService,
+		Depth:               depth,
+		TotalNodes:          len(nodeSet) + 1, // +1 for the target itself
+		TotalEdges:          len(edgeSet),
+		Unresolved:          []graph.UnresolvedRef{},
+		VerificationSummary: graph.BuildVerificationSummary(edges),
 	}
 }
 
@@ -111,24 +125,47 @@ func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
 }
 
 // traverse runs BFS in the appropriate directions for the given task.
-func traverse(idx *graph.AdjacencyIndex, targetID, task string, depth int) (upstream, downstream []TraceNode) {
+// Returns the upstream/downstream node lists and all traversed edges (for
+// computing the VerificationSummary).
+func traverse(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool) (upstream, downstream []TraceNode, edges []graph.Edge) {
 	switch task {
 	case "impact":
-		upstream = toTraceNodes(graph.Ancestors(idx, targetID, depth))
+		upstream, edges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources)
 	case "generate":
-		downstream = toTraceNodes(graph.Descendants(idx, targetID, depth))
+		downstream, edges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources)
 	case "debug", "refactor":
-		upstream = toTraceNodes(graph.Ancestors(idx, targetID, depth))
-		downstream = toTraceNodes(graph.Descendants(idx, targetID, depth))
+		var upEdges, downEdges []graph.Edge
+		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources)
+		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources)
+		edges = append(upEdges, downEdges...)
 	default:
-		upstream = toTraceNodes(graph.Ancestors(idx, targetID, depth))
-		downstream = toTraceNodes(graph.Descendants(idx, targetID, depth))
+		var upEdges, downEdges []graph.Edge
+		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources)
+		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources)
+		edges = append(upEdges, downEdges...)
 	}
 	return
 }
 
-func toTraceNodes(results []graph.TraversalResult) []TraceNode {
+// marshalSources serialises edge Sources as compact "provider:ref" strings
+// (default) or full SourceRef structs (verboseSources=true).
+func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
+	if len(sources) == 0 {
+		return nil
+	}
+	var v any
+	if verbose {
+		v = graph.SortedSources(sources)
+	} else {
+		v = graph.CompactSources(sources)
+	}
+	b, _ := json.Marshal(v)
+	return json.RawMessage(b)
+}
+
+func toTraceNodes(results []graph.TraversalResult, verboseSources bool) ([]TraceNode, []graph.Edge) {
 	out := make([]TraceNode, 0, len(results))
+	var edges []graph.Edge
 	for _, r := range results {
 		if r.Node == nil {
 			continue
@@ -148,10 +185,14 @@ func toTraceNodes(results []graph.TraversalResult) []TraceNode {
 			tn.EdgeType = string(r.Via.Type)
 			tn.Confidence = r.Via.Confidence
 			tn.EdgeMeta = r.Via.Meta
+			tn.VerificationState = r.Via.VerificationState
+			tn.VerifiedGranularity = r.Via.VerifiedGranularity
+			tn.Sources = marshalSources(r.Via.Sources, verboseSources)
+			edges = append(edges, *r.Via)
 		}
 		out = append(out, tn)
 	}
-	return out
+	return out, edges
 }
 
 // extractCrossService finds edges in the traversal results that cross service

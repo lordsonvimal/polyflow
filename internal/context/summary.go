@@ -21,8 +21,7 @@ type FileRollup struct {
 
 // Summary is the file-grouped rollup of a context result, emitted when the
 // full per-node detail exceeds the token budget (or on --summary). The
-// unresolved section is carried whole — blind spots are never trimmed to
-// save tokens.
+// unresolved and verification_summary sections are carried whole — never trimmed.
 type Summary struct {
 	Target       *graph.Node  `json:"target"`
 	Task         string       `json:"task"`
@@ -33,9 +32,10 @@ type Summary struct {
 	TotalNodes   int          `json:"total_nodes"`
 	TotalEdges   int          `json:"total_edges"`
 
-	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
-	UnresolvedNote string                `json:"unresolved_note,omitempty"`
-	Budget         *budget.Info          `json:"budget,omitempty"`
+	Unresolved          []graph.UnresolvedRef        `json:"unresolved"`
+	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
+	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
+	Budget              *budget.Info                 `json:"budget,omitempty"`
 }
 
 // Summarize rolls the per-node traversal detail up into per-file entries.
@@ -87,16 +87,17 @@ func (r *Result) Summarize() *Summary {
 	})
 
 	return &Summary{
-		Target:         r.Target,
-		Task:           r.Task,
-		Summary:        true,
-		Files:          files,
-		CrossService:   r.CrossService,
-		Depth:          r.Depth,
-		TotalNodes:     r.TotalNodes,
-		TotalEdges:     r.TotalEdges,
-		Unresolved:     r.Unresolved,
-		UnresolvedNote: r.UnresolvedNote,
+		Target:              r.Target,
+		Task:                r.Task,
+		Summary:             true,
+		Files:               files,
+		CrossService:        r.CrossService,
+		Depth:               r.Depth,
+		TotalNodes:          r.TotalNodes,
+		TotalEdges:          r.TotalEdges,
+		Unresolved:          r.Unresolved,
+		UnresolvedNote:      r.UnresolvedNote,
+		VerificationSummary: r.VerificationSummary,
 	}
 }
 
