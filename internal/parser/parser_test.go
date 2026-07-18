@@ -314,11 +314,12 @@ func TestLanguage_Methods(t *testing.T) {
 	assert.Equal(t, "javascript", parser.ForFile("x.js").Language())
 	assert.Equal(t, "ruby", parser.ForFile("x.rb").Language())
 	assert.Equal(t, "templ", parser.ForFile("x.templ").Language())
+	assert.Equal(t, "python", parser.ForFile("x.py").Language())
 }
 
 func TestForFile_ReturnsNilForUnknownExtension(t *testing.T) {
-	assert.Nil(t, parser.ForFile("main.py"))
 	assert.Nil(t, parser.ForFile("config.json"))
+	assert.Nil(t, parser.ForFile("main.sql"))
 }
 
 func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
@@ -328,6 +329,7 @@ func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
 	assert.NotNil(t, parser.ForFile("app.rb"))
 	assert.NotNil(t, parser.ForFile("page.templ"))
 	assert.NotNil(t, parser.ForFile("Rakefile.rake"))
+	assert.NotNil(t, parser.ForFile("service.py"))
 }
 
 func TestRubyParser_RakeExtension(t *testing.T) {
