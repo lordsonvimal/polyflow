@@ -125,7 +125,7 @@ would fake certainty).
 
 **Outcome (2026-07-18).** Implemented exactly as specified. `internal/mcpserver/mcpserver.go` gains: `semanticsParagraph` const embedded in all three tool descriptions; `minVerificationPasses` helper mapping `"any"/"observed"/"declared"/"verified"` to the actual state set (`"declared"` is equivalent to `"verified"` with the current state set — no distinct declared-contract state exists yet; noted in code); `min_verification` + `verbose_sources` fields on `contextInput`/`impactInput`/`traceInput`; post-build filtering via `filterCallers`, `filterTraceNodes`, `filterHops`, `filterChains` helpers. `verbose_sources` is wired through to all three `Build`/`Run` calls (previously hardcoded `false`). Filtering happens post-build so the `VerificationSummary` field retains pre-filter counts — filtered totals stay visible per spec. `filterChains` drops any chain containing a hop whose edge fails the threshold (chain integrity is preserved over partial chains). `SchemaVersion` NOT bumped — MCP handler layer only, no stored node/edge shape change. 6 new tests in `mcpserver_test.go`: `TestMinVerificationPasses_UnitTable` (15 cases covering all filter values + both directions), `TestImpactTool_MinVerificationFiltersCallers`, `TestImpactTool_MinVerificationAnyReturnsAll`, `TestContextTool_MinVerificationFiltersNodes`, `TestTraceTool_MinVerificationFiltersChains`, `TestToolDescriptionsContainSemanticsParagraph` (regression guard on description text). All 19 mcpserver tests pass; full suite clean; `BenchmarkIndexCold` unaffected (output path only).
 
-### Phase A.3 — Verification-aware ranking `pending`
+### Phase A.3 — Verification-aware ranking `done`
 
 **Problem.** `RelatedFiles` ranking (direct refs → hop distance → node count)
 and impact rollups ignore verification, so a verified dependency and a
@@ -146,6 +146,8 @@ existing ranking tests unchanged (proves tie-breaker-only).
 
 **Acceptance.** On the fusion fixtures, a verified related file outranks an
 equal-scored candidate one; total result sets are identical (nothing dropped).
+
+**Outcome (2026-07-18).** Implemented exactly as specified. `VerificationRank(state) int` added to `internal/graph/verification.go` (0=verified, 1=observed_only_gap, 2=candidate, 3=conflicting, 4=empty). `BestVerificationState string` added to `RelatedFileEntry` (tracked in `countDirect` and BFS loop) with verification tie-breaker injected in `RelatedFiles` sort after Refs/MinDepth/Nodes. `FileRollup` gains `BestVerificationState` (tracked in `rollupCallers`), same tie-breaker added after MinDepth. `Summary.Ranking = "depth,verification"` and `DiffSummary.Ranking = "depth,verification"` set in both `Summarize()` methods. `FilesResult.Ranking = "refs,hops,verification"` set in `BuildFiles`. Two new tests added: `TestRelatedFilesVerificationTieBreaker` (2 files, equal refs/hops/nodes, verified outranks candidate, total=2 unchanged) and `TestSummarize_VerificationTieBreaker` (same invariant for rollupCallers). All existing ranking tests unchanged. Full test suite passes. `SchemaVersion` NOT bumped — output shape change only, no stored node/edge semantics changed. `BenchmarkIndexCold` unaffected (output path only).
 
 ---
 

@@ -242,6 +242,7 @@ func (r *DiffResult) InlineSnippets(root string, lines int) {
 type DiffSummary struct {
 	Mode                 string                `json:"mode"`
 	Summary              bool                  `json:"summary"` // always true: marks the rollup shape
+	Ranking              string                `json:"ranking"` // "depth,verification"
 	ChangedFiles         int                   `json:"changed_files"`
 	Targets              []string              `json:"targets"`
 	Unmapped             []UnmappedHunk        `json:"unmapped_hunks"`
@@ -272,6 +273,7 @@ func (r *DiffResult) Summarize() *DiffSummary {
 	return &DiffSummary{
 		Mode:                 r.Mode,
 		Summary:              true,
+		Ranking:              "depth,verification",
 		ChangedFiles:         r.ChangedFiles,
 		Targets:              targets,
 		Unmapped:             r.Unmapped,

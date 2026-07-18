@@ -14,6 +14,10 @@ type RelatedFileEntry struct {
 	MinDepth int `json:"min_depth"`
 	// EdgeTypes lists every edge type seen on paths into this file.
 	EdgeTypes []string `json:"edge_types"`
+	// BestVerificationState is the highest-confidence verification state seen
+	// on any edge touching this file — used as a tie-breaker when Refs, MinDepth,
+	// and Nodes are equal. Order: verified > observed_only_gap > candidate > conflicting.
+	BestVerificationState string `json:"best_verification_state,omitempty"`
 }
 
 // RelatedFiles ranks the files related to the given seed files: the graph
@@ -76,6 +80,9 @@ func RelatedFiles(idx *AdjacencyIndex, service string, paths []string, maxDepth 
 		en := entry(n, 1)
 		en.Refs++
 		en.EdgeTypes = appendUnique(en.EdgeTypes, string(e.Type))
+		if VerificationRank(e.VerificationState) < VerificationRank(en.BestVerificationState) {
+			en.BestVerificationState = e.VerificationState
+		}
 	}
 	for _, s := range seedNodes {
 		for _, e := range idx.OutEdges[s.ID] {
@@ -117,6 +124,9 @@ func RelatedFiles(idx *AdjacencyIndex, service string, paths []string, maxDepth 
 				}
 				if cur.via != nil {
 					e.EdgeTypes = appendUnique(e.EdgeTypes, string(cur.via.Type))
+					if VerificationRank(cur.via.VerificationState) < VerificationRank(e.BestVerificationState) {
+						e.BestVerificationState = cur.via.VerificationState
+					}
 				}
 			}
 		}
@@ -151,6 +161,10 @@ func RelatedFiles(idx *AdjacencyIndex, service string, paths []string, maxDepth 
 		}
 		if related[i].Nodes != related[j].Nodes {
 			return related[i].Nodes > related[j].Nodes
+		}
+		ri, rj := VerificationRank(related[i].BestVerificationState), VerificationRank(related[j].BestVerificationState)
+		if ri != rj {
+			return ri < rj
 		}
 		if related[i].File != related[j].File {
 			return related[i].File < related[j].File
