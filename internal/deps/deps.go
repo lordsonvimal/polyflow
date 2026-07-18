@@ -20,9 +20,10 @@ const (
 
 // Ecosystem names.
 const (
-	EcosystemGo   = "go"
-	EcosystemNPM  = "npm"
-	EcosystemRuby = "rubygems"
+	EcosystemGo    = "go"
+	EcosystemNPM   = "npm"
+	EcosystemRuby  = "rubygems"
+	EcosystemPyPI  = "pypi"
 )
 
 // Dependency is one resolved package version for a service.
@@ -52,6 +53,12 @@ func Resolve(dir string) ([]Dependency, error) {
 	out = append(out, npm...)
 
 	if ds, err := resolveGemfileLock(filepath.Join(dir, "Gemfile.lock")); err != nil {
+		return nil, err
+	} else {
+		out = append(out, ds...)
+	}
+
+	if ds, err := resolvePython(dir); err != nil {
 		return nil, err
 	} else {
 		out = append(out, ds...)

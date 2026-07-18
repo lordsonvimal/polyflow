@@ -120,6 +120,49 @@ func patternNames(ps []*patterns.Pattern) []string {
 	return out
 }
 
+// TestForService_PythonVersionGating proves the pypi ecosystem feeds the version
+// gate — L.P1's core promise: a flask-gated pattern activates on flask 2.x and
+// is suppressed on flask 1.x or when flask is absent.
+func TestForService_PythonVersionGating(t *testing.T) {
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(&patterns.PatternFile{
+		Language:     "python",
+		Package:      "flask",
+		VersionRange: ">=2.0.0 <3.0.0",
+		Patterns: []patterns.Pattern{{
+			Name:  "flask_route_v2",
+			Query: `(decorator) @dec`,
+		}},
+	})
+	reg.RegisterFile(&patterns.PatternFile{
+		Language: "python",
+		Patterns: []patterns.Pattern{{Name: "py_ungated", Query: `(function_definition) @fn`}},
+	})
+
+	flask2 := []deps.Dependency{{Ecosystem: deps.EcosystemPyPI, Name: "flask", Version: "2.3.0", Kind: deps.KindProd}}
+	flask1 := []deps.Dependency{{Ecosystem: deps.EcosystemPyPI, Name: "flask", Version: "1.1.4", Kind: deps.KindProd}}
+
+	t.Run("flask 2.3.0 activates v2 pattern", func(t *testing.T) {
+		svc := reg.ForService(flask2)
+		names := patternNames(svc.List("python"))
+		assert.Contains(t, names, "flask_route_v2")
+		assert.Contains(t, names, "py_ungated")
+	})
+
+	t.Run("flask 1.x does not satisfy >=2.0.0 range", func(t *testing.T) {
+		svc := reg.ForService(flask1)
+		names := patternNames(svc.List("python"))
+		assert.NotContains(t, names, "flask_route_v2")
+		assert.Contains(t, names, "py_ungated")
+	})
+
+	t.Run("absent flask deactivates gated pattern", func(t *testing.T) {
+		svc := reg.ForService(nil)
+		names := patternNames(svc.List("python"))
+		assert.NotContains(t, names, "flask_route_v2")
+	})
+}
+
 // TestAWSSDKGating loads the real shipped AWS pattern files and proves the
 // gating level of the version split: a service pinning SDK v1 activates only
 // the v1 file; a service on SDK v2 activates only the v2 file.
