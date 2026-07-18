@@ -1,0 +1,56 @@
+# Flask route registrations via decorators.
+#
+# Gate: only activates for services that depend on flask.
+# Two shapes:
+#   flask_route — @app.route("/path") with optional methods=[...] keyword
+#     (methods not extracted; meta["method"] left empty; contract engine
+#     method_fallback matches clients via the "" tier).
+#   flask_method_route — @app.get/post/...("/path") (Flask 2.0+ shorthand)
+language: python
+version: "1"
+package: flask
+patterns:
+  # @app.route("/users") def handler(): — generic route decorator.
+  # methods=[...] keyword is intentionally not captured: extracting elements
+  # from a list literal requires multiple passes outside the query language.
+  # Flask default when methods is absent is GET-only.
+  - name: flask_route
+    query: |
+      (decorated_definition
+        (decorator
+          (call
+            function: (attribute
+              attribute: (identifier) @fn
+              (#eq? @fn "route"))
+            arguments: (argument_list
+              .
+              (string) @path)))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: path
+        role: http_path
+      - name: name
+        role: func_name
+
+  # @app.get("/users") / @app.post("/items") — Flask 2.0+ HTTP-method shortcuts.
+  - name: flask_method_route
+    query: |
+      (decorated_definition
+        (decorator
+          (call
+            function: (attribute
+              attribute: (identifier) @method
+              (#match? @method "^(get|post|put|patch|delete|head|options)$"))
+            arguments: (argument_list
+              .
+              (string) @path)))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: name
+        role: func_name

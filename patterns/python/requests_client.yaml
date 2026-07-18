@@ -1,0 +1,48 @@
+# Python requests library HTTP client patterns.
+#
+# Gate: only activates for services that depend on requests.
+# Both shorthand verb methods and the generic requests.request() form
+# emit http_client nodes so the cross-service contract engine can link
+# them to http_handler nodes in other services.
+language: python
+version: "1"
+package: requests
+patterns:
+  # requests.get(url) / requests.post(url, json=data) / requests.delete(url)
+  # The object identifier "requests" disambiguates from dict/cache .get() calls.
+  - name: requests_call
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @pkg
+          (#eq? @pkg "requests")
+          attribute: (identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options)$"))
+        arguments: (argument_list
+          .
+          (_) @url))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+
+  # requests.request("GET", url) — generic form with explicit method string.
+  - name: requests_request
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @pkg
+          (#eq? @pkg "requests")
+          attribute: (identifier) @fn
+          (#eq? @fn "request"))
+        arguments: (argument_list
+          .
+          (_) @method
+          .
+          (_) @url))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url

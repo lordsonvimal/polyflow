@@ -1,0 +1,28 @@
+# Django URL routing patterns.
+#
+# Gate: only activates for services that depend on django.
+# Django routes are registered via path()/re_path()/url() calls in urls.py,
+# not decorators. The first positional argument is the route pattern string;
+# the second is the view callable (captured as handler_ref for linker use).
+language: python
+version: "1"
+package: django
+patterns:
+  # path("users/", views.user_list) / re_path(r"^archive/", views.archive)
+  # The function name (path/re_path/url) is captured only to satisfy the
+  # predicate; it is not stored in meta.
+  - name: django_url_route
+    query: |
+      (call
+        function: (identifier) @fn
+        (#match? @fn "^(path|re_path|url)$")
+        arguments: (argument_list
+          .
+          (string) @path
+          .
+          (_) @handler))
+    captures:
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
