@@ -372,6 +372,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			label = stripStringLiteral(aliasN)
 		} else if instN, ok := r.Captures["instance_name"]; ok {
 			label = stripStringLiteral(instN)
+		} else if id, ok := r.Captures["id"]; ok {
+			// HTML/JSX element id attribute — label as "#id" for CSS-selector readability.
+			label = "#" + stripStringLiteral(id)
+		} else if cls, ok := r.Captures["class"]; ok {
+			// HTML/JSX element class attribute — label as ".first-class".
+			label = "." + strings.SplitN(stripStringLiteral(cls), " ", 2)[0]
 		}
 		if r.PatternName == "goroutine_anon" {
 			label = "go func()"
@@ -379,8 +385,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 
 		// ID format: service:file:type:name:line  (design doc §SQLite Schema)
 		// Function/method/component nodes use the captured name so edges can target the same ID.
+		// Element nodes are also named (by their id/class label) so selectors can address them.
 		idName := r.PatternName
-		namedTypes := nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod || nodeType == graph.NodeTypeComponent
+		namedTypes := nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod ||
+			nodeType == graph.NodeTypeComponent || nodeType == graph.NodeTypeElement
 		if namedTypes && label != r.PatternName {
 			idName = label
 		}
@@ -493,10 +501,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 
 		// Strip surrounding quotes from path, url, method, route-group prefix,
-		// and G.7 base-URL captures. prefix matters: G.3's route-group
-		// enrichment concatenates it onto route paths, and a quoted prefix
-		// (`"/play"` + `/:id/draw`) produces keys no consumer can match.
-		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url"} {
+		// G.7 base-URL captures, and L.W2 selector/element captures. Selector
+		// captures arrive as raw source (`'"#save-btn"'`); id and class values
+		// from HTML/JSX attribute patterns similarly carry surrounding quotes.
+		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url", "selector", "id", "class"} {
 			if v, ok := meta[key]; ok {
 				meta[key] = stripStringLiteral(v)
 			}
@@ -1092,6 +1100,10 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
 	case strings.HasPrefix(lower, "jquery_selector"):
 		return graph.NodeTypeDOMTarget, graph.EdgeTypeDOMRead
+
+	// ── DOM element definitions (HTML/JSX id= / class=) ──────────────────────
+	case strings.HasPrefix(lower, "html_element") || strings.HasPrefix(lower, "jsx_element"):
+		return graph.NodeTypeElement, graph.EdgeTypeCalls
 
 	// ── gRPC ──────────────────────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "grpc_client"):

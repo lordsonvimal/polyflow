@@ -1,0 +1,25 @@
+language: jsx
+version: "1"
+patterns:
+  # JSX element id prop: <div id="save-btn"> or <div id={"save-btn"}>.
+  - name: jsx_element_id
+    query: |
+      (jsx_attribute
+        (property_identifier) @attr
+        (#eq? @attr "id")
+        [(string (string_fragment) @id)
+         (jsx_expression (string (string_fragment) @id))])
+    captures:
+      - name: id
+        role: elem_id
+  # JSX element className prop: <div className="btn"> or <div className={"btn"}>.
+  - name: jsx_element_class
+    query: |
+      (jsx_attribute
+        (property_identifier) @attr
+        (#eq? @attr "className")
+        [(string (string_fragment) @class)
+         (jsx_expression (string (string_fragment) @class))])
+    captures:
+      - name: class
+        role: elem_class
