@@ -51,6 +51,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 	ex.preCollectClasses(root)
 	ex.collectTopLevel(root)
 	ex.walk(root, []*jsScope{ex.moduleScope()})
+	ex.stampGlobalSymbols(root)
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
 	sort.Slice(ex.edges, func(i, j int) bool { return ex.edges[i].ID < ex.edges[j].ID })
@@ -918,6 +919,120 @@ func (ex *jsExtractor) handleNew(node *sitter.Node, scopes []*jsScope) {
 		Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceStatic,
 		Meta: map[string]string{"count": "1"},
 	})
+}
+
+// stampGlobalSymbols stamps Meta["global_symbol"] = name on function/variable
+// nodes that are visible at the window-global level:
+//
+//   - Top-level function declarations in non-module files (no import/export).
+//   - window.X = fn|{…} assignments at the top level (any file).
+//
+// Called after walk() so all nodes are present.
+func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
+	// Detect non-module: any top-level import_statement or export_statement.
+	isModule := false
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		t := root.NamedChild(i).Type()
+		if t == "import_statement" || t == "export_statement" {
+			isModule = true
+			break
+		}
+	}
+
+	// Build function node index by label → slice index (stable after walk).
+	funcIdxByLabel := make(map[string]int)
+	for i, n := range ex.nodes {
+		if n.Type == graph.NodeTypeFunction {
+			if _, exists := funcIdxByLabel[n.Label]; !exists {
+				funcIdxByLabel[n.Label] = i
+			}
+		}
+	}
+
+	stamp := func(idx int, globalName string) {
+		if ex.nodes[idx].Meta == nil {
+			ex.nodes[idx].Meta = map[string]string{}
+		}
+		ex.nodes[idx].Meta["global_symbol"] = globalName
+	}
+
+	// Case 1: non-module top-level function declarations.
+	if !isModule {
+		for i := 0; i < int(root.NamedChildCount()); i++ {
+			stmt := root.NamedChild(i)
+			if stmt.Type() != "function_declaration" {
+				continue
+			}
+			nameNode := stmt.ChildByFieldName("name")
+			if nameNode == nil {
+				continue
+			}
+			name := nameNode.Content(ex.src)
+			if idx, ok := funcIdxByLabel[name]; ok {
+				stamp(idx, name)
+			}
+		}
+	}
+
+	// Case 2: window.X = fn|{…} assignments at top level.
+	// Collect new nodes separately so we don't invalidate funcIdxByLabel during iteration.
+	var newNodes []graph.Node
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		stmt := root.NamedChild(i)
+		if stmt.Type() != "expression_statement" {
+			continue
+		}
+		// expression_statement → assignment_expression
+		expr := stmt.NamedChild(0)
+		if expr == nil || expr.Type() != "assignment_expression" {
+			continue
+		}
+		left := expr.ChildByFieldName("left")
+		right := expr.ChildByFieldName("right")
+		if left == nil || right == nil || left.Type() != "member_expression" {
+			continue
+		}
+		obj := left.ChildByFieldName("object")
+		prop := left.ChildByFieldName("property")
+		if obj == nil || prop == nil || obj.Content(ex.src) != "window" {
+			continue
+		}
+		propName := prop.Content(ex.src)
+		lineNo := tsLine(stmt)
+
+		if isFunctionNode(right.Type()) {
+			// Named or anonymous function assigned to window.X.
+			fnLabel := propName // default: use window property name as label
+			if rightName := right.ChildByFieldName("name"); rightName != nil {
+				fnLabel = rightName.Content(ex.src)
+			}
+			if idx, ok := funcIdxByLabel[fnLabel]; ok {
+				stamp(idx, propName)
+			} else {
+				nodeID := ex.fnNodeID(propName, lineNo)
+				if !ex.nodeSeen[nodeID] {
+					newNodes = append(newNodes, graph.Node{
+						ID: nodeID, Type: graph.NodeTypeFunction, Label: propName,
+						Service: ex.service, File: ex.file, Line: lineNo, Language: ex.langTag,
+						Meta: map[string]string{"global_symbol": propName},
+					})
+				}
+			}
+		} else {
+			// Object or other value: create a variable node for the global.
+			nodeID := ex.varNodeID(propName, lineNo)
+			if !ex.nodeSeen[nodeID] {
+				newNodes = append(newNodes, graph.Node{
+					ID: nodeID, Type: graph.NodeTypeVariable, Label: propName,
+					Service: ex.service, File: ex.file, Line: lineNo, Language: ex.langTag,
+					Meta: map[string]string{"global_symbol": propName, "scope": "global"},
+				})
+			}
+		}
+	}
+	for _, n := range newNodes {
+		ex.addNode(n)
+	}
 }
 
 // collectIdentifiers visits the identifiers *bound* under n (parameter
