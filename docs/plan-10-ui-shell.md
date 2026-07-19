@@ -34,7 +34,7 @@ stack; detail-on-demand with one gesture grammar everywhere.
 
 ```
 ┌──┬───────────┬──────────────────────────────────────┬─────────┐
-│A │ EXPLORER  │ ⌘K omni-search   [Index ▸] [Share ▾] │ DETAIL  │
+│A │ EXPLORER  │ ◆ polyflow  ⌘K   [Index ▸] [Share ▾] │ DETAIL  │
 │c ├───────────┼──────────────────────────────────────┤ (opens  │
 │t │ ▾ nextgen │ nextgen ▸ app ▸ jobs ▸ sync.rb  [×]  │  only   │
 │i │  ▾ app/   │ ┌──────────────────────────────────┐ │  on     │
@@ -63,8 +63,12 @@ stack; detail-on-demand with one gesture grammar everywhere.
   comparison).
 - **Bottom drawer**: closed by default; opens on demand or automatically
   when a job starts; tabs Jobs · Tool calls · Unresolved.
-- **Top bar**: omni-search trigger, Index button with inline progress,
-  Share/Export menu, stats chip (nodes/edges/coverage), theme toggle.
+- **Top bar**: product mark `◆ polyflow` at the far left (present on
+  every page — it is also the click target for "back to overview"),
+  omni-search trigger, Index button with inline progress, Share/Export
+  menu, **pin tray** (chips for pinned nodes when the pinboard is
+  active — plan 12 UF.7), stats chip (nodes/edges/coverage), theme
+  toggle.
 
 ### Gesture grammar (uniform across tree rows, canvas nodes, edges, groups)
 
@@ -79,6 +83,32 @@ stack; detail-on-demand with one gesture grammar everywhere.
 | `Esc` | close detail → clear selection → pop isolation → pop scope (in that order, one level per press) |
 | `⌘K` / `/` | command palette / omni-search |
 | `⌘⇧C` | Copy context for current selection (plan 12) |
+| `p` | pin/unpin the hovered or selected node to the pinboard (plan 12 UF.7) |
+| `[` / `]` | peek one hop upstream / downstream from the selection (plan 12 UF.8) |
+| hover on a link-list row | **peek**: ghost-preview on canvas, no state change (see below) |
+
+### Peek vs commit (binding interaction principle)
+
+Every list that names graph elements not currently on canvas (upstream/
+downstream link lists, flow lists, path lists, waypoint candidates,
+search results) supports both depths of engagement:
+
+- **Peek** — hover (or focus, keyboard) a row: the referenced elements
+  render as **ghosts** on the canvas (reduced opacity, dashed halo,
+  positioned by a light incremental layout near their anchor) and the
+  connecting edges glow; moving off the row removes the ghosts. Peek
+  never changes `ViewState`, the URL, or the scope stack — it is free
+  to explore and impossible to get lost in.
+- **Commit** — click (or Enter): the peeked elements are added for real
+  (scope expansion) or the view navigates (scope push), per the
+  action's label. Every commit is one `Esc`/breadcrumb-pop away from
+  undo.
+
+Rows show both affordances: the row body peeks, an explicit `＋` (add
+to view) or `→` (go there) button commits. Ghost rendering counts
+against the element budget with a small reserved headroom (100
+elements); a peek that would exceed it shows a count chip instead of
+ghosts ("+38 nodes — commit to view").
 
 ### View modes & navigation flow
 
@@ -139,6 +169,130 @@ candidate / dotted conflicting / double-line observed_only_gap).
 Scope-too-big: a dialog states the exact count vs budget and offers
 narrowing (pick a folder, collapse level, filter kinds) or
 auto-cluster — **never silent truncation**.
+
+### Layout gallery — every page and scenario (binding wireframes)
+
+All pages share the shell frame (activity bar · left panel · top bar
+with `◆ polyflow` · optional detail panel · optional bottom drawer);
+the wireframes below show what varies. Implementers must match regions
+and placements; visual styling is free within the Feel rules.
+
+**1 · Landing / Service Overview** (default scope)
+```
+◆ polyflow  ⌘K        [Index ▸] [Share ▾]  2,010n/2,812e
+ Overview [×]                      lens: [All][Calls][HTTP][Msg][Data][Imports]
+┌────────────────────────────────────────────────────────┐
+│   (nextgen)══http ×12══(cdr-agent)                     │
+│      ║rabbitmq ×2          │http ×3                    │
+│   (datascience)─────────(sce-agent)                    │
+└────────────────────────────────────────────────────────┘
+```
+Lens control (plan-11 UN.5) sits right of the breadcrumbs on every
+canvas page.
+
+**2 · Drill-down scope** (service/folder/file — tree synced)
+```
+EXPLORER          │ ◆ polyflow ▸ nextgen ▸ app ▸ jobs [×]  lens:[…]
+▾ nextgen         │ ┌────────────────────────────────┐ DETAIL
+ ▾ app/           │ │ [sync.rb]──calls──[queue.rb]   │ SyncJob
+  ▾ jobs/ ⚠2      │ │     │imports        ⚠         │ file:3–40
+   sync.rb ◀      │ │ [util.rb]   ⇢ stub: cdr-agent │ edges·src
+```
+
+**3 · Flow lane** (isolated flow — plan 12 UF.0)
+```
+◆ polyflow  Flow: POST /orders → CDR consumer [×]
+┌ nextgen ──────────────────────────────────────────────┐
+│ [POST /orders]→[OrdersCtrl]→[publish cdr_requests]    │
+├ rabbitmq:cdr_requests ─────────────pill───────────────┤
+├ cdr-agent ────────────────────────────────────────────┤
+│ [Consumer]→[process]→[store]                          │
+└───────────────────────────────────────────────────────┘
+```
+
+**4 · Entrypoint catalog** (Flows activity)
+```
+FLOWS             │ ◆ polyflow · Entrypoints (34)   [route][consumer][worker]
+search…           │ ▸ GET /play        chessleap  routes.go:41–44
+                  │ ▸ queue cdr_reqs   cdr-agent  consumer.rb:8–31
+                  │ footer: 312 callbacks / 41 unreachable hidden [show]
+```
+
+**5 · Path finder / waypoint builder** (plan 12 UF.2)
+```
+A: OrdersCtrl [×] → B: CDR process [×]        [Overlay all]
+│ ① 4 hops · verified    ── peek on hover ──  [→ isolate] │
+│ ② 6 hops · candidate                        [→ isolate] │
+waypoints: (OrdersCtrl)─(publish)─(＋ pick next: 3 candidates)
+```
+
+**6 · Pinboard active** (plan 12 UF.7) — pin tray under the top bar
+```
+◆ polyflow   pins: [OrdersCtrl ×][cdr_requests ×][store ×]  [clear all]
+canvas = only nodes/edges on paths through ALL pins; rest hidden
+empty result → "No flow passes through all 3 pins — remove one?"
+```
+
+**7 · Link explorer / peek** (plan 12 UF.8, detail panel section)
+```
+DETAIL · SyncJob.perform          [upstream 12 | downstream 8]
+filter: kind:… service:… q:…
+│ ▸ OrdersCtrl.create   http   nextgen   (hover=ghost) [＋][→] │
+│ ▸ Scheduler.tick      calls  nextgen               [＋][→] │
+```
+
+**8 · Group view** (plan 12 UF.4)
+```
+◆ polyflow · Group: 3 nodes [×]      DETAIL · relationships
+[handler]──renders──[template]       calls:2 renders:1
+     └──calls──[store func]          services: 1 · channels: 0
+```
+
+**9 · Health dashboard** (Health activity, canvas-free)
+```
+◆ polyflow · Health
+[Index: 689 files · v18 · 2 parse errors]  [Coverage: ██ verified 61%…]
+[Unresolved: 41 → open drawer]             [Eval: chessleap 1.000 …]
+```
+
+**10 · Config editor** (Config activity, canvas-free)
+```
+◆ polyflow · workspace.yaml            [Form|YAML]  [Save]
+Services  | name: nextgen  path: ~/Projects/nextGen  lang: ruby [−]
+Links     | nextgen → cdr-agent via rabbitmq [−]   [＋ add]
+⚠ 422: services[1].path does not exist (inline, under the field)
+```
+
+**11 · Docs** (Docs activity, canvas-free)
+```
+◆ polyflow · Docs     [Setup|CLI|UI guide|Concepts]   search…
+nav: index · serve · mcp …  │  # polyflow index
+                            │  --workers, --full …
+```
+
+**12 · Bottom drawer** (Jobs / Tool calls / Unresolved / Context tabs)
+```
+▤ Jobs │ ⚡Tool calls │ ⚠ Unresolved │ ⧉ Context          [▁ close]
+⚡ 12:01:33 mcp trace {"root":"…"} 220ms ok   [expand][→ node]
+filters: [mcp][http] tool:▾ status:▾ q:…      [pause][clear all]
+```
+
+**13 · Command palette** (overlay, any page)
+```
+╭─ ⌘K ────────────────────────────────────────╮
+│ > sync kind:function service:nextgen        │
+│ SYMBOLS  ƒ SyncJob.perform  nextgen · 5–22  │
+│ FLOWS    POST /orders → CDR                 │
+│ COMMANDS Switch lens: Calls                 │
+╰─────────────────────────────────────────────╯
+```
+
+**14 · Over-budget dialog** (any scope, US.3)
+```
+This scope is 4,812 elements (budget 1,500).
+[Narrow: api/ 214 · web/ 1,890 · jobs/ 96 …]
+[Auto-cluster to folders]  [Adjust filters]  [Cancel]
+```
 
 ---
 

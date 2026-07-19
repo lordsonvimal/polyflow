@@ -165,12 +165,57 @@ the right palette/filter state; empty-deps service renders honestly
 **Acceptance.** The stack page answers "what is this fleet built with?"
 for the 7-repo fleet workspace at a glance.
 
+### Phase UN.5 — Flow lenses: one-click edge-class modes `pending`
+
+**Problem.** Isolating a *type* of connection (function calls, service
+HTTP calls, messaging, variable/data flow, imports, DOM) requires
+assembling edge-type filter chips by hand; developers need named,
+one-click modes.
+
+**Deliverable.** A **lens control** (segmented buttons right of the
+breadcrumbs, on every canvas page — see plan-10 layout gallery #1)
+backed by `views/canvas/lenses.ts` with this pinned table (the lens →
+edge-type mapping is the contract; every `graph.EdgeType` must appear
+in ≥1 lens or in the pinned "structure-only" remainder list — rule-12
+accounting, asserted by a test that walks the edge-type enum):
+
+| Lens | Edge types shown |
+|---|---|
+| All | everything except `contains` (default) |
+| Calls | `calls`, `spawns`, `instantiates` |
+| HTTP | `http_call`, `sse_endpoint`, `grpc_call`, `graphql_call`, `navigates_to`, `ws_*` |
+| Messaging | `publishes`, `subscribes`, `kafka_publish`, `nats_publish`, `redis_publish`, `job_enqueue`, `job_perform`, `pusher_*`, `hub_*` |
+| Data flow | `declares`, `reads`, `writes`, `captures`, `flows_to`, `queries`, `persists` |
+| Imports | `imports`, `uses_type`, `inherits`, `implements`, `component_impl` — plus a **module rollup** toggle: aggregate to file→file / folder→folder import edges with counts |
+| DOM | `dom_*`, `datastar_*`, `renders`, `defined_in` |
+
+- A lens is a named preset over `ViewState.filters.edgeTypes` (US.1) —
+  it composes with scope, encodes in shared URLs, and re-runs the
+  budget pipeline; custom chip edits switch the control to "Custom".
+- Nodes with zero visible edges under a lens dim to 30% (kept for
+  orientation, one click to restore via the lens's "hide unlinked"
+  toggle) — never silently removed.
+- The Imports lens's module rollup reuses the aggregation approach of
+  `lib/aggregate.ts` (client-side, counts on edges, click an
+  aggregated edge → the concrete import list in the detail panel).
+- Palette commands "Switch lens: <name>" registered (US.4).
+
+**Tests.** Enum-coverage walk (every edge type mapped or listed);
+lens → filter state exact; URL round-trip with lens; imports rollup
+math (file→file counts) + drill-to-list; dim-vs-hide toggle; custom
+edit → "Custom" state.
+
+**Acceptance.** chessleap: Calls lens shows a clean call graph of a
+file scope; Imports lens at service scope shows the folder-level
+import structure with counts; Messaging lens on the fleet workspace
+overview shows only the RabbitMQ topology.
+
 ---
 
 ## Key files
 
 - New: `web/src/views/explore/{Tree,StackPanel}.tsx`,
-  `web/src/views/canvas/{FilterBar}.tsx`,
+  `web/src/views/canvas/{FilterBar}.tsx`, `web/src/views/canvas/lenses.ts`,
   `web/src/views/canvas/scopes/*.ts`, `web/src/stores/tree.ts`.
 - Modified: palette Enter behavior (US.4 file), detail panel source
   section (US.2's DetailHost content), possibly
@@ -186,12 +231,14 @@ for the 7-repo fleet workspace at a glance.
 | UN.2 | problem 3 (search/filter) |
 | UN.3 | problem 6 (line ranges) |
 | UN.4 | problem 9 (tech stack) |
+| UN.5 | problem 7 (flow-type isolation: calls/http/messaging/data/imports/dom lenses) |
 
 ## Developer use-case sweep
 
 "Where is this function in the project?" → UN.0 sync. "What's inside
 this service/folder?" → UN.1. "Take me to X" → UN.2. "Exactly which
-lines is this?" → UN.3. "What's this repo built with?" → UN.4. Declared
+lines is this?" → UN.3. "What's this repo built with?" → UN.4. "Show
+me only the call graph / only imports / only messaging" → UN.5. Declared
 non-goals: editing source from the UI; git blame/history views; symbol
 rename/refactor operations.
 

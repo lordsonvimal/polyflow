@@ -28,8 +28,13 @@ type FlowRef =
   | { kind: "waypoints"; ids: string[]; direction: "forward"|"backward" }
   | { kind: "seam"; edgeId: string }
   | { kind: "varflow"; nodeId: string }
-  | { kind: "edgeset"; nodeId: string; edgeTypes: string[] }; // call/pub-sub/data flows
+  | { kind: "edgeset"; nodeId: string; edgeTypes: string[] }  // lens-scoped flows from a node
+  | { kind: "pins"; ids: string[] };                          // pinboard (UF.7)
 ```
+
+`edgeset` flows take their `edgeTypes` from the active lens
+(plan-11 UN.5) by default — "Isolate <lens name> flow from here" in the
+context menu — so every lens doubles as a flow type.
 
 ---
 
@@ -256,11 +261,95 @@ only; badge → pre-filtered drawer state.
 radius; a known ledgered gap (from `polyflow status --unresolved`)
 is reachable in ≤2 clicks from its ⚠ badge.
 
+### Phase UF.7 — Pinboard: flows through pinned nodes only `pending`
+
+**Problem.** Viewing a specific flow in detail by pinning a few nodes:
+only connections flowing through the pinned set should remain visible,
+with easy clearing (user addendum).
+
+**Deliverable.**
+- Pinning: `p` on hovered/selected node, context-menu "Pin to
+  pinboard", or pin icon in the detail panel. Pinned nodes get a 📌
+  badge on canvas and a chip in the **pin tray** under the top bar
+  (plan-10 layout gallery #6); chips: click = select the node, `×` =
+  unpin, `[clear all]` empties the tray. Pins persist in `ViewState`
+  (URL-shareable) and survive scope changes.
+- **Pinboard mode** engages automatically at ≥2 pins (1 pin only
+  badges): the canvas keeps only nodes/edges lying on some flow path
+  passing through **all** pins (order-free). Resolution: consecutive
+  connectivity via `/api/flows/paths` between pin pairs in both
+  directions, union of the k=5 path sets per pair, intersected down to
+  paths traversing every pin; computed server-side via
+  `/api/flows/refine` where an ordering exists (it validates and
+  stitches), client-side set intersection otherwise. Everything else
+  fades out (Feel rules), *not* removed from the scope — unpinning
+  restores instantly without refetch.
+- Honest empty result: "No flow passes through all N pins" with
+  per-pair reachability (which pair broke) and one-click "remove
+  <node>" suggestions — never a silent blank canvas.
+- Pins compose with the active lens (UN.5): pinboard paths are
+  computed over the lens's edge set, so "Data-flow through these 3
+  pins" works.
+- `FlowRef{kind:"pins"}` scope: "View as flow lane" action in the tray
+  renders the pinboard result as a UF.0 lane; Copy context (UF.5)
+  works on it.
+
+**Tests.** Pin/unpin/clear state machine incl. URL round-trip; 2-pin
+and 3-pin path-set intersection math (fixture with a diamond so a
+non-through branch must disappear); empty-result names the broken
+pair; lens composition (same pins, different lens → different edge
+set); fade-not-remove (unpin restores without network calls —
+assert no fetch).
+
+**Acceptance.** Fleet workspace: pin nextGen's publisher and
+CDR-Agent's handler → only the RabbitMQ flow remains; add an unrelated
+third pin → honest empty state naming the disconnected pair; clear all
+→ full scope returns instantly.
+
+### Phase UF.8 — Link explorer: peek or commit upstream/downstream `pending`
+
+**Problem.** Viewing a node's detailed links upstream/downstream with
+search/filter — from a selected node or from search — with a UX that
+either previews (peek) or updates the graph (commit), per plan-10's
+binding "Peek vs commit" principle (user addendum).
+
+**Deliverable.** `views/explore/LinkExplorer.tsx` — a detail-panel
+section for any selected node (and openable from a palette result via
+"Explore links" without first committing a scope change):
+- Header: `[upstream N | downstream N]` toggle (counts from the
+  adjacency data; both directions loaded lazily). Depth stepper 1–3
+  (default 1); depth >1 groups rows by path ("via X → Y").
+- Filter row: `kind:` `service:` chips + free text — filtering the
+  loaded link list client-side, same syntax as the palette (UN.2).
+- Rows (per plan-10 gallery #7): target label, edge-type icon +
+  channel, service, `file:12–48`, verification dot. **Hover = peek**
+  (ghost nodes + glowing edges per the shell's ghost renderer);
+  **`＋` = commit-expand** (adds the target and its connecting edge to
+  the current scope — scope gains an `expanded` id list in
+  `ViewState`, budget-checked); **`→` = commit-navigate** (pushes the
+  target's file scope with it selected, UN.2 behavior).
+- Keyboard: `[` / `]` peek-walk the top upstream/downstream row from
+  the current selection; Enter commits `→`, `⇧Enter` commits `＋`.
+- Rule-1 honesty: the list is the *complete* adjacency (paginated at
+  100 per direction with exact totals), including edges whose far node
+  is outside the current scope or service — nothing hidden by scope.
+
+**Tests.** Direction toggle + lazy loads; filter chip narrowing;
+peek renders ghosts and leaves ViewState untouched (assert store
+equality); `＋` adds exactly node+edge and re-budgets; `→` pushes file
+scope; depth-2 grouping; pagination totals; keyboard walk.
+
+**Acceptance.** chessleap: from a store function, filter upstream
+links to `kind:http_handler`, peek each without the canvas changing
+state, commit-expand two of them, then commit-navigate to one — all
+without losing the original scope (breadcrumb pops back).
+
 ---
 
 ## Key files
 
-- New: `web/src/views/flows/{FlowLane,Catalog,WaypointBuilder}.tsx`,
+- New: `web/src/views/flows/{FlowLane,Catalog,WaypointBuilder,Pinboard}.tsx`,
+  `web/src/views/explore/LinkExplorer.tsx`,
   `web/src/views/context/copy.ts` + drawer tab,
   `web/src/views/impact/*`, `web/src/views/canvas/scopes/{flow,group,impact}.ts`.
 - Modified: `stores/scope.ts` (FlowRef), gesture/context-menu registry,
@@ -277,6 +366,8 @@ is reachable in ≤2 clicks from its ⚠ badge.
 | UF.4 | group view (addendum 4) |
 | UF.5 | universal context copy (addendum 2, 5) — the goal-closing feature |
 | UF.6 | impact/diff extra scope; problem 5 (missing edges debuggable) |
+| UF.7 | pinboard flow filtering (addendum: pin nodes → only through-flows visible, clearable) |
+| UF.8 | link explorer with peek/commit (addendum: detailed up/downstream by search/filter) |
 
 ## Developer use-case sweep
 
@@ -284,7 +375,9 @@ is reachable in ≤2 clicks from its ⚠ badge.
 UF.2. "Who talks over this queue/event/route?" → UF.3. "How do these N
 things relate?" → UF.4. "Give me context to paste into an LLM" → UF.5.
 "What breaks if I change this / what does my diff touch?" → UF.6. "Why
-is the edge I expected missing?" → UF.6 overlay → ledger. Declared
+is the edge I expected missing?" → UF.6 overlay → ledger. "Show only
+what flows through these exact nodes" → UF.7. "Who calls this /
+what does this reach — preview before I change my view" → UF.8. Declared
 non-goals: runtime span timeline UI (OTLP flows stay CLI —
 `polyflow flows`); editing/annotating flows; exporting video/animated
 walkthroughs.

@@ -103,11 +103,13 @@ including these):
     specification for plans 11–13.**
 11. `docs/plan-11-ui-navigation.md` (Tier U-N) — tree explorer,
     drill-down scopes, search-that-navigates, line-range source panel,
-    tech-stack view.
+    tech-stack view, flow lenses (calls/http/messaging/data/imports/
+    dom edge-class modes).
 12. `docs/plan-12-ui-flows.md` (Tier U-F) — flow lanes, flows-through-
     here, entrypoint catalog, path finder, waypoint builder, seam +
-    group isolation, context-copy workbench, impact/diff + coverage
-    overlay.
+    group isolation, pinboard (through-pins-only filtering), link
+    explorer (peek/commit up/downstream), context-copy workbench,
+    impact/diff + coverage overlay.
 13. `docs/plan-13-ui-ops.md` (Tier U-O) — jobs UI, tool-call log,
     config editor, health dashboard, generated CLI docs + README,
     export/share/saved views. Ends with the UI coverage-contract walk.
