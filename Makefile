@@ -12,6 +12,8 @@ web:
 
 build: web
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
+	# V.2 parser sidecar; discovered next to the polyflow binary at runtime.
+	CGO_ENABLED=1 go build -o $(BUILD_DIR)/polyflow-parse-templ ./cmd/polyflow-parse-templ
 
 test:
 	go test ./... -coverprofile=coverage.out
