@@ -72,6 +72,9 @@ type CoverageNote struct {
 	Tool             Tool   `json:"tool"`
 	RequestedVersion string `json:"requested_version"`
 	UsedProfile      string `json:"used_profile"` // RuleVariant or SidecarBackend of the fallback
+	// Note carries free-text detail for sidecar-router records (V.2):
+	// fallback cause, captured stderr. Empty for plain inferred selections.
+	Note string `json:"note,omitempty"`
 }
 
 // SelectAll runs Select for every resolved tool version and returns all

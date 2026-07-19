@@ -32,6 +32,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/sidecar"
 	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -163,6 +164,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// svcToolchainVersions: service name → tool → resolved version string.
 	svcToolchainVersions := make(map[string]map[toolchain.Tool]string, len(cfg.Services))
 	var allToolchainNotes []toolchain.CoverageNote
+	// svcToolchainProfiles: service → tool → profile stamp (V.2 labeling —
+	// which rule variant / sidecar backend interpreted each tool).
+	type profileStamp struct {
+		Profile  string `json:"profile"`
+		Version  string `json:"version"`
+		Inferred bool   `json:"inferred,omitempty"`
+	}
+	svcToolchainProfiles := make(map[string]map[string]profileStamp, len(cfg.Services))
 
 	var allSvcFiles []serviceFiles
 	for idx, svc := range cfg.Services {
@@ -191,8 +200,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 		tcVersions := toolchain.ResolveToolchain(absSvcPath, svcDeps)
 		svcToolchainVersions[svc.Name] = tcVersions
-		_, notes := toolchain.SelectAll(tcReg, svc.Name, tcVersions)
+		selections, notes := toolchain.SelectAll(tcReg, svc.Name, tcVersions)
 		allToolchainNotes = append(allToolchainNotes, notes...)
+		stamps := make(map[string]profileStamp, len(selections))
+		for _, sel := range selections {
+			profile := sel.Backend.RuleVariant
+			if profile == "" {
+				profile = sel.Backend.SidecarBackend
+			}
+			stamps[string(sel.Tool)] = profileStamp{Profile: profile, Version: sel.Version, Inferred: sel.Inferred}
+		}
+		svcToolchainProfiles[svc.Name] = stamps
 
 		fmt.Fprintf(logw, "  %s: %d files (%s, %d deps)\n", svc.Name, len(files), svc.Language, len(svcDeps))
 		allSvcFiles = append(allSvcFiles, serviceFiles{svc, files, svcDeps})
@@ -247,6 +265,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		// Fall through to a full build if the previous DB cannot be opened.
 	}
+
+	// V.2: one sidecar process pool for the whole run; per-service routers
+	// dispatch sidecar'd engines (templ) through it. A missing/dead sidecar
+	// falls back to the in-process parser with a coverage note — never an
+	// aborted run, never a dropped file.
+	sidecarMgr := sidecar.NewManager("")
+	defer sidecarMgr.Shutdown()
 
 	tmpDB := filepath.Join(opts.DBDir, "graph.db.tmp")
 	_ = os.Remove(tmpDB)
@@ -349,7 +374,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			toParse = append(toParse, file)
 		}
 
+		router := sidecar.NewRouter(sidecarMgr, tcReg, sf.svc.Name, svcToolchainVersions[sf.svc.Name])
 		pool := parser.NewWorkerPool(opts.Workers, matcher, sf.svc.Name)
+		pool.SetRoute(router.ParserFor)
 		for result := range pool.Run(toParse) {
 			done++
 			stats.ParsedFiles++
@@ -390,6 +417,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				allEdges = append(allEdges, e)
 			}
 		}
+		// Sidecar routing outcomes (inferred selections, in-process fallbacks).
+		allToolchainNotes = append(allToolchainNotes, router.Notes()...)
 	}
 
 	// Flush tree-sitter nodes+edges before the semantic pass (FK constraints).
@@ -875,10 +904,25 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, err
 	}
 
-	// Toolchain versions + coverage ledger (V.0 seams).
+	// Toolchain versions + coverage ledger (V.0 seams) + profile stamps (V.2).
 	if tcJSON, err := json.Marshal(svcToolchainVersions); err == nil {
 		_ = store.SetMeta(ctx, "toolchain_versions", string(tcJSON))
 	}
+	if tcProfJSON, err := json.Marshal(svcToolchainProfiles); err == nil {
+		_ = store.SetMeta(ctx, "toolchain_profiles", string(tcProfJSON))
+	}
+	// SelectAll iterates a version map, so note order is stabilized here
+	// before it reaches stored output (bug-class rule 2).
+	sort.SliceStable(allToolchainNotes, func(i, j int) bool {
+		a, b := allToolchainNotes[i], allToolchainNotes[j]
+		if a.Service != b.Service {
+			return a.Service < b.Service
+		}
+		if a.Tool != b.Tool {
+			return a.Tool < b.Tool
+		}
+		return a.Note < b.Note
+	})
 	if len(allToolchainNotes) == 0 {
 		_ = store.SetMeta(ctx, "toolchain_coverage", "[]")
 	} else if tcCovJSON, err := json.Marshal(allToolchainNotes); err == nil {
