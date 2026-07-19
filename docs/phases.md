@@ -3,8 +3,8 @@
 The phase plans (`docs/agent-context-plan.md`, `docs/contract-matching-plan.md`,
 `docs/versioning-matrix-plan.md`, `docs/evidence-fusion-plan.md`,
 `docs/runtime-flow-plan.md`, `docs/goal-completion-plan.md`,
-`docs/semantic-search-plan.md`, and the numbered gap-closing series
-`docs/plan-1-recall-hardfails.md` through `docs/plan-8-multi-repo.md`)
+`docs/semantic-search-plan.md`, and the numbered series
+`docs/plan-1-recall-hardfails.md` through `docs/plan-13-ui-ops.md`)
 all follow this process. The original gap-closing plan that carried these rules is complete and was
 removed; this doc keeps the rules themselves.
 
@@ -81,6 +81,36 @@ interleaves with the roadmap above:
    Multi-repo workspaces: path semantics (`~`, workspace-file-relative),
    per-service git roots for `impact --diff`, and the cross-repo fleet
    eval corpus (nextGen ↔ agents over RabbitMQ/REST).
+
+## UI series (plans 9–13) — the web-UI overhaul
+
+The UI plans close the 2026-07-19 UI review (12 problems + extras:
+scale, hierarchy, search, tool ops, coverage visibility, line ranges,
+flow isolation, layout, tech stack, tool-call debugging, config
+editing, docs; plus context copy, waypoint flows, group/seam isolation,
+impact/diff visualization, export/share, saved views, health
+dashboard). Execute **in filename order, after plan-8 and before
+plan-6's N.3** (N.3's coverage contract covers whatever shipped,
+including these):
+
+9. `docs/plan-9-ui-backend.md` (Tier U-B) — backend enablers: node
+   line ranges (schema 17→18), `/api/tree`, ops.db + tool-call audit,
+   jobs API, config API, flow/seam/health/stack queries, context
+   bundles. No `web/` changes.
+10. `docs/plan-10-ui-shell.md` (Tier U-S) — the workbench rebuild:
+    shell layout, scope stack + URL state, gesture grammar, element
+    budget, palette, notification system. **Carries the binding UX
+    specification for plans 11–13.**
+11. `docs/plan-11-ui-navigation.md` (Tier U-N) — tree explorer,
+    drill-down scopes, search-that-navigates, line-range source panel,
+    tech-stack view.
+12. `docs/plan-12-ui-flows.md` (Tier U-F) — flow lanes, flows-through-
+    here, entrypoint catalog, path finder, waypoint builder, seam +
+    group isolation, context-copy workbench, impact/diff + coverage
+    overlay.
+13. `docs/plan-13-ui-ops.md` (Tier U-O) — jobs UI, tool-call log,
+    config editor, health dashboard, generated CLI docs + README,
+    export/share/saved views. Ends with the UI coverage-contract walk.
 
 Referencing rule for implementers: every prompt/task should name **this file
 (process + order) plus the single owning plan doc for the phase being
