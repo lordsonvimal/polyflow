@@ -6,6 +6,7 @@ package impact
 
 import (
 	"encoding/json"
+	"sort"
 
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -142,6 +143,8 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verb
 	for svc := range svcSet {
 		servicesAffected = append(servicesAffected, svc)
 	}
+	// Map iteration must never reach output (bug-class rule 2).
+	sort.Strings(servicesAffected)
 
 	xsCount := make(map[string]int)
 	for _, a := range ancestors {
@@ -156,6 +159,7 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verb
 	for svc, cnt := range xsCount {
 		triggers = append(triggers, CrossServiceTrigger{FromService: svc, EdgeCount: cnt})
 	}
+	sort.Slice(triggers, func(i, j int) bool { return triggers[i].FromService < triggers[j].FromService })
 
 	return callers, entryPoints, servicesAffected, triggers, edges
 }
