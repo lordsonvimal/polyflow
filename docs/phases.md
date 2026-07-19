@@ -4,7 +4,7 @@ The phase plans (`docs/agent-context-plan.md`, `docs/contract-matching-plan.md`,
 `docs/versioning-matrix-plan.md`, `docs/evidence-fusion-plan.md`,
 `docs/runtime-flow-plan.md`, `docs/goal-completion-plan.md`,
 `docs/semantic-search-plan.md`, and the numbered series
-`docs/plan-1-recall-hardfails.md` through `docs/plan-13-ui-ops.md`)
+`docs/plan-1-recall-hardfails.md` through `docs/plan-14-agent-trust.md`)
 all follow this process. The original gap-closing plan that carried these rules is complete and was
 removed; this doc keeps the rules themselves.
 
@@ -117,6 +117,12 @@ including these):
     and the CLI↔UI parity sweep (patterns, setup mode, parity matrix:
     both surfaces drive the same graph). Ends with the UI
     coverage-contract walk.
+14. `docs/plan-14-agent-trust.md` (Tier T) — measured agent trust:
+    workspace trust stamp (T.0), runtime-gap → eval-case promotion
+    (T.1), agent-in-the-loop correctness eval + ≥ 0.95 bar and ratchet
+    (T.2–T.3). T.0/T.1 any time after plan-1 B.3; most valuable re-run
+    after each of plans 2–8 lands (restamping is one command). T.0's
+    stamp is an additive field in plan-9's `/api/health`.
 
 Referencing rule for implementers: every prompt/task should name **this file
 (process + order) plus the single owning plan doc for the phase being
