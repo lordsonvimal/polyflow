@@ -95,8 +95,9 @@ including these):
 
 9. `docs/plan-9-ui-backend.md` (Tier U-B) — backend enablers: node
    line ranges (schema 17→18), `/api/tree`, ops.db + tool-call audit,
-   jobs API, config API, flow/seam/health/stack queries, context
-   bundles. No `web/` changes.
+   jobs API (index/eval/reconcile), config API, flow/seam/health/stack
+   queries, context bundles, runtime capture/ingest/flows API (shared
+   session store with the CLI). No `web/` changes.
 10. `docs/plan-10-ui-shell.md` (Tier U-S) — the workbench rebuild:
     shell layout, scope stack + URL state, gesture grammar, element
     budget, palette, notification system. **Carries the binding UX
@@ -112,7 +113,10 @@ including these):
     impact/diff + coverage overlay.
 13. `docs/plan-13-ui-ops.md` (Tier U-O) — jobs UI, tool-call log,
     config editor, health dashboard, generated CLI docs + README,
-    export/share/saved views. Ends with the UI coverage-contract walk.
+    export/share/saved views, runtime capture UI (record/ingest/fuse),
+    and the CLI↔UI parity sweep (patterns, setup mode, parity matrix:
+    both surfaces drive the same graph). Ends with the UI
+    coverage-contract walk.
 
 Referencing rule for implementers: every prompt/task should name **this file
 (process + order) plus the single owning plan doc for the phase being

@@ -378,8 +378,8 @@ things relate?" → UF.4. "Give me context to paste into an LLM" → UF.5.
 is the edge I expected missing?" → UF.6 overlay → ledger. "Show only
 what flows through these exact nodes" → UF.7. "Who calls this /
 what does this reach — preview before I change my view" → UF.8. Declared
-non-goals: runtime span timeline UI (OTLP flows stay CLI —
-`polyflow flows`); editing/annotating flows; exporting video/animated
+non-goals: runtime capture/observed-flow UI (owned by plan-13 UO.6,
+not this tier); editing/annotating flows; exporting video/animated
 walkthroughs.
 
 ## Verification

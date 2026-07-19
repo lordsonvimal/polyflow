@@ -201,10 +201,17 @@ progress, cancellation, and history — never a blocked request.
 
 **Deliverable.**
 1. `POST /api/jobs` body `{"kind": "index", "args": {"full": false}}` —
-   kinds this phase: `index` only (`eval`/`reconcile` are declared
-   non-goals here; the enum rejects them with an error naming this
-   plan — rule 3). Response `202 {"job": {…}}`. **Single-flight**: a
-   second POST while one runs → `409` with the running job.
+   kinds: `index` (args: `full`), `eval` (args: `corpus`, `case`;
+   requires `eval/` to exist — absence → 422 naming the path, honest,
+   not a crash), `reconcile` (args: `propose_dir` optional). Each kind
+   wraps the same internals its CLI command uses (`indexer.Run`, the
+   eval runner, the reconcile report) — **one engine, two surfaces**;
+   an unknown kind → 400 naming the supported enum (rule 3). Response
+   `202 {"job": {…}}`. **Single-flight per kind**: a second POST of a
+   running kind → `409` with the running job; different kinds may run
+   concurrently except `index`, which excludes all others (it swaps
+   the store). Non-index jobs put their JSON result in a `result`
+   field on the job record.
 2. Job record (also a row in ops.db `jobs` table, same field names):
    `{"id": "j-<ulid>", "kind": "index", "state":
    "running|succeeded|failed|canceled", "started_at": "...",
@@ -388,6 +395,66 @@ determinism (byte-identical markdown).
 **Acceptance.** Bundle a chessleap route node with snippets: paste-ready
 markdown matches the file content ranges by hand-check.
 
+### Phase UB.7 — Runtime capture & flows API `pending`
+
+**Problem.** Runtime capture (`polyflow capture start|stop|run`,
+`ingest`, `flows`) is CLI-only; the UI must start/stop capture, import
+dumps, inspect observed flows, and fuse the evidence into the graph —
+with **CLI and UI as two surfaces over the same session store**, so a
+capture started in either is visible and stoppable from the other.
+
+**Deliverable.**
+1. `internal/capture`'s session lifecycle refactored to a shared
+   package API (the CLI subcommands already own this logic — extract,
+   don't duplicate; list the moved functions in the outcome note).
+   Sessions live where the CLI puts them today (disk session store),
+   so CLI-started sessions appear in the API and vice versa.
+2. Endpoints:
+   - `POST /api/capture/start` `{"session": "s1", "http_port": 4318,
+     "grpc_port": 4317}` → 202 with status; port-in-use → 409 naming
+     the port. `POST /api/capture/stop` `{"session": "s1"}`.
+   - `GET /api/capture/status` → `{"active": [{"session", "since",
+     "spans_received", "http_port", "grpc_port"}], "sessions":
+     [{"session", "spans", "created_at"}]}` — active receivers +
+     on-disk sessions. SSE `{"type":"capture_progress"}` with the span
+     counter (throttled ≥1 s).
+   - `POST /api/capture/ingest` (multipart OTLP dump upload or
+     `{"path": "..."}` for a local file) into a named session —
+     wraps `polyflow ingest`.
+   - `GET /api/runtime/flows?session=` → the `FlowRecord` list
+     (kind/key/from_service/to_service/causality/refs) plus the
+     ingest ledger (unmapped spans with reasons — rule 12: the ledger
+     ships with the flows, never separately optional).
+   - `GET /api/runtime/coverage?session=` → the `flows --coverage`
+     comparison against the static baseline (verified channels,
+     observed-only channels, static-only channels).
+3. **Graph update semantics (pinned, both surfaces):** runtime
+   evidence fuses into edges (`Sources[]` runtime entries,
+   `verification_state` transitions) **at index time** via the F.0
+   reconciler. Therefore stop/ingest responses carry
+   `"fusion_hint": "run index to fuse this evidence into the graph"`,
+   and the UI (UO.6) offers that as a one-click follow-up job. A
+   capture or ingest done via CLI converges identically: the next
+   index (CLI or UI job) fuses it, and the existing `graph_updated`
+   SSE tells every open UI. Observed flows with no static edge do
+   **not** mint edges — they surface as `observed_only_gap` in
+   `/api/health` coverage and in `/api/runtime/coverage` (trust
+   contract: runtime confirms or exposes gaps, never fabricates
+   structure).
+
+**Tests.** Start/stop lifecycle with a fake OTLP POST (span counter
+increments, status reflects); port conflict 409; ingest of the
+existing `testdata/evidence/runtime/*.otlp.json` fixtures → flows +
+ledger exact (incl. the unmapped-span ledger entries); coverage
+endpoint against a fixture baseline; CLI-started session visible via
+API (start via the extracted package as the CLI does, then GET);
+two-run determinism on flows/coverage output.
+
+**Acceptance.** Start capture via `curl`, run an instrumented
+datascience service (`~/Projects/datascience` is OTel-instrumented)
+against it, stop, ingest→index, and watch a candidate edge turn
+verified in `/api/node/{id}`.
+
 ---
 
 ## Key files
@@ -398,8 +465,10 @@ markdown matches the file content ranges by hand-check.
   `internal/mcpserver/mcpserver.go` (UB.2), `cmd/polyflow/main.go`
   (serve wiring for ops store + jobs).
 - New: `internal/ops/` (store, UB.2/UB.3), `internal/server/tree.go`
-  (UB.1), `internal/server/{toolcalls,jobs,config,flowsapi,bundle}.go`
-  (one file per phase, mirroring handlers.go style).
+  (UB.1), `internal/server/{toolcalls,jobs,config,flowsapi,bundle,capture}.go`
+  (one file per phase, mirroring handlers.go style); UB.7 additionally
+  extracts the capture session lifecycle from `cmd/polyflow/capture.go`
+  into a shared package.
 
 ## Traceability
 
@@ -412,6 +481,7 @@ markdown matches the file content ranges by hand-check.
 | UB.4 | problem 11 (view/update config) — data layer |
 | UB.5 | problems 5, 7, 9 + seam isolation, waypoint flows, health dashboard — data layer |
 | UB.6 | universal context copy — data layer |
+| UB.7 | runtime capture/ingest/flows from UI; CLI↔UI parity on one session store — data layer |
 
 ## Developer use-case sweep (this tier answers via API)
 
@@ -419,9 +489,10 @@ markdown matches the file content ranges by hand-check.
 UB.1/`/api/stack`. "What did the agent ask the tool, and how long did it
 take?" → UB.2. "Reindex without leaving the browser?" → UB.3. "Why is
 this edge missing?" → `/api/unresolved` + seam verification states
-(UB.5). "What do I paste to an LLM?" → UB.6. Declared non-goals: jobs
-for eval/reconcile (UB.3 enum), auth/multi-user (local single-user tool),
-config form-level server endpoints (single PUT path).
+(UB.5). "What do I paste to an LLM?" → UB.6. "Capture runtime traffic and fuse
+it into the graph, from either surface" → UB.7 (+ UB.3 index job).
+Declared non-goals: auth/multi-user (local single-user tool), config
+form-level server endpoints (single PUT path).
 
 ## Explicit non-goals
 

@@ -214,15 +214,115 @@ notice; export menu calls the right lib per format.
 reopen it from Saved Views; share the link into another browser
 profile and land on the same view.
 
+### Phase UO.6 — Runtime capture UI: record, ingest, fuse `pending`
+
+**Problem.** Starting/stopping runtime capture and getting the
+captured evidence into the graph must work from the browser (user
+addendum), with the CLI and UI fully interchangeable.
+
+**Deliverable.**
+- **`◉ Record` control** in the top bar (left of the Index button):
+  click → session dialog (name prefilled `ui-<date>`, ports shown) →
+  `POST /api/capture/start`; while capturing, the control pulses red
+  with the live span counter (SSE `capture_progress`) and OTLP
+  endpoint hint on hover ("point OTEL_EXPORTER_OTLP_ENDPOINT at
+  :4318"); click again → stop confirm.
+- **On stop** (or ingest completion): summary toast + a prompt
+  wired to UB.7's `fusion_hint`: "Captured N spans (M services).
+  **Fuse into graph now?**" → runs the index job (UO.0); after it
+  completes, edges verified by this session visibly flip styling via
+  the normal `graph_updated` reload — the user *sees* dashed
+  candidates turn solid.
+- **Runtime panel** (Flows activity gains a "Runtime" tab): session
+  list (active + on-disk, incl. CLI-started ones — same store);
+  per-session observed-flow table (kind, channel key, from→to,
+  causality) with its ingest ledger inline (unmapped spans + reasons,
+  never hidden); coverage view from `/api/runtime/coverage`: verified
+  / observed-only / static-only channel lists — observed-only rows
+  carry "propose contract rule" (shows the reconcile proposal YAML,
+  copyable) and link into the Health dashboard's coverage card.
+  "Import OTLP dump…" button → file upload → ingest → same fuse
+  prompt.
+- Capture started in the CLI shows live in the UI (status polling +
+  SSE) and can be stopped from either surface; the phase's tests
+  assert this cross-surface visibility.
+
+**Tests.** Record control state machine (idle/starting/active/
+stopping) with SSE counter; stop → fuse prompt → index job wiring;
+runtime table + inline ledger rendering from fixture; observed-only
+proposal display; CLI-started session appears and is stoppable
+(mocked API contract); dump upload flow.
+
+**Acceptance.** With `~/Projects/datascience` running against a
+UI-started capture: watch the span counter climb, stop, fuse, and
+show one edge whose detail panel now lists a runtime source — then
+repeat with `polyflow capture start` from the CLI and confirm the UI
+mirrors it.
+
+### Phase UO.7 — CLI parity sweep: patterns, setup mode, the parity matrix `pending`
+
+**Problem.** The user requirement is **every CLI capability available
+in the UI**, with both surfaces updating the same graph. After UO.0–
+UO.6, the gaps are `patterns`, `init` (serve currently refuses to boot
+without an indexed workspace), and proof that nothing else is missing.
+
+**Deliverable.**
+- **Patterns viewer** (Settings activity → "Patterns"): list from a
+  new `GET /api/patterns` (name, language, version gate, package gate,
+  source file, per-pattern kinds/roles — wraps the `patterns list`
+  internals); search + language filter; a pattern row expands to its
+  YAML (read-only). "Add pattern…" uploads a YAML → `POST
+  /api/patterns` → validated exactly like `patterns add` (errors
+  verbatim) → saved to the workspace patterns dir → prompts re-index.
+- **Setup mode**: `polyflow serve` boots with no workspace.yaml or no
+  graph.db instead of erroring: it serves the shell in a guided setup
+  page — step 1 pick/confirm workspace root + `init` (runs discovery
+  via a new `init` job kind, shows the proposed services for
+  confirmation, writes workspace.yaml through the UB.4 path), step 2
+  first index (UO.0), step 3 land on overview. The CLI `init`/`index`
+  path produces byte-identical results (same internals).
+- **The parity matrix** (closes this plan): a pinned table in this
+  doc's outcome note AND rendered on the Docs page — every CLI
+  command/flag → its UI equivalent or a **declared exception**.
+  Pinned exceptions (the only allowed ones): `mcp` (the UI *is* the
+  human surface; MCP is the agent surface — observability via UO.1),
+  `serve` flags (bootstrapping), shell-oriented output flags
+  (`--format`, `--output` — the UI is the format). Rule-12 test: a Go
+  test walks the cobra tree and asserts every command name appears in
+  the matrix file (`web/src/docs/parity.md`), so a future CLI command
+  without a UI story fails CI instead of drifting.
+- **Both-ways freshness pinned**: every UI mutation goes through the
+  same internals as its CLI twin (jobs → `indexer.Run` etc., config →
+  `workspace.Save`, patterns → the `patterns add` writer, capture →
+  the shared session store), and every CLI mutation reaches open UIs
+  via the existing watchers (`graph_updated` fsnotify on graph.db;
+  config watch-on-focus from UO.2; capture status from UB.7). State
+  this as the phase's design invariant: **no state is writable from
+  one surface and invisible to the other.** The test list includes one
+  cross-surface case per store (graph.db, workspace.yaml, ops.db,
+  capture sessions).
+
+**Tests.** Go: `/api/patterns` list/add + validation errors verbatim;
+init job discovery output; parity-matrix walk test. Vitest: patterns
+panel, setup-mode step flow, matrix rendering. Cross-surface: CLI
+`polyflow index` under an open (test) UI session → `graph_updated`
+observed; UI pattern add visible to CLI `patterns list`.
+
+**Acceptance.** On a fresh clone with no workspace.yaml:
+`polyflow serve` → complete setup → indexed overview, browser-only.
+The rendered parity matrix accounts for every command in
+`polyflow --help`.
+
 ---
 
 ## Key files
 
-- New: `web/src/views/{ops,config,health,docs}/*`, `web/src/docs/*.md`,
-  `README.md` (repo root).
-- Modified: top bar (Index/Share/star buttons live), drawer tab
-  registry, `internal/server` (docs/cli + views endpoints, with tests),
-  `cmd/polyflow` (cobra tree exposure for UO.4).
+- New: `web/src/views/{ops,config,health,docs,runtime,patterns,setup}/*`,
+  `web/src/docs/*.md` (incl. `parity.md`), `README.md` (repo root).
+- Modified: top bar (Index/Record/Share/star buttons live), drawer tab
+  registry, `internal/server` (docs/cli + views + patterns endpoints,
+  with tests), `cmd/polyflow` (cobra tree exposure for UO.4; serve
+  setup-mode boot for UO.7).
 
 ## Traceability
 
@@ -234,6 +334,8 @@ profile and land on the same view.
 | UO.3 | health/eval dashboard extra scope; problem 5's trust-numbers face |
 | UO.4 | problem 12 (docs of all CLI options + setup) |
 | UO.5 | export & share + saved views extra scopes |
+| UO.6 | runtime capture start/stop/ingest from UI + evidence fusion made visible (addendum) |
+| UO.7 | full CLI↔UI parity (patterns, init/setup mode, parity matrix; both surfaces update one graph) |
 
 ## Developer use-case sweep
 
@@ -241,17 +343,24 @@ profile and land on the same view.
 why was it slow?" → UO.1. "Add a service/exclude and re-index" → UO.2.
 "Can I trust this graph right now?" → UO.3. "How do I even use this
 tool?" → UO.4. "Send this exact view to a teammate / keep it for
-tomorrow" → UO.5. Declared non-goals: multi-user/auth on saved views
-(local tool); scheduled/recurring jobs; log shipping/export of the
-tool-call audit (JSON download of the filtered list is in scope for
-UO.1 via a "Download" button — included in its deliverable).
+tomorrow" → UO.5. "Record real traffic and watch the graph get
+verified" → UO.6. "Do anything the CLI can do without a terminal — and
+never wonder if the other surface is stale" → UO.7. Declared
+non-goals: multi-user/auth on saved views (local tool); scheduled/
+recurring jobs; log shipping/export of the tool-call audit (JSON
+download of the filtered list is in scope for UO.1 via a "Download"
+button — included in its deliverable); a span *timeline* visualization
+(UO.6 ships tables/coverage; a Gantt-style timeline is a future tier).
 
 ## Verification
 
 Vitest per phase; Go handler tests for the three server additions
 (docs/cli, views CRUD, plus UB wiring); manual acceptance per phase on
-chessleap and the fleet workspace, recorded in outcome notes. Final
-tier check (goes in UO.5's outcome note): walk all 12 original
-problems + 4 extras + 5 addendum features against the shipped UI and
-record where each is closed — this is the UI series' coverage contract,
+chessleap and the fleet workspace, recorded in outcome notes. UO.6's acceptance
+uses `~/Projects/datascience` (the OTel-instrumented fleet repo). Final
+tier check (goes in UO.7's outcome note, alongside the parity matrix):
+walk all 12 original problems + 4 extras + all addendum features
+(context copy, waypoint flows, group/seam isolation, lenses, pinboard,
+link explorer, capture, CLI parity) against the shipped UI and record
+where each is closed — this is the UI series' coverage contract,
 mirroring what plan-6 N.3 does for the backend series.
