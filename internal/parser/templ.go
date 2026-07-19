@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -38,20 +39,32 @@ var reReactiveSignal = regexp.MustCompile(`\$([A-Za-z_]\w*)`)
 var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
 
 func (p *TemplParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	tf, err := templparser.Parse(file)
+	content, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-
 	variant := ""
 	if matcher != nil {
 		variant = matcher.DatastarVariant
 	}
+	return p.ParseSource(file, service, content, variant)
+}
+
+// ParseSource parses templ source that has already been read (or received
+// over the sidecar IPC, which ships content rather than a path).
+// templparser.Parse(file) is exactly os.ReadFile + ParseString, so this path
+// is byte-equivalent to Parse for on-disk files.
+func (p *TemplParser) ParseSource(file, service string, content []byte, datastarVariant string) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	tf, err := templparser.ParseString(string(content))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	v := &templVisitor{
 		file:                file,
 		service:             service,
 		currentComponentIdx: -1,
-		vocab:               toolchain.DefaultDatastarVocab(variant),
+		vocab:               toolchain.DefaultDatastarVocab(datastarVariant),
 	}
 	if err := tf.Visit(v); err != nil {
 		return v.nodes, v.edges, nil, err

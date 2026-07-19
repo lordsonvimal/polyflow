@@ -96,12 +96,22 @@ type Result struct {
 	Err        error
 }
 
+// RouteFunc lets a caller intercept parser dispatch for a file. Returning
+// nil falls through to the extension registry (ForFile). The V.2 sidecar
+// router uses this to send version-sidecar'd engines (templ) out of process.
+type RouteFunc func(path string) Parser
+
 // WorkerPool fans out file parsing across multiple goroutines.
 type WorkerPool struct {
 	workers int
 	matcher *patterns.TreeSitterMatcher
 	service string
+	route   RouteFunc // optional dispatch interceptor; nil → ForFile only
 }
+
+// SetRoute installs a dispatch interceptor consulted before the extension
+// registry. Must be called before Run.
+func (wp *WorkerPool) SetRoute(route RouteFunc) { wp.route = route }
 
 // NewWorkerPool creates a pool with the given concurrency, matcher, and service name.
 // service is used as a namespace prefix in generated node IDs.
@@ -136,7 +146,13 @@ func (wp *WorkerPool) Run(files []string) <-chan Result {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			p := ForFile(path)
+			var p Parser
+			if wp.route != nil {
+				p = wp.route(path)
+			}
+			if p == nil {
+				p = ForFile(path)
+			}
 			if p == nil {
 				results[idx] = Result{File: path, Err: fmt.Errorf("no parser for %s", path)}
 				return

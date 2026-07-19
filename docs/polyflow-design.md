@@ -233,7 +233,12 @@ For each file:
        → Prism/RuboCop AST primary
        → Sorbet type data if .rbi files present
   6. If Templ:
-       → a-h/templ/parser/v2 Visitor (unchanged)
+       → a-h/templ/parser/v2 Visitor, routed through the V.2 parser sidecar
+         (polyflow-parse-templ, one build per engine version, selected by the
+         service's resolved templ version via the toolchain registry;
+         length-prefixed JSON over stdio). Missing/dead sidecar → the same
+         Visitor runs in-process, with a toolchain_coverage note — never an
+         aborted run, never a dropped file.
 ```
 
 ### Cross-Service Linking — Constraint-Based Resolver

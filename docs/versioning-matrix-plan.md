@@ -210,7 +210,7 @@ eval corpus (play-events-sse hard-fail); pure vocab data change, exactly the
 maintenance mode this phase was built for. v0 vocab unchanged (data-init is a
 v1 idiom); wrong-version negatives added for both directions.
 
-### Phase V.2 — Sidecar protocol + router + templ sidecar (parser-engine fidelity) `pending`
+### Phase V.2 — Sidecar protocol + router + templ sidecar (parser-engine fidelity) `done`
 New `internal/sidecar/{protocol.go,router.go,manager.go}` and
 `cmd/polyflow-parse-templ/` (built against `a-h/templ`). Router wraps
 `parser.ForFile` dispatch in `indexer.go`; nearest-version fallback + labeling.
@@ -235,6 +235,68 @@ version-gated in V.1. Graph output byte-identical on chessleap (regression guard
   `io.ReadFull`/full-buffer writes on the length-prefixed frames; a frame
   size cap (reject >64MB with an error, not an OOM); sidecar stderr is
   captured into the coverage note, never inherited to the user's terminal.
+
+**Outcome (V.2).** Shipped `internal/sidecar/{protocol.go,manager.go,router.go}`
+and `cmd/polyflow-parse-templ/`. `protocol.go` is payload-generic exactly as
+pinned: uint32-LE length + opaque JSON both directions, `io.ReadFull` on
+header and payload, 64MB cap enforced on read and write, plus the pooled
+`Client` (one long-lived process per backend, requests serialized, stderr
+captured into a 16KB bounded buffer). `Manager` pools clients per backend id
+for one index run and caches start failures (no per-file respawn); binary
+discovery: `POLYFLOW_SIDECAR_DIR` env → polyflow executable's dir → PATH.
+`Router` (one per service) intercepts `.templ` dispatch via a new
+`WorkerPool.SetRoute` hook in `internal/parser/parser.go`; selection reuses
+`toolchain.Registry.Select` (nearest-newest + Inferred note). Any sidecar
+failure — missing binary, dead process, error frame — falls back to the
+in-process `TemplParser` with a `toolchain_coverage` note (`used_profile:
+"in-process"`, cause + captured stderr in the new optional `note` field);
+zero files dropped, run never aborts. The sidecar sorts nodes/edges by ID
+and unresolved by (file,line,kind,name) before framing. `TemplParser` gained
+`ParseSource` (content-based; `templparser.Parse` is exactly
+ReadFile+ParseString, so byte-equivalent). Indexer stamps per-service
+selections into new graph meta `toolchain_profiles` (tool → profile/version/
+inferred) and sorts `toolchain_coverage` notes before persisting (rule 2 —
+`SelectAll`'s map iteration previously reached stored output). `make build`
+now also builds `dist/polyflow-parse-templ`.
+
+Acceptance evidence: 20 new sidecar tests, all green — frame round-trip/
+partial-read/oversize/truncation; **two-run determinism** through the real
+built binary (byte-identical frames); sidecar↔in-process parity on the real
+datastar fixture; datastar_variant wrong-version negatives both directions
+(v0 fixture: >0 actions under v0 vocab, 0 under v1); fallback tested with a
+**real missing binary**, a **renamed** binary, and a **crashing** binary
+(stderr "boom" asserted in the note); full-`indexer.Run` missing-sidecar
+test (0 error files, note ledgered). Chessleap migration guard
+(`internal/sidecar/chessleap_golden_test.go`): sidecar-routed and in-process
+index runs are **byte-identical** — 11762 nodes / 29104 edges / 752
+cross-links both ways, marshaled node+edge JSON equal — with the sidecar
+proven genuinely used (no fallback note) and `toolchain_profiles` stamped
+`templ→templ-v0.3`, `datastar→datastar-v1`; committed snapshot
+`testdata/golden/chessleap_templ_graph.json` (1014 templ nodes, 2135 edges)
+in this same commit. Full suite green; `BenchmarkIndexCold` holds
+(10.1s/1200 files vs ~9.9s at V.1, Apple M4 run noise); chessleap
+`polyflow index --full`: 21.8s sidecar vs 21.2s in-process (~3% IPC
+overhead, pooled process keeps startup off the hot path).
+
+Recorded deviations/notes: (1) `ParseRequest` carries two additive fields
+beyond the pinned example — `service` (node IDs embed the service
+namespace) and `datastar_variant` (per-service vocabulary selection);
+without them the sidecar cannot reproduce the in-process graph. Frame
+layout unchanged. (2) `toolchain.CoverageNote` gained an optional `note`
+field for fallback cause/stderr. (3) No `graph.SchemaVersion` bump: stored
+node/edge shape and semantics are unchanged (byte-identity is the phase's
+acceptance); the new `toolchain_profiles` meta key is absent from pre-V.2
+graphs until their next rebuild — V.4's doctor must treat absence as
+"unstamped". (4) `make lint` could not run (golangci-lint not installed in
+the implementing environment); `go vet ./...` clean. (5) `build-all`
+(cross-compile) does not yet build the sidecar — distribution stays a
+documented risk until V.4 wires the matrix into CI. (6) phases.md's roadmap
+line "V.2/V.3 sidecars are divergence-triggered" conflicts with this plan
+(only V.3 is divergence-gated; V.2 → V.4 is unconditional here); per the
+process, this plan's ordering is authoritative — V.2 was built. (7) A
+pre-existing determinism defect surfaced during verification (impact
+`services_affected`/triggers emitted in map order, flaking the suite) was
+fixed in its own prior commit, not this phase's.
 
 ### Phase V.3 — Grammar sidecars (divergence-triggered, not unconditional) `pending`
 **Gated on proof, executed after V.4.** Grammars are version-tolerant; standing up
