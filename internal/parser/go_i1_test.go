@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "17" {
-		t.Errorf("expected SchemaVersion 17 (L.W2: NodeTypeElement introduced), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "18" {
+		t.Errorf("expected SchemaVersion 18 (D.2: unresolved_history table), got %q", graph.SchemaVersion)
 	}
 }
 
