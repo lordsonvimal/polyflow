@@ -42,8 +42,17 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg, _ := workspace.Load(meta.ConfigFile) // best-effort
+
+	// Build the embedder once for the MCP session lifetime; share across reloads.
+	emb, closeEmb, _ := resolveEmbedder(cfg)
+	defer closeEmb()
+	var synonyms map[string][]string
+	if cfg != nil {
+		synonyms = cfg.Search.Synonyms
+	}
+
 	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile))
-	handle.SetSearcher(buildSearcher(store, cfg))
+	handle.SetSearcher(buildSearcher(store, emb, synonyms))
 
 	// Pick up reindexes during the session: polyflow index atomically swaps
 	// graph.db, so watch it and swap in a fresh store + index. Diagnostics go
@@ -61,7 +70,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "mcp reload: build index: %v\n", err)
 			return
 		}
-		handle.SetSearcher(buildSearcher(newStore, cfg))
+		handle.SetSearcher(buildSearcher(newStore, emb, synonyms))
 		handle.Reload(newStore, newIdx)
 		fmt.Fprintln(os.Stderr, "polyflow mcp: graph reloaded")
 	}); err != nil {

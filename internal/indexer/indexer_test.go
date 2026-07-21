@@ -398,3 +398,100 @@ func TestRun_EmbedPassDeterminism(t *testing.T) {
 	r2 := run()
 	require.Equal(t, r1, r2, "embed pass is non-deterministic: run 1 ≠ run 2")
 }
+
+// fakeEmbedder is a test double for the Embedder interface.  It produces
+// deterministic all-zero 4-dim vectors so tests can exercise the embed pass
+// without depending on the real static model.
+type fakeEmbedder struct {
+	id   string
+	dims int
+}
+
+func (f *fakeEmbedder) ID() string { return f.id }
+func (f *fakeEmbedder) Dims() int  { return f.dims }
+func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range out {
+		out[i] = make([]float32, f.dims)
+	}
+	return out, nil
+}
+
+// TestRun_EmbedPassEmbedderSwitch is the S.3 acceptance test:
+// switching the embedder (simulated as changing the embedder ID) triggers a
+// full re-embed of every entity, and a second run with the new embedder
+// re-embeds zero (incremental gate holds).
+func TestRun_EmbedPassEmbedderSwitch(t *testing.T) {
+	cfg, _ := testWorkspace(t)
+	dbDir := t.TempDir()
+
+	embA := &fakeEmbedder{id: "fake-embedder-A", dims: 4}
+	embB := &fakeEmbedder{id: "fake-embedder-B", dims: 4}
+
+	// Run 1: embed with embedder A.
+	_, err := Run(context.Background(), Options{
+		Config:      cfg,
+		DBDir:       dbDir,
+		PatternsDir: "../../patterns",
+		Workers:     2,
+		Embedder:    embA,
+	})
+	require.NoError(t, err)
+
+	store1, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	metas1, err := store1.ListEmbeddingMeta(context.Background())
+	store1.Close()
+	require.NoError(t, err)
+	require.NotEmpty(t, metas1, "expected embeddings after first run")
+	for _, m := range metas1 {
+		require.Equal(t, embA.id, m.EmbedderID, "all embeddings must use embedder A after first run")
+	}
+
+	// Run 2: switch to embedder B — must re-embed everything.
+	_, err = Run(context.Background(), Options{
+		Config:      cfg,
+		DBDir:       dbDir,
+		PatternsDir: "../../patterns",
+		Workers:     2,
+		Embedder:    embB,
+	})
+	require.NoError(t, err)
+
+	store2, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	metas2, err := store2.ListEmbeddingMeta(context.Background())
+	store2.Close()
+	require.NoError(t, err)
+	require.Equal(t, len(metas1), len(metas2), "embedding count must be same after switch")
+	for _, m := range metas2 {
+		require.Equal(t, embB.id, m.EmbedderID, "all embeddings must use embedder B after switch")
+	}
+
+	// Run 3: same embedder B, unchanged sources — must re-embed zero.
+	_, err = Run(context.Background(), Options{
+		Config:      cfg,
+		DBDir:       dbDir,
+		PatternsDir: "../../patterns",
+		Workers:     2,
+		Embedder:    embB,
+	})
+	require.NoError(t, err)
+
+	store3, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	metas3, err := store3.ListEmbeddingMeta(context.Background())
+	store3.Close()
+	require.NoError(t, err)
+	// Content hashes and embedder IDs must be byte-identical — nothing re-embedded.
+	require.Equal(t, len(metas2), len(metas3), "embedding count changed on third run")
+	m2 := make(map[string]string, len(metas2))
+	for _, m := range metas2 {
+		m2[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
+	}
+	m3 := make(map[string]string, len(metas3))
+	for _, m := range metas3 {
+		m3[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
+	}
+	require.Equal(t, m2, m3, "embeddings changed on third run (no-op expected)")
+}

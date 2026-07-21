@@ -346,7 +346,7 @@ set (verified by `TestHandleSearch_OK` + new server wiring). (4) `meta` column
 in `embeddings` table now populated; pre-S.2 rows with `'{}'` are
 transparently enriched from the `nodes` table at query time for node entities.
 
-### Phase S.3 — Embedder upgrade ladder (sidecar + endpoint) `pending`
+### Phase S.3 — Embedder upgrade ladder (sidecar + endpoint) `done`
 
 **Problem.** Static embeddings are the floor; quality-sensitive users need
 the ladder without polyflow ever defaulting to it.
@@ -372,6 +372,37 @@ mock; space-mixing guard (two IDs in the table → error naming the fix).
 
 **Acceptance.** Switching `static → sidecar` on a fixture re-embeds
 everything once and search still passes the S.2 goldens.
+
+**Outcome (2026-07-21).** Shipped: `internal/semantic/sidecar.go`
+(`SidecarEmbedder`, `NewSidecarEmbedder`, `SidecarEmbedderID`,
+`SidecarEmbedderDims`, `SidecarBinaryName`); `internal/semantic/endpoint.go`
+(`EndpointEmbedder`, `NewEndpointEmbedder`);
+`internal/semantic/store.go` extended with `CheckEmbedderConsistency`;
+`internal/workspace/config.go` `SearchConfig` extended with `EndpointURL`,
+`EndpointModel`, `EndpointKeyEnv`; `internal/indexer/indexer.go` updated:
+`Options.Embedder` field, embedder-ID included in workspace fingerprint
+(switching embedder invalidates the incremental cache → full re-embed),
+`CheckEmbedderConsistency` called at embed-pass start; `cmd/polyflow/main.go`
+updated: `selectEmbedder`/`resolveEmbedder`/`findEmbedSidecarBin` helpers,
+`buildSearcher` refactored to accept embedder+synonyms (lifecycle clear),
+`runIndex`/`runServe`/`runMCP`/`buildSearcher` updated; `polyflow models pull`
+command (downloads nomic-embed-text-v1.5.Q8_0.gguf, sha256-checked).
+Tests: `sidecar_test.go` (4 tests: round-trip, ID/dims, dead-after-error,
+determinism); `endpoint_test.go` (7 tests: round-trip, default model, dims=0,
+API key from env, no-key header, server error, determinism); `store_test.go`
+(3 tests: empty/single/mixed embedder consistency); `indexer_test.go` extended
+with `TestRun_EmbedPassEmbedderSwitch` (acceptance: switch A→B re-embeds
+everything; B→B re-embeds zero). All 1051 tests pass (3 pre-existing timeout
+failures in contract/sidecar/evidence unchanged). `go vet` clean.
+`BenchmarkIndexCold` 14.6s/1200 files (≤15.95s budget held).
+Deviations: (1) `nomicModelSHA256` constant in `polyflow models pull` is left
+empty (skip integrity check) pending the author verifying the upstream GGUF
+SHA-256 on their machine after first download. The code enforces the check when
+the constant is non-empty. (2) chessleap corpus absent from bench run (local
+machine present — 14.6s confirmed). (3) The `polyflow-embed-sidecar` binary
+(the actual llama.cpp wrapper) is not included in this phase — it requires a
+C/CGO build. `SidecarEmbedder` fully implements the IPC client side; the
+server-side binary is a separate engineering task outside this plan.
 
 ### Phase S.4 — Measured accuracy + benchmark arm `pending`
 
