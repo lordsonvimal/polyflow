@@ -1,0 +1,17 @@
+{
+  "language": "go",
+  "profile": "datastar-v0",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "component", "label": "HyphenPanel"},
+    {"type": "http_client", "label": "POST /boards/create", "meta": {"datastar": "true"}},
+    {"type": "http_client", "label": "GET /boards/*/status", "meta": {"datastar": "true"}}
+  ],
+  "must_not_nodes": [
+    {"type": "http_client", "label_contains": "modern/colon"}
+  ],
+  "must_edges": [
+    {"type": "datastar_action", "from_label": "HyphenPanel", "to_label": "POST /boards/create"},
+    {"type": "datastar_action", "from_label": "HyphenPanel", "to_label_contains": "/boards/"}
+  ]
+}
