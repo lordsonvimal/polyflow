@@ -1,0 +1,16 @@
+{
+  "language": "ruby",
+  "profile": "ruby-v2",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "function", "label": "greet"},
+    {"type": "function", "label": "process"},
+    {"type": "function", "label": "main"}
+  ],
+  "must_edges": [
+    {"type": "contains", "from_label_contains": "app.rb", "to_label": "main"}
+  ],
+  "must_not_nodes": [
+    {"type": "function", "label": "helper"}
+  ]
+}

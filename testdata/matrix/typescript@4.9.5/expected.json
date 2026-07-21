@@ -1,0 +1,14 @@
+{
+  "language": "typescript",
+  "profile": "typescript-v4",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "function", "label": "identity"},
+    {"type": "function", "label": "transform"},
+    {"type": "function", "label": "main"}
+  ],
+  "must_not_nodes": [
+    {"type": "function", "label": "add"},
+    {"type": "function", "label": "compute"}
+  ]
+}

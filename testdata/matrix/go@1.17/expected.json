@@ -1,0 +1,17 @@
+{
+  "language": "go",
+  "profile": "go-v1-compat",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "function", "label": "transform"},
+    {"type": "function", "label": "accumulate"},
+    {"type": "function", "label": "main"}
+  ],
+  "must_edges": [
+    {"type": "calls", "from_label": "main", "to_label": "accumulate"},
+    {"type": "calls", "from_label": "accumulate", "to_label": "transform"}
+  ],
+  "must_not_nodes": [
+    {"type": "function", "label": "Map"}
+  ]
+}
