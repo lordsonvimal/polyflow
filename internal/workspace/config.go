@@ -99,6 +99,19 @@ type Settings struct {
 	Port          int    `yaml:"port"`           // default 9400
 }
 
+// SearchConfig holds workspace-level settings for hybrid retrieval (S.0+).
+type SearchConfig struct {
+	// Embedder selects the embedding backend: "static" (default, no setup),
+	// "sidecar" (llama.cpp nomic-embed-text, S.3), or "endpoint" (OpenAI-
+	// compatible API, S.3).  Changed Embedder triggers a full re-embed on
+	// the next index run so vector spaces are never mixed.
+	Embedder string `yaml:"embedder,omitempty"`
+	// Synonyms maps user-visible terms to code vocabulary, expanding both
+	// the FTS query and the embedding input text (S.2).
+	// Example: checkout: [falcon, purchase]
+	Synonyms map[string][]string `yaml:"synonyms,omitempty"`
+}
+
 // WorkspaceConfig is the parsed representation of workspace.yaml.
 type WorkspaceConfig struct {
 	Name     string         `yaml:"name"`
@@ -109,6 +122,7 @@ type WorkspaceConfig struct {
 	Index    IndexConfig    `yaml:"index"`
 	Settings Settings       `yaml:"settings"`
 	Evidence EvidenceConfig `yaml:"evidence,omitempty"`
+	Search   SearchConfig   `yaml:"search,omitempty"`
 }
 
 // DefaultExcludes returns the exclude globs written by `polyflow init`.
