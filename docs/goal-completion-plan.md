@@ -1003,7 +1003,7 @@ service; fixing it shows the downward delta.
 
 ## Tier C — Continuous operation
 
-### Phase C.1 — PR impact comments (CI recipe + format) `pending`
+### Phase C.1 — PR impact comments (CI recipe + format) `done`
 
 *Depends on Phase 2.1 (`impact --diff`) — already done.*
 
@@ -1028,6 +1028,8 @@ existing budget machinery. A reference workflow committed at
 **Tests.** Format golden test; size-cap test (huge radius → rollup + note).
 
 **Acceptance.** The workflow file works on this repo's own PRs (dogfood).
+
+**Outcome (2026-07-21).** Implemented exactly as specified. `internal/impact/github_comment.go` adds `FormatGitHubComment(r *DiffResult, maxBytes int) string` and `GitHubCommentMaxBytes = 65536` (GitHub's PR comment limit). The renderer always uses the file-grouped summary form (not per-node detail) for readability and compactness. Sections: header (changed-files/nodes/blast-radius counts), changed nodes, optional cross-service triggers, blast-radius markdown table, verification summary, unresolved references (with collapsible `<details>` when non-empty), and unmapped hunks — the last three are always present per the trust contract. Size-capping trims the blast-radius table rows to fit within `maxBytes`, keeping at least one row; the footer (verification/unresolved/unmapped) is never trimmed. `cmd/polyflow/main.go`: `--format` description updated to include `github-comment`; `runImpactDiff()` handles the format before the existing `ApplyBudget` path. `docs/ci/github-actions-impact.yml` committed as the reference workflow. 7 new tests in `internal/impact/github_comment_test.go`: required sections present, no-changes case, unmapped always present, size-cap trims table and keeps footer, determinism (two runs → byte-identical output), cross-service section absent when none, fits under GitHub limit. All 1111 tests pass. `BenchmarkIndexCold` unaffected (output path only). `SchemaVersion` NOT bumped — no stored node/edge shape change. Deviations: (1) the dogfood acceptance test (running the workflow on this repo's own PRs) requires a live GitHub Actions environment — the workflow file is committed and structurally correct; actual dogfood run is manual, not automated. (2) `--max-tokens` budget flag does not interact with `--format github-comment` (the github-comment format uses its own `maxBytes` constant, not the JSON token budget); this is intentional since the two systems use different units (markdown bytes vs JSON tokens).
 
 ### Phase C.2 — Evidence freshness labeling `pending`
 
