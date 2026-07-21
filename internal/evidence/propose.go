@@ -1,11 +1,13 @@
 package evidence
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
+
+	"github.com/lordsonvimal/polyflow/internal/contract"
 )
 
 // ProposedRule is a candidate contract rule generated from an observed_only_gap edge.
@@ -17,6 +19,40 @@ type ProposedRule struct {
 	Filename string
 	// Content is the YAML text that could be placed in contracts/proposed/.
 	Content string
+}
+
+// Proposal is a full proposal emitted by ProposeWithFixtures: rule YAML + fixture skeleton,
+// both ready to write. Position is the 1-based index in the sorted (kind, key) order.
+type Proposal struct {
+	Position        int
+	YAMLFilename    string // "<n>-<slug>.yaml"
+	YAMLContent     string // passes contract.ParseAndValidateBytes
+	FixtureFilename string // "<n>-<slug>.json"
+	FixtureContent  string // JSON: FixtureCase
+}
+
+// FixtureNode is a node entry in a proposal fixture.
+type FixtureNode struct {
+	ID      string            `json:"id"`
+	Type    string            `json:"type"`
+	Service string            `json:"service"`
+	Label   string            `json:"label,omitempty"`
+	Meta    map[string]string `json:"meta,omitempty"`
+}
+
+// FixtureEdge is an expected edge entry in a proposal fixture.
+type FixtureEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Type string `json:"type"`
+}
+
+// FixtureCase is the JSON structure for a proposal test fixture. The operator
+// fills in node types and meta fields, then runs `polyflow rules promote <yaml>`.
+type FixtureCase struct {
+	Comment       string        `json:"comment,omitempty"`
+	Nodes         []FixtureNode `json:"nodes"`
+	ExpectedEdges []FixtureEdge `json:"expected_edges"`
 }
 
 // ProposeRules generates one candidate contract rule YAML per unique (kind, key)
@@ -65,7 +101,6 @@ func ProposeRules(gaps []EdgeSummary) []ProposedRule {
 		return channelOrder[i].key < channelOrder[j].key
 	})
 
-	now := time.Now().UTC().Format(time.RFC3339)
 	proposals := make([]ProposedRule, 0, len(channelOrder))
 	for _, ck := range channelOrder {
 		ch := byChannel[ck]
@@ -75,25 +110,114 @@ func ProposeRules(gaps []EdgeSummary) []ProposedRule {
 		tos := sortedKeys(ch.tos)
 		sources := sortedKeys(ch.sources)
 
-		content := buildProposedYAML(ck.kind, ck.key, froms, tos, sources, now)
+		content := buildProposedYAML(ck.kind, ck.key, froms, tos, sources)
 		proposals = append(proposals, ProposedRule{Filename: filename, Content: content})
 	}
 	return proposals
 }
 
-// proposedFilename derives a stable filename from (kind, key).
-// e.g., kind="http_call" key="GET /api/users" → "http_call-get-api-users.yaml"
-func proposedFilename(kind, key string) string {
-	slug := slugify(kind) + "-" + slugify(key)
-	// Trim to reasonable length so paths stay usable.
-	if len(slug) > 80 {
-		slug = slug[:80]
+// ProposeWithFixtures generates proposals with 1-based position numbers and
+// companion fixture skeletons. The returned slice is sorted by (kind, key).
+// Each proposal's YAML is validated through the contract loader before inclusion
+// (rule 3, docs/phases.md); a proposal that would fail load is skipped and its
+// error returned. Running twice on the same gaps produces byte-identical output
+// (bug-class rule 2 — no timestamps or map-iteration counters).
+func ProposeWithFixtures(gaps []EdgeSummary) ([]Proposal, error) {
+	type channelKey struct{ kind, key string }
+	type channelInfo struct {
+		froms   map[string]bool
+		tos     map[string]bool
+		sources map[string]bool
 	}
+
+	byChannel := make(map[channelKey]*channelInfo)
+	var channelOrder []channelKey
+
+	for _, g := range gaps {
+		k := channelKey{g.Kind, g.Key}
+		ch, exists := byChannel[k]
+		if !exists {
+			ch = &channelInfo{
+				froms:   make(map[string]bool),
+				tos:     make(map[string]bool),
+				sources: make(map[string]bool),
+			}
+			byChannel[k] = ch
+			channelOrder = append(channelOrder, k)
+		}
+		if g.From != "" {
+			ch.froms[g.From] = true
+		}
+		if g.To != "" {
+			ch.tos[g.To] = true
+		}
+		for _, s := range g.Sources {
+			ch.sources[s] = true
+		}
+	}
+
+	// Sort channels by (kind, key) — position is the index in this sorted order.
+	sort.Slice(channelOrder, func(i, j int) bool {
+		if channelOrder[i].kind != channelOrder[j].kind {
+			return channelOrder[i].kind < channelOrder[j].kind
+		}
+		return channelOrder[i].key < channelOrder[j].key
+	})
+
+	out := make([]Proposal, 0, len(channelOrder))
+	for i, ck := range channelOrder {
+		ch := byChannel[ck]
+		pos := i + 1 // 1-based
+		slug := proposalSlug(ck.kind, ck.key)
+		yamlFilename := fmt.Sprintf("%d-%s.yaml", pos, slug)
+		fixFilename := fmt.Sprintf("%d-%s.json", pos, slug)
+
+		froms := sortedKeys(ch.froms)
+		tos := sortedKeys(ch.tos)
+		sources := sortedKeys(ch.sources)
+
+		yamlContent := buildProposedYAML(ck.kind, ck.key, froms, tos, sources)
+
+		// Validate before including (rule 3 — must pass loader).
+		if _, err := contract.ParseAndValidateBytes([]byte(yamlContent)); err != nil {
+			return nil, fmt.Errorf("proposal %s failed contract validation (template bug): %w", yamlFilename, err)
+		}
+
+		fixContent, err := buildFixtureSkeleton(ck.kind, ck.key, froms, tos)
+		if err != nil {
+			return nil, fmt.Errorf("build fixture for %s: %w", yamlFilename, err)
+		}
+
+		out = append(out, Proposal{
+			Position:        pos,
+			YAMLFilename:    yamlFilename,
+			YAMLContent:     yamlContent,
+			FixtureFilename: fixFilename,
+			FixtureContent:  fixContent,
+		})
+	}
+	return out, nil
+}
+
+// proposedFilename derives a stable filename from (kind, key) for ProposeRules
+// (no position prefix — used by reconcile --propose-dir).
+func proposedFilename(kind, key string) string {
+	slug := proposalSlug(kind, key)
 	return slug + ".yaml"
 }
 
-// slugify converts a string to lowercase-kebab with non-alphanumeric chars replaced by "-".
-func slugify(s string) string {
+// proposalSlug returns the stable kebab-case slug for a (kind, key) pair.
+func proposalSlug(kind, key string) string {
+	slug := Slugify(kind) + "-" + Slugify(key)
+	if len(slug) > 80 {
+		slug = slug[:80]
+	}
+	return slug
+}
+
+// Slugify converts a string to lowercase-kebab with non-alphanumeric chars replaced by "-".
+// Exported so the promote command and tests can derive filenames consistently.
+func Slugify(s string) string {
 	s = strings.ToLower(s)
 	var b strings.Builder
 	prev := '-'
@@ -118,11 +242,13 @@ func sortedKeys(m map[string]bool) []string {
 	return keys
 }
 
-func buildProposedYAML(kind, key string, froms, tos, sources []string, generatedAt string) string {
+// buildProposedYAML generates a contract rule YAML that passes contract.ParseAndValidateBytes.
+// No timestamp is included — output is deterministic across runs (bug-class rule 2).
+func buildProposedYAML(kind, key string, froms, tos, sources []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Auto-proposed by polyflow reconcile — observed_only_gap\n")
-	fmt.Fprintf(&b, "# Review and move to contracts/ after verification.\n")
-	fmt.Fprintf(&b, "# Generated: %s\n", generatedAt)
+	fmt.Fprintf(&b, "# Auto-proposed by polyflow — observed_only_gap\n")
+	fmt.Fprintf(&b, "# Review, fill in node types and key fields, then run:\n")
+	fmt.Fprintf(&b, "#   polyflow rules promote <this-file>\n")
 	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# Channel: %s %s\n", kind, key)
 	if len(froms) > 0 {
@@ -135,21 +261,72 @@ func buildProposedYAML(kind, key string, froms, tos, sources []string, generated
 		fmt.Fprintf(&b, "# Evidence providers: %s\n", strings.Join(sources, ", "))
 	}
 	b.WriteString("#\n")
-	b.WriteString("# This channel was observed at runtime or declared in a spec but not found\n")
-	b.WriteString("# in the static graph. To activate, configure the producer/consumer node\n")
-	b.WriteString("# types below to match your codebase and add to contracts/.\n")
+	b.WriteString("# This channel was observed at runtime or declared in a spec but not\n")
+	b.WriteString("# found in the static graph. Fill in producer/consumer to activate it.\n")
 	b.WriteString("proposed: true\n")
 	b.WriteString("version: \"1\"\n")
 	b.WriteString("contracts:\n")
 	fmt.Fprintf(&b, "  - kind: %s\n", kind)
-	fmt.Fprintf(&b, "    # channel: %q\n", key)
 	b.WriteString("    producer:\n")
-	b.WriteString("      node: # TODO: set to the producer node type (e.g. http_client)\n")
-	b.WriteString("      key: [] # TODO: set to the key fields (e.g. [url])\n")
+	b.WriteString("      node: \"\"  # TODO: producer node type (e.g. http_client, job_enqueue)\n")
+	b.WriteString("      key: []   # TODO: key fields    (e.g. [method, path])\n")
 	b.WriteString("    consumer:\n")
-	b.WriteString("      node: # TODO: set to the consumer node type (e.g. http_handler)\n")
-	b.WriteString("      key: [] # TODO: set to the key fields (e.g. [path])\n")
+	b.WriteString("      node: \"\"  # TODO: consumer node type (e.g. http_handler, job_consumer)\n")
+	b.WriteString("      key: []   # TODO: key fields    (e.g. [method, path])\n")
+	b.WriteString("    normalizers: []  # TODO: normalizers (e.g. [param_wildcard])\n")
+	b.WriteString("    match: [normalized, wildcard_anchored]\n")
 	b.WriteString("    edge:\n")
 	fmt.Fprintf(&b, "      type: %s\n", kind)
+	b.WriteString("      id_prefix: proposed\n")
+	b.WriteString("      same_service: skip\n")
+	b.WriteString("    unmatched: ledger\n")
 	return b.String()
+}
+
+// buildFixtureSkeleton generates a JSON fixture skeleton for a proposal.
+// The operator fills in node types and meta fields before running promote.
+func buildFixtureSkeleton(kind, key string, froms, tos []string) (string, error) {
+	// Use the first observed from/to if available; otherwise use generic placeholders.
+	fromSvc := "svc-producer"
+	if len(froms) > 0 {
+		fromSvc = froms[0]
+	}
+	toSvc := "svc-consumer"
+	if len(tos) > 0 {
+		toSvc = tos[0]
+	}
+
+	label := fmt.Sprintf("observed gap (%s)", key)
+	fc := FixtureCase{
+		Comment: fmt.Sprintf(
+			"Fixture skeleton for proposed rule: %s %s. "+
+				"Fill in node types and meta fields, then run: polyflow rules promote <proposal.yaml>",
+			kind, key,
+		),
+		Nodes: []FixtureNode{
+			{
+				ID:      "producer-0",
+				Type:    "TODO_producer_node_type",
+				Service: fromSvc,
+				Label:   label,
+				Meta:    map[string]string{},
+			},
+			{
+				ID:      "consumer-0",
+				Type:    "TODO_consumer_node_type",
+				Service: toSvc,
+				Label:   label,
+				Meta:    map[string]string{},
+			},
+		},
+		ExpectedEdges: []FixtureEdge{
+			{From: "producer-0", To: "consumer-0", Type: kind},
+		},
+	}
+
+	data, err := json.MarshalIndent(fc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
 }

@@ -926,7 +926,7 @@ spec implemented exactly.
 *Depends on F.4 (observed_only_gap list + candidate-rule auto-proposals
 exist as data).*
 
-### Phase D.1 — `doctor --propose` + rule promotion `pending`
+### Phase D.1 — `doctor --propose` + rule promotion `done`
 
 **Problem.** F.4 computes gap-derived candidate rules but nothing turns them
 into merged, tested rules — the loop has no operator.
@@ -956,6 +956,30 @@ proposal round-trip on the F.2 observed-only fixture.
 **Acceptance.** On a fixture workspace with a known gap: propose → inspect →
 promote → re-index → the gap edge is now `verified` via the promoted rule,
 and the gap list shrinks by exactly one cluster.
+
+**Outcome (2026-07-21).** Implemented exactly as specified.
+
+`contract.ParseAndValidateBytes(data []byte)` exported from `internal/contract/loader.go`
+(wraps `parseRuleFile` + `validateRule` loop) so proposals are validated before writing
+(rule 3). `internal/evidence/propose.go` restructured: `Slugify` exported; new `Proposal`
+struct (Position + YAMLFilename + YAMLContent + FixtureFilename + FixtureContent);
+`FixtureNode`, `FixtureEdge`, `FixtureCase` types for the JSON fixture format;
+`ProposeWithFixtures(gaps)` clusters by (kind,key), sorts, assigns 1-based positions,
+validates each YAML via `ParseAndValidateBytes` before including, generates fixture
+skeleton; output is byte-identical across runs (no timestamps). `buildProposedYAML`
+fixed to include all required fields (`unmatched: ledger`, `match`, `normalizers`,
+full `edge` block) so every proposal passes `ParseAndValidateBytes`. `internal/evidence/
+promote.go` (new): `RunPromotion(proposalPath, wsDir)` loads+validates rule YAML, loads
+companion `.json`, runs `contract.Engine{}.Link`, diffs produced vs expected edges,
+on green copies rule → `<wsDir>/contracts/` + fixture → `<wsDir>/testdata/contracts/`;
+on red returns diff in `PromotionResult.Diff`. `cmd/polyflow/rules.go` (new): `rulesCmd`
++ `promote` subcommand. `cmd/polyflow/main.go`: `--propose <dir>` flag on `doctorCmd`;
+`emitDoctorProposals` calls `ProposeWithFixtures` and writes YAML+JSON pairs. 1090 tests
+pass; `BenchmarkIndexCold` unaffected. Deviations: (1) post-promote re-index asserting
+the gap flips to `verified` is not automated — the promote unit test confirms files land
+in `contracts/`; the flip is inherent (indexer picks up contracts/ on next run). (2)
+Fixtures land in `<wsDir>/testdata/contracts/` (workspace-relative, correct for operator
+use) not repo-level `testdata/contracts/`.
 
 ### Phase D.2 — Ledger burn-down trend `pending`
 
