@@ -7,6 +7,7 @@ package impact
 import (
 	"encoding/json"
 	"sort"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -69,7 +70,9 @@ type Result struct {
 // (<= 0 means unlimited), optionally filtered to one service. verboseSources
 // controls whether per-caller Sources contains compact "provider:ref" strings
 // (false, default) or full SourceRef structs (true, --verbose-sources).
-func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service string, verboseSources bool) *Result {
+// Build computes the blast radius of root. staleAfter is the workspace-configured
+// freshness threshold (0 = no stale check).
+func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service string, verboseSources bool, staleAfter time.Duration) *Result {
 	ancestors := graph.Ancestors(idx, root.ID, depth)
 
 	if service != "" {
@@ -93,7 +96,7 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		Depth:                depth,
 		TotalCallers:         len(callers),
 		Unresolved:           []graph.UnresolvedRef{},
-		VerificationSummary:  graph.BuildVerificationSummary(edges),
+		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, staleAfter, time.Now()),
 	}
 }
 
@@ -165,8 +168,8 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verb
 }
 
 // marshalSources serialises edge Sources as compact "provider:ref" strings
-// (default) or full SourceRef structs (verboseSources=true). Returns nil when
-// the edge has no Sources.
+// with age annotation (default) or full SourceRef structs (verboseSources=true).
+// Returns nil when the edge has no Sources.
 func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	if len(sources) == 0 {
 		return nil
@@ -175,7 +178,7 @@ func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	if verbose {
 		v = graph.SortedSources(sources)
 	} else {
-		v = graph.CompactSources(sources)
+		v = graph.CompactSourcesAt(sources, time.Now())
 	}
 	b, _ := json.Marshal(v)
 	return json.RawMessage(b)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
@@ -51,7 +52,8 @@ type DiffResult struct {
 // means unlimited), optionally filtered to one service. Spans that map to no
 // node are recorded in Unmapped — never silently dropped. verboseSources
 // controls whether per-caller Sources uses compact or full SourceRef structs.
-func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth int, service string, verboseSources bool) *DiffResult {
+// staleAfter is the workspace-configured freshness threshold (0 = no stale check).
+func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth int, service string, verboseSources bool, staleAfter time.Duration) *DiffResult {
 	r := &DiffResult{
 		Mode:         "worktree",
 		Depth:        depth,
@@ -146,7 +148,7 @@ func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth in
 	r.ServicesAffected = services
 	r.CrossServiceTriggers = triggers
 	r.TotalCallers = len(callers)
-	r.VerificationSummary = graph.BuildVerificationSummary(edges)
+	r.VerificationSummary = graph.BuildVerificationSummaryAt(edges, staleAfter, time.Now())
 	return r
 }
 

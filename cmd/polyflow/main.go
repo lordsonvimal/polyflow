@@ -659,6 +659,30 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				r.Service, r.Kind, r.Baseline, r.Latest, deltaStr)
 		}
 	}
+
+	// C.2: list capture sessions with ages.
+	sessions := trace_ingest.ListSessionInfos(capturesBase(), time.Now())
+	if len(sessions) > 0 {
+		fmt.Println()
+		fmt.Printf("  Capture sessions: %d\n", len(sessions))
+		for _, s := range sessions {
+			age := s.Age
+			if age == "" {
+				age = "?"
+			}
+			status := "active"
+			if s.StoppedAt != nil {
+				status = "done"
+			}
+			fmt.Printf("    %-30s  started=%s  %s  spans=%-5d  (%s)\n",
+				s.Name,
+				s.StartedAt.Format("2006-01-02"),
+				age,
+				s.SpanCount,
+				status,
+			)
+		}
+	}
 	return nil
 }
 
@@ -813,7 +837,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources)
+	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile))
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -989,7 +1013,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result := trace.Run(idx, root.ID, traceDirection, traceDepth, traceVerboseSources)
+	result := trace.Run(idx, root.ID, traceDirection, traceDepth, traceVerboseSources, loadStaleAfter(meta.ConfigFile))
 	if result == nil {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
@@ -1161,7 +1185,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	out := impact.Build(idx, root, impactDepth, impactService, impactVerboseSources)
+	out := impact.Build(idx, root, impactDepth, impactService, impactVerboseSources, loadStaleAfter(meta.ConfigFile))
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1313,7 +1337,7 @@ func runImpactDiff() error {
 		return err
 	}
 
-	out := impact.BuildDiff(idx, changes, impactDepth, impactService, impactVerboseSources)
+	out := impact.BuildDiff(idx, changes, impactDepth, impactService, impactVerboseSources, cfg.Evidence.StaleAfterDuration())
 	if impactStaged {
 		out.Mode = "staged"
 	}
@@ -2041,8 +2065,45 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// C.2: evidence freshness — suggest re-capture when all verified edges are stale.
+	fmt.Println()
+	if storeErr != nil {
+		fmt.Printf("  Evidence freshness:  (no index — run 'polyflow index' first)\n")
+	} else if len(allEdges) > 0 {
+		wsCfg, wsErr := workspace.Load(meta.ConfigFile)
+		var staleAfter time.Duration
+		if wsErr == nil {
+			staleAfter = wsCfg.Evidence.StaleAfterDuration()
+		} else {
+			staleAfter = workspace.DefaultStaleAfter
+		}
+		vs := graph.BuildVerificationSummaryAt(allEdges, staleAfter, time.Now())
+		if vs.Verified == 0 {
+			fmt.Printf("  Evidence freshness:  no verified edges (no capture sessions or all edges static)\n")
+		} else if vs.StaleEvidence == vs.Verified {
+			fmt.Printf("  Evidence freshness:  WARNING — all %d verified edge(s) have stale runtime evidence (>%s); run 'polyflow capture' to refresh\n",
+				vs.Verified, formatDuration(staleAfter))
+		} else if vs.StaleEvidence > 0 {
+			fmt.Printf("  Evidence freshness:  %d/%d verified edge(s) have stale runtime evidence (>%s); consider re-capturing\n",
+				vs.StaleEvidence, vs.Verified, formatDuration(staleAfter))
+		} else {
+			fmt.Printf("  Evidence freshness:  OK (%d verified edge(s), none stale)\n", vs.Verified)
+		}
+	} else {
+		fmt.Printf("  Evidence freshness:  (no cross-service edges — run 'polyflow index' first)\n")
+	}
+
 	fmt.Println()
 	return nil
+}
+
+// formatDuration renders a duration as a human-readable string for doctor output.
+func formatDuration(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	if days > 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return d.String()
 }
 
 // emitDoctorProposals writes rule YAML + fixture JSON for each observed_only_gap channel.
@@ -2177,4 +2238,14 @@ func openStore() (*graph.SQLiteStore, error) {
 		return nil, fmt.Errorf("open store (run `polyflow index` first): %w", err)
 	}
 	return store, nil
+}
+
+// loadStaleAfter reads the workspace evidence.stale_after duration.
+// Returns the default (30d) on any error so callers can always pass a value.
+func loadStaleAfter(wsPath string) time.Duration {
+	cfg, err := workspace.Load(wsPath)
+	if err != nil {
+		return workspace.DefaultStaleAfter
+	}
+	return cfg.Evidence.StaleAfterDuration()
 }

@@ -155,7 +155,7 @@ func TestTraceJSON_IncludesEveryFixtureEdgeType(t *testing.T) {
 		})
 	}
 
-	r := Run(buildIdx(nodes, edges), "root", "forward", 0, false)
+	r := Run(buildIdx(nodes, edges), "root", "forward", 0, false, 0)
 	require.NotNil(t, r)
 
 	sorted := append([]string{}, edgeTypes...)

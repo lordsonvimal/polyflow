@@ -148,7 +148,7 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 		if err != nil || len(nodes) == 0 {
 			return CaseResult{}, fmt.Errorf("node not found for target %q", c.Target)
 		}
-		out := impact.Build(idx, nodes[0], 10, "", false)
+		out := impact.Build(idx, nodes[0], 10, "", false, 0)
 		returned = nodeImpactFiles(out)
 	case "file":
 		out, err := impact.BuildFile(idx, "", c.Target, "backward", 10)

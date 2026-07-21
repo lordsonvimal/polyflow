@@ -40,7 +40,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build index: %w", err)
 	}
 
-	srv, handle := mcpserver.New(store, idx, meta.Version)
+	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile))
 
 	// Pick up reindexes during the session: polyflow index atomically swaps
 	// graph.db, so watch it and swap in a fresh store + index. Diagnostics go
