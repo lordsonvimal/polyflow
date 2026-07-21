@@ -266,9 +266,8 @@ export default App;
 
 // --- S.0 embed pass acceptance tests ---
 
-// TestRun_EmbedPassFirstRun verifies that a fresh index embeds all nodes and
-// stores them in the embeddings table (acceptance: "polyflow index embeds all
-// node cards in one pass").
+// TestRun_EmbedPassFirstRun verifies that a fresh index embeds all entities
+// (nodes + flow chains + doc chunks) in one pass (S.1 acceptance).
 func TestRun_EmbedPassFirstRun(t *testing.T) {
 	cfg, _ := testWorkspace(t)
 	dbDir := t.TempDir()
@@ -285,8 +284,11 @@ func TestRun_EmbedPassFirstRun(t *testing.T) {
 
 	metas, err := store.ListEmbeddingMeta(ctx)
 	require.NoError(t, err)
-	require.Equal(t, nodeCount, len(metas),
-		"embedding count (%d) must equal node count (%d)", len(metas), nodeCount)
+	// S.1: embeddings include nodes + flow chains + doc chunks, so total is
+	// >= nodeCount.  All nodes must be embedded (no node may be skipped).
+	require.GreaterOrEqual(t, len(metas), nodeCount,
+		"every node must have an embedding; got %d embeddings for %d nodes",
+		len(metas), nodeCount)
 
 	// embed_status must be "ok"
 	status, err := store.GetMeta(ctx, "embed_status")

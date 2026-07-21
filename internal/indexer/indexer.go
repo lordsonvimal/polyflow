@@ -919,7 +919,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			return nil, err
 		}
 	} else {
-		if embedErr := runEmbedPass(ctx, store, allNodes, oldEmbedMeta, opts, logw); embedErr != nil {
+		if embedErr := runEmbedPass(ctx, store, allNodes, allEdges, oldEmbedMeta, opts, logw); embedErr != nil {
 			fmt.Fprintf(logw, "  Warning: embed pass: %v\n", embedErr)
 			if serr := store.SetMeta(ctx, "embed_status", "unavailable: "+embedErr.Error()); serr != nil {
 				return nil, serr
@@ -1065,16 +1065,14 @@ func fingerprintLines(lines []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// runEmbedPass embeds finalized nodes and upserts their vectors + FTS entries.
-// It only re-embeds nodes whose content hash or embedder ID changed.
-//
-// Card text for S.0: "{label} {type} {service} {file}" — a minimal one-line
-// card. S.1 replaces this with richer node-card + flow-chain + doc-chunk
-// builders; the hash gate ensures changed nodes are re-embedded automatically.
+// runEmbedPass builds the full embedding corpus (S.1: node cards + flow chains
+// + doc chunks) and upserts vectors + FTS entries for entities whose content
+// hash or embedder ID changed.
 func runEmbedPass(
 	ctx context.Context,
 	store *graph.SQLiteStore,
 	allNodes []graph.Node,
+	allEdges []graph.Edge,
 	oldEmbedMeta map[string]string,
 	opts Options,
 	logw io.Writer,
@@ -1085,30 +1083,57 @@ func runEmbedPass(
 	}
 	embedderID := emb.ID()
 
-	// Build the delta: nodes whose content hash or embedder changed.
-	var toEmbed []semantic.Entity
+	// ── Build corpus entities (S.1) ─────────────────────────────────────────
+	// 1. Node cards — richer one-line card: label type service file [meta].
+	nodeEntities := make([]semantic.Entity, len(allNodes))
 	for i := range allNodes {
-		n := &allNodes[i]
-		text := nodeCard(n)
-		h := sha256.Sum256([]byte(text))
-		contentHash := hex.EncodeToString(h[:])
-		key := embedderID + "\x00" + contentHash
-		if oldEmbedMeta[n.ID] == key {
-			continue // unchanged — skip re-embed
-		}
-		toEmbed = append(toEmbed, semantic.Entity{
-			ID:          n.ID,
-			Type:        "node",
-			Text:        text,
-			ContentHash: contentHash,
-			NodeID:      n.ID,
-			File:        n.File,
-			Line:        n.Line,
-		})
+		nodeEntities[i] = semantic.BuildNodeCard(&allNodes[i])
 	}
 
-	fmt.Fprintf(logw, "  Embedding %d/%d nodes (embedder=%s)\n",
-		len(toEmbed), len(allNodes), embedderID)
+	// 2. Flow-chain documents — one per distinct chain from each entrypoint.
+	idx := graph.NewAdjacencyIndex()
+	for i := range allNodes {
+		idx.AddNode(&allNodes[i])
+	}
+	for i := range allEdges {
+		idx.AddEdge(&allEdges[i])
+	}
+	chainEntities := semantic.BuildFlowChains(idx)
+
+	// 3. Doc chunks — markdown files + code doc-comments from service dirs.
+	var svcPaths []semantic.ServicePath
+	if opts.Config != nil {
+		for _, svc := range opts.Config.Services {
+			absPath, err := filepath.Abs(svc.Path)
+			if err != nil {
+				absPath = svc.Path
+			}
+			svcPaths = append(svcPaths, semantic.ServicePath{Path: absPath, Service: svc.Name})
+		}
+	}
+	docEntities := semantic.BuildDocChunks(svcPaths, allNodes)
+
+	// Combine all entities; dedupe by ID (node cards win over chain/doc on
+	// collision — in practice IDs are namespaced and never collide).
+	combined := make([]semantic.Entity, 0, len(nodeEntities)+len(chainEntities)+len(docEntities))
+	combined = append(combined, nodeEntities...)
+	combined = append(combined, chainEntities...)
+	combined = append(combined, docEntities...)
+
+	// ── Delta: entities whose content hash or embedder changed ───────────────
+	var toEmbed []semantic.Entity
+	for _, ent := range combined {
+		key := embedderID + "\x00" + ent.ContentHash
+		if oldEmbedMeta[ent.ID] == key {
+			continue
+		}
+		toEmbed = append(toEmbed, ent)
+	}
+
+	fmt.Fprintf(logw, "  Embedding %d/%d entities (nodes=%d flows=%d docs=%d embedder=%s)\n",
+		len(toEmbed), len(combined),
+		len(nodeEntities), len(chainEntities), len(docEntities),
+		embedderID)
 
 	if len(toEmbed) == 0 {
 		return nil
@@ -1127,22 +1152,15 @@ func runEmbedPass(
 		for i, e := range batch {
 			texts[i] = e.Text
 		}
-		vecs, err := emb.Embed(ctx, texts)
-		if err != nil {
-			return fmt.Errorf("embed batch [%d:%d]: %w", start, end, err)
+		vecs, embErr := emb.Embed(ctx, texts)
+		if embErr != nil {
+			return fmt.Errorf("embed batch [%d:%d]: %w", start, end, embErr)
 		}
-		if err := sem.BatchUpsertEmbeddings(ctx, batch, vecs, embedderID); err != nil {
-			return fmt.Errorf("upsert embeddings [%d:%d]: %w", start, end, err)
+		if uErr := sem.BatchUpsertEmbeddings(ctx, batch, vecs, embedderID); uErr != nil {
+			return fmt.Errorf("upsert embeddings [%d:%d]: %w", start, end, uErr)
 		}
 	}
 	return nil
-}
-
-// nodeCard produces a one-line card text for a node (S.0 minimal format).
-// S.1 replaces this with the full corpus builder that includes route/signature
-// meta and produces richer text for all three entity types.
-func nodeCard(n *graph.Node) string {
-	return n.Label + " " + string(n.Type) + " " + n.Service + " " + n.File
 }
 
 // walkService collects parseable files under root, honoring exclude globs.
