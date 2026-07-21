@@ -32,6 +32,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/sidecar"
 	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
@@ -45,8 +46,13 @@ type Options struct {
 	ContractsDir string // default: "" → no workspace-custom rules; set to the workspace root to load <dir>/contracts/*.yaml
 	Workers      int    // default: GOMAXPROCS
 	Full         bool   // force full re-parse, ignoring the incremental cache
-	Log          io.Writer
-	Progress     func(done, total int)
+	// NoEmbed skips the embedding pass entirely.  The next index without
+	// NoEmbed will re-embed all entities (no incremental delta).  The
+	// degradation reason is stamped in the "embed_status" meta key so
+	// search can surface "semantic: unavailable: embeddings skipped".
+	NoEmbed bool
+	Log      io.Writer
+	Progress func(done, total int)
 }
 
 // Stats reports what an indexing run did.
@@ -92,6 +98,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	oldHashes := map[string]*graph.FileHash{}
 	oldSemantic := map[string][4]string{} // service → (fingerprint, nodesJSON, edgesJSON, referencedJSON)
 	oldFingerprint := ""
+	// oldEmbedMeta: entity_id → "embedder_id\x00content_hash" for hash-gating.
+	oldEmbedMeta := map[string]string{}
 	if !opts.Full {
 		if _, err := os.Stat(finalDB); err == nil {
 			if oldStore, err := graph.NewSQLiteStore(finalDB); err == nil {
@@ -109,6 +117,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 					}
 					if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
 						oldFingerprint = fp
+					}
+					// Load embedding metadata for incremental re-embed gating.
+					if metas, err := oldStore.ListEmbeddingMeta(ctx); err == nil {
+						for _, m := range metas {
+							oldEmbedMeta[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
+						}
 					}
 				} else {
 					fmt.Fprintf(logw, "  Schema version changed (%q → %q) — full re-index\n", ver, graph.SchemaVersion)
@@ -895,6 +909,28 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		allUnresolved = result.Unresolved
 	}
 
+	// ── Embed pass (S.0) ─────────────────────────────────────────────────────
+	// Produce or update vector embeddings for every finalized node.
+	// Runs after all linking and evidence reconciliation so the node set is
+	// complete.  Skipped if opts.NoEmbed — the degradation reason is stamped
+	// so the search layer can surface it in the response.
+	if opts.NoEmbed {
+		if err := store.SetMeta(ctx, "embed_status", "unavailable: embeddings skipped"); err != nil {
+			return nil, err
+		}
+	} else {
+		if embedErr := runEmbedPass(ctx, store, allNodes, oldEmbedMeta, opts, logw); embedErr != nil {
+			fmt.Fprintf(logw, "  Warning: embed pass: %v\n", embedErr)
+			if serr := store.SetMeta(ctx, "embed_status", "unavailable: "+embedErr.Error()); serr != nil {
+				return nil, serr
+			}
+		} else {
+			if err := store.SetMeta(ctx, "embed_status", "ok"); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// ── Recall gauge ─────────────────────────────────────────────────────────
 	// Persist the blind-spot ledger so `polyflow status` can report exactly
 	// which references the graph is missing instead of failing silently.
@@ -1027,6 +1063,86 @@ func fingerprintLines(lines []string) string {
 	sort.Strings(sorted)
 	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
 	return hex.EncodeToString(sum[:])
+}
+
+// runEmbedPass embeds finalized nodes and upserts their vectors + FTS entries.
+// It only re-embeds nodes whose content hash or embedder ID changed.
+//
+// Card text for S.0: "{label} {type} {service} {file}" — a minimal one-line
+// card. S.1 replaces this with richer node-card + flow-chain + doc-chunk
+// builders; the hash gate ensures changed nodes are re-embedded automatically.
+func runEmbedPass(
+	ctx context.Context,
+	store *graph.SQLiteStore,
+	allNodes []graph.Node,
+	oldEmbedMeta map[string]string,
+	opts Options,
+	logw io.Writer,
+) error {
+	emb, err := semantic.DefaultStaticEmbedder()
+	if err != nil {
+		return fmt.Errorf("load static embedder: %w", err)
+	}
+	embedderID := emb.ID()
+
+	// Build the delta: nodes whose content hash or embedder changed.
+	var toEmbed []semantic.Entity
+	for i := range allNodes {
+		n := &allNodes[i]
+		text := nodeCard(n)
+		h := sha256.Sum256([]byte(text))
+		contentHash := hex.EncodeToString(h[:])
+		key := embedderID + "\x00" + contentHash
+		if oldEmbedMeta[n.ID] == key {
+			continue // unchanged — skip re-embed
+		}
+		toEmbed = append(toEmbed, semantic.Entity{
+			ID:          n.ID,
+			Type:        "node",
+			Text:        text,
+			ContentHash: contentHash,
+			NodeID:      n.ID,
+			File:        n.File,
+			Line:        n.Line,
+		})
+	}
+
+	fmt.Fprintf(logw, "  Embedding %d/%d nodes (embedder=%s)\n",
+		len(toEmbed), len(allNodes), embedderID)
+
+	if len(toEmbed) == 0 {
+		return nil
+	}
+
+	// Embed in batches of 256 to bound memory.
+	const batchSize = 256
+	sem := semantic.NewStore(store.DB())
+	for start := 0; start < len(toEmbed); start += batchSize {
+		end := start + batchSize
+		if end > len(toEmbed) {
+			end = len(toEmbed)
+		}
+		batch := toEmbed[start:end]
+		texts := make([]string, len(batch))
+		for i, e := range batch {
+			texts[i] = e.Text
+		}
+		vecs, err := emb.Embed(ctx, texts)
+		if err != nil {
+			return fmt.Errorf("embed batch [%d:%d]: %w", start, end, err)
+		}
+		if err := sem.BatchUpsertEmbeddings(ctx, batch, vecs, embedderID); err != nil {
+			return fmt.Errorf("upsert embeddings [%d:%d]: %w", start, end, err)
+		}
+	}
+	return nil
+}
+
+// nodeCard produces a one-line card text for a node (S.0 minimal format).
+// S.1 replaces this with the full corpus builder that includes route/signature
+// meta and produces richer text for all three entity types.
+func nodeCard(n *graph.Node) string {
+	return n.Label + " " + string(n.Type) + " " + n.Service + " " + n.File
 }
 
 // walkService collects parseable files under root, honoring exclude globs.
