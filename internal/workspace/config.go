@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -65,6 +66,29 @@ type EvidenceConfig struct {
 	ContractGlobs []string `yaml:"contract_globs,omitempty"`
 	// Runtime holds OTLP trace evidence settings (R.1+).
 	Runtime RuntimeEvidenceConfig `yaml:"runtime,omitempty"`
+	// StaleAfter is the duration after which a runtime capture is considered
+	// stale. A verified edge whose runtime sources are all older than this
+	// threshold adds a stale_evidence count to the verification_summary
+	// without downgrading the verification_state. Default: 30 days.
+	// Accepts Go duration strings: "720h", "168h", "30m".
+	StaleAfter string `yaml:"stale_after,omitempty"`
+}
+
+// DefaultStaleAfter is the default freshness threshold used when workspace
+// config is absent or stale_after is not set.
+const DefaultStaleAfter = 30 * 24 * time.Hour
+
+// StaleAfterDuration returns the configured stale_after duration, defaulting
+// to DefaultStaleAfter when the field is empty or unparseable.
+func (e *EvidenceConfig) StaleAfterDuration() time.Duration {
+	if e.StaleAfter == "" {
+		return DefaultStaleAfter
+	}
+	d, err := time.ParseDuration(e.StaleAfter)
+	if err != nil {
+		return DefaultStaleAfter
+	}
+	return d
 }
 
 // Settings holds workspace-level defaults for the server and display.

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -54,9 +55,10 @@ type Store interface {
 // Server wires the query layer behind MCP tool handlers. The store and index
 // are swappable so a long-lived stdio session picks up reindexes.
 type Server struct {
-	mu    sync.RWMutex
-	store Store
-	idx   *graph.AdjacencyIndex
+	mu         sync.RWMutex
+	store      Store
+	idx        *graph.AdjacencyIndex
+	staleAfter time.Duration // workspace evidence.stale_after (0 = no stale check)
 }
 
 // Reload swaps in a freshly built store and index (after `polyflow index`
@@ -77,8 +79,10 @@ func (s *Server) snapshot() (Store, *graph.AdjacencyIndex) {
 
 // New builds an MCP server exposing the polyflow query tools. The returned
 // *Server handle supports Reload; the *mcp.Server is what runs the session.
-func New(store Store, idx *graph.AdjacencyIndex, version string) (*mcp.Server, *Server) {
-	s := &Server{store: store, idx: idx}
+// staleAfter propagates the workspace evidence.stale_after threshold (0 = no
+// stale check — caller can pass the workspace default when loading config).
+func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time.Duration) (*mcp.Server, *Server) {
+	s := &Server{store: store, idx: idx, staleAfter: staleAfter}
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "polyflow", Version: version}, nil)
 
@@ -270,7 +274,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 
-	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources)
+	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -329,7 +333,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	if err != nil {
 		return nil, nil, err
 	}
-	out := impact.Build(idx, root, depth, in.Service, in.VerboseSources)
+	out := impact.Build(idx, root, depth, in.Service, in.VerboseSources, s.staleAfter)
 	out.AttachUnresolved(unresolved)
 	if in.MinVerification != "" && in.MinVerification != "any" {
 		out.Callers = filterCallers(out.Callers, in.MinVerification)
@@ -365,7 +369,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, err
 	}
 
-	result := trace.Run(idx, root.ID, direction, depth, in.VerboseSources)
+	result := trace.Run(idx, root.ID, direction, depth, in.VerboseSources, s.staleAfter)
 	if result == nil {
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}
