@@ -74,6 +74,7 @@ func init() {
 		reconcileCmd,
 		rulesCmd,
 		modelsCmd,
+		benchCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
