@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
 
 // fakeStore backs the tool handlers with an in-memory node list: search is a
@@ -482,4 +483,97 @@ func TestToolDescriptionsContainSemanticsParagraph(t *testing.T) {
 	for name, found := range semanticTools {
 		assert.True(t, found, "tool %s not found in ListTools", name)
 	}
+}
+
+// connectWithSearcher creates an MCP server backed by a real SQLite store so
+// that a semantic.Searcher can be wired.  The store is pre-seeded with nodes.
+func connectWithSearcher(t *testing.T, nodes []*graph.Node) (*mcp.ClientSession, *Server) {
+	t.Helper()
+	store, err := graph.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+
+	ctx := context.Background()
+	for _, n := range nodes {
+		require.NoError(t, store.UpsertNode(ctx, n))
+		// Insert into entities_fts so the FTS arm can find this node.
+		cardText := n.Label + " " + string(n.Type) + " " + n.Service + " " + n.File
+		_, err = store.DB().ExecContext(ctx,
+			`INSERT OR REPLACE INTO embeddings (entity_id, entity_type, content_hash, embedder_id, dims, vector, meta)
+			 VALUES (?, 'node', 'hash', 'stub-v1', 4, X'00000000000000000000000000000000', '{}')`,
+			n.ID)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(ctx, `DELETE FROM entities_fts WHERE entity_id = ?`, n.ID)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(ctx,
+			`INSERT INTO entities_fts (entity_id, entity_type, text) VALUES (?, 'node', ?)`,
+			n.ID, cardText)
+		require.NoError(t, err)
+	}
+
+	idx, err := store.BuildIndex(ctx)
+	require.NoError(t, err)
+
+	sem := semantic.NewStore(store.DB())
+	sr := semantic.NewSearcher(sem, nil, nil) // nil embedder → FTS-only
+
+	srv, handle := New(store, idx, "test", 0)
+	handle.SetSearcher(sr)
+
+	st, ct := mcp.NewInMemoryTransports()
+	_, err = srv.Connect(context.Background(), st, nil)
+	require.NoError(t, err)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	cs, err := client.Connect(context.Background(), ct, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { cs.Close() })
+	return cs, handle
+}
+
+// TestSearchTool_HybridRoundTrip verifies that when a Searcher is wired the
+// search tool returns a semantic.Response (nodes/flows/docs sections) rather
+// than the legacy []*graph.Node format.
+func TestSearchTool_HybridRoundTrip(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "fn:getUser", Type: graph.NodeTypeFunction, Label: "getUser",
+			Service: "backend", File: "user.go", Line: 10, Language: "go"},
+		{ID: "fn:createUser", Type: graph.NodeTypeFunction, Label: "createUser",
+			Service: "backend", File: "user.go", Line: 20, Language: "go"},
+	}
+	cs, _ := connectWithSearcher(t, nodes)
+
+	var resp semantic.Response
+	callJSON(t, cs, "search", map[string]any{"query": "getUser"}, &resp)
+
+	require.NotEmpty(t, resp.Nodes, "hybrid search must return node hits")
+	found := false
+	for _, h := range resp.Nodes {
+		if h.Entity.ID == "fn:getUser" {
+			found = true
+			assert.NotEmpty(t, h.Retrieval, "hit must have retrieval label")
+			assert.Greater(t, h.Score, 0.0, "hit must have positive score")
+		}
+	}
+	assert.True(t, found, "fn:getUser should appear in search results")
+	// Semantic field: FTS-only searcher should carry a degradation note.
+	assert.NotEmpty(t, resp.Semantic, "nil embedder must produce semantic degradation note")
+}
+
+// TestSearchTool_HybridDescription verifies the search tool description mentions
+// natural language and flows (S.2 requirement).
+func TestSearchTool_HybridDescription(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+	tools, err := cs.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+	for _, tool := range tools.Tools {
+		if tool.Name == "search" {
+			assert.Contains(t, tool.Description, "natural language",
+				"search tool description must mention natural language")
+			assert.Contains(t, tool.Description, "flows",
+				"search tool description must mention flows")
+			return
+		}
+	}
+	t.Error("search tool not found")
 }
