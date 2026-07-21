@@ -8,19 +8,21 @@ package eval
 // failure mode the whole project exists to prevent.
 type CaseResult struct {
 	CaseID       string  `json:"case_id"`
-	Recall       float64 `json:"recall"`    // |returned ∩ expected| / |expected|
-	Precision    float64 `json:"precision"` // |returned ∩ expected| / |returned|
-	HonestMisses int     `json:"honest_misses"` // expected files missed AND present in the unresolved ledger
-	SilentMisses int     `json:"silent_misses"` // expected files missed with no trace in any ledger
-	HardFail     bool    `json:"hard_fail"`     // any must_not_miss file silently missed
+	Kind         string  `json:"kind,omitempty"` // "semantic" for S.4 cases; empty for impact cases
+	Recall       float64 `json:"recall"`
+	Precision    float64 `json:"precision"`
+	HonestMisses int     `json:"honest_misses"`
+	SilentMisses int     `json:"silent_misses"`
+	HardFail     bool    `json:"hard_fail"`
 }
 
 // Report is the full corpus scoring report for one repository.
 type Report struct {
-	Repo      string       `json:"repo"`
-	Results   []CaseResult `json:"results"`
-	Recall    float64      `json:"recall"`    // macro-average over cases
-	Precision float64      `json:"precision"` // macro-average over cases
+	Repo           string       `json:"repo"`
+	Results        []CaseResult `json:"results"`
+	Recall         float64      `json:"recall"`           // macro-average over all cases
+	Precision      float64      `json:"precision"`        // macro-average over all cases
+	SemanticRecall float64      `json:"semantic_recall,omitempty"` // macro-average over kind=semantic cases (S.4)
 }
 
 // Score computes a CaseResult.
@@ -81,23 +83,34 @@ func Score(caseID string, returned, expected, mustNotMiss []string, unresolvedFi
 }
 
 // AggregateReport computes corpus-level macro-averaged recall and precision
-// from individual case results.
+// from individual case results. SemanticRecall is separately computed over
+// kind=semantic cases (S.4).
 func AggregateReport(repo string, results []CaseResult) Report {
 	if len(results) == 0 {
 		return Report{Repo: repo}
 	}
 	var sumR, sumP float64
+	var sumSR float64
+	var nSem int
 	for _, r := range results {
 		sumR += r.Recall
 		sumP += r.Precision
+		if r.Kind == "semantic" {
+			sumSR += r.Recall
+			nSem++
+		}
 	}
 	n := float64(len(results))
-	return Report{
+	rep := Report{
 		Repo:      repo,
 		Results:   results,
 		Recall:    sumR / n,
 		Precision: sumP / n,
 	}
+	if nSem > 0 {
+		rep.SemanticRecall = sumSR / float64(nSem)
+	}
+	return rep
 }
 
 func toSet(ss []string) map[string]bool {

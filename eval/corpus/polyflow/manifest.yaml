@@ -44,3 +44,64 @@ cases:
       - web/src/stores/derived.ts
     must_not_miss:
       - web/src/stores/derived.ts
+
+  # ── Semantic search cases (S.4) ───────────────────────────────────────────
+  # Verified by running `polyflow search <query> --format json` on this repo
+  # at its current indexed state and confirming the expected label appears in
+  # the top-10 nodes section. Entity labels are the name component of node IDs
+  # (format: service:file:type:name:line → name), stable across line changes.
+
+  - id: nl-unresolved-note
+    kind: semantic
+    query: "UnresolvedNote graph ledger builder"
+    section: nodes
+    # Verified: `polyflow search` returns UnresolvedNote at position 1 (exact match).
+    # internal/graph/unresolved.go defines the UnresolvedNote function.
+    expect_any_of:
+      - UnresolvedNote
+    must_not_miss:
+      - UnresolvedNote
+
+  - id: nl-link-route-handlers
+    kind: semantic
+    query: "LinkRouteHandlers wiring indexer"
+    section: nodes
+    # Verified: `polyflow search` returns LinkRouteHandlers at position 1 (exact match).
+    # internal/linker/linker.go defines LinkRouteHandlers.
+    expect_any_of:
+      - LinkRouteHandlers
+    must_not_miss:
+      - LinkRouteHandlers
+
+  - id: nl-search-nodes-store
+    kind: semantic
+    query: "SearchNodes graph store lookup"
+    section: nodes
+    # Verified: `polyflow search` returns SearchNodes at position 1 (exact match).
+    # internal/graph/store.go defines SearchNodes.
+    expect_any_of:
+      - SearchNodes
+    must_not_miss:
+      - SearchNodes
+
+  - id: nl-confidence-filter-js
+    kind: semantic
+    query: "confidence filter edges javascript"
+    section: nodes
+    # Verified: `polyflow search` returns filterEdgesByConfidence at position 1 (lexical match).
+    # web/src/lib/confidence.ts defines filterEdgesByConfidence.
+    expect_any_of:
+      - filterEdgesByConfidence
+    must_not_miss:
+      - filterEdgesByConfidence
+
+  - id: nl-adjacency-index
+    kind: semantic
+    query: "AdjacencyIndex traversal builder"
+    section: nodes
+    # Verified: `polyflow search` returns AdjacencyIndex at position 1 (exact match).
+    # internal/graph/model.go defines AdjacencyIndex.
+    expect_any_of:
+      - AdjacencyIndex
+    must_not_miss:
+      - AdjacencyIndex

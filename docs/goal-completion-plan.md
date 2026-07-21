@@ -1075,13 +1075,20 @@ protocol:
 - Tasks: 10 per corpus repo, drawn from the eval cases ("change X; list every
   file needing attention"), with the E.2 ground truth as the answer key.
 - Arms: (1) Claude Code headless (`claude -p`, pinned model) with polyflow
-  MCP registered (semantic search active); (2) identical but with semantic
-  search disabled (FTS-only — isolates what Tier S anchoring is worth in
-  tokens per model tier); (3) no polyflow at all.
+  MCP registered and semantic search active (`search.embedder: sidecar` or
+  `static`); (2) identical but `--no-embed` flag so the `search` tool uses
+  FTS-only and the `Semantic` field in the response reads `"unavailable: …"`
+  — this isolates what Tier S vector anchoring adds in tokens per model tier;
+  (3) no polyflow MCP at all.
 - Metrics per task: input+output tokens, wall time, ground-truth recall of
   the files the agent names, silent misses. 3 runs per task/arm (variance).
 - Output: `eval/agent-bench/results/<date>.json` + a markdown summary table.
   Runs are manual-triggered (they cost real tokens), never in CI.
+
+**Third-arm toggle:** switching arm 1→arm 2 is a single flag: index with
+`--no-embed` (stamps `embed_status = "skipped: --no-embed"`; `Search` reads
+this via `GetEmbedStatus` and returns the degradation note). No config change
+or binary rebuild needed.
 
 **Tests.** Runner parses transcripts correctly (fixture transcript);
 scoring reuses `internal/eval` scorer.
