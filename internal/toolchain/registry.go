@@ -79,11 +79,13 @@ func DefaultRegistry() Registry {
 		ToolTypeScript: {{VersionRange: ">=4.0.0", RuleVariant: "typescript-living"}},
 		// Templ uses a sidecar backend (parser-engine isolation); no RuleVariant.
 		ToolTempl:    {{VersionRange: ">=0.3.0", SidecarBackend: "templ-v0.3"}},
-		// datastar-v1 (colon syntax, >=1.0.0) checked first; datastar-v0 (hyphen
-		// syntax, <1.0.0) is a real supported variant, not a nearest-newest fallback.
+		// datastar-v1 (colon syntax, >=1.0.0 <2.0.0); datastar-v0 (hyphen
+		// syntax, <1.0.0). Upper bounds ensure that a future v2 triggers the
+		// nearest-newest fallback (Inferred=true) rather than silently using
+		// stale semantics — V.4 fail-safe contract.
 		ToolDatastar: {
-			{VersionRange: ">=1.0.0", RuleVariant: "datastar-v1"},
-			{VersionRange: ">=0.0.0", RuleVariant: "datastar-v0"},
+			{VersionRange: ">=1.0.0,<2.0.0", RuleVariant: "datastar-v1"},
+			{VersionRange: ">=0.0.0,<1.0.0", RuleVariant: "datastar-v0"},
 		},
 		ToolRuby:     {{VersionRange: ">=3.0", RuleVariant: "ruby-v3"}},
 	}

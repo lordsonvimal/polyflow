@@ -1,0 +1,9 @@
+{
+  "language": "javascript",
+  "profile": "datastar-v1",
+  "inferred": true,
+  "must_nodes": [
+    {"type": "http_client", "label": "/future/dashboard"},
+    {"type": "http_client", "label": "POST /future/save"}
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "ds-v2-cell",
+  "version": "1.0.0",
+  "dependencies": {
+    "@starfederation/datastar": "2.0.0"
+  }
+}

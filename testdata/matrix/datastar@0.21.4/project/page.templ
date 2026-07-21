@@ -1,0 +1,11 @@
+package views
+
+templ HyphenPanel(boardID string) {
+	<div>
+		<button data-on-click="@post('/boards/create')">Create</button>
+		<button data-on-click={ "@get('/boards/" + boardID + "/status')" }>Refresh</button>
+		<button data-on:click={ "@post('/modern/colon/resign')" }>Modern</button>
+		<button data-on-click="$active = true">Activate</button>
+		<div data-attr-class="{'active': $boardOpen}"></div>
+	</div>
+}

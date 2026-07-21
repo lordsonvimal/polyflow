@@ -309,7 +309,7 @@ When triggered: a `cmd/polyflow-parse-grammar/` build target for the diverging
 version + a registry row; the router dispatches; zero shared-code edits (mechanism
 already proven by the templ sidecar in V.2).
 
-### Phase V.4 — Matrix harness + CI gate + doctor `pending`
+### Phase V.4 — Matrix harness + CI gate + doctor `done`
 `internal/matrix/matrix_test.go` iterates `testdata/matrix/<tool>@<ver>/` (real
 manifest + `expected.json`), spins the right rule variant / sidecar backend, asserts
 every cell; a coverage test fails when a registered version lacks a fixture.
@@ -329,6 +329,56 @@ record both outcomes in the phase note.
 V.2 proves the sidecar mechanism on the one tool with a hard constraint (templ);
 V.4's matrix then supplies the evidence that decides whether any V.3 grammar sidecar
 is ever built.
+
+**Outcome (V.4).** Shipped `internal/matrix/matrix_test.go` (3 tests:
+`TestMatrixCells`, `TestMatrixCoverage`, `TestMatrixTwoRunDeterminism`) and 10
+fixture cells under `testdata/matrix/`:
+- `go@1.22`, `javascript@living`, `typescript@5.4.5`, `html@living`, `ruby@3.3.5`
+  (rule-variant, non-inferred; one per registered non-templ tool row)
+- `templ@0.3.1020`, `templ@0.3.906` (two minors, same `templ-v0.3` sidecar row;
+  proves two cells can cover one row and both pass)
+- `datastar@1.1.0` (v1 colon-syntax; asserts `POST /legacy/hyphen/create` absent —
+  v1 vocab correctly ignores hyphen-syntax `data-on-*` in the same fixture)
+- `datastar@0.21.4` (v0 hyphen-syntax; asserts `POST /modern/colon/resign` absent —
+  v0 vocab ignores colon-syntax `data-on:*` in the same fixture)
+- `datastar@2.0.0` (fail-safe cell, `inferred: true`; npm-based html fixture;
+  `@starfederation/datastar: 2.0.0` resolved via package.json; registry rows
+  narrowed to `>=1.0.0,<2.0.0` / `>=0.0.0,<1.0.0` so v2.0.0 triggers
+  nearest-newest `datastar-v1` with Inferred=true and a coverage note)
+
+Also shipped:
+- `internal/toolchain/coverage.go` (`ProfileStamp` type; `RenderVersionCoverage`
+  rendering the tool×version table from `toolchain_profiles` + `toolchain_coverage`
+  graph meta, byte-identical across runs — two-run determinism tested)
+- `internal/toolchain/coverage_test.go` (4 tests: table content, determinism,
+  unstamped/absent graph, no-notes path)
+- `cmd/polyflow/main.go` doctor updated: replaced the V.4 pending placeholder
+  with a real `toolchain.RenderVersionCoverage(profilesJSON, notesJSON)` call
+
+Gate simulation (rule 4): (1) removed `ruby@3.3.5` fixture → TestMatrixCoverage
+reported "registered version without a fixture: tool=ruby range=>=3.0 variant=ruby-v3";
+(2) added a `datastar@99.9.9` orphan cell → "orphaned cell datastar@99.9.9: version
+"99.9.9" satisfies no registry row and the cell does not declare inferred:true".
+Both failures collected and reported without early exit; baseline restored and suite green.
+
+Registry change: datastar rows narrowed to `>=1.0.0,<2.0.0` / `>=0.0.0,<1.0.0`.
+Updated `TestDefaultRegistry_FutureVersionInferred` to assert v2.0.0 is now Inferred.
+
+Acceptance numbers (Apple M4): `go test ./...` — all 28 packages pass (matrix
+package: TestMatrixCells 1.21s, TestMatrixCoverage 0.00s,
+TestMatrixTwoRunDeterminism 0.06s). `BenchmarkIndexCold`: 10.27s/1200 files
+(V.2 baseline 10.1s — within run noise). No SchemaVersion bump: no stored
+node/edge shape change. No `make lint` (golangci-lint absent on this machine);
+`go vet ./...` clean.
+
+Deviations: (1) `make lint` could not run (golangci-lint not installed in the
+implementing environment); `go vet ./...` clean. (2) Chessleap and synergy are
+private local repos absent in this environment — BenchmarkIndexCold uses the
+chessleap symlink at `eval/.cache/chessleap`; the 1200-file count confirms the
+symlink is present and the benchmark held. (3) V.3 grammar sidecars remain
+pending — the matrix shows all grammar tools (go/js/ts/html/ruby) use single
+in-process backends; no cell proved a divergence requiring a sidecar. V.3 gate
+holds: no V.3 work was done.
 
 ---
 

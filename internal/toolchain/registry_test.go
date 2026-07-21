@@ -110,12 +110,13 @@ func TestDefaultRegistry_VersionedToolsMatchCurrentVersions(t *testing.T) {
 }
 
 func TestDefaultRegistry_FutureVersionInferred(t *testing.T) {
-	// A hypothetical future version not in any range triggers the fallback.
+	// V.4 fail-safe: a future version above all registered ranges triggers the
+	// nearest-newest fallback (Inferred=true), stamped for doctor + coverage note.
+	// Datastar rows are bounded (<2.0.0 for v1, <1.0.0 for v0), so v2.0.0+ is inferred.
 	reg := DefaultRegistry()
-	sel := reg.Select(ToolDatastar, "99.0.0")
-	// >=1.0.0 matches 99.0.0 so this should NOT be inferred for the current registry.
-	// This test documents the expected behaviour: >=1.0.0 is an open upper bound.
-	assert.False(t, sel.Inferred)
+	sel := reg.Select(ToolDatastar, "2.0.0")
+	assert.True(t, sel.Inferred, "v2.0.0 is above all registered rows; must be inferred")
+	assert.Equal(t, "datastar-v1", sel.Backend.RuleVariant, "nearest-newest is the first (highest) row")
 }
 
 func TestDefaultRegistry_OldVersionInferred(t *testing.T) {
