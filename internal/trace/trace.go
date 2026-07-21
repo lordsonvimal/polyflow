@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -76,8 +77,9 @@ type Result struct {
 // "both") up to depth hops (<= 0 means unlimited). It returns nil if rootID
 // is not in the index. verboseSources controls whether per-hop Sources
 // contains compact "provider:ref" strings (false, default) or full SourceRef
-// structs (true, --verbose-sources).
-func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verboseSources bool) *Result {
+// structs (true, --verbose-sources). staleAfter is the workspace-configured
+// freshness threshold (0 = no stale check).
+func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verboseSources bool, staleAfter time.Duration) *Result {
 	root, ok := idx.Nodes[rootID]
 	if !ok {
 		return nil
@@ -113,7 +115,7 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verbose
 	}
 	r.EdgeTypes = sortedKeys(edgeTypes)
 	r.Services = sortedKeys(services)
-	r.VerificationSummary = graph.BuildVerificationSummary(allEdges)
+	r.VerificationSummary = graph.BuildVerificationSummaryAt(allEdges, staleAfter, time.Now())
 	return r
 }
 
@@ -194,7 +196,7 @@ func applyEdge(h *Hop, e *graph.Edge, idx *graph.AdjacencyIndex, verboseSources 
 }
 
 // marshalSources serialises edge Sources as compact "provider:ref" strings
-// (default) or full SourceRef structs (verboseSources=true).
+// with age annotation (default) or full SourceRef structs (verboseSources=true).
 func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	if len(sources) == 0 {
 		return nil
@@ -203,7 +205,7 @@ func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	if verbose {
 		v = graph.SortedSources(sources)
 	} else {
-		v = graph.CompactSources(sources)
+		v = graph.CompactSourcesAt(sources, time.Now())
 	}
 	b, _ := json.Marshal(v)
 	return json.RawMessage(b)

@@ -50,7 +50,7 @@ func provenanceGraph() *graph.AdjacencyIndex {
 // TestTrace_VerificationSummaryPopulated verifies the summary accumulates
 // all edges traversed during chain enumeration.
 func TestTrace_VerificationSummaryPopulated(t *testing.T) {
-	r := Run(provenanceGraph(), "a", "forward", 0, false)
+	r := Run(provenanceGraph(), "a", "forward", 0, false, 0)
 	require.NotNil(t, r)
 	assert.Equal(t, 1, r.VerificationSummary.Verified)
 	assert.Equal(t, 1, r.VerificationSummary.Candidate)
@@ -60,14 +60,14 @@ func TestTrace_VerificationSummaryPopulated(t *testing.T) {
 // TestTrace_VerificationSummaryEmptyWhenNoFusedEdges checks all-zero struct
 // on a graph with no VerificationState on edges.
 func TestTrace_VerificationSummaryEmptyWhenNoFusedEdges(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 0, false)
+	r := Run(linearGraph(), "a", "forward", 0, false, 0)
 	require.NotNil(t, r)
 	assert.Equal(t, graph.VerificationSummary{}, r.VerificationSummary)
 }
 
 // TestTrace_VerificationSummaryPresentInJSON verifies {}-never-absent.
 func TestTrace_VerificationSummaryPresentInJSON(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 0, false)
+	r := Run(linearGraph(), "a", "forward", 0, false, 0)
 	require.NotNil(t, r)
 	data, err := json.Marshal(r)
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestTrace_VerificationSummaryPresentInJSON(t *testing.T) {
 
 // TestTrace_HopProvenance verifies per-Hop verification fields are populated.
 func TestTrace_HopProvenance(t *testing.T) {
-	r := Run(provenanceGraph(), "a", "forward", 0, false)
+	r := Run(provenanceGraph(), "a", "forward", 0, false, 0)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 
@@ -102,7 +102,7 @@ func TestTrace_HopProvenance(t *testing.T) {
 
 // TestTrace_SourcesCompactFormat verifies the "provider:ref" compact encoding.
 func TestTrace_SourcesCompactFormat(t *testing.T) {
-	r := Run(provenanceGraph(), "a", "forward", 0, false)
+	r := Run(provenanceGraph(), "a", "forward", 0, false, 0)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 
@@ -122,7 +122,7 @@ func TestTrace_SourcesCompactFormat(t *testing.T) {
 
 // TestTrace_SourcesVerboseFormat verifies full SourceRef structs.
 func TestTrace_SourcesVerboseFormat(t *testing.T) {
-	r := Run(provenanceGraph(), "a", "forward", 0, true)
+	r := Run(provenanceGraph(), "a", "forward", 0, true, 0)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 
@@ -143,7 +143,7 @@ func TestTrace_SourcesVerboseFormat(t *testing.T) {
 func TestTrace_DeterministicOutput(t *testing.T) {
 	idx := provenanceGraph()
 	run := func() string {
-		r := Run(idx, "a", "forward", 0, false)
+		r := Run(idx, "a", "forward", 0, false, 0)
 		data, err := json.Marshal(r)
 		require.NoError(t, err)
 		return string(data)

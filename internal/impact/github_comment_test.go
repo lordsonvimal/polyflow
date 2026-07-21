@@ -17,7 +17,7 @@ func TestFormatGitHubComment_ContainsRequiredSections(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 16}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false)
+	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 	})
@@ -54,7 +54,7 @@ func TestFormatGitHubComment_ContainsRequiredSections(t *testing.T) {
 
 func TestFormatGitHubComment_NoChanges(t *testing.T) {
 	idx := diffFixtureIndex()
-	out := impact.BuildDiff(idx, nil, 10, "", false)
+	out := impact.BuildDiff(idx, nil, 10, "", false, 0)
 
 	md := impact.FormatGitHubComment(out, 0)
 
@@ -76,7 +76,7 @@ func TestFormatGitHubComment_UnmappedHunksAlwaysPresent(t *testing.T) {
 		{Path: "README.md", Spans: []gitdiff.Span{{Start: 1, End: 3}}},
 		{Path: "gone.go", Deleted: true},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false)
+	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
 
 	md := impact.FormatGitHubComment(out, 0)
 
@@ -104,7 +104,7 @@ func TestFormatGitHubComment_SizeCapTrimsFilesTableNotFooter(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "root.go", Spans: []gitdiff.Span{{Start: 5, End: 5}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false)
+	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
 	require.Equal(t, 60, len(out.Callers), "setup: need 60 distinct file rows")
 
 	// Use a small maxBytes to force trimming (footer ~500 bytes + header ~200 bytes).
@@ -124,12 +124,12 @@ func TestFormatGitHubComment_Determinism(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 16}}},
 	}
-	out1 := impact.BuildDiff(idx, changes, 10, "", false)
+	out1 := impact.BuildDiff(idx, changes, 10, "", false, 0)
 	out1.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 	})
 
-	out2 := impact.BuildDiff(idx, changes, 10, "", false)
+	out2 := impact.BuildDiff(idx, changes, 10, "", false, 0)
 	out2.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 	})
@@ -146,7 +146,7 @@ func TestFormatGitHubComment_CrossServiceTriggersAbsentWhenNone(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "main.go", Spans: []gitdiff.Span{{Start: 4, End: 4}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false)
+	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
 
 	md := impact.FormatGitHubComment(out, 0)
 	assert.NotContains(t, md, "### Cross-service triggers",
@@ -158,7 +158,7 @@ func TestFormatGitHubComment_FitsUnderGitHubLimit(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 16}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false)
+	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
 
 	md := impact.FormatGitHubComment(out, 0) // default = GitHubCommentMaxBytes
 	assert.LessOrEqual(t, len(md), impact.GitHubCommentMaxBytes+1000,

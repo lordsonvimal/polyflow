@@ -45,7 +45,7 @@ func provenanceIndex() *graph.AdjacencyIndex {
 // both traversed edges for a debug (upstream+downstream) call.
 func TestContext_VerificationSummaryPopulated(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
 	require.NotNil(t, r)
 
 	// upstream traversal hits e1 (verified); downstream hits e2 (candidate).
@@ -57,7 +57,7 @@ func TestContext_VerificationSummaryPopulated(t *testing.T) {
 // TestContext_VerificationSummaryPresentInJSON verifies {}-never-absent.
 func TestContext_VerificationSummaryPresentInJSON(t *testing.T) {
 	idx := fixtureIndex() // no fused edges
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
 	data, err := json.Marshal(r)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"verification_summary"`)
@@ -66,14 +66,14 @@ func TestContext_VerificationSummaryPresentInJSON(t *testing.T) {
 // TestContext_VerificationSummaryEmptyWhenNoFusedEdges checks all-zero struct.
 func TestContext_VerificationSummaryEmptyWhenNoFusedEdges(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
 	assert.Equal(t, graph.VerificationSummary{}, r.VerificationSummary)
 }
 
 // TestContext_PerNodeProvenance verifies per-TraceNode verification fields.
 func TestContext_PerNodeProvenance(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
 	require.NotEmpty(t, r.Upstream)
 
 	var fetchUserNode *ctx.TraceNode
@@ -92,7 +92,7 @@ func TestContext_PerNodeProvenance(t *testing.T) {
 // TestContext_SourcesCompactFormat verifies the compact "provider:ref" encoding.
 func TestContext_SourcesCompactFormat(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
 
 	for _, n := range r.Upstream {
 		if n.ID == "fe:fetchUser" {
@@ -110,7 +110,7 @@ func TestContext_SourcesCompactFormat(t *testing.T) {
 // TestContext_SourcesVerboseFormat verifies full SourceRef structs.
 func TestContext_SourcesVerboseFormat(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, true)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, true, 0)
 
 	for _, n := range r.Upstream {
 		if n.ID == "fe:fetchUser" {
@@ -129,7 +129,7 @@ func TestContext_SourcesVerboseFormat(t *testing.T) {
 func TestContext_DeterministicOutput(t *testing.T) {
 	idx := provenanceIndex()
 	run := func() string {
-		r := ctx.Build(idx, "be:getUser", "debug", 5, false)
+		r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
 		data, err := json.Marshal(r)
 		require.NoError(t, err)
 		return string(data)

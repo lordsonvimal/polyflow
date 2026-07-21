@@ -65,7 +65,7 @@ func fixture() (*fakeStore, *graph.AdjacencyIndex) {
 // connect wires the server to an in-memory client session.
 func connect(t *testing.T, store Store, idx *graph.AdjacencyIndex) *mcp.ClientSession {
 	t.Helper()
-	srv, _ := New(store, idx, "test")
+	srv, _ := New(store, idx, "test", 0)
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
 		t.Fatal(err)
