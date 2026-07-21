@@ -30,6 +30,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/server"
 	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/trace"
@@ -331,11 +332,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	} else {
 		srv = server.New(store, idx)
 	}
+	srv.SetSearcher(buildSearcher(store, cfg))
 
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
 	// On a Write or Create event, reopen the store, rebuild the index, and push a
 	// graph_updated SSE event to all connected browser clients.
-	if err := watchDB(dbPath, func() { reloadDB(dbPath, srv) }); err != nil {
+	if err := watchDB(dbPath, func() { reloadDB(dbPath, srv, cfg) }); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not start DB watcher: %v\n", err)
 	}
 
@@ -395,7 +397,7 @@ func watchDB(dbPath string, onChange func()) error {
 	return nil
 }
 
-func reloadDB(dbPath string, srv *server.Server) {
+func reloadDB(dbPath string, srv *server.Server, cfg *workspace.WorkspaceConfig) {
 	newStore, err := graph.NewSQLiteStore(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reload: open store: %v\n", err)
@@ -407,6 +409,7 @@ func reloadDB(dbPath string, srv *server.Server) {
 		fmt.Fprintf(os.Stderr, "reload: build index: %v\n", err)
 		return
 	}
+	srv.SetSearcher(buildSearcher(newStore, cfg))
 	srv.Reload(newIdx)
 	fmt.Println("Graph reloaded.")
 }
@@ -475,17 +478,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Node-type kinds over-fetch then filter, so a sparse type still fills
-	// the requested limit.
-	fetchLimit := searchLimit
+	// Kind-filtered searches use the FTS path (kind = node type, no flow/doc sections).
 	if searchKind != "" {
-		fetchLimit = searchLimit * 10
-	}
-	nodes, err := store.SearchNodes(ctx, args[0], fetchLimit)
-	if err != nil {
-		return err
-	}
-	if searchKind != "" {
+		fetchLimit := searchLimit * 10
+		nodes, err := store.SearchNodes(ctx, args[0], fetchLimit)
+		if err != nil {
+			return err
+		}
 		filtered := nodes[:0]
 		for _, n := range nodes {
 			if string(n.Type) == searchKind {
@@ -496,21 +495,87 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		if len(nodes) > searchLimit {
 			nodes = nodes[:searchLimit]
 		}
+		if searchFormat == "json" {
+			return json.NewEncoder(os.Stdout).Encode(nodes)
+		}
+		for _, n := range nodes {
+			fmt.Printf("  %-10s %-30s %-40s [%s]\n",
+				strings.ToUpper(string(n.Type)),
+				n.Label,
+				fmt.Sprintf("%s:%d", n.File, n.Line),
+				n.Service,
+			)
+		}
+		return nil
+	}
+
+	// Hybrid FTS+vector search (S.2): build searcher from the open store.
+	cfg, _ := workspace.Load(meta.ConfigFile) // best-effort; nil cfg → no synonyms
+	sr := buildSearcher(store, cfg)
+
+	resp, err := sr.Search(ctx, args[0], searchLimit)
+	if err != nil {
+		return err
 	}
 
 	if searchFormat == "json" {
-		return json.NewEncoder(os.Stdout).Encode(nodes)
+		return json.NewEncoder(os.Stdout).Encode(resp)
 	}
 
-	for _, n := range nodes {
-		fmt.Printf("  %-10s %-30s %-40s [%s]\n",
-			strings.ToUpper(string(n.Type)),
-			n.Label,
-			fmt.Sprintf("%s:%d", n.File, n.Line),
-			n.Service,
-		)
+	// Table output: sections separated by headers.
+	if resp.Semantic != "" {
+		fmt.Printf("  [semantic: %s]\n", resp.Semantic)
+	}
+	if len(resp.Nodes) > 0 {
+		fmt.Println("  NODES")
+		for _, h := range resp.Nodes {
+			e := h.Entity
+			fmt.Printf("    %-10s %-30s %-40s [%s] %s\n",
+				strings.ToUpper(e.Type),
+				e.ID,
+				fmt.Sprintf("%s:%d", e.File, e.Line),
+				h.Retrieval,
+				fmt.Sprintf("%.4f", h.Score),
+			)
+		}
+	}
+	if len(resp.Flows) > 0 {
+		fmt.Println("  FLOWS")
+		for _, h := range resp.Flows {
+			e := h.Entity
+			fmt.Printf("    %-50s entry=%s [%s]\n",
+				e.ID, e.NodeID, h.Retrieval,
+			)
+		}
+	}
+	if len(resp.Docs) > 0 {
+		fmt.Println("  DOCS")
+		for _, h := range resp.Docs {
+			e := h.Entity
+			fmt.Printf("    %-50s %s:%d [%s]\n",
+				e.ID, e.File, e.Line, h.Retrieval,
+			)
+		}
 	}
 	return nil
+}
+
+// buildSearcher creates a Searcher from the open store and workspace config.
+// The embedder is nil when --no-embed was used (the embed_status meta key carries
+// the degradation reason; the Searcher surfaces it in Response.Semantic).
+func buildSearcher(store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) *semantic.Searcher {
+	sem := semantic.NewStore(store.DB())
+	emb, err := semantic.DefaultStaticEmbedder()
+	if err != nil {
+		// Static embedder failed to load (should not happen with embedded model).
+		// Fall back to FTS-only; degradation reason surfaced via embed_status.
+		emb = nil
+	}
+	var synonyms map[string][]string
+	if cfg != nil {
+		synonyms = cfg.Search.Synonyms
+	}
+	return semantic.NewSearcher(sem, emb, synonyms)
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────

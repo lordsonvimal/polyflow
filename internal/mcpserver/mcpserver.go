@@ -17,6 +17,7 @@ import (
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/trace"
 )
 
@@ -58,23 +59,36 @@ type Server struct {
 	mu         sync.RWMutex
 	store      Store
 	idx        *graph.AdjacencyIndex
-	staleAfter time.Duration // workspace evidence.stale_after (0 = no stale check)
+	searcher   *semantic.Searcher // optional; nil → FTS-only fallback
+	staleAfter time.Duration      // workspace evidence.stale_after (0 = no stale check)
+}
+
+// SetSearcher wires a hybrid Searcher. Call after New; safe to call while
+// serving (protected by mu). When nil, search falls back to FTS-only SearchNodes.
+func (s *Server) SetSearcher(sr *semantic.Searcher) {
+	s.mu.Lock()
+	s.searcher = sr
+	s.mu.Unlock()
 }
 
 // Reload swaps in a freshly built store and index (after `polyflow index`
-// rewrote the graph database).
+// rewrote the graph database). Also invalidates the vector matrix cache.
 func (s *Server) Reload(store Store, idx *graph.AdjacencyIndex) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.store = store
 	s.idx = idx
+	sr := s.searcher
+	s.mu.Unlock()
+	if sr != nil {
+		sr.Invalidate()
+	}
 }
 
-// snapshot returns a consistent store+index pair for one tool call.
-func (s *Server) snapshot() (Store, *graph.AdjacencyIndex) {
+// snapshot returns a consistent store+index+searcher triple for one tool call.
+func (s *Server) snapshot() (Store, *graph.AdjacencyIndex, *semantic.Searcher) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.store, s.idx
+	return s.store, s.idx, s.searcher
 }
 
 // New builds an MCP server exposing the polyflow query tools. The returned
@@ -89,7 +103,9 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search",
 		Description: "Search the indexed code graph for nodes (functions, methods, variables, " +
-			"HTTP handlers, …) or files matching a query. Use this to find the exact node " +
+			"HTTP handlers, …), flow chains, or doc chunks matching a query. " +
+			"Query may be natural language; results include flows — a flows hit's entry " +
+			"node is the starting point for trace. Use this to find the exact node " +
 			"before calling context, impact, or trace.",
 	}, s.search)
 
@@ -181,7 +197,7 @@ type searchOutput struct {
 }
 
 func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
-	store, idx := s.snapshot()
+	store, idx, searcher := s.snapshot()
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 20
@@ -191,8 +207,19 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 		return jsonResult(searchOutput{Files: graph.ListFiles(idx, in.Query, limit)})
 	}
 
-	// Node-type kinds over-fetch then filter, so a sparse type still fills
-	// the requested limit.
+	// Use hybrid FTS+vector search when a Searcher is wired (S.2).
+	// kind filtering is handled post-fusion for unfiltered queries;
+	// explicit kind requests fall through to FTS SearchNodes for type precision.
+	if searcher != nil && in.Kind == "" {
+		resp, err := searcher.Search(ctx, in.Query, limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonResult(resp)
+	}
+
+	// Fallback: FTS-only SearchNodes. Used when no Searcher is wired or
+	// a specific node type (kind) is requested.
 	fetchLimit := limit
 	if in.Kind != "" {
 		fetchLimit = limit * 10
@@ -236,7 +263,8 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 	if (in.Target == "") == (len(in.Files) == 0) {
 		return nil, nil, fmt.Errorf("provide exactly one of target or files")
 	}
-	store, idx := s.snapshot()
+	store, idx, searcher := s.snapshot()
+	_ = searcher
 
 	// Files mode: rank the files related to the seed file(s).
 	if len(in.Files) > 0 {
@@ -309,7 +337,8 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 	depth := effectiveDepth(in.Depth, 10)
 
-	store, idx := s.snapshot()
+	store, idx, searcher := s.snapshot()
+	_ = searcher
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -363,7 +392,8 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 	}
 	depth := effectiveDepth(in.Depth, 10)
 
-	store, idx := s.snapshot()
+	store, idx, searcher := s.snapshot()
+	_ = searcher
 	root, err := resolveNode(ctx, store, in.Root)
 	if err != nil {
 		return nil, nil, err

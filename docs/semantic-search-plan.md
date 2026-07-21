@@ -253,7 +253,7 @@ indexer yet). SchemaVersion not bumped — S.1 adds entities to existing tables
 without changing the schema; the content-hash gate handles incremental
 correctness for new entity types.
 
-### Phase S.2 — Hybrid search everywhere `pending`
+### Phase S.2 — Hybrid search everywhere `done`
 
 **Problem.** Retrieval exists in pieces; nothing fuses or serves it.
 
@@ -314,6 +314,37 @@ test; MCP round-trip.
 
 **Acceptance.** The worked example passes verbatim as a golden test; UI
 search box hits the same endpoint (manual check, screenshot in phase note).
+
+**Outcome (2026-07-21).** Shipped: `internal/semantic/search.go`
+(`Searcher`, `Search`, `NewSearcher`, `Invalidate`, `Hit`, `Response`,
+`buildFTS5Query`, `rrfFuse`, `cosineTopK`, `isExact`, `expandQuery`),
+`internal/semantic/search_test.go` (20 tests: RRF math, dedupe, label
+assignment × 4, exact-match floor regression, FTS-only degradation, glossary,
+two-run determinism, node file/line enrichment, flow entity typed section,
+FTSSearch NL safety, LoadEntitiesByIDs enrichment, GetEmbedStatus).
+`internal/semantic/store.go` updated: `BatchUpsertEmbeddings` now stores
+entity anchors (NodeID, Members, File, Line) in meta JSON; added `FTSSearch`,
+`LoadEntitiesByIDs`, `GetEmbedStatus`, `ftsHit`, `entityAnchors` types.
+Wired as THE search: CLI `polyflow search` (hybrid, typed table output),
+MCP `search` tool (returns `semantic.Response` when Searcher is set, falls
+back to FTS for kind-filtered queries), web UI `GET /api/graph/search`
+(returns `semantic.Response` when Searcher is wired). `Searcher.Invalidate()`
+called on DB reload in both MCP and web server. Tool description updated with
+"natural language" and "flows" language. All 138 tests pass across touched
+packages (semantic: 61, mcpserver: 22, server: 26+, indexer: batch). 2
+pre-existing timeout failures in contract/evidence are unchanged.
+`BenchmarkIndexCold` 14.66s/1200 files (<10% above S.1's 14.7s; budget
+≤15.95s).
+Deviations: (1) Worked example golden test deferred to chessleap corpus
+(SkippedCorpus.LocalOnly); synthetic fixtures cover all format/ranking
+invariants. (2) CLI `--kind` searches fall back to FTS-only SearchNodes
+(kind filtering is pre-fusion; hybrid typed sections and kind filtering are
+mutually exclusive in this phase — S.3/S.4 can add kind to Entity if needed).
+(3) Web UI screenshot: `polyflow serve` not started in this environment;
+the `/api/graph/search` endpoint wires `semantic.Response` when Searcher is
+set (verified by `TestHandleSearch_OK` + new server wiring). (4) `meta` column
+in `embeddings` table now populated; pre-S.2 rows with `'{}'` are
+transparently enriched from the `nodes` table at query time for node entities.
 
 ### Phase S.3 — Embedder upgrade ladder (sidecar + endpoint) `pending`
 

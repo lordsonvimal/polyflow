@@ -12,6 +12,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/mcpserver"
 	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
 var mcpCmd = &cobra.Command{
@@ -40,7 +41,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build index: %w", err)
 	}
 
+	cfg, _ := workspace.Load(meta.ConfigFile) // best-effort
 	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile))
+	handle.SetSearcher(buildSearcher(store, cfg))
 
 	// Pick up reindexes during the session: polyflow index atomically swaps
 	// graph.db, so watch it and swap in a fresh store + index. Diagnostics go
@@ -58,6 +61,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "mcp reload: build index: %v\n", err)
 			return
 		}
+		handle.SetSearcher(buildSearcher(newStore, cfg))
 		handle.Reload(newStore, newIdx)
 		fmt.Fprintln(os.Stderr, "polyflow mcp: graph reloaded")
 	}); err != nil {

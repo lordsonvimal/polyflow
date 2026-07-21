@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 	webui "github.com/lordsonvimal/polyflow/web"
 )
 
@@ -15,6 +16,7 @@ type Server struct {
 	db        graph.Store
 	idx       *graph.AdjacencyIndex
 	idxMu     sync.RWMutex
+	searcher  *semantic.Searcher // nil → FTS-only fallback
 	mux       *http.ServeMux
 	devMode   bool
 	broadcast chan string
@@ -51,11 +53,23 @@ func NewDev(db graph.Store, idx *graph.AdjacencyIndex) *Server {
 	return s
 }
 
+// SetSearcher wires a hybrid Searcher into the server. Safe to call at any time.
+func (s *Server) SetSearcher(sr *semantic.Searcher) {
+	s.idxMu.Lock()
+	s.searcher = sr
+	s.idxMu.Unlock()
+}
+
 // Reload swaps the adjacency index and broadcasts a graph_updated SSE event.
+// Also invalidates the vector matrix cache when a Searcher is wired.
 func (s *Server) Reload(idx *graph.AdjacencyIndex) {
 	s.idxMu.Lock()
 	s.idx = idx
+	sr := s.searcher
 	s.idxMu.Unlock()
+	if sr != nil {
+		sr.Invalidate()
+	}
 	select {
 	case s.broadcast <- `{"type":"graph_updated"}`:
 	default:
