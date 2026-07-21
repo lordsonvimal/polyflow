@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // Store handles reads and writes for the embeddings and entities_fts tables.
@@ -44,8 +46,17 @@ func (s *Store) ListEmbeddingMeta(ctx context.Context) ([]EmbeddingMeta, error) 
 	return out, rows.Err()
 }
 
+// entityAnchors is the JSON-encoded anchor metadata stored in the embeddings.meta column.
+type entityAnchors struct {
+	NodeID  string   `json:"node_id,omitempty"`
+	Members []string `json:"members,omitempty"`
+	File    string   `json:"file,omitempty"`
+	Line    int      `json:"line,omitempty"`
+}
+
 // BatchUpsertEmbeddings writes a batch of embeddings in one transaction.
-// The vector is stored as little-endian float32 bytes (BLOB).
+// The vector is stored as little-endian float32 bytes (BLOB). Entity anchors
+// (NodeID, Members, File, Line) are serialised into the meta JSON column.
 func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, vecs [][]float32, embedderID string) error {
 	if len(entities) == 0 {
 		return nil
@@ -58,7 +69,7 @@ func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, ve
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO embeddings (entity_id, entity_type, content_hash, embedder_id, dims, vector, meta)
-		VALUES (?, ?, ?, ?, ?, ?, '{}')
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(entity_id) DO UPDATE SET
 			entity_type=excluded.entity_type,
 			content_hash=excluded.content_hash,
@@ -71,20 +82,17 @@ func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, ve
 	}
 	defer stmt.Close()
 
-	ftsStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO entities_fts (entity_id, entity_type, text)
-		VALUES (?, ?, ?)
-		ON CONFLICT DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("prepare fts insert: %w", err)
-	}
-	defer ftsStmt.Close()
-
 	for i, ent := range entities {
 		vec := vecs[i]
 		blob := vecToBlob(vec)
+		metaJSON, _ := json.Marshal(entityAnchors{
+			NodeID:  ent.NodeID,
+			Members: ent.Members,
+			File:    ent.File,
+			Line:    ent.Line,
+		})
 		if _, err := stmt.ExecContext(ctx,
-			ent.ID, ent.Type, ent.ContentHash, embedderID, len(vec), blob); err != nil {
+			ent.ID, ent.Type, ent.ContentHash, embedderID, len(vec), blob, string(metaJSON)); err != nil {
 			return fmt.Errorf("upsert embedding %s: %w", ent.ID, err)
 		}
 		// entities_fts is the lexical twin — upsert text alongside the vector.
@@ -98,8 +106,141 @@ func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, ve
 			return fmt.Errorf("fts insert %s: %w", ent.ID, err)
 		}
 	}
-	_ = ftsStmt // closed via defer; suppress unused warning
 	return tx.Commit()
+}
+
+// ftsHit is one result from FTSSearch.
+type ftsHit struct {
+	EntityID   string
+	EntityType string
+	Rank       int    // 1-based (1 = best match)
+	Label      string // node label for exact-match detection; "" for flows/docs
+}
+
+// FTSSearch runs the tokenised ftsQuery against entities_fts and returns up
+// to limit ranked hits. For node entities, the node label is also loaded from
+// the nodes table so the caller can detect exact-match hits.
+// ftsQuery must already be FTS5-safe (see buildFTS5Query in search.go).
+func (s *Store) FTSSearch(ctx context.Context, ftsQuery string, limit int) ([]ftsHit, error) {
+	if ftsQuery == "" {
+		return nil, nil
+	}
+	// Wrap the FTS match in a subquery so the LEFT JOIN with nodes is safe
+	// across all SQLite versions that support FTS5 JOIN semantics.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.entity_id, f.entity_type, COALESCE(n.label,'') AS label
+		FROM (
+			SELECT entity_id, entity_type
+			FROM entities_fts
+			WHERE entities_fts MATCH ?
+			ORDER BY rank
+			LIMIT ?
+		) f
+		LEFT JOIN nodes n ON n.id = f.entity_id AND f.entity_type = 'node'`,
+		ftsQuery, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fts search: %w", err)
+	}
+	defer rows.Close()
+	var hits []ftsHit
+	for rows.Next() {
+		var h ftsHit
+		if err := rows.Scan(&h.EntityID, &h.EntityType, &h.Label); err != nil {
+			return nil, fmt.Errorf("scan fts hit: %w", err)
+		}
+		h.Rank = len(hits) + 1 // 1-based rank preserving FTS5 BM25 order
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
+}
+
+// LoadEntitiesByIDs loads entity metadata (anchors) for the given ids from the
+// embeddings table.  Node entities are additionally enriched with authoritative
+// file/line from the nodes table, which handles pre-S.2 rows whose meta is '{}'.
+func (s *Store) LoadEntitiesByIDs(ctx context.Context, ids []string) (map[string]Entity, error) {
+	if len(ids) == 0 {
+		return map[string]Entity{}, nil
+	}
+	ph := strings.Repeat("?,", len(ids))
+	ph = ph[:len(ph)-1]
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT entity_id, entity_type, meta FROM embeddings WHERE entity_id IN (`+ph+`)`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("load entity meta: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]Entity, len(ids))
+	var nodeIDs []string
+	for rows.Next() {
+		var id, etype, metaStr string
+		if err := rows.Scan(&id, &etype, &metaStr); err != nil {
+			return nil, fmt.Errorf("scan entity meta: %w", err)
+		}
+		var a entityAnchors
+		_ = json.Unmarshal([]byte(metaStr), &a)
+		result[id] = Entity{
+			ID:      id,
+			Type:    etype,
+			NodeID:  a.NodeID,
+			Members: a.Members,
+			File:    a.File,
+			Line:    a.Line,
+		}
+		if etype == "node" {
+			nodeIDs = append(nodeIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Enrich node entities from the authoritative nodes table (file, line,
+	// node_id). This handles old embeddings whose meta column is '{}'.
+	if len(nodeIDs) > 0 {
+		nph := strings.Repeat("?,", len(nodeIDs))
+		nph = nph[:len(nph)-1]
+		nargs := make([]any, len(nodeIDs))
+		for i, id := range nodeIDs {
+			nargs[i] = id
+		}
+		nrows, nerr := s.db.QueryContext(ctx,
+			`SELECT id, file, line FROM nodes WHERE id IN (`+nph+`)`, nargs...)
+		if nerr != nil {
+			return nil, fmt.Errorf("enrich node meta: %w", nerr)
+		}
+		defer nrows.Close()
+		for nrows.Next() {
+			var id, file string
+			var line int
+			if err := nrows.Scan(&id, &file, &line); err != nil {
+				return nil, fmt.Errorf("scan node row: %w", err)
+			}
+			if ent, ok := result[id]; ok {
+				ent.File = file
+				ent.Line = line
+				ent.NodeID = id
+				result[id] = ent
+			}
+		}
+		if err := nrows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+// GetEmbedStatus reads the "embed_status" key from the graph meta table.
+// Returns "" if the key is absent (first run before any index).
+func (s *Store) GetEmbedStatus(ctx context.Context) string {
+	var v string
+	_ = s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'embed_status'`).Scan(&v)
+	return v
 }
 
 // LoadVectors loads all stored vectors for in-memory cosine search.

@@ -79,7 +79,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSearch handles GET /api/graph/search?q=<query>&limit=<n>&kind=<type>
-// kind optionally restricts results to one node type (variable, function, …).
+// When a hybrid Searcher is wired (S.2) and kind is empty, returns a typed
+// semantic.Response (nodes/flows/docs sections). Otherwise falls back to the
+// FTS-only SearchNodes path for backward compatibility and kind filtering.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -92,7 +94,22 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := r.URL.Query().Get("kind")
 
-	// Over-fetch when filtering so a sparse type still fills the limit.
+	s.idxMu.RLock()
+	sr := s.searcher
+	s.idxMu.RUnlock()
+
+	// Use hybrid search when a Searcher is wired and no type filter is requested.
+	if sr != nil && kind == "" {
+		resp, err := sr.Search(r.Context(), q, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Fallback: FTS-only SearchNodes (also used for kind-filtered requests).
 	fetchLimit := limit
 	if kind != "" {
 		fetchLimit = limit * 10
