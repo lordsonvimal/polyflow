@@ -515,12 +515,16 @@ func runSearch(cmd *cobra.Command, args []string) error {
 var (
 	statusErrors     bool
 	statusUnresolved bool
+	statusTrend      bool
+	statusTrendN     int
 	statusWS         string
 )
 
 func initStatusFlags() {
 	statusCmd.Flags().BoolVar(&statusErrors, "errors", false, "list files with parse errors")
 	statusCmd.Flags().BoolVar(&statusUnresolved, "unresolved", false, "list references the graph could not resolve (blind spots)")
+	statusCmd.Flags().BoolVar(&statusTrend, "trend", false, "show per-service unresolved count trend over recent index runs")
+	statusCmd.Flags().IntVar(&statusTrendN, "trend-n", 5, "number of past runs to compare against for --trend")
 	statusCmd.Flags().StringVar(&statusWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
 }
 
@@ -627,6 +631,32 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		for _, u := range unresolvedRefs {
 			fmt.Printf("  UNRESOLVED  %-10s %s:%d  %s (%s)\n", u.Service, u.File, u.Line, u.Name, u.Kind)
+		}
+	}
+	if statusTrend {
+		fmt.Println()
+		dbStore, dbErr := graph.NewSQLiteStore(dbPath)
+		if dbErr != nil {
+			fmt.Printf("  Trend: no index found (run 'polyflow index' first)\n")
+			return nil
+		}
+		defer dbStore.Close()
+		history, hErr := dbStore.ListUnresolvedHistory(ctx, statusTrendN+1)
+		if hErr != nil {
+			fmt.Printf("  Trend: error reading history: %v\n", hErr)
+			return nil
+		}
+		if len(history) == 0 {
+			fmt.Printf("  Trend: no history yet (run 'polyflow index' at least once)\n")
+			return nil
+		}
+		trend := graph.ComputeTrend(history, statusTrendN)
+		fmt.Printf("  Trend (last %d runs): %-16s  %-16s  %8s  %8s  %8s\n",
+			statusTrendN, "service", "kind", "baseline", "latest", "delta")
+		for _, r := range trend {
+			deltaStr := fmt.Sprintf("%+d", r.Delta)
+			fmt.Printf("                       %-16s  %-16s  %8d  %8d  %8s\n",
+				r.Service, r.Kind, r.Baseline, r.Latest, deltaStr)
 		}
 	}
 	return nil
@@ -1983,6 +2013,27 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if doctorPropose != "" {
 		if err := emitDoctorProposals(fusionReport.GapList, doctorPropose); err != nil {
 			return err
+		}
+	}
+
+	// D.2: ledger burn-down trend — flag services with 3 consecutive growing runs.
+	fmt.Println()
+	if storeErr != nil {
+		fmt.Printf("  Ledger trend:        (no index — run 'polyflow index' first)\n")
+	} else {
+		ctx4 := context.Background()
+		history, hErr := store.ListUnresolvedHistory(ctx4, 5)
+		if hErr != nil || len(history) == 0 {
+			fmt.Printf("  Ledger trend:        no history yet (run 'polyflow index' at least once)\n")
+		} else {
+			flagged := graph.DetectGrowth(history, 3)
+			if len(flagged) == 0 {
+				fmt.Printf("  Ledger trend:        OK — no services with 3+ consecutive growing unresolved counts\n")
+			} else {
+				fmt.Printf("  Ledger trend:        WARNING — unresolved count grew 3 runs consecutively: %s\n",
+					strings.Join(flagged, ", "))
+				fmt.Printf("                       Run 'polyflow status --trend' for per-kind breakdown\n")
+			}
 		}
 	}
 

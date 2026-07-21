@@ -166,7 +166,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "17" // L.W2: NodeTypeElement introduced; templ_element minting migrated to element
+const SchemaVersion = "18" // D.2: unresolved_history table added for ledger burn-down trend
 
 // Node represents a code entity in the graph.
 type Node struct {
@@ -284,6 +284,16 @@ type UnresolvedRef struct {
 	Line    int    `json:"line"`
 	Name    string `json:"name"`
 	Kind    string `json:"kind"`
+}
+
+// UnresolvedHistoryRow is one row of the per-index-run unresolved count log.
+// Each index run writes one row per (service, kind) pair; the history table
+// keeps the last 50 distinct run timestamps for trend computation.
+type UnresolvedHistoryRow struct {
+	RunAt   int64  `json:"run_at"`  // unix timestamp of the index run
+	Service string `json:"service"`
+	Kind    string `json:"kind"`
+	Count   int    `json:"count"`
 }
 
 // ParseError records a file that produced errors during indexing.

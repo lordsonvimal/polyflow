@@ -251,12 +251,20 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		finalStore, err := graph.NewSQLiteStore(finalDB)
 		if err == nil {
 			defer finalStore.Close()
-			_ = finalStore.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10))
+			runAt := time.Now().Unix()
+			_ = finalStore.SetMeta(ctx, "last_indexed", strconv.FormatInt(runAt, 10))
 			if n, e, err := finalStore.Stats(ctx); err == nil {
 				stats.Nodes, stats.Edges = n, e
 			}
 			if v, err := finalStore.GetMeta(ctx, "cross_links"); err == nil {
 				stats.CrossLinks, _ = strconv.Atoi(v)
+			}
+			// D.2: record history row using the persisted unresolved refs.
+			if refs, hErr := finalStore.ListUnresolvedRefs(ctx); hErr == nil {
+				rows := aggregateUnresolvedHistory(refs, runAt)
+				if wErr := finalStore.WriteUnresolvedHistory(ctx, rows); wErr == nil {
+					_ = finalStore.PruneUnresolvedHistory(ctx, 50)
+				}
 			}
 			stats.SkippedFiles = stats.TotalFiles
 			stats.Elapsed = time.Since(start)
@@ -959,6 +967,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if statsErr != nil {
 			fmt.Fprintf(logw, "  Warning: read final stats: %v\n", statsErr)
 		}
+		// D.2: append history row and prune to last 50 runs.
+		histRows := aggregateUnresolvedHistory(allUnresolved, time.Now().Unix())
+		if wErr := s.WriteUnresolvedHistory(ctx, histRows); wErr != nil {
+			fmt.Fprintf(logw, "  Warning: write unresolved history: %v\n", wErr)
+		} else {
+			_ = s.PruneUnresolvedHistory(ctx, 50)
+		}
 		s.Close()
 	} else {
 		fmt.Fprintf(logw, "  Warning: open graph for stats: %v\n", err)
@@ -983,6 +998,27 @@ func patternsFingerprint(dir string, extra []string) string {
 		fmt.Fprintf(h, "%s:%x\n", f, sha256.Sum256(data))
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// aggregateUnresolvedHistory counts refs by (service, kind) and returns
+// history rows with the given run timestamp, sorted for determinism.
+func aggregateUnresolvedHistory(refs []graph.UnresolvedRef, runAt int64) []graph.UnresolvedHistoryRow {
+	type key struct{ service, kind string }
+	counts := map[key]int{}
+	for _, r := range refs {
+		counts[key{r.Service, r.Kind}]++
+	}
+	rows := make([]graph.UnresolvedHistoryRow, 0, len(counts))
+	for k, c := range counts {
+		rows = append(rows, graph.UnresolvedHistoryRow{RunAt: runAt, Service: k.service, Kind: k.kind, Count: c})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Service != rows[j].Service {
+			return rows[i].Service < rows[j].Service
+		}
+		return rows[i].Kind < rows[j].Kind
+	})
+	return rows
 }
 
 // fingerprintLines hashes the sorted per-file hash lines of a service.
