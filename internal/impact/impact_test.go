@@ -27,7 +27,7 @@ func fixtureIndex() *graph.AdjacencyIndex {
 
 func TestBuild_BlastRadius(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
 
 	require.Equal(t, 2, out.TotalCallers)
 	assert.Equal(t, "be:getUser", out.Callers[0].ID)
@@ -49,7 +49,7 @@ func TestBuild_BlastRadius(t *testing.T) {
 
 func TestBuild_ServiceFilterExcludesOtherServices(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "backend", false)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "backend", false, 0)
 
 	require.Equal(t, 1, out.TotalCallers)
 	assert.Equal(t, "be:getUser", out.Callers[0].ID)
@@ -58,7 +58,7 @@ func TestBuild_ServiceFilterExcludesOtherServices(t *testing.T) {
 
 func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
 
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "frontend", File: "api.js", Line: 11, Name: "dynCall", Kind: "call_ref"},
@@ -72,7 +72,7 @@ func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
 
 func TestBuild_UnresolvedDefaultsToEmptyNotNull(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
 
 	data, err := json.Marshal(out)
 	require.NoError(t, err)

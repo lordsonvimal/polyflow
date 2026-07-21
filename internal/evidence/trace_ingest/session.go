@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -164,6 +165,68 @@ func (s *Session) writeMeta() error {
 		return err
 	}
 	return os.WriteFile(s.dir+"/meta.json", data, 0o644)
+}
+
+// ─── Session listing ─────────────────────────────────────────────────────────
+
+// SessionInfo summarises a capture session for display in `polyflow status`.
+type SessionInfo struct {
+	Name      string
+	StartedAt time.Time
+	StoppedAt *time.Time
+	SpanCount int
+	Age       string // human-readable age from StartedAt, e.g. "43d old"
+}
+
+// ListSessionInfos reads all session directories under capturesDir and returns
+// a summary slice sorted newest-first. now is used for age computation; pass
+// time.Now() in production. Missing or unreadable directories return nil.
+func ListSessionInfos(capturesDir string, now time.Time) []SessionInfo {
+	entries, err := os.ReadDir(capturesDir)
+	if err != nil {
+		return nil
+	}
+	var out []SessionInfo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(capturesDir, e.Name(), "meta.json"))
+		if err != nil {
+			continue
+		}
+		var m SessionMeta
+		if err := json.Unmarshal(data, &m); err != nil {
+			continue
+		}
+		info := SessionInfo{
+			Name:      m.Name,
+			StartedAt: m.StartedAt,
+			StoppedAt: m.StoppedAt,
+			SpanCount: m.SpanCount,
+		}
+		if !now.IsZero() && !m.StartedAt.IsZero() {
+			age := now.Sub(m.StartedAt)
+			days := int(age.Hours() / 24)
+			switch {
+			case days > 0:
+				info.Age = fmt.Sprintf("%dd old", days)
+			case int(age.Hours()) > 0:
+				info.Age = fmt.Sprintf("%dh old", int(age.Hours()))
+			default:
+				info.Age = "today"
+			}
+		}
+		out = append(out, info)
+	}
+	// Newest first (deterministic — sort by StartedAt desc, then Name asc).
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].StartedAt.After(out[j].StartedAt)
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // ─── PID helpers ─────────────────────────────────────────────────────────────

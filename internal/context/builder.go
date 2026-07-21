@@ -2,6 +2,7 @@ package context
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -72,8 +73,9 @@ type CrossEdge struct {
 // Build produces a context result for the given target node and task.
 // Depth <= 0 means unlimited traversal. verboseSources controls whether
 // per-node Sources contains compact "provider:ref" strings (false, default)
-// or full SourceRef structs (true, --verbose-sources).
-func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool) *Result {
+// or full SourceRef structs (true, --verbose-sources). staleAfter is the
+// workspace-configured freshness threshold (0 = no stale check).
+func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool, staleAfter time.Duration) *Result {
 	upstream, downstream, edges := traverse(idx, targetID, task, depth, verboseSources)
 
 	crossService := extractCrossService(idx, upstream, downstream)
@@ -103,7 +105,7 @@ func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseS
 		TotalNodes:          len(nodeSet) + 1, // +1 for the target itself
 		TotalEdges:          len(edgeSet),
 		Unresolved:          []graph.UnresolvedRef{},
-		VerificationSummary: graph.BuildVerificationSummary(edges),
+		VerificationSummary: graph.BuildVerificationSummaryAt(edges, staleAfter, time.Now()),
 	}
 }
 
@@ -148,7 +150,7 @@ func traverse(idx *graph.AdjacencyIndex, targetID, task string, depth int, verbo
 }
 
 // marshalSources serialises edge Sources as compact "provider:ref" strings
-// (default) or full SourceRef structs (verboseSources=true).
+// with age annotation (default) or full SourceRef structs (verboseSources=true).
 func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	if len(sources) == 0 {
 		return nil
@@ -157,7 +159,7 @@ func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	if verbose {
 		v = graph.SortedSources(sources)
 	} else {
-		v = graph.CompactSources(sources)
+		v = graph.CompactSourcesAt(sources, time.Now())
 	}
 	b, _ := json.Marshal(v)
 	return json.RawMessage(b)
