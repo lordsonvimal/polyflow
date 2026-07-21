@@ -3,9 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +36,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/server"
+	"github.com/lordsonvimal/polyflow/internal/sidecar"
 	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/trace"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
@@ -68,6 +73,7 @@ func init() {
 		doctorCmd,
 		reconcileCmd,
 		rulesCmd,
+		modelsCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
@@ -236,12 +242,26 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Resolve the embedder from workspace config (S.3 upgrade ladder).
+	var emb semantic.Embedder
+	var closeEmb func()
+	if !indexNoEmbed {
+		emb, closeEmb, err = selectEmbedder(&cfg.Search)
+		if err != nil {
+			return fmt.Errorf("embedder: %w", err)
+		}
+		if closeEmb != nil {
+			defer closeEmb()
+		}
+	}
+
 	fmt.Println("Scanning services...")
 	stats, err := indexer.Run(context.Background(), indexer.Options{
 		Config:       cfg,
 		Workers:      indexWorkers,
 		Full:         indexFull,
 		NoEmbed:      indexNoEmbed,
+		Embedder:     emb,
 		ContractsDir: filepath.Dir(indexWorkspace),
 		Log:          os.Stdout,
 		Progress: func(done, total int) {
@@ -332,12 +352,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	} else {
 		srv = server.New(store, idx)
 	}
-	srv.SetSearcher(buildSearcher(store, cfg))
+	// Build the embedder once for the server lifetime; share it across reloads.
+	emb, closeEmb, err := resolveEmbedder(cfg)
+	if err != nil {
+		return fmt.Errorf("embedder: %w", err)
+	}
+	defer closeEmb()
+	synonyms := cfg.Search.Synonyms
+	srv.SetSearcher(buildSearcher(store, emb, synonyms))
 
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
 	// On a Write or Create event, reopen the store, rebuild the index, and push a
 	// graph_updated SSE event to all connected browser clients.
-	if err := watchDB(dbPath, func() { reloadDB(dbPath, srv, cfg) }); err != nil {
+	if err := watchDB(dbPath, func() { reloadDB(dbPath, srv, emb, synonyms) }); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not start DB watcher: %v\n", err)
 	}
 
@@ -397,7 +424,7 @@ func watchDB(dbPath string, onChange func()) error {
 	return nil
 }
 
-func reloadDB(dbPath string, srv *server.Server, cfg *workspace.WorkspaceConfig) {
+func reloadDB(dbPath string, srv *server.Server, emb semantic.Embedder, synonyms map[string][]string) {
 	newStore, err := graph.NewSQLiteStore(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reload: open store: %v\n", err)
@@ -409,7 +436,9 @@ func reloadDB(dbPath string, srv *server.Server, cfg *workspace.WorkspaceConfig)
 		fmt.Fprintf(os.Stderr, "reload: build index: %v\n", err)
 		return
 	}
-	srv.SetSearcher(buildSearcher(newStore, cfg))
+	// Reuse the same embedder across reloads — the sidecar process stays alive
+	// for the server lifetime; only the in-memory vector matrix is refreshed.
+	srv.SetSearcher(buildSearcher(newStore, emb, synonyms))
 	srv.Reload(newIdx)
 	fmt.Println("Graph reloaded.")
 }
@@ -511,7 +540,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	// Hybrid FTS+vector search (S.2): build searcher from the open store.
 	cfg, _ := workspace.Load(meta.ConfigFile) // best-effort; nil cfg → no synonyms
-	sr := buildSearcher(store, cfg)
+	emb, closeEmb, _ := resolveEmbedder(cfg)
+	defer closeEmb()
+	var synonyms map[string][]string
+	if cfg != nil {
+		synonyms = cfg.Search.Synonyms
+	}
+	sr := buildSearcher(store, emb, synonyms)
 
 	resp, err := sr.Search(ctx, args[0], searchLimit)
 	if err != nil {
@@ -560,22 +595,93 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// buildSearcher creates a Searcher from the open store and workspace config.
-// The embedder is nil when --no-embed was used (the embed_status meta key carries
+// buildSearcher creates a Searcher from the open store with the given embedder.
+// emb may be nil for FTS-only operation (the embed_status meta key carries
 // the degradation reason; the Searcher surfaces it in Response.Semantic).
-func buildSearcher(store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) *semantic.Searcher {
+// The embedder lifecycle is the caller's responsibility.
+func buildSearcher(store *graph.SQLiteStore, emb semantic.Embedder, synonyms map[string][]string) *semantic.Searcher {
 	sem := semantic.NewStore(store.DB())
-	emb, err := semantic.DefaultStaticEmbedder()
-	if err != nil {
-		// Static embedder failed to load (should not happen with embedded model).
-		// Fall back to FTS-only; degradation reason surfaced via embed_status.
-		emb = nil
-	}
-	var synonyms map[string][]string
-	if cfg != nil {
-		synonyms = cfg.Search.Synonyms
-	}
 	return semantic.NewSearcher(sem, emb, synonyms)
+}
+
+// resolveEmbedder builds the Embedder from a workspace config.
+// Returns (nil, noop, nil) when cfg is nil (FTS-only fallback).
+// The close function must be called when the embedder is no longer needed.
+func resolveEmbedder(cfg *workspace.WorkspaceConfig) (semantic.Embedder, func(), error) {
+	if cfg == nil {
+		emb, err := semantic.DefaultStaticEmbedder()
+		if err != nil {
+			return nil, func() {}, nil // FTS-only on failure
+		}
+		return emb, func() {}, nil
+	}
+	emb, closeFn, err := selectEmbedder(&cfg.Search)
+	if closeFn == nil {
+		closeFn = func() {}
+	}
+	if err != nil {
+		return nil, func() {}, nil // FTS-only on failure; degradation surfaced via embed_status
+	}
+	return emb, closeFn, nil
+}
+
+// selectEmbedder builds the Embedder described in the workspace SearchConfig.
+// Returns the embedder, an optional close function (non-nil only for sidecar),
+// and any error.  The static default is always safe to use — it never fails once
+// the binary is loaded.
+func selectEmbedder(cfg *workspace.SearchConfig) (semantic.Embedder, func(), error) {
+	switch cfg.Embedder {
+	case "", "static":
+		emb, err := semantic.DefaultStaticEmbedder()
+		if err != nil {
+			return nil, nil, err
+		}
+		return emb, nil, nil
+	case "sidecar":
+		binPath, err := findEmbedSidecarBin()
+		if err != nil {
+			return nil, nil, fmt.Errorf("sidecar binary not found: %w (run `polyflow models pull` to download the model)", err)
+		}
+		c, err := sidecar.StartClient(binPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("start sidecar: %w", err)
+		}
+		emb := semantic.NewSidecarEmbedder(c)
+		return emb, emb.Close, nil
+	case "endpoint":
+		if cfg.EndpointURL == "" {
+			return nil, nil, fmt.Errorf("search.endpoint_url is required when search.embedder is 'endpoint'")
+		}
+		model := cfg.EndpointModel
+		emb := semantic.NewEndpointEmbedder(cfg.EndpointURL, model, cfg.EndpointKeyEnv)
+		return emb, nil, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown search.embedder %q; valid values: static, sidecar, endpoint", cfg.Embedder)
+	}
+}
+
+// findEmbedSidecarBin looks up the polyflow-embed-sidecar binary using the
+// same search order as the parse sidecar Manager: POLYFLOW_SIDECAR_DIR env,
+// the running executable's directory, then PATH.
+func findEmbedSidecarBin() (string, error) {
+	const bin = semantic.SidecarBinaryName
+	var dirs []string
+	if env := os.Getenv(sidecar.SidecarDirEnv); env != "" {
+		dirs = append(dirs, env)
+	}
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	for _, d := range dirs {
+		p := filepath.Join(d, bin)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p, nil
+		}
+	}
+	if p, err := exec.LookPath(bin); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("%s not found in POLYFLOW_SIDECAR_DIR, executable dir, or PATH", bin)
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────
@@ -2316,4 +2422,155 @@ func loadStaleAfter(wsPath string) time.Duration {
 		return workspace.DefaultStaleAfter
 	}
 	return cfg.Evidence.StaleAfterDuration()
+}
+
+// ─── models ──────────────────────────────────────────────────────────────────
+//
+// polyflow models pull  — download the nomic-embed-text-v1.5 GGUF model for
+// the sidecar embedder (the only download polyflow ever performs; explicit by
+// design so no code paths silently phone home).
+
+// nomicModelURL is the HuggingFace download URL for nomic-embed-text-v1.5 Q8_0.
+// SHA256 is pinned to detect corrupted/tampered downloads.
+// Sourced from: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
+const (
+	nomicModelURL      = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf"
+	nomicModelFile     = "nomic-embed-text-v1.5.Q8_0.gguf"
+	// nomicModelSHA256 is the expected hex-encoded SHA-256 of the downloaded file.
+	// Verify with: sha256sum ~/.cache/polyflow/models/nomic-embed-text-v1.5.Q8_0.gguf
+	// and update this constant when the upstream model file changes.
+	nomicModelSHA256   = "" // set to the verified SHA-256 before production use; empty = skip check
+)
+
+var modelsCmd = &cobra.Command{
+	Use:   "models",
+	Short: "Manage embedding models for the sidecar embedder",
+}
+
+var modelsPullCmd = &cobra.Command{
+	Use:   "pull",
+	Short: "Download the nomic-embed-text-v1.5 GGUF model for sidecar embedding",
+	Long: `Downloads nomic-embed-text-v1.5.Q8_0.gguf to ~/.cache/polyflow/models/.
+The sidecar embedder (search.embedder: sidecar) requires this model.
+The download is sha256-pinned; integrity is verified after download.`,
+	RunE: runModelsPull,
+}
+
+func init() {
+	modelsCmd.AddCommand(modelsPullCmd)
+}
+
+func runModelsPull(_ *cobra.Command, _ []string) error {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("locate user cache dir: %w", err)
+	}
+	modelDir := filepath.Join(cacheDir, "polyflow", "models")
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+		return fmt.Errorf("create model dir %s: %w", modelDir, err)
+	}
+	dest := filepath.Join(modelDir, nomicModelFile)
+
+	if info, err := os.Stat(dest); err == nil && info.Size() > 0 {
+		if nomicModelSHA256 == "" {
+			fmt.Printf("Model already present at %s (sha256 pin not set — skipping integrity check)\n", dest)
+			return nil
+		}
+		if ok, err := verifySHA256(dest, nomicModelSHA256); err == nil && ok {
+			fmt.Printf("Model already present and verified at %s\n", dest)
+			return nil
+		}
+		fmt.Printf("Model at %s failed integrity check — re-downloading\n", dest)
+	}
+
+	fmt.Printf("Downloading %s\n  → %s\n", nomicModelURL, dest)
+	if err := downloadFile(dest, nomicModelURL); err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+
+	if nomicModelSHA256 != "" {
+		fmt.Print("Verifying sha256... ")
+		ok, err := verifySHA256(dest, nomicModelSHA256)
+		if err != nil {
+			return fmt.Errorf("verify sha256: %w", err)
+		}
+		if !ok {
+			_ = os.Remove(dest)
+			return fmt.Errorf("sha256 mismatch — downloaded file deleted; expected %s", nomicModelSHA256)
+		}
+		fmt.Println("OK")
+	} else {
+		fmt.Println("Warning: sha256 pin not set; skipping integrity check")
+	}
+
+	fmt.Printf("Model saved to %s\n", dest)
+	fmt.Printf("Point your sidecar binary at this file and set search.embedder: sidecar in workspace.yaml\n")
+	return nil
+}
+
+// downloadFile downloads url to dest, printing progress to stdout.
+func downloadFile(dest, url string) error {
+	resp, err := http.Get(url) //nolint:gosec // URL is a hardcoded constant
+	if err != nil {
+		return fmt.Errorf("http get: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	tmp := dest + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("create tmp file: %w", err)
+	}
+	defer os.Remove(tmp) //nolint:errcheck
+
+	total := resp.ContentLength
+	var written int64
+	buf := make([]byte, 1<<20) // 1 MiB chunks
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := f.Write(buf[:n]); werr != nil {
+				f.Close()
+				return fmt.Errorf("write: %w", werr)
+			}
+			written += int64(n)
+			if total > 0 {
+				fmt.Printf("\r  %d / %d MB (%.0f%%)",
+					written>>20, total>>20, float64(written)/float64(total)*100)
+			} else {
+				fmt.Printf("\r  %d MB downloaded", written>>20)
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			f.Close()
+			return fmt.Errorf("read: %w", rerr)
+		}
+	}
+	fmt.Println()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close tmp file: %w", err)
+	}
+	return os.Rename(tmp, dest)
+}
+
+// verifySHA256 returns true if the SHA-256 hex digest of the file at path
+// matches expected (case-insensitive).
+func verifySHA256(path, expected string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false, err
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	return strings.EqualFold(got, expected), nil
 }

@@ -51,6 +51,10 @@ type Options struct {
 	// degradation reason is stamped in the "embed_status" meta key so
 	// search can surface "semantic: unavailable: embeddings skipped".
 	NoEmbed bool
+	// Embedder overrides the embedding backend for this run.  When nil,
+	// runEmbedPass falls back to DefaultStaticEmbedder (the safe default).
+	// Set by the CLI from the workspace search.embedder config (S.3).
+	Embedder semantic.Embedder
 	Log      io.Writer
 	Progress func(done, total int)
 }
@@ -259,6 +263,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	cfgJSON, _ := json.Marshal(cfg)
 	fpLines = append(fpLines, "config:"+string(cfgJSON))
 	fpLines = append(fpLines, "patterns:"+patternsFingerprint(opts.PatternsDir, cfg.Patterns))
+	// Include the embedder ID in the fingerprint so that changing the embedder
+	// (S.3) invalidates the incremental cache and triggers a full re-embed.
+	if opts.Embedder != nil {
+		fpLines = append(fpLines, "embedder:"+opts.Embedder.ID())
+	} else {
+		fpLines = append(fpLines, "embedder:static-v1-int8") // default when nil
+	}
 	workspaceFingerprint := fingerprintLines(fpLines)
 
 	if !opts.Full && oldFingerprint != "" && workspaceFingerprint == oldFingerprint {
@@ -1077,11 +1088,30 @@ func runEmbedPass(
 	opts Options,
 	logw io.Writer,
 ) error {
-	emb, err := semantic.DefaultStaticEmbedder()
-	if err != nil {
-		return fmt.Errorf("load static embedder: %w", err)
+	// Resolve the embedder: use the caller-supplied one (S.3 upgrade ladder) or
+	// fall back to the static default.
+	var emb semantic.Embedder
+	if opts.Embedder != nil {
+		emb = opts.Embedder
+	} else {
+		var err error
+		emb, err = semantic.DefaultStaticEmbedder()
+		if err != nil {
+			return fmt.Errorf("load static embedder: %w", err)
+		}
 	}
 	embedderID := emb.ID()
+
+	// Space-mixing guard: reject any table state where two different embedder IDs
+	// coexist (interrupted prior run, manual DB edit).  The delta pass below will
+	// re-embed everything that doesn't match the current embedder ID, so a clean
+	// run always ends in a consistent state — this guard fires only on corruption.
+	sem := semantic.NewStore(store.DB())
+	if storedID, err := sem.CheckEmbedderConsistency(ctx); err != nil {
+		return fmt.Errorf("embed pass aborted: %w; delete the DB and run `polyflow index --full` to recover", err)
+	} else if storedID != "" && storedID != embedderID {
+		fmt.Fprintf(logw, "  Embedder changed (%s → %s): re-embedding all entities\n", storedID, embedderID)
+	}
 
 	// ── Build corpus entities (S.1) ─────────────────────────────────────────
 	// 1. Node cards — richer one-line card: label type service file [meta].
@@ -1141,7 +1171,6 @@ func runEmbedPass(
 
 	// Embed in batches of 256 to bound memory.
 	const batchSize = 256
-	sem := semantic.NewStore(store.DB())
 	for start := 0; start < len(toEmbed); start += batchSize {
 		end := start + batchSize
 		if end > len(toEmbed) {
