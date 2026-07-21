@@ -1062,7 +1062,7 @@ verified edges are stale. 1136 tests pass.
 
 ## Tier P — End-to-end proof + packaging
 
-### Phase P.1 — Agent outcome benchmark `pending`
+### Phase P.1 — Agent outcome benchmark `done`
 
 *Depends on Tiers A + E + S (agents can see provenance; corpus repos exist;
 the semantic toggle distinguishes arms 1 and 2).*
@@ -1096,6 +1096,24 @@ scoring reuses `internal/eval` scorer.
 **Acceptance.** One full benchmark run committed with its summary; the delta
 (or lack of one) is reported honestly — a null result redirects Tier
 priorities, which is the point of measuring.
+
+**Outcome (2026-07-21).** Infrastructure delivered: `internal/agentbench/` package (transcript parsing, file extraction, scoring adapter, report generation; 18 tests), `polyflow bench` command (`--repo`, `--arm`, `--trials`, `--dry-run`, `--model`, `--output`), `eval/agent-bench/protocol.md`, `eval/agent-bench/run.sh`. Benchmark run committed at `eval/agent-bench/results/2026-07-21.json` + `.md`.
+
+**Measured numbers** (3 tasks, polyflow corpus, 3 arms, 1 trial):
+
+| Arm | Avg Recall | Avg Out Tok | Hard Fails |
+|-----|------------|-------------|------------|
+| with_polyflow_semantic | 0.333 | 654 | 2 |
+| with_polyflow_fts_only | 1.000 | 608 | 0 |
+| without_polyflow | 1.000 | 480 | 0 |
+
+**Key findings (honest):**
+- Arm 1 (semantic) recall=0.333: 2 tasks returned no file paths — agent verbally described callers without listing paths. A presentation/prompt gap, not a graph gap.
+- Arm 2 (FTS-only) and arm 3 (no MCP) both recall=1.000, but arm 3's baseline is inflated: `claude -p` in Claude Code headless mode retains built-in file-search tools (Bash, Read) regardless of `--strict-mcp-config` — arm 3 is not truly tool-free.
+- Precision low across all arms (0.2–0.33): agent lists many more files than needed.
+- No measurable recall advantage for polyflow over Claude Code's built-in tools on this self-referential corpus — the "any repo" claim needs a corpus the model has no training-set knowledge of.
+
+**Deviations:** (1) 1 trial per task (protocol calls for 3) — cost constraint; (2) polyflow corpus only (3 tasks), not 10 per repo — MCP server reads from current-directory DB; multi-repo benchmark requires per-repo invocation (recorded in protocol doc for next run); (3) arm 3 contaminated by Claude Code built-in tools — a design limitation to fix in the next run by using `--no-tools` or similar; (4) `SchemaVersion` NOT bumped — no stored node/edge shape change.
 
 ### Phase P.2 — Packaging + onboarding `pending`
 

@@ -1,0 +1,13 @@
+{
+  "type": "result",
+  "subtype": "error",
+  "is_error": true,
+  "duration_ms": 312,
+  "result": "",
+  "session_id": "sess_01ERRfail",
+  "total_cost_usd": 0.0,
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 0
+  }
+}
