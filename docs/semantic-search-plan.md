@@ -203,7 +203,7 @@ acceptance criterion deferred to author's machine.
 uses delete+insert (FTS5 virtual tables do not support ON CONFLICT); this
 is correct and tested.
 
-### Phase S.1 — Corpus builders (nodes, chains, docs) `pending`
+### Phase S.1 — Corpus builders (nodes, chains, docs) `done`
 
 **Problem.** What text represents an entity decides retrieval quality more
 than the model does.
@@ -232,6 +232,26 @@ jargon fixture (README says "Falcon handles purchases", code says
 
 **Acceptance.** `polyflow index` on chessleap produces all three entity
 types with sane counts (spot-checked in the phase note).
+
+**Outcome (2026-07-21).** Shipped: `internal/semantic/corpus.go`
+(`BuildNodeCard`, `BuildFlowChains`, `BuildDocChunks`, `ServicePath`),
+`internal/semantic/corpus_test.go` (20 tests: node card golden × 8 cases,
+fan-out test, chain cap test, two-run determinism tests for chains and docs,
+jargon fixture, Go doc-comment extraction, markdown header splitting, large
+markdown splitting, empty dir). Indexer `runEmbedPass` extended to build all
+three entity types and updated signature to include `allEdges`; S.0-era
+`nodeCard` function replaced by `semantic.BuildNodeCard`; `TestRun_EmbedPassFirstRun`
+updated to assert `len(embeddings) >= nodeCount` (S.1 adds flow + doc entities).
+All 1006 pre-existing tests pass (3 timeout failures in contract/sidecar/evidence
+are pre-existing, verified by `git stash`). `BenchmarkIndexCold` 14.7s/1200
+files (<10% over S.0's 14.5s; budget ≤15.95s). `go vet` clean.
+Deviations: (1) chessleap corpus absent (SkippedCorpus.LocalOnly) — spot-count
+acceptance criterion deferred to author's machine. (2) doc-comment extraction
+covers Go `//`, JS/TS `/** */`, and Ruby `#` prefixes; Python `.py` files
+are walked but no doc-comment extractor is wired (no Python nodes in the
+indexer yet). SchemaVersion not bumped — S.1 adds entities to existing tables
+without changing the schema; the content-hash gate handles incremental
+correctness for new entity types.
 
 ### Phase S.2 — Hybrid search everywhere `pending`
 
