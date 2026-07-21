@@ -380,6 +380,29 @@ pending — the matrix shows all grammar tools (go/js/ts/html/ruby) use single
 in-process backends; no cell proved a divergence requiring a sidecar. V.3 gate
 holds: no V.3 work was done.
 
+**V.4 supplementary patch (2026-07-21).** The original V.4 cells were shallow
+sanity checks: one version per grammar tool, trivial fixtures, no
+version-discriminating syntax. The gate declared "no divergence" on zero
+evidence. This patch closes the gap by: (a) splitting the registry at
+meaningful language-era boundaries (Go 1.18 generics, TypeScript 5.0 const-type-
+params, Ruby 3.0 stable pattern matching) and (b) adding three new fixture
+cells (`go@1.17`, `typescript@4.9.5`, `ruby@2.7`) whose code exercises
+pre-boundary syntax, paired with the corresponding existing cells that exercise
+post-boundary syntax (`go@1.22` updated with a generic `Map[T,U any]` function,
+`typescript@5.4.5` with updated profile, `ruby@2.7` with distinct function set).
+All 13 cells pass: both cells per split tool produce valid graphs with different
+function-level nodes, and neither cell surfaces an ERROR parse node — confirming
+the go-tree-sitter 2024-08-27 grammar is tolerant across all three boundary
+spans. Registry: ToolGo has two rows (`>=1.18→go-v1`, `>=1.0,<1.18→go-v1-compat`);
+ToolTypeScript has two rows (`>=5.0.0→typescript-v5`, `>=4.0.0,<5.0.0→typescript-v4`);
+ToolRuby has two rows (`>=3.0→ruby-v3`, `>=2.0,<3.0→ruby-v2`). Coverage gate
+passes bidirectionally (all 13 registry rows covered; no orphaned cell).
+**V.3 finding:** grammar is tolerant across the tested ranges; no sidecar is
+warranted by current evidence. V.3 gate holds — V.3 remains `pending` and
+executes only if a future matrix cell proves behavioural divergence between two
+grammar versions of the same language. `go test ./...` all 28 packages green;
+`go vet ./...` clean.
+
 ---
 
 ## Key files

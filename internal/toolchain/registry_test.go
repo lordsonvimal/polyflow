@@ -120,11 +120,16 @@ func TestDefaultRegistry_FutureVersionInferred(t *testing.T) {
 }
 
 func TestDefaultRegistry_OldVersionInferred(t *testing.T) {
-	// A version below the minimum threshold must trigger nearest-newest fallback.
+	// A version below ALL registered ranges must trigger nearest-newest fallback.
 	reg := DefaultRegistry()
 
-	// Go 1.18 is below >=1.21.
-	sel := reg.Select(ToolGo, "1.18.0")
+	// TypeScript 3.x is below >=4.0.0,<5.0.0, so no row matches → inferred.
+	sel := reg.Select(ToolTypeScript, "3.9.0")
 	assert.True(t, sel.Inferred)
-	assert.Equal(t, "go-v1", sel.Backend.RuleVariant) // nearest-newest is the only row
+	assert.Equal(t, "typescript-v5", sel.Backend.RuleVariant) // nearest-newest is the first row
+
+	// Ruby 1.x is below >=2.0,<3.0, so no row matches → inferred.
+	sel2 := reg.Select(ToolRuby, "1.9.3")
+	assert.True(t, sel2.Inferred)
+	assert.Equal(t, "ruby-v3", sel2.Backend.RuleVariant) // nearest-newest is the first row
 }

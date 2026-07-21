@@ -1,0 +1,7 @@
+{
+  "name": "tscell4",
+  "version": "1.0.0",
+  "devDependencies": {
+    "typescript": "4.9.5"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "language": "typescript",
-  "profile": "typescript-living",
+  "profile": "typescript-v5",
   "inferred": false,
   "must_nodes": [
     {"type": "function", "label": "add"},
@@ -10,6 +10,7 @@
     {"type": "calls", "from_label": "compute", "to_label": "add"}
   ],
   "must_not_nodes": [
-    {"type": "http_client"}
+    {"type": "function", "label": "identity"},
+    {"type": "function", "label": "transform"}
   ]
 }
