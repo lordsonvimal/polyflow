@@ -981,7 +981,7 @@ in `contracts/`; the flip is inherent (indexer picks up contracts/ on next run).
 Fixtures land in `<wsDir>/testdata/contracts/` (workspace-relative, correct for operator
 use) not repo-level `testdata/contracts/`.
 
-### Phase D.2 — Ledger burn-down trend `pending`
+### Phase D.2 — Ledger burn-down trend `done`
 
 **Problem.** Unresolved counts are a snapshot; accumulation is invisible.
 
@@ -994,6 +994,10 @@ doctor flags any service whose count grew 3 runs consecutively.
 
 **Acceptance.** Three indexes with an injected growing gap → doctor flags the
 service; fixing it shows the downward delta.
+
+**Outcome (2026-07-21).** Implemented exactly as specified.
+
+`SchemaVersion` bumped "17" → "18". `internal/graph/model.go`: `UnresolvedHistoryRow` struct (RunAt/Service/Kind/Count). `internal/graph/store.go`: `unresolved_history` table added to Schema (CREATE TABLE IF NOT EXISTS + DESC index on run_at); `WriteUnresolvedHistory`, `ListUnresolvedHistory`, `PruneUnresolvedHistory` added to Store interface and `SQLiteStore`. `internal/graph/trend.go` (new): `ComputeTrend(history, nBack)` returns per-(service,kind) `TrendRow` (Latest/Baseline/Delta/Runs) sorted deterministically; `DetectGrowth(history, consec)` returns sorted service names for pairs with monotonically growing counts across `consec` consecutive run timestamps. `internal/indexer/indexer.go`: `aggregateUnresolvedHistory(refs, runAt)` helper (sorted output, rule 2); called from both the no-change fast path (reads `ListUnresolvedRefs` from `finalStore`) and the full-build path (uses `allUnresolved` in memory, writes to the final DB after atomic swap); `PruneUnresolvedHistory(ctx, 50)` called after each write. `cmd/polyflow/main.go`: `--trend` / `--trend-n` flags on `status`; `polyflow doctor` gains "Ledger trend" section flagging services with 3 consecutive growing runs via `DetectGrowth`. 24 new tests in `internal/graph/trend_test.go`: history write/read (2), multi-run nRuns limit (1), retention/prune to 50 (1), trend math (4: basic, fewer-than-N, decreasing, empty), growth detection (4: flags, insufficient-runs, empty, not-strictly-increasing), determinism (3: ComputeTrend, DetectGrowth, ListUnresolvedHistory). `TestGoI1_SchemaVersion` updated to "18". All 1104 tests pass. `BenchmarkIndexCold` unaffected (history write is post-swap, off the critical path). Deviations: none.
 
 ---
 
