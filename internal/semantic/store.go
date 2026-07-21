@@ -109,6 +109,27 @@ func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, ve
 	return tx.Commit()
 }
 
+// UpsertEntitiesFTS writes entity text rows into entities_fts without touching
+// the embeddings table. Used in tests to populate the lexical arm independently.
+func (s *Store) UpsertEntitiesFTS(ctx context.Context, entities []Entity) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin fts tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, ent := range entities {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM entities_fts WHERE entity_id = ?`, ent.ID); err != nil {
+			return fmt.Errorf("fts delete %s: %w", ent.ID, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO entities_fts (entity_id, entity_type, text) VALUES (?, ?, ?)`,
+			ent.ID, ent.Type, ent.Text); err != nil {
+			return fmt.Errorf("fts insert %s: %w", ent.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // ftsHit is one result from FTSSearch.
 type ftsHit struct {
 	EntityID   string
