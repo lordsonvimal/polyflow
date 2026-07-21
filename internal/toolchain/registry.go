@@ -74,11 +74,22 @@ func DefaultRegistry() Registry {
 		ToolHTML:       {{VersionRange: "", RuleVariant: "html-living"}},
 		ToolJavaScript: {{VersionRange: "", RuleVariant: "javascript-living"}},
 
-		// Versioned tools — single row today; prepend new rows as versions land.
-		ToolGo:         {{VersionRange: ">=1.21", RuleVariant: "go-v1"}},
-		ToolTypeScript: {{VersionRange: ">=4.0.0", RuleVariant: "typescript-living"}},
+		// Go: split at 1.18 (generics). go-v1 covers the generics era (1.18+);
+		// go-v1-compat covers pre-generics code (1.0–1.17) with the same
+		// in-process grammar — V.4 supplementary cells prove tolerance across both.
+		ToolGo: {
+			{VersionRange: ">=1.18", RuleVariant: "go-v1"},
+			{VersionRange: ">=1.0,<1.18", RuleVariant: "go-v1-compat"},
+		},
+		// TypeScript: split at 5.0 (const type params, stage-3 decorators).
+		// typescript-v5 and typescript-v4 share the same in-process grammar —
+		// V.4 supplementary cells prove the grammar is tolerant across both eras.
+		ToolTypeScript: {
+			{VersionRange: ">=5.0.0", RuleVariant: "typescript-v5"},
+			{VersionRange: ">=4.0.0,<5.0.0", RuleVariant: "typescript-v4"},
+		},
 		// Templ uses a sidecar backend (parser-engine isolation); no RuleVariant.
-		ToolTempl:    {{VersionRange: ">=0.3.0", SidecarBackend: "templ-v0.3"}},
+		ToolTempl: {{VersionRange: ">=0.3.0", SidecarBackend: "templ-v0.3"}},
 		// datastar-v1 (colon syntax, >=1.0.0 <2.0.0); datastar-v0 (hyphen
 		// syntax, <1.0.0). Upper bounds ensure that a future v2 triggers the
 		// nearest-newest fallback (Inferred=true) rather than silently using
@@ -87,6 +98,12 @@ func DefaultRegistry() Registry {
 			{VersionRange: ">=1.0.0,<2.0.0", RuleVariant: "datastar-v1"},
 			{VersionRange: ">=0.0.0,<1.0.0", RuleVariant: "datastar-v0"},
 		},
-		ToolRuby:     {{VersionRange: ">=3.0", RuleVariant: "ruby-v3"}},
+		// Ruby: split at 3.0 (stable pattern matching, numbered block params).
+		// ruby-v3 and ruby-v2 share the same in-process grammar — V.4
+		// supplementary cells prove the grammar is tolerant across both eras.
+		ToolRuby: {
+			{VersionRange: ">=3.0", RuleVariant: "ruby-v3"},
+			{VersionRange: ">=2.0,<3.0", RuleVariant: "ruby-v2"},
+		},
 	}
 }
