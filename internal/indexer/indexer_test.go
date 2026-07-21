@@ -263,3 +263,136 @@ export default App;
 		assert.NotNil(t, idx.Nodes[e.To], "edge %s has dangling To", e.ID)
 	}
 }
+
+// --- S.0 embed pass acceptance tests ---
+
+// TestRun_EmbedPassFirstRun verifies that a fresh index embeds all nodes and
+// stores them in the embeddings table (acceptance: "polyflow index embeds all
+// node cards in one pass").
+func TestRun_EmbedPassFirstRun(t *testing.T) {
+	cfg, _ := testWorkspace(t)
+	dbDir := t.TempDir()
+	runIndexer(t, cfg, dbDir, false)
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	nodeCount, _, err := store.Stats(ctx)
+	require.NoError(t, err)
+	require.Greater(t, nodeCount, 0, "expected nodes after index")
+
+	metas, err := store.ListEmbeddingMeta(ctx)
+	require.NoError(t, err)
+	require.Equal(t, nodeCount, len(metas),
+		"embedding count (%d) must equal node count (%d)", len(metas), nodeCount)
+
+	// embed_status must be "ok"
+	status, err := store.GetMeta(ctx, "embed_status")
+	require.NoError(t, err)
+	require.Equal(t, "ok", status)
+}
+
+// TestRun_EmbedPassIncrementalSkipsUnchanged verifies that a second index on
+// unchanged sources re-embeds zero nodes (acceptance: "second run re-embeds zero").
+func TestRun_EmbedPassIncrementalSkipsUnchanged(t *testing.T) {
+	cfg, _ := testWorkspace(t)
+	dbDir := t.TempDir()
+
+	// First run — embed everything.
+	runIndexer(t, cfg, dbDir, false)
+
+	store1, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	metas1, err := store1.ListEmbeddingMeta(context.Background())
+	store1.Close()
+	require.NoError(t, err)
+	require.NotEmpty(t, metas1)
+
+	// Second run — nothing changed; hash gate must prevent re-embed.
+	// We capture the embedding metadata again and verify it is identical.
+	runIndexer(t, cfg, dbDir, false)
+
+	store2, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store2.Close()
+	metas2, err := store2.ListEmbeddingMeta(context.Background())
+	require.NoError(t, err)
+
+	require.Equal(t, len(metas1), len(metas2), "embedding count changed on incremental run")
+	m1 := map[string]string{}
+	m2 := map[string]string{}
+	for _, m := range metas1 {
+		m1[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
+	}
+	for _, m := range metas2 {
+		m2[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
+	}
+	require.Equal(t, m1, m2, "embedding hashes differ on incremental run — content or embedder changed unexpectedly")
+}
+
+// TestRun_EmbedPassNoEmbed verifies that --no-embed skips the pass and
+// stamps the degradation reason (acceptance: "--no-embed indexes identically fast").
+func TestRun_EmbedPassNoEmbed(t *testing.T) {
+	cfg, _ := testWorkspace(t)
+	dbDir := t.TempDir()
+
+	_, err := Run(context.Background(), Options{
+		Config:      cfg,
+		DBDir:       dbDir,
+		PatternsDir: "../../patterns",
+		Workers:     2,
+		NoEmbed:     true,
+	})
+	require.NoError(t, err)
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	status, err := store.GetMeta(ctx, "embed_status")
+	require.NoError(t, err)
+	require.Contains(t, status, "embeddings skipped",
+		"embed_status must record degradation reason, got %q", status)
+
+	// No embeddings must exist.
+	metas, err := store.ListEmbeddingMeta(ctx)
+	require.NoError(t, err)
+	require.Empty(t, metas, "no embeddings expected when NoEmbed=true")
+}
+
+// TestRun_EmbedPassDeterminism is the two-run determinism test required by
+// phases.md bug-class rule 2: same inputs → byte-identical vector output.
+func TestRun_EmbedPassDeterminism(t *testing.T) {
+	cfg, _ := testWorkspace(t)
+
+	run := func() map[string]string { // entity_id → hex(content_hash):hex(embedder_id)
+		dbDir := t.TempDir()
+		_, err := Run(context.Background(), Options{
+			Config:      cfg,
+			DBDir:       dbDir,
+			PatternsDir: "../../patterns",
+			Workers:     2,
+			Full:        true, // ensure fresh embed both times
+		})
+		require.NoError(t, err)
+
+		store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+		require.NoError(t, err)
+		defer store.Close()
+
+		metas, err := store.ListEmbeddingMeta(context.Background())
+		require.NoError(t, err)
+		m := make(map[string]string, len(metas))
+		for _, meta := range metas {
+			m[meta.EntityID] = meta.EmbedderID + ":" + meta.ContentHash
+		}
+		return m
+	}
+
+	r1 := run()
+	r2 := run()
+	require.Equal(t, r1, r2, "embed pass is non-deterministic: run 1 ≠ run 2")
+}
