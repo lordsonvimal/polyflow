@@ -66,6 +66,7 @@ func init() {
 		evalCmd,
 		doctorCmd,
 		reconcileCmd,
+		rulesCmd,
 	)
 	initDepsFlags()
 	initIndexFlags()
@@ -1864,7 +1865,10 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
 
-var doctorBaseline string
+var (
+	doctorBaseline string
+	doctorPropose  string
+)
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -1874,6 +1878,7 @@ var doctorCmd = &cobra.Command{
 
 func init() {
 	doctorCmd.Flags().StringVar(&doctorBaseline, "baseline", "eval/baseline.json", "baseline JSON file for the eval summary row")
+	doctorCmd.Flags().StringVar(&doctorPropose, "propose", "", "write gap-derived rule proposals + fixture skeletons to this directory (e.g. .polyflow/proposals)")
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {
@@ -1959,10 +1964,11 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// merged alongside G.5 contract coverage and R.5 runtime coverage.
 	// Also surfaces V.4 versioning coverage if the indexer wrote it.
 	fmt.Println()
+	var fusionReport evidence.ReconcileReport
 	if storeErr != nil {
 		fmt.Printf("  Fusion coverage:     (no index — run 'polyflow index' first)\n")
 	} else if len(allEdges) > 0 {
-		fusionReport := evidence.BuildReport(allEdges)
+		fusionReport = evidence.BuildReport(allEdges)
 		printDoctorFusionCoverage(fusionReport)
 		// V.4 versioning coverage: tool×version matrix stamped by the indexer.
 		ctx3 := context.Background()
@@ -1973,7 +1979,45 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Fusion coverage:     (no cross-service edges — run 'polyflow index' first)\n")
 	}
 
+	// D.1: --propose emits gap-derived rule proposals + fixture skeletons.
+	if doctorPropose != "" {
+		if err := emitDoctorProposals(fusionReport.GapList, doctorPropose); err != nil {
+			return err
+		}
+	}
+
 	fmt.Println()
+	return nil
+}
+
+// emitDoctorProposals writes rule YAML + fixture JSON for each observed_only_gap channel.
+// Proposals are named "<n>-<slug>.yaml"; fixtures share the same base with ".json".
+// Two runs on the same graph produce byte-identical files (bug-class rule 2).
+func emitDoctorProposals(gaps []evidence.EdgeSummary, dir string) error {
+	if len(gaps) == 0 {
+		fmt.Printf("\n  No observed_only_gap channels — nothing to propose.\n")
+		return nil
+	}
+	proposals, err := evidence.ProposeWithFixtures(gaps)
+	if err != nil {
+		return fmt.Errorf("generate proposals: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create proposals dir %s: %w", dir, err)
+	}
+	for _, p := range proposals {
+		yamlPath := filepath.Join(dir, p.YAMLFilename)
+		fixPath := filepath.Join(dir, p.FixtureFilename)
+		if err := os.WriteFile(yamlPath, []byte(p.YAMLContent), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", yamlPath, err)
+		}
+		if err := os.WriteFile(fixPath, []byte(p.FixtureContent), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", fixPath, err)
+		}
+		fmt.Printf("\n  Proposed [%d]: %s\n           fixture: %s\n", p.Position, yamlPath, fixPath)
+	}
+	fmt.Printf("\n  %d proposal(s) written to %s\n", len(proposals), dir)
+	fmt.Printf("  Edit node types + key fields, then: polyflow rules promote <yaml>\n")
 	return nil
 }
 

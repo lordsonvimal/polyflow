@@ -106,6 +106,22 @@ func parseRuleFile(name string, data []byte) ([]Rule, error) {
 	return rf.Contracts, nil
 }
 
+// ParseAndValidateBytes parses contract rules from YAML bytes and validates each rule.
+// Used by proposals to verify generated YAML passes the loader before writing (rule 3,
+// docs/phases.md: parsed-but-unenforced fields must fail at load).
+func ParseAndValidateBytes(data []byte) ([]Rule, error) {
+	rules, err := parseRuleFile("<proposal>", data)
+	if err != nil {
+		return nil, err
+	}
+	for i, r := range rules {
+		if err := validateRule(r); err != nil {
+			return nil, fmt.Errorf("rule %d (kind=%s): %w", i, r.Kind, err)
+		}
+	}
+	return rules, nil
+}
+
 func validateRule(r Rule) error {
 	// package/version_range are reserved in the pinned Rule shape but the
 	// engine does not enforce them yet (V.1 gated patterns/parser vocab only).
