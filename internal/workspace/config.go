@@ -106,6 +106,17 @@ type SearchConfig struct {
 	// compatible API, S.3).  Changed Embedder triggers a full re-embed on
 	// the next index run so vector spaces are never mixed.
 	Embedder string `yaml:"embedder,omitempty"`
+	// EndpointURL is the base URL for the OpenAI-compatible embeddings API
+	// (e.g. "http://localhost:11434" for Ollama). Required when Embedder is
+	// "endpoint".
+	EndpointURL string `yaml:"endpoint_url,omitempty"`
+	// EndpointModel is the model name sent in /v1/embeddings requests.
+	// Defaults to "nomic-embed-text" when empty.
+	EndpointModel string `yaml:"endpoint_model,omitempty"`
+	// EndpointKeyEnv names the environment variable whose value is used as
+	// the Authorization Bearer token.  Leave empty for unauthenticated
+	// endpoints (e.g. local Ollama).
+	EndpointKeyEnv string `yaml:"endpoint_key_env,omitempty"`
 	// Synonyms maps user-visible terms to code vocabulary, expanding both
 	// the FTS query and the embedding input text (S.2).
 	// Example: checkout: [falcon, purchase]

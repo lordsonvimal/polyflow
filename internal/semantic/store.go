@@ -243,6 +243,43 @@ func (s *Store) GetEmbedStatus(ctx context.Context) string {
 	return v
 }
 
+// CheckEmbedderConsistency reports whether all stored embeddings share one
+// embedder ID (a requirement for valid cosine search — vectors from different
+// model spaces cannot be compared).
+//
+// Returns ("", nil) when the table is empty.
+// Returns (id, nil) when all rows share the same embedder ID.
+// Returns ("", error) when two or more distinct IDs are found; the error message
+// names the fix: run `polyflow index` to re-embed with a single embedder.
+func (s *Store) CheckEmbedderConsistency(ctx context.Context) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT embedder_id FROM embeddings LIMIT 2`)
+	if err != nil {
+		return "", fmt.Errorf("check embedder consistency: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", fmt.Errorf("check embedder consistency: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("check embedder consistency: %w", err)
+	}
+	if len(ids) > 1 {
+		return "", fmt.Errorf(
+			"embeddings table contains vectors from multiple embedders %v — "+
+				"vector spaces are incompatible; run `polyflow index` to re-embed with a single embedder",
+			ids)
+	}
+	if len(ids) == 1 {
+		return ids[0], nil
+	}
+	return "", nil
+}
+
 // LoadVectors loads all stored vectors for in-memory cosine search.
 // Returns entity ids (ordered), entity types, and the flat float32 matrix
 // (n × dims, row-major).  S.2 calls this at first-search time.
