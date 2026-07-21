@@ -1085,7 +1085,7 @@ func initImpactFlags() {
 	impactCmd.Flags().BoolVar(&impactStaged, "staged", false, "with --diff: staged changes only (git diff --cached)")
 	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	impactCmd.Flags().StringVar(&impactService, "service", "", "filter results to a specific service")
-	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text or json")
+	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text, json, or github-comment")
 	impactCmd.Flags().IntVar(&impactMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
 	impactCmd.Flags().BoolVar(&impactSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
 	impactCmd.Flags().IntVar(&impactSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
@@ -1325,6 +1325,10 @@ func runImpactDiff() error {
 	out.AttachUnresolved(unresolved)
 	out.InlineSnippets(".", impactSnippetLines)
 
+	if impactFormat == "github-comment" {
+		fmt.Fprint(os.Stdout, impact.FormatGitHubComment(out, 0))
+		return nil
+	}
 	budgeted := out.ApplyBudget(impactMaxTokens, impactSummary)
 	if impactFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(budgeted)

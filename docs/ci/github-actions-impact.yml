@@ -1,0 +1,31 @@
+name: Polyflow Impact
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  impact:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Polyflow
+        run: |
+          go install github.com/lordsonvimal/polyflow/cmd/polyflow@latest
+
+      - name: Index
+        run: polyflow index --full
+
+      - name: Compute impact
+        run: polyflow impact --diff --staged --format github-comment > impact.md
+
+      - uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: impact.md
