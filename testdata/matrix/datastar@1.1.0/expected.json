@@ -1,0 +1,18 @@
+{
+  "language": "go",
+  "profile": "datastar-v1",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "component", "label": "ActionPanel"},
+    {"type": "http_client", "label": "POST /play/static/resign", "meta": {"datastar": "true"}},
+    {"type": "http_client", "label": "POST /play/*/draw", "meta": {"datastar": "true"}},
+    {"type": "http_client", "label": "GET /rows/*", "meta": {"datastar": "true"}}
+  ],
+  "must_not_nodes": [
+    {"type": "http_client", "label_contains": "legacy/hyphen"}
+  ],
+  "must_edges": [
+    {"type": "datastar_action", "from_label": "ActionPanel", "to_label": "POST /play/static/resign"},
+    {"type": "datastar_action", "from_label": "ActionPanel", "to_label_contains": "/rows/"}
+  ]
+}

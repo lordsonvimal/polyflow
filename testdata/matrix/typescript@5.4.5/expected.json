@@ -1,0 +1,15 @@
+{
+  "language": "typescript",
+  "profile": "typescript-living",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "function", "label": "add"},
+    {"type": "function", "label": "compute"}
+  ],
+  "must_edges": [
+    {"type": "calls", "from_label": "compute", "to_label": "add"}
+  ],
+  "must_not_nodes": [
+    {"type": "http_client"}
+  ]
+}

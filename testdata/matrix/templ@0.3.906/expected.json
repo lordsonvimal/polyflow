@@ -1,0 +1,12 @@
+{
+  "language": "go",
+  "profile": "templ-v0.3",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "component", "label": "Dashboard"},
+    {"type": "http_client", "label": "POST /dashboard/refresh", "meta": {"datastar": "true"}}
+  ],
+  "must_edges": [
+    {"type": "datastar_action", "from_label": "Dashboard", "to_label": "POST /dashboard/refresh"}
+  ]
+}

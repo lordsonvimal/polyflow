@@ -1,0 +1,12 @@
+{
+  "language": "go",
+  "profile": "go-v1",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "function", "label": "main"},
+    {"type": "function", "label": "helper"}
+  ],
+  "must_edges": [
+    {"type": "calls", "from_label": "main", "to_label": "helper"}
+  ]
+}

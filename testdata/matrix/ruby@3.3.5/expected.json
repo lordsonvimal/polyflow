@@ -1,0 +1,12 @@
+{
+  "language": "ruby",
+  "profile": "ruby-v3",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "function", "label": "main"},
+    {"type": "function", "label": "helper"}
+  ],
+  "must_edges": [
+    {"type": "contains", "from_label_contains": "app.rb", "to_label": "main"}
+  ]
+}

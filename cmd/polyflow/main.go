@@ -31,6 +31,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/server"
+	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/trace"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -1963,12 +1964,11 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	} else if len(allEdges) > 0 {
 		fusionReport := evidence.BuildReport(allEdges)
 		printDoctorFusionCoverage(fusionReport)
-		// V.4 versioning coverage — print if available (V.4 is pending; graceful absent).
-		if ctx3 := context.Background(); ctx3 != nil {
-			if vCov, err := store.GetMeta(ctx3, "version_coverage"); err == nil && vCov != "" {
-				fmt.Printf("  Versioning coverage: %s\n", vCov)
-			}
-		}
+		// V.4 versioning coverage: tool×version matrix stamped by the indexer.
+		ctx3 := context.Background()
+		profilesJSON, _ := store.GetMeta(ctx3, "toolchain_profiles")
+		notesJSON, _ := store.GetMeta(ctx3, "toolchain_coverage")
+		fmt.Print(toolchain.RenderVersionCoverage(profilesJSON, notesJSON))
 	} else {
 		fmt.Printf("  Fusion coverage:     (no cross-service edges — run 'polyflow index' first)\n")
 	}

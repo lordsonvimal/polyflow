@@ -1,0 +1,9 @@
+{
+  "language": "javascript",
+  "profile": "html-living",
+  "inferred": false,
+  "must_nodes": [
+    {"type": "http_client", "label": "/reports"},
+    {"type": "http_client", "label": "POST /save"}
+  ]
+}

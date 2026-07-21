@@ -1,0 +1,12 @@
+package views
+
+templ ActionPanel(gameID string, page int) {
+	<div>
+		<button data-on:click={ templ.JSExpression("@post('/play/" + gameID + "/draw')") }>Draw</button>
+		<button data-on:click={ "$page = " + strconv.Itoa(page) + "; @get('/rows/" + gameID + "')" }>Next</button>
+		<button data-on:click={ "@post('/play/static/resign')" }>Resign</button>
+		<button data-on-click="@post('/legacy/hyphen/create')">Legacy</button>
+		<button data-on:click="$flipped = !$flipped">Flip</button>
+		<input data-bind="username"/>
+	</div>
+}
