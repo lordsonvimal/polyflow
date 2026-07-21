@@ -1,0 +1,17 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 4821,
+  "duration_api_ms": 4750,
+  "num_turns": 2,
+  "result": "Based on polyflow analysis, these files call UnresolvedNote and would need attention:\n\n- `internal/impact/impact.go` — calls UnresolvedNote to append ledger entries\n- `internal/impact/file.go` — calls UnresolvedNote in file-level impact paths\n- `internal/trace/trace.go` — calls UnresolvedNote for trace chain gaps\n- `internal/context/builder.go` — calls UnresolvedNote for context assembly\n\nThese files all import and call the function directly.",
+  "session_id": "sess_01ABCdef123",
+  "total_cost_usd": 0.00512,
+  "usage": {
+    "input_tokens": 1523,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 112
+  }
+}
