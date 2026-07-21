@@ -213,12 +213,14 @@ var (
 	indexWorkspace string
 	indexWorkers   int
 	indexFull      bool
+	indexNoEmbed   bool
 )
 
 func initIndexFlags() {
 	indexCmd.Flags().StringVar(&indexWorkspace, "workspace", meta.ConfigFile, "path to workspace.yaml")
 	indexCmd.Flags().IntVar(&indexWorkers, "workers", runtime.GOMAXPROCS(0), "parser worker pool size")
 	indexCmd.Flags().BoolVar(&indexFull, "full", false, "force a full re-parse, ignoring the incremental cache")
+	indexCmd.Flags().BoolVar(&indexNoEmbed, "no-embed", false, "skip the embedding pass (search runs FTS-only; semantic: unavailable)")
 }
 
 var indexCmd = &cobra.Command{
@@ -238,6 +240,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		Config:       cfg,
 		Workers:      indexWorkers,
 		Full:         indexFull,
+		NoEmbed:      indexNoEmbed,
 		ContractsDir: filepath.Dir(indexWorkspace),
 		Log:          os.Stdout,
 		Progress: func(done, total int) {

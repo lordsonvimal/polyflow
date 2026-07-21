@@ -123,6 +123,26 @@ CREATE TABLE IF NOT EXISTS unresolved_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_unresolved_history_run_at ON unresolved_history(run_at DESC);
+
+-- S.0: static embedding corpus.  Vectors are little-endian float32 BLOBs.
+-- entity_type: "node" | "flow" | "doc".
+-- meta: JSON anchors (node_id, members, file, line) for S.1+.
+CREATE TABLE IF NOT EXISTS embeddings (
+  entity_id    TEXT PRIMARY KEY,
+  entity_type  TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  embedder_id  TEXT NOT NULL,
+  dims         INTEGER NOT NULL,
+  vector       BLOB NOT NULL,
+  meta         TEXT NOT NULL DEFAULT '{}'
+);
+
+-- S.0: lexical twin of the embedding corpus.  Both arms of hybrid search
+-- (S.2) rank the same text for all three entity types.  nodes_fts is
+-- untouched; this table covers flows and docs that nodes_fts does not index.
+CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+  entity_id UNINDEXED, entity_type UNINDEXED, text
+);
 `
 
 // Store is the persistence interface for the polyflow graph.
@@ -727,6 +747,38 @@ func (s *SQLiteStore) PruneUnresolvedHistory(ctx context.Context, keepRuns int) 
 
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// DB returns the underlying *sql.DB. Used by packages that operate on the
+// same database connection without depending on graph.SQLiteStore directly
+// (e.g. internal/semantic for the embeddings table).
+func (s *SQLiteStore) DB() *sql.DB { return s.db }
+
+// EmbeddingMeta holds the stored metadata for one embedding row, used by the
+// indexer to decide which entities need re-embedding without loading vectors.
+type EmbeddingMeta struct {
+	EntityID    string
+	EmbedderID  string
+	ContentHash string
+}
+
+// ListEmbeddingMeta returns lightweight metadata for every stored embedding.
+func (s *SQLiteStore) ListEmbeddingMeta(ctx context.Context) ([]EmbeddingMeta, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT entity_id, embedder_id, content_hash FROM embeddings ORDER BY entity_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list embedding meta: %w", err)
+	}
+	defer rows.Close()
+	var out []EmbeddingMeta
+	for rows.Next() {
+		var m EmbeddingMeta
+		if err := rows.Scan(&m.EntityID, &m.EmbedderID, &m.ContentHash); err != nil {
+			return nil, fmt.Errorf("scan embedding meta: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // WithTx executes fn inside a single transaction, rolling back on error.

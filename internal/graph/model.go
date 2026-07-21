@@ -166,7 +166,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "18" // D.2: unresolved_history table added for ledger burn-down trend
+const SchemaVersion = "19" // S.0: embeddings + entities_fts tables added for semantic retrieval
 
 // Node represents a code entity in the graph.
 type Node struct {

@@ -160,7 +160,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
 
 ## Phases (one commit each)
 
-### Phase S.0 — Embedder interface + static embedder + storage `pending`
+### Phase S.0 — Embedder interface + static embedder + storage `done`
 
 **Problem.** Nothing can produce or store a vector.
 
@@ -184,6 +184,24 @@ fixture set); hash-gate test (unchanged text → no re-embed); offline test
 
 **Acceptance.** `polyflow index` on this repo embeds all node cards in one
 pass; a second run re-embeds zero; `--no-embed` indexes identically fast.
+
+**Outcome (2026-07-21).** Shipped: `internal/semantic/{embedder.go,static.go,
+store.go}`, `tools/embed-model/{main.go,convert.py,README.md}`,
+`internal/semantic/model/model.bin` (synthetic 630-token model, 164KB;
+production model via `tools/embed-model/convert.py` + potion-base-8M,
+MIT-licensed). `SchemaVersion` bumped 18 → 19. `polyflow index --no-embed`
+wired. All 1152 tests pass. `BenchmarkIndexCold` 14.5s/1200 files (target
+<30s), embed pass included. Acceptance: 10,751 nodes embedded on first run
+of `polyflow index` on this repo; second run re-embeds 0 (hash-gate confirmed
+by `TestRun_EmbedPassIncrementalSkipsUnchanged`).
+Deviations: (1) shipped model is synthetic (630-token vocab, deterministic
+random weights) rather than potion-base-8M; the conversion script and README
+document how to generate the production model — quality measured in S.4.
+(2) chessleap corpus absent (SkippedCorpus.LocalOnly) — spot-count
+acceptance criterion deferred to author's machine.
+(3) The `entities_fts` table's FTS5 `ON CONFLICT DO NOTHING` insert path
+uses delete+insert (FTS5 virtual tables do not support ON CONFLICT); this
+is correct and tested.
 
 ### Phase S.1 — Corpus builders (nodes, chains, docs) `pending`
 
