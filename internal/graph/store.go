@@ -110,6 +110,19 @@ CREATE TABLE IF NOT EXISTS dependencies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dependencies_name ON dependencies(name);
+
+-- D.2 ledger burn-down trend: one row per (run_at, service, kind) per index run.
+-- Retention: the last 50 distinct run timestamps are kept; older rows are pruned
+-- at the end of each successful index run.
+CREATE TABLE IF NOT EXISTS unresolved_history (
+	run_at  INTEGER NOT NULL,
+	service TEXT    NOT NULL,
+	kind    TEXT    NOT NULL,
+	count   INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (run_at, service, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_unresolved_history_run_at ON unresolved_history(run_at DESC);
 `
 
 // Store is the persistence interface for the polyflow graph.
@@ -136,6 +149,14 @@ type Store interface {
 	SetMeta(ctx context.Context, key, value string) error
 	// GetMeta retrieves a metadata entry by key.
 	GetMeta(ctx context.Context, key string) (string, error)
+	// WriteUnresolvedHistory appends per-kind unresolved counts for one index run.
+	WriteUnresolvedHistory(ctx context.Context, rows []UnresolvedHistoryRow) error
+	// ListUnresolvedHistory returns history rows for the most recent nRuns distinct
+	// run timestamps, ordered newest first then by service and kind.
+	ListUnresolvedHistory(ctx context.Context, nRuns int) ([]UnresolvedHistoryRow, error)
+	// PruneUnresolvedHistory removes history rows older than the most recent
+	// keepRuns distinct run timestamps.
+	PruneUnresolvedHistory(ctx context.Context, keepRuns int) error
 	Close() error
 }
 
@@ -645,6 +666,63 @@ func (s *SQLiteStore) GetMeta(ctx context.Context, key string) (string, error) {
 		return "", fmt.Errorf("get meta %s: %w", key, err)
 	}
 	return value, nil
+}
+
+func (s *SQLiteStore) WriteUnresolvedHistory(ctx context.Context, rows []UnresolvedHistoryRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO unresolved_history (run_at, service, kind, count)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(run_at, service, kind) DO UPDATE SET count=excluded.count`)
+		if err != nil {
+			return fmt.Errorf("prepare history insert: %w", err)
+		}
+		defer stmt.Close()
+		for _, r := range rows {
+			if _, err := stmt.ExecContext(ctx, r.RunAt, r.Service, r.Kind, r.Count); err != nil {
+				return fmt.Errorf("insert history row (%s/%s): %w", r.Service, r.Kind, err)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *SQLiteStore) ListUnresolvedHistory(ctx context.Context, nRuns int) ([]UnresolvedHistoryRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT run_at, service, kind, count FROM unresolved_history
+		WHERE run_at IN (
+			SELECT DISTINCT run_at FROM unresolved_history ORDER BY run_at DESC LIMIT ?
+		)
+		ORDER BY run_at DESC, service, kind`, nRuns)
+	if err != nil {
+		return nil, fmt.Errorf("list unresolved history: %w", err)
+	}
+	defer rows.Close()
+
+	var out []UnresolvedHistoryRow
+	for rows.Next() {
+		var r UnresolvedHistoryRow
+		if err := rows.Scan(&r.RunAt, &r.Service, &r.Kind, &r.Count); err != nil {
+			return nil, fmt.Errorf("scan history row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) PruneUnresolvedHistory(ctx context.Context, keepRuns int) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM unresolved_history
+		WHERE run_at NOT IN (
+			SELECT DISTINCT run_at FROM unresolved_history ORDER BY run_at DESC LIMIT ?
+		)`, keepRuns)
+	if err != nil {
+		return fmt.Errorf("prune history: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) Close() error {
