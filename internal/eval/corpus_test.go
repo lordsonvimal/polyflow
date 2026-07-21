@@ -139,6 +139,88 @@ func TestValidateManifest_LocalPath(t *testing.T) {
 	assert.Empty(t, errs)
 }
 
+// ── Semantic case (kind=semantic, S.4) validation ─────────────────────────
+
+func validSemanticCase() eval.Case {
+	return eval.Case{
+		ID:          "sem-one",
+		Kind:        "semantic",
+		Query:       "unresolved references",
+		Section:     "nodes",
+		ExpectAnyOf: []string{"UnresolvedNote"},
+		MustNotMiss: []string{"UnresolvedNote"},
+	}
+}
+
+func TestValidateManifest_SemanticCase_Valid(t *testing.T) {
+	m := validManifest()
+	m.Cases = []eval.Case{validSemanticCase()}
+	errs := eval.ValidateManifest(m)
+	assert.Empty(t, errs, "valid semantic case should have no errors")
+}
+
+func TestValidateManifest_SemanticCase_MissingQuery(t *testing.T) {
+	m := validManifest()
+	c := validSemanticCase()
+	c.Query = ""
+	m.Cases = []eval.Case{c}
+	errs := eval.ValidateManifest(m)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "query")
+}
+
+func TestValidateManifest_SemanticCase_BadSection(t *testing.T) {
+	m := validManifest()
+	c := validSemanticCase()
+	c.Section = "files"
+	m.Cases = []eval.Case{c}
+	errs := eval.ValidateManifest(m)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "section")
+}
+
+func TestValidateManifest_SemanticCase_EmptyExpectAnyOf(t *testing.T) {
+	m := validManifest()
+	c := validSemanticCase()
+	c.ExpectAnyOf = nil
+	m.Cases = []eval.Case{c}
+	errs := eval.ValidateManifest(m)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "expect_any_of")
+}
+
+// expected_impacted is not required for semantic cases.
+func TestValidateManifest_SemanticCase_NoExpectedImpacted(t *testing.T) {
+	m := validManifest()
+	c := validSemanticCase()
+	c.ExpectedImpacted = nil
+	m.Cases = []eval.Case{c}
+	errs := eval.ValidateManifest(m)
+	assert.Empty(t, errs, "semantic cases do not require expected_impacted")
+}
+
+// must_not_miss is still required for semantic cases.
+func TestValidateManifest_SemanticCase_MissingMustNotMiss(t *testing.T) {
+	m := validManifest()
+	c := validSemanticCase()
+	c.MustNotMiss = nil
+	m.Cases = []eval.Case{c}
+	errs := eval.ValidateManifest(m)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "must_not_miss")
+}
+
+// "semantic" is now a known kind — should not trigger unknown-kind error.
+func TestValidateManifest_SemanticKindRecognized(t *testing.T) {
+	m := validManifest()
+	c := validSemanticCase()
+	m.Cases = []eval.Case{c}
+	errs := eval.ValidateManifest(m)
+	for _, e := range errs {
+		assert.NotContains(t, e.Error(), "unknown kind")
+	}
+}
+
 // All cases must have ≥1 must_not_miss — multiple violations reported at once.
 func TestValidateManifest_MultipleMissingMustNotMiss(t *testing.T) {
 	m := validManifest()

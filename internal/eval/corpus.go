@@ -30,11 +30,15 @@ type RepoRef struct {
 // Case is one eval test case.
 type Case struct {
 	ID               string   `yaml:"id"`
-	Kind             string   `yaml:"kind"`              // node | file | diff
-	Target           string   `yaml:"target,omitempty"`  // node search query or file path
+	Kind             string   `yaml:"kind"`              // node | file | diff | semantic
+	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff)
 	DiffFile         string   `yaml:"diff_file,omitempty"`
-	ExpectedImpacted []string `yaml:"expected_impacted"`
+	ExpectedImpacted []string `yaml:"expected_impacted,omitempty"`
 	MustNotMiss      []string `yaml:"must_not_miss"`
+	// Semantic search cases (kind=semantic, S.4):
+	Query       string   `yaml:"query,omitempty"`         // natural-language query
+	Section     string   `yaml:"section,omitempty"`       // nodes | flows | docs
+	ExpectAnyOf []string `yaml:"expect_any_of,omitempty"` // entity labels; a hit in top-10 of Section counts as recall=1
 }
 
 // LoadManifest reads a corpus manifest from <dir>/manifest.yaml.
@@ -90,24 +94,33 @@ func ValidateManifest(m *Manifest) []ValidationError {
 		seen[c.ID] = true
 		switch c.Kind {
 		case "node", "file", "diff":
+			if len(c.ExpectedImpacted) == 0 {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "expected_impacted must not be empty"})
+			}
+			if c.Kind == "diff" && c.DiffFile == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "diff cases require diff_file"})
+			}
+			if (c.Kind == "node" || c.Kind == "file") && c.Target == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: c.Kind + " cases require target"})
+			}
+		case "semantic":
+			if c.Query == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "semantic cases require query"})
+			}
+			switch c.Section {
+			case "nodes", "flows", "docs":
+			default:
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("semantic cases require section (nodes|flows|docs), got %q", c.Section)})
+			}
+			if len(c.ExpectAnyOf) == 0 {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "semantic cases require expect_any_of"})
+			}
 		default:
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff)", c.Kind)})
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|semantic)", c.Kind)})
 		}
-		if len(c.ExpectedImpacted) == 0 {
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: "expected_impacted must not be empty"})
-		}
-		// Lint rule: every case must have at least one must_not_miss file.
+		// Lint rule: every case must have at least one must_not_miss entry.
 		if len(c.MustNotMiss) == 0 {
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: "must_not_miss is required (every case needs ≥1 hard-failure file)"})
-		}
-		if c.Kind == "diff" && c.DiffFile == "" {
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: "diff cases require diff_file"})
-		}
-		if c.Kind == "node" && c.Target == "" {
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: "node cases require target"})
-		}
-		if c.Kind == "file" && c.Target == "" {
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: "file cases require target"})
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: "must_not_miss is required (every case needs ≥1 hard-failure entry)"})
 		}
 	}
 	return errs

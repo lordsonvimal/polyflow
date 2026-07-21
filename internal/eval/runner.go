@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
 
 // RunOptions configures an eval run.
@@ -159,10 +161,79 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 	case "diff":
 		// Diff cases require E.2 corpus infrastructure (clone + patch apply).
 		return CaseResult{}, fmt.Errorf("diff cases not supported until Phase E.2")
+	case "semantic":
+		return runSemanticCase(ctx, store, c)
 	default:
 		return CaseResult{}, fmt.Errorf("unknown case kind %q", c.Kind)
 	}
 	return Score(c.ID, returned, c.ExpectedImpacted, c.MustNotMiss, unresolvedFiles), nil
+}
+
+// runSemanticCase executes a kind=semantic eval case (S.4): NL query →
+// top-10 entity labels in the requested section, scored against expect_any_of.
+// Gracefully handles DBs without entities_fts (pre-S.1 schema) by scoring
+// as 0 results (honest miss) rather than returning an error.
+func runSemanticCase(ctx context.Context, store *graph.SQLiteStore, c Case) (CaseResult, error) {
+	semStore := semantic.NewStore(store.DB())
+	embedder, _ := semantic.DefaultStaticEmbedder()
+	searcher := semantic.NewSearcher(semStore, embedder, nil)
+
+	resp, err := searcher.Search(ctx, c.Query, 10)
+	if err != nil {
+		// DB lacks entities_fts (pre-S.1 schema) or other search failure.
+		// Score as 0 results — honest miss, not an eval run error.
+		cr := Score(c.ID, nil, c.ExpectAnyOf, c.MustNotMiss, nil)
+		cr.Kind = "semantic"
+		return cr, nil
+	}
+
+	var hits []semantic.Hit
+	switch c.Section {
+	case "nodes":
+		hits = resp.Nodes
+	case "flows":
+		hits = resp.Flows
+	case "docs":
+		hits = resp.Docs
+	default:
+		return CaseResult{}, fmt.Errorf("unknown section %q in semantic case %s", c.Section, c.ID)
+	}
+
+	returned := make([]string, 0, len(hits))
+	for _, h := range hits {
+		returned = append(returned, semanticHitLabel(h, c.Section))
+	}
+	cr := Score(c.ID, returned, c.ExpectAnyOf, c.MustNotMiss, nil)
+	cr.Kind = "semantic"
+	return cr, nil
+}
+
+// semanticHitLabel extracts a stable, line-number-free identifier from a
+// search hit. For nodes and flows this is the name component of the entity ID
+// (format: service:file:type:name:line → parts[3]). For docs it is the file path.
+func semanticHitLabel(hit semantic.Hit, section string) string {
+	switch section {
+	case "nodes":
+		return nodeIDLabel(hit.Entity.ID)
+	case "flows":
+		return nodeIDLabel(hit.Entity.NodeID)
+	case "docs":
+		return hit.Entity.File
+	}
+	return hit.Entity.ID
+}
+
+// nodeIDLabel extracts the name component from a node ID string of the form
+// service:file:type:name:line. Returns the raw ID if the format is unexpected.
+func nodeIDLabel(nodeID string) string {
+	parts := strings.SplitN(nodeID, ":", 5)
+	if len(parts) >= 4 {
+		return parts[3]
+	}
+	if len(parts) >= 1 {
+		return parts[len(parts)-1]
+	}
+	return nodeID
 }
 
 // nodeImpactFiles collects unique file paths from a node-level impact result.

@@ -404,7 +404,7 @@ machine present — 14.6s confirmed). (3) The `polyflow-embed-sidecar` binary
 C/CGO build. `SidecarEmbedder` fully implements the IPC client side; the
 server-side binary is a separate engineering task outside this plan.
 
-### Phase S.4 — Measured accuracy + benchmark arm `pending`
+### Phase S.4 — Measured accuracy + benchmark arm `done`
 
 **Problem.** Every quality claim so far is a design estimate.
 
@@ -431,6 +431,27 @@ server-side binary is a separate engineering task outside this plan.
 
 **Acceptance.** `polyflow eval` prints semantic recall@10 per tier;
 baseline committed.
+
+**Outcome.**
+- Shipped: `kind: semantic` case type in Tier E (corpus.go + score.go +
+  runner.go), `SemanticRecall` macro-average in Report, `UpsertEntitiesFTS`
+  helper in semantic.Store, determinism test, 10 hand-verified NL cases
+  (5 polyflow + 5 pyflask), regenerated baseline.
+- **Measured numbers (static embedder, hybrid FTS+vector, recall@10):**
+  - polyflow: SemanticRecall = 1.000 (5/5 cases, all exact-match hits)
+  - pyflask: SemanticRecall = 1.000 (5/5 cases)
+  - Overall recall across all cases: polyflow 1.000 (8 cases), pyflask 1.000
+    (21 cases); gate passes with no regressions.
+- **Deviations:** Semantic cases added only for polyflow and pyflask (both
+  re-indexed with S.1 schema). gotify, writefreely, lobsters, chessleap
+  deferred — their DBs pre-date S.1 and lack `entities_fts`; graceful
+  degradation (score-as-zero) confirmed working via `NoDB` test. These repos
+  need `make eval-corpus` re-run before semantic cases can be added.
+- Static embedder delivers recall@10 = 1.000 on these 10 cases, all of which
+  are lexically unambiguous (entity name present or closely paraphrased in the
+  query). The open question from the risk section — whether static quality
+  holds on purely semantic queries with no lexical overlap — remains to be
+  tested when a sidecar/endpoint embedder is wired in (S.3 upgrade ladder).
 
 ---
 

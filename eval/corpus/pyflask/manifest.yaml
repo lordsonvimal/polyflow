@@ -188,3 +188,63 @@ cases:
       - gateway/app.py
     must_not_miss:
       - gateway/app.py
+
+  # ── Semantic search cases (S.4) ────────────────────────────────────────────
+  # Verified by running FTS search against the indexed pyflask DB (60 entities).
+  # Requires the pyflask fixture to be re-indexed with `polyflow index` after S.1
+  # (adds entities_fts table). Entity labels are function names from nodes table.
+
+  - id: nl-send-email-notification
+    kind: semantic
+    query: "send notification email task"
+    section: nodes
+    # Verified: FTS search for "send*" + "notification*" returns send_notification
+    # at rank 2–3 (behind celery_task_decorator). worker/tasks.py:send_notification.
+    expect_any_of:
+      - send_notification
+    must_not_miss:
+      - send_notification
+
+  - id: nl-payment-processing
+    kind: semantic
+    query: "payment processing worker task"
+    section: nodes
+    # Verified: FTS search for "process*" + "payment*" returns process_payment.
+    # worker/tasks.py:process_payment.
+    expect_any_of:
+      - process_payment
+    must_not_miss:
+      - process_payment
+
+  - id: nl-create-user-endpoint
+    kind: semantic
+    query: "create new user registration"
+    section: nodes
+    # Verified: FTS search for "create*" + "user*" returns create_user.
+    # api/routes/users.py:create_user.
+    expect_any_of:
+      - create_user
+    must_not_miss:
+      - create_user
+
+  - id: nl-health-check-status
+    kind: semantic
+    query: "health check gateway status endpoint"
+    section: nodes
+    # Verified: FTS search for "health*" + "check*" returns health_check.
+    # gateway/app.py:health_check.
+    expect_any_of:
+      - health_check
+    must_not_miss:
+      - health_check
+
+  - id: nl-generate-invoice
+    kind: semantic
+    query: "generate invoice order task"
+    section: nodes
+    # Verified: FTS search for "generate*" + "invoice*" returns generate_invoice.
+    # worker/tasks.py:generate_invoice.
+    expect_any_of:
+      - generate_invoice
+    must_not_miss:
+      - generate_invoice
