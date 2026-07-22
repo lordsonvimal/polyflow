@@ -196,6 +196,49 @@ func TestSearchNodes(t *testing.T) {
 	assert.Len(t, results, 1)
 }
 
+func TestFTS5PrefixQuery(t *testing.T) {
+	cases := map[string]string{
+		"Create":             "Create*",
+		"build.submit":       "build* OR submit*", // regression: `.` crashed FTS5
+		"user's checkout":    "user* OR s* OR checkout*",
+		"user_id":            "user_id*", // underscore stays inside the token
+		"pkg.Method{arg}[0]": "pkg* OR Method* OR arg* OR 0*",
+		"":                   "",
+		"...---:::":          "", // punctuation-only → no usable tokens
+	}
+	for in, want := range cases {
+		if got := graph.FTS5PrefixQuery(in); got != want {
+			t.Errorf("FTS5PrefixQuery(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSearchNodes_PunctuatedQueryDoesNotError(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.UpsertNode(ctx, &graph.Node{
+		ID: "a", Type: graph.NodeTypeFunction, Label: "CreateUser",
+		Service: "api", File: "user.go", Language: "go",
+	}))
+
+	// Dotted/punctuated targets previously produced `fts5: syntax error near
+	// "."`, which callers swallowed as a false "node not found". They must now
+	// return cleanly and still resolve by token.
+	for _, q := range []string{"Create.User", "build.submit", "pkg.CreateUser()", "a<b>c"} {
+		results, err := s.SearchNodes(ctx, q, 10)
+		require.NoErrorf(t, err, "query %q must not error", q)
+		_ = results
+	}
+	results, err := s.SearchNodes(ctx, "Create.User", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 1, "Create.User should resolve to CreateUser via token match")
+
+	// A query with no usable tokens returns no results, not an error.
+	results, err = s.SearchNodes(ctx, "...", 10)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
 func TestSearchNodesLimit(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
