@@ -69,6 +69,9 @@ func chessleapGraph(t *testing.T, dir string) (nodes []*graph.Node, edges []*gra
 	dbDir := t.TempDir()
 	stats, err := indexer.Run(context.Background(), indexer.Options{
 		Config: cfg, DBDir: dbDir, PatternsDir: filepath.Join(repoRoot(), "patterns"), Full: true,
+		// Only nodes/edges are compared; embeddings (~80% of index time) are
+		// not under test, so skip the embedding pass.
+		NoEmbed: true,
 	})
 	require.NoError(t, err)
 	t.Logf("chessleap (sidecar dir %q): files=%d nodes=%d edges=%d crosslinks=%d",
