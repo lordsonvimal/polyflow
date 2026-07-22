@@ -25,6 +25,8 @@ type TaskResult struct {
 	Trial          int      `json:"trial"`
 	InputTokens    int      `json:"input_tokens"`
 	OutputTokens   int      `json:"output_tokens"`
+	ContextTokens  int      `json:"context_tokens"`
+	NumTurns       int      `json:"num_turns"`
 	WallMs         int64    `json:"wall_ms"`
 	TotalCostUSD   float64  `json:"total_cost_usd"`
 	Recall         float64  `json:"recall"`
@@ -37,14 +39,16 @@ type TaskResult struct {
 
 // ArmSummary aggregates metrics across all trials for one arm.
 type ArmSummary struct {
-	Arm          string  `json:"arm"`
-	Trials       int     `json:"trials"`
-	AvgRecall    float64 `json:"avg_recall"`
-	AvgInputTok  float64 `json:"avg_input_tokens"`
-	AvgOutputTok float64 `json:"avg_output_tokens"`
-	AvgWallMs    float64 `json:"avg_wall_ms"`
-	TotalCostUSD float64 `json:"total_cost_usd"`
-	HardFails    int     `json:"hard_fails"`
+	Arm           string  `json:"arm"`
+	Trials        int     `json:"trials"`
+	AvgRecall     float64 `json:"avg_recall"`
+	AvgInputTok   float64 `json:"avg_input_tokens"`
+	AvgOutputTok  float64 `json:"avg_output_tokens"`
+	AvgContextTok float64 `json:"avg_context_tokens"`
+	AvgTurns      float64 `json:"avg_turns"`
+	AvgWallMs     float64 `json:"avg_wall_ms"`
+	TotalCostUSD  float64 `json:"total_cost_usd"`
+	HardFails     int     `json:"hard_fails"`
 }
 
 // BenchReport is the full benchmark run output persisted to
@@ -70,7 +74,7 @@ func Summarize(tasks []TaskResult) []ArmSummary {
 		if !ok {
 			continue
 		}
-		var sumR, sumP, sumIn, sumOut float64
+		var sumR, sumP, sumIn, sumOut, sumCtx, sumTurns float64
 		var sumWall int64
 		var totalCost float64
 		var hf int
@@ -79,6 +83,8 @@ func Summarize(tasks []TaskResult) []ArmSummary {
 			sumP += t.Precision
 			sumIn += float64(t.InputTokens)
 			sumOut += float64(t.OutputTokens)
+			sumCtx += float64(t.ContextTokens)
+			sumTurns += float64(t.NumTurns)
 			sumWall += t.WallMs
 			totalCost += t.TotalCostUSD
 			if t.HardFail {
@@ -87,14 +93,16 @@ func Summarize(tasks []TaskResult) []ArmSummary {
 		}
 		n := float64(len(ts))
 		out = append(out, ArmSummary{
-			Arm:          arm,
-			Trials:       len(ts),
-			AvgRecall:    sumR / n,
-			AvgInputTok:  sumIn / n,
-			AvgOutputTok: sumOut / n,
-			AvgWallMs:    float64(sumWall) / n,
-			TotalCostUSD: totalCost,
-			HardFails:    hf,
+			Arm:           arm,
+			Trials:        len(ts),
+			AvgRecall:     sumR / n,
+			AvgInputTok:   sumIn / n,
+			AvgOutputTok:  sumOut / n,
+			AvgContextTok: sumCtx / n,
+			AvgTurns:      sumTurns / n,
+			AvgWallMs:     float64(sumWall) / n,
+			TotalCostUSD:  totalCost,
+			HardFails:     hf,
 		})
 	}
 	return out
@@ -113,17 +121,20 @@ func FormatMarkdown(r BenchReport) string {
 	}
 
 	sb.WriteString("## Summary\n\n")
-	sb.WriteString("| Arm | Trials | Avg Recall | Avg In Tok | Avg Out Tok | Avg Wall (ms) | Total Cost (USD) | Hard Fails |\n")
-	sb.WriteString("|-----|--------|------------|------------|-------------|---------------|------------------|------------|\n")
+	sb.WriteString("_Context Tok = input + cache-creation + cache-read: the total tokens the model " +
+		"processed across all tool round-trips (the real per-run context cost). Out Tok is the " +
+		"final-answer size._\n\n")
+	sb.WriteString("| Arm | Trials | Avg Recall | Avg Context Tok | Avg Turns | Avg Out Tok | Avg Wall (ms) | Total Cost (USD) | Hard Fails |\n")
+	sb.WriteString("|-----|--------|------------|-----------------|-----------|-------------|---------------|------------------|------------|\n")
 	for _, s := range r.Summary {
-		fmt.Fprintf(&sb, "| %s | %d | %.3f | %.0f | %.0f | %.0f | $%.4f | %d |\n",
-			s.Arm, s.Trials, s.AvgRecall, s.AvgInputTok, s.AvgOutputTok, s.AvgWallMs,
+		fmt.Fprintf(&sb, "| %s | %d | %.3f | %.0f | %.1f | %.0f | %.0f | $%.4f | %d |\n",
+			s.Arm, s.Trials, s.AvgRecall, s.AvgContextTok, s.AvgTurns, s.AvgOutputTok, s.AvgWallMs,
 			s.TotalCostUSD, s.HardFails)
 	}
 
 	sb.WriteString("\n## Task Detail\n\n")
-	sb.WriteString("| Task | Arm | Trial | Recall | Hard Fail | In Tok | Out Tok | Wall (ms) |\n")
-	sb.WriteString("|------|-----|-------|--------|-----------|--------|---------|----------|\n")
+	sb.WriteString("| Task | Arm | Trial | Recall | Hard Fail | Context Tok | Turns | Out Tok | Wall (ms) |\n")
+	sb.WriteString("|------|-----|-------|--------|-----------|-------------|-------|---------|----------|\n")
 
 	sorted := make([]TaskResult, len(r.Tasks))
 	copy(sorted, r.Tasks)
@@ -144,8 +155,8 @@ func FormatMarkdown(r BenchReport) string {
 		if t.Error != "" {
 			hf = "ERR"
 		}
-		fmt.Fprintf(&sb, "| %s | %s | %d | %.3f | %s | %d | %d | %d |\n",
-			t.TaskID, t.Arm, t.Trial, t.Recall, hf, t.InputTokens, t.OutputTokens, t.WallMs)
+		fmt.Fprintf(&sb, "| %s | %s | %d | %.3f | %s | %d | %d | %d | %d |\n",
+			t.TaskID, t.Arm, t.Trial, t.Recall, hf, t.ContextTokens, t.NumTurns, t.OutputTokens, t.WallMs)
 	}
 	return sb.String()
 }
