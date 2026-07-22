@@ -1,0 +1,4 @@
+services:
+  - name: svc
+    path: svc
+    language: go
