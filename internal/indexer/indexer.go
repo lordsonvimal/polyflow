@@ -491,6 +491,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			if err != nil {
 				absSvcPath = sf.svc.Path
 			}
+			// templ codegen preflight: regenerate missing/stale _templ.go so the
+			// go/packages build below succeeds instead of failing on undefined
+			// generated symbols and dropping the whole service to tree-sitter.
+			if sf.svc.Language == "go" {
+				if ts := ensureTemplGenerated(absSvcPath); ts.note != "" {
+					fmt.Fprintf(logw, "  templ: %s\n", ts.note)
+				}
+			}
 			fmt.Fprintf(logw, "  Semantic analysis: %s...\n", sf.svc.Name)
 			sem := analyzer.AnalyzeService(absSvcPath, sf.svc.Name, fset, knownNodeIDs)
 			if sem.Warning != "" {
