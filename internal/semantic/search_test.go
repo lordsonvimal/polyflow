@@ -129,6 +129,30 @@ func TestBuildFTS5Query_Empty(t *testing.T) {
 	}
 }
 
+func TestBuildFTS5Query_DottedIdentifier(t *testing.T) {
+	// Regression: "build.submit" (an AMQP routing key) previously produced
+	// "build.submit*", which FTS5 rejects with `syntax error near "."`.
+	got := buildFTS5Query("build.submit")
+	if got != "build* OR submit*" {
+		t.Errorf("got %q, want %q", got, "build* OR submit*")
+	}
+}
+
+func TestBuildFTS5Query_AllowlistPunctuation(t *testing.T) {
+	// The allowlist keeps letters/digits/underscore and drops everything else,
+	// so no unhandled punctuation can reach the FTS5 parser. Underscores stay
+	// inside a token (they are valid, not FTS5 syntax).
+	got := buildFTS5Query("pkg.Method{build_jobs}[0] <T> a#b&c|d\\e`f=g%h")
+	for _, ch := range []string{".", "{", "}", "[", "]", "<", ">", "#", "&", "|", "\\", "`", "=", "%"} {
+		if contains(got, ch) {
+			t.Errorf("FTS5 query still contains %q: %s", ch, got)
+		}
+	}
+	if !contains(got, "build_jobs*") {
+		t.Errorf("expected underscore token preserved, got %q", got)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		func() bool {
@@ -491,11 +515,13 @@ func TestFTSSearch_NLQuerySafe(t *testing.T) {
 	db := openTestDB(t)
 	sem := NewStore(db)
 	ctx := context.Background()
-	// "user's checkout-flow" would be an FTS5 syntax error if passed raw;
-	// buildFTS5Query must sanitise it.
-	_, err := sem.FTSSearch(ctx, buildFTS5Query("user's checkout-flow"), 10)
-	if err != nil {
-		t.Errorf("sanitised NL query should not cause FTS error: %v", err)
+	// These would each be an FTS5 syntax error if passed raw; buildFTS5Query
+	// must sanitise them. "build.submit" is the exact input that crashed
+	// `polyflow search` with `fts5: syntax error near "."`.
+	for _, q := range []string{"user's checkout-flow", "build.submit", "pkg.Method(arg)", "a<b>c{d}"} {
+		if _, err := sem.FTSSearch(ctx, buildFTS5Query(q), 10); err != nil {
+			t.Errorf("sanitised query %q should not cause FTS error: %v", q, err)
+		}
 	}
 }
 
