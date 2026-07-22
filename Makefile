@@ -1,4 +1,4 @@
-.PHONY: web build build-all test test-e2e bench lint clean
+.PHONY: web build build-all release test test-e2e bench lint clean
 
 BUILD_DIR := dist
 BINARY    := polyflow
@@ -84,4 +84,26 @@ build-all:
 		CC="zig cc -target $$(./scripts/zig_target.sh $$os $$arch)" \
 		GOOS=$$os GOARCH=$$arch \
 		go build -o $(BUILD_DIR)/$(BINARY)-$$os-$$arch ./cmd/polyflow; \
+		CGO_ENABLED=1 \
+		CC="zig cc -target $$(./scripts/zig_target.sh $$os $$arch)" \
+		GOOS=$$os GOARCH=$$arch \
+		go build -o $(BUILD_DIR)/polyflow-parse-templ-$$os-$$arch ./cmd/polyflow-parse-templ; \
 	done
+
+# release — version-stamped tarballs for every supported platform.
+# Each archive contains the polyflow binary and the polyflow-parse-templ sidecar.
+# Requires build-all to have run first (or will run it).
+release: build-all
+	@mkdir -p $(BUILD_DIR)/release
+	@for platform in $(PLATFORMS); do \
+		os=$${platform%/*}; arch=$${platform#*/}; \
+		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
+		name="$(BINARY)-$(VERSION)-$$os-$$arch"; \
+		echo "Packaging $$name..."; \
+		mkdir -p $(BUILD_DIR)/release/$$name; \
+		cp $(BUILD_DIR)/$(BINARY)-$$os-$$arch $(BUILD_DIR)/release/$$name/$(BINARY)$$ext; \
+		cp $(BUILD_DIR)/polyflow-parse-templ-$$os-$$arch $(BUILD_DIR)/release/$$name/polyflow-parse-templ$$ext; \
+		tar -czf $(BUILD_DIR)/release/$$name.tar.gz -C $(BUILD_DIR)/release $$name; \
+		rm -rf $(BUILD_DIR)/release/$$name; \
+	done
+	@echo "Release $(VERSION) packages written to $(BUILD_DIR)/release/"
