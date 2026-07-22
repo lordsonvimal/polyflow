@@ -97,6 +97,9 @@ func indexChessleapContractEdges(t *testing.T, chessleapDir string) []goldenEdge
 		DBDir:       dbDir,
 		PatternsDir: "../../patterns",
 		Full:        true,
+		// This harness inspects only contract edges — the embedding pass is
+		// ~80% of index time and irrelevant here, so skip it (5x faster).
+		NoEmbed: true,
 	})
 	require.NoError(t, err)
 	t.Logf("indexed chessleap: files=%d parsed=%d errors=%d nodes=%d edges=%d crosslinks=%d",
