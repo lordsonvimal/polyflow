@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
 // Hit is one item in a typed search result section.
@@ -343,30 +345,12 @@ func isExact(label, q string) bool {
 // ── FTS5 query building ───────────────────────────────────────────────────────
 
 // buildFTS5Query converts a natural-language query to a safe FTS5 query
-// expression: special characters are replaced with spaces, each resulting
-// token gets a prefix-star, tokens are OR-joined so any term match returns a
-// result. Raw sentences like "user's checkout-flow" are syntax errors in FTS5
-// without this treatment (bug-class rule 6 — captured text must be sanitised
-// before being fed to an engine).
+// expression. It delegates to graph.FTS5PrefixQuery so both FTS paths (semantic
+// entities_fts here, graph nodes_fts in SearchNodes) share one allowlist-based
+// sanitiser — a blocklist miss (e.g. "build.submit" → `syntax error near "."`)
+// cannot reappear in only one of them.
 func buildFTS5Query(q string) string {
-	var b strings.Builder
-	for _, r := range q {
-		switch r {
-		case '"', '\'', '-', ':', '(', ')', '^', '*', '~', '+', '@', '!', '?', ',', ';', '/':
-			b.WriteByte(' ')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	tokens := strings.Fields(b.String())
-	if len(tokens) == 0 {
-		return ""
-	}
-	parts := make([]string, len(tokens))
-	for i, t := range tokens {
-		parts[i] = t + "*"
-	}
-	return strings.Join(parts, " OR ")
+	return graph.FTS5PrefixQuery(q)
 }
 
 // ── Glossary expansion ────────────────────────────────────────────────────────
