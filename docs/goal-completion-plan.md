@@ -1115,7 +1115,7 @@ priorities, which is the point of measuring.
 
 **Deviations:** (1) 1 trial per task (protocol calls for 3) — cost constraint; (2) polyflow corpus only (3 tasks), not 10 per repo — MCP server reads from current-directory DB; multi-repo benchmark requires per-repo invocation (recorded in protocol doc for next run); (3) arm 3 contaminated by Claude Code built-in tools — a design limitation to fix in the next run by using `--no-tools` or similar; (4) `SchemaVersion` NOT bumped — no stored node/edge shape change.
 
-### Phase P.2 — Packaging + onboarding `pending`
+### Phase P.2 — Packaging + onboarding `done`
 
 *Additionally depends on `polyflow doctor` existing — it is created in
 contract-matching G.5 and extended by V.4/F.4/R.5; the onboarding deliverable
@@ -1140,6 +1140,46 @@ workspace); doctor-suggestion golden tests.
 
 **Acceptance.** A fresh clone + quickstart reaches a working MCP-served
 impact query with no undocumented step.
+
+**Outcome (2026-07-22).** Implemented exactly as specified.
+
+`internal/doctor/onboarding.go` adds `CheckOnboarding(OnboardingParams)
+[]OnboardingIssue` — a pure function (no I/O) covering four checks: missing
+workspace config (action: `polyflow init`), no services in workspace (action:
+`polyflow init --interactive`), graph DB not found (action: `polyflow index`),
+zero-pattern-match services (warning: `polyflow patterns --list`), and absent
+capture sessions (info: `polyflow capture start <name>`). 9 tests in
+`internal/doctor/onboarding_test.go` covering all conditions, the
+multi-zero-service case, the missing-workspace early-return (single issue),
+and `OnboardingOK`. `cmd/polyflow/main.go`: `printDoctorOnboarding()` wired
+at the top of `runDoctor` — resolves workspace state (stat + Load + BuildIndex
+node counts + ListSessionInfos) then calls `CheckOnboarding`; output appears
+before the existing eval/contract/runtime/fusion sections. `docs/quickstart.md`
+written (under a page; covers init→index→MCP→impact→optional capture, links to
+instrumentation.md). `docs/instrumentation.md` promoted from the runtime-flow-plan
+appendix (R.5) with OTEL env vars, per-stack recipe table, service name mapping,
+and verification states section. `Makefile`: `release` target added — calls
+`build-all` (which now also builds `polyflow-parse-templ` for all platforms) and
+packages each platform's binaries into a version-stamped tarball in
+`dist/release/`. `internal/e2e/quickstart_test.go` with fixture at
+`internal/e2e/testdata/quickstart/`: `TestQuickstart_StepByStep` (load workspace
+→ index → verify node count > 0 → context query on `listUsers`) and
+`TestQuickstart_Determinism` (two identical runs → byte-identical edge and node
+sets). All 9 doctor tests + 2 quickstart tests pass. Full suite: 1135 tests pass.
+
+**Deviations:**
+1. F.2 status in evidence-fusion-plan.md reads `pending` but was explicitly
+   expanded into R.0–R.5 (all `done`); treated as satisfied per the plan
+   note "this plan = F.2, expanded" (runtime-flow-plan.md line 720).
+2. F.5 ("LLM last-mile proposer, optional") is `pending` and not in P.2's
+   specific dependency chain; treated as non-blocking per its "optional"
+   designation and absence from the P.2 prerequisite note.
+3. `make release` requires `zig` for cross-compilation (same constraint as
+   the existing `build-all` target); on machines without zig, `build` (native
+   only) still works.
+4. The MCP registration acceptance step (Claude Code headless MCP test) is
+   not automated in CI — it requires a live Claude Code session. The
+   quickstart doc is human-tested on the polyflow fixture repo.
 
 ---
 
