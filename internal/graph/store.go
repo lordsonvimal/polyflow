@@ -333,12 +333,17 @@ func (s *SQLiteStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
 }
 
 func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
-	// FTS5 prefix search: append * for prefix matching. Nodes whose label is
-	// an exact (case-insensitive) match for the query rank above prefix-only
-	// matches — bm25 alone shuffles as the corpus grows (e.g. indexing test
-	// files), and a query for "Create" must find the node named Create before
-	// CreateClient.
-	ftsQuery := query + "*"
+	// FTS5 prefix search. Nodes whose label is an exact (case-insensitive)
+	// match for the query rank above prefix-only matches — bm25 alone shuffles
+	// as the corpus grows (e.g. indexing test files), and a query for "Create"
+	// must find the node named Create before CreateClient. The query is run
+	// through FTS5PrefixQuery so punctuated targets ("Game.state", "build.submit")
+	// don't produce an FTS5 syntax error; the raw query is still used for the
+	// exact-label tie-breaker below.
+	ftsQuery := FTS5PrefixQuery(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.id, n.type, n.label, n.service, n.file, n.line, n.language, n.meta
 		FROM nodes n
