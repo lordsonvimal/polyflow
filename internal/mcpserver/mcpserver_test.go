@@ -295,6 +295,43 @@ func TestImpactTool_TightMaxTokensRollsUp(t *testing.T) {
 	assert.Equal(t, "summary", out.Budget["level"])
 }
 
+// TestImpactTool_DefaultBudgetIsCompact verifies the MCP impact tool applies a
+// compact token budget when the caller omits max_tokens: a small blast radius
+// still returns full per-node detail, but the budget is stamped (proving the
+// default is wired, not unlimited). This is what protects an agent's context
+// from the verbose per-node dump on large radii.
+func TestImpactTool_DefaultBudgetIsCompact(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Callers []map[string]any `json:"callers"`
+		Budget  map[string]any   `json:"budget"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
+
+	assert.NotEmpty(t, out.Callers, "small radius fits the default budget: detail kept")
+	require.NotNil(t, out.Budget, "default run must stamp a budget, not run unlimited")
+	assert.Equal(t, "detail", out.Budget["level"])
+	assert.Equal(t, float64(defaultImpactBudget), out.Budget["max_tokens"])
+}
+
+// TestImpactTool_NegativeMaxTokensIsUnlimited verifies a negative max_tokens
+// opts out of the compact default: full detail with no budget cap applied.
+func TestImpactTool_NegativeMaxTokensIsUnlimited(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Callers []map[string]any `json:"callers"`
+		Budget  map[string]any   `json:"budget"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB", "max_tokens": -1}, &out)
+
+	assert.NotEmpty(t, out.Callers, "unlimited keeps per-node detail")
+	assert.Nil(t, out.Budget, "negative max_tokens means unlimited: no budget stamp")
+}
+
 func TestUnknownTargetIsToolError(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
