@@ -490,6 +490,9 @@ func TestChessleapF0StaticBaseline(t *testing.T) {
 		DBDir:       dbDir,
 		PatternsDir: patternsDir,
 		Full:        true,
+		// Only edges/fusion states are asserted below; embeddings (~80% of
+		// index time) are not under test, so skip the embedding pass.
+		NoEmbed: true,
 	})
 	require.NoError(t, err)
 	t.Logf("chessleap F.0 index: files=%d nodes=%d edges=%d", stats.TotalFiles, stats.Nodes, stats.Edges)
@@ -572,6 +575,9 @@ func TestChessleapF0Determinism(t *testing.T) {
 		dbDir := t.TempDir()
 		_, err = indexer.Run(context.Background(), indexer.Options{
 			Config: cfg, DBDir: dbDir, PatternsDir: patternsDir, Full: true,
+			// Determinism is asserted over the reconciled edge set only;
+			// skip the embedding pass (~80% of index time, not under test).
+			NoEmbed: true,
 		})
 		require.NoError(t, err)
 
