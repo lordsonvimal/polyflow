@@ -128,9 +128,10 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"transitively depends on it, entry points, and affected services. Directly answers " +
 			"'what is impacted if I change X'. The unresolved section lists references the " +
 			"indexer could not resolve — verify those manually, the blast radius may be " +
-			"under-reported where they appear. Set max_tokens to cap output size (over budget, " +
-			"per-node detail rolls up per file), summary to force the rollup, snippet_lines to " +
-			"inline source snippets per node. " +
+			"under-reported where they appear. Output defaults to a compact budget: small blast " +
+			"radii return full per-node detail, large ones auto-roll-up per file. Set max_tokens " +
+			"to raise or lower that cap (negative = unlimited), summary to force the rollup, " +
+			"snippet_lines to inline source snippets per node. " +
 			semanticsParagraph,
 	}, s.impact)
 
@@ -168,6 +169,27 @@ func effectiveDepth(depth, def int) int {
 		return def
 	}
 	return depth
+}
+
+// defaultImpactBudget is the token budget applied to the MCP impact tool when
+// the caller does not specify max_tokens. Unlike the CLI (where 0 means
+// unlimited), an MCP consumer is an agent paying for every token it ingests, so
+// the default is a compact budget: small blast radii still return full per-node
+// detail (they fit the budget), while large ones auto-roll-up to the per-file
+// summary instead of dumping the verbose form into the agent's context.
+const defaultImpactBudget = 2000
+
+// effectiveBudget maps an MCP max_tokens input to an impact.ApplyBudget budget.
+// 0 (unset) → the compact default; a negative value → 0 (unlimited, opt-in);
+// any positive value is honoured as-is.
+func effectiveBudget(maxTokens int) int {
+	switch {
+	case maxTokens == 0:
+		return defaultImpactBudget
+	case maxTokens < 0:
+		return 0
+	}
+	return maxTokens
 }
 
 // resolveNode finds the best node match for a search query, mirroring the
@@ -324,8 +346,8 @@ type impactInput struct {
 	Direction       string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
-	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
-	Summary         bool   `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
+	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail"`
+	Summary         bool   `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
 	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
@@ -354,7 +376,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 			return nil, nil, err
 		}
 		out.AttachUnresolved(unresolved)
-		out.ApplyBudget(in.MaxTokens)
+		out.ApplyBudget(effectiveBudget(in.MaxTokens))
 		return jsonResult(out)
 	}
 
@@ -369,7 +391,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		out.TotalCallers = len(out.Callers)
 	}
 	out.InlineSnippets(".", in.SnippetLines)
-	return jsonResult(out.ApplyBudget(in.MaxTokens, in.Summary))
+	return jsonResult(out.ApplyBudget(effectiveBudget(in.MaxTokens), in.Summary))
 }
 
 // ─── trace ───────────────────────────────────────────────────────────────────
