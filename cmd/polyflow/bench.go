@@ -149,6 +149,8 @@ func runBench(cmd *cobra.Command, args []string) error {
 				} else {
 					r.InputTokens = tr.InputTokens
 					r.OutputTokens = tr.OutputTokens
+					r.ContextTokens = tr.ContextTokens
+					r.NumTurns = tr.NumTurns
 					r.TotalCostUSD = tr.TotalCostUSD
 					cr := agentbench.ScoreTranscript(task.CaseID, tr, task.Expected, task.MustNotMiss)
 					r.Recall = cr.Recall
@@ -156,8 +158,8 @@ func runBench(cmd *cobra.Command, args []string) error {
 					r.SilentMisses = cr.SilentMisses
 					r.HardFail = cr.HardFail
 					r.ExtractedFiles = agentbench.ExtractFiles(tr.Result)
-					fmt.Printf("recall=%.3f hard_fail=%v in=%d out=%d wall=%dms\n",
-						r.Recall, r.HardFail, r.InputTokens, r.OutputTokens, r.WallMs)
+					fmt.Printf("recall=%.3f hard_fail=%v ctx=%d turns=%d out=%d wall=%dms\n",
+						r.Recall, r.HardFail, r.ContextTokens, r.NumTurns, r.OutputTokens, r.WallMs)
 				}
 				results = append(results, r)
 			}
