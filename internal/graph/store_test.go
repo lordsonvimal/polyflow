@@ -260,6 +260,39 @@ func TestSearchNodesLimit(t *testing.T) {
 	assert.Len(t, results, 3)
 }
 
+// TestSearchNodes_TestFilesDeprioritized asserts that among equally-good matches
+// a production node resolves ahead of a test node, so impact/trace/context target
+// resolution stops landing on `_test.go` (and spec) files.
+func TestSearchNodes_TestFilesDeprioritized(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Same exact label; only the defining file differs. Insert the test node
+	// first so a naive tie-break by insertion/rowid would surface it on top.
+	nodes := []*graph.Node{
+		{ID: "t", Type: graph.NodeTypeFunction, Label: "AppConfig", Service: "api", File: "internal/services/app_config_service_test.go", Language: "go"},
+		{ID: "p", Type: graph.NodeTypeStruct, Label: "AppConfig", Service: "api", File: "internal/models/app_config.go", Language: "go"},
+		{ID: "s", Type: graph.NodeTypeMethod, Label: "AppConfigList", Service: "api", File: "spec/app_config_spec.rb", Language: "ruby"},
+	}
+	for _, n := range nodes {
+		require.NoError(t, s.UpsertNode(ctx, n))
+	}
+
+	results, err := s.SearchNodes(ctx, "AppConfig", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
+	assert.Equal(t, "p", results[0].ID, "production node must resolve ahead of the _test.go node")
+
+	// Tests still appear in results (deprioritized, not filtered).
+	var sawTest bool
+	for _, r := range results {
+		if r.ID == "t" {
+			sawTest = true
+		}
+	}
+	assert.True(t, sawTest, "test nodes should still be returned, just ranked lower")
+}
+
 func TestStats(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

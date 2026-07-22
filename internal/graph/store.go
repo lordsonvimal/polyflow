@@ -332,6 +332,30 @@ func (s *SQLiteStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
 	return scanEdge(row)
 }
 
+// testFileRankPenalty is an ORDER BY sub-expression that evaluates to 1 for nodes
+// defined in a test/spec file and 0 otherwise. Applied after the exact-label
+// tie-breaker so that, among equally good matches, production code resolves ahead
+// of tests: target resolution for impact/trace/context was landing on test nodes
+// (e.g. "app config service" → app_config_service_test.go, "docker build callback"
+// → docker_build_cancel_callback_test.go). Tests still rank and appear in results;
+// they just don't win when a production node is an equally good match. `\` is the
+// LIKE ESCAPE char so the literal `_` in `_test`/`_spec` matches an underscore
+// rather than acting as the single-char wildcard.
+const testFileRankPenalty = `(CASE WHEN
+	    n.file LIKE '%\_test.go' ESCAPE '\'
+	 OR n.file LIKE '%\_test.py' ESCAPE '\'
+	 OR n.file LIKE 'test\_%' ESCAPE '\'
+	 OR n.file LIKE '%/test\_%' ESCAPE '\'
+	 OR n.file LIKE '%\_spec.rb' ESCAPE '\'
+	 OR n.file LIKE '%\_test.rb' ESCAPE '\'
+	 OR n.file LIKE '%.test.%'
+	 OR n.file LIKE '%.spec.%'
+	 OR n.file LIKE 'spec/%'  OR n.file LIKE '%/spec/%'
+	 OR n.file LIKE 'test/%'  OR n.file LIKE '%/test/%'
+	 OR n.file LIKE 'tests/%' OR n.file LIKE '%/tests/%'
+	 OR n.file LIKE '%/__tests__/%'
+	THEN 1 ELSE 0 END)`
+
 func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
 	// FTS5 prefix search. Nodes whose label is an exact (case-insensitive)
 	// match for the query rank above prefix-only matches — bm25 alone shuffles
@@ -349,7 +373,7 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 		FROM nodes n
 		JOIN nodes_fts f ON f.id = n.id
 		WHERE nodes_fts MATCH ?
-		ORDER BY (lower(n.label) = lower(?)) DESC, rank
+		ORDER BY (lower(n.label) = lower(?)) DESC, `+testFileRankPenalty+` ASC, rank
 		LIMIT ?`, ftsQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search nodes: %w", err)
