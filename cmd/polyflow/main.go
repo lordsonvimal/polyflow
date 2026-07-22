@@ -24,6 +24,7 @@ import (
 
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/contract"
+	"github.com/lordsonvimal/polyflow/internal/doctor"
 	"github.com/lordsonvimal/polyflow/internal/eval"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/evidence/trace_ingest"
@@ -2118,6 +2119,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Println("polyflow doctor")
 	fmt.Println()
 
+	// P.2 Onboarding section — shown first so new users see the critical path.
+	printDoctorOnboarding()
+
 	// Eval summary row — reads the baseline file without re-running the corpus.
 	baseline, err := eval.LoadBaseline(doctorBaseline)
 	if err != nil {
@@ -2310,6 +2314,64 @@ func emitDoctorProposals(gaps []evidence.EdgeSummary, dir string) error {
 	fmt.Printf("\n  %d proposal(s) written to %s\n", len(proposals), dir)
 	fmt.Printf("  Edit node types + key fields, then: polyflow rules promote <yaml>\n")
 	return nil
+}
+
+// printDoctorOnboarding prints the guided onboarding section at the top of
+// doctor output.  It resolves workspace state in-process and delegates the
+// logic to internal/doctor so the checks are unit-testable.
+func printDoctorOnboarding() {
+	// Resolve workspace state.
+	_, wsStatErr := os.Stat(meta.ConfigFile)
+	workspaceFound := wsStatErr == nil
+
+	var configuredServices []string
+	if workspaceFound {
+		if wsCfg, err := workspace.Load(meta.ConfigFile); err == nil {
+			for _, svc := range wsCfg.Services {
+				configuredServices = append(configuredServices, svc.Name)
+			}
+		}
+	}
+
+	store, storeErr := openStore()
+	nodeCountByService := map[string]int{}
+	if storeErr == nil {
+		defer store.Close()
+		ctx := context.Background()
+		idx, idxErr := store.BuildIndex(ctx)
+		if idxErr == nil {
+			// Count substantive (non-file) nodes per service.
+			for _, n := range idx.Nodes {
+				if n.Type != graph.NodeTypeFile {
+					nodeCountByService[n.Service]++
+				}
+			}
+		}
+	}
+
+	sessions := trace_ingest.ListSessionInfos(capturesBase(), time.Now())
+	hasSessions := len(sessions) > 0
+
+	params := doctor.OnboardingParams{
+		WorkspaceFound:     workspaceFound,
+		ConfiguredServices: configuredServices,
+		StoreErr:           storeErr,
+		NodeCountByService: nodeCountByService,
+		HasSessions:        hasSessions,
+	}
+
+	issues := doctor.CheckOnboarding(params)
+	fmt.Printf("  Onboarding:\n")
+	if len(issues) == 0 {
+		fmt.Printf("    OK — workspace configured, indexed, and operational\n")
+	} else {
+		for _, issue := range issues {
+			label := strings.ToUpper(string(issue.Kind))
+			fmt.Printf("    [%s] %s\n", label, issue.Message)
+			fmt.Printf("          run: %s\n", issue.Fix)
+		}
+	}
+	fmt.Println()
 }
 
 // printDoctorRuntimeCoverage prints the runtime coverage section in doctor style.
