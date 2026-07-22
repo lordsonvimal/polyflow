@@ -25,6 +25,20 @@ func TestParseTranscript_Fixture(t *testing.T) {
 	if tr.OutputTokens != 112 {
 		t.Errorf("OutputTokens = %d, want 112", tr.OutputTokens)
 	}
+	if tr.CacheCreationTokens != 2000 {
+		t.Errorf("CacheCreationTokens = %d, want 2000", tr.CacheCreationTokens)
+	}
+	if tr.CacheReadTokens != 15000 {
+		t.Errorf("CacheReadTokens = %d, want 15000", tr.CacheReadTokens)
+	}
+	// ContextTokens is the whole point of the fix: input + cache creation + cache
+	// read = the real context the model processed, not the 1523 raw input tokens.
+	if tr.ContextTokens != 1523+2000+15000 {
+		t.Errorf("ContextTokens = %d, want %d", tr.ContextTokens, 1523+2000+15000)
+	}
+	if tr.NumTurns != 2 {
+		t.Errorf("NumTurns = %d, want 2", tr.NumTurns)
+	}
 	if tr.TotalCostUSD != 0.00512 {
 		t.Errorf("TotalCostUSD = %v, want 0.00512", tr.TotalCostUSD)
 	}

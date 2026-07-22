@@ -10,8 +10,8 @@
   "total_cost_usd": 0.00512,
   "usage": {
     "input_tokens": 1523,
-    "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 2000,
+    "cache_read_input_tokens": 15000,
     "output_tokens": 112
   }
 }

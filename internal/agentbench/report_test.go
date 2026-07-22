@@ -73,8 +73,8 @@ func TestSummarize_ArmOrder(t *testing.T) {
 
 func TestSummarize_Math(t *testing.T) {
 	tasks := []agentbench.TaskResult{
-		{Arm: agentbench.ArmWithSemantics, Recall: 1.0, InputTokens: 100, OutputTokens: 20, WallMs: 1000},
-		{Arm: agentbench.ArmWithSemantics, Recall: 0.5, InputTokens: 200, OutputTokens: 40, WallMs: 2000},
+		{Arm: agentbench.ArmWithSemantics, Recall: 1.0, InputTokens: 100, OutputTokens: 20, ContextTokens: 5000, NumTurns: 2, WallMs: 1000},
+		{Arm: agentbench.ArmWithSemantics, Recall: 0.5, InputTokens: 200, OutputTokens: 40, ContextTokens: 25000, NumTurns: 8, WallMs: 2000},
 	}
 	s := agentbench.Summarize(tasks)
 	if len(s) != 1 {
@@ -86,6 +86,12 @@ func TestSummarize_Math(t *testing.T) {
 	}
 	if as.AvgInputTok != 150 {
 		t.Errorf("AvgInputTok = %.0f, want 150", as.AvgInputTok)
+	}
+	if as.AvgContextTok != 15000 {
+		t.Errorf("AvgContextTok = %.0f, want 15000", as.AvgContextTok)
+	}
+	if as.AvgTurns != 5 {
+		t.Errorf("AvgTurns = %.1f, want 5", as.AvgTurns)
 	}
 	if as.AvgWallMs != 1500 {
 		t.Errorf("AvgWallMs = %.0f, want 1500", as.AvgWallMs)
