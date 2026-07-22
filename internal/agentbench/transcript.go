@@ -11,14 +11,26 @@ import (
 )
 
 // Transcript is the parsed result of one `claude -p --output-format json` run.
+//
+// InputTokens/OutputTokens are the raw (uncached) prompt and completion tokens
+// the result envelope reports. On their own they badly understate a tool-using
+// agent's cost: the growing transcript is re-fed to the model on every tool
+// round-trip, and that bulk is billed as cached-input tokens. ContextTokens
+// sums input + cache-creation + cache-read into the total the model actually
+// processed across the run — the metric that separates an agent that answered
+// from one MCP call from one that ground through a dozen grep/read round-trips.
 type Transcript struct {
-	DurationMs   int64   `json:"duration_ms"`
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	TotalCostUSD float64 `json:"total_cost_usd"`
-	Result       string  `json:"result"`
-	IsError      bool    `json:"is_error"`
-	SessionID    string  `json:"session_id"`
+	DurationMs          int64   `json:"duration_ms"`
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	CacheCreationTokens int     `json:"cache_creation_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens"`
+	ContextTokens       int     `json:"context_tokens"`
+	NumTurns            int     `json:"num_turns"`
+	TotalCostUSD        float64 `json:"total_cost_usd"`
+	Result              string  `json:"result"`
+	IsError             bool    `json:"is_error"`
+	SessionID           string  `json:"session_id"`
 }
 
 // claudeEnvelope mirrors the `claude -p --output-format json` JSON envelope.
@@ -26,12 +38,15 @@ type claudeEnvelope struct {
 	Type         string  `json:"type"`
 	IsError      bool    `json:"is_error"`
 	DurationMs   int64   `json:"duration_ms"`
+	NumTurns     int     `json:"num_turns"`
 	Result       string  `json:"result"`
 	SessionID    string  `json:"session_id"`
 	TotalCostUSD float64 `json:"total_cost_usd"`
 	Usage        struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -45,9 +60,14 @@ func ParseTranscript(data []byte) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("unexpected transcript type %q (want \"result\")", env.Type)
 	}
 	return Transcript{
-		DurationMs:   env.DurationMs,
-		InputTokens:  env.Usage.InputTokens,
-		OutputTokens: env.Usage.OutputTokens,
+		DurationMs:          env.DurationMs,
+		InputTokens:         env.Usage.InputTokens,
+		OutputTokens:        env.Usage.OutputTokens,
+		CacheCreationTokens: env.Usage.CacheCreationInputTokens,
+		CacheReadTokens:     env.Usage.CacheReadInputTokens,
+		ContextTokens: env.Usage.InputTokens + env.Usage.CacheCreationInputTokens +
+			env.Usage.CacheReadInputTokens,
+		NumTurns:     env.NumTurns,
 		TotalCostUSD: env.TotalCostUSD,
 		Result:       env.Result,
 		IsError:      env.IsError,
