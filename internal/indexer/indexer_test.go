@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -494,4 +495,78 @@ func TestRun_EmbedPassEmbedderSwitch(t *testing.T) {
 		m3[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
 	}
 	require.Equal(t, m2, m3, "embeddings changed on third run (no-op expected)")
+}
+
+// TestRun_UnparsedFileLedger verifies B.0: the indexer writes "unparsed_files"
+// meta as sorted JSON containing only non-asset blind spots, and that running
+// twice yields byte-identical output (bug-class rule 2).
+func TestRun_UnparsedFileLedger(t *testing.T) {
+	dir := t.TempDir()
+	svcDir := filepath.Join(dir, "api")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+	writeFile(t, svcDir, "go.mod", "module example.com/api\n\ngo 1.22\n")
+	writeFile(t, svcDir, "main.go", "package main\nfunc main() {}\n")
+	writeFile(t, svcDir, "deploy.sh", "#!/bin/sh\necho deploy\n")
+	writeFile(t, svcDir, "Dockerfile", "FROM alpine\n")
+	writeFile(t, svcDir, "logo.png", "\x89PNG\r\n") // allowlisted — must not appear
+
+	cfg := &workspace.WorkspaceConfig{
+		Name: "b0test", Version: "1",
+		Services: []workspace.Service{{Name: "api", Path: svcDir, Language: "go"}},
+	}
+	dbDir := t.TempDir()
+
+	// First run.
+	runIndexer(t, cfg, dbDir, true)
+
+	openAndReadMeta := func() string {
+		t.Helper()
+		st, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+		require.NoError(t, err)
+		defer st.Close()
+		val, err := st.GetMeta(context.Background(), "unparsed_files")
+		require.NoError(t, err, "unparsed_files meta must always be written")
+		return val
+	}
+
+	meta1 := openAndReadMeta()
+
+	// Verify content: .sh and Dockerfile present; .png absent.
+	var parsed map[string]map[string]int
+	require.NoError(t, json.Unmarshal([]byte(meta1), &parsed))
+	apiCounts := parsed["api"]
+	assert.Equal(t, 1, apiCounts[".sh"], ".sh count in api service")
+	assert.Equal(t, 1, apiCounts["Dockerfile"], "Dockerfile count in api service")
+	assert.Equal(t, 2, len(apiCounts), "only two non-asset blind spots")
+	_, hasPNG := apiCounts[".png"]
+	assert.False(t, hasPNG, ".png is allowlisted — must not appear")
+
+	// Second run — determinism check (bug-class rule 2).
+	runIndexer(t, cfg, dbDir, true)
+	meta2 := openAndReadMeta()
+	assert.Equal(t, meta1, meta2, "two index runs must produce byte-identical unparsed_files JSON")
+}
+
+// TestRun_UnparsedFileLedger_CleanService verifies the {}-when-clean requirement:
+// the meta key is always written, even when all files are parseable.
+func TestRun_UnparsedFileLedger_CleanService(t *testing.T) {
+	dir := t.TempDir()
+	svcDir := filepath.Join(dir, "clean")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+	writeFile(t, svcDir, "go.mod", "module example.com/clean\n\ngo 1.22\n")
+	writeFile(t, svcDir, "main.go", "package main\nfunc main() {}\n")
+
+	cfg := &workspace.WorkspaceConfig{
+		Name: "b0clean", Version: "1",
+		Services: []workspace.Service{{Name: "clean", Path: svcDir, Language: "go"}},
+	}
+	dbDir := t.TempDir()
+	runIndexer(t, cfg, dbDir, true)
+
+	st, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer st.Close()
+	val, err := st.GetMeta(context.Background(), "unparsed_files")
+	require.NoError(t, err, "unparsed_files key must be written even for clean services")
+	assert.Equal(t, "{}", val, "clean service must yield empty JSON object")
 }
