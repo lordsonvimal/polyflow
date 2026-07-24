@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -45,6 +46,7 @@ type varExtractResult struct {
 // All edges carry static confidence — they come from the type checker, not
 // heuristics.
 func extractVariables(
+	pkgs []*packages.Package,
 	ssaPkgs []*ssa.Package,
 	dir, service string,
 	fset *token.FileSet,
@@ -94,6 +96,12 @@ func extractVariables(
 	// globalIDs maps each package-level *ssa.Global to its node ID so the
 	// instruction walk below can attribute loads/stores to it.
 	globalIDs := map[*ssa.Global]string{}
+	// qualifiedNameIDs maps "<pkgPath>.<Name>" to the node ID for cross-package
+	// global and const lookups (B.2). Pointer identity in globalIDs can fail
+	// when the SSA program was built from test-variant packages whose dependency
+	// resolution uses a different *ssa.Package instance than the one in ssaPkgs.
+	// Non-test-file entries win over test-file entries (per-spec shadowing rule).
+	qualifiedNameIDs := map[string]string{}
 	// structIDs maps a named struct type to its node ID for uses_type and
 	// inherits/instantiates edges.
 	structIDs := map[*types.Named]string{}
@@ -147,6 +155,16 @@ func extractVariables(
 						"scope": "package", "mutable": "true",
 					},
 				})
+				// B.2: register by qualified name for cross-package fallback.
+				// Non-test-file entry wins when both variants are in ssaPkgs.
+				if v.Package() != nil && v.Package().Pkg != nil {
+					qk := v.Package().Pkg.Path() + "." + v.Name()
+					if _, exists := qualifiedNameIDs[qk]; !exists {
+						qualifiedNameIDs[qk] = id
+					} else if !strings.HasSuffix(pos.Filename, "_test.go") {
+						qualifiedNameIDs[qk] = id // prod file wins over test file
+					}
+				}
 			case *ssa.NamedConst:
 				id := fmt.Sprintf("%s:%s:variable:%s:%d", service, file, v.Name(), pos.Line)
 				addNode(graph.Node{
@@ -157,6 +175,15 @@ func extractVariables(
 						"scope": "package", "mutable": "false",
 					},
 				})
+				// B.2: register const by qualified name for const-ref resolution.
+				if v.Package() != nil && v.Package().Pkg != nil {
+					qk := v.Package().Pkg.Path() + "." + v.Name()
+					if _, exists := qualifiedNameIDs[qk]; !exists {
+						qualifiedNameIDs[qk] = id
+					} else if !strings.HasSuffix(pos.Filename, "_test.go") {
+						qualifiedNameIDs[qk] = id
+					}
+				}
 			case *ssa.Type:
 				named, ok := v.Type().(*types.Named)
 				if !ok {
@@ -342,7 +369,7 @@ func extractVariables(
 				switch in := instr.(type) {
 				case *ssa.Store:
 					if g := rootGlobal(in.Addr); g != nil {
-						if id, ok := globalIDs[g]; ok && fnResolved {
+						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok && fnResolved {
 							addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "assign"})
 						}
 					}
@@ -358,7 +385,7 @@ func extractVariables(
 					}
 				case *ssa.MapUpdate:
 					if g := rootGlobal(in.Map); g != nil {
-						if id, ok := globalIDs[g]; ok && fnResolved {
+						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok && fnResolved {
 							addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "map_update"})
 						}
 					}
@@ -367,7 +394,7 @@ func extractVariables(
 						continue
 					}
 					if g, ok := in.X.(*ssa.Global); ok {
-						if id, tracked := globalIDs[g]; tracked && fnResolved {
+						if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked && fnResolved {
 							addEdge(graph.EdgeTypeReads, fnID, id, nil)
 						}
 					}
@@ -398,7 +425,7 @@ func extractVariables(
 						if g == nil {
 							continue
 						}
-						id, tracked := globalIDs[g]
+						id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs)
 						if !tracked {
 							continue
 						}
@@ -451,6 +478,102 @@ func extractVariables(
 		})
 	}
 
+	// ── B.2: cross-package const references via typed AST ───────────────────
+	// Go constants are compile-time-folded and invisible to SSA instructions,
+	// so we resolve them using the type-checker's Uses map (available from
+	// packages.LoadAllSyntax, the same load mode the SSA pass already uses).
+	// We build a per-file function-range index from inService to find the
+	// enclosing function node for each const-reference identifier.
+	//
+	// Implementation note: the spec calls for the tree-sitter layer here, but
+	// MatchToGraph has no access to the in-service const node set (those are
+	// emitted by this SSA pass). Using the typed AST achieves the same result
+	// with higher precision (type-checker distinguishes *types.Const from
+	// *types.Var and *types.Func) and avoids new cross-layer coupling.
+	// Recorded as a deviation in the phase outcome note.
+	type fnRng struct {
+		start  int
+		end    int // 0 = unknown
+		nodeID string
+	}
+	fnsByFile := map[string][]fnRng{}
+	for fn := range inService {
+		if fn.Parent() != nil {
+			continue // skip closures; attribute to named parent
+		}
+		pos := fset.Position(fn.Pos())
+		if !inDir(pos) {
+			continue
+		}
+		nodeID, ok := resolveFunc(fn)
+		if !ok {
+			continue
+		}
+		endLine := 0
+		if syn := fn.Syntax(); syn != nil {
+			endPos := fset.Position(syn.End())
+			if endPos.IsValid() {
+				endLine = endPos.Line
+			}
+		}
+		cf := canonicalPath(pos.Filename)
+		fnsByFile[cf] = append(fnsByFile[cf], fnRng{pos.Line, endLine, nodeID})
+	}
+	for cf := range fnsByFile {
+		sort.Slice(fnsByFile[cf], func(i, j int) bool {
+			return fnsByFile[cf][i].start < fnsByFile[cf][j].start
+		})
+	}
+	enclosingFnAt := func(filename string, line int) (string, bool) {
+		cf := canonicalPath(filename)
+		var best *fnRng
+		for i := range fnsByFile[cf] {
+			f := &fnsByFile[cf][i]
+			if f.start > line {
+				continue
+			}
+			if f.end > 0 && line > f.end {
+				continue
+			}
+			if best == nil || f.start > best.start {
+				best = f
+			}
+		}
+		if best == nil {
+			return "", false
+		}
+		return best.nodeID, true
+	}
+
+	for _, p := range pkgs {
+		if p == nil || p.TypesInfo == nil || p.Types == nil {
+			continue
+		}
+		for ident, obj := range p.TypesInfo.Uses {
+			c, ok := obj.(*types.Const)
+			if !ok {
+				continue
+			}
+			if c.Pkg() == nil || c.Pkg() == p.Types {
+				continue // same-package const: SSA handles it (or no edge needed)
+			}
+			qk := c.Pkg().Path() + "." + c.Name()
+			constNodeID, ok := qualifiedNameIDs[qk]
+			if !ok {
+				continue // not an in-service const
+			}
+			pos := fset.Position(ident.Pos())
+			if !inDir(pos) {
+				continue
+			}
+			fnID, ok := enclosingFnAt(pos.Filename, pos.Line)
+			if !ok {
+				continue
+			}
+			addEdge(graph.EdgeTypeReads, fnID, constNodeID, nil)
+		}
+	}
+
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	return varExtractResult{
@@ -459,4 +582,20 @@ func extractVariables(
 		StructIDs:    structIDs,
 		InterfaceIDs: interfaceIDs,
 	}
+}
+
+// resolveGlobalID returns the node ID for a package-level global, using pointer
+// identity first (same-package, fast path) then falling back to the service-wide
+// qualifiedNameIDs map (cross-package, needed when SSA builds dependency packages
+// from a different variant than the one stored in globalIDs — B.2).
+func resolveGlobalID(g *ssa.Global, globalIDs map[*ssa.Global]string, qualifiedNameIDs map[string]string) (string, bool) {
+	if id, ok := globalIDs[g]; ok {
+		return id, true
+	}
+	if g.Package() == nil || g.Package().Pkg == nil {
+		return "", false
+	}
+	qk := g.Package().Pkg.Path() + "." + g.Name()
+	id, ok := qualifiedNameIDs[qk]
+	return id, ok
 }

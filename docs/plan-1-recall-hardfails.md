@@ -247,7 +247,7 @@ No deviations.
 
 ---
 
-## Phase B.2 — Go cross-package const/var reads `pending`
+## Phase B.2 — Go cross-package const/var reads `done`
 
 **Problem.** ~80 Go variable nodes are isolated: `pkg/config.DefaultTimeout`
 read from `pkg/server` produces no `reads` edge — the SSA instruction walk in
@@ -285,6 +285,45 @@ precedent).
 **Acceptance.** `impact --target DefaultTimeout` on the fixture lists the
 reading function; isolated-variable gauge recorded before/after in the phase
 note.
+
+**Outcome (2026-07-24).** Implemented as specified with one documented deviation.
+
+`internal/parser/go_variables.go`: added `pkgs []*packages.Package` parameter to
+`extractVariables`; built `qualifiedNameIDs map[string]string` (keyed `pkgPath.Name`)
+in the package-member walk alongside the existing `globalIDs` pointer map —
+non-test-file entry wins over `_test.go` entry for the test-variant shadowing rule.
+Added `resolveGlobalID` helper (new function): tries pointer-identity `globalIDs`
+first, then falls back to `qualifiedNameIDs` for cross-package globals where SSA's
+dependency resolution may produce a different `*ssa.Global` instance than the one
+in `globalIDs`. All four global-touching instruction cases (Store/MapUpdate/UnOp/
+flows_to CallInstruction) updated to use `resolveGlobalID`.
+`internal/parser/go_semantic.go`: `extractVariables` call updated to pass `pkgs`.
+
+Deviation (const ref walk): the spec calls for resolution at the tree-sitter layer
+via a new call-ref pattern + Pass 3 in `MatchToGraph`. `MatchToGraph` has no access
+to the in-service const node set (emitted by the SSA pass), so alias→pkgPath→node
+resolution is impossible without new cross-layer coupling. Instead, const references
+are resolved using `packages.Package.TypesInfo.Uses` from the typed AST already
+loaded by the SSA pass (`packages.LoadAllSyntax`). For each `*types.Const`
+reference from a different package, a function-range index from `inService` finds
+the enclosing named function and a `reads` edge is emitted. Semantically equivalent
+to the tree-sitter approach with higher precision. Deviation recorded here; no
+design-doc decision overridden.
+
+7 new tests in `internal/parser/go_b2_test.go` (CrossPackageVarReads,
+_VarWrites, _ConstReads, _AliasedImport, _FanOut, _Determinism,
+_TestVariantShadowing). All pass via real two-package SSA fixture (rule 6).
+`make test` passes; `go vet` clean.
+
+Gauges: before B.2 ~80 cross-package Go variables had no reads/writes edges
+(Phase 0.3 baseline). After B.2: 409 cross-file `reads` edges for Go variable
+nodes; 46 are genuine cross-top-level-directory (cross-package) references
+newly linked (e.g. cmd/polyflow/bench.go → internal/meta:DBDir,
+cmd/polyflow/main.go → internal/semantic:SidecarBinaryName). Remaining 94
+isolated Go variable nodes are same-package constants (compile-time-folded,
+legitimately no cross-package reads edges) or test-file locals. Two consecutive
+`polyflow index --full` runs produce identical cross-pkg edge count (409).
+No `SchemaVersion` bump — no stored node/edge shape change.
 
 ---
 

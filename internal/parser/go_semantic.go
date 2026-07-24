@@ -471,7 +471,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 
 	// Variable-tracking layer: package globals/consts, structs, interface nodes,
 	// mutations, closure captures, inherits (embedding), instantiates.
-	varResult := extractVariables(ssaPkgs, dir, service, fset, inService, resolveFunc)
+	varResult := extractVariables(pkgs, ssaPkgs, dir, service, fset, inService, resolveFunc)
 	edges = append(edges, varResult.Edges...)
 
 	// Implements-edge sweep: in-service structs → in-service and external
