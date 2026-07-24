@@ -843,19 +843,59 @@ func (ex *jsExtractor) captureEdge(node *sitter.Node, name string, scopes []*jsS
 }
 
 // handleCall emits flows_to edges when a tracked module variable is passed
-// to a function declared in the same file.
+// to a function declared in the same file, and (B.1) calls edges when a
+// same-file function declaration is passed as a bare identifier argument.
 func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
-	fnNode := node.ChildByFieldName("function")
-	if fnNode == nil || fnNode.Type() != "identifier" {
-		return
-	}
-	fnName := fnNode.Content(ex.src)
-	fnLine, declared := ex.fnDecls[fnName]
-	if !declared {
-		return
-	}
 	args := node.ChildByFieldName("arguments")
 	if args == nil {
+		return
+	}
+
+	// Existing flows_to logic: only fires when the callee is a same-file fn.
+	fnNode := node.ChildByFieldName("function")
+	if fnNode != nil && fnNode.Type() == "identifier" {
+		fnName := fnNode.Content(ex.src)
+		fnLine, declared := ex.fnDecls[fnName]
+		if declared {
+			for i := 0; i < int(args.NamedChildCount()); i++ {
+				arg := args.NamedChild(i)
+				if arg.Type() != "identifier" {
+					continue
+				}
+				name := arg.Content(ex.src)
+				if resolve(scopes, name) != 0 {
+					continue
+				}
+				v := ex.moduleVars[name]
+				if v == nil {
+					continue
+				}
+				// Objects/arrays are handles — mutations inside the callee are
+				// visible outside. Primitives copy.
+				mode := "unknown"
+				switch v.dataType {
+				case "object", "array", "function":
+					mode = "ref"
+				case "string", "number", "boolean":
+					mode = "value"
+				}
+				ex.addEdge(graph.EdgeTypeFlowsTo, v.nodeID, ex.fnNodeID(fnName, fnLine),
+					graph.ConfidenceInferred,
+					map[string]string{"mode": mode, "data_type": v.dataType})
+			}
+		}
+	}
+
+	// B.1: func-arg detection — for any call expression, check whether any
+	// bare identifier argument is a same-file function declaration. If so,
+	// emit a calls edge (confidence static — same file, tree-sitter-proven).
+	// Member-expression arguments are skipped (JS binding semantics; descoped).
+	// Unresolved identifiers are NOT ledgered (spec B.1 clause 3).
+	fromID := attribution(scopes, ex)
+	if fromID == "" {
+		fromID = ex.moduleAttr(node)
+	}
+	if fromID == "" {
 		return
 	}
 	for i := 0; i < int(args.NamedChildCount()); i++ {
@@ -864,25 +904,16 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 			continue
 		}
 		name := arg.Content(ex.src)
-		if resolve(scopes, name) != 0 {
+		fnLine, isFn := ex.fnDecls[name]
+		if !isFn {
 			continue
 		}
-		v := ex.moduleVars[name]
-		if v == nil {
+		toID := ex.fnNodeID(name, fnLine)
+		if fromID == toID {
 			continue
 		}
-		// Objects/arrays are handles — mutations inside the callee are
-		// visible outside. Primitives copy.
-		mode := "unknown"
-		switch v.dataType {
-		case "object", "array", "function":
-			mode = "ref"
-		case "string", "number", "boolean":
-			mode = "value"
-		}
-		ex.addEdge(graph.EdgeTypeFlowsTo, v.nodeID, ex.fnNodeID(fnName, fnLine),
-			graph.ConfidenceInferred,
-			map[string]string{"mode": mode, "data_type": v.dataType})
+		ex.addEdge(graph.EdgeTypeCalls, fromID, toID, graph.ConfidenceStatic,
+			map[string]string{"via": "func_arg"})
 	}
 }
 

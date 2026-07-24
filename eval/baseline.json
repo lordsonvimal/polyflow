@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-21T17:08:44.82835Z",
+  "generated_at": "2026-07-24T07:31:37.205957Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -645,67 +645,67 @@
       "results": [
         {
           "case_id": "handle-view-home-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "handle-view-landing-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "view-collections-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "view-edit-collection-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "view-articles-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "handle-user-delete-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "view-stats-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "handle-view-subscribers-callers",
-          "recall": 0,
-          "precision": 0,
+          "recall": 1,
+          "precision": 0.25,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "serve-callers",
@@ -764,8 +764,8 @@
           "hard_fail": false
         }
       ],
-      "recall": 0.4666666666666667,
-      "precision": 0.23055555555555557
+      "recall": 1,
+      "precision": 0.3638888888888889
     }
   ]
 }

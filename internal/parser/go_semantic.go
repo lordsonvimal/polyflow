@@ -254,8 +254,9 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// to its parent's callerID) race with the parent function itself, flipping
 	// the edge type between runs when one uses `go f()` and the other uses
 	// `f()` for the same callee.
-	spawnPairs := make(map[string]bool) // callerID+"->"+calleeID seen as ssa.Go
-	callPairs  := make(map[string]bool) // callerID+"->"+calleeID seen as regular call
+	spawnPairs   := make(map[string]bool) // callerID+"->"+calleeID seen as ssa.Go
+	callPairs    := make(map[string]bool) // callerID+"->"+calleeID seen as regular call
+	funcArgCounts := make(map[string]int) // callerID+"->"+calleeID for func-arg references
 	var edges []graph.Edge
 
 	for caller := range inService {
@@ -300,6 +301,25 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 						if isDatastarNewSSE(fn) {
 							callerIsSSE = true
 						}
+					}
+					// B.1: detect function values passed as arguments. Any *ssa.Function
+					// or *ssa.MakeClosure wrapping a named in-service function in argument
+					// position becomes a calls edge (via=func_arg). Synthetic thunks
+					// (bound-method wrappers whose Synthetic field is set) resolve to ""
+					// in resolveFunc and are silently skipped — no ledger entry.
+					// ChangeType unwrapping is required: named function types (e.g.
+					// writefreely's `handlerFunc`) produce a *ssa.ChangeType wrapper
+					// around the underlying *ssa.Function at the call site.
+					for _, arg := range common.Args {
+						targetFn := ssaArgFunc(arg)
+						if targetFn == nil || !inService[targetFn] {
+							continue
+						}
+						targetID, ok2 := resolveFunc(targetFn)
+						if !ok2 || callerID == targetID {
+							continue
+						}
+						funcArgCounts[callerID+"->"+targetID]++
 					}
 				}
 
@@ -385,6 +405,26 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 			From: parts[0],
 			To:   parts[1],
 			Type: graph.EdgeTypeCalls,
+		})
+	}
+
+	// Emit func-arg edges (B.1): function values passed as call arguments.
+	// Sorted for determinism (bug-class rule 2); deduped via funcArgCounts.
+	funcArgKeys := make([]string, 0, len(funcArgCounts))
+	for key := range funcArgCounts {
+		funcArgKeys = append(funcArgKeys, key)
+	}
+	sort.Strings(funcArgKeys)
+	for _, key := range funcArgKeys {
+		sep := strings.Index(key, "->")
+		from, to := key[:sep], key[sep+2:]
+		edges = append(edges, graph.Edge{
+			ID:         "funcarg:calls:" + key,
+			From:       from,
+			To:         to,
+			Type:       graph.EdgeTypeCalls,
+			Confidence: graph.ConfidenceStatic,
+			Meta:       map[string]string{"via": "func_arg", "count": strconv.Itoa(funcArgCounts[key])},
 		})
 	}
 
@@ -621,6 +661,30 @@ func isDatastarNewSSE(fn *ssa.Function) bool {
 		return false
 	}
 	return strings.Contains(fn.Pkg.Pkg.Path(), "datastar")
+}
+
+// ssaArgFunc extracts an *ssa.Function from an SSA argument value, resolving
+// through ChangeType wrappers that Go emits when a plain function literal is
+// passed where a named function type is expected (e.g. `handlerFunc` in
+// writefreely). Only ChangeType is unwrapped — Convert is for numeric/pointer
+// conversions and won't wrap function values; MakeInterface would lose type
+// information and is not unwrapped here (interface-wrapped funcs stay silent).
+func ssaArgFunc(v ssa.Value) *ssa.Function {
+	for {
+		switch a := v.(type) {
+		case *ssa.Function:
+			return a
+		case *ssa.MakeClosure:
+			if fn, ok := a.Fn.(*ssa.Function); ok {
+				return fn
+			}
+			return nil
+		case *ssa.ChangeType:
+			v = a.X // unwrap and retry
+		default:
+			return nil
+		}
+	}
 }
 
 // matchesInvoke returns true if fn satisfies the interface method described by call.
