@@ -119,6 +119,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"manually, edges may be missing. " +
 			"Set max_tokens to cap output size (over budget, per-node detail rolls up per file), " +
 			"summary to force the rollup, snippet_lines to inline source snippets per node. " +
+			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
 	}, s.context)
 
@@ -132,6 +133,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"radii return full per-node detail, large ones auto-roll-up per file. Set max_tokens " +
 			"to raise or lower that cap (negative = unlimited), summary to force the rollup, " +
 			"snippet_lines to inline source snippets per node. " +
+			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
 	}, s.impact)
 
@@ -140,6 +142,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 		Description: "Trace multi-hop flows from a node as linear chains (A -> B -> C), " +
 			"including cross-service hops. The unresolved section lists references the indexer " +
 			"could not resolve — verify those manually, chains may be incomplete. " +
+			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
 	}, s.trace)
 
@@ -192,17 +195,10 @@ func effectiveBudget(maxTokens int) int {
 	return maxTokens
 }
 
-// resolveNode finds the best node match for a search query, mirroring the
-// CLI's target resolution.
-func resolveNode(ctx context.Context, store Store, query string) (*graph.Node, error) {
-	nodes, err := store.SearchNodes(ctx, query, 5)
-	if err != nil {
-		return nil, err
-	}
-	if len(nodes) == 0 {
-		return nil, fmt.Errorf("node not found for query: %s", query)
-	}
-	return nodes[0], nil
+// resolveNode finds the best node match for a search query with optional
+// pre-filters, mirroring the CLI's target resolution (graph.ResolveTarget).
+func resolveNode(ctx context.Context, store Store, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, error) {
+	return graph.ResolveTarget(ctx, store, query, targetService, targetType)
 }
 
 // ─── search ──────────────────────────────────────────────────────────────────
@@ -269,6 +265,8 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 
 type contextInput struct {
 	Target          string   `json:"target,omitempty" jsonschema:"search query for the target node (use this or files)"`
+	TargetService   string   `json:"target_service,omitempty" jsonschema:"restrict target resolution to this service (resolves cross-service ambiguity; use when target_candidates is non-empty)"`
+	TargetType      string   `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
 	Files           []string `json:"files,omitempty" jsonschema:"file path(s): return ranked related files (graph neighborhood) instead of node context"`
 	Service         string   `json:"service,omitempty" jsonschema:"with files: restrict seed file resolution to a service"`
 	Limit           int      `json:"limit,omitempty" jsonschema:"with files: max related files returned (default 20, -1 = unlimited)"`
@@ -319,12 +317,13 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 	}
 	depth := effectiveDepth(in.Depth, 5)
 
-	root, err := resolveNode(ctx, store, in.Target)
+	root, candidates, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter)
+	result.TargetCandidates = candidates
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -342,6 +341,8 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 
 type impactInput struct {
 	Target          string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
+	TargetService   string `json:"target_service,omitempty" jsonschema:"restrict target resolution to this service (resolves cross-service ambiguity; use when target_candidates is non-empty)"`
+	TargetType      string `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
 	File            string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
 	Direction       string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
@@ -380,11 +381,12 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		return jsonResult(out)
 	}
 
-	root, err := resolveNode(ctx, store, in.Target)
+	root, candidates, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
 	out := impact.Build(idx, root, depth, in.Service, in.VerboseSources, s.staleAfter)
+	out.TargetCandidates = candidates
 	out.AttachUnresolved(unresolved)
 	if in.MinVerification != "" && in.MinVerification != "any" {
 		out.Callers = filterCallers(out.Callers, in.MinVerification)
@@ -398,6 +400,8 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 
 type traceInput struct {
 	Root            string `json:"root" jsonschema:"search query for the root node"`
+	TargetService   string `json:"target_service,omitempty" jsonschema:"restrict root resolution to this service (resolves cross-service ambiguity; use when target_candidates is non-empty)"`
+	TargetType      string `json:"target_type,omitempty" jsonschema:"restrict root resolution to this node type (function, component, ...)"`
 	Direction       string `json:"direction,omitempty" jsonschema:"trace direction: forward, backward, or both (default forward)"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
@@ -416,7 +420,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 
 	store, idx, searcher := s.snapshot()
 	_ = searcher
-	root, err := resolveNode(ctx, store, in.Root)
+	root, candidates, err := resolveNode(ctx, store, in.Root, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -425,6 +429,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 	if result == nil {
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}
+	result.TargetCandidates = candidates
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err

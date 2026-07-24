@@ -71,6 +71,11 @@ type Result struct {
 	// VerificationSummary aggregates edge provenance counts. Always present;
 	// survives any token budget cut.
 	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+
+	// TargetCandidates lists every exact-label match when >1 candidate exists,
+	// sorted by (service, file). Always present ([] when unambiguous). Agents
+	// should re-query with target_service/--target-service when non-empty.
+	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 }
 
 // Run traces from rootID in the given direction ("forward", "backward",

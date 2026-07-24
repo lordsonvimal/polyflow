@@ -61,6 +61,11 @@ type Result struct {
 	// (never absent — absence would look like certainty); survives any token budget.
 	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 
+	// TargetCandidates lists every exact-label match when >1 candidate exists,
+	// sorted by (service, file). Always present ([] when unambiguous). Agents
+	// should re-query with target_service/--target-service when non-empty.
+	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+
 	// Budget records the token-budgeting decision when a budget was set and
 	// the detail shape was emitted.
 	Budget *budget.Info `json:"budget,omitempty"`
