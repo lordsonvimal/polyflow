@@ -802,6 +802,43 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		allUnresolved = append(allUnresolved, railsUnresolved...)
 	}
 
+	// M.0: file-based route synthesis (Next.js, SvelteKit, Nuxt, Remix).
+	// Runs after per-file parsing and all linking passes, before the contract engine,
+	// so synthesized http_handler nodes participate in cross-service linking.
+	{
+		// Build nodesInFile map from allNodes at this point (post-parse, post-link).
+		fileNodeMap := make(map[string][]graph.Node, len(allNodes))
+		for _, n := range allNodes {
+			if n.File != "" {
+				fileNodeMap[n.File] = append(fileNodeMap[n.File], n)
+			}
+		}
+		nodesInFile := func(absFile string) []graph.Node { return fileNodeMap[absFile] }
+
+		for _, sf := range allSvcFiles {
+			absSvcPath, _ := filepath.Abs(sf.svc.Path)
+			// Route synthesis needs ALL service files (including unparsed like .svelte, .vue),
+			// not just the parser-handled subset — file-based routers are identified by their
+			// filesystem paths, which exist regardless of whether a parser is registered.
+			allSvcFilesList := walkAllFiles(absSvcPath)
+			fr := linker.SynthesizeFileRoutes(absSvcPath, sf.svc.Name, allSvcFilesList, sf.deps, nodesInFile)
+			for i := range fr.Nodes {
+				n := fr.Nodes[i]
+				if err := bw.AddNode(ctx, &n); err != nil {
+					return nil, err
+				}
+				allNodes = append(allNodes, n)
+			}
+			if err := bw.Flush(ctx); err != nil {
+				return nil, err
+			}
+			if err := writeEdges(fr.Edges); err != nil {
+				return nil, err
+			}
+			allUnresolved = append(allUnresolved, fr.Unresolved...)
+		}
+	}
+
 	// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
 	// opts.ContractsDir may add workspace-custom rules on top of the embedded defaults (G.5).
 	contractRules, err := contract.Load(contractdata.FS, opts.ContractsDir)
@@ -1245,4 +1282,29 @@ func walkService(root string, excludes []string) ([]string, map[string]int, erro
 		return nil
 	})
 	return files, unparsed, err
+}
+
+// walkAllFiles returns every regular file under root (no exclude filtering,
+// no asset skipping). Used by M.0 route synthesis which needs to see all files
+// in the service directory — including unparsed ones like .svelte and .vue —
+// because file-based routing is identified by filesystem path, not parse output.
+func walkAllFiles(root string) []string {
+	var files []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		// Skip node_modules and other common build artifacts to avoid noise.
+		rel, relErr := filepath.Rel(root, p)
+		if relErr == nil {
+			seg := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+			switch seg {
+			case "node_modules", ".git", "dist", ".next", ".nuxt", ".svelte-kit", "build", ".output":
+				return filepath.SkipDir
+			}
+		}
+		files = append(files, p)
+		return nil
+	})
+	return files
 }
