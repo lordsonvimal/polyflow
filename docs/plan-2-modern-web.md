@@ -117,7 +117,16 @@ with a fixture, don't assume).
 
 ## Phases (one commit each)
 
-### Phase M.0 — File-based route synthesis (Next/SvelteKit/Nuxt/Remix) `pending`
+### Phase M.0 — File-based route synthesis (Next/SvelteKit/Nuxt/Remix) `done`
+
+> **Outcome (2026-07-24).** `SynthesizeFileRoutes` landed in
+> `internal/linker/file_routes.go` with six convention rows (next-pages,
+> next-app, sveltekit, nuxt, nuxt-server, remix). Indexer wiring inserts the
+> pass between per-file parsing and `Engine.Link`. `mintFileNode` ensures FK
+> targets always exist for unparsed `.svelte`/`.vue` files. All 8 integration
+> tests pass (positive+negative, fan-out, determinism, real-parse path);
+> `make test` green. No SchemaVersion bump (existing node/edge types reused).
+> Tier E corpus deviation: no OSS Next.js repo added (local env limitation).
 
 **Problem.** See table above — no call site exists, so today these repos have
 zero route nodes and every `fetch("/api/users")` in them links to
