@@ -797,6 +797,25 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			len(unresolvedRefs), strings.Join(kindParts, ", "))
 	}
 
+	// B.0: unparsed source files — service-level gauge of parser blind spots.
+	if unparsedJSON, metaErr := store.GetMeta(ctx, "unparsed_files"); metaErr == nil && unparsedJSON != "{}" && unparsedJSON != "" {
+		var unparsed map[string]map[string]int
+		if json.Unmarshal([]byte(unparsedJSON), &unparsed) == nil && len(unparsed) > 0 {
+			svcs := make([]string, 0, len(unparsed))
+			for s := range unparsed {
+				svcs = append(svcs, s)
+			}
+			sort.Strings(svcs)
+			var svcParts []string
+			for _, s := range svcs {
+				total, topExts := indexer.UnparsedSummary(unparsed[s])
+				svcParts = append(svcParts, fmt.Sprintf("%s: %d (%s)", s, total, topExts))
+			}
+			fmt.Printf("  Unparsed source files: %s — no parser registered (may be added by future plans)\n",
+				strings.Join(svcParts, "; "))
+		}
+	}
+
 	if statusErrors {
 		fmt.Println()
 		for _, pe := range parseErrors {
@@ -2165,6 +2184,34 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			fmt.Printf("  Contract coverage:  no data (run 'polyflow index' first)\n")
+		}
+
+		// B.0: unparsed file class ledger — per-service blind-spot gauge.
+		fmt.Println()
+		if unparsedJSON, metaErr := store.GetMeta(ctx, "unparsed_files"); metaErr == nil {
+			var unparsed map[string]map[string]int
+			if json.Unmarshal([]byte(unparsedJSON), &unparsed) == nil && len(unparsed) > 0 {
+				svcs := make([]string, 0, len(unparsed))
+				for s := range unparsed {
+					svcs = append(svcs, s)
+				}
+				sort.Strings(svcs)
+				first := true
+				for _, s := range svcs {
+					total, topExts := indexer.UnparsedSummary(unparsed[s])
+					msg := fmt.Sprintf("%d files (%s) cannot be indexed — no parser registered", total, topExts)
+					if first {
+						fmt.Printf("  Unparsed files:      %s: %s\n", s, msg)
+						first = false
+					} else {
+						fmt.Printf("                       %s: %s\n", s, msg)
+					}
+				}
+			} else {
+				fmt.Printf("  Unparsed files:      OK — all source files are parseable\n")
+			}
+		} else {
+			fmt.Printf("  Unparsed files:      (no data — run 'polyflow index' first)\n")
 		}
 	}
 
