@@ -191,6 +191,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	}
 	svcToolchainProfiles := make(map[string]map[string]profileStamp, len(cfg.Services))
 
+	// B.0: unparsed-file-class ledger — counts per (service, extension).
+	allUnparsedFiles := map[string]map[string]int{}
+
 	var allSvcFiles []serviceFiles
 	for idx, svc := range cfg.Services {
 		absSvcPath, _ := filepath.Abs(svc.Path)
@@ -206,9 +209,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		excludes := append(append([]string{}, cfg.Index.Exclude...), ignorePatterns...)
 		excludes = append(excludes, extraExcludes...)
-		files, err := walkService(svc.Path, excludes)
+		files, unparsed, err := walkService(svc.Path, excludes)
 		if err != nil {
 			return nil, fmt.Errorf("walk %s: %w", svc.Name, err)
+		}
+		if len(unparsed) > 0 {
+			allUnparsedFiles[svc.Name] = unparsed
 		}
 
 		svcDeps, err := deps.Resolve(absSvcPath)
@@ -967,6 +973,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, err
 	}
 
+	// B.0: persist unparsed file class ledger (always written, {} when clean).
+	_ = store.SetMeta(ctx, "unparsed_files", serializeUnparsed(allUnparsedFiles))
+
 	// Toolchain versions + coverage ledger (V.0 seams) + profile stamps (V.2).
 	if tcJSON, err := json.Marshal(svcToolchainVersions); err == nil {
 		_ = store.SetMeta(ctx, "toolchain_versions", string(tcJSON))
@@ -1201,8 +1210,11 @@ func runEmbedPass(
 }
 
 // walkService collects parseable files under root, honoring exclude globs.
-func walkService(root string, excludes []string) ([]string, error) {
+// It also counts skipped non-asset files by extension (or basename for
+// extensionless files) for the B.0 unparsed-file-class ledger.
+func walkService(root string, excludes []string) ([]string, map[string]int, error) {
 	var files []string
+	unparsed := map[string]int{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -1222,11 +1234,15 @@ func walkService(root string, excludes []string) ([]string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if parser.ForFile(path) == nil {
+		if parser.ForFile(path) != nil {
+			files = append(files, path)
 			return nil
 		}
-		files = append(files, path)
+		key := unparsedKey(path)
+		if !assetExts[key] {
+			unparsed[key]++
+		}
 		return nil
 	})
-	return files, err
+	return files, unparsed, err
 }

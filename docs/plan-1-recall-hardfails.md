@@ -39,7 +39,7 @@ confidence-labeled output.
 
 ---
 
-## Phase B.0 — Unparsed-file-class ledger `pending`
+## Phase B.0 — Unparsed-file-class ledger `done`
 
 **Problem.** The workspace scan walks every non-excluded file, but
 `parser.ForFile` returning `nil` is a silent skip. There is no artifact that
@@ -102,6 +102,31 @@ certainty — the key is always written).
 **Acceptance.** `polyflow index` on this repo, then `polyflow status`, shows
 a nonzero unparsed count (this repo has `.sh` scripts) with exact per-service
 numbers; running index twice yields byte-identical `unparsed_files` meta.
+
+**Outcome (2026-07-24).** Implemented exactly as specified.
+
+`internal/indexer/unparsed.go` (new): `assetExts` allowlist (25 extensions),
+`unparsedKey(path)` (ext or basename for extensionless), `serializeUnparsed()`
+(uses `encoding/json.Marshal` which sorts map keys alphabetically — deterministic
+without extra sorting), `UnparsedSummary()` (total + top-3 sorted extensions for
+status/doctor output). `walkService` signature changed to return `([]string,
+map[string]int, error)` — the extra return is the per-extension unparsed count
+collected in the same walk (no double-walk). The service loop in `Run()` collects
+counts into `allUnparsedFiles map[string]map[string]int` and writes
+`unparsed_files` meta after `unresolved_refs` (always written, `{}` when clean).
+`polyflow status` prints "Unparsed source files: …" when the count is nonzero.
+`polyflow doctor` gains "Unparsed files: <svc>: N files (ext1, ext2, ext3) cannot
+be indexed — no parser registered" inside the existing store section (no extra
+DB open). 11 new tests: `TestWalkService_UnparsedCounts`, `_AllowlistExcludes`,
+`_CleanService`, `_TwoRunDeterminism`, `_ParseableFilesNotCounted`;
+`TestSerializeUnparsed_Determinism`, `_EmptyIsClean`; `TestUnparsedSummary_TopThree`,
+`_FewExtensions`; `TestRun_UnparsedFileLedger` (integration), `_CleanService`
+(integration). `make test` passes (all tests green). `go vet` clean.
+Acceptance verified: `polyflow status` on this repo shows `polyflow: 2979
+(.bin ×1, .builder ×3, .cf ×2)` with `.sh ×6` in the full JSON; two consecutive
+`polyflow index` runs produce byte-identical `unparsed_files` JSON.
+No `SchemaVersion` bump — meta keys are forward/backward compatible (no
+stored node/edge shape change). No deviations.
 
 ---
 
