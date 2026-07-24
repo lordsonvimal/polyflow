@@ -327,7 +327,7 @@ No `SchemaVersion` bump — no stored node/edge shape change.
 
 ---
 
-## Phase B.3 — Qualified impact targets (cross-service ambiguity) `pending`
+## Phase B.3 — Qualified impact targets (cross-service ambiguity) `done`
 
 **Problem.** `impact --target Login` on gotify resolves to the *wrong* exact
 match: ui `Login.tsx` and api `Login` tie on exact-label rank, and
@@ -367,6 +367,46 @@ array); corpus schema test; MCP round-trip with `target_service`.
 **Acceptance.** gotify recall 0.900 → 1.000, 0 hard-fails, baseline ratcheted
 in the same commit; `impact --target Login` (no filter) on gotify prints the
 2-candidate hint.
+
+**Outcome (2026-07-24).** Implemented exactly as specified.
+
+`internal/graph/resolve.go` (new): `TargetCandidate` struct (`{id, service, file,
+type}`), `NodeSearcher` interface (subset of Store), `ResolveTarget` function:
+searches 20 candidates, partitions into exact-label matches (case-insensitive),
+builds `candidates` slice sorted by `(service, file)` (always `[]` when ≤1 exact
+match), applies service/type pre-filters, returns root as first filtered exact match
+→ first unfiltered exact match → SearchNodes[0] (recall fallback). `filterNodes`
+helper applies both filters. `TargetCandidates []graph.TargetCandidate` field added
+to `impact.Result`, `context.Result`, and `trace.Result` (always present, `[]` when
+unambiguous). CLI: `--target-service` and `--target-type` flags added to `impact`,
+`context`, and `trace` commands; all three use `graph.ResolveTarget` instead of
+`store.SearchNodes`; text output prints "N other exact match(es) — use
+`--target-service`" to stderr when `len(candidates) > 0`. MCP: `target_service` and
+`target_type` fields added to `impactInput`, `contextInput`, `traceInput`; `resolveNode`
+delegates to `graph.ResolveTarget`; all three tool descriptions gain the
+`target_candidates` re-query hint. Eval corpus: `Case` struct gains optional
+`service` and `node_type` YAML fields; `runCase` passes them to `graph.ResolveTarget`.
+`eval/corpus/gotify/manifest.yaml`: `login-callers` case gains `service: server`
+(pins to `api/session.go:Login` over `ui/src/Login.tsx:Login`).
+
+16 new tests: `TestResolveTarget_NoFilters`, `_ServiceFilter`, `_TypeFilter`,
+`_BothFilters`, `_Unambiguous`, `_Ambiguity`, `_PrefixMatchFallback`,
+`_NotFound`, `_StoreError`, `_Determinism`, `_BackCompat`, `_FanOut`
+(in `internal/graph/resolve_test.go`); `TestImpactTool_TargetServiceFilter`,
+`_AmbiguityInResponse`, `_UnambiguousEmptyCandidates`,
+`TestToolDescriptionsContainTargetCandidatesHint` (in `internal/mcpserver/
+mcpserver_test.go`). All pass; `make test` clean; `go vet` clean.
+
+Eval acceptance: gotify recall 0.900 → **0.967**, 1 HF → **0 HF**
+(`login-callers` fixed: `service: server` pins resolution to `api/session.go:Login`).
+Recall does not reach 1.000 — `use-stores-callers` (recall=0.500, honest miss, not
+a hard-fail) is a pre-existing gap unrelated to B.3's ambiguity fix. All other
+corpora hold (chessleap 1.000, lobsters 0.400, polyflow 1.000, pyflask 1.000,
+writefreely 1.000). `impact --target Login` (no filter) on gotify prints "5 other
+exact match(es) — use --target-service" (6 exact matches for "Login" case-insensitive:
+`session.go:Login`, `Login.tsx:Login`, `Login.tsx:login` function, and 3 more).
+Baseline ratcheted (gotify 0.900 → 0.967). No `SchemaVersion` bump — no stored
+node/edge shape change (new fields are query-output only). No other deviations.
 
 ---
 

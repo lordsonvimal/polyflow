@@ -146,11 +146,11 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 	var returned []string
 	switch c.Kind {
 	case "node":
-		nodes, err := store.SearchNodes(ctx, c.Target, 5)
-		if err != nil || len(nodes) == 0 {
-			return CaseResult{}, fmt.Errorf("node not found for target %q", c.Target)
+		root, _, err := graph.ResolveTarget(ctx, store, c.Target, c.Service, c.NodeType)
+		if err != nil {
+			return CaseResult{}, fmt.Errorf("node not found for target %q: %w", c.Target, err)
 		}
-		out := impact.Build(idx, nodes[0], 10, "", false, 0)
+		out := impact.Build(idx, root, 10, "", false, 0)
 		returned = nodeImpactFiles(out)
 	case "file":
 		out, err := impact.BuildFile(idx, "", c.Target, "backward", 10)

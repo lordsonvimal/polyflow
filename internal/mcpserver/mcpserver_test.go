@@ -614,3 +614,92 @@ func TestSearchTool_HybridDescription(t *testing.T) {
 	}
 	t.Error("search tool not found")
 }
+
+// ── B.3 target resolution tests ───────────────────────────────────────────────
+
+// fixtureAmbiguous creates a store with two exact-label matches for "Login"
+// (server service Go function + ui service component).
+func fixtureAmbiguous() (*fakeStore, *graph.AdjacencyIndex) {
+	srvLogin := &graph.Node{ID: "srv:Login", Type: graph.NodeTypeFunction, Label: "Login", Service: "server", File: "api/session.go", Line: 10, Language: "go"}
+	uiLogin := &graph.Node{ID: "ui:Login", Type: graph.NodeTypeComponent, Label: "Login", Service: "ui", File: "ui/src/Login.tsx", Line: 5, Language: "typescript"}
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(srvLogin)
+	idx.AddNode(uiLogin)
+	store := &fakeStore{nodes: []*graph.Node{uiLogin, srvLogin}} // ui returned first (ambiguous default)
+	return store, idx
+}
+
+// TestImpactTool_TargetServiceFilter verifies that target_service pins resolution
+// to the correct service and the result targets the server Login node.
+func TestImpactTool_TargetServiceFilter(t *testing.T) {
+	store, idx := fixtureAmbiguous()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Target           *graph.Node              `json:"target"`
+		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	}
+	callJSON(t, cs, "impact", map[string]any{
+		"target":         "Login",
+		"target_service": "server",
+	}, &out)
+
+	require.NotNil(t, out.Target)
+	assert.Equal(t, "srv:Login", out.Target.ID, "target_service=server must pick the server node")
+	// Two exact matches → candidates populated.
+	assert.Len(t, out.TargetCandidates, 2, "two exact matches must populate target_candidates")
+}
+
+// TestImpactTool_AmbiguityInResponse verifies that without filters the response
+// still populates target_candidates when >1 exact match exists.
+func TestImpactTool_AmbiguityInResponse(t *testing.T) {
+	store, idx := fixtureAmbiguous()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Target           *graph.Node              `json:"target"`
+		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "Login"}, &out)
+
+	require.NotNil(t, out.Target)
+	// Two exact matches → candidates non-empty even without filter.
+	assert.Len(t, out.TargetCandidates, 2, "ambiguous result must have target_candidates")
+}
+
+// TestImpactTool_UnambiguousEmptyCandidates verifies that a unique target has
+// an empty target_candidates array ([] not absent).
+func TestImpactTool_UnambiguousEmptyCandidates(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Target           *graph.Node              `json:"target"`
+		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
+
+	require.NotNil(t, out.Target)
+	assert.NotNil(t, out.TargetCandidates, "target_candidates must be present (never absent)")
+	assert.Empty(t, out.TargetCandidates, "unambiguous target must have empty target_candidates")
+}
+
+// TestToolDescriptionsContainTargetCandidatesHint guards that all three query
+// tools mention target_candidates in their description (B.3 MCP contract).
+func TestToolDescriptionsContainTargetCandidatesHint(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	tools, err := cs.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+
+	for _, tool := range tools.Tools {
+		switch tool.Name {
+		case "context", "impact", "trace":
+			assert.Contains(t, tool.Description, "target_candidates",
+				"tool %s description must mention target_candidates", tool.Name)
+			assert.Contains(t, tool.Description, "target_service",
+				"tool %s description must mention target_service", tool.Name)
+		}
+	}
+}

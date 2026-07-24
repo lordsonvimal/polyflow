@@ -32,6 +32,8 @@ type Case struct {
 	ID               string   `yaml:"id"`
 	Kind             string   `yaml:"kind"`              // node | file | diff | semantic
 	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff)
+	Service          string   `yaml:"service,omitempty"` // pre-filter target resolution to this service (B.3)
+	NodeType         string   `yaml:"node_type,omitempty"` // pre-filter target resolution to this node type (B.3)
 	DiffFile         string   `yaml:"diff_file,omitempty"`
 	ExpectedImpacted []string `yaml:"expected_impacted,omitempty"`
 	MustNotMiss      []string `yaml:"must_not_miss"`

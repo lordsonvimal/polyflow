@@ -101,8 +101,11 @@ cases:
   - id: login-callers
     kind: node
     target: Login
+    service: server
     # api.SessionAPI.Login (api/session.go) registered in router/router.go:
     # `g.POST("/auth/local/login", sessionHandler.Login)`.
+    # ui.Login (ui/src/Login.tsx) is a different exact-label match in service=ui.
+    # service: server pins resolution to api/session.go:Login (B.3 qualifier).
     # Verified: grep -n "sessionHandler.Login" router/router.go → line found.
     expected_impacted:
       - router/router.go
