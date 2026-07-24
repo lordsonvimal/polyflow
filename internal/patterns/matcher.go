@@ -928,10 +928,20 @@ func isJSModuleFile(file string) bool {
 
 // normalizeEventName reduces an event-binding attribute or property to its bare
 // event name: "onClick" → "click", "on:click"/"oncapture:click" → "click",
-// "onclick" → "click".
+// "onclick" → "click", "@click"/"@submit.prevent" → "click"/"submit",
+// "v-on:click" → "click".
+// Vue modifiers (.prevent, .stop, .once, etc.) are stripped before the prefix.
 func normalizeEventName(prop string) string {
 	p := prop
+	// Strip Vue event modifiers: "submit.prevent" → "submit".
+	if idx := strings.IndexByte(p, '.'); idx >= 0 {
+		p = p[:idx]
+	}
 	switch {
+	case strings.HasPrefix(p, "v-on:"):
+		p = p[len("v-on:"):]
+	case strings.HasPrefix(p, "@"):
+		p = p[len("@"):]
 	case strings.HasPrefix(p, "oncapture:"):
 		p = p[len("oncapture:"):]
 	case strings.HasPrefix(p, "on:"):

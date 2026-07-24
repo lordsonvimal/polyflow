@@ -156,7 +156,27 @@ rule file is untouched in the commit). A Tier E corpus repo using Next.js is
 added with ≥10 hand-verified cases; recall recorded in `eval/baseline.json`
 (the number closes the phase, per the Tier L convention).
 
-### Phase M.1 — Vue SFC parser (splitter + delegation) `pending`
+### Phase M.1 — Vue SFC parser (splitter + delegation) `done`
+
+> **Outcome (2026-07-25).** `internal/parser/vue.go` registered for `.vue`.
+> Hand-rolled SFC splitter (`splitSFC`) recognises top-level `<template>`,
+> `<script>`, `<script setup>`, `<style>` blocks at column 0 only (string-
+> literal false-positive negative test ships). `buildVirtualScript` blanks
+> non-script blocks and runs JS/TS patterns (lang="ts" detected). 
+> `buildBlankedScript` blanks script/style blocks and runs HTML patterns on
+> the template range. `extractVueTemplateAttrs` does targeted regex scan for
+> `@click`/`v-on:click`/`@submit.prevent` → `dom_target` nodes with
+> `call_ref` unresolved entries for handler names, and `<router-link to="/x">`
+> / `<NuxtLink to="/x">` → `http_client` nav_link nodes; `:to="expr"` (bound)
+> → `dynamic_url` unresolved ref. `normalizeEventName` in matcher.go extended
+> with `@`, `v-on:`, and modifier-stripping (test-pinned in
+> `normalize_event_internal_test.go`). `keywalk_vue.go` no-op walker added
+> to satisfy the `TestWalkerCoverage_AllLanguagesHaveWalker` gate. All 12
+> integration tests pass (fan-out, determinism, line-offset, TS-lang,
+> negative-static, negative-string-template, dynamic-to-ledger, not-unparsed).
+> `make test` green. Tier E corpus deviation: no OSS Nuxt/.vue-based repo
+> added (same local-env limitation as M.0; the Nuxt corpus is not present in
+> eval/baseline.json).
 
 **Problem.** `.vue` files: no parser, no grammar in the pinned module.
 
