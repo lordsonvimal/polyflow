@@ -403,6 +403,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 		localName   string // binding name in this file (relativity lookup)
 		line        int
 		valueUse    bool // bare identifier use (not a call): always a read on variables
+		isFuncArg   bool // B.1: identifier is a direct argument of a call_expression
 	}
 	var callSites []callSite
 
@@ -530,11 +531,14 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 					if !isValueUse(c.Node) {
 						continue
 					}
+					// B.1: a direct argument position (parent == arguments) is a func-arg ref.
+					isFuncArg := c.Node.Parent() != nil && c.Node.Parent().Type() == "arguments"
 					callSites = append(callSites, callSite{
 						targetLabel: plainImport[name],
 						localName:   name,
 						line:        int(c.Node.StartPoint().Row) + 1,
 						valueUse:    true,
+						isFuncArg:   isFuncArg,
 					})
 				}
 			}
@@ -611,11 +615,31 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 			}
 			targetID = target.id
 		}
-		if cs.valueUse && isFn {
-			continue // function references passed as values stay out (JSX event refs are handled above)
-		}
 		fromID := resolveFrom(cs.line)
 		if fromID == "" || fromID == targetID {
+			continue
+		}
+		if cs.valueUse && isFn {
+			if !cs.isFuncArg {
+				// Function references in non-arg positions stay out (JSX event
+				// refs are handled by jsxEventPropQuery; other value uses of
+				// functions don't generate call edges).
+				continue
+			}
+			// B.1: function passed as a direct argument → calls edge, inferred
+			// confidence (cross-file resolution via import map).
+			id := fmt.Sprintf("calls:%s->%s", fromID, targetID)
+			if !seenEdge[id] {
+				seenEdge[id] = true
+				edges = append(edges, graph.Edge{
+					ID:         id,
+					From:       fromID,
+					To:         targetID,
+					Type:       graph.EdgeTypeCalls,
+					Confidence: graph.ConfidenceInferred,
+					Meta:       map[string]string{"via": "func_arg"},
+				})
+			}
 			continue
 		}
 		typ := graph.EdgeTypeCalls

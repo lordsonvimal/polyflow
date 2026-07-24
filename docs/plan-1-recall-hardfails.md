@@ -130,7 +130,7 @@ stored node/edge shape change). No deviations.
 
 ---
 
-## Phase B.1 — Function-value registration edges (Go + JS) `pending`
+## Phase B.1 — Function-value registration edges (Go + JS) `done`
 
 **Problem.** A function passed **as an argument** gets no incoming edge:
 
@@ -210,6 +210,40 @@ argument sharing a function's name → no edge.
 gorilla/mux hard-fails flip to passes (target: writefreely recall ≥ 0.85,
 0 hard-fails); baseline ratcheted in the same commit. `BenchmarkIndexCold`
 held.
+
+**Outcome (2026-07-24).** Implemented exactly as specified.
+
+Go SSA pass (`internal/parser/go_semantic.go`): added `ssaArgFunc()` helper
+that unwraps `*ssa.ChangeType` wrappers (required for writefreely's named
+function types like `handlerFunc`) to reach the underlying `*ssa.Function`
+or `*ssa.MakeClosure`; added `funcArgCounts map[string]int` accumulated in the
+per-caller instruction walk alongside `callPairs`/`spawnPairs`; emitted sorted
+`funcarg:calls:from->to` edges with `Confidence: static`, `Meta["via"]="func_arg"`,
+`Meta["count"]=<n>` after the existing call/spawn edge emission. `Referenced`
+population is unchanged (the existing `collectReferenced` operand scan already
+finds these functions; B.1 only lifts them to edges). JS same-file
+(`internal/parser/js_variables.go`): `handleCall` restructured — existing
+`flows_to` logic preserved for same-file callee + module-variable args; new
+lower block detects any bare identifier argument that is in `ex.fnDecls` and
+emits a `calls` edge with `confidence static` / `via=func_arg`. JS cross-file
+(`internal/linker/js_linker.go`): added `isFuncArg bool` field to `callSite`
+struct, set it when the identifier's parent node type is `"arguments"` in the
+`valueUseQuery` loop; changed the `valueUse && isFn` early-return to emit a
+`calls` edge with `confidence inferred` / `via=func_arg` when `isFuncArg=true`,
+and continue for non-arg positions. The `fromID` resolution was hoisted before
+the `valueUse && isFn` guard. 12 new tests across `internal/parser/go_b1_test.go`
+(5 Go tests: FuncArgEdges, FanOut, Determinism, StringArgNoEdge, ReferencedUnchanged)
+and `internal/parser/js_b1_test.go` (7 JS tests: SameFileFuncArg, SameFileFuncArgFanOut,
+SameFileDeterminism, NonFunctionArgNoEdge, JSXNoDuplicateEdge, CrossFileFuncArg,
+CrossFileDeterminism). All 1298 tests pass; `go vet` clean.
+`BenchmarkIndexCold`: 14.6s / 1200 files (within historical range, no regression).
+Eval acceptance: writefreely recall 0.467 → **1.000**, 8 hard-fails → **0**
+(all gorilla/mux `handler.Web(fn)` registration cases pass). All other corpora
+unchanged: chessleap 1.000, gotify 0.900 (login-callers HF is pre-existing
+cross-service ambiguity, B.3's fix), lobsters 0.400, polyflow 1.000, pyflask 1.000.
+Baseline ratcheted. No `SchemaVersion` bump — no stored node/edge shape change
+(adds edges with existing `EdgeTypeCalls` type and flexible meta map).
+No deviations.
 
 ---
 
