@@ -948,6 +948,8 @@ func runPatternsAdd(cmd *cobra.Command, args []string) error {
 
 var (
 	contextTarget         string
+	contextTargetService  string
+	contextTargetType     string
 	contextFiles          []string
 	contextService        string
 	contextLimit          int
@@ -962,6 +964,8 @@ var (
 
 func initContextFlags() {
 	contextCmd.Flags().StringVar(&contextTarget, "target", "", "search query to find root node (use this or --file)")
+	contextCmd.Flags().StringVar(&contextTargetService, "target-service", "", "restrict target resolution to this service (resolves cross-service ambiguity)")
+	contextCmd.Flags().StringVar(&contextTargetType, "target-type", "", "restrict target resolution to this node type (function, component, …)")
 	contextCmd.Flags().StringSliceVar(&contextFiles, "file", nil, "file path(s): return ranked related files instead of node context (repeatable)")
 	contextCmd.Flags().StringVar(&contextService, "service", "", "with --file: restrict seed file resolution to a service")
 	contextCmd.Flags().IntVar(&contextLimit, "limit", 20, "with --file: max related files returned (0 = unlimited)")
@@ -1021,11 +1025,10 @@ func runContext(cmd *cobra.Command, args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
-	nodes, err := store.SearchNodes(ctx, contextTarget, 5)
-	if err != nil || len(nodes) == 0 {
-		return fmt.Errorf("node not found for query: %s", contextTarget)
+	root, candidates, err := graph.ResolveTarget(ctx, store, contextTarget, contextTargetService, contextTargetType)
+	if err != nil {
+		return err
 	}
-	root := nodes[0]
 
 	idx, err := store.BuildIndex(ctx)
 	if err != nil {
@@ -1033,6 +1036,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	}
 
 	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile))
+	result.TargetCandidates = candidates
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1043,6 +1047,9 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	out := result.ApplyBudget(contextMaxTokens, contextSummary)
 	if contextFormat == "text" {
+		if len(candidates) > 0 {
+			fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, contextTarget)
+		}
 		if s, ok := out.(*pfcontext.Summary); ok {
 			return printContextSummaryText(s)
 		}
@@ -1160,15 +1167,19 @@ func printUnresolvedText(refs []graph.UnresolvedRef) {
 // ─── trace ───────────────────────────────────────────────────────────────────
 
 var (
-	traceRoot          string
-	traceDirection     string
-	traceDepth         int
-	traceFormat        string
-	traceVerboseSources bool
+	traceRoot            string
+	traceTargetService   string
+	traceTargetType      string
+	traceDirection       string
+	traceDepth           int
+	traceFormat          string
+	traceVerboseSources  bool
 )
 
 func initTraceFlags() {
 	traceCmd.Flags().StringVar(&traceRoot, "root", "", "search query to find the root node (required)")
+	traceCmd.Flags().StringVar(&traceTargetService, "target-service", "", "restrict root resolution to this service (resolves cross-service ambiguity)")
+	traceCmd.Flags().StringVar(&traceTargetType, "target-type", "", "restrict root resolution to this node type (function, component, …)")
 	traceCmd.Flags().StringVar(&traceDirection, "direction", "forward", "trace direction: forward, backward, or both")
 	traceCmd.Flags().IntVar(&traceDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	traceCmd.Flags().StringVar(&traceFormat, "format", "text", "output format: json, text, or chain")
@@ -1197,11 +1208,10 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
-	matches, err := store.SearchNodes(ctx, traceRoot, 5)
-	if err != nil || len(matches) == 0 {
-		return fmt.Errorf("node not found for query: %s", traceRoot)
+	root, candidates, err := graph.ResolveTarget(ctx, store, traceRoot, traceTargetService, traceTargetType)
+	if err != nil {
+		return err
 	}
-	root := matches[0]
 
 	idx, err := store.BuildIndex(ctx)
 	if err != nil {
@@ -1212,6 +1222,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	if result == nil {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
+	result.TargetCandidates = candidates
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1219,6 +1230,9 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	}
 	result.AttachUnresolved(unresolved)
 
+	if len(candidates) > 0 {
+		fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, traceRoot)
+	}
 	switch traceFormat {
 	case "json":
 		return json.NewEncoder(os.Stdout).Encode(result)
@@ -1283,6 +1297,8 @@ func printTraceText(r *trace.Result) error {
 
 var (
 	impactTarget         string
+	impactTargetService  string
+	impactTargetType     string
 	impactDepth          int
 	impactService        string
 	impactFormat         string
@@ -1298,6 +1314,8 @@ var (
 
 func initImpactFlags() {
 	impactCmd.Flags().StringVar(&impactTarget, "target", "", "search query for the target node")
+	impactCmd.Flags().StringVar(&impactTargetService, "target-service", "", "restrict target resolution to this service (resolves cross-service ambiguity)")
+	impactCmd.Flags().StringVar(&impactTargetType, "target-type", "", "restrict target resolution to this node type (function, component, …)")
 	impactCmd.Flags().StringVar(&impactFile, "file", "", "file path: report impact at file granularity")
 	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "with --file: forward, backward or both")
 	impactCmd.Flags().BoolVar(&impactDiff, "diff", false, "union blast radius of uncommitted changes (git diff against HEAD)")
@@ -1369,11 +1387,10 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	matches, err := store.SearchNodes(ctx, impactTarget, 5)
-	if err != nil || len(matches) == 0 {
-		return fmt.Errorf("node not found for query: %s", impactTarget)
+	root, candidates, err := graph.ResolveTarget(ctx, store, impactTarget, impactTargetService, impactTargetType)
+	if err != nil {
+		return err
 	}
-	root := matches[0]
 
 	idx, err := store.BuildIndex(ctx)
 	if err != nil {
@@ -1381,6 +1398,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	}
 
 	out := impact.Build(idx, root, impactDepth, impactService, impactVerboseSources, loadStaleAfter(meta.ConfigFile))
+	out.TargetCandidates = candidates
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1392,6 +1410,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	budgeted := out.ApplyBudget(impactMaxTokens, impactSummary)
 	if impactFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(budgeted)
+	}
+	if len(candidates) > 0 {
+		fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, impactTarget)
 	}
 	if s, ok := budgeted.(*impact.Summary); ok {
 		return printImpactSummaryText(s)
