@@ -70,6 +70,14 @@ const (
 	NodeTypeGraphQLResolver NodeType = "graphql_resolver"
 )
 
+// MetaIsTest marks a node whose call site sits inside a test-DSL harness
+// (Jest/Mocha/Playwright, RSpec, Go testing). X.0: comm-classified sites
+// (http_client/publisher/subscriber) in test-DSL scope are demoted to a
+// plain NodeTypeFunction and stamped with this meta key instead of minting
+// a bogus communication node — the call/blast-radius edge is kept, the
+// contract engine and coverage denominators are not.
+const MetaIsTest = "is_test"
+
 // EdgeType classifies the relationship between two nodes.
 type EdgeType string
 
@@ -166,7 +174,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "19" // S.0: embeddings + entities_fts tables added for semantic retrieval
+const SchemaVersion = "20" // X.0: test-DSL comm sites demoted to function nodes + is_test meta
 
 // Node represents a code entity in the graph.
 type Node struct {
