@@ -57,3 +57,43 @@ contracts:
       id_prefix: job
       same_service: keep
     unmatched: ledger
+
+  # X.2: delayed_job .delay method-wrapping — user.delay.deliver_email wraps
+  # an existing method, so the join target is <Type>#<method> (dj_target,
+  # populated by matcher.go's delayedJobTarget), not a job class.
+  - kind: job
+    producer:
+      node: publisher
+      where: {pattern: dj_delay}
+      key: [dj_target]
+    consumer:
+      node: function
+      where: {}
+      key: [qualified_name]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: job_enqueue
+      id_prefix: job
+      same_service: keep
+    unmatched: ledger    # unresolved receiver type (dj_target unset) or no matching method
+
+  # X.2: delayed_job handle_asynchronously declaration — marks an existing
+  # method as async; every regular caller of it becomes an implicit enqueue
+  # once this job_perform edge marks the method itself as job-backed.
+  - kind: job
+    producer:
+      node: publisher
+      where: {pattern: dj_handle_asynchronously}
+      key: [dj_target]
+    consumer:
+      node: function
+      where: {}
+      key: [qualified_name]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: job_perform
+      id_prefix: job
+      same_service: keep
+    unmatched: ledger

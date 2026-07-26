@@ -317,6 +317,17 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				minLine = 0
 			}
 
+			// X.2: delayed_job's `.delay`/`handle_asynchronously` sites have an
+			// implicit-self receiver — the join target is the enclosing class,
+			// not text in the match itself. Capture it here where the AST is
+			// still available (MatchToGraph only sees flat capture text).
+			if grammarLang == "ruby" && anchor != nil &&
+				(cq.pattern.Name == "dj_delay" || cq.pattern.Name == "dj_handle_asynchronously") {
+				if cls := rubyEnclosingClassName(anchor, src); cls != "" {
+					captures["dj_class"] = cls
+				}
+			}
+
 			mr := MatchResult{
 				PatternName: cq.pattern.Name,
 				Captures:    captures,
@@ -470,6 +481,32 @@ func rubyInTestDSLScope(n *sitter.Node, src []byte) bool {
 		}
 	}
 	return false
+}
+
+// rubyEnclosingClassName walks up to the nearest enclosing class/module
+// declaration and returns its name (last segment only for a namespaced
+// scope_resolution name, e.g. "Admin::ReportJob" -> "ReportJob"), or "" if
+// n is not nested inside one. Used by X.2 to resolve the implicit-self
+// receiver of `handle_asynchronously` and `self.delay.method` call sites.
+func rubyEnclosingClassName(n *sitter.Node, src []byte) string {
+	cur := n
+	for depth := 0; cur != nil && depth < testDSLWalkDepth; depth, cur = depth+1, cur.Parent() {
+		if cur.Type() != "class" && cur.Type() != "module" {
+			continue
+		}
+		nameNode := cur.ChildByFieldName("name")
+		if nameNode == nil {
+			continue
+		}
+		if nameNode.Type() == "scope_resolution" {
+			if last := nameNode.ChildByFieldName("name"); last != nil {
+				return last.Content(src)
+			}
+			continue
+		}
+		return nameNode.Content(src)
+	}
+	return ""
 }
 
 // goInTestDSLScope reports true when the nearest enclosing function_declaration
@@ -630,6 +667,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// boundary classification) can reason about the match without
 		// re-deriving it.
 		meta["pattern"] = r.PatternName
+
+		// X.2: delayed_job wraps an existing method, so the job_enqueue/
+		// job_perform join target is a qualified <Type>#<method> key, not a
+		// job class. dj_target is left unset (and the contract rule falls
+		// through to its unmatched:ledger policy) when the receiver type
+		// can't be honestly determined — never guessed.
+		if djTarget := delayedJobTarget(r); djTarget != "" {
+			meta["dj_target"] = djTarget
+		}
 
 		if demoteTestDSL {
 			meta[graph.MetaIsTest] = "true"
@@ -1461,6 +1507,90 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	default:
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 	}
+}
+
+// rubySimpleReceiverRe matches a plain local/instance/class-variable receiver
+// (identifier, @ivar, @@cvar) that railsClassify can safely guess a type for.
+// Anything else (method chains, index expressions, etc.) is left unresolved
+// rather than guessed at.
+var rubySimpleReceiverRe = regexp.MustCompile(`^@{0,2}[a-z_][a-zA-Z0-9_]*$`)
+
+// rubyConstantReceiverRe matches a bare or namespaced constant receiver
+// (Notifier, Admin::Report) — Klass.delay.method dispatches a class/module
+// method, so the receiver already IS the target's qualifying type; no
+// naming-convention guess is needed or applied.
+var rubyConstantReceiverRe = regexp.MustCompile(`^[A-Z][a-zA-Z0-9_]*(::[A-Z][a-zA-Z0-9_]*)*$`)
+
+// delayedJobTarget derives the Meta["dj_target"] qualified-method join key
+// (<Type>#<method>) for a dj_delay or dj_handle_asynchronously match. It
+// never guesses: a receiver that cannot be honestly resolved to a class
+// (bug-class rule #12 — unresolvable sites still reach the contract engine's
+// unmatched:ledger, they just carry no dj_target to join on) leaves the meta
+// field unset.
+func delayedJobTarget(r MatchResult) string {
+	switch r.PatternName {
+	case "dj_handle_asynchronously":
+		// Implicit-self receiver: the enclosing class is exact, not a guess.
+		cls := r.Captures["dj_class"]
+		method := strings.TrimPrefix(r.Captures["method_name"], ":")
+		if cls == "" || method == "" {
+			return ""
+		}
+		return cls + "#" + method
+	case "dj_delay":
+		method := r.Captures["job_method"]
+		if method == "" {
+			return ""
+		}
+		recv := r.Captures["dj_receiver"]
+		if recv == "self" || recv == "" {
+			// Implicit-self receiver (explicit `self.delay.x` or bare
+			// `delay.x`, no dj_receiver capture at all): exact, resolved the
+			// same way as handle_asynchronously.
+			if cls := r.Captures["dj_class"]; cls != "" {
+				return cls + "#" + method
+			}
+			return ""
+		}
+		if rubyConstantReceiverRe.MatchString(recv) {
+			// Klass.delay.method — the receiver already is the target type
+			// (a class/module method dispatch), not a naming-convention guess.
+			return recv + "#" + method
+		}
+		if cls := railsClassify(recv); cls != "" {
+			return cls + "#" + method
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+// railsClassify infers a Ruby class name from a plain receiver identifier
+// using the Rails naming convention (snake_case variable name -> matching
+// class), e.g. "user" -> "User", "current_user" -> "CurrentUser". Only
+// applies to simple identifiers/ivars (rubySimpleReceiverRe); anything more
+// complex (chained calls, index expressions) returns "" so the caller
+// honestly ledgers the site instead of joining on a fabricated key. This is
+// a best-effort inferred join: it only ever produces an edge when a method
+// node with the resulting qualified name actually exists (the contract
+// engine's normal exact-match join), so a wrong guess yields no edge, not a
+// wrong one.
+func railsClassify(receiver string) string {
+	if receiver == "" || !rubySimpleReceiverRe.MatchString(receiver) {
+		return ""
+	}
+	name := strings.TrimLeft(receiver, "@")
+	parts := strings.Split(name, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String()
 }
 
 // stripStringLiteral removes surrounding string delimiters from a captured value.

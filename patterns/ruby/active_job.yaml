@@ -5,11 +5,14 @@ language: ruby
 version: "1"
 package: activejob
 patterns:
-  # ReportJob.perform_later(user.id)
+  # ReportJob.perform_later(user.id) — receiver may be a bare constant or a
+  # namespaced scope resolution (Admin::ReportJob); both are captured raw
+  # (X.2: matcher.go leaves the text as-is, quote_strip/normalized tiers in
+  # the jobs.yaml contract rule handle the rest).
   - name: aj_perform_later
     query: |
       (call
-        receiver: (constant) @job_class
+        receiver: [(constant) (scope_resolution)] @job_class
         method: (identifier) @fn
         (#match? @fn "^(perform_later|perform_now)$"))
     captures:
@@ -23,7 +26,7 @@ patterns:
     query: |
       (call
         receiver: (call
-          receiver: (constant) @job_class
+          receiver: [(constant) (scope_resolution)] @job_class
           method: (identifier) @set
           (#eq? @set "set"))
         method: (identifier) @fn
@@ -32,13 +35,16 @@ patterns:
       - name: job_class
         role: job_class
 
-  # class ReportJob < ApplicationJob ... def perform(...)
+  # class ReportJob < ApplicationJob ... def perform(...) — superclass is
+  # usually the bare ApplicationJob, but jobs can subclass ActiveJob::Base
+  # directly (scope_resolution), so both shapes are captured raw and matched
+  # against both the bare and namespaced spellings.
   - name: aj_perform_method
     query: |
       (class
-        name: (constant) @job_class
-        superclass: (superclass (constant) @super
-          (#match? @super "^(ApplicationJob|ActiveJob)$"))
+        name: [(constant) (scope_resolution)] @job_class
+        superclass: (superclass [(constant) (scope_resolution)] @super
+          (#match? @super "^(ApplicationJob|ActiveJob(::Base)?)$"))
         body: (body_statement
           (method
             name: (identifier) @name

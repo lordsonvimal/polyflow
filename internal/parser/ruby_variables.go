@@ -172,10 +172,18 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 			name := nameNode.Content(ex.src)
 			methodID = ex.methodNodeID(name, rbLine(node))
+			meta := map[string]string{"class": class}
+			// X.2: qualified_name is the <Type>#<method> join key delayed_job's
+			// dj_target (matcher.go) and jobs.yaml's contract rules match against.
+			if class != "" {
+				meta["qualified_name"] = class + "#" + name
+			} else {
+				meta["qualified_name"] = name
+			}
 			ex.addNode(graph.Node{
 				ID: methodID, Type: graph.NodeTypeFunction, Label: name,
 				Service: ex.service, File: ex.file, Line: rbLine(node), Language: "ruby",
-				Meta: map[string]string{"class": class},
+				Meta: meta,
 			})
 		}
 	case "assignment", "operator_assignment":
