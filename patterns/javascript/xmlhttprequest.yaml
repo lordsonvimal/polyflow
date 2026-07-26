@@ -9,7 +9,7 @@ patterns:
           (#eq? @fn "open"))
         arguments: (arguments
           (string) @method
-          (string) @url . _*))
+          (_) @url . _*))
     captures:
       - name: method
         role: http_method

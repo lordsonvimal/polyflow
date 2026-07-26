@@ -60,44 +60,25 @@ patterns:
       - name: path
         role: http_path
 
-  # G.6 shape (a): ternary href — <a href={cond ? "/admin" : "/dashboard"}>.
-  # Both branches must be root-relative string literals. MatchToGraph assembles
-  # branch_0 + branch_1 into key_candidates meta for engine fan-out.
-  - name: nav_link_jsx_ternary
+  # X.1a: any braced href/action expression — <a href={cond ? "/admin" :
+  # "/dashboard"}>, <a href={someVar}>, <a href={`/rooms/${id}`}>, etc.
+  # Captures the bare expression node as @path (the same convention every
+  # other producer key uses) and lets contract.KeyWalkerFor("javascript")
+  # classify it: a ternary of literals fans out via key_candidates, a
+  # template/concat with holes reconstructs to a wildcarded template (X.1b),
+  # and anything else surfaces as key_dynamic. Replaces the former
+  # nav_link_jsx_ternary/nav_link_jsx_dynamic pair (G.6's JSX-only
+  # @branch_N/@key_expr convention), unifying nav links with the general
+  # producer-key mechanism instead of a JSX-specific one.
+  - name: nav_link_jsx_expr
     query: |
       (jsx_attribute
         (property_identifier) @prop
         (#match? @prop "^(href|action)$")
         (jsx_expression
-          (ternary_expression
-            consequence: (string (string_fragment) @branch_0)
-            alternative: (string (string_fragment) @branch_1))))
+          (_) @path))
     captures:
       - name: prop
         role: nav_attr
-      - name: branch_0
-        role: key_branch
-      - name: branch_1
-        role: key_branch
-
-  # G.6 shape (c): dynamic href expression — <a href={someVar}> or <a href={fn()}>
-  # Matches identifier / member / call / binary / template in JSX position.
-  # MatchToGraph stamps key_dynamic=true; engine surfaces to dynamic_url ledger.
-  - name: nav_link_jsx_dynamic
-    query: |
-      (jsx_attribute
-        (property_identifier) @prop
-        (#match? @prop "^(href|action)$")
-        (jsx_expression
-          [
-            (identifier) @key_expr
-            (member_expression) @key_expr
-            (call_expression) @key_expr
-            (binary_expression) @key_expr
-            (template_string) @key_expr
-          ]))
-    captures:
-      - name: prop
-        role: nav_attr
-      - name: key_expr
-        role: dynamic_key
+      - name: path
+        role: http_path

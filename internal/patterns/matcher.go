@@ -2,7 +2,6 @@ package patterns
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"maps"
@@ -20,6 +19,7 @@ import (
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -42,6 +42,75 @@ type MatchResult struct {
 	// call/function (X.0). Comm classifiers (http_client/publisher/subscriber)
 	// consult this to avoid minting a communication node from test/scenario code.
 	IsTestDSL bool
+
+	// KeyNodes retains the tree-sitter node for a bounded allow-list of
+	// producer/consumer key captures (X.1a wiring): url, path, channel,
+	// exchange, routing_key, topic, queue, queue_name, key, event.
+	// MatchToGraph routes these through the match's language KeyWalker
+	// instead of the already-flattened capture text, so dynamic key
+	// expressions (fmt.Sprintf, template interpolation, string concatenation)
+	// are recognized instead of becoming unmatchable garbage keys. Bounded so
+	// unrelated captures (payload, handler, method, ...) never retain nodes.
+	KeyNodes map[string]*sitter.Node
+
+	// Src is the source bytes this match was parsed from (shares the
+	// caller's backing array — no copy). Required by KeyWalker.WalkKey,
+	// which re-derives text from node byte offsets.
+	Src []byte
+
+	// Lang is the contract.KeyWalker registry language for this match's
+	// grammar (e.g. "javascript" for js/ts/tsx/jsx), or "" when the grammar
+	// has no walker family.
+	Lang string
+}
+
+// keyWalkerKeyCaptureNames is the bounded allow-list of capture names whose
+// tree-sitter node is retained on MatchResult.KeyNodes for X.1a WalkKey
+// routing — restricted to names that are an actual contract-rule `key:`
+// field somewhere in contracts/*.yaml today (verified against every
+// go/javascript/ruby pattern file, 2026-07-26). "event" is deliberately
+// excluded despite appearing in the phase doc's allow-list text: no contract
+// rule keys on it (websocket.yaml keys on message_type; hub.yaml's key is
+// `[]`, matching unconditionally), and sse_hub.yaml's hub_broadcast_call
+// captures @event for an arbitrary Go value (often a composite literal, not
+// a channel/topic-like key) — routing it through WalkKey marked every hub
+// producer key_dynamic and wiped out hub_broadcast fan-out entirely
+// (caught by TestGoldenChessleapParity). A capture name being routable here
+// is necessary but not sufficient for correctness — it must also be a real
+// match key for the rule that consumes it; "event" failed that bar.
+//
+// "key" is deliberately excluded too, despite the phase doc's allow-list
+// text: it is a widespread *predicate-only* capture-name convention across
+// the pattern corpus (`key: (property_identifier) @key (#eq? @key
+// "baseURL")` — checking an object literal's property name, not carrying a
+// producer key value) used by gorilla_websocket, kafka, axios_instance,
+// fetch, producer_alias, and websocket.yaml's ws_send_typed — none of them
+// declare "key" in their own captures: list. Routing ws_send_typed's stray
+// @key node (a bare property_identifier, always non-literal to the walker)
+// wrongly marked it key_dynamic and deleted every ws_send edge from the
+// fixture corpus (caught by TestFixtureEdgeTypes_Snapshot).
+var keyWalkerKeyCaptureNames = map[string]bool{
+	"url": true, "path": true, "channel": true, "exchange": true,
+	"routing_key": true, "topic": true, "queue": true, "queue_name": true,
+}
+
+// keyWalkerRoutedLangs restricts X.1a's live WalkKey routing to the
+// languages the phase actually extends (go, javascript, ruby) rather than
+// every registered contract.KeyWalker — see the routing-block comment for
+// why python's placeholder walker must not be routed live.
+var keyWalkerRoutedLangs = map[string]bool{
+	"go": true, "javascript": true, "ruby": true,
+}
+
+// keyWalkerLangFor maps a grammar language to the contract.KeyWalker
+// registry language, normalizing the JS family (javascript/typescript/tsx)
+// to "javascript" the same way testDSLLangFamily does; other grammars
+// (go, ruby, python, html) already register under their own name.
+func keyWalkerLangFor(grammarLang string) string {
+	if fam := testDSLLangFamily(grammarLang); fam != "" {
+		return fam
+	}
+	return grammarLang
 }
 
 // compiledQuery holds a compiled tree-sitter query and the original pattern.
@@ -195,6 +264,7 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 			// function body) but their text is not stored, so declaration
 			// bodies never leak into node meta.
 			captures := make(map[string]string, len(m2.Captures))
+			var keyNodes map[string]*sitter.Node
 			var minLine int = -1
 			var defEndLine int
 			var anchor *sitter.Node
@@ -211,6 +281,12 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 					}
 				} else {
 					captures[name] = cap.Node.Content(src)
+					if keyWalkerKeyCaptureNames[name] {
+						if keyNodes == nil {
+							keyNodes = make(map[string]*sitter.Node, 1)
+						}
+						keyNodes[name] = cap.Node
+					}
 				}
 				row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
 				if minLine < 0 || row < minLine {
@@ -248,6 +324,9 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				EndLine:     defEndLine,
 				File:        file,
 				IsTestDSL:   testDSLFamily != "" && anchor != nil && inTestDSLScope(anchor, src, testDSLFamily),
+				KeyNodes:    keyNodes,
+				Src:         src,
+				Lang:        keyWalkerLangFor(grammarLang),
 			}
 			if cq.pattern.Package != "" {
 				mr.Package = cq.pattern.Package
@@ -620,34 +699,54 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
-		// G.6 multi-candidate key: patterns that capture @branch_N produce nodes
-		// with key_candidates meta (JSON array) so the engine can fan-out and match
-		// each alternative independently. The raw branch captures are cleared after
-		// assembly.
-		if branches := extractBranchCaptures(meta); len(branches) >= 2 {
-			data, _ := json.Marshal(branches)
-			meta["key_candidates"] = string(data)
-			// Remove individual branch_N captures — they are transient metadata
-			for k := range meta {
-				if strings.HasPrefix(k, "branch_") {
-					delete(meta, k)
+		// X.1a: route producer/consumer key fields through the match's
+		// language KeyWalker instead of raw capture text. Replaces the
+		// JSX-only @branch_N/@key_expr convention (G.6) — which stamped
+		// key_candidates/key_dynamic only for nav_link_jsx_ternary/
+		// nav_link_jsx_dynamic — with the general mechanism so every
+		// language/producer kind benefits, not just JSX nav links. A nil
+		// walker (unregistered grammar) or a no-op walker declining a
+		// genuinely-static capture leaves meta untouched — today's raw-text
+		// behavior, no regression. Multiple dynamic key fields on one node
+		// still yield a single whole-node key_dynamic (matching the engine's
+		// per-node, not per-field, ledger check).
+		//
+		// Scoped to go/javascript/ruby (X.1's Files list) rather than "any
+		// registered walker": the python walker is a placeholder that always
+		// returns dynamic regardless of whether the node is a plain literal
+		// (unlike go/js/ruby, which classify literals first) — routing
+		// python through it here would wrongly dynamic-ledger every literal
+		// requests.get("/path") call. Extending python is future scope.
+		if keyWalkerRoutedLangs[r.Lang] && isKeyWalkerNode(nodeType) && len(r.KeyNodes) > 0 {
+			if walker := contract.KeyWalkerFor(r.Lang); walker != nil {
+				consts := constResolverFor(constants[r.File])
+				dynamicHit := false
+				candidateHit := false
+				for field, node := range r.KeyNodes {
+					cands, dynamic := walker.WalkKey(node, r.Src, consts)
+					switch {
+					case dynamic:
+						meta[field] = ""
+						if !dynamicHit {
+							dynamicHit = true
+							meta["key_dynamic"] = "true"
+							meta["key_dynamic_raw"] = node.Content(r.Src)
+						}
+					case len(cands) == 1:
+						meta[field] = cands[0]
+					case len(cands) >= 2:
+						meta["key_candidates"] = contract.MarshalKeyCandidates(cands)
+						meta[field] = ""
+						candidateHit = true
+					}
+				}
+				switch {
+				case dynamicHit:
+					label = "dynamic"
+				case candidateHit:
+					label = "branch_enum"
 				}
 			}
-			// Ensure the primary key field is empty so the engine selects it for
-			// injection. Method remains set (e.g. GET for nav links).
-			meta["path"] = ""
-			meta["url"] = ""
-			label = "branch_enum"
-		}
-
-		// G.6 dynamic key: patterns that capture @key_expr carry a non-literal
-		// expression in the key position. Stamp key_dynamic=true; the engine
-		// surfaces a dynamic_<kind> ledger entry instead of silently dropping.
-		if keyExpr, ok := meta["key_expr"]; ok {
-			meta["key_dynamic"] = "true"
-			meta["key_dynamic_raw"] = keyExpr // preserved for ledger Name field
-			delete(meta, "key_expr")
-			label = "dynamic"
 		}
 
 		// Version-gated patterns stamp which package version they matched
@@ -688,6 +787,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 							label = resolved
 						}
 					}
+				}
+			}
+		}
+
+		// X.1a: instance/alias base URLs get the same constant-propagation
+		// pass as http_client url/path. Without it, `axios.create({baseURL:
+		// BASE_V1})` with `const BASE_V1 = "/api/v1"` looks non-literal to
+		// EnrichAliases' isLiteralURL check, gets blanked, and the whole
+		// "/api/v1" prefix silently vanishes from every call through that
+		// instance. These binding nodes classify as NodeTypeVariable (not
+		// HTTPClient), so this runs unconditionally rather than gated on
+		// nodeType like the block above.
+		for _, key := range []string{"instance_base_url", "alias_base_url"} {
+			if raw, ok := meta[key]; ok && raw != "" {
+				if resolved, _ := resolveURL(raw, r.File, constants); resolved != raw {
+					meta[key] = resolved
 				}
 			}
 		}
@@ -1474,23 +1589,28 @@ func tryResolveOne(raw string, fileConsts map[string]string) (string, string) {
 	return raw, ""
 }
 
-// extractBranchCaptures collects branch_N capture values from a meta map in
-// index order (branch_0, branch_1, …) and strips surrounding quotes. Returns
-// nil when fewer than two branches are present.
-func extractBranchCaptures(meta map[string]string) []string {
-	var branches []string
-	for i := 0; ; i++ {
-		key := fmt.Sprintf("branch_%d", i)
-		v, ok := meta[key]
-		if !ok {
-			break
-		}
-		branches = append(branches, stripStringLiteral(v))
+// isKeyWalkerNode reports whether t is a producer/consumer node type whose
+// key fields should be routed through the language KeyWalker (X.1a): HTTP
+// clients, pub/sub publishers and subscribers, and AMQP channels (both
+// producer and consumer side share NodeTypeChannel).
+func isKeyWalkerNode(t graph.NodeType) bool {
+	switch t {
+	case graph.NodeTypeHTTPClient, graph.NodeTypePublisher, graph.NodeTypeSubscriber, graph.NodeTypeChannel:
+		return true
+	default:
+		return false
 	}
-	if len(branches) < 2 {
-		return nil
+}
+
+// constResolverFor builds a contract.ConstResolver closure over a file's
+// same-file constant table (name -> literal value), used by KeyWalker to
+// resolve shape (b) identifier/constant references. fileConsts may be nil
+// (no constants collected for the file); lookups on a nil map are safe.
+func constResolverFor(fileConsts map[string]string) contract.ConstResolver {
+	return func(name string) (string, bool) {
+		v, ok := fileConsts[name]
+		return v, ok
 	}
-	return branches
 }
 
 // isIdentifier reports whether s is a plain identifier (letters, digits, _, $).
