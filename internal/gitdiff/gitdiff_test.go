@@ -1,6 +1,9 @@
 package gitdiff_test
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,6 +12,28 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 )
+
+// initGitRepo creates a git repository at dir with one committed file
+// (committed.txt), so callers can then modify it to produce a real diff.
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "t")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "committed.txt"), []byte("line1\nline2\n"), 0o644))
+	run("add", "committed.txt")
+	run("commit", "-q", "-m", "init")
+}
 
 func TestParse_ModifiedFileMultipleHunks(t *testing.T) {
 	diff := `diff --git a/internal/foo/foo.go b/internal/foo/foo.go
@@ -115,4 +140,155 @@ index 1111111..2222222 100644
 
 func TestParse_EmptyDiff(t *testing.T) {
 	assert.Empty(t, gitdiff.Parse(strings.NewReader("")))
+}
+
+func TestRoot_FindsRepoRoot(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	sub := filepath.Join(dir, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	root, err := gitdiff.Root(sub)
+	require.NoError(t, err)
+
+	wantRoot, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	gotRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	assert.Equal(t, wantRoot, gotRoot)
+}
+
+func TestRoot_NotAGitRepoErrors(t *testing.T) {
+	_, err := gitdiff.Root(t.TempDir())
+	assert.Error(t, err)
+}
+
+func TestResolveRoots_DedupesAndReportsNoGitRepo(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	subA := filepath.Join(repo, "svc-a")
+	subB := filepath.Join(repo, "svc-b")
+	require.NoError(t, os.MkdirAll(subA, 0o755))
+	require.NoError(t, os.MkdirAll(subB, 0o755))
+	noRepo := t.TempDir()
+
+	roots := gitdiff.ResolveRoots([]gitdiff.ServiceDir{
+		{Name: "svc-a", Path: subA},
+		{Name: "svc-b", Path: subB},
+		{Name: "svc-c", Path: noRepo},
+	})
+	require.Len(t, roots, 3)
+	assert.False(t, roots[0].NoGitRepo)
+	assert.False(t, roots[1].NoGitRepo)
+	assert.True(t, roots[2].NoGitRepo)
+
+	wantRoot, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
+	gotA, err := filepath.EvalSymlinks(roots[0].Root)
+	require.NoError(t, err)
+	gotB, err := filepath.EvalSymlinks(roots[1].Root)
+	require.NoError(t, err)
+	assert.Equal(t, wantRoot, gotA)
+	assert.Equal(t, gotA, gotB, "svc-a and svc-b share one repo root")
+}
+
+// TestMultiChanges_UnionsAcrossRootsWithAbsolutePaths proves the Z.1 core
+// behavior: two services in two separate git repos each get their own
+// `git diff` run, and the union comes back as absolute, root-joined paths
+// so they compare directly against graph.Node.File (Z.0: node files are
+// absolute).
+func TestMultiChanges_UnionsAcrossRootsWithAbsolutePaths(t *testing.T) {
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+	initGitRepo(t, repoA)
+	initGitRepo(t, repoB)
+	require.NoError(t, os.WriteFile(filepath.Join(repoA, "committed.txt"), []byte("line1\nCHANGED-A\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoB, "committed.txt"), []byte("line1\nCHANGED-B\n"), 0o644))
+
+	roots := gitdiff.ResolveRoots([]gitdiff.ServiceDir{
+		{Name: "svc-a", Path: repoA},
+		{Name: "svc-b", Path: repoB},
+	})
+	changes, err := gitdiff.MultiChanges(roots, false)
+	require.NoError(t, err)
+	require.Len(t, changes, 2)
+
+	wantA, err := filepath.EvalSymlinks(filepath.Join(repoA, "committed.txt"))
+	require.NoError(t, err)
+	wantB, err := filepath.EvalSymlinks(filepath.Join(repoB, "committed.txt"))
+	require.NoError(t, err)
+
+	gotPaths := make([]string, len(changes))
+	for i, ch := range changes {
+		p, err := filepath.EvalSymlinks(ch.Path)
+		require.NoError(t, err)
+		gotPaths[i] = p
+		assert.True(t, filepath.IsAbs(ch.Path), "expected absolute path, got %q", ch.Path)
+	}
+	assert.ElementsMatch(t, []string{wantA, wantB}, gotPaths)
+}
+
+// TestMultiChanges_OnlyOneRootChangedContributesNothingFromTheOther proves a
+// clean repo contributes zero changes and does not error just because a
+// sibling repo in the same workspace has edits.
+func TestMultiChanges_OnlyOneRootChangedContributesNothingFromTheOther(t *testing.T) {
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+	initGitRepo(t, repoA)
+	initGitRepo(t, repoB) // repoB stays clean — no edits after init commit
+	require.NoError(t, os.WriteFile(filepath.Join(repoA, "committed.txt"), []byte("line1\nCHANGED-A\n"), 0o644))
+
+	roots := gitdiff.ResolveRoots([]gitdiff.ServiceDir{
+		{Name: "svc-a", Path: repoA},
+		{Name: "svc-b", Path: repoB},
+	})
+	changes, err := gitdiff.MultiChanges(roots, false)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+
+	wantA, err := filepath.EvalSymlinks(filepath.Join(repoA, "committed.txt"))
+	require.NoError(t, err)
+	gotA, err := filepath.EvalSymlinks(changes[0].Path)
+	require.NoError(t, err)
+	assert.Equal(t, wantA, gotA)
+}
+
+// TestMultiChanges_SkipsNoGitRepoWithoutError proves a service outside any
+// git repo does not abort the rest of the diff — the caller (impact package)
+// surfaces it separately via AppendNoGitRepo.
+func TestMultiChanges_SkipsNoGitRepoWithoutError(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "committed.txt"), []byte("line1\nCHANGED\n"), 0o644))
+	noRepo := t.TempDir()
+
+	roots := gitdiff.ResolveRoots([]gitdiff.ServiceDir{
+		{Name: "svc-a", Path: repo},
+		{Name: "svc-b", Path: noRepo},
+	})
+	changes, err := gitdiff.MultiChanges(roots, false)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+}
+
+// TestMultiChanges_Determinism runs the union twice over the same input and
+// requires byte-identical output (bug-class rule 2).
+func TestMultiChanges_Determinism(t *testing.T) {
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+	initGitRepo(t, repoA)
+	initGitRepo(t, repoB)
+	require.NoError(t, os.WriteFile(filepath.Join(repoA, "committed.txt"), []byte("line1\nCHANGED-A\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoB, "committed.txt"), []byte("line1\nCHANGED-B\n"), 0o644))
+
+	roots := gitdiff.ResolveRoots([]gitdiff.ServiceDir{
+		{Name: "svc-a", Path: repoA},
+		{Name: "svc-b", Path: repoB},
+	})
+
+	run1, err := gitdiff.MultiChanges(roots, false)
+	require.NoError(t, err)
+	run2, err := gitdiff.MultiChanges(roots, false)
+	require.NoError(t, err)
+	assert.Equal(t, run1, run2)
 }
