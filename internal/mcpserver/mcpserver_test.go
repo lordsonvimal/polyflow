@@ -101,7 +101,7 @@ func TestToolDiscovery(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace"}, names)
+	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace", "flows", "entrypoints", "resolve"}, names)
 }
 
 func TestSearchTool(t *testing.T) {
@@ -505,7 +505,7 @@ func TestToolDescriptionsContainSemanticsParagraph(t *testing.T) {
 	tools, err := cs.ListTools(context.Background(), nil)
 	require.NoError(t, err)
 
-	semanticTools := map[string]bool{"context": false, "impact": false, "trace": false}
+	semanticTools := map[string]bool{"context": false, "impact": false, "trace": false, "flows": false}
 	for _, tool := range tools.Tools {
 		if _, ok := semanticTools[tool.Name]; ok {
 			assert.Contains(t, tool.Description, "verification_state",
@@ -695,7 +695,7 @@ func TestToolDescriptionsContainTargetCandidatesHint(t *testing.T) {
 
 	for _, tool := range tools.Tools {
 		switch tool.Name {
-		case "context", "impact", "trace":
+		case "context", "impact", "trace", "flows":
 			assert.Contains(t, tool.Description, "target_candidates",
 				"tool %s description must mention target_candidates", tool.Name)
 			assert.Contains(t, tool.Description, "target_service",
