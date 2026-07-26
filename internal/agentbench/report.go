@@ -21,6 +21,7 @@ type TaskResult struct {
 	TaskID         string   `json:"task_id"`
 	Repo           string   `json:"repo"`
 	CaseID         string   `json:"case_id"`
+	Kind           string   `json:"kind"`
 	Arm            string   `json:"arm"`
 	Trial          int      `json:"trial"`
 	InputTokens    int      `json:"input_tokens"`
@@ -59,6 +60,7 @@ type BenchReport struct {
 	Note     string       `json:"note,omitempty"`
 	Tasks    []TaskResult `json:"tasks"`
 	Summary  []ArmSummary `json:"summary"`
+	FlowGate *FlowGate    `json:"flow_gate,omitempty"`
 }
 
 // Summarize computes per-arm summaries from task results.
@@ -108,6 +110,76 @@ func Summarize(tasks []TaskResult) []ArmSummary {
 	return out
 }
 
+// FlowGate is X.4's own acceptance bar, computed only over kind=flow tasks:
+// median token reduction of with_polyflow_semantic vs without_polyflow, and
+// with_polyflow_semantic correctness (Recall==1.0 && !HardFail, no partial
+// credit — matches eval.CaseResult's existing fields, no new scoring
+// semantics).
+type FlowGate struct {
+	MedianTokenReductionPct float64 `json:"median_token_reduction_pct"` // must be >= 80
+	CorrectnessWithPolyflow float64 `json:"correctness_with_polyflow"`  // must be >= 0.95
+	Pass                    bool    `json:"pass"`
+	TaskCount               int     `json:"task_count"`
+}
+
+// ComputeFlowGate computes the flow-subset token/correctness gate. Token
+// reduction is measured per matching (task_id, trial) pair between
+// with_polyflow_semantic and without_polyflow's context tokens; correctness
+// is the fraction of with_polyflow_semantic runs with Recall==1.0 and no
+// HardFail. Task order follows the input slice (rule 2 determinism — the
+// caller already sorts by (repo, caseID)).
+func ComputeFlowGate(tasks []TaskResult) FlowGate {
+	type key struct {
+		taskID string
+		trial  int
+	}
+	withoutByKey := make(map[key]TaskResult)
+	for _, t := range tasks {
+		if t.Kind == "flow" && t.Arm == ArmNoPolyflow {
+			withoutByKey[key{t.TaskID, t.Trial}] = t
+		}
+	}
+
+	var withTasks []TaskResult
+	var reductions []float64
+	for _, t := range tasks {
+		if t.Kind != "flow" || t.Arm != ArmWithSemantics {
+			continue
+		}
+		withTasks = append(withTasks, t)
+		if wo, ok := withoutByKey[key{t.TaskID, t.Trial}]; ok && wo.ContextTokens > 0 {
+			reductions = append(reductions, (float64(wo.ContextTokens)-float64(t.ContextTokens))/float64(wo.ContextTokens)*100)
+		}
+	}
+
+	var g FlowGate
+	g.TaskCount = len(withTasks)
+	if len(reductions) > 0 {
+		sort.Float64s(reductions)
+		g.MedianTokenReductionPct = medianFloat64(reductions)
+	}
+	if len(withTasks) > 0 {
+		var correct int
+		for _, t := range withTasks {
+			if t.Recall == 1.0 && !t.HardFail {
+				correct++
+			}
+		}
+		g.CorrectnessWithPolyflow = float64(correct) / float64(len(withTasks))
+	}
+	g.Pass = g.MedianTokenReductionPct >= 80 && g.CorrectnessWithPolyflow >= 0.95
+	return g
+}
+
+// medianFloat64 returns the median of a pre-sorted slice.
+func medianFloat64(sorted []float64) float64 {
+	n := len(sorted)
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
+}
+
 // FormatMarkdown renders a BenchReport as a human-readable markdown file.
 // Task rows are sorted deterministically (rule 2).
 func FormatMarkdown(r BenchReport) string {
@@ -130,6 +202,19 @@ func FormatMarkdown(r BenchReport) string {
 		fmt.Fprintf(&sb, "| %s | %d | %.3f | %.0f | %.1f | %.0f | %.0f | $%.4f | %d |\n",
 			s.Arm, s.Trials, s.AvgRecall, s.AvgContextTok, s.AvgTurns, s.AvgOutputTok, s.AvgWallMs,
 			s.TotalCostUSD, s.HardFails)
+	}
+
+	if r.FlowGate != nil {
+		fg := *r.FlowGate
+		verdict := "FAIL"
+		if fg.Pass {
+			verdict = "PASS"
+		}
+		sb.WriteString("\n## Flow Gate (X.4 acceptance bar)\n\n")
+		fmt.Fprintf(&sb, "| Median Token Reduction | Correctness (with polyflow) | Task Count | Verdict |\n")
+		fmt.Fprintf(&sb, "|------------------------|------------------------------|------------|---------|\n")
+		fmt.Fprintf(&sb, "| %.1f%% | %.3f | %d | %s |\n",
+			fg.MedianTokenReductionPct, fg.CorrectnessWithPolyflow, fg.TaskCount, verdict)
 	}
 
 	sb.WriteString("\n## Task Detail\n\n")

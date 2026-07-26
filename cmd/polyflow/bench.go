@@ -59,6 +59,7 @@ type benchTask struct {
 	TaskID      string
 	Repo        string
 	CaseID      string
+	Kind        string
 	Prompt      string
 	Expected    []string
 	MustNotMiss []string
@@ -82,7 +83,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 		tasks = filtered
 	}
 	if len(tasks) == 0 {
-		return fmt.Errorf("no impact cases found under %s (need kind=node or kind=file)", benchCorpus)
+		return fmt.Errorf("no impact cases found under %s (need kind=node, kind=file, or kind=flow)", benchCorpus)
 	}
 	fmt.Printf("Found %d tasks across corpus repos\n", len(tasks))
 
@@ -139,6 +140,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 					TaskID:  task.TaskID,
 					Repo:    task.Repo,
 					CaseID:  task.CaseID,
+					Kind:    task.Kind,
 					Arm:     arm,
 					Trial:   trial,
 					WallMs:  wall,
@@ -177,6 +179,10 @@ func runBench(cmd *cobra.Command, args []string) error {
 		Tasks:   results,
 		Summary: agentbench.Summarize(results),
 	}
+	if hasFlowTask(tasks) {
+		fg := agentbench.ComputeFlowGate(results)
+		report.FlowGate = &fg
+	}
 
 	if err := writeReport(benchOutput, report); err != nil {
 		return err
@@ -199,31 +205,50 @@ func collectBenchTasks(corpusRoot string) ([]benchTask, error) {
 			continue
 		}
 		for _, c := range m.Cases {
-			if c.Kind != "node" && c.Kind != "file" {
-				continue // skip semantic cases — they use a different prompt pattern
+			if c.Kind != "node" && c.Kind != "file" && c.Kind != "flow" {
+				continue // skip semantic/diff cases — they use a different prompt pattern
 			}
 			t := benchTask{
 				TaskID:      m.Repo.Name + "/" + c.ID,
 				Repo:        m.Repo.Name,
 				CaseID:      c.ID,
+				Kind:        c.Kind,
 				Expected:    c.ExpectedImpacted,
 				MustNotMiss: c.MustNotMiss,
 			}
-			if c.Kind == "node" {
+			switch c.Kind {
+			case "node":
 				t.Prompt = fmt.Sprintf(
 					"In the %s codebase, if %s were modified or renamed, which source files "+
 						"would need to be updated as a result? List each file path on its own line.",
 					m.Repo.Name, c.Target)
-			} else {
+			case "file":
 				t.Prompt = fmt.Sprintf(
 					"In the %s codebase, if the file %s were modified, which other source files "+
 						"would be affected? List each file path on its own line.",
+					m.Repo.Name, c.Target)
+			case "flow":
+				t.Prompt = fmt.Sprintf(
+					"In the %s codebase, trace the flow for %s from entry point to completion, "+
+						"across services if applicable. List each file involved on its own line, "+
+						"in the order they participate in the flow.",
 					m.Repo.Name, c.Target)
 			}
 			tasks = append(tasks, t)
 		}
 	}
 	return tasks, nil
+}
+
+// hasFlowTask reports whether any collected task is kind=flow, gating whether
+// a FlowGate is worth computing/reporting for this run.
+func hasFlowTask(tasks []benchTask) bool {
+	for _, t := range tasks {
+		if t.Kind == "flow" {
+			return true
+		}
+	}
+	return false
 }
 
 // writeMCPConfig writes a temporary MCP config JSON for arms 1 and 2.
