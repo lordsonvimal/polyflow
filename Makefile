@@ -68,6 +68,46 @@ eval-corpus:
 	done; \
 	echo "eval-corpus done."
 
+# yield-gate — X.3 CI gate: run `polyflow doctor --yield` against every
+# indexed corpus repo under eval/.cache/. Bug-class #4: enumerate the
+# manifests (the baseline) and fail if a URL-based repo's cache dir is absent
+# or unindexed — an absent repo must read as a failure, never a silent pass.
+# path:-based (local-only, e.g. chessleap) manifests are the documented
+# exemption: CI cannot clone a private local repo, matching
+# SkippedCorpus.LocalOnly in `polyflow eval`.
+yield-gate:
+	@POLYFLOW=$$(pwd)/dist/polyflow; \
+	if [ ! -x "$$POLYFLOW" ]; then \
+		echo "error: $$POLYFLOW not found — run 'make build' first"; exit 1; \
+	fi; \
+	FAILED=0; \
+	for manifest in eval/corpus/*/manifest.yaml; do \
+		dir=$$(dirname "$$manifest"); \
+		name=$$(basename "$$dir"); \
+		url=$$(grep -m1 'url:' "$$manifest" | awk '{print $$2}'); \
+		cachedir="eval/.cache/$$name"; \
+		if [ -z "$$url" ]; then \
+			if [ ! -d "$$cachedir/.polyflow" ]; then \
+				echo "SKIP  $$name: local-only (path:-based manifest, not available in CI)"; \
+				continue; \
+			fi; \
+		elif [ ! -d "$$cachedir/.polyflow" ]; then \
+			echo "MISSING  $$name: $$cachedir/.polyflow not found (repo not indexed — run 'make eval-corpus' first)"; \
+			FAILED=1; \
+			continue; \
+		fi; \
+		echo "--- yield: $$name ---"; \
+		if ! (cd "$$cachedir" && "$$POLYFLOW" doctor --yield); then \
+			echo "FAIL  $$name: yield gate failed"; \
+			FAILED=1; \
+		fi; \
+	done; \
+	if [ "$$FAILED" = "1" ]; then \
+		echo "yield-gate: one or more repos failed or were missing"; \
+		exit 1; \
+	fi; \
+	echo "yield-gate: all corpus repos pass"
+
 lint:
 	golangci-lint run ./...
 

@@ -41,6 +41,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/toolchain"
 	"github.com/lordsonvimal/polyflow/internal/trace"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
+	yieldpkg "github.com/lordsonvimal/polyflow/internal/yield"
 )
 
 func main() {
@@ -2140,8 +2141,10 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 // ─── doctor ──────────────────────────────────────────────────────────────────
 
 var (
-	doctorBaseline string
-	doctorPropose  string
+	doctorBaseline  string
+	doctorPropose   string
+	doctorYield     bool
+	doctorYieldJSON bool
 )
 
 var doctorCmd = &cobra.Command{
@@ -2153,6 +2156,8 @@ var doctorCmd = &cobra.Command{
 func init() {
 	doctorCmd.Flags().StringVar(&doctorBaseline, "baseline", "eval/baseline.json", "baseline JSON file for the eval summary row")
 	doctorCmd.Flags().StringVar(&doctorPropose, "propose", "", "write gap-derived rule proposals + fixture skeletons to this directory (e.g. .polyflow/proposals)")
+	doctorCmd.Flags().BoolVar(&doctorYield, "yield", false, "print the X.3 resolution-yield scorecard; CI gate — exits 1 if it fails the bar (internal=100%, cross-static>=95%, every unresolved site reason-coded)")
+	doctorCmd.Flags().BoolVar(&doctorYieldJSON, "json", false, "with --yield, print the scorecard as JSON instead of a table")
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {
@@ -2340,8 +2345,73 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Evidence freshness:  (no cross-service edges — run 'polyflow index' first)\n")
 	}
 
+	// X.3: resolution-yield scorecard — the trust-signal source for whether
+	// polyflow resolves this repo's flows. --yield doubles as the CI gate:
+	// pinned exit precedence — this is the LAST check in runDoctor, so every
+	// other diagnostic section has already printed before a failing gate exits.
+	var (
+		yieldReport   yieldpkg.Report
+		yieldComputed bool
+	)
+	if doctorYield {
+		fmt.Println()
+		if storeErr != nil {
+			fmt.Printf("  Yield scorecard:     (no index — run 'polyflow index' first)\n")
+		} else {
+			ctx5 := context.Background()
+			rep, yErr := yieldpkg.Compute(ctx5, store)
+			if yErr != nil {
+				fmt.Printf("  Yield scorecard:     error: %v\n", yErr)
+			} else {
+				yieldReport, yieldComputed = rep, true
+				if doctorYieldJSON {
+					data, mErr := json.MarshalIndent(rep, "", "  ")
+					if mErr != nil {
+						return fmt.Errorf("marshal yield report: %w", mErr)
+					}
+					fmt.Println(string(data))
+				} else {
+					printDoctorYield(rep)
+				}
+			}
+		}
+	}
+
 	fmt.Println()
+
+	if doctorYield && yieldComputed && !yieldReport.Pass {
+		fmt.Fprintf(os.Stderr, "Yield gate: FAILED — %s\n", strings.Join(yieldReport.Failures, "; "))
+		os.Exit(1)
+	}
+
 	return nil
+}
+
+// printDoctorYield renders the X.3 resolution-yield scorecard in doctor
+// table style: one row per (Class, Scope), then the three headline ratios
+// and the pass/fail verdict.
+func printDoctorYield(r yieldpkg.Report) {
+	prefix := "  Yield scorecard:    "
+	indent := "                       "
+
+	if len(r.Rows) == 0 {
+		fmt.Printf("%s(no resolution-relevant edges found)\n", prefix)
+	} else {
+		fmt.Printf("%s%-16s  %-8s  %6s  %6s  %6s  %6s  %6s\n",
+			prefix, "class", "scope", "static", "runtime", "extern", "unres", "resolv")
+		for _, row := range r.Rows {
+			fmt.Printf("%s%-16s  %-8s  %6d  %6d  %6d  %6d  %6d\n",
+				indent, row.Class, row.Scope, row.ResolvedStatic, row.ResolvedRuntime, row.External, row.Unresolved, row.Resolvable)
+		}
+	}
+
+	fmt.Printf("%sinternal_yield=%.3f  cross_yield_static=%.3f  cross_yield_with_runtime=%.3f\n",
+		indent, r.InternalYield, r.CrossYieldStatic, r.CrossYieldWithRuntime)
+	if r.Pass {
+		fmt.Printf("%sverdict: PASS\n", indent)
+	} else {
+		fmt.Printf("%sverdict: FAIL — %s\n", indent, strings.Join(r.Failures, "; "))
+	}
 }
 
 // formatDuration renders a duration as a human-readable string for doctor output.
