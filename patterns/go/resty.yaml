@@ -15,6 +15,67 @@ patterns:
         role: http_method
       - name: url
         role: http_url
+
+  # X.1a: resty_get's `#match?` literal-quote gate is its only precision
+  # guard (it keys on the method-name selector alone, no receiver check), so
+  # it cannot simply be loosened to (_) — that would fire on any two-arg
+  # `.Get(x)`-shaped call anywhere. Instead, two receiver-gated variants cover
+  # the non-literal-URL case, mirroring axios_instance/faraday_instance:
+  # resty.New().R().Get(fmt.Sprintf(...)) is the resty-specific worked example
+  # (svc-c) that #match? was silently dropping to zero nodes.
+  #
+  # Direct chain: resty.New().R().Get(<non-literal>).
+  - name: resty_get_dynamic
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (call_expression
+            function: (selector_expression
+              operand: (call_expression
+                function: (selector_expression
+                  operand: (identifier) @pkg
+                  (#eq? @pkg "resty")
+                  field: (field_identifier) @newfn
+                  (#eq? @newfn "New")))
+              field: (field_identifier) @rfn
+              (#eq? @rfn "R")))
+          field: (field_identifier) @fn
+          (#match? @fn "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
+        arguments: (argument_list .
+          (_) @url .
+          (#not-match? @url "^[\"\x60]")))
+    captures:
+      - name: fn
+        role: http_method
+      - name: url
+        role: http_url
+
+  # Variable-bound chain: client := resty.New(); client.R().Get(<non-literal>).
+  # @via_alias resolves through EnrichAliases against resty_new_instance's
+  # alias_instance_name (resty_new.yaml) — the same generic alias mechanism
+  # axios_instance_call uses, not a resty-specific lookup.
+  - name: resty_get_dynamic_alias
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (call_expression
+            function: (selector_expression
+              operand: (identifier) @via_alias
+              field: (field_identifier) @rfn
+              (#eq? @rfn "R")))
+          field: (field_identifier) @fn
+          (#match? @fn "^(Get|Post|Put|Patch|Delete|Head|Options)$"))
+        arguments: (argument_list .
+          (_) @url .
+          (#not-match? @url "^[\"\x60]")))
+    captures:
+      - name: via_alias
+        role: alias_receiver
+      - name: fn
+        role: http_method
+      - name: url
+        role: http_url
+
   - name: resty_execute
     query: |
       (call_expression

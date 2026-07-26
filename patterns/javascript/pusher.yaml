@@ -14,7 +14,7 @@ patterns:
           (#eq? @fn "subscribe"))
         arguments: (arguments
           .
-          (string) @channel
+          (_) @channel
           .))
     captures:
       - name: channel

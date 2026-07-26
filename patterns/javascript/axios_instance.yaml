@@ -1,5 +1,14 @@
 language: javascript
 version: "1"
+package: axios
+# X.1a: axios_instance_call's url capture is loosened from (string) to (_) so
+# a dynamic call through a known instance (store.get(`${x}/y`)) is captured
+# instead of silently producing no node at all — EnrichAliases (alias.go:
+# 160-164) does not drop an unresolved via_alias receiver, it keeps the node
+# as an http_client, so there is no "known-instance" gate elsewhere. The
+# package: axios gate above is the compensating precision guard (mirrors
+# pusher-js/bunny): without it, any `.get(...)` call through any object would
+# match once X.1b's template reconstruction makes such calls resolvable.
 patterns:
   - name: axios_create_with_baseurl
     query: |
@@ -31,7 +40,7 @@ patterns:
           (#match? @method "^(get|post|put|patch|delete|head|options|request)$"))
         arguments: (arguments
           .
-          (string) @url))
+          (_) @url))
     captures:
       - name: via_alias
         role: alias_receiver
