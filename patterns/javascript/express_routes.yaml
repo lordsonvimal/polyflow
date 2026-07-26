@@ -1,0 +1,82 @@
+# Express server routes: `app.get(...)`/`router.post(...)` verb registration
+# and `app.use(prefix, router)` mounting. H.0 (plan-7): tether-class Node
+# backends have zero server-side surface without this.
+#
+# Receiver is deliberately any identifier (`app`, `router`, `api`) — the
+# `package: express` gate plus the `(string|expr, callback)` argument shape
+# is the disambiguator, mirroring gin_route's "any receiver, gate decides"
+# convention. Known accepted false-positive class: none in the JS corpus
+# today (`$.get(url, cb)` is jQuery — services depending on jQuery do not
+# also depend on express in this fleet, so the package gate suppresses the
+# file's express patterns entirely at index time; recall-over-precision
+# would accept the extra candidate if they ever coexisted).
+language: javascript
+version: "1"
+package: express
+patterns:
+  - name: express_verb_route
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @recv
+          property: (property_identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options|all)$"))
+        arguments: (arguments
+          .
+          (string) @path
+          (_) @handler))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+
+  # Non-string first arg (`app.get(ROUTES.user, handler)`): the matcher's
+  # generic quote-strip pass leaves the raw member-expression text
+  # (`ROUTES.health`) as meta.path verbatim — HTTPHandler is not a
+  # KeyWalker-routed node type (isKeyWalkerNode covers producer/consumer
+  # kinds only: http_client, publisher, subscriber, channel), so no
+  # key_dynamic ledger entry is stamped for the *server* side today; this is
+  # a recorded gap (see H.0 outcome note), not a silent drop — the handler
+  # node itself is still emitted and visible in the graph.
+  - name: express_verb_route_dynamic
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @recv
+          property: (property_identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options|all)$"))
+        arguments: (arguments
+          .
+          (member_expression) @path
+          (_) @handler))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
+
+  # `app.use("/prefix", router)`: prefix reconstruction across files is NOT
+  # attempted (precedent: gin_route_chained's recorded descope) — the mount
+  # is emitted so it is visible, meta.mount marks it distinct from a real
+  # handler registration.
+  - name: express_mount
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @recv
+          property: (property_identifier) @method
+          (#eq? @method "use"))
+        arguments: (arguments
+          .
+          (string) @path
+          (_) @handler))
+    captures:
+      - name: path
+        role: http_path
+      - name: handler
+        role: handler_ref
