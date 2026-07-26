@@ -1,0 +1,4 @@
+{
+  "patterns": ["express_verb_route", "express_verb_route", "express_verb_route_dynamic", "express_mount"],
+  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler"]
+}

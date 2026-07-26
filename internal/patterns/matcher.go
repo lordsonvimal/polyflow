@@ -1483,6 +1483,14 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		strings.Contains(lower, "route"):
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
 
+	// H.0: express_mount doesn't match any *_route/*_handler substring above
+	// (it's a `.use(prefix, router)` mount, not a verb registration) but is
+	// still a server-side surface that should be visible as an http_handler
+	// node, mirroring gin_route_chained/gin_route_group's explicit-case
+	// treatment for shapes that fall outside the generic heuristic.
+	case lower == "express_mount":
+		return graph.NodeTypeHTTPHandler, graph.EdgeTypeHTTPCall
+
 	// ── HTTP clients ──────────────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "faraday_") || strings.HasPrefix(lower, "httparty_") ||
 		strings.HasPrefix(lower, "net_http_") || strings.HasPrefix(lower, "rest_client"):
