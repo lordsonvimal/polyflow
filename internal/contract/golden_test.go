@@ -87,9 +87,6 @@ func indexChessleapContractEdges(t *testing.T, chessleapDir string) []goldenEdge
 
 	cfg, err := workspace.Load(filepath.Join(chessleapDir, "workspace.yaml"))
 	require.NoError(t, err)
-	for i := range cfg.Services {
-		cfg.Services[i].Path = filepath.Join(chessleapDir, cfg.Services[i].Path)
-	}
 
 	dbDir := t.TempDir()
 	stats, err := indexer.Run(context.Background(), indexer.Options{

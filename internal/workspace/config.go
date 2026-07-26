@@ -184,7 +184,20 @@ func (cfg *WorkspaceConfig) EffectivePort() int {
 	return meta.DefaultPort
 }
 
-// Load reads and parses a workspace.yaml file at path.
+// Load reads and parses a workspace.yaml file at path, then resolves every
+// Service.Path to an absolute directory:
+//  1. a leading "~/" expands to os.UserHomeDir(); any other leading "~"
+//     (e.g. "~user/") is rejected — that form is not supported;
+//  2. a still-relative path resolves against the directory containing path
+//     (NOT the process CWD);
+//  3. the result is filepath.Clean'd and stored back on the Service, so all
+//     downstream code (which already treats svc.Path as usable-as-is) is
+//     unchanged.
+//
+// A resolved path that does not exist or is not a directory, or two
+// services that resolve to the same directory, fail the load: silently
+// indexing an empty/missing dir or double-counting one repo as two services
+// would fake completeness (docs/phases.md rule 3/12 spirit).
 func Load(path string) (*WorkspaceConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -194,7 +207,55 @@ func Load(path string) (*WorkspaceConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse workspace config: %w", err)
 	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace config path %s: %w", path, err)
+	}
+	wsDir := filepath.Dir(absPath)
+
+	seenRoots := make(map[string]string, len(cfg.Services)) // resolved path -> owning service name
+	for i := range cfg.Services {
+		svc := &cfg.Services[i]
+		resolved, err := resolveServicePath(svc.Path, wsDir)
+		if err != nil {
+			return nil, fmt.Errorf("service %s: %w", svc.Name, err)
+		}
+		info, statErr := os.Stat(resolved)
+		if statErr != nil || !info.IsDir() {
+			return nil, fmt.Errorf("service %s: path %q (resolved to %q) does not exist or is not a directory", svc.Name, svc.Path, resolved)
+		}
+		if other, ok := seenRoots[resolved]; ok {
+			return nil, fmt.Errorf("service %s and service %s both resolve to %q — duplicate service roots are not allowed", other, svc.Name, resolved)
+		}
+		seenRoots[resolved] = svc.Name
+		svc.Path = resolved
+	}
+
 	return &cfg, nil
+}
+
+// resolveServicePath applies the ~/-expansion and workspace-relative-join
+// rules described on Load, then Cleans the result. wsDir must already be
+// absolute.
+func resolveServicePath(p, wsDir string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand %q: resolve home directory: %w", p, err)
+		}
+		if p == "~" {
+			p = home
+		} else {
+			p = filepath.Join(home, p[len("~/"):])
+		}
+	} else if strings.HasPrefix(p, "~") {
+		return "", fmt.Errorf("path %q: ~user/-style home-directory expansion is not supported; use an absolute path or ~/ for your own home directory", p)
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(wsDir, p)
+	}
+	return filepath.Clean(p), nil
 }
 
 // Save writes the config back to path atomically.
@@ -211,4 +272,24 @@ func Save(path string, cfg *WorkspaceConfig) error {
 		return fmt.Errorf("rename workspace config: %w", err)
 	}
 	return nil
+}
+
+// InitHeaderComment is the single comment line `polyflow init` prepends to
+// the workspace.yaml it generates (Z.0), documenting Load's path resolution
+// rules for hand-editors who add out-of-tree services later.
+const InitHeaderComment = "# paths may be absolute or ~/-prefixed; relative paths resolve against this file\n"
+
+// SaveInit writes cfg to path via Save, then prepends InitHeaderComment.
+// Used only by `polyflow init` — Save itself stays header-free so repeated
+// config-editing round trips (via `polyflow config ...`) don't accumulate or
+// duplicate the comment.
+func SaveInit(path string, cfg *WorkspaceConfig) error {
+	if err := Save(path, cfg); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read workspace config %s: %w", path, err)
+	}
+	return os.WriteFile(path, append([]byte(InitHeaderComment), data...), 0o644)
 }

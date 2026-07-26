@@ -22,8 +22,20 @@ func writeYAML(t *testing.T, content string) string {
 	return f.Name()
 }
 
+// writeYAMLInDir writes a workspace.yaml (with the given content) into dir
+// and returns its path, so relative service paths inside content resolve
+// against a known workspace directory.
+func writeYAMLInDir(t *testing.T, dir, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, "workspace.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
 func TestLoad_OK(t *testing.T) {
-	path := writeYAML(t, `
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "svc-a"), 0o755))
+	path := writeYAMLInDir(t, dir, `
 name: my-workspace
 version: "1"
 services:
@@ -50,6 +62,7 @@ settings:
 	assert.Equal(t, "1", cfg.Version)
 	require.Len(t, cfg.Services, 1)
 	assert.Equal(t, "svc-a", cfg.Services[0].Name)
+	assert.Equal(t, filepath.Join(dir, "svc-a"), cfg.Services[0].Path)
 	assert.Equal(t, []string{"chi"}, cfg.Services[0].Frameworks)
 	require.Len(t, cfg.Links, 1)
 	assert.Equal(t, "/api", cfg.Links[0].BaseURL)
@@ -58,6 +71,177 @@ settings:
 	assert.Equal(t, 50, cfg.Settings.SnippetLines)
 	assert.Equal(t, "dagre-lr", cfg.Settings.DefaultLayout)
 	assert.Equal(t, 3, cfg.Settings.DefaultDepth)
+}
+
+// TestLoad_PathResolvesAgainstWorkspaceDirNotCWD proves relative service
+// paths resolve against the directory containing workspace.yaml — not the
+// process's current working directory — per Z.0.
+func TestLoad_PathResolvesAgainstWorkspaceDirNotCWD(t *testing.T) {
+	wsDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(wsDir, "svc-a"), 0o755))
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-a
+    path: ./svc-a
+    language: go
+`)
+
+	// Run from an unrelated CWD to prove resolution ignores it.
+	elsewhere := t.TempDir()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(elsewhere))
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	cfg, err := workspace.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Services, 1)
+	assert.Equal(t, filepath.Join(wsDir, "svc-a"), cfg.Services[0].Path)
+}
+
+// TestLoad_TildeExpansion proves a leading "~/" expands to the user's home
+// directory, and that "~user/"-style expansion is rejected with a named
+// message rather than silently mis-resolving.
+func TestLoad_TildeExpansion(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	sub := filepath.Join(home, "polyflow-z0-test-"+t.Name())
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(sub) })
+
+	wsDir := t.TempDir()
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-home
+    path: "~/`+filepath.Base(sub)+`"
+    language: go
+`)
+	cfg, err := workspace.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Services, 1)
+	assert.Equal(t, sub, cfg.Services[0].Path)
+}
+
+func TestLoad_TildeUserExpansionErrors(t *testing.T) {
+	wsDir := t.TempDir()
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-a
+    path: "~someuser/repo"
+    language: go
+`)
+	_, err := workspace.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "~user/-style home-directory expansion is not supported")
+}
+
+// TestLoad_NonexistentPathErrors proves a resolved path that does not exist
+// fails Load naming both the service and the raw/resolved paths, rather than
+// silently indexing an empty directory.
+func TestLoad_NonexistentPathErrors(t *testing.T) {
+	wsDir := t.TempDir()
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: missing-svc
+    path: ./does-not-exist
+    language: go
+`)
+	_, err := workspace.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing-svc")
+	assert.Contains(t, err.Error(), "does-not-exist")
+}
+
+// TestLoad_DuplicateResolvedRootsError proves two services resolving to the
+// same directory fail the load — duplicate service roots corrupt
+// same-service scoping.
+func TestLoad_DuplicateResolvedRootsError(t *testing.T) {
+	wsDir := t.TempDir()
+	shared := filepath.Join(wsDir, "shared")
+	require.NoError(t, os.MkdirAll(shared, 0o755))
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-a
+    path: ./shared
+    language: go
+  - name: svc-b
+    path: ./shared
+    language: go
+`)
+	_, err := workspace.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "svc-a")
+	assert.Contains(t, err.Error(), "svc-b")
+}
+
+// TestLoad_AbsolutePathPassesThroughUnchanged proves an already-absolute
+// service path is used as-is (Clean'd) and not re-joined to the workspace
+// directory.
+func TestLoad_AbsolutePathPassesThroughUnchanged(t *testing.T) {
+	svcDir := t.TempDir()
+	wsDir := t.TempDir()
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-abs
+    path: "`+filepath.ToSlash(svcDir)+`"
+    language: go
+`)
+	cfg, err := workspace.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Services, 1)
+	assert.Equal(t, filepath.Clean(svcDir), cfg.Services[0].Path)
+}
+
+// TestLoad_SingleRepoRegression loads this repo's own workspace.yaml from
+// its own directory (CWD == workspace dir) and asserts resolved service
+// paths equal the pre-Z.0 behavior (filepath.Abs from CWD).
+func TestLoad_SingleRepoRegression(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	wsPath := filepath.Join(repoRoot, "workspace.yaml")
+	if _, err := os.Stat(wsPath); err != nil {
+		t.Skipf("repo workspace.yaml not found: %v", err)
+	}
+
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	cfg, err := workspace.Load(wsPath)
+	require.NoError(t, err)
+	require.NotEmpty(t, cfg.Services)
+	for _, svc := range cfg.Services {
+		assert.True(t, filepath.IsAbs(svc.Path))
+	}
+	// Direct equivalence check against the documented pre-Z.0 behavior
+	// (filepath.Abs against CWD) for the two known services.
+	for _, svc := range cfg.Services {
+		var rel string
+		switch svc.Name {
+		case "polyflow":
+			rel = "."
+		case "web":
+			rel = "./web"
+		default:
+			continue
+		}
+		want, err := filepath.Abs(rel)
+		require.NoError(t, err)
+		assert.Equal(t, want, svc.Path)
+	}
 }
 
 func TestLoad_NotFound(t *testing.T) {
@@ -74,6 +258,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 func TestSave_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "workspace.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "svc"), 0o755))
 
 	cfg := &workspace.WorkspaceConfig{
 		Name:    "test-ws",

@@ -52,7 +52,7 @@ func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Worksp
 	var allEdges []graph.Edge
 
 	for _, svc := range cfg.Services {
-		svcPath := filepath.Join(fixtureWS, svc.Path)
+		svcPath := svc.Path
 		var files []string
 		err := filepath.WalkDir(svcPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {

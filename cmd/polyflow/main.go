@@ -140,7 +140,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		for _, l := range cfg.Links {
 			fmt.Printf("  link: %s -> %s (via %s)\n", l.From, l.To, l.Via)
 		}
-		if err := workspace.Save(cfgPath, cfg); err != nil {
+		if err := workspace.SaveInit(cfgPath, cfg); err != nil {
 			return err
 		}
 		fmt.Printf("Created %s — edit it or use `polyflow config service` to adjust.\n", cfgPath)
@@ -210,7 +210,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := workspace.Save(cfgPath, cfg); err != nil {
+	if err := workspace.SaveInit(cfgPath, cfg); err != nil {
 		return err
 	}
 	fmt.Printf("Created %s\n", cfgPath)
