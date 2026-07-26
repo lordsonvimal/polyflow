@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -36,6 +37,11 @@ type MatchResult struct {
 	// targets and the service's resolved version of it.
 	Package         string
 	ResolvedVersion string
+
+	// IsTestDSL is true when the match's enclosing construct is a test-harness
+	// call/function (X.0). Comm classifiers (http_client/publisher/subscriber)
+	// consult this to avoid minting a communication node from test/scenario code.
+	IsTestDSL bool
 }
 
 // compiledQuery holds a compiled tree-sitter query and the original pattern.
@@ -139,7 +145,7 @@ func (m *TreeSitterMatcher) MatchWithGrammar(patternLang, grammarLang, file stri
 	if err != nil {
 		return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
 	}
-	return m.execQueries(cqs, root, src, file)
+	return m.execQueries(cqs, root, src, file, grammarLang)
 }
 
 // Match runs registered patterns for the language against the source bytes.
@@ -161,11 +167,12 @@ func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchRes
 		return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
 	}
 
-	return m.execQueries(cqs, root, src, file)
+	return m.execQueries(cqs, root, src, file, language)
 }
 
-func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, src []byte, file string) ([]MatchResult, error) {
+func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, src []byte, file, grammarLang string) ([]MatchResult, error) {
 	var results []MatchResult
+	testDSLFamily := testDSLLangFamily(grammarLang)
 
 	for _, cq := range cqs {
 		cursor := sitter.NewQueryCursor()
@@ -190,7 +197,11 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 			captures := make(map[string]string, len(m2.Captures))
 			var minLine int = -1
 			var defEndLine int
+			var anchor *sitter.Node
 			for _, cap := range m2.Captures {
+				if anchor == nil {
+					anchor = cap.Node
+				}
 				name := cq.query.CaptureNameForId(cap.Index)
 				if strings.HasPrefix(name, "_") {
 					// Positional-only capture: it marks the span of the whole
@@ -236,6 +247,7 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				Line:        minLine,
 				EndLine:     defEndLine,
 				File:        file,
+				IsTestDSL:   testDSLFamily != "" && anchor != nil && inTestDSLScope(anchor, src, testDSLFamily),
 			}
 			if cq.pattern.Package != "" {
 				mr.Package = cq.pattern.Package
@@ -286,6 +298,126 @@ func isConstantPattern(patternName string) bool {
 		patternName == "fn_return_template_prefix"
 }
 
+// testDSLCallers is the recognized test-harness vocabulary, per language
+// family (X.0). Validated against real repos (bug-class #7): Playwright/
+// Jest/Mocha, RSpec, Go testing. Go is handled structurally (see
+// goInTestDSLScope) since its harness is a naming convention, not a callee.
+var testDSLCallers = map[string]map[string]bool{
+	"javascript": {
+		"test": true, "it": true, "describe": true, "context": true,
+		"beforeEach": true, "afterEach": true, "beforeAll": true, "afterAll": true,
+	},
+	"ruby": {
+		"describe": true, "it": true, "context": true, "before": true,
+		"after": true, "let": true, "subject": true, "specify": true, "scenario": true,
+	},
+	"go": {},
+}
+
+// testDSLWalkDepth bounds the ancestor walk in inTestDSLScope so pathological
+// trees can't cause unbounded work (bug-class #2: deterministic, bounded).
+const testDSLWalkDepth = 64
+
+// goTestFuncNameRe matches Go test/benchmark/example/fuzz entry-point names.
+var goTestFuncNameRe = regexp.MustCompile(`^(Test|Benchmark|Example|Fuzz)`)
+
+// testDSLLangFamily maps a grammar language to the vocabulary/dispatch family
+// used by inTestDSLScope. TypeScript/TSX share the JavaScript call_expression
+// shape, so they resolve to "javascript". Languages with no test-DSL rule
+// (python, html) return "" and are never scoped.
+func testDSLLangFamily(grammarLang string) string {
+	switch grammarLang {
+	case "javascript", "typescript", "tsx":
+		return "javascript"
+	case "ruby":
+		return "ruby"
+	case "go":
+		return "go"
+	default:
+		return ""
+	}
+}
+
+// inTestDSLScope reports whether n's enclosing construct is a test-harness
+// call/function. Walks up the tree-sitter ancestor chain to the nearest
+// matching call/function-declaration node; depth-bounded to avoid
+// pathological trees.
+func inTestDSLScope(n *sitter.Node, src []byte, family string) bool {
+	switch family {
+	case "javascript":
+		return jsInTestDSLScope(n, src)
+	case "ruby":
+		return rubyInTestDSLScope(n, src)
+	case "go":
+		return goInTestDSLScope(n, src)
+	default:
+		return false
+	}
+}
+
+// jsInTestDSLScope walks up to the nearest enclosing call_expression whose
+// callee is a recognized test-harness function (test/it/describe/…).
+func jsInTestDSLScope(n *sitter.Node, src []byte) bool {
+	cur := n
+	for depth := 0; cur != nil && depth < testDSLWalkDepth; depth, cur = depth+1, cur.Parent() {
+		if cur.Type() != "call_expression" {
+			continue
+		}
+		fn := cur.ChildByFieldName("function")
+		if fn == nil {
+			continue
+		}
+		if testDSLCallers["javascript"][fn.Content(src)] {
+			return true
+		}
+	}
+	return false
+}
+
+// rubyInTestDSLScope walks up to the nearest enclosing `call` node whose
+// method name is a recognized RSpec/Minitest DSL verb (it/describe/before/…).
+func rubyInTestDSLScope(n *sitter.Node, src []byte) bool {
+	cur := n
+	for depth := 0; cur != nil && depth < testDSLWalkDepth; depth, cur = depth+1, cur.Parent() {
+		if cur.Type() != "call" {
+			continue
+		}
+		method := cur.ChildByFieldName("method")
+		if method == nil {
+			continue
+		}
+		if testDSLCallers["ruby"][method.Content(src)] {
+			return true
+		}
+	}
+	return false
+}
+
+// goInTestDSLScope reports true when the nearest enclosing function_declaration
+// name matches ^(Test|Benchmark|Example|Fuzz), or the site is an argument to a
+// t.Run(...) subtest call. This is stricter than a filename check: helpers in
+// _test.go files that are not test-DSL call sites are still indexed normally.
+func goInTestDSLScope(n *sitter.Node, src []byte) bool {
+	cur := n
+	for depth := 0; cur != nil && depth < testDSLWalkDepth; depth, cur = depth+1, cur.Parent() {
+		switch cur.Type() {
+		case "function_declaration":
+			if name := cur.ChildByFieldName("name"); name != nil && goTestFuncNameRe.MatchString(name.Content(src)) {
+				return true
+			}
+		case "call_expression":
+			fn := cur.ChildByFieldName("function")
+			if fn == nil || fn.Type() != "selector_expression" {
+				continue
+			}
+			if field := fn.ChildByFieldName("field"); field != nil && field.Content(src) == "Run" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // MatchToGraph maps match results to graph nodes and edges. The third return
 // lists call references that resolved to nothing in-file — candidates for the
 // unresolved-refs ledger (the JS import linker resolves some of them later;
@@ -334,6 +466,18 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		nodeType, _ := classifyPattern(r.PatternName)
 		if nodeType == graph.NodeTypeInterface || nodeType == graph.NodeTypeTypeAlias {
 			continue
+		}
+
+		// X.0: a comm-classified site (http_client/publisher/subscriber) whose
+		// enclosing construct is a test-DSL call/function is not a real
+		// communication endpoint — it's test/scenario code. Demote it to an
+		// ordinary calls node (still indexed, so blast radius still finds
+		// "which tests break") instead of minting a node the contract engine
+		// and coverage denominators would treat as a real producer/consumer.
+		demoteTestDSL := r.IsTestDSL && (nodeType == graph.NodeTypeHTTPClient ||
+			nodeType == graph.NodeTypePublisher || nodeType == graph.NodeTypeSubscriber)
+		if demoteTestDSL {
+			nodeType = graph.NodeTypeFunction
 		}
 		// Constant declarations exist only to feed URL propagation (the
 		// constants table above); emitting them as nodes floods the graph
@@ -407,6 +551,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// boundary classification) can reason about the match without
 		// re-deriving it.
 		meta["pattern"] = r.PatternName
+
+		if demoteTestDSL {
+			meta[graph.MetaIsTest] = "true"
+		}
 
 		// External-service call sites: record which cloud service (derived
 		// from the pattern-name prefix, e.g. s3_operation_v1 → s3).
@@ -588,7 +736,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	filtered := nodes[:0]
 	for i := range nodes {
 		n := nodes[i]
-		if n.Type == graph.NodeTypeHTTPClient {
+		// X.0: a test-DSL-demoted site (Meta is_test=true) may be produced by
+		// several patterns matching the same physical call (e.g. fetch_call +
+		// producer_alias_url_call on the same fetch(...)); dedupe it the same
+		// way as an undemoted http_client, or the demotion itself becomes a
+		// new source of duplicate nodes.
+		if n.Type == graph.NodeTypeHTTPClient || n.Meta[graph.MetaIsTest] == "true" {
 			key := fmt.Sprintf("%s:%d", n.File, n.Line)
 			if handlerLines[key] {
 				continue // drop: a handler pattern already owns this call site
@@ -630,6 +783,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	nameByFileAndName := make(map[string]string) // "file\x00name" -> nodeID
 	for i := range nodes {
 		n := &nodes[i]
+		// X.0: a test-DSL-demoted comm site (Type=function, is_test=true) is a
+		// leaf call site, not a real scope — it must not become a false
+		// enclosing function for whatever code follows it in the test file.
+		if n.Meta[graph.MetaIsTest] == "true" {
+			continue
+		}
 		switch n.Type {
 		case graph.NodeTypeFunction, graph.NodeTypeMethod:
 			end := 0
@@ -699,7 +858,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+		// X.0: a test-DSL-demoted comm site keeps Type=function (an "ordinary
+		// calls node") but is a leaf call site, so — unlike a real function
+		// declaration — it still needs a caller→it edge below.
+		if (n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod) && n.Meta[graph.MetaIsTest] != "true" {
 			continue
 		}
 		// Type declarations don't need caller→callee edges.
@@ -856,6 +1018,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	seenChannels := make(map[string]bool)
 	for i := range nodes {
 		n := &nodes[i]
+		if n.Meta[graph.MetaIsTest] == "true" {
+			continue // X.0: demoted test-DSL site — no channel node, no channel edge
+		}
 		exchange, hasEx := n.Meta["exchange"]
 		if !hasEx || exchange == "" {
 			continue
