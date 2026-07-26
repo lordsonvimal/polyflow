@@ -4,13 +4,33 @@ language: ruby
 version: "1"
 package: delayed_job
 patterns:
-  # user.delay.send_welcome_email — the .delay proxy enqueue.
+  # user.delay.send_welcome_email — the .delay proxy enqueue. dj_receiver is
+  # the raw receiver text (identifier, ivar, or "self"); X.2's matcher.go
+  # resolves it to a qualified <Type>#<method> join key (dj_target meta).
+  - name: dj_delay
+    query: |
+      (call
+        receiver: (call
+          receiver: (_) @dj_receiver
+          method: (identifier) @d
+          (#eq? @d "delay"))
+        method: (identifier) @job_method)
+    captures:
+      - name: dj_receiver
+        role: dj_receiver
+      - name: job_method
+        role: job_method
+
+  # delay.send_welcome_email — implicit-self .delay (no explicit receiver);
+  # matcher.go resolves this the same way as handle_asynchronously, via the
+  # enclosing class (dj_class), since there is no dj_receiver capture here.
   - name: dj_delay
     query: |
       (call
         receiver: (call
           method: (identifier) @d
-          (#eq? @d "delay"))
+          (#eq? @d "delay")
+          !receiver)
         method: (identifier) @job_method)
     captures:
       - name: job_method
