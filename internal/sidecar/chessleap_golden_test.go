@@ -62,9 +62,6 @@ func chessleapGraph(t *testing.T, dir string) (nodes []*graph.Node, edges []*gra
 	chessleap := chessleapPath(t)
 	cfg, err := workspace.Load(filepath.Join(chessleap, "workspace.yaml"))
 	require.NoError(t, err)
-	for i := range cfg.Services {
-		cfg.Services[i].Path = filepath.Join(chessleap, cfg.Services[i].Path)
-	}
 
 	dbDir := t.TempDir()
 	stats, err := indexer.Run(context.Background(), indexer.Options{

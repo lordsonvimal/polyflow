@@ -479,9 +479,6 @@ func TestChessleapF0StaticBaseline(t *testing.T) {
 	// Index chessleap (F.0 reconciler now runs inside indexer.Run).
 	cfg, err := workspace.Load(filepath.Join(chessleap, "workspace.yaml"))
 	require.NoError(t, err)
-	for i := range cfg.Services {
-		cfg.Services[i].Path = filepath.Join(chessleap, cfg.Services[i].Path)
-	}
 	dbDir := t.TempDir()
 	_, thisFile, _, _ := runtime.Caller(0)
 	patternsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "patterns")
@@ -569,9 +566,6 @@ func TestChessleapF0Determinism(t *testing.T) {
 	indexAndExport := func() []byte {
 		cfg, err := workspace.Load(filepath.Join(chessleap, "workspace.yaml"))
 		require.NoError(t, err)
-		for i := range cfg.Services {
-			cfg.Services[i].Path = filepath.Join(chessleap, cfg.Services[i].Path)
-		}
 		dbDir := t.TempDir()
 		_, err = indexer.Run(context.Background(), indexer.Options{
 			Config: cfg, DBDir: dbDir, PatternsDir: patternsDir, Full: true,
