@@ -1,0 +1,6 @@
+{
+  "name": "svc-node",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

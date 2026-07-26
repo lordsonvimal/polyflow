@@ -1,0 +1,16 @@
+name: "express-fetch-2svc"
+version: "1"
+services:
+  - name: svc-node
+    path: ./svc-node
+    language: javascript
+  - name: svc-web
+    path: ./svc-web
+    language: javascript
+links:
+  - from: svc-web
+    to: svc-node
+    base_url: "http://svc-node"
+index:
+  exclude:
+    - "**/node_modules/**"
