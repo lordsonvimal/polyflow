@@ -3,6 +3,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
@@ -102,6 +103,17 @@ const keyWalkerMaxBranches = 8
 
 // keyWalkerMaxDepth is the conditional-nesting depth ceiling.
 const keyWalkerMaxDepth = 2
+
+// hasConcreteTemplateContent reports whether a reconstructed template (holes
+// = "*") carries at least one concrete character once wildcards and path
+// separators are stripped. X.1b's over-match guard: a template with none
+// (e.g. "*", "*/*", "**") could spuriously match an unrelated dynamic key
+// through pure normalized-tier string equality, so such a reconstruction
+// must stay dynamic-ledgered rather than becoming a wildcard-only key.
+func hasConcreteTemplateContent(template string) bool {
+	stripped := strings.Trim(strings.ReplaceAll(template, "*", ""), "/")
+	return stripped != ""
+}
 
 // stripKeyLiteral removes surrounding quotes from a string literal value.
 func stripKeyLiteral(s string) string {

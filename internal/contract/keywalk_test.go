@@ -136,13 +136,36 @@ func TestJSWalker_TemplateLiteral_Static(t *testing.T) {
 	assert.Equal(t, "/admin", vals[0])
 }
 
-func TestJSWalker_TemplateLiteral_Dynamic(t *testing.T) {
-	// Template with interpolation → dynamic
+func TestJSWalker_TemplateLiteral_Reconstructed(t *testing.T) {
+	// X.1b: template with interpolation reconstructs to a wildcarded
+	// template instead of bailing dynamic — "${id}" becomes a "*" hole.
 	root, src := parseJS(t, "`/users/${id}`")
+	w := contract.KeyWalkerFor("javascript")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "/users/*", vals[0])
+}
+
+func TestJSWalker_TemplateLiteral_FullyWildcard_StaysDynamic(t *testing.T) {
+	// A template with no concrete content at all (e.g. just "${id}") must
+	// not reconstruct to a bare "*" — that could spuriously match any other
+	// dynamic key at the normalized tier. Stays dynamic-ledgered.
+	root, src := parseJS(t, "`${id}`")
 	w := contract.KeyWalkerFor("javascript")
 	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
 	assert.True(t, dyn)
 	assert.Nil(t, vals)
+}
+
+func TestJSWalker_Concat_Reconstructed(t *testing.T) {
+	// "room-" + id → "room-*"
+	root, src := parseJS(t, `"room-" + id`)
+	w := contract.KeyWalkerFor("javascript")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "room-*", vals[0])
 }
 
 func TestJSWalker_CallExpression_Dynamic(t *testing.T) {
@@ -236,6 +259,103 @@ func TestGoWalker_Identifier_Dynamic(t *testing.T) {
 	assert.Nil(t, vals)
 }
 
+func TestGoWalker_Sprintf_Reconstructed(t *testing.T) {
+	root, src := parseGo(t, `package p; var _ = fmt.Sprintf("%s/api/v1/builds/%s", cfg.AgentURL, buildID)`)
+	var callNode *sitter.Node
+	var find func(*sitter.Node)
+	find = func(n *sitter.Node) {
+		if n.Type() == "call_expression" {
+			if fn := n.ChildByFieldName("function"); fn != nil && fn.Type() == "selector_expression" {
+				callNode = n
+				return
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			find(n.Child(i))
+		}
+	}
+	find(root)
+	require.NotNil(t, callNode)
+
+	w := contract.KeyWalkerFor("go")
+	vals, dyn := w.WalkKey(callNode, src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "*/api/v1/builds/*", vals[0])
+}
+
+func TestGoWalker_StringConcat_Reconstructed(t *testing.T) {
+	root, src := parseGo(t, `package p; var _ = "/activity/play/" + attemptID + "/move"`)
+	// Take the outermost binary_expression only — the outer node wraps a
+	// nested left-associative chain, and descending further would find the
+	// inner (leftmost) sub-expression instead.
+	var binNode *sitter.Node
+	var find func(*sitter.Node)
+	find = func(n *sitter.Node) {
+		if binNode != nil {
+			return
+		}
+		if n.Type() == "binary_expression" {
+			binNode = n
+			return
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			find(n.Child(i))
+		}
+	}
+	find(root)
+	require.NotNil(t, binNode)
+
+	w := contract.KeyWalkerFor("go")
+	vals, dyn := w.WalkKey(binNode, src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "/activity/play/*/move", vals[0])
+}
+
+func TestGoWalker_PathJoin_Reconstructed(t *testing.T) {
+	root, src := parseGo(t, `package p; var _ = path.Join(base, "v1", id)`)
+	var callNode *sitter.Node
+	var find func(*sitter.Node)
+	find = func(n *sitter.Node) {
+		if n.Type() == "call_expression" {
+			callNode = n
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			find(n.Child(i))
+		}
+	}
+	find(root)
+	require.NotNil(t, callNode)
+
+	w := contract.KeyWalkerFor("go")
+	vals, dyn := w.WalkKey(callNode, src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "*/v1/*", vals[0])
+}
+
+func TestGoWalker_FullyWildcardConcat_StaysDynamic(t *testing.T) {
+	root, src := parseGo(t, `package p; var _ = a + b`)
+	var binNode *sitter.Node
+	var find func(*sitter.Node)
+	find = func(n *sitter.Node) {
+		if n.Type() == "binary_expression" {
+			binNode = n
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			find(n.Child(i))
+		}
+	}
+	find(root)
+	require.NotNil(t, binNode)
+
+	w := contract.KeyWalkerFor("go")
+	vals, dyn := w.WalkKey(binNode, src, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
+}
+
 // ── Ruby walker ──────────────────────────────────────────────────────────────
 
 func TestRubyWalker_Language(t *testing.T) {
@@ -254,6 +374,43 @@ func TestRubyWalker_StringLiteral(t *testing.T) {
 
 func TestRubyWalker_Identifier_Dynamic(t *testing.T) {
 	root, src := parseRuby(t, `topic_name`)
+	w := contract.KeyWalkerFor("ruby")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
+}
+
+func TestRubyWalker_Interpolation_Reconstructed(t *testing.T) {
+	// X.1b: "room-#{room.id}" reconstructs to "room-*" instead of leaking
+	// the #{...} marker into the raw key text (bug-class #6).
+	root, src := parseRuby(t, `"room-#{room.id}"`)
+	w := contract.KeyWalkerFor("ruby")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "room-*", vals[0])
+}
+
+func TestRubyWalker_Concat_Reconstructed(t *testing.T) {
+	root, src := parseRuby(t, `"room-" + id`)
+	w := contract.KeyWalkerFor("ruby")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "room-*", vals[0])
+}
+
+func TestRubyWalker_Shovel_Reconstructed(t *testing.T) {
+	root, src := parseRuby(t, `"room-" << id`)
+	w := contract.KeyWalkerFor("ruby")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "room-*", vals[0])
+}
+
+func TestRubyWalker_FullyInterpolated_StaysDynamic(t *testing.T) {
+	root, src := parseRuby(t, `"#{room.id}"`)
 	w := contract.KeyWalkerFor("ruby")
 	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
 	assert.True(t, dyn)

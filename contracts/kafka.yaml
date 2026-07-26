@@ -13,7 +13,10 @@ contracts:
       node: subscriber
       where: {pattern: kafka_subscribe}
       key: [topic]
-    normalizers: [quote_strip]
+    normalizers: [quote_strip, dynamic_host_strip]  # dynamic_host_strip is a
+                                     # no-op here (topic keys never carry a
+                                     # leading "*" host segment); added for
+                                     # chain consistency with http.yaml (X.1b).
     match: [exact, normalized]
     edge:
       type: kafka_publish

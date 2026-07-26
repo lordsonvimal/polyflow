@@ -32,6 +32,7 @@ func init() {
 	RegisterNormalizer("base_url_strip", normBaseURLStrip)
 	RegisterNormalizer("shared_anchor_guard", normSharedAnchorGuard)
 	RegisterNormalizer("url_to_path", normURLToPath)
+	RegisterNormalizer("dynamic_host_strip", normDynamicHostStrip)
 }
 
 var (
@@ -131,6 +132,20 @@ func normURLToPath(value string, _ NormalizeEnv) string {
 			return rest[j:]
 		}
 		return "/"
+	}
+	return value
+}
+
+// normDynamicHostStrip drops a single leading "*" segment (the dynamic
+// scheme/host/base produced by X.1b template reconstruction — e.g.
+// "*/api/v1/builds/*" from fmt.Sprintf("%s/api/v1/builds/%s", base, id))
+// so it aligns with the handler side's "/api/v1/builds/*". No-op when the
+// value has no leading wildcard segment — channel/topic keys (pusher, amqp,
+// kafka) never have one, so it is safe to add to those normalizer chains
+// too. Not reconciled with workspace.Link.BaseURL yet (X.5).
+func normDynamicHostStrip(value string, _ NormalizeEnv) string {
+	if strings.HasPrefix(value, "*/") {
+		return value[1:]
 	}
 	return value
 }

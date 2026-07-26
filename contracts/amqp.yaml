@@ -11,7 +11,10 @@ contracts:
     consumer:
       node: channel
       key: [exchange, routing_key]
-    normalizers: [quote_strip]
+    normalizers: [quote_strip, dynamic_host_strip]  # dynamic_host_strip is a
+                                     # no-op here (exchange/routing_key never
+                                     # carry a leading "*" host segment);
+                                     # added for chain consistency (X.1b).
     match: [exact, normalized]
     edge:
       type: publishes
