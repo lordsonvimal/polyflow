@@ -30,7 +30,7 @@ type RepoRef struct {
 // Case is one eval test case.
 type Case struct {
 	ID               string   `yaml:"id"`
-	Kind             string   `yaml:"kind"`              // node | file | diff | semantic
+	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic
 	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff)
 	Service          string   `yaml:"service,omitempty"` // pre-filter target resolution to this service (B.3)
 	NodeType         string   `yaml:"node_type,omitempty"` // pre-filter target resolution to this node type (B.3)
@@ -95,14 +95,14 @@ func ValidateManifest(m *Manifest) []ValidationError {
 		}
 		seen[c.ID] = true
 		switch c.Kind {
-		case "node", "file", "diff":
+		case "node", "file", "diff", "flow":
 			if len(c.ExpectedImpacted) == 0 {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "expected_impacted must not be empty"})
 			}
 			if c.Kind == "diff" && c.DiffFile == "" {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "diff cases require diff_file"})
 			}
-			if (c.Kind == "node" || c.Kind == "file") && c.Target == "" {
+			if (c.Kind == "node" || c.Kind == "file" || c.Kind == "flow") && c.Target == "" {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: c.Kind + " cases require target"})
 			}
 		case "semantic":
@@ -118,7 +118,7 @@ func ValidateManifest(m *Manifest) []ValidationError {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "semantic cases require expect_any_of"})
 			}
 		default:
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|semantic)", c.Kind)})
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic)", c.Kind)})
 		}
 		// Lint rule: every case must have at least one must_not_miss entry.
 		if len(c.MustNotMiss) == 0 {

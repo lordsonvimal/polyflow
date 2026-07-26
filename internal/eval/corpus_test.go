@@ -130,6 +130,33 @@ func TestValidateManifest_NodeCaseMissingTarget(t *testing.T) {
 	assert.Contains(t, errs[0].Error(), "target")
 }
 
+// ── kind=flow (X.4a) validation ────────────────────────────────────────────
+
+func TestValidateManifest_FlowCase_Valid(t *testing.T) {
+	m := validManifest()
+	m.Cases[0].Kind = "flow"
+	errs := eval.ValidateManifest(m)
+	assert.Empty(t, errs, "valid flow case should have no errors")
+}
+
+func TestValidateManifest_FlowCaseMissingTarget(t *testing.T) {
+	m := validManifest()
+	m.Cases[0].Kind = "flow"
+	m.Cases[0].Target = ""
+	errs := eval.ValidateManifest(m)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "flow cases require target")
+}
+
+func TestValidateManifest_FlowCaseMissingExpectedImpacted(t *testing.T) {
+	m := validManifest()
+	m.Cases[0].Kind = "flow"
+	m.Cases[0].ExpectedImpacted = nil
+	errs := eval.ValidateManifest(m)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "expected_impacted")
+}
+
 // A manifest using path: instead of url: is valid (local repo).
 func TestValidateManifest_LocalPath(t *testing.T) {
 	m := validManifest()

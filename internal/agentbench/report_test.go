@@ -152,6 +152,52 @@ func TestFormatMarkdown_Determinism(t *testing.T) {
 	}
 }
 
+// ── ComputeFlowGate (X.4a) ─────────────────────────────────────────────────
+
+func TestComputeFlowGate_Passing(t *testing.T) {
+	tasks := []agentbench.TaskResult{
+		// task 1: with=2000 ctx tokens, without=10000 -> 80% reduction, recall 1.0
+		{TaskID: "r/flow-1", Kind: "flow", Arm: agentbench.ArmWithSemantics, Trial: 1, ContextTokens: 2000, Recall: 1.0, HardFail: false},
+		{TaskID: "r/flow-1", Kind: "flow", Arm: agentbench.ArmNoPolyflow, Trial: 1, ContextTokens: 10000},
+		// task 2: with=1000, without=10000 -> 90% reduction, recall 1.0
+		{TaskID: "r/flow-2", Kind: "flow", Arm: agentbench.ArmWithSemantics, Trial: 1, ContextTokens: 1000, Recall: 1.0, HardFail: false},
+		{TaskID: "r/flow-2", Kind: "flow", Arm: agentbench.ArmNoPolyflow, Trial: 1, ContextTokens: 10000},
+		// a non-flow task must be excluded from the gate entirely
+		{TaskID: "r/node-1", Kind: "node", Arm: agentbench.ArmWithSemantics, Trial: 1, ContextTokens: 100, Recall: 0.0, HardFail: true},
+	}
+	g := agentbench.ComputeFlowGate(tasks)
+	if g.TaskCount != 2 {
+		t.Fatalf("TaskCount = %d, want 2", g.TaskCount)
+	}
+	if g.MedianTokenReductionPct < 84.9 || g.MedianTokenReductionPct > 85.1 {
+		t.Errorf("MedianTokenReductionPct = %.2f, want ~85 (median of 80,90)", g.MedianTokenReductionPct)
+	}
+	if g.CorrectnessWithPolyflow != 1.0 {
+		t.Errorf("CorrectnessWithPolyflow = %.3f, want 1.0", g.CorrectnessWithPolyflow)
+	}
+	if !g.Pass {
+		t.Error("expected Pass=true (reduction >= 80, correctness >= 0.95)")
+	}
+}
+
+func TestComputeFlowGate_Failing(t *testing.T) {
+	tasks := []agentbench.TaskResult{
+		// only 20% reduction and a hard fail -> should not pass
+		{TaskID: "r/flow-1", Kind: "flow", Arm: agentbench.ArmWithSemantics, Trial: 1, ContextTokens: 8000, Recall: 0.5, HardFail: true},
+		{TaskID: "r/flow-1", Kind: "flow", Arm: agentbench.ArmNoPolyflow, Trial: 1, ContextTokens: 10000},
+	}
+	g := agentbench.ComputeFlowGate(tasks)
+	if g.TaskCount != 1 {
+		t.Fatalf("TaskCount = %d, want 1", g.TaskCount)
+	}
+	if g.CorrectnessWithPolyflow != 0.0 {
+		t.Errorf("CorrectnessWithPolyflow = %.3f, want 0.0 (hard fail excludes credit)", g.CorrectnessWithPolyflow)
+	}
+	if g.Pass {
+		t.Error("expected Pass=false")
+	}
+}
+
 // TestScoreTranscript_ReusesEvalScorer ensures ScoreTranscript delegates to eval.Score
 // (same quadrant behaviour: honest vs silent misses).
 func TestScoreTranscript_ReusesEvalScorer(t *testing.T) {
