@@ -198,6 +198,90 @@ func TestJobsRule_WrongPattern_NoEdge(t *testing.T) {
 	assert.Empty(t, res.Edges, "pusher_trigger publisher must not produce a job edge")
 }
 
+// X.2: delayed_job .delay method-wrapping — dj_target join keys a `function`
+// consumer by qualified_name (<Type>#<method>), not a job class.
+
+// Positive: user.delay.deliver_email links to User#deliver_email.
+func TestJobsRule_DelayedJobDelay_LinksToMethod(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "app:pub", Type: graph.NodeTypePublisher, Service: "app",
+			Meta: map[string]string{"pattern": "dj_delay", "dj_target": "User#deliver_email"}},
+		{ID: "app:sub", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{"qualified_name": "User#deliver_email"}},
+	}
+	res := runKind(t, contract.KindJob, nodes)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, "job:app:pub->app:sub", res.Edges[0].ID)
+	assert.Equal(t, graph.EdgeTypeJobEnqueue, res.Edges[0].Type)
+}
+
+// Positive: handle_asynchronously :rebuild on Group links to Group#rebuild
+// as job_perform (declaration, not an enqueue site).
+func TestJobsRule_HandleAsynchronously_LinksToMethod(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "app:pub", Type: graph.NodeTypePublisher, Service: "app",
+			Meta: map[string]string{"pattern": "dj_handle_asynchronously", "dj_target": "Group#rebuild"}},
+		{ID: "app:sub", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{"qualified_name": "Group#rebuild"}},
+	}
+	res := runKind(t, contract.KindJob, nodes)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, graph.EdgeTypeJobPerform, res.Edges[0].Type)
+}
+
+// Negative: a .delay call whose receiver type could not be honestly resolved
+// (matcher.go leaves dj_target unset) must not guess a join key — it ledgers
+// instead of matching whichever function happens to also lack qualified_name.
+func TestJobsRule_DelayedJob_UnresolvedReceiver_Ledgers(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "app:pub", Type: graph.NodeTypePublisher, Service: "app",
+			Meta: map[string]string{"pattern": "dj_delay"}}, // no dj_target: unwrapped_job
+		{ID: "app:unrelated-fn", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{}}, // e.g. a JS/Go function with no qualified_name either
+	}
+	res := runKind(t, contract.KindJob, nodes)
+	assert.Empty(t, res.Edges, "an unresolved receiver must never guess-join an unrelated empty-keyed function")
+	require.Len(t, res.Unresolved, 1, "unresolved .delay receiver must reach the ledger")
+	assert.Equal(t, "job", res.Unresolved[0].Kind)
+}
+
+// Fan-out (bug-class #1): Ruby classes can be reopened across files, so two
+// distinct method nodes can share one qualified_name. Both must link.
+func TestJobsRule_DelayedJob_ReopenedClass_FanOut(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "app:pub", Type: graph.NodeTypePublisher, Service: "app",
+			Meta: map[string]string{"pattern": "dj_delay", "dj_target": "User#deliver_email"}},
+		{ID: "app:user.rb:sub1", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{"qualified_name": "User#deliver_email"}},
+		{ID: "app:user_ext.rb:sub2", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{"qualified_name": "User#deliver_email"}},
+	}
+	res := runKind(t, contract.KindJob, nodes)
+	require.Len(t, res.Edges, 2, "both reopened-class method definitions must be linked, not just the first")
+}
+
+// Determinism (bug-class #2): two runs over the same input produce the same
+// edge set and order.
+func TestJobsRule_DelayedJob_Deterministic(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "app:pub", Type: graph.NodeTypePublisher, Service: "app",
+			Meta: map[string]string{"pattern": "dj_delay", "dj_target": "User#deliver_email"}},
+		{ID: "app:user.rb:sub1", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{"qualified_name": "User#deliver_email"}},
+		{ID: "app:user_ext.rb:sub2", Type: graph.NodeTypeFunction, Service: "app",
+			Meta: map[string]string{"qualified_name": "User#deliver_email"}},
+	}
+	rules := rulesOfKind(t, contract.KindJob)
+	e := &contract.Engine{}
+	first := e.Link(nodes, rules, nil)
+	require.Len(t, first.Edges, 2)
+	for i := 0; i < 20; i++ {
+		again := e.Link(nodes, rules, nil)
+		require.Equal(t, edgeIDs(first.Edges), edgeIDs(again.Edges),
+			"edge set and order must be stable across runs")
+	}
+}
+
 // ── Pusher ────────────────────────────────────────────────────────────────────
 
 // Positive: server pusher_trigger links to pusher_subscribe_client by channel.

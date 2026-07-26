@@ -218,6 +218,9 @@ func matchProducer(
 ) bool {
 	for _, override := range candidateMethodOverrides(prod, rule.Producer) {
 		rawFields := buildRawFields(prod, rule.Producer, override)
+		if keyIsEmpty(rawFields) {
+			continue
+		}
 		rawKey := strings.Join(rawFields, " ")
 
 		normFields := applyNormsToFields(rawFields, norms, env)
@@ -421,6 +424,9 @@ func buildConsumerIndexes(
 	}
 	for _, c := range consumers {
 		rawFields := buildRawFields(c, spec, nil)
+		if keyIsEmpty(rawFields) {
+			continue
+		}
 		rawKey := strings.Join(rawFields, " ")
 		idx.exact[rawKey] = append(idx.exact[rawKey], c)
 		normFields := applyNormsToFields(rawFields, norms, env)
@@ -431,6 +437,30 @@ func buildConsumerIndexes(
 		idx.norm[normKey] = append(idx.norm[normKey], c)
 	}
 	return idx
+}
+
+// keyIsEmpty reports whether the rule declares at least one key field and
+// every one of them is the empty string on this node. Rules that key a
+// broad, ungated node pool (e.g. X.2's `node: function, where: {}` for
+// delayed_job's qualified-method join, where most functions never set
+// qualified_name) would otherwise hash-join every unrelated node sharing an
+// absent field into one giant "" bucket — a silent false-positive fan-out
+// bug-class #1 exists to prevent. Nodes with an all-empty declared key are
+// excluded from both producing and consuming a match; producers fall
+// through to the rule's normal unmatched policy (ledger), the honest
+// outcome for "the join key could not be determined" rather than "do not
+// guess". `key: []` (zero declared fields) is a deliberate broadcast-to-all
+// wildcard (see hub.yaml) and is never treated as empty.
+func keyIsEmpty(fields []string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		if f != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // buildRawFields extracts the key field values from a node's meta,
