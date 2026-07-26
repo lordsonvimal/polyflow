@@ -1,6 +1,7 @@
 package patterns_test
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -660,4 +661,209 @@ func TestStripStringLiteral_PythonForms(t *testing.T) {
 		got := patterns.StripStringLiteral(c.input)
 		assert.Equal(t, c.want, got, "StripStringLiteral(%q)", c.input)
 	}
+}
+
+// --- X.0: test-DSL comm-node suppression ------------------------------------
+//
+// Real parser→matcher→MatchToGraph path (bug-class #6): each case reads an
+// actual fixture file, matches it with the full pattern set for the
+// language, and asserts on the resulting graph nodes — not hand-built
+// MatchResults.
+
+func TestX0_TestDSL_JS_PositiveSuppressesHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/javascript")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/test_dsl_js.js")
+	results, err := m.Match("javascript", "testdata/test_dsl_js.js", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients, demoted int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+		}
+		if n.Type == graph.NodeTypeFunction && n.Meta[graph.MetaIsTest] == "true" {
+			demoted++
+		}
+	}
+	assert.Equal(t, 0, httpClients, "test('...', async () => { fetch(...) }) must not mint an http_client node")
+	// 2 demoted sites: the fetch(...) call, and the outer test("creates
+	// profile", ...) call itself — producer_alias_url_call's generic
+	// identifier(stringArg) shape also matches the test() wrapper, so without
+	// demotion it would mint a phantom http_client node from the test label.
+	assert.Equal(t, 2, demoted, "call sites are still indexed, demoted to function nodes with is_test=true")
+}
+
+func TestX0_TestDSL_JS_NegativeKeepsHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/javascript")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/prod_js.js")
+	results, err := m.Match("javascript", "testdata/prod_js.js", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+			assert.NotEqual(t, "true", n.Meta[graph.MetaIsTest])
+		}
+	}
+	assert.Equal(t, 1, httpClients, "the same fetch(...) call outside a test-DSL function is a real http_client node")
+}
+
+func TestX0_TestDSL_Ruby_PositiveSuppressesHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/ruby")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/test_dsl_rb.rb")
+	results, err := m.Match("ruby", "testdata/test_dsl_rb.rb", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients, demoted int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+		}
+		if n.Type == graph.NodeTypeFunction && n.Meta[graph.MetaIsTest] == "true" {
+			demoted++
+		}
+	}
+	assert.Equal(t, 0, httpClients, "HTTParty.post inside RSpec it/do must not mint an http_client node")
+	assert.Equal(t, 1, demoted)
+}
+
+func TestX0_TestDSL_Ruby_NegativeKeepsHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/ruby")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/prod_rb.rb")
+	results, err := m.Match("ruby", "testdata/prod_rb.rb", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+		}
+	}
+	assert.Equal(t, 1, httpClients, "the same HTTParty.post outside RSpec is a real http_client node")
+}
+
+func TestX0_TestDSL_Go_PositiveSuppressesHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/go")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/test_dsl_go.go")
+	results, err := m.Match("go", "testdata/test_dsl_go.go", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients, demoted int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+		}
+		if n.Type == graph.NodeTypeFunction && n.Meta[graph.MetaIsTest] == "true" {
+			demoted++
+		}
+	}
+	assert.Equal(t, 0, httpClients, "http.Get inside func TestFetch and inside t.Run(...) must not mint http_client nodes")
+	assert.Equal(t, 2, demoted, "one demoted site in TestFetch, one inside the t.Run subtest closure")
+}
+
+func TestX0_TestDSL_Go_NegativeKeepsHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/go")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/prod_go.go")
+	results, err := m.Match("go", "testdata/prod_go.go", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+		}
+	}
+	assert.Equal(t, 1, httpClients, "http.Get in a non-Test function is a real http_client node")
+}
+
+// TestX0_Determinism_TwoRunByteIdentical guards bug-class #2: the ancestor
+// walk must not depend on map iteration order or any other non-deterministic
+// input. Running the same fixture through Match+MatchToGraph twice must
+// produce byte-identical JSON-serialized node sets.
+func TestX0_Determinism_TwoRunByteIdentical(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/go")
+	require.NoError(t, err)
+
+	src := mustReadFile(t, "testdata/test_dsl_go.go")
+
+	run := func() []byte {
+		m := patterns.NewTreeSitterMatcher(reg)
+		results, err := m.Match("go", "testdata/test_dsl_go.go", src)
+		require.NoError(t, err)
+		nodes, edges, _ := patterns.MatchToGraph("svc", results)
+		out, err := json.Marshal(struct {
+			Nodes []graph.Node
+			Edges []graph.Edge
+		}{nodes, edges})
+		require.NoError(t, err)
+		return out
+	}
+
+	first := run()
+	second := run()
+	assert.Equal(t, string(first), string(second), "two runs over the same input must be byte-identical")
+}
+
+func TestX0_MatchToGraph_DemotesOnlyCommTypes(t *testing.T) {
+	// Hand-built regression: a test-DSL http_client site is demoted to
+	// function+is_test, keeps its caller edge, and is excluded from the
+	// enclosing-function index (must not become a false scope for code that
+	// follows it in the same test function).
+	results := []patterns.MatchResult{
+		{PatternName: "func_decl", File: "f_test.go", Line: 1, Captures: map[string]string{"name": "TestFoo"}, EndLine: 10},
+		{PatternName: "http_get", File: "f_test.go", Line: 2, Captures: map[string]string{"url": "http://x/y"}, IsTestDSL: true},
+		{PatternName: "func_decl", File: "f_test.go", Line: 5, Captures: map[string]string{"name": "helper"}},
+	}
+	nodes, edges, _ := patterns.MatchToGraph("svc", results)
+
+	require.Len(t, nodes, 3)
+	var demotedID string
+	for _, n := range nodes {
+		if n.Meta[graph.MetaIsTest] == "true" {
+			assert.Equal(t, graph.NodeTypeFunction, n.Type)
+			demotedID = n.ID
+		}
+	}
+	require.NotEmpty(t, demotedID, "expected exactly one demoted node")
+
+	var callerEdge *graph.Edge
+	for i := range edges {
+		if edges[i].To == demotedID {
+			callerEdge = &edges[i]
+		}
+	}
+	require.NotNil(t, callerEdge, "the demoted node must still receive a caller edge (blast radius preserved)")
+	assert.Equal(t, "svc:f_test.go:function:TestFoo:1", callerEdge.From)
+	assert.Equal(t, graph.EdgeTypeCalls, callerEdge.Type)
 }
