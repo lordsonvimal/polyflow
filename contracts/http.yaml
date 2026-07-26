@@ -18,11 +18,17 @@ contracts:
       node: http_handler
       key: [method, path]
     normalizers:                     # applied in order to each key field
-      [case_fold, url_to_path, base_url_strip, query_strip, param_wildcard, trim_slash]
+      [case_fold, url_to_path, dynamic_host_strip, base_url_strip, query_strip, param_wildcard, trim_slash]
                                      # case_fold first: chi emits "Post", templ emits
                                      # "POST" — normalizing to lowercase before key
                                      # comparison gives method-case-insensitive parity
                                      # with Linker.Link's strings.ToUpper() call.
+                                     # dynamic_host_strip (X.1b): drops the leading "*"
+                                     # host/base segment a template-reconstructed URL
+                                     # carries (fmt.Sprintf("%s/api/v1/x", base, ...)
+                                     # → "*/api/v1/x") so it aligns with the handler's
+                                     # bare "/api/v1/x" — placed after url_to_path,
+                                     # before base_url_strip per the worked example.
     match: [exact, normalized, wildcard_anchored]  # tiers in order; first hit wins
     edge:
       type: http_call
@@ -42,7 +48,7 @@ contracts:
     consumer:
       node: http_handler
       key: [method, path]
-    normalizers: [case_fold, url_to_path, query_strip, param_wildcard, trim_slash]
+    normalizers: [case_fold, url_to_path, dynamic_host_strip, query_strip, param_wildcard, trim_slash]
     match: [exact, normalized, wildcard_anchored]
     edge:
       type: navigates_to
