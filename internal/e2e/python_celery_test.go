@@ -50,7 +50,7 @@ func indexPythonCelery(t *testing.T) *graph.SQLiteStore {
 	var allEdges []graph.Edge
 
 	for _, svc := range cfg.Services {
-		svcPath := filepath.Join(pythonCeleryFixtureWS, svc.Path)
+		svcPath := svc.Path
 
 		svcDeps, err := deps.Resolve(svcPath)
 		require.NoError(t, err)

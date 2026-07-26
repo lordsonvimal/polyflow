@@ -53,7 +53,7 @@ func indexPythonGo(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Works
 	var allEdges []graph.Edge
 
 	for _, svc := range cfg.Services {
-		svcPath := filepath.Join(pythonGoFixtureWS, svc.Path)
+		svcPath := svc.Path
 
 		// Resolve deps so version-gated patterns activate correctly.
 		svcDeps, err := deps.Resolve(svcPath)

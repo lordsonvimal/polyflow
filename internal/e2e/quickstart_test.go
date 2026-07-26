@@ -55,7 +55,7 @@ func indexQuickstart(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Wor
 
 	// step 2: polyflow index — walk and parse each service.
 	for _, svc := range cfg.Services {
-		svcPath := filepath.Join(quickstartFixture, svc.Path)
+		svcPath := svc.Path
 		var files []string
 		err := filepath.WalkDir(svcPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
