@@ -46,3 +46,6 @@ jobs:
             --corpus eval/corpus \
             --output /tmp/current-eval.json \
             --gate eval/baseline.json
+
+      - name: Resolution-yield gate (X.3)
+        run: make yield-gate
