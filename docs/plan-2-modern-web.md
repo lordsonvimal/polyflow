@@ -221,7 +221,30 @@ disappear from B.0's `unparsed_files` (assert the count drops).
 corpus repo from M.0 (if `.vue`-based) re-runs with template-event and
 nav-link cases added.
 
-### Phase M.2 — Svelte parser `pending`
+### Phase M.2 — Svelte parser `done`
+
+> **Outcome (2026-07-26).** `internal/parser/svelte.go` registered for `.svelte`.
+> Hand-rolled SFC splitter (`splitSvelteSFC`) recognises top-level `<script>`,
+> `<script context="module">`, and `<style>` blocks at column 0 only.
+> `buildSvelteVirtualScript` blanks non-script blocks and runs JS/TS patterns
+> (lang="ts" detected). `buildSvelteBlankedScript` blanks script/style blocks
+> and runs HTML patterns on the markup range. `extractSvelteMarkupAttrs` does
+> targeted regex scan for `on:event|modifier={handler}` → `dom_target` nodes
+> with `call_ref` unresolved entries for handler names; `href={expr}` passes
+> the expression to `KeyWalkerFor("javascript")` via a mini JS tree-sitter parse
+> → single static string emits nav_link `http_client` node, ternary with literal
+> branches emits `key_candidates` meta (G.6 convention), unresolvable identifier
+> emits `dynamic_url` unresolved ref. `normalizeSvelteEvent` strips Svelte `|modifier`
+> syntax (different from Vue `.modifier`). `keywalk_svelte.go` no-op walker
+> added to satisfy `TestWalkerCoverage_AllLanguagesHaveWalker` gate.
+> All 14 integration tests pass (fan-out, determinism, offsets, TS-lang,
+> event-modifier stripping, ternary-href candidates, dynamic-href-ledger,
+> markup-only negative, no-event-bindings negative). `make test` green.
+> No SchemaVersion bump (existing node/edge types reused).
+> Tier E corpus deviation: no OSS SvelteKit repo added (local-env limitation,
+> same as M.0 and M.1); SvelteKit corpus impact test deferred.
+> SFC-splitter approach confirmed; svelte grammar in pinned module not used
+> (no deviation from pinned architecture).
 
 **Problem.** `.svelte`: no parser. (A `svelte` tree-sitter grammar exists in
 the pinned module, but the SFC-splitter approach is pinned here for
