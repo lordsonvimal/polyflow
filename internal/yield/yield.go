@@ -258,6 +258,54 @@ func Compute(ctx context.Context, s *graph.SQLiteStore) (Report, error) {
 	return report, nil
 }
 
+// IsFlowEdge reports whether an edge type participates in the resolution-flow
+// population this package measures (the complement of nonResolutionEdgeTypes).
+// Shared with internal/mcpserver's `flows` traversal (X.4) so a flow answer
+// and the yield scorecard agree on what counts as a flow hop rather than
+// re-deriving the classification.
+func IsFlowEdge(t graph.EdgeType) bool {
+	return !nonResolutionEdgeTypes[t]
+}
+
+// CoverageBlock is a compact, per-answer projection of the resolution-yield
+// scorecard scoped to one traversed subgraph (a flows/entrypoints answer)
+// rather than the whole store: counts of verified/candidate/observed_only_gap
+// hops plus the unresolved endpoints (with reasons) reached by the traversal.
+// This is the token-saving lever — it tells the agent exactly which residue
+// warrants a grep so it stops defensively re-verifying the rest.
+type CoverageBlock struct {
+	Verified        int                   `json:"verified"`
+	Candidate       int                   `json:"candidate"`
+	ObservedOnlyGap int                   `json:"observed_only_gap"`
+	Unresolved      []graph.UnresolvedRef `json:"unresolved"`
+	UnresolvedNote  string                `json:"unresolved_note,omitempty"`
+}
+
+// ComputeCoverage tallies verification states across a set of traversed edges
+// and pairs the tally with the unresolved-ledger entries the caller has
+// already scoped to the touched files (graph.UnresolvedInFiles). It reuses
+// the same verified/observed_only_gap/else-candidate classification Compute
+// uses per edge, without requiring a whole-graph BuildIndex — the caller
+// supplies just the edges its traversal actually walked.
+func ComputeCoverage(edges []graph.Edge, unresolvedInScope []graph.UnresolvedRef) CoverageBlock {
+	cb := CoverageBlock{Unresolved: unresolvedInScope}
+	if cb.Unresolved == nil {
+		cb.Unresolved = []graph.UnresolvedRef{}
+	}
+	for _, e := range edges {
+		switch e.VerificationState {
+		case graph.StateVerified:
+			cb.Verified++
+		case graph.StateObservedOnlyGap:
+			cb.ObservedOnlyGap++
+		default:
+			cb.Candidate++
+		}
+	}
+	cb.UnresolvedNote = graph.UnresolvedNote(len(cb.Unresolved))
+	return cb
+}
+
 func isUnresolvedNode(n *graph.Node) bool {
 	return n.Type == graph.NodeTypeService && (n.ID == "unresolved" || strings.HasPrefix(n.ID, "unresolved:"))
 }
