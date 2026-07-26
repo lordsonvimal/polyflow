@@ -72,15 +72,21 @@ func TrimToFit(count, maxTokens int, estimate func(n int) int) int {
 	return best
 }
 
-// Snippet returns up to n source lines of file (workspace-relative, resolved
-// against root) starting at 1-based line start. Any failure — missing file,
-// line past EOF, non-positive inputs — returns "": snippets are best-effort
-// sugar, never an error path.
+// Snippet returns up to n source lines of file starting at 1-based line
+// start. file may be workspace-relative (resolved against root) or already
+// absolute (Z.0: node.File is absolute for out-of-tree/multi-repo services,
+// where no single root can make every service's files relative). Any
+// failure — missing file, line past EOF, non-positive inputs — returns "":
+// snippets are best-effort sugar, never an error path.
 func Snippet(root, file string, start, n int) string {
 	if n <= 0 || start <= 0 || file == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(root, file))
+	p := file
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(root, file)
+	}
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return ""
 	}

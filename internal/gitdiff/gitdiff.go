@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -34,8 +36,7 @@ type FileChange struct {
 
 // Changes runs git in dir and returns the changed spans of the working tree
 // against HEAD (everything uncommitted, staged or not), or of the index only
-// when staged is set (git diff --cached). Paths are relative to dir, matching
-// node file paths when dir is the workspace root.
+// when staged is set (git diff --cached). Paths are relative to dir.
 func Changes(dir string, staged bool) ([]FileChange, error) {
 	args := []string{"diff", "-U0", "--no-color", "--no-ext-diff", "--relative"}
 	if staged {
@@ -51,6 +52,90 @@ func Changes(dir string, staged bool) ([]FileChange, error) {
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return Parse(&out), nil
+}
+
+// Root returns the absolute path of the git working-tree root containing
+// dir (git -C dir rev-parse --show-toplevel). Returns an error if dir is
+// not inside a git repository.
+func Root(dir string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git -C %s rev-parse --show-toplevel: %w: %s", dir, err, strings.TrimSpace(errb.String()))
+	}
+	return filepath.Clean(strings.TrimSpace(out.String())), nil
+}
+
+// ServiceDir names a workspace service and its resolved (Z.0-absolute)
+// directory. A minimal, workspace-package-independent pair so gitdiff does
+// not import internal/workspace.
+type ServiceDir struct {
+	Name string
+	Path string
+}
+
+// ServiceRoot is one service's resolved git repository root, or the reason
+// none was found: a service directory outside any git working tree is
+// surfaced here rather than silently dropped from the diff (docs/phases.md
+// rule 12 — exhaustive intake).
+type ServiceRoot struct {
+	Service   string
+	Root      string
+	NoGitRepo bool
+}
+
+// ResolveRoots discovers the git root for each service, preserving input
+// order. Services whose path is not inside a git working tree get
+// NoGitRepo: true instead of an error — the caller decides how to surface
+// that (impact.DiffResult.AppendNoGitRepo).
+func ResolveRoots(services []ServiceDir) []ServiceRoot {
+	cache := map[string]ServiceRoot{} // service Path -> resolved lookup
+	out := make([]ServiceRoot, 0, len(services))
+	for _, svc := range services {
+		cached, ok := cache[svc.Path]
+		if !ok {
+			root, err := Root(svc.Path)
+			cached = ServiceRoot{Root: root, NoGitRepo: err != nil}
+			cache[svc.Path] = cached
+		}
+		out = append(out, ServiceRoot{Service: svc.Name, Root: cached.Root, NoGitRepo: cached.NoGitRepo})
+	}
+	return out
+}
+
+// MultiChanges unions Changes() across the distinct git roots in roots
+// (NoGitRepo entries skipped — the caller surfaces those separately),
+// returning absolute FileChange.Path values (root-joined) so they compare
+// directly against graph.Node.File (Z.0: node file paths are absolute,
+// including for out-of-tree services). Distinct roots are diffed once each,
+// in sorted order, and the unioned result stays in that order — bug-class
+// rule 1 (services sharing a monorepo root share one diff run) and rule 2
+// (deterministic output).
+func MultiChanges(roots []ServiceRoot, staged bool) ([]FileChange, error) {
+	seen := map[string]bool{}
+	var distinct []string
+	for _, r := range roots {
+		if r.NoGitRepo || seen[r.Root] {
+			continue
+		}
+		seen[r.Root] = true
+		distinct = append(distinct, r.Root)
+	}
+	sort.Strings(distinct)
+
+	var all []FileChange
+	for _, root := range distinct {
+		changes, err := Changes(root, staged)
+		if err != nil {
+			return nil, fmt.Errorf("diff %s: %w", root, err)
+		}
+		for _, ch := range changes {
+			ch.Path = filepath.Join(root, ch.Path)
+			all = append(all, ch)
+		}
+	}
+	return all, nil
 }
 
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)

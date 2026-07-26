@@ -198,6 +198,27 @@ func nodesInSpan(nodes []*graph.Node, s gitdiff.Span) []*graph.Node {
 	return nil
 }
 
+// AppendNoGitRepo records services whose path is not inside a git
+// repository (gitdiff.ServiceRoot.NoGitRepo) as an unmapped_hunks entry
+// instead of silently omitting their diff — rule 12: exhaustive intake. The
+// rest of the diff still runs against the services that do resolve. Sorted
+// by service name for deterministic output (rule 2).
+func (r *DiffResult) AppendNoGitRepo(roots []gitdiff.ServiceRoot) {
+	var missing []string
+	for _, sr := range roots {
+		if sr.NoGitRepo {
+			missing = append(missing, sr.Service)
+		}
+	}
+	sort.Strings(missing)
+	for _, svc := range missing {
+		r.Unmapped = append(r.Unmapped, UnmappedHunk{
+			File:   svc,
+			Reason: "no_git_repo: service path is not inside a git repository",
+		})
+	}
+}
+
 // AttachUnresolved scopes the workspace's unresolved-reference ledger to the
 // files touched by this query: changed files (mapped or not) and every caller
 // file in the blast radius.

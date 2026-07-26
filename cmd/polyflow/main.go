@@ -1538,7 +1538,12 @@ func runImpactDiff() error {
 	}
 	fmt.Fprintf(os.Stderr, "Reindexed %d files (%d parsed, %d unchanged)\n", stats.TotalFiles, stats.ParsedFiles, stats.SkippedFiles)
 
-	changes, err := gitdiff.Changes(".", impactStaged)
+	svcDirs := make([]gitdiff.ServiceDir, len(cfg.Services))
+	for i, svc := range cfg.Services {
+		svcDirs[i] = gitdiff.ServiceDir{Name: svc.Name, Path: svc.Path}
+	}
+	roots := gitdiff.ResolveRoots(svcDirs)
+	changes, err := gitdiff.MultiChanges(roots, impactStaged)
 	if err != nil {
 		return err
 	}
@@ -1555,6 +1560,7 @@ func runImpactDiff() error {
 	}
 
 	out := impact.BuildDiff(idx, changes, impactDepth, impactService, impactVerboseSources, cfg.Evidence.StaleAfterDuration())
+	out.AppendNoGitRepo(roots)
 	if impactStaged {
 		out.Mode = "staged"
 	}

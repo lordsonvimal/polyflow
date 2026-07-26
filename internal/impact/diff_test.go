@@ -176,6 +176,28 @@ func TestDiffResult_AttachUnresolvedScopedToChangedAndCallerFiles(t *testing.T) 
 	assert.Contains(t, out.UnresolvedNote, "verify these 2 unresolved references manually")
 }
 
+func TestDiffResult_AppendNoGitRepoSurfacesEachMissingService(t *testing.T) {
+	idx := diffFixtureIndex()
+	out := impact.BuildDiff(idx, nil, 10, "", false, 0)
+	out.AppendNoGitRepo([]gitdiff.ServiceRoot{
+		{Service: "backend", NoGitRepo: false, Root: "/repo"},
+		{Service: "legacy-vendor-drop", NoGitRepo: true},
+		{Service: "another-no-repo", NoGitRepo: true},
+	})
+
+	require.Len(t, out.Unmapped, 2)
+	assert.Equal(t, "another-no-repo", out.Unmapped[0].File)
+	assert.Equal(t, "legacy-vendor-drop", out.Unmapped[1].File)
+	assert.Contains(t, out.Unmapped[0].Reason, "no_git_repo")
+}
+
+func TestDiffResult_AppendNoGitRepoNoOpWhenAllResolved(t *testing.T) {
+	idx := diffFixtureIndex()
+	out := impact.BuildDiff(idx, nil, 10, "", false, 0)
+	out.AppendNoGitRepo([]gitdiff.ServiceRoot{{Service: "backend", Root: "/repo"}})
+	assert.Empty(t, out.Unmapped)
+}
+
 func TestDiffResult_ApplyBudgetRollsUpAndKeepsBlindSpots(t *testing.T) {
 	idx := diffFixtureIndex()
 	changes := []gitdiff.FileChange{
