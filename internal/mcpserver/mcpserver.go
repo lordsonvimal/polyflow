@@ -146,6 +146,39 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			semanticsParagraph,
 	}, s.trace)
 
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "flows",
+		Description: "Resolve an end-to-end flow from a starting point (node id, 'GET /path' route, " +
+			"file, or a natural-language feature description) across service boundaries: HTTP, jobs, " +
+			"pub/sub, gRPC, renders, and calls. Prefer this over trace/context/impact when the question " +
+			"is 'how does X flow across services' rather than 'what is adjacent to X' — it resolves the " +
+			"whole path in one call instead of find→trace→cross-service→repeat. Start with `entrypoints` " +
+			"or `flows`; treat `verified`/`candidate` hops as authoritative and only grep the endpoints " +
+			"listed under coverage.unresolved — that is the token-saving contract of this tool. A hub " +
+			"node with many same-type branches into one service rolls up into a single hop " +
+			"(verification_state \"rollup\") instead of dumping every branch. Set max_tokens to cap " +
+			"output size (over budget, flows collapse to a sample plus the coverage tally, which is " +
+			"never trimmed). If target_candidates is non-empty, re-query with target_service to pin the " +
+			"right node. " + semanticsParagraph,
+	}, s.flows)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "entrypoints",
+		Description: "Catalog entry nodes (HTTP routes, broker subscribers, background workers, gRPC " +
+			"and GraphQL server handlers) filterable by service and a feature keyword. Maps a request or " +
+			"feature to a starting node with no grep — use this before `flows` to find where a flow " +
+			"begins. CLI commands and scheduled/cron tasks are not catalogued yet (no such node type " +
+			"exists in the graph).",
+	}, s.entrypoints)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "resolve",
+		Description: "Resolve a natural-language description or partial name to ranked candidate nodes, " +
+			"with the same target_service/target_type disambiguation context/impact/trace/flows use. Call " +
+			"this first when unsure which node a query will land on — it cuts a round-trip versus calling " +
+			"context/impact/trace/flows and re-querying after seeing target_candidates.",
+	}, s.resolve)
+
 	return srv, s
 }
 
