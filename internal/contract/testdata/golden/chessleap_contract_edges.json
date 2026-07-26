@@ -140,6 +140,30 @@
     "confidence": "inferred"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:120-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:120",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodPost /activity/play/*/move",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_rows_test.go:http_client:http_new_request:65-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_rows_test.go:http_client:http_new_request:65",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /rows?datastar=*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/anagram/anagram.go:http_client:http_get:125-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/anagram/anagram.go:http_client:http_get:125",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " answer_*",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:14-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:14",
     "to": "unresolved",
@@ -164,6 +188,22 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/hangman/hangman.go:http_client:http_get:165-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/hangman/hangman.go:http_client:http_get:165",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " result_*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/hangman/hangman.go:http_client:http_get:166-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/hangman/hangman.go:http_client:http_get:166",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " wrong_*",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/word_builder/word_builder.go:http_client:http_get:210-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/word_builder/word_builder.go:http_client:http_get:210",
     "to": "unresolved",
@@ -177,6 +217,22 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " found_json",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/word_wheel/word_wheel.go:http_client:http_get:188-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/word_wheel/word_wheel.go:http_client:http_get:188",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " found_*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/word_wheel/word_wheel.go:http_client:http_get:193-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/activity/kinds/word_wheel/word_wheel.go:http_client:http_get:193",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " answer_*",
     "confidence": "unknown"
   },
   {
@@ -233,6 +289,70 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " datastar-patch-elements",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1014-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1014",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /practice/*/coach",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:403-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:403",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " */*/move/*/*?*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:462-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:462",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " */*/resync",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:479-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:479",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " */*/move/*/*?*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:831-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:831",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /practice/*/node/*/square/*/*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:844-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:844",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /practice/*/node/*/arrow/*/*/*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:861-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:861",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /practice/*/node/*/annotations",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:998-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:998",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /practice/*/save",
     "confidence": "unknown"
   },
   {
@@ -1388,6 +1508,14 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:fetch_call:1360-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:fetch_call:1360",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /liveclass/sessions/*/end",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:producer_alias_url_call:116-\u003eunresolved",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:producer_alias_url_call:116",
     "to": "unresolved",
@@ -1433,6 +1561,14 @@
     "to": "unresolved",
     "type": "http_call",
     "label": " audio",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/stage-controller.js:http_client:fetch_call:444-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/stage-controller.js:http_client:fetch_call:444",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": " /liveclass/sessions/*/stage/pdf",
     "confidence": "unknown"
   },
   {
@@ -1809,6 +1945,14 @@
     "to": "unresolved",
     "type": "http_call",
     "label": "GET /activity/sessions/*/progress*",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:147-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:147",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "http.MethodGet /liveclass/sessions/*/events",
     "confidence": "unknown"
   },
   {

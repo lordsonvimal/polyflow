@@ -1,6 +1,10 @@
 package contract
 
-import sitter "github.com/smacker/go-tree-sitter"
+import (
+	"strings"
+
+	sitter "github.com/smacker/go-tree-sitter"
+)
 
 // rubyKeyWalker enumerates literal alternatives for Ruby key expressions.
 // Handles: string literals, ternary (depth ≤2), constant references (shape b).
@@ -21,8 +25,24 @@ func walkRubyExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int
 	}
 	switch node.Type() {
 	case "string", "simple_string":
-		text := string(src[node.StartByte():node.EndByte()])
-		return []string{stripKeyLiteral(text)}, false
+		// X.1b: reconstruct via children instead of capturing the whole raw
+		// node text. Ruby interpolation parses as a "string" node containing
+		// "interpolation" children (#{...}) — the same node type as a plain
+		// literal — so the old whole-text capture left the #{...} markers
+		// embedded verbatim in the key (bug-class #6: raw captured text).
+		// Literal string_content chunks are kept verbatim; each
+		// interpolation becomes a "*" wildcard hole.
+		tmpl := rubyReconstructString(node, src)
+		if !hasConcreteTemplateContent(tmpl) {
+			return nil, true
+		}
+		return []string{tmpl}, false
+
+	case "binary":
+		if tmpl, ok := rubyReconstructConcat(node, src, depth); ok && hasConcreteTemplateContent(tmpl) {
+			return []string{tmpl}, false
+		}
+		return nil, true
 
 	case "if":
 		// Ternary-style: `cond ? a : b` parses as if/else in Ruby
@@ -56,6 +76,72 @@ func walkRubyExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int
 	default:
 		return nil, true
 	}
+}
+
+// rubyReconstructString reconstructs a Ruby string node (plain or
+// interpolated — both parse as the same "string" node type) into a single
+// wildcarded template: literal `string_content` chunks kept verbatim, each
+// `#{...}` interpolation becomes a "*" wildcard hole. Quote delimiters are
+// skipped.
+func rubyReconstructString(node *sitter.Node, src []byte) string {
+	var out strings.Builder
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(i)
+		if child == nil {
+			continue
+		}
+		switch child.Type() {
+		case `"`, "'", "`":
+			continue
+		case "interpolation":
+			out.WriteString("*")
+		default: // string_content or other literal text chunk
+			out.WriteString(string(src[child.StartByte():child.EndByte()]))
+		}
+	}
+	return out.String()
+}
+
+// rubyReconstructConcat reconstructs a `+`/`<<`-chained string concatenation
+// into a single wildcarded template: literal operands contribute their text
+// verbatim, any other operand becomes a "*" hole. Depth-bounded like the
+// ternary walker to avoid pathological trees.
+func rubyReconstructConcat(node *sitter.Node, src []byte, depth int) (string, bool) {
+	if depth > keyWalkerMaxDepth {
+		return "", false
+	}
+	op := node.ChildByFieldName("operator")
+	if op == nil {
+		return "", false
+	}
+	opText := string(src[op.StartByte():op.EndByte()])
+	if opText != "+" && opText != "<<" {
+		return "", false
+	}
+	left := node.ChildByFieldName("left")
+	right := node.ChildByFieldName("right")
+	if left == nil || right == nil {
+		return "", false
+	}
+	return rubyConcatSegment(left, src, depth+1) + rubyConcatSegment(right, src, depth+1), true
+}
+
+// rubyConcatSegment reconstructs one operand of a concatenation chain: a
+// string literal verbatim, a nested `+`/`<<` chain recursively, anything
+// else "*".
+func rubyConcatSegment(node *sitter.Node, src []byte, depth int) string {
+	if node == nil || depth > keyWalkerMaxDepth {
+		return "*"
+	}
+	switch node.Type() {
+	case "string", "simple_string":
+		return rubyReconstructString(node, src)
+	case "binary":
+		if tmpl, ok := rubyReconstructConcat(node, src, depth); ok {
+			return tmpl
+		}
+	}
+	return "*"
 }
 
 func init() {
