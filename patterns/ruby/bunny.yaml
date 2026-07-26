@@ -30,7 +30,7 @@ patterns:
         method: (identifier) @fn
         (#eq? @fn "queue")
         arguments: (argument_list
-          (string) @queue_name . _*))
+          (_) @queue_name . _*))
     captures:
       - name: queue_name
         role: amqp_queue
