@@ -164,25 +164,25 @@ func TestH2_SolidRoute_ComponentEdge_ResolvesAndLedgersMiss(t *testing.T) {
 // name, so Solid's <A href="/x"> produces a nav_link node with zero new
 // pattern code — recall is preserved, no node is dropped.
 //
-// This test surfaced a pre-existing, out-of-scope defect: nav_link_jsx
-// captures @path on the inner string_fragment node (to anchor its "^/"
-// predicate), but X.1a's WalkKey switches on node.Type() and only
-// recognizes the parent "string" node — so every literal href/action, not
-// just Solid's, is wrongly marked key_dynamic instead of resolving to the
-// clean path. Confirmed present on master before this phase's changes.
-// Recall still holds (the node exists, nothing is dropped) so this does
-// not block H.2 — recorded as a follow-up in the phase's outcome note
-// rather than fixed here (fixing nav_link_jsx's capture shape is a
-// repo-wide change well outside a Solid-Router-scoped commit).
+// This test originally surfaced a pre-existing, unrelated defect:
+// nav_link_jsx captured @path on the inner string_fragment node (to anchor
+// its "^/" predicate), but X.1a's WalkKey switches on node.Type() and only
+// recognizes the parent "string" node — so every literal href/action was
+// wrongly marked key_dynamic instead of resolving to the clean path. That
+// has since been fixed in nav_links.yaml (the fragment now feeds only the
+// #match? predicate under its own capture name; @path binds to the parent
+// string node, mirroring solid_router.yaml's fix), so this asserts the
+// resolved path directly.
 func TestH2_SolidNavLink_AlreadyCoveredByExistingPattern(t *testing.T) {
 	nodes := matchSolidRouterFile(t)
 	var nav *graph.Node
 	for i := range nodes {
-		if nodes[i].Meta["nav_link"] == "true" && nodes[i].Meta["key_dynamic_raw"] == "/settings" {
+		if nodes[i].Meta["nav_link"] == "true" && nodes[i].Meta["path"] == "/settings" {
 			nav = &nodes[i]
 		}
 	}
 	require.NotNil(t, nav, "<A href=\"/settings\"> must still produce a nav_link node via the existing generic pattern")
+	assert.Empty(t, nav.Meta["key_dynamic"], "literal href must resolve, not be ledgered as dynamic")
 }
 
 // TestH2_Determinism runs the whole parse→match→link pipeline twice on the
