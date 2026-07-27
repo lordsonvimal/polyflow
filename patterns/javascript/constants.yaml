@@ -74,3 +74,24 @@ patterns:
         role: const_name
       - name: value
         role: const_value
+  # H.2: object-literal constant members — export const clientRoutes = {
+  # home: "/", settings: "/settings" }. Feeds "objName.propKey" entries into
+  # the constant table so the JS KeyWalker's member_expression case can
+  # resolve `clientRoutes.home` (Solid Router's real-world route-path shape)
+  # to its literal value instead of ledgering it as key_dynamic.
+  - name: const_object_member
+    query: |
+      (lexical_declaration
+        (variable_declarator
+          name: (identifier) @obj
+          value: (object
+            (pair
+              key: (property_identifier) @key
+              value: (string) @value))))
+    captures:
+      - name: obj
+        role: const_name
+      - name: key
+        role: const_key
+      - name: value
+        role: const_value
