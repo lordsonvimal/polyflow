@@ -1,0 +1,4 @@
+{
+  "patterns": ["ws_server_new", "ws_server_connection", "ws_server_attached", "ws_server_noserver"],
+  "node_types": ["subscriber", "http_handler", "subscriber", "subscriber"]
+}

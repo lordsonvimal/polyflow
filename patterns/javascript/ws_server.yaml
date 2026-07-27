@@ -1,0 +1,93 @@
+# `ws` library server-side WebSocket construction (H.1, plan-7): tether's
+# actual architecture is primarily a `WebSocketServer`, not a REST app.
+# Gated in its own file (a file has one `package:` gate) so the browser
+# client patterns in websocket.yaml stay ungated.
+#
+# Three shapes, all classified as a subscriber node (ws_server_* prefix,
+# see internal/patterns/matcher.go classifyPattern — *_server_* is not
+# covered by any generic heuristic, so it gets an explicit case, same
+# treatment as gin_route_chained/express_mount):
+#   1. ws_server_new       — literal {path: "/x"} config: real join key.
+#   2. ws_server_attached  — {server, ...} shorthand (HTTP server upgrade
+#                            handoff, tether's actual shape): no path in
+#                            the constructor call at all.
+#   3. ws_server_noserver  — {noServer: true, ...}: manual upgrade handling,
+#                            same "no path here" case as #2.
+# For #2/#3 the matcher stamps key_dynamic=true with raw "(attached)"
+# (see matcher.go) instead of silently emitting a keyless node.
+language: javascript
+version: "1"
+package: ws
+patterns:
+  - name: ws_server_new
+    query: |
+      (new_expression
+        constructor: (identifier) @cls
+        (#eq? @cls "WebSocketServer")
+        arguments: (arguments
+          .
+          (object
+            .
+            (pair
+              key: (property_identifier) @key
+              (#eq? @key "path")
+              value: (string) @path))))
+    captures:
+      - name: path
+        role: ws_url
+
+  - name: ws_server_attached
+    query: |
+      (new_expression
+        constructor: (identifier) @cls
+        (#eq? @cls "WebSocketServer")
+        arguments: (arguments
+          .
+          (object
+            .
+            (shorthand_property_identifier) @server
+            (#eq? @server "server"))))
+    captures:
+      - name: server
+        role: subscriber
+
+  - name: ws_server_noserver
+    query: |
+      (new_expression
+        constructor: (identifier) @cls
+        (#eq? @cls "WebSocketServer")
+        arguments: (arguments
+          .
+          (object
+            .
+            (pair
+              key: (property_identifier) @key
+              (#eq? @key "noServer")
+              value: (true)))))
+    captures:
+      - name: key
+        role: subscriber
+
+  # X.on("connection", handler) — gated by package: ws (this file), so
+  # services without the dep never run it. Not anchored to a same-file
+  # ws_server_new capture (tree-sitter cannot express cross-node anchoring);
+  # the structural negative (`.on("message", h)`, wrong event name/arity)
+  # is the precision trade recorded here, per H.1's own spec.
+  - name: ws_server_connection
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @recv
+          property: (property_identifier) @fn
+          (#eq? @fn "on"))
+        arguments: (arguments
+          .
+          (string) @event
+          (#match? @event "connection")
+          .
+          (_) @handler))
+    captures:
+      - name: event
+        role: event_type
+      - name: handler
+        role: handler_ref
