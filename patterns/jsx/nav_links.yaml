@@ -11,8 +11,8 @@ patterns:
           (property_identifier) @prop
           (#eq? @prop "action")
           (string
-            (string_fragment) @path
-            (#match? @path "^/")))
+            (string_fragment) @path_frag
+            (#match? @path_frag "^/")) @path)
         (jsx_attribute
           (property_identifier) @mprop
           (#eq? @mprop "method")
@@ -35,8 +35,8 @@ patterns:
           (property_identifier) @prop
           (#eq? @prop "action")
           (string
-            (string_fragment) @path
-            (#match? @path "^/"))))
+            (string_fragment) @path_frag
+            (#match? @path_frag "^/")) @path))
     captures:
       - name: path
         role: http_path
@@ -52,8 +52,8 @@ patterns:
         (property_identifier) @prop
         (#match? @prop "^(href|action)$")
         (string
-          (string_fragment) @path
-          (#match? @path "^/")))
+          (string_fragment) @path_frag
+          (#match? @path_frag "^/")) @path)
     captures:
       - name: prop
         role: nav_attr
