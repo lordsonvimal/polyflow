@@ -181,9 +181,53 @@ it was in fact an unblock of an existing one.
 Ordered ROI-first: pure joins (existing clues, no new parsing) before new extractors. Every phase
 adds real chain edges and is independently useful.
 
-### Phase Y.3 — http_client → route → handler-fn (the request half) `pending`
+### Phase Y.3 — http_client → route → handler-fn (the request half) `done`
 
-Three joins that connect hops 3, 3b, 2→4:
+**Measured outcome (shipped 2026-07-28).** On inspecting the live graph, **two of the three
+proposed joins were already satisfied** and the third was already connected — only the db-terminus
+entity was missing. What actually shipped is the table extraction (Y.3c's second half); the rest is
+ledgered here as already-present so the plan reflects reality, not the prediction.
+
+- **Y.3a (route → handler-fn): already done** by `linker.LinkRouteHandlers` (existing pass). 13/15
+  `http_handler` nodes resolve to their function via receiver-stripped label lookup and emit `calls`.
+  The 2 that don't (`http.NotFoundHandler()`, `http.FileServer(...)`, and the OTel `r.handleHTTP`
+  registered with no method) reference stdlib/external constructors with no in-service function node —
+  correct to leave unresolved (#12), not a gap.
+- **Y.3b (http_client → http_handler): already done** by the contract engine's keywalk. **All 11
+  genuine frontend `fetch` sites resolve — including the templated ones** (`/api/node/*` →
+  `/api/node/{id}`, `/api/variable/*/flow` → `/api/variable/{id}/flow`, `/api/node/*/source`,
+  plus query-string cases). The plan predicted "11 literal resolve, 28 templated unresolved needing
+  KeyWalker" — **that premise was wrong for this repo**: the templated URLs already reconstruct, and
+  the "28 unresolved" `http_client → service(unresolved)` edges are **misclassified non-HTTP string
+  nodes** (localStorage keys `pf:layout`, sort directions `forward`/`backward`, export formats
+  `svg`/`png`) minted by the JS parser, *not* templated URLs. That is a JS-parser **precision** issue
+  (opposite of a coverage gap) and out of Tier-Y scope; recall-over-precision does not license chasing
+  it here. No KeyWalker work was needed.
+- **Y.3c (handler-fn → db): re-anchor already connected; table terminus added.** The predicted
+  "re-anchor the query edge from the call node to the enclosing function" is **already achieved** by
+  the SSA `calls` edge: every one of the 42 datastore call nodes has an incoming `calls` from its
+  enclosing function/method, so `handler-fn → calls → repo-fn → calls → callNode → queries → store` is
+  already a connected path — and that shape is *richer* than the plan's `function → store` because it
+  keeps the SQL on the call node. Emitting a parallel `function → store` edge would duplicate an
+  existing path (#12), so it was **not** added. The one genuinely-missing piece — the query
+  terminating at a real entity instead of an opaque driver — shipped as new pass
+  `linker.LinkTables`: it parses the table from `meta.sql` (first `FROM`/`INTO`/`UPDATE` target, with
+  subquery-skip so `FROM ( SELECT … FROM t )` resolves to `t`) and emits `callNode → table`
+  (`queries`/`persists`, confidence `static`). The call node is itself `type=datastore`, so this
+  edge *is* the plan's `datastore → table`. **Measured:** 12 table nodes minted (`meta`, `nodes`,
+  `edges`, `parse_errors`, `file_hashes`, `unresolved_refs`, `semantic_cache`, `unresolved_history`,
+  `embeddings`, `nodes_fts`, `dependencies`, `entities_fts`), 38 `datastore → table` edges (21
+  queries + 17 persists), 0 orphan-endpoint edges (#10), 0 dangling tables. PRAGMA / multi-statement
+  SQL with no owning table minted nothing (#12). Nodes 2772→2788.
+
+**Net:** the forward request half `fetch → http_call → http_handler → calls → handler-fn → … →
+callNode → queries → table` is a fully connected static path for every genuine literal-or-templated
+fetch in this repo, now terminating at a real table entity. The plan's KeyWalker/re-anchor work was
+unnecessary because the machinery already existed; only the table terminus was new.
+
+---
+
+Three joins that connect hops 3, 3b, 2→4 (original spec, retained for reference):
 
 **Y.3a — route → handler-fn (hop 3b, trivial join).** The `http_handler` node carries
 `meta.handler` = `"s.handleNode"` (a `recv.Method` string) and `meta.fn` = registration call. Resolve

@@ -760,6 +760,24 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkDatastores(allNodes)); err != nil {
 		return nil, err
 	}
+	// Y.3c: parse table names out of datastore call SQL and terminate each
+	// query/persist at a real table entity (mints table nodes).
+	{
+		tableNodes, tableEdges := linker.LinkTables(allNodes)
+		for i := range tableNodes {
+			n := tableNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(tableEdges); err != nil {
+			return nil, err
+		}
+	}
 	if err := writeEdges(linker.LinkSSEClients(allNodes)); err != nil {
 		return nil, err
 	}

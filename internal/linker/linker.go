@@ -226,6 +226,105 @@ func LinkDatastores(nodes []graph.Node) []graph.Edge {
 	return edges
 }
 
+// LinkTables closes the db end of the request path (Y.3c). A datastore call
+// node (kind=call) already carries the literal SQL in meta.sql and reaches its
+// enclosing function via the SSA `calls` edge, so the path
+// `handler-fn → calls → repo-fn → calls → callNode → queries → store` is
+// connected — but it terminates at an opaque driver/store node. This pass
+// parses the table name out of the SQL (first FROM/INTO/UPDATE target) and
+// emits `callNode → table` (queries/persists), minting one table node per
+// (service, table). The call node is itself type=datastore, so the emitted
+// edge is literally the plan's `datastore → table`, and the query now ends at
+// a real entity. Statements with no resolvable table (PRAGMA, multi-statement)
+// are left alone — no table node is fabricated (#12).
+func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
+	tableID := func(service, name string) string {
+		return service + ":table:" + name
+	}
+	seen := make(map[string]bool)
+	var newNodes []graph.Node
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeDatastore || n.Meta["kind"] != "call" {
+			continue
+		}
+		table := parseSQLTable(n.Meta["sql"])
+		if table == "" {
+			continue
+		}
+		tid := tableID(n.Service, table)
+		if !seen[tid] {
+			seen[tid] = true
+			newNodes = append(newNodes, graph.Node{
+				ID:       tid,
+				Type:     graph.NodeTypeTable,
+				Label:    table,
+				Service:  n.Service,
+				Language: n.Language,
+				Meta:     map[string]string{"name": table},
+			})
+		}
+		edgeType := graph.EdgeTypeQueries
+		if n.Meta["op"] == "persist" {
+			edgeType = graph.EdgeTypePersists
+		}
+		edges = append(edges, graph.Edge{
+			ID:         fmt.Sprintf("%s:%s->%s", string(edgeType), n.ID, tid),
+			From:       n.ID,
+			To:         tid,
+			Type:       edgeType,
+			Confidence: graph.ConfidenceStatic,
+			Meta:       map[string]string{"via": "sql_table", "table": table},
+		})
+	}
+	return newNodes, edges
+}
+
+// parseSQLTable extracts the primary table name from a SQL literal: the token
+// following the first FROM, INTO, or UPDATE keyword. Returns "" when the SQL
+// has no such target (PRAGMA, DDL we don't model) or when the next token opens
+// a subquery — the search then continues to the next keyword so an outer
+// `FROM ( SELECT … FROM real_table )` resolves to the inner table. The keyword
+// scan is case-insensitive; the returned name preserves the source casing with
+// surrounding quotes/backticks/brackets and any trailing `(col,…)` stripped.
+func parseSQLTable(rawSQL string) string {
+	sql := stripMeta(strings.TrimSpace(rawSQL))
+	if sql == "" {
+		return ""
+	}
+	// Only consider the first statement; multi-statement PRAGMA blocks and the
+	// like carry no single owning table.
+	if semi := strings.IndexByte(sql, ';'); semi >= 0 {
+		sql = sql[:semi]
+	}
+	fields := strings.Fields(sql)
+	for i := 0; i < len(fields)-1; i++ {
+		switch strings.ToUpper(fields[i]) {
+		case "FROM", "INTO", "UPDATE":
+			name := cleanTableToken(fields[i+1])
+			if name == "" {
+				continue // subquery "(" or empty — keep scanning
+			}
+			return name
+		}
+	}
+	return ""
+}
+
+// cleanTableToken normalises a raw table token: strips a trailing column list
+// (`meta(key,value)` → `meta`), surrounding quotes/backticks/brackets, and
+// trailing punctuation. Returns "" for a subquery-opening "(" or an empty
+// result.
+func cleanTableToken(tok string) string {
+	if paren := strings.IndexByte(tok, '('); paren >= 0 {
+		tok = tok[:paren]
+	}
+	tok = strings.Trim(tok, "`\"'[]")
+	tok = strings.TrimRight(tok, ",;")
+	return tok
+}
+
 // LinkBrokerHints applies workspace `links:` hints of the form
 // {via: rabbitmq, exchange: "dsw.builds"}. Broker publishers whose exchange
 // cannot be resolved statically (e.g. Ruby bunny publishes through an
