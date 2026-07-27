@@ -75,7 +75,13 @@ Only hop 2 is solid today. **The clues for the rest are largely already captured
 These do **not** add flow edges; they remove noise that makes coverage look worse than it is and
 that pollutes any "% of nodes connected" trust metric.
 
-### Phase Y.1 — Lazy external-interface stub nodes `pending`
+### Phase Y.1 — Lazy external-interface stub nodes `done`
+
+**Measured outcome (clean reindex after fix):** nodes 2975→2772 (**203 external stub nodes removed**),
+edges unchanged 5801 (**no `implements` edge lost**), cross-service links unchanged 78, **0 orphan-endpoint
+edges**. Dangling Go interfaces 204→**1** (the real `rowScanner`, to be resolved by Y.5 `uses_type`). The
+17 dangling TS interfaces are the separate `js_type_relations.go` gap (TS note below), untouched here.
+
 
 **Problem.** `extractImplements` (`internal/parser/go_semantic.go:915-1054`) creates a synthetic
 `NodeTypeInterface` node (`syntheticIfaceID`, line 959) for **every** exported interface with ≥1
