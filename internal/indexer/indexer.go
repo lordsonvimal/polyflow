@@ -778,6 +778,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			return nil, err
 		}
 	}
+	// Y.4: join server response DTOs to the client interfaces that mirror their
+	// JSON shape (cross-language response_of). Runs after all returns/consumes
+	// edges are collected so it can gate on server-declared response structs.
+	if err := writeEdges(linker.LinkResponseShapes(allNodes, allEdges)); err != nil {
+		return nil, err
+	}
 	if err := writeEdges(linker.LinkSSEClients(allNodes)); err != nil {
 		return nil, err
 	}

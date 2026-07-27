@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
 	"go/token"
 	"go/types"
 	"os"
@@ -105,6 +106,11 @@ func extractVariables(
 	// structIDs maps a named struct type to its node ID for uses_type and
 	// inherits/instantiates edges.
 	structIDs := map[*types.Named]string{}
+	// structIDsByQName maps "<pkgPath>.<Name>" to a struct node ID — the
+	// pointer-identity fallback for cross-package struct lookups (Y.4 returns),
+	// needed when SSA/type-checking built a package in a different variant than
+	// the one registered in structIDs (same failure mode as B.2's globals).
+	structIDsByQName := map[string]string{}
 	// interfaceIDs maps a named interface type to its node ID (Tier I.1).
 	interfaceIDs := map[*types.Named]string{}
 
@@ -199,6 +205,14 @@ func extractVariables(
 					fieldsJSON, _ := json.Marshal(fields)
 					id := fmt.Sprintf("%s:%s:struct:%s:%d", service, file, v.Name(), pos.Line)
 					structIDs[named] = id
+					if named.Obj() != nil && named.Obj().Pkg() != nil {
+						qk := named.Obj().Pkg().Path() + "." + v.Name()
+						if _, exists := structIDsByQName[qk]; !exists {
+							structIDsByQName[qk] = id
+						} else if !strings.HasSuffix(pos.Filename, "_test.go") {
+							structIDsByQName[qk] = id // prod file wins over test variant
+						}
+					}
 					addNode(graph.Node{
 						ID: id, Type: graph.NodeTypeStruct, Label: v.Name(),
 						Service: service, File: file, Line: pos.Line, Language: "go",
@@ -578,6 +592,64 @@ func extractVariables(
 		}
 	}
 
+	// ── Y.4: response-type extraction (the return half) ─────────────────────
+	// A handler's response body is not runtime-only — its static type is
+	// declared at the call site of the JSON writer. We resolve the payload
+	// argument's type at each response sink and emit `handler-fn → struct`
+	// `returns`, terminating the request flow at the DTO the endpoint returns.
+	//
+	// Sinks recognised (all present in this repo's server): encoding/json
+	// Marshal/MarshalIndent, (*json.Encoder).Encode, and any local wrapper
+	// whose first parameter is net/http.ResponseWriter (the writeJSON idiom —
+	// payload is the trailing argument). Untyped bodies (map[string]any) are
+	// ledgered (#12): no matching struct node, so no edge is emitted. Uses the
+	// type-checker (types.Info.TypeOf) for the payload's static type; attributes
+	// to the enclosing function via the same range index as the const pass.
+	for _, p := range pkgs {
+		if p == nil || p.TypesInfo == nil {
+			continue
+		}
+		info := p.TypesInfo
+		for _, f := range p.Syntax {
+			ast.Inspect(f, func(nd ast.Node) bool {
+				call, ok := nd.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				payload, ok := responseSinkPayload(call, info)
+				if !ok {
+					return true
+				}
+				named, container := unwrapNamedType(info.TypeOf(payload))
+				if named == nil {
+					return true // untyped/map/basic body — ledgered (#12)
+				}
+				sid, ok := structIDs[named]
+				if !ok && named.Obj() != nil && named.Obj().Pkg() != nil {
+					// Cross-package fallback (test-variant identity, cf. B.2).
+					sid, ok = structIDsByQName[named.Obj().Pkg().Path()+"."+named.Obj().Name()]
+				}
+				if !ok {
+					return true // out-of-service or non-struct type — ledgered
+				}
+				pos := fset.Position(call.Pos())
+				if !inDir(pos) {
+					return true
+				}
+				fnID, ok := enclosingFnAt(pos.Filename, pos.Line)
+				if !ok {
+					return true
+				}
+				meta := map[string]string{"response_type": named.String(), "via": "json_encode"}
+				if container != "" {
+					meta["container"] = container
+				}
+				addEdge(graph.EdgeTypeReturns, fnID, sid, meta)
+				return true
+			})
+		}
+	}
+
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	return varExtractResult{
@@ -602,4 +674,82 @@ func resolveGlobalID(g *ssa.Global, globalIDs map[*ssa.Global]string, qualifiedN
 	qk := g.Package().Pkg.Path() + "." + g.Name()
 	id, ok := qualifiedNameIDs[qk]
 	return id, ok
+}
+
+// responseSinkPayload returns the argument expression carrying the JSON
+// response body if call is a recognised response-writing sink (Y.4), else
+// ok=false. It resolves the callee through the type-checker so a project-local
+// wrapper (writeJSON) is recognised structurally by its ResponseWriter-first
+// signature rather than by name.
+func responseSinkPayload(call *ast.CallExpr, info *types.Info) (ast.Expr, bool) {
+	var callee *types.Func
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		callee, _ = info.Uses[fn].(*types.Func)
+	case *ast.SelectorExpr:
+		callee, _ = info.ObjectOf(fn.Sel).(*types.Func)
+	}
+	if callee == nil {
+		return nil, false
+	}
+	sig, _ := callee.Type().(*types.Signature)
+	if sig == nil {
+		return nil, false
+	}
+	// encoding/json.Marshal / MarshalIndent(v) and (*json.Encoder).Encode(v):
+	// the payload is the first argument.
+	if callee.Pkg() != nil && callee.Pkg().Path() == "encoding/json" {
+		if callee.Name() == "Marshal" || callee.Name() == "MarshalIndent" {
+			if len(call.Args) > 0 {
+				return call.Args[0], true
+			}
+		}
+	}
+	if callee.Name() == "Encode" && recvType(sig) == "*encoding/json.Encoder" {
+		if len(call.Args) > 0 {
+			return call.Args[0], true
+		}
+	}
+	// ResponseWriter-first wrapper (writeJSON(w, status, v)): the body is the
+	// trailing argument.
+	if sig.Params().Len() > 0 &&
+		sig.Params().At(0).Type().String() == "net/http.ResponseWriter" &&
+		len(call.Args) > 0 {
+		return call.Args[len(call.Args)-1], true
+	}
+	return nil, false
+}
+
+// recvType returns the string form of a signature's receiver type, or "".
+func recvType(sig *types.Signature) string {
+	if recv := sig.Recv(); recv != nil {
+		return recv.Type().String()
+	}
+	return ""
+}
+
+// unwrapNamedType peels pointer/slice/array layers off t and returns the
+// underlying named type (or nil) plus container="slice" when a list was
+// unwrapped — so a []T or []*T response resolves to T and records that it is
+// a collection.
+func unwrapNamedType(t types.Type) (*types.Named, string) {
+	container := ""
+	for t != nil {
+		switch u := t.(type) {
+		case *types.Pointer:
+			t = u.Elem()
+		case *types.Slice:
+			container = "slice"
+			t = u.Elem()
+		case *types.Array:
+			container = "slice"
+			t = u.Elem()
+		default:
+			if named, ok := t.(*types.Named); ok {
+				return named, container
+			}
+			return nil, container
+		}
+	}
+	return nil, container
 }
