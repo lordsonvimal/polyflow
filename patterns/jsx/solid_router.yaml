@@ -1,0 +1,66 @@
+# Solid Router component-config client routes (H.2, plan-7):
+# `<Route path={clientRoutes.home} component={Home} />` — real-world Solid
+# apps (synergy/apps/calendar-ui) pass constant refs, not string literals, so
+# the `path` capture accepts either shape. Gated on `@solidjs/router` in its
+# own file (a file has one `package:` gate).
+#
+# Two attribute orders (path-then-component, component-then-path) since JSX
+# attribute order is not fixed and tree-sitter query children are
+# order-sensitive (same convention as nav_links.yaml's nav_link_form pair).
+#
+# classifyPattern maps solid_route → NodeTypeRoute (explicit case, matcher.go
+# — `*_route` would otherwise fall into the generic HTTPHandler heuristic,
+# which is server-side, not this client-side declaration). The route→
+# component `renders` edge is a same-service label lookup done by
+# linker.LinkRouteComponents (cross-node resolution; tree-sitter cannot join
+# two declarations in one query) after all nodes are collected.
+#
+# Nav coverage (`<A href="/x">`): patterns/jsx/nav_links.yaml's nav_link_jsx
+# already matches any `href`/`action` attribute regardless of element name —
+# it is not gated to `<a>`, so Solid's `<A href="/settings">` already
+# produces a nav_link node with zero changes here. Verified in
+# internal/contract/solid_router_wiring_test.go. No solid_nav_link pattern is
+# added (the shape already fits an existing file, per the phase's own
+# "add there if a shared shape fits" instruction).
+language: jsx
+version: "1"
+package: "@solidjs/router"
+patterns:
+  - name: solid_route
+    query: |
+      (jsx_self_closing_element
+        name: (identifier) @tag
+        (#eq? @tag "Route")
+        (jsx_attribute
+          (property_identifier) @pprop
+          (#eq? @pprop "path")
+          [(string) @path
+           (jsx_expression (_) @path)])
+        (jsx_attribute
+          (property_identifier) @cprop
+          (#eq? @cprop "component")
+          (jsx_expression (_) @component)))
+    captures:
+      - name: path
+        role: http_path
+      - name: component
+        role: component_ref
+  - name: solid_route
+    query: |
+      (jsx_self_closing_element
+        name: (identifier) @tag
+        (#eq? @tag "Route")
+        (jsx_attribute
+          (property_identifier) @cprop
+          (#eq? @cprop "component")
+          (jsx_expression (_) @component))
+        (jsx_attribute
+          (property_identifier) @pprop
+          (#eq? @pprop "path")
+          [(string) @path
+           (jsx_expression (_) @path)]))
+    captures:
+      - name: path
+        role: http_path
+      - name: component
+        role: component_ref

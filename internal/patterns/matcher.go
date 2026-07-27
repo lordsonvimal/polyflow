@@ -385,7 +385,8 @@ func isConstantPattern(patternName string) bool {
 	return patternName == "const_string" ||
 		patternName == "const_template_prefix" ||
 		patternName == "fn_return_string" ||
-		patternName == "fn_return_template_prefix"
+		patternName == "fn_return_template_prefix" ||
+		patternName == "const_object_member"
 }
 
 // testDSLCallers is the recognized test-harness vocabulary, per language
@@ -561,6 +562,21 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// file -> varName -> literalValue
 	constants := make(map[string]map[string]string)
 	for _, r := range defResults {
+		// H.2: const_object_member carries three fields (obj/key/value), keyed
+		// into the table as "obj.key" so the JS KeyWalker's member_expression
+		// case can resolve `clientRoutes.home`-shaped producer keys.
+		if r.PatternName == "const_object_member" {
+			obj, okO := r.Captures["obj"]
+			key, okK := r.Captures["key"]
+			value, okV := r.Captures["value"]
+			if okO && okK && okV {
+				if constants[r.File] == nil {
+					constants[r.File] = make(map[string]string)
+				}
+				constants[r.File][obj+"."+key] = stripStringLiteral(value)
+			}
+			continue
+		}
 		if !isConstantPattern(r.PatternName) {
 			continue
 		}
@@ -1499,6 +1515,13 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "graphql_resolver"):
 		return graph.NodeTypeGraphQLResolver, graph.EdgeTypeGraphQLCall
 
+	// H.2: Solid Router's inline `<Route path=... component=...>` declares a
+	// client-side route (not a server endpoint) — explicit case (checked
+	// before the generic *_route→HTTPHandler heuristic below, which is
+	// server-side) so it doesn't get misclassified as a handler.
+	case lower == "solid_route":
+		return graph.NodeTypeRoute, graph.EdgeTypeCalls
+
 	// ── HTTP routes / handlers ────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "chi_get") || strings.HasPrefix(lower, "chi_post") ||
 		strings.HasPrefix(lower, "chi_put") || strings.HasPrefix(lower, "chi_patch") ||
@@ -1760,6 +1783,11 @@ func tryResolveOne(raw string, fileConsts map[string]string) (string, string) {
 func isKeyWalkerNode(t graph.NodeType) bool {
 	switch t {
 	case graph.NodeTypeHTTPClient, graph.NodeTypePublisher, graph.NodeTypeSubscriber, graph.NodeTypeChannel:
+		return true
+	// H.2: Solid Router route declarations carry a producer-shaped path key
+	// (literal, or a same-file constant-object member) that must go through
+	// the same WalkKey resolution instead of being kept as raw capture text.
+	case graph.NodeTypeRoute:
 		return true
 	default:
 		return false

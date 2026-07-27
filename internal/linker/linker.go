@@ -54,6 +54,55 @@ func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
 	return edges
 }
 
+// LinkRouteComponents emits renders edges from Solid Router client-route
+// declarations (NodeTypeRoute, Meta["component"] set by the solid_route
+// pattern) to the component function/method they reference. Mirrors
+// LinkRouteHandlers's same-service label-lookup shape, but on a miss it
+// ledgers the reference instead of silently skipping it (H.2:
+// recall-over-precision — a route's component_ref is a real user-facing
+// link and must be visible even when unresolved).
+func LinkRouteComponents(nodes []graph.Node) ([]graph.Edge, []graph.UnresolvedRef) {
+	funcIndex := make(map[string]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeComponent {
+			key := n.Service + "\x00" + n.Label
+			if _, exists := funcIndex[key]; !exists {
+				funcIndex[key] = n.ID
+			}
+		}
+	}
+
+	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeRoute {
+			continue
+		}
+		component := n.Meta["component"]
+		if component == "" {
+			continue
+		}
+		targetID, ok := funcIndex[n.Service+"\x00"+component]
+		if !ok {
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: component, Kind: "component_ref",
+			})
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:         fmt.Sprintf("renders:%s->%s", n.ID, targetID),
+			From:       n.ID,
+			To:         targetID,
+			Type:       graph.EdgeTypeRenders,
+			Confidence: graph.ConfidenceInferred,
+		})
+	}
+	return edges, unresolved
+}
+
 // templGeneratedPath maps a `.templ` source path to the path of the Go file
 // `templ generate` produces beside it: `views/puzzles.templ` →
 // `views/puzzles_templ.go`. Returns "" for non-templ paths.

@@ -73,6 +73,24 @@ func walkJSExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int) 
 		}
 		return nil, true
 
+	case "member_expression":
+		// H.2: object.property access into a same-file const object literal
+		// (Solid Router's `clientRoutes.home`) — resolved via the compound
+		// "obj.prop" key const_object_member populates in the const table.
+		// Anything but a plain identifier.identifier chain (computed access,
+		// nested chains, `this.x`) stays dynamic — never guessed.
+		objNode := node.ChildByFieldName("object")
+		propNode := node.ChildByFieldName("property")
+		if objNode == nil || propNode == nil || objNode.Type() != "identifier" {
+			return nil, true
+		}
+		obj := string(src[objNode.StartByte():objNode.EndByte()])
+		prop := string(src[propNode.StartByte():propNode.EndByte()])
+		if v, ok := consts(obj + "." + prop); ok {
+			return []string{v}, false
+		}
+		return nil, true
+
 	default:
 		return nil, true
 	}
