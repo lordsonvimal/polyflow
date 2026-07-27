@@ -722,6 +722,19 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			meta["transport"] = "sse"
 		}
 
+		// H.1: `new WebSocketServer({server, ...})` / `{noServer: true}` have
+		// no path in the constructor at all (the server attaches to an
+		// existing HTTP server or handles the upgrade manually) — stamp
+		// key_dynamic so the gap is visible rather than a silent keyless
+		// node. NodeTypeSubscriber is a KeyWalker-routed type (X.1a), but the
+		// walker block below only fires when a key capture exists in
+		// r.KeyNodes; these two patterns capture no path/url/channel field,
+		// so it never would otherwise.
+		if r.PatternName == "ws_server_attached" || r.PatternName == "ws_server_noserver" {
+			meta["key_dynamic"] = "true"
+			meta["key_dynamic_raw"] = "(attached)"
+		}
+
 		// Navigation links (href/action in JSX or HTML): mark as nav_link so
 		// the cross-service linker emits navigates_to instead of http_call.
 		// Forms with method="post" (and data-method="delete" spoofing) carry
@@ -1418,6 +1431,19 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "ws_read") || strings.HasPrefix(lower, "ws_dispatch") ||
 		strings.HasPrefix(lower, "ws_on"):
 		return graph.NodeTypeSubscriber, graph.EdgeTypeWSRead
+
+	// H.1: `new WebSocketServer({...})` — server-side listen construct.
+	// *_server_* isn't covered by any generic heuristic (unlike ws_new/
+	// ws_read's prefixes above), so it gets an explicit case, same
+	// treatment as express_mount/gin_route_chained.
+	case strings.HasPrefix(lower, "ws_server_new") || strings.HasPrefix(lower, "ws_server_attached") ||
+		strings.HasPrefix(lower, "ws_server_noserver"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypeWSRead
+	// X.on("connection", handler): classified as HTTPHandler so the existing
+	// LinkRouteHandlers pass (keys on NodeTypeHTTPHandler + Meta["handler"])
+	// wires the handler edge, same mechanism Express routes use.
+	case lower == "ws_server_connection":
+		return graph.NodeTypeHTTPHandler, graph.EdgeTypeCalls
 
 	// ── SSE broadcast hub ─────────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "hub_broadcast"):

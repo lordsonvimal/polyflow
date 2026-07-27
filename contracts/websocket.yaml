@@ -21,3 +21,31 @@ contracts:
       id_prefix: ws
       same_service: keep
     unmatched: ledger
+
+  # H.1: connect-time join — a client `new WebSocket("ws://host/path")`
+  # against a server `new WebSocketServer({path: "/path"})`. Path-keyed,
+  # mirroring http.yaml's two-variant-per-kind shape (API calls vs. nav
+  # links) rather than adding new engine machinery. ws_server_attached/
+  # ws_server_noserver (no path captured) are deliberately excluded from
+  # `where: {pattern: ...}` — they carry no path key to join on; the
+  # matcher stamps them key_dynamic="(attached)" for visibility, but the
+  # engine only ledgers dynamic keys on the *producer* side today (a
+  # recorded gap shared with H.0's handler-side dynamic path case).
+  - kind: websocket
+    producer:
+      node: http_client
+      where: {pattern: ws_new_connection}
+      key: [path]
+      key_fallbacks: {path: [url]}
+      target_service_meta: target_service
+    consumer:
+      node: subscriber
+      where: {pattern: ws_server_new}
+      key: [path]
+    normalizers: [case_fold, url_to_path, param_wildcard, trim_slash]
+    match: [exact, normalized, wildcard_anchored]
+    edge:
+      type: ws_connect
+      id_prefix: wsconn
+      same_service: keep
+    unmatched: ledger

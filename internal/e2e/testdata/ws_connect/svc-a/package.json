@@ -1,0 +1,6 @@
+{
+  "name": "svc-a",
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
