@@ -72,6 +72,66 @@ func TestLinkTemplComponents_NoTwin(t *testing.T) {
 }
 
 
+func TestLinkRouteComponents(t *testing.T) {
+	route := graph.Node{
+		ID:      "app:src/App.tsx:route:%2Fsettings:10",
+		Type:    graph.NodeTypeRoute,
+		Label:   "/settings",
+		Service: "app",
+		File:    "src/App.tsx",
+		Line:    10,
+		Meta:    map[string]string{"component": "Settings"},
+	}
+	settingsFn := graph.Node{
+		ID:      "app:src/Settings.tsx:function:Settings:1",
+		Type:    graph.NodeTypeFunction,
+		Label:   "Settings",
+		Service: "app",
+		File:    "src/Settings.tsx",
+	}
+	// Same label in a different service must not match.
+	otherServiceFn := graph.Node{
+		ID:      "other:src/Settings.tsx:function:Settings:1",
+		Type:    graph.NodeTypeFunction,
+		Label:   "Settings",
+		Service: "other",
+		File:    "src/Settings.tsx",
+	}
+
+	edges, unresolved := LinkRouteComponents([]graph.Node{route, settingsFn, otherServiceFn})
+
+	require.Len(t, edges, 1, "one renders edge from the route to its component")
+	require.Empty(t, unresolved)
+	e := edges[0]
+	assert.Equal(t, route.ID, e.From)
+	assert.Equal(t, settingsFn.ID, e.To)
+	assert.Equal(t, graph.EdgeTypeRenders, e.Type)
+	assert.Equal(t, graph.ConfidenceInferred, e.Confidence)
+}
+
+func TestLinkRouteComponents_MissLedgered(t *testing.T) {
+	route := graph.Node{
+		ID:      "app:src/App.tsx:route:%2Fmissing:20",
+		Type:    graph.NodeTypeRoute,
+		Label:   "/missing",
+		Service: "app",
+		File:    "src/App.tsx",
+		Line:    20,
+		Meta:    map[string]string{"component": "Ghost"},
+	}
+
+	edges, unresolved := LinkRouteComponents([]graph.Node{route})
+
+	assert.Empty(t, edges, "no declaration to resolve to — never guessed")
+	require.Len(t, unresolved, 1, "the miss is ledgered, not silently dropped")
+	u := unresolved[0]
+	assert.Equal(t, "app", u.Service)
+	assert.Equal(t, "src/App.tsx", u.File)
+	assert.Equal(t, 20, u.Line)
+	assert.Equal(t, "Ghost", u.Name)
+	assert.Equal(t, "component_ref", u.Kind)
+}
+
 func TestLinkDatastores(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "svc:datastore:sqlite", Type: graph.NodeTypeDatastore, Service: "svc",

@@ -668,6 +668,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
 		return nil, err
 	}
+	{
+		routeCompEdges, routeCompUnresolved := linker.LinkRouteComponents(allNodes)
+		if err := writeEdges(routeCompEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, routeCompUnresolved...)
+	}
 	if err := writeEdges(linker.LinkTemplComponents(allNodes)); err != nil {
 		return nil, err
 	}

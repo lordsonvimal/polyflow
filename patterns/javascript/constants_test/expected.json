@@ -1,1 +1,1 @@
-{"patterns": ["const_string", "const_template_prefix"], "node_types": ["function", "function"]}
+{"patterns": ["const_string", "const_template_prefix", "const_object_member", "const_object_member"], "node_types": ["function", "function", "function", "function"]}
