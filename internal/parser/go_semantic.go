@@ -973,10 +973,14 @@ func extractImplements(
 	}
 
 	// seenExtIface deduplicates the external interface collection across
-	// service packages that import the same external package.
+	// service packages that import the same external package. The synthetic
+	// interface node is NOT minted here — only when an in-service struct
+	// actually satisfies the interface (see satisfaction branch below), so
+	// unimplemented external interfaces leave no dangling stub node.
 	type extIfaceEntry struct {
-		iface  *types.Interface
-		nodeID string
+		iface   *types.Interface
+		pkgPath string
+		name    string
 	}
 	seenExtIface := map[string]extIfaceEntry{} // pkgPath.Name → entry
 
@@ -1001,8 +1005,9 @@ func extractImplements(
 				}
 				key := imp.Path() + "." + name
 				if _, already := seenExtIface[key]; !already {
-					nodeID := syntheticIfaceID(imp.Path(), name)
-					seenExtIface[key] = extIfaceEntry{iface: iface, nodeID: nodeID}
+					seenExtIface[key] = extIfaceEntry{
+						iface: iface, pkgPath: imp.Path(), name: name,
+					}
 				}
 			}
 		}
@@ -1037,10 +1042,14 @@ func extractImplements(
 				}
 			}
 
-			// External interfaces (collected above across all packages).
+			// External interfaces (collected above across all packages). The
+			// synthetic node is minted lazily here — only on satisfaction — so
+			// an external interface that nothing implements never becomes a
+			// dangling stub node.
 			for _, entry := range seenExtIface {
 				if types.Implements(T, entry.iface) || types.Implements(ptrT, entry.iface) {
-					addEdge(structID, entry.nodeID, map[string]string{
+					nodeID := syntheticIfaceID(entry.pkgPath, entry.name)
+					addEdge(structID, nodeID, map[string]string{
 						"nominal": "false", "external": "true",
 					})
 				}
