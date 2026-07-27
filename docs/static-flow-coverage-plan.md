@@ -368,7 +368,37 @@ Store` → assert `Use`→`Store` `uses_type`, `Use`→`Store.Get` `calls` (invo
 
 </details>
 
-### Phase Y.6 — Render dataflow: resource → signal → DOM (frontend tail) `pending`
+### Phase Y.6 — Render dataflow: resource → signal → DOM (frontend tail) `done`
+
+**Outcome (measured, clean reindex).** Both edges landed, schema 22→23.
+- **signal → element `dom_write` (extract, js_variables.go).** A JSX interpolation — text `{sig()}` or
+  attribute `attr={sig()}` — that reads a Solid reactive accessor now binds that signal to the
+  enclosing DOM element. The element node is minted lazily (a bare `<span>` has no id/class so the
+  matcher never emitted one) and *only* when a resolvable accessor read is found, so a `dom_write`
+  never dangles (#10). Reactive accessors are the first non-setter binding of
+  `createSignal`/`createResource`/`createMemo`; function-local accessors are materialised as
+  variable nodes (a signal's reach exceeds one function) while ordinary locals stay out of the graph.
+  **14 `dom_write` edges, 13 minted element nodes**, 0 dangling element nodes. Genuine bindings:
+  `copied → button`, `source → pre`, `loadingImpact → button`, `exportOpen → button` (Detail.tsx,
+  Toolbar.tsx).
+- **http_client → signal `flows_to` (via:resource) join (linker.LinkResourceSignals).** A
+  `createResource(loaderFn)` accessor is stamped `meta.resource_fn`; the linker resolves the loader
+  fn node and walks its `fn → http_client` `calls` edges to emit `http_client → signal`
+  (`flows_to`, `via:resource`). **0 edges in-repo** — a correct, ledgered result: polyflow's own
+  frontend is *manual* `createSignal` + `fetch`, not `createResource`, so hop 6's resource join has
+  no in-repo instance. The path is validated by `TestLinkResourceSignals`; no edge is fabricated (#12).
+- Nodes 2824→**2863**, edges 6114→**6176**, **0 orphan-endpoint edges** (#10). Tests
+  `TestJSY6_DomWrite`/`TestJSY6_ResourceMeta` (parser) + `TestLinkResourceSignals` (linker) + schema
+  bump; `go vet` clean.
+
+**Honest note.** The `dom_write` half fires broadly (any signal-driven element, incl. Solid `<Show>`
+control-flow whose condition reads a signal — the signal *does* gate that element). The
+`createResource → http_client → signal` half is real but only lights up on codebases that use the
+`createResource` idiom; the manual `createSignal`+`fetch`+`setX(await res.json())` pattern is a
+`writes` edge on the setter (already captured) and would need a setter-payload type join (deferred,
+Y.4-adjacent) to reach the same directional `http_client → signal`.
+
+<details><summary>Original spec</summary>
 
 **Problem (hop 6).** `renders` is fn→fn only. The fetch-result→DOM binding is declarative Solid
 reactive dataflow: `const [data] = createResource(fetchFn)` binds the fetch fn to a signal, and JSX
@@ -388,6 +418,8 @@ str`) — recall over precision does **not** license edges from unresolvable dyn
 
 **Test.** Solid fixture `const [d] = createResource(loadNode); return <span>{d().label}</span>` →
 assert `loadNode(http_client) → signal(d) → element(span)` path.
+
+</details>
 
 ### Phase Y.7 — DOM event → handler (frontend head) `pending`
 

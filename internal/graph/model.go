@@ -203,7 +203,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "22" // Y.5: interface uses_type + dispatch calls (interface-method nodes)
+const SchemaVersion = "23" // Y.6: render dataflow — resource→signal flows_to + signal→element dom_write
 
 // Node represents a code entity in the graph.
 type Node struct {
