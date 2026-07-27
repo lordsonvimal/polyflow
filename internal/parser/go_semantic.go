@@ -2,8 +2,10 @@ package parser
 
 import (
 	"fmt"
+	"go/build/constraint"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -107,6 +109,20 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		return SemanticResult{
 			Warning: fmt.Sprintf("go/packages load failed for service %q: %v — falling back to tree-sitter call edges", service, err),
 		}
+	}
+	// Build-tag-gated test files (`//go:build integration`, `e2e`, etc.) are
+	// otherwise invisible to go/packages under default build constraints —
+	// a silent recall gap, since these are exactly the real test-file callers
+	// the Tests:true pass above exists to capture (e.g. *_integration_test.go
+	// suites that call production constructors directly). Force-enabling a
+	// discovered tag is not automatically safe, though: the same tag can also
+	// gate a *production* file (e.g. a `legacy_x` build-tag toggle between two
+	// competing implementations), and turning it on can introduce brand-new
+	// build errors having nothing to do with the test file that named it.
+	// Each candidate is trialed in isolation and kept only if it introduces no
+	// error beyond what the untagged baseline already has.
+	if widened, ok := widenWithTestBuildTags(dir, fset, pkgs); ok {
+		pkgs = widened
 	}
 	pkgs = collapseTestVariants(pkgs)
 	if packages.PrintErrors(pkgs) > 0 {
@@ -254,8 +270,8 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// to its parent's callerID) race with the parent function itself, flipping
 	// the edge type between runs when one uses `go f()` and the other uses
 	// `f()` for the same callee.
-	spawnPairs   := make(map[string]bool) // callerID+"->"+calleeID seen as ssa.Go
-	callPairs    := make(map[string]bool) // callerID+"->"+calleeID seen as regular call
+	spawnPairs := make(map[string]bool)   // callerID+"->"+calleeID seen as ssa.Go
+	callPairs := make(map[string]bool)    // callerID+"->"+calleeID seen as regular call
 	funcArgCounts := make(map[string]int) // callerID+"->"+calleeID for func-arg references
 	var edges []graph.Edge
 
@@ -605,6 +621,183 @@ func collectReferenced(prog *ssa.Program, ssaPkgs []*ssa.Package, allFns map[*ss
 	return out
 }
 
+// reservedBuildTags are tags the Go toolchain manages implicitly (GOOS,
+// maxTestBuildTagCandidates bounds how many discovered tags widenWithTestBuildTags
+// will trial. Each candidate costs a full extra packages.Load; real repos name
+// a small handful of test-gating tags (integration, e2e, ...), so this is a
+// safety cap against a pathological number of distinct tags, not a tuning knob.
+const maxTestBuildTagCandidates = 20
+
+// widenWithTestBuildTags re-loads dir with build tags discovered in *_test.go
+// files force-enabled, but only after confirming each candidate tag doesn't
+// introduce a build error the untagged baseline didn't already have — a tag
+// can just as easily gate a *production* file (a compile-time feature toggle
+// between two competing implementations) as a test file, and enabling it
+// blindly can silently take down the entire service's semantic pass instead
+// of just adding the intended test edges. basePkgs is the already-successful
+// untagged load, used both as the error baseline and as the safe fallback.
+// Returns (nil, false) when no candidate widens the build cleanly, in which
+// case the caller keeps using basePkgs.
+func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*packages.Package) ([]*packages.Package, bool) {
+	candidates := discoverTestBuildTags(dir)
+	if len(candidates) == 0 || len(candidates) > maxTestBuildTagCandidates {
+		return nil, false
+	}
+	baseErrs := packageErrorSet(basePkgs)
+
+	var safe []string
+	for _, tag := range candidates {
+		trialCfg := &packages.Config{
+			Mode:       packages.LoadAllSyntax,
+			Dir:        dir,
+			Fset:       token.NewFileSet(), // throwaway: only error text is inspected
+			Tests:      true,
+			BuildFlags: []string{"-tags=" + tag},
+		}
+		trialPkgs, err := packages.Load(trialCfg, "./...")
+		if err != nil {
+			continue
+		}
+		if isErrorSubset(packageErrorSet(trialPkgs), baseErrs) {
+			safe = append(safe, tag)
+		}
+	}
+	if len(safe) == 0 {
+		return nil, false
+	}
+
+	finalCfg := &packages.Config{
+		Mode:       packages.LoadAllSyntax,
+		Dir:        dir,
+		Fset:       fset,
+		Tests:      true,
+		BuildFlags: []string{"-tags=" + strings.Join(safe, ",")},
+	}
+	finalPkgs, err := packages.Load(finalCfg, "./...")
+	if err != nil || !isErrorSubset(packageErrorSet(finalPkgs), baseErrs) {
+		// Individually-safe tags can still conflict in combination (e.g. two
+		// mutually exclusive opt-in features); bail to the known-good baseline
+		// rather than risk a worse build than not widening at all.
+		return nil, false
+	}
+	return finalPkgs, true
+}
+
+// packageErrorSet collects every packages.Package error as its formatted
+// string ("file:line:col: message"), which is stable across separate Load
+// calls using different token.FileSets (unlike the underlying positions).
+func packageErrorSet(pkgs []*packages.Package) map[string]bool {
+	set := make(map[string]bool)
+	for _, p := range pkgs {
+		for _, e := range p.Errors {
+			set[e.Error()] = true
+		}
+	}
+	return set
+}
+
+// isErrorSubset reports whether every error in sub also appears in super.
+func isErrorSubset(sub, super map[string]bool) bool {
+	for e := range sub {
+		if !super[e] {
+			return false
+		}
+	}
+	return true
+}
+
+// reservedBuildTags are tags the Go toolchain manages implicitly (GOOS,
+// GOARCH, and standard toolchain flags). Force-enabling one of these via
+// discoverTestBuildTags could pull in platform-specific files that don't
+// match the host, so they're never added to BuildFlags even if a _test.go
+// file's constraint happens to name one.
+var reservedBuildTags = map[string]bool{
+	// GOOS
+	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
+	"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true, "nacl": true,
+	"netbsd": true, "openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
+	"windows": true, "zos": true,
+	// GOARCH
+	"386": true, "amd64": true, "amd64p32": true, "arm": true, "armbe": true, "arm64": true,
+	"arm64be": true, "loong64": true, "mips": true, "mipsle": true, "mips64": true,
+	"mips64le": true, "mips64p32": true, "mips64p32le": true, "ppc": true, "ppc64": true,
+	"ppc64le": true, "riscv": true, "riscv64": true, "s390": true, "s390x": true,
+	"sparc": true, "sparc64": true, "wasm": true,
+	// Toolchain / implicit
+	"cgo": true, "race": true, "msan": true, "asan": true, "purego": true,
+	"boringcrypto": true, "netgo": true, "netcgo": true, "osusergo": true,
+	"unix": true, "gc": true, "gccgo": true,
+}
+
+// discoverTestBuildTags scans every *_test.go file under dir for a leading
+// `//go:build` or legacy `// +build` constraint and collects the positive
+// (non-negated) tag identifiers it names, skipping reservedBuildTags and Go
+// version tags ("go1.21"). Negated tags (`!foo`) are skipped: enabling `foo`
+// would flip a file that's included by default (because foo is undefined)
+// to excluded, which is a regression, not an improvement.
+//
+// Best-effort: only the leading comment block of each file is scanned, and a
+// malformed or unparsable constraint line is silently skipped — this exists
+// to widen recall, so any file it fails to help with is no worse off than
+// before the scan existed.
+func discoverTestBuildTags(dir string) []string {
+	tagSet := map[string]bool{}
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "package ") {
+				break // constraints only ever precede the package clause
+			}
+			if !constraint.IsGoBuild(line) && !constraint.IsPlusBuild(line) {
+				continue
+			}
+			expr, perr := constraint.Parse(line)
+			if perr != nil {
+				continue
+			}
+			collectPositiveTags(expr, tagSet)
+		}
+		return nil
+	})
+	tags := make([]string, 0, len(tagSet))
+	for t := range tagSet {
+		if reservedBuildTags[t] || strings.HasPrefix(t, "go1.") {
+			continue
+		}
+		tags = append(tags, t)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+// collectPositiveTags walks a build constraint expression tree, adding every
+// tag that appears outside a NotExpr to tagSet.
+func collectPositiveTags(expr constraint.Expr, tagSet map[string]bool) {
+	switch e := expr.(type) {
+	case *constraint.TagExpr:
+		tagSet[e.Tag] = true
+	case *constraint.AndExpr:
+		collectPositiveTags(e.X, tagSet)
+		collectPositiveTags(e.Y, tagSet)
+	case *constraint.OrExpr:
+		collectPositiveTags(e.X, tagSet)
+		collectPositiveTags(e.Y, tagSet)
+	case *constraint.NotExpr:
+		// Skip: forcing a negated tag true would exclude a file that's
+		// currently included by default.
+	}
+}
+
 // canonicalPath resolves a path to its absolute, symlink-evaluated form so
 // workspace-relative node paths and absolute go/packages positions compare
 // equal (filepath.Abs resolves relative paths against the indexer's cwd,
@@ -688,12 +881,35 @@ func ssaArgFunc(v ssa.Value) *ssa.Function {
 }
 
 // matchesInvoke returns true if fn satisfies the interface method described by call.
-// We match by method name only — a lightweight approximation sufficient for v1.5.
+// Matching by method name alone fans out to every same-named method across the
+// whole service (e.g. two unrelated types both declaring `Do()`), which is a
+// real false-positive source: name-only matching linked call sites to methods
+// that could never actually be invoked there. The static interface type of the
+// call is available from the type checker (`call.Value.Type()`), so candidates
+// are additionally required to have a receiver type that actually implements
+// that interface — a real disambiguation, not a heuristic, and strictly
+// narrower than before (never introduces new matches, only removes false ones).
 func matchesInvoke(call *ssa.CallCommon, fn *ssa.Function) bool {
 	if fn.Signature.Recv() == nil {
 		return false
 	}
-	return fn.Name() == call.Method.Name()
+	if fn.Name() != call.Method.Name() {
+		return false
+	}
+	iface, ok := call.Value.Type().Underlying().(*types.Interface)
+	if !ok {
+		// Can't narrow further without a static interface type; keep prior
+		// name-only behavior rather than dropping the edge.
+		return true
+	}
+	recvType := fn.Signature.Recv().Type()
+	if types.Implements(recvType, iface) {
+		return true
+	}
+	if _, isPtr := recvType.(*types.Pointer); !isPtr && types.Implements(types.NewPointer(recvType), iface) {
+		return true
+	}
+	return false
 }
 
 // extractImplements emits implements edges from in-service struct types to
@@ -759,8 +975,8 @@ func extractImplements(
 	// seenExtIface deduplicates the external interface collection across
 	// service packages that import the same external package.
 	type extIfaceEntry struct {
-		iface    *types.Interface
-		nodeID   string
+		iface  *types.Interface
+		nodeID string
 	}
 	seenExtIface := map[string]extIfaceEntry{} // pkgPath.Name → entry
 

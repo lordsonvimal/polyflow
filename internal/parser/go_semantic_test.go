@@ -398,6 +398,208 @@ func Other() {
 	}
 }
 
+// TestGoSemanticInterfaceDispatchDisambiguates is the regression test for a
+// real precision bug: interface-invoke call sites used to resolve by method
+// name alone, fanning out to every same-named method across the service
+// regardless of whether its receiver type actually implements the invoked
+// interface. Other.Do(x int) shares a name with Real.Do() but has a different
+// signature, so Other does not implement Doer — only Real.Do may be linked.
+func TestGoSemanticInterfaceDispatchDisambiguates(t *testing.T) {
+	dir := t.TempDir()
+	// Real and Other live in separate files (as in the real-world fan-out bug,
+	// which linked call sites to same-named methods in unrelated files):
+	// resolveFunc keys purely by file+name, so two same-named methods in the
+	// *same* file would collide there regardless of matchesInvoke, which would
+	// not isolate the behavior under test.
+	files := map[string]string{
+		"go.mod": "module example.com/semtest\n\ngo 1.25.0\n",
+		"main.go": `package main
+
+type Doer interface {
+	Do()
+}
+
+type Real struct{}
+
+func (Real) Do() {}
+
+func run(d Doer) {
+	d.Do()
+}
+
+func main() {
+	run(Real{})
+}
+`,
+		"other.go": `package main
+
+type Other struct{}
+
+func (Other) Do(x int) {}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:main.go:function:main:15": true,
+		"svc:main.go:function:run:11":  true,
+		"svc:main.go:method:Do:9":      true, // Real.Do
+		"svc:other.go:method:Do:5":     true, // Other.Do
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	var runCallsRealDo, runCallsOtherDo bool
+	for _, e := range res.Edges {
+		if e.From != "svc:main.go:function:run:11" {
+			continue
+		}
+		switch e.To {
+		case "svc:main.go:method:Do:9":
+			runCallsRealDo = true
+		case "svc:other.go:method:Do:5":
+			runCallsOtherDo = true
+		}
+	}
+	if !runCallsRealDo {
+		t.Fatalf("expected run -> Real.Do calls edge (Real implements Doer), got: %+v", res.Edges)
+	}
+	if runCallsOtherDo {
+		t.Fatalf("run -> Other.Do must NOT be linked: Other.Do(x int) does not implement Doer.Do(), only the method name matches (regression for the interface-dispatch fan-out bug)")
+	}
+}
+
+// TestGoSemanticIntegrationTaggedTestFileIncluded is the regression test for
+// a real recall bug: *_test.go files gated behind a build tag like
+// `//go:build integration` are invisible to go/packages under default build
+// constraints, so real test-file callers in such files were silently missing
+// from the call graph entirely — not just deprioritized, absent. The analyzer
+// must discover and force-enable such tags so these files are analyzed too.
+func TestGoSemanticIntegrationTaggedTestFileIncluded(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/semtest\n\ngo 1.25.0\n",
+		"main.go": `package main
+
+func Helper() {}
+
+func main() {}
+`,
+		"helper_integration_test.go": `//go:build integration
+
+package main
+
+import "testing"
+
+func TestHelperIntegration(t *testing.T) {
+	Helper()
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:main.go:function:Helper:3":                                   true,
+		"svc:main.go:function:main:5":                                     true,
+		"svc:helper_integration_test.go:function:TestHelperIntegration:7": true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	found := false
+	for _, e := range res.Edges {
+		if e.From == "svc:helper_integration_test.go:function:TestHelperIntegration:7" && e.To == "svc:main.go:function:Helper:3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected integration-tagged test file's call to Helper to be captured, got: %+v", res.Edges)
+	}
+}
+
+// TestGoSemanticConflictingBuildTagDeclined is the regression test for the
+// widening safety net: a tag found on a _test.go file can also gate a
+// *production* file that conflicts with another always-on file (a
+// compile-time feature toggle between two competing implementations, e.g.
+// `legacy_x`). Enabling such a tag blindly would break the whole package's
+// build. The analyzer must detect the conflict, decline the tag, and fall
+// back to the untagged baseline cleanly — no warning, no crash, and no false
+// call edge from the now-invisible gated test file.
+func TestGoSemanticConflictingBuildTagDeclined(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/semtest\n\ngo 1.25.0\n",
+		"main.go": `package main
+
+func Helper() {}
+
+func main() {}
+`,
+		"legacy_stub.go": `package main
+
+type Thing struct{}
+`,
+		"real_impl.go": `//go:build legacy_thing
+
+package main
+
+type Thing struct{}
+`,
+		"real_impl_test.go": `//go:build legacy_thing
+
+package main
+
+import "testing"
+
+func TestReal(t *testing.T) {
+	Helper()
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:main.go:function:Helper:3":             true,
+		"svc:main.go:function:main:5":               true,
+		"svc:real_impl_test.go:function:TestReal:7": true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("expected a clean baseline fallback with no warning, got: %s", res.Warning)
+	}
+
+	for _, e := range res.Edges {
+		if e.From == "svc:real_impl_test.go:function:TestReal:7" {
+			t.Fatalf("legacy_thing conflicts with legacy_stub.go's Thing declaration and must be declined, but TestReal's edge was emitted: %+v", e)
+		}
+	}
+}
+
 // TestGoSemanticZeroResolutionWarns ensures the analyzer fails loudly instead
 // of silently returning an empty edge set when no function matches the node
 // index (e.g. a future path-format regression).
