@@ -1,0 +1,16 @@
+name: "ws-connect-2svc"
+version: "1"
+services:
+  - name: svc-a
+    path: ./svc-a
+    language: javascript
+  - name: svc-b
+    path: ./svc-b
+    language: javascript
+links:
+  - from: svc-b
+    to: svc-a
+    base_url: "ws://svc-a"
+index:
+  exclude:
+    - "**/node_modules/**"
