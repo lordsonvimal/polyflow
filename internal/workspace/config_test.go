@@ -204,6 +204,50 @@ services:
 	assert.Equal(t, filepath.Clean(svcDir), cfg.Services[0].Path)
 }
 
+// TestLoad_SymlinkedServiceRootDereferenced: X.5 fleet workspaces commonly
+// point Service.Path at a symlink (eval/.cache/<name> -> an out-of-tree
+// repo, the chessleap/Z.2 precedent). filepath.WalkDir treats a symlink
+// root as a single non-dir entry and never descends into it, so Load must
+// resolve the symlink to its physical target — discovered by indexing a
+// real 3-repo fleet workspace where every symlinked service silently
+// walked 0 files.
+func TestLoad_SymlinkedServiceRootDereferenced(t *testing.T) {
+	realDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(realDir, "marker.go"), []byte("package x"), 0o644))
+
+	wsDir := t.TempDir()
+	linkPath := filepath.Join(wsDir, "svc-link")
+	require.NoError(t, os.Symlink(realDir, linkPath))
+
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-symlink
+    path: ./svc-link
+    language: go
+`)
+	cfg, err := workspace.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Services, 1)
+
+	resolvedReal, err := filepath.EvalSymlinks(realDir)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedReal, cfg.Services[0].Path)
+
+	// Prove the fix actually matters: filepath.WalkDir on the raw symlink
+	// path (what Load would have stored pre-fix) sees only the symlink
+	// itself, not marker.go inside it.
+	var sawMarker bool
+	_ = filepath.WalkDir(cfg.Services[0].Path, func(p string, d os.DirEntry, err error) error {
+		if filepath.Base(p) == "marker.go" {
+			sawMarker = true
+		}
+		return nil
+	})
+	assert.True(t, sawMarker, "WalkDir on the resolved path must see files inside the symlink target")
+}
+
 // TestLoad_SingleRepoRegression loads this repo's own workspace.yaml from
 // its own directory (CWD == workspace dir) and asserts resolved service
 // paths equal the pre-Z.0 behavior (filepath.Abs from CWD).

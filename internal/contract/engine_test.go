@@ -104,7 +104,7 @@ func TestEngine_ExactMatch_SameServiceKept(t *testing.T) {
 func TestEngine_SameService_SkipUnlessMeta(t *testing.T) {
 	// skip_unless_meta:datastar: same-service skip, EXCEPT datastar clients
 	nodes := []graph.Node{
-		client("c1", "svc-a", "GET", "/users"),         // no datastar meta
+		client("c1", "svc-a", "GET", "/users"),                       // no datastar meta
 		client("c2", "svc-a", "POST", "/action", "datastar", "true"), // datastar
 		handler("h1", "svc-a", "GET", "/users"),
 		handler("h2", "svc-a", "POST", "/action"),
@@ -286,6 +286,48 @@ func TestEngine_BaseURLStrip_ConsumerPath(t *testing.T) {
 			Key:  []string{"method", "path"},
 		},
 		Normalizers: []string{"base_url_strip", "trim_slash"},
+		Match:       []contract.MatchTier{contract.TierNormalized},
+		Edge: contract.EdgeSpec{
+			Type:        graph.EdgeTypeHTTPCall,
+			IDPrefix:    "link",
+			SameService: "skip",
+		},
+		Unmatched: contract.UnmatchedDrop,
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{rule}, links)
+
+	require.Len(t, result.Edges, 1)
+	assert.Equal(t, "link:c1->h1", result.Edges[0].ID)
+}
+
+// TestEngine_DynamicHostStrip_ReconciledWithBaseURL (X.5): a templated
+// cross-repo call whose base resolves via a workspace Link to a target
+// service mounted at a non-empty base_url must still match. dynamic_host_strip
+// only ever drops the producer's reconstructed "*" host segment; base_url_strip
+// (next in the chain, same as contracts/http.yaml orders them) is what
+// consults env.Links — the two normalizers already compose correctly with no
+// engine change needed, verified here end to end rather than assumed.
+func TestEngine_DynamicHostStrip_ReconciledWithBaseURL(t *testing.T) {
+	links := []workspace.Link{{From: "svc-a", To: "svc-b", BaseURL: "/api"}}
+	nodes := []graph.Node{
+		// Producer path already template-reconstructed by X.1b to
+		// "*/users" (fmt.Sprintf("%s/users", dynamicBase)).
+		client("c1", "svc-a", "GET", "*/users", "target_service", "svc-b"),
+		handler("h1", "svc-b", "GET", "/api/users"),
+	}
+	rule := contract.Rule{
+		Kind: contract.KindHTTP,
+		Producer: contract.EndpointSpec{
+			Node:              graph.NodeTypeHTTPClient,
+			Key:               []string{"method", "path"},
+			TargetServiceMeta: "target_service",
+		},
+		Consumer: contract.EndpointSpec{
+			Node: graph.NodeTypeHTTPHandler,
+			Key:  []string{"method", "path"},
+		},
+		Normalizers: []string{"dynamic_host_strip", "base_url_strip", "trim_slash"},
 		Match:       []contract.MatchTier{contract.TierNormalized},
 		Edge: contract.EdgeSpec{
 			Type:        graph.EdgeTypeHTTPCall,
