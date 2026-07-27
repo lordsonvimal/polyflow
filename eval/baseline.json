@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-27T06:26:24.03288Z",
+  "generated_at": "2026-07-27T08:40:14.822137Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -1099,6 +1099,307 @@
       ],
       "recall": 1,
       "precision": 0.7571428571428572
+    },
+    {
+      "repo": "main-svc",
+      "results": [
+        {
+          "case_id": "dj-application-group-promise-ok",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "dj-folder-update-file-paths-on-rename",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "bunny-publisher-class-callers",
+          "recall": 1,
+          "precision": 0.6666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "bunny-agent-message-class-callers",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "inherits-application-controller",
+          "recall": 1,
+          "precision": 0.022222222222222223,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "inherits-secured-controller",
+          "recall": 1,
+          "precision": 0.012048192771084338,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "inherits-application-record",
+          "recall": 1,
+          "precision": 0.016129032258064516,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "react-icon-get-custom-svg-icon",
+          "recall": 1,
+          "precision": 0.017241379310344827,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "react-icon-render-file-icon",
+          "recall": 1,
+          "precision": 0.034482758620689655,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "test-caller-version-header",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fill-clipboard-view-spec",
+          "recall": 1,
+          "precision": 0.4,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fill-file-display-category-helper",
+          "recall": 1,
+          "precision": 0.15384615384615385,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fill-user-file-model",
+          "recall": 1,
+          "precision": 0.13333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fill-user-license-classifier",
+          "recall": 1,
+          "precision": 0.6666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "fill-user-file-copier",
+          "recall": 1,
+          "precision": 0.2,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 0.35484242704634844
+    },
+    {
+      "repo": "consumer-a",
+      "results": [
+        {
+          "case_id": "inherits-api-base-controller",
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "instantiates-user-manager",
+          "recall": 1,
+          "precision": 0.75,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "instantiates-folder-manager",
+          "recall": 1,
+          "precision": 0.4,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "bunny-message-handler-base",
+          "recall": 1,
+          "precision": 0.09090909090909091,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "message-handler-base-deliver-ack",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rest-client-storage-manager",
+          "recall": 1,
+          "precision": 0.2857142857142857,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rest-client-ldap-wrapper",
+          "recall": 1,
+          "precision": 0.2222222222222222,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rest-client-study-manager",
+          "recall": 1,
+          "precision": 0.6666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "instantiates-dss-org-info-wrapper",
+          "recall": 1,
+          "precision": 0.125,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "instantiates-snapshot-cleaner",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 0.3707178932178932
+    },
+    {
+      "repo": "consumer-b",
+      "results": [
+        {
+          "case_id": "rest-helper-callers",
+          "recall": 1,
+          "precision": 0.05405405405405406,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "remote-executor-callers",
+          "recall": 1,
+          "precision": 0.06896551724137931,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "snapshot-based-executor-spec-callers",
+          "recall": 1,
+          "precision": 0.2222222222222222,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sas-base-adapter-subclasses",
+          "recall": 1,
+          "precision": 0.2857142857142857,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "base-execution-service-subclasses",
+          "recall": 1,
+          "precision": 0.4,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "remote-exec-adapter-subclasses",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "trace-parser-subclasses",
+          "recall": 1,
+          "precision": 0.2857142857142857,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "log-buffer-callers",
+          "recall": 1,
+          "precision": 0.06451612903225806,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "job-item-files-downloader-callers",
+          "recall": 1,
+          "precision": 0.2,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "file-uploader-callers",
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 0.22478531606451516
     }
   ]
 }
