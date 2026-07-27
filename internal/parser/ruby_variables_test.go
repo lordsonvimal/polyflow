@@ -83,3 +83,135 @@ func TestRubyVariables_IvarWritesAndReads(t *testing.T) {
 		t.Errorf("@@count should be class-scoped: %+v", count)
 	}
 }
+
+const rubyCallsFixture = `class UserManager
+  def create(params)
+    validate(params)
+    self.notify(params)
+  end
+
+  def validate(params)
+    true
+  end
+
+  def notify(params)
+    later_helper(params)
+  end
+end
+
+class OrderManager
+  def notify(params)
+    false
+  end
+end
+
+def later_helper(params)
+  params
+end
+`
+
+func TestRubyVariables_BareCallResolvesSameClass(t *testing.T) {
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
+		t.Errorf("missing calls edge create -> validate; edges: %+v", edges)
+	}
+}
+
+func TestRubyVariables_ExplicitSelfCallResolves(t *testing.T) {
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:notify") == nil {
+		t.Errorf("missing calls edge create -> self.notify; edges: %+v", edges)
+	}
+}
+
+func TestRubyVariables_SameNameDifferentClassDoesNotCollide(t *testing.T) {
+	nodes, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+
+	// UserManager#create calls UserManager#notify — must NOT resolve to
+	// OrderManager#notify even though both classes are in the same file and
+	// share the method name (rule 9: no attribution by luck).
+	var userNotify, orderNotify *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "notify" && nodes[i].Meta["class"] == "UserManager" {
+			userNotify = &nodes[i]
+		}
+		if nodes[i].Label == "notify" && nodes[i].Meta["class"] == "OrderManager" {
+			orderNotify = &nodes[i]
+		}
+	}
+	if userNotify == nil || orderNotify == nil {
+		t.Fatalf("expected both notify methods as nodes; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == orderNotify.ID {
+			t.Errorf("calls edge must not target OrderManager#notify: %+v", e)
+		}
+	}
+}
+
+func TestRubyVariables_BareCallForwardReferenceResolves(t *testing.T) {
+	// later_helper is defined below notify() in the file — forward
+	// references must still resolve via the pre-collection pass.
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:notify", "function:later_helper") == nil {
+		t.Errorf("missing forward-reference calls edge notify -> later_helper; edges: %+v", edges)
+	}
+}
+
+func TestRubyVariables_UnresolvableBareCallGoesToLedger(t *testing.T) {
+	_, _, unresolved := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(rubyVarFixture))
+
+	found := false
+	for _, u := range unresolved {
+		if u.Kind == "call_ref" && u.Name == "render" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected unresolved call_ref for `render` (no matching method); unresolved: %+v", unresolved)
+	}
+}
+
+func TestRubyVariables_ReceiverTypedCallNotAttributed(t *testing.T) {
+	// article.save has an explicit non-self receiver — Ruby's dynamism rules
+	// out static type inference, so this must not be attributed to any
+	// same-named method (no false positive), nor land in the ledger (it's
+	// not a bare/implicit-self call at all).
+	src := `class ArticlesController
+  def create
+    article = Article.new
+    article.save
+  end
+end
+
+class Article
+  def save
+    true
+  end
+end
+`
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/articles_controller.rb", "shop", []byte(src))
+
+	var articleSave *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "save" {
+			articleSave = &nodes[i]
+		}
+	}
+	if articleSave == nil {
+		t.Fatalf("expected Article#save node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == articleSave.ID {
+			t.Errorf("receiver-typed call must not be attributed: %+v", e)
+		}
+	}
+	for _, u := range unresolved {
+		if u.Name == "save" {
+			t.Errorf("receiver-typed call must not enter the ledger either: %+v", u)
+		}
+	}
+}

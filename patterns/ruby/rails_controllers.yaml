@@ -1,15 +1,6 @@
 language: ruby
 version: "1"
 patterns:
-  - name: controller_action
-    query: |
-      (class
-        body: (body_statement
-          (method
-            name: (identifier) @name)))
-    captures:
-      - name: name
-        role: rails_action
   - name: before_action
     query: |
       (call
