@@ -27,6 +27,12 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "ruby")
 
+	// Tier-2 AMQP queue-key resolution: rewrite channel/subscriber nodes whose
+	// queue name is a same-file method reference (from_queue resolved_queue_name)
+	// to the concrete queue key that method returns. Runs before variable
+	// tracking so it only sees the pattern-matched comm nodes.
+	resolveRubyQueueKeys(file, src, nodes)
+
 	// Structural variable tracking: constants, classes, ivar reads/writes.
 	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, src)
 	nodes = append(nodes, varNodes...)
