@@ -784,6 +784,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkResponseShapes(allNodes, allEdges)); err != nil {
 		return nil, err
 	}
+	// Y.6: join a createResource loader's http_client to the reactive signal it
+	// feeds (http_client → signal flows_to). Needs the calls edges from Pass 2,
+	// so it runs after the bulk of edges are collected.
+	if err := writeEdges(linker.LinkResourceSignals(allNodes, allEdges)); err != nil {
+		return nil, err
+	}
 	if err := writeEdges(linker.LinkSSEClients(allNodes)); err != nil {
 		return nil, err
 	}
