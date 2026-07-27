@@ -478,12 +478,16 @@ func extractVariables(
 		})
 	}
 
-	// ── B.2: cross-package const references via typed AST ───────────────────
-	// Go constants are compile-time-folded and invisible to SSA instructions,
-	// so we resolve them using the type-checker's Uses map (available from
-	// packages.LoadAllSyntax, the same load mode the SSA pass already uses).
-	// We build a per-file function-range index from inService to find the
-	// enclosing function node for each const-reference identifier.
+	// ── B.2 / Y.2: const references via typed AST ───────────────────────────
+	// Go constants are compile-time-folded and invisible to SSA instructions —
+	// SSA inlines every use as an *ssa.Const literal, so no reads edge is
+	// structurally possible via the instruction walk, regardless of whether the
+	// const is same-package or imported. We resolve them using the type-checker's
+	// Uses map (available from packages.LoadAllSyntax, the same load mode the SSA
+	// pass already uses). We build a per-file function-range index from inService
+	// to find the enclosing function node for each const-reference identifier.
+	// Y.2 extends this from cross-package only to same-package as well (the 109
+	// same-package const nodes previously dangled).
 	//
 	// Implementation note: the spec calls for the tree-sitter layer here, but
 	// MatchToGraph has no access to the in-service const node set (those are
@@ -554,8 +558,8 @@ func extractVariables(
 			if !ok {
 				continue
 			}
-			if c.Pkg() == nil || c.Pkg() == p.Types {
-				continue // same-package const: SSA handles it (or no edge needed)
+			if c.Pkg() == nil {
+				continue // builtin const (true/false/iota) — no node exists
 			}
 			qk := c.Pkg().Path() + "." + c.Name()
 			constNodeID, ok := qualifiedNameIDs[qk]
