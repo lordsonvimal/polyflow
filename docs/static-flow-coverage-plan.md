@@ -258,7 +258,45 @@ cases 100%, templated cases per X.1 yield ≥95% cross).
 **Test.** Fixture with a Solid `fetch("/api/node/" + id)` and a Go `GET /api/node/{id}` handler that
 runs `SELECT … FROM nodes` → assert one connected path client→handler-fn→`nodes` table.
 
-### Phase Y.4 — Response-type extraction + type-shape join (the return half) `pending`
+### Phase Y.4 — Response-type extraction + type-shape join (the return half) `done`
+
+**Measured outcome (shipped 2026-07-28).** All three sub-parts landed as specified; the return
+half now connects end-to-end. New edge types `returns`/`consumes`/`response_of` (schema 20→21,
+forced full re-index); no new node types (edges-only pass). Verified against the live graph:
+
+- **Server `returns`** (typed-AST pass in `go_variables.go`, after the const-ref loop). Resolves
+  the payload type at each JSON sink via `types.Info.TypeOf`. Sinks recognised: `encoding/json`
+  `Marshal`/`MarshalIndent`, `(*json.Encoder).Encode`, and — the wrinkle this repo actually uses —
+  any **ResponseWriter-first wrapper** (`writeJSON(w, status, v)`), detected *structurally* by its
+  signature, not by name. **30 `returns` edges.** The two real HTTP handlers resolve
+  (`handleGraph`/`handleTrace → CytoscapeGraph`, `handleSearch → {graph.Node, semantic.Response}`);
+  the rest are honest CLI/internal `json.Marshal` sites. Untyped bodies (`map[string]any`, most
+  handlers) emit **no** edge (ledgered, #12). Needed a B.2-style qualified-name fallback for
+  `structIDs` (`structIDsByQName`): cross-package response structs (`graph.Node`, `semantic.Response`)
+  missed on pointer identity because the type-checker built a test variant — same failure mode B.2
+  fixed for globals.
+- **Client `consumes`** (tree-sitter pass in `js_variables.go`). Fires on typed `await res.json()`
+  — annotated (`const d: NodeDetail = …`) or asserted (`… as GraphNode[]`). **3 `consumes` edges**
+  (`fetchGraph`/`fetchTrace → CytoscapeGraph`, `Detail → NodeDetail`). Resolves against same-file
+  interfaces only; the one cross-file/imported decode target (`GraphNode` in `search.ts`) and every
+  untyped `.json()` are ledgered (#12), no fabricated endpoint. Cross-file TS decode resolution is a
+  deliberately-deferred residual (would need the import-aware linker path).
+- **Join `response_of`** (`linker.LinkResponseShapes`, gated on `returns` targets). Matches each
+  server-declared response struct against every non-Go interface by **JSON field-name set** (json
+  tag → wire name), Jaccard ≥ 0.8 and ≥ 2 shared fields. **4 `response_of` edges**, all genuine
+  cross-language mirrors: `CytoscapeGraph↔CytoscapeGraph` (1.00), `graph.FileSummary↔FileResult`
+  (1.00), `graph.Node↔{GraphNode (0.80), CytoscapeNodeData (0.89)}`. Gating on the (small) server
+  returns set kept it from exploding while recall stayed high — every shape-equivalent client type
+  is linked, each edge carrying `shared`/`jaccard` so a consumer can rank.
+
+**End-to-end (verified):** `http_handler(/api/graph) → handleGraph → returns → CytoscapeGraph →
+response_of → TS CytoscapeGraph ← consumes ← fetchGraph/fetchTrace`. 0 orphan-endpoint edges (#10);
+the previously-dangling TS DTO interfaces are now connected. Tests: `TestLinkResponseShapes`,
+`TestGoStructJSONFields`, `TestGoY4_Returns`, `TestJSY4_Consumes` (+ schema-version bump); 702 pass
+across parser/linker/graph/indexer/server/contract, vet clean. The one e2e failure
+(`TestChain_RailsBunnyRabbitGoConsumer`) is the pre-existing `testdata` go.sum issue, unrelated.
+
+<details><summary>Original plan (unchanged, for reference)</summary>
 
 **Problem (hop 5).** The response is not runtime-only — its **type is statically declared**. A
 handler does `json.NewEncoder(w).Encode(resp)` where `resp : *NodeDetail`; the client does
@@ -285,6 +323,8 @@ the render tie-in in Y.6.
 **Test.** Go handler encoding `type NodeDetail struct{ ID string \`json:"id"\`; Label string }` and
 a TS `interface NodeDetail { id: string; label: string }` decode → assert one `response_of` edge by
 shape. A handler returning `map[string]any` → assert a ledger entry, **no** edge.
+
+</details>
 
 ### Phase Y.5 — Interface param/return `uses_type` + interface-dispatch calls `pending`
 

@@ -699,6 +699,7 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		ex.handleRead(node, scopes)
 	case "call_expression":
 		ex.handleCall(node, scopes)
+		ex.handleResponseConsume(node, scopes)
 	case "new_expression":
 		ex.handleNew(node, scopes)
 	}
@@ -737,6 +738,106 @@ func (ex *jsExtractor) handleWrite(node *sitter.Node, name string, scopes []*jsS
 	case frame > 0 && frame < len(scopes)-1: // captured outer local
 		ex.captureEdge(node, name, scopes, frame, true)
 	}
+}
+
+// handleResponseConsume records the DTO a fetch response is decoded into
+// (Y.4 client side). It fires on `await res.json()` whose result is typed —
+// either annotated (`const d: NodeDetail = await res.json()`) or asserted
+// (`(await res.json()) as GraphNode[]`) — and emits `function → interface`
+// `consumes`. The type name is resolved against same-file interfaces only;
+// cross-file/imported decode targets and untyped `.json()` calls are ledgered
+// (#12): no edge, no fabricated endpoint.
+func (ex *jsExtractor) handleResponseConsume(call *sitter.Node, scopes []*jsScope) {
+	fn := call.ChildByFieldName("function")
+	if fn == nil || fn.Type() != "member_expression" {
+		return
+	}
+	prop := fn.ChildByFieldName("property")
+	if prop == nil || prop.Content(ex.src) != "json" {
+		return
+	}
+	// Climb past the await (await res.json()) to the typing context.
+	cur := call
+	if p := cur.Parent(); p != nil && p.Type() == "await_expression" {
+		cur = p
+	}
+	typeNode := ex.decodeTargetType(cur)
+	if typeNode == nil {
+		return // untyped decode — ledgered
+	}
+	name := baseTypeName(typeNode, ex.src)
+	if name == "" {
+		return
+	}
+	nodeID, ok := ex.classNodes[name]
+	if !ok {
+		return // cross-file/unresolved type — ledgered
+	}
+	from := attribution(scopes, ex)
+	if from == "" {
+		from = ex.moduleAttr(call)
+	}
+	if from == "" || from == nodeID {
+		return
+	}
+	meta := map[string]string{"response_type": name, "via": "json_decode"}
+	if typeNode.Type() == "array_type" {
+		meta["container"] = "slice"
+	}
+	ex.addEdge(graph.EdgeTypeConsumes, from, nodeID, graph.ConfidenceStatic, meta)
+}
+
+// decodeTargetType returns the TS type node that the expression `expr`
+// (an `await res.json()` result) is typed as, via a surrounding `as`
+// assertion or an enclosing typed variable declarator — or nil when untyped.
+func (ex *jsExtractor) decodeTargetType(expr *sitter.Node) *sitter.Node {
+	p := expr.Parent()
+	for p != nil && p.Type() == "parenthesized_expression" {
+		expr, p = p, p.Parent()
+	}
+	if p == nil {
+		return nil
+	}
+	switch p.Type() {
+	case "as_expression", "satisfies_expression":
+		// `<expr> as T` — T is the last named child.
+		if n := p.NamedChildCount(); n > 0 {
+			return p.NamedChild(int(n) - 1)
+		}
+	case "variable_declarator":
+		if p.ChildByFieldName("value") == expr {
+			if ta := p.ChildByFieldName("type"); ta != nil && ta.NamedChildCount() > 0 {
+				return ta.NamedChild(0) // type_annotation wraps the actual type
+			}
+		}
+	}
+	return nil
+}
+
+// baseTypeName reduces a TS type node to the bare named type — peeling
+// array (`T[]`) and generic (`Array<T>`, `Promise<T>`) wrappers — so a
+// decode target of `GraphNode[]` resolves to `GraphNode`.
+func baseTypeName(t *sitter.Node, src []byte) string {
+	switch t.Type() {
+	case "type_identifier", "identifier":
+		return t.Content(src)
+	case "array_type":
+		if t.NamedChildCount() > 0 {
+			return baseTypeName(t.NamedChild(0), src)
+		}
+	case "generic_type":
+		if args := t.ChildByFieldName("type_arguments"); args != nil && args.NamedChildCount() == 1 {
+			return baseTypeName(args.NamedChild(0), src)
+		}
+		if name := t.ChildByFieldName("name"); name != nil {
+			return name.Content(src)
+		}
+	case "parenthesized_type":
+		if t.NamedChildCount() > 0 {
+			return baseTypeName(t.NamedChild(0), src)
+		}
+	}
+	return ""
 }
 
 func (ex *jsExtractor) handleRead(node *sitter.Node, scopes []*jsScope) {
