@@ -79,6 +79,72 @@ func TestAMQPRule_QuotedKeyNormalised(t *testing.T) {
 	assert.True(t, found, "quote_strip must allow quoted channel to match unquoted")
 }
 
+// Positive: queue-based flows (bunny channel.queue publisher declare <->
+// kicks from_queue consumer) match cross-service on queue_name alone, with no
+// exchange/routing_key present.
+func TestAMQPRule_QueueName_CrossServiceMatch(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "consumer-a:channel:cdr_progress_events", Type: graph.NodeTypeChannel, Service: "consumer-a",
+			Meta: map[string]string{"queue_name": "cdr_progress_events"}},
+		{ID: "main-svc:channel:cdr_progress_events", Type: graph.NodeTypeChannel, Service: "main-svc",
+			Meta: map[string]string{"queue_name": "cdr_progress_events"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	crossEdges := 0
+	for _, e := range res.Edges {
+		if e.Type == graph.EdgeTypePublishes {
+			crossEdges++
+		}
+	}
+	require.Greater(t, crossEdges, 0, "expected cross-service queue publishes edge")
+	assert.Equal(t, "broker_queue", res.Edges[0].ID[:len("broker_queue")],
+		"queue-based edge ID must start with 'broker_queue:'")
+}
+
+// Positive: quoted queue names normalise via quote_strip.
+func TestAMQPRule_QueueName_QuotedNormalised(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:channel:q", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"queue_name": `"audit_events"`}},
+		{ID: "b:channel:q", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"queue_name": "audit_events"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	var found bool
+	for _, e := range res.Edges {
+		if e.Type == graph.EdgeTypePublishes {
+			found = true
+		}
+	}
+	assert.True(t, found, "quote_strip must let a quoted queue_name match an unquoted one")
+}
+
+// Negative: an exchange-only channel and a queue-only channel must NOT link —
+// both have an empty key under the other's contract (keyIsEmpty guard), so no
+// empty-string false match crosses the two AMQP contracts.
+func TestAMQPRule_QueueAndExchange_NoEmptyKeyCollision(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:channel:ex", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"exchange": "orders", "routing_key": "placed"}},
+		{ID: "b:channel:q", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"queue_name": "audit_events"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	assert.Empty(t, res.Edges, "exchange-only and queue-only channels must not cross-match")
+}
+
+// Negative: different queue names must not match.
+func TestAMQPRule_QueueName_Different_NoEdge(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:channel:q", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"queue_name": "cdr_progress_events"}},
+		{ID: "b:channel:q", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"queue_name": "audit_events"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	assert.Empty(t, res.Edges, "different queue names must not match")
+}
+
 // Negative: same-service channels must not link (skip policy).
 func TestAMQPRule_SameService_NoCrossEdge(t *testing.T) {
 	nodes := []graph.Node{

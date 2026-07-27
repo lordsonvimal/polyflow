@@ -1,0 +1,31 @@
+# Gated on the kicks gem (a maintained Sneakers fork that keeps the
+# `Sneakers::Worker` module and the `from_queue` class macro). `from_queue`
+# is the queue-binding DSL a worker uses to declare which AMQP queue it
+# consumes — the consumer side of a bunny publish. Captured as a channel
+# node keyed on queue_name so the AMQP contract can join it, cross-service,
+# to the publisher's `channel.queue(name)` declaration.
+language: ruby
+version: "1"
+package: kicks
+patterns:
+  # from_queue "cdr_progress_events", ack: true, threads: 4
+  # from_queue resolved_queue_name, ack: true          (method-ref name)
+  - name: kicks_from_queue
+    query: |
+      (call
+        method: (identifier) @fn
+        (#eq? @fn "from_queue")
+        arguments: (argument_list
+          .
+          [
+            (string)
+            (simple_symbol)
+            (identifier)
+            (constant)
+            (call)
+            (scope_resolution)
+            (binary)
+          ] @queue_name))
+    captures:
+      - name: queue_name
+        role: amqp_queue

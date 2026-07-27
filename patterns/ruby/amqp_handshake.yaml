@@ -1,0 +1,43 @@
+# Tier 3 — AMQP registration-handshake fields.
+#
+# When a queue name is not checked in but negotiated at runtime, the two
+# services still share one static token: the registration *field symbol*
+# (e.g. `amqp_progress_events_queue_name`). The producer sends it as a hash
+# pair key in a REST registration response; the consumer reads it back with
+# `dig(:amqp_progress_events_queue_name)`. Capturing that symbol on both sides
+# as a channel node's `broker_field` lets `polyflow link --infer` (InferLinks)
+# propose the cross-repo link the runtime handshake implies — reviewable,
+# never a silently-applied edge.
+#
+# The `amqp_..._queue_name` regex is specific enough that no gem gate is
+# needed; it will not match ordinary symbols.
+# Gated on bunny: the registration handshake only matters for services that
+# actually speak AMQP, so non-broker Ruby repos never pay the match cost.
+language: ruby
+version: "1"
+package: bunny
+patterns:
+  # producer: `amqp_progress_events_queue_name: cdr_progress_events_queue(org)`
+  - name: amqp_field_pair
+    query: |
+      (pair
+        key: (hash_key_symbol) @broker_field
+        (#match? @broker_field "amqp_[a-z0-9_]*_queue_name"))
+    captures:
+      - name: broker_field
+        role: amqp_broker_field
+  # consumer: `hash.dig(:amqp_progress_events_queue_name)`. Scoped to `dig`
+  # calls (not any call with a symbol arg) so the query does not fan out over
+  # the thousands of `validates :x` / `before_action :y` symbol args a Rails
+  # app carries.
+  - name: amqp_field_symbol
+    query: |
+      (call
+        method: (identifier) @_m
+        (#eq? @_m "dig")
+        arguments: (argument_list
+          (simple_symbol) @broker_field
+          (#match? @broker_field "amqp_[a-z0-9_]*_queue_name")))
+    captures:
+      - name: broker_field
+        role: amqp_broker_field

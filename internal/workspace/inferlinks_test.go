@@ -92,6 +92,60 @@ func TestInferLinks_BrokerExchangeOverlap(t *testing.T) {
 	assert.Equal(t, workspace.Link{From: "svc-b", To: "svc-a", Via: "rabbitmq", Exchange: "orders.events"}, links[1])
 }
 
+// Tier 3: two services that share an AMQP registration field symbol (a
+// runtime-negotiated queue whose only static token is the handshake field)
+// get a proposed cross-repo link in both directions.
+func TestInferLinks_BrokerFieldHandshake(t *testing.T) {
+	ctx := context.Background()
+	s := newMemStore(t)
+
+	nodes := []graph.Node{
+		// MainSvc registration response pair key.
+		{ID: "f:ng", Type: graph.NodeTypeChannel, Service: "main-svc",
+			Meta: map[string]string{"broker_field": "amqp_progress_events_queue_name"}},
+		// ConsumerA dig(:amqp_progress_events_queue_name).
+		{ID: "f:cdr", Type: graph.NodeTypeChannel, Service: "consumer-a",
+			Meta: map[string]string{"broker_field": "amqp_progress_events_queue_name"}},
+		// An unrelated field in a third service must not link.
+		{ID: "f:other", Type: graph.NodeTypeChannel, Service: "consumer-b",
+			Meta: map[string]string{"broker_field": "amqp_lro_events_queue_name"}},
+	}
+	for i := range nodes {
+		require.NoError(t, s.UpsertNode(ctx, &nodes[i]))
+	}
+
+	cfg := &workspace.WorkspaceConfig{
+		Services: []workspace.Service{{Name: "main-svc"}, {Name: "consumer-a"}, {Name: "consumer-b"}},
+	}
+
+	links, err := workspace.InferLinks(ctx, s, cfg)
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+	assert.Equal(t, workspace.Link{From: "consumer-a", To: "main-svc", Via: "rabbitmq", Exchange: "amqp_progress_events_queue_name"}, links[0])
+	assert.Equal(t, workspace.Link{From: "main-svc", To: "consumer-a", Via: "rabbitmq", Exchange: "amqp_progress_events_queue_name"}, links[1])
+}
+
+// Tier 3 negative: distinct field symbols must not link (no key-collision noise).
+func TestInferLinks_BrokerField_DistinctSymbols_NoLink(t *testing.T) {
+	ctx := context.Background()
+	s := newMemStore(t)
+
+	nodes := []graph.Node{
+		{ID: "f:a", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"broker_field": "amqp_audit_events_queue_name"}},
+		{ID: "f:b", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"broker_field": "amqp_progress_events_queue_name"}},
+	}
+	for i := range nodes {
+		require.NoError(t, s.UpsertNode(ctx, &nodes[i]))
+	}
+	cfg := &workspace.WorkspaceConfig{Services: []workspace.Service{{Name: "svc-a"}, {Name: "svc-b"}}}
+
+	links, err := workspace.InferLinks(ctx, s, cfg)
+	require.NoError(t, err)
+	assert.Empty(t, links)
+}
+
 // TestInferLinks_Negative_NoSharedExchange: two same-named-shape channels in
 // unrelated services must not link when their exchange values differ.
 func TestInferLinks_Negative_NoSharedExchange(t *testing.T) {
