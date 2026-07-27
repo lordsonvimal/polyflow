@@ -32,6 +32,11 @@ const (
 	// NodeTypeExternalService is a third-party service boundary (cloud SDKs:
 	// S3, Bedrock, Pusher-as-a-service, …).
 	NodeTypeExternalService NodeType = "external_service"
+	// NodeTypeTable is a database table referenced by a SQL statement, parsed
+	// from a datastore call node's meta.sql (the FROM/INTO/UPDATE target). It
+	// turns the opaque store endpoint into a real entity so a query terminates
+	// at the table it touches. Meta: name.
+	NodeTypeTable NodeType = "table"
 	// NodeTypeVariable is a tracked variable: package/module-level vars and
 	// consts, closure-captured locals — variables whose mutation has impact
 	// beyond one function. Purely-local variables are NOT nodes (they would

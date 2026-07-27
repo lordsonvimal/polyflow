@@ -172,6 +172,77 @@ func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
 	}
 }
 
+// TestLinkTables verifies Y.3c: a datastore call node's SQL is parsed to its
+// table, one table node is minted per (service, name), and the query/persist
+// terminates at that real entity (callNode → table). Statements with no
+// resolvable table (PRAGMA) mint nothing (#12 — never fabricate).
+func TestLinkTables(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "svc:sel", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "query",
+				"sql": "`SELECT value FROM meta WHERE key = ?`"}},
+		{ID: "svc:ins", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist",
+				"sql": "`INSERT OR REPLACE INTO meta(key,value) VALUES('x',?)`"}},
+		{ID: "svc:del", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist",
+				"sql": "`DELETE FROM nodes WHERE id=?`"}},
+		{ID: "svc:pragma", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist",
+				"sql": "`PRAGMA busy_timeout=5000;`"}},
+		{ID: "svc:store", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "store"}}, // not a call — ignored
+	}
+	tableNodes, edges := LinkTables(nodes)
+
+	// Two distinct tables (meta touched twice → deduped), no table for PRAGMA.
+	require.Len(t, tableNodes, 2)
+	byName := map[string]graph.Node{}
+	for _, n := range tableNodes {
+		assert.Equal(t, graph.NodeTypeTable, n.Type)
+		assert.Equal(t, "svc", n.Service)
+		byName[n.Label] = n
+	}
+	assert.Contains(t, byName, "meta")
+	assert.Contains(t, byName, "nodes")
+	assert.Equal(t, "svc:table:meta", byName["meta"].ID)
+
+	// One edge per call with a resolvable table; PRAGMA yields none.
+	require.Len(t, edges, 3)
+	byFrom := map[string]graph.Edge{}
+	for _, e := range edges {
+		byFrom[e.From] = e
+		assert.Equal(t, graph.ConfidenceStatic, e.Confidence)
+	}
+	assert.Equal(t, "svc:table:meta", byFrom["svc:sel"].To)
+	assert.Equal(t, graph.EdgeTypeQueries, byFrom["svc:sel"].Type)
+	assert.Equal(t, "svc:table:meta", byFrom["svc:ins"].To)
+	assert.Equal(t, graph.EdgeTypePersists, byFrom["svc:ins"].Type)
+	assert.Equal(t, "svc:table:nodes", byFrom["svc:del"].To)
+	_, pragmaHasEdge := byFrom["svc:pragma"]
+	assert.False(t, pragmaHasEdge, "PRAGMA must not fabricate a table edge")
+}
+
+// TestParseSQLTable covers the table-name extraction edge cases directly.
+func TestParseSQLTable(t *testing.T) {
+	cases := []struct{ sql, want string }{
+		{"`SELECT a, b FROM users WHERE id = ?`", "users"},
+		{"`INSERT INTO edges (id) VALUES (?)`", "edges"},
+		{"`INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)`", "meta"},
+		{"`UPDATE nodes SET x=1`", "nodes"},
+		{"`DELETE FROM edges WHERE \"from\"=?`", "edges"},
+		{"`SELECT id, \"from\", \"to\" FROM edges`", "edges"},
+		// Outer FROM opens a subquery → resolve to the inner real table.
+		{"`SELECT * FROM ( SELECT id FROM entities_fts ) f`", "entities_fts"},
+		{"`PRAGMA busy_timeout=5000;`", ""},
+		{"`PRAGMA synchronous=OFF; PRAGMA journal_mode=MEMORY;`", ""},
+		{"``", ""},
+	}
+	for _, c := range cases {
+		assert.Equalf(t, c.want, parseSQLTable(c.sql), "sql=%s", c.sql)
+	}
+}
+
 // TestLinkBrokerHints_CrossLanguage proves the confirmed real chain: a Rails
 // service publishing via bunny (exchange held in a variable — unresolvable
 // statically) reaching a Go amqp091 consumer, connected by a workspace hint.
