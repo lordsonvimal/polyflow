@@ -688,3 +688,94 @@ func TestGoSemanticZeroResolutionWarns(t *testing.T) {
 		t.Fatalf("expected zero-resolution warning, got %d edges and no warning", len(res.Edges))
 	}
 }
+
+// TestGoSemanticConstReadEdges (Y.2): package-level consts are compile-time
+// folded, so SSA never surfaces a load — the typed-AST Uses pass must emit a
+// reads edge from each function that references a same-package const. An
+// unreferenced const must stay dangling (unused is a real state, not a bug: #12).
+func TestGoSemanticConstReadEdges(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/consttest\n\ngo 1.25.0\n",
+		"main.go": `package main
+
+const Foo = 3
+
+const Bar = 5
+
+func useA() int {
+	return Foo + 1
+}
+
+func useB() int {
+	return Foo * 2
+}
+
+func main() {
+	_ = useA()
+	_ = useB()
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	const (
+		fooID  = "svc:main.go:variable:Foo:3"
+		barID  = "svc:main.go:variable:Bar:5"
+		useAID = "svc:main.go:function:useA:7"
+		useBID = "svc:main.go:function:useB:11"
+	)
+	known := map[string]bool{
+		useAID:                         true,
+		useBID:                         true,
+		"svc:main.go:function:main:15": true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	readsToFoo := map[string]bool{}
+	readsToBar := 0
+	for _, e := range res.Edges {
+		if e.Type != graph.EdgeTypeReads {
+			continue
+		}
+		if e.To == fooID {
+			readsToFoo[e.From] = true
+		}
+		if e.To == barID {
+			readsToBar++
+		}
+	}
+	if !readsToFoo[useAID] || !readsToFoo[useBID] || len(readsToFoo) != 2 {
+		t.Fatalf("expected reads edges to Foo from exactly {useA, useB}, got %v", readsToFoo)
+	}
+	if readsToBar != 0 {
+		t.Fatalf("expected zero reads edges to unused const Bar, got %d", readsToBar)
+	}
+
+	// Bar's node must still exist (it is a real, if unused, package member) and
+	// must genuinely dangle — no fabricated edge (#12).
+	var barPresent bool
+	for _, n := range res.Nodes {
+		if n.ID == barID {
+			barPresent = true
+		}
+	}
+	if !barPresent {
+		t.Fatalf("expected const Bar node %q to be minted", barID)
+	}
+	for _, e := range res.Edges {
+		if e.From == barID || e.To == barID {
+			t.Fatalf("unused const Bar must dangle, got edge %+v", e)
+		}
+	}
+}
