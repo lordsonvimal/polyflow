@@ -326,7 +326,23 @@ shape. A handler returning `map[string]any` → assert a ledger entry, **no** ed
 
 </details>
 
-### Phase Y.5 — Interface param/return `uses_type` + interface-dispatch calls `pending`
+### Phase Y.5 — Interface param/return `uses_type` + interface-dispatch calls `done`
+
+**Outcome (measured, clean reindex).** Both parts landed as specced, schema 21→22.
+- **Y.5a `uses_type`** — extended the existing struct `uses_type` `checkType` closure (go_variables.go)
+  to also resolve interface params/returns via `interfaceIDs` (+ a B.2-style `interfaceIDsByQName`
+  qualified-name fallback). **24 `uses_type`→interface edges.** The last real dangling project
+  interface `rowScanner` now has **2 incoming** `uses_type` — dangling Go interfaces 1→**0**.
+- **Y.5b dispatch `calls`** — on SSA `common.IsInvoke()` (handled *before* the concrete-callee
+  `continue`, since invoke's `StaticCallee` is nil), mint a synthetic interface-method node
+  (`NodeTypeMethod`, ID `<ifaceID>:m:<Method>`, meta `kind=interface_method`, `interface=<ifaceID>`)
+  and emit `caller → interface-method` `calls` (meta `via=invoke`). **13 interface-method nodes,
+  21 dispatch `calls`** where previously `calls`-to-interface = 0. Real blast radius surfaced:
+  `Embedder.Embed`, `KeyWalker.WalkKey`, `Parser.Parse`, `Provider.Collect`, `NodeSearcher.SearchNodes`.
+- Nodes 2788→**2824**, edges →**6114**, **0 orphan-endpoint edges** (#10). Tests
+  `TestGoY5_UsesTypeInterface`/`TestGoY5_DispatchCalls` + schema bump; `go vet` clean.
+
+<details><summary>Original spec</summary>
 
 Two additions that make interfaces first-class in the call graph (and resolve the last real dangling
 project interface):
@@ -349,6 +365,8 @@ resolution too. Answers "who dispatches through interface I's method M" — toda
 **Test.** Fixture with `type Store interface{ Get() }`, `func Use(s Store){ s.Get() }`, `func New()
 Store` → assert `Use`→`Store` `uses_type`, `Use`→`Store.Get` `calls` (invoke), and `New`→`Store`
 `uses_type` (return).
+
+</details>
 
 ### Phase Y.6 — Render dataflow: resource → signal → DOM (frontend tail) `pending`
 

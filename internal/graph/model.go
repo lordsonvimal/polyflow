@@ -9,6 +9,11 @@ const (
 	NodeTypeHTTPHandler  NodeType = "http_handler"
 	NodeTypeHTTPClient   NodeType = "http_client"
 	NodeTypeFunction     NodeType = "function"
+	// NodeTypeMethod is a concrete method (struct/class receiver) or, when
+	// meta.kind="interface_method" (Tier Y.5b), an abstract interface method —
+	// the dispatch target of an SSA invoke call. Interface-method nodes carry
+	// meta.interface=<interface node ID> and are minted only when a `calls`
+	// edge dispatches through them.
 	NodeTypeMethod       NodeType = "method"
 	NodeTypeComponent    NodeType = "component"
 	NodeTypeRoute        NodeType = "route"
@@ -198,7 +203,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "21" // Y.4: response-type edges (returns/consumes/response_of)
+const SchemaVersion = "22" // Y.5: interface uses_type + dispatch calls (interface-method nodes)
 
 // Node represents a code entity in the graph.
 type Node struct {
