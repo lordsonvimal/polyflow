@@ -174,12 +174,31 @@ const (
 	// instantiates: function/method→struct/class it constructs.
 	// Deduped per (function, type) pair; meta: count=<n>.
 	EdgeTypeInstantiates EdgeType = "instantiates"
+	// Response-type edges (Tier Y.4 — the return half of a request flow).
+	//
+	// returns: handler-function → struct it writes as its JSON response body
+	// (the static type of the payload passed to json.Marshal/Encode or a
+	// local ResponseWriter-first wrapper such as writeJSON). meta:
+	// response_type=<qualified type>, container=slice (when the body is []T),
+	// via=json_encode. Untyped bodies (map[string]any) emit no edge (#12).
+	EdgeTypeReturns EdgeType = "returns"
+	// consumes: client-function → interface it decodes a fetch response into
+	// (the annotated/asserted type of `await res.json()` in TS). meta:
+	// response_type=<name>, container=slice, via=json_decode. Untyped decodes
+	// emit no edge (#12).
+	EdgeTypeConsumes EdgeType = "consumes"
+	// response_of: Go response struct → TS interface that mirrors its JSON
+	// shape, joining the producer and consumer type across the language
+	// boundary. Direction: server DTO → client DTO. meta: match=shape,
+	// shared=<n>, jaccard=<0..1>. Emitted only for server-declared response
+	// types (returns targets); untyped payloads are ledgered, never guessed.
+	EdgeTypeResponseOf EdgeType = "response_of"
 )
 
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "20" // X.0: test-DSL comm sites demoted to function nodes + is_test meta
+const SchemaVersion = "21" // Y.4: response-type edges (returns/consumes/response_of)
 
 // Node represents a code entity in the graph.
 type Node struct {
