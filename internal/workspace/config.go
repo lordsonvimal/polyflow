@@ -125,15 +125,21 @@ type SearchConfig struct {
 
 // WorkspaceConfig is the parsed representation of workspace.yaml.
 type WorkspaceConfig struct {
-	Name     string         `yaml:"name"`
-	Version  string         `yaml:"version"`
-	Services []Service      `yaml:"services"`
-	Links    []Link         `yaml:"links"`
-	Patterns []string       `yaml:"patterns,omitempty"`
-	Index    IndexConfig    `yaml:"index"`
-	Settings Settings       `yaml:"settings"`
-	Evidence EvidenceConfig `yaml:"evidence,omitempty"`
-	Search   SearchConfig   `yaml:"search,omitempty"`
+	Name     string    `yaml:"name"`
+	Version  string    `yaml:"version"`
+	Services []Service `yaml:"services"`
+	Links    []Link    `yaml:"links"`
+	// LinksProposed holds cross-service Link proposals written by
+	// `polyflow link --infer` (X.5). The contract engine only ever reads
+	// Links, never LinksProposed — a proposal takes effect only once a human
+	// promotes it into Links (e.g. via `polyflow config link add`), per the
+	// "never silently applied" rule (docs/phases.md bug-class #3 spirit).
+	LinksProposed []Link         `yaml:"links_proposed,omitempty"`
+	Patterns      []string       `yaml:"patterns,omitempty"`
+	Index         IndexConfig    `yaml:"index"`
+	Settings      Settings       `yaml:"settings"`
+	Evidence      EvidenceConfig `yaml:"evidence,omitempty"`
+	Search        SearchConfig   `yaml:"search,omitempty"`
 }
 
 // DefaultExcludes returns the exclude globs written by `polyflow init`.
@@ -224,6 +230,21 @@ func Load(path string) (*WorkspaceConfig, error) {
 		info, statErr := os.Stat(resolved)
 		if statErr != nil || !info.IsDir() {
 			return nil, fmt.Errorf("service %s: path %q (resolved to %q) does not exist or is not a directory", svc.Name, svc.Path, resolved)
+		}
+		// Dereference resolved when IT ITSELF is a symlink (X.5: fleet
+		// workspaces commonly point Service.Path at an eval/.cache/<name>
+		// symlink to an out-of-tree repo). filepath.WalkDir treats a symlink
+		// root as a single non-dir entry and never descends into it —
+		// discovered by indexing a real 3-repo fleet workspace, where every
+		// symlinked service silently walked 0 files. Checking Lstat on
+		// resolved itself (rather than unconditionally calling
+		// EvalSymlinks, which also resolves symlinked ANCESTOR directories,
+		// e.g. macOS's /var -> /private/var) keeps this a no-op for the
+		// common case of a plain absolute/relative path.
+		if li, lerr := os.Lstat(resolved); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+			if real, err := filepath.EvalSymlinks(resolved); err == nil {
+				resolved = real
+			}
 		}
 		if other, ok := seenRoots[resolved]; ok {
 			return nil, fmt.Errorf("service %s and service %s both resolve to %q — duplicate service roots are not allowed", other, svc.Name, resolved)

@@ -142,7 +142,16 @@ func normURLToPath(value string, _ NormalizeEnv) string {
 // so it aligns with the handler side's "/api/v1/builds/*". No-op when the
 // value has no leading wildcard segment — channel/topic keys (pusher, amqp,
 // kafka) never have one, so it is safe to add to those normalizer chains
-// too. Not reconciled with workspace.Link.BaseURL yet (X.5).
+// too.
+//
+// X.5: a cross-repo templated call whose base resolves via a workspace Link
+// to a target service mounted at a non-empty base_url needs no special
+// handling here — this normalizer always reduces to the bare path, and
+// normBaseURLStrip (placed after it in contracts/http.yaml's chain) is what
+// consults env.Links to strip that base_url from the handler side, so the
+// two compose correctly with zero engine changes (verified end to end by
+// TestEngine_DynamicHostStrip_ReconciledWithBaseURL in
+// internal/contract/engine_test.go).
 func normDynamicHostStrip(value string, _ NormalizeEnv) string {
 	if strings.HasPrefix(value, "*/") {
 		return value[1:]

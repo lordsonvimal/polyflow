@@ -70,6 +70,7 @@ func init() {
 		traceCmd,
 		configCmd,
 		depsCmd,
+		linkCmd,
 		mcpCmd,
 		evalCmd,
 		doctorCmd,
@@ -89,6 +90,7 @@ func init() {
 	initTraceFlags()
 	initConfigSubcmds()
 	initEvalFlags()
+	initLinkFlags()
 }
 
 // ─── init ────────────────────────────────────────────────────────────────────
@@ -1168,13 +1170,13 @@ func printUnresolvedText(refs []graph.UnresolvedRef) {
 // ─── trace ───────────────────────────────────────────────────────────────────
 
 var (
-	traceRoot            string
-	traceTargetService   string
-	traceTargetType      string
-	traceDirection       string
-	traceDepth           int
-	traceFormat          string
-	traceVerboseSources  bool
+	traceRoot           string
+	traceTargetService  string
+	traceTargetType     string
+	traceDirection      string
+	traceDepth          int
+	traceFormat         string
+	traceVerboseSources bool
 )
 
 func initTraceFlags() {
@@ -1748,6 +1750,63 @@ var depsCmd = &cobra.Command{
 	RunE:  runDeps,
 }
 
+// ─── link ────────────────────────────────────────────────────────────────────
+
+var linkInfer bool
+
+var linkCmd = &cobra.Command{
+	Use:   "link",
+	Short: "Propose cross-service links from indexed evidence",
+	RunE:  runLink,
+}
+
+func initLinkFlags() {
+	linkCmd.Flags().BoolVar(&linkInfer, "infer", false, "propose cross-service links from HTTP env-var hints and broker exchange overlap; writes to links_proposed for review (never silently applied — promote via `polyflow config link add`)")
+}
+
+func runLink(cmd *cobra.Command, args []string) error {
+	if !linkInfer {
+		return cmd.Help()
+	}
+	cfg, err := workspace.Load(meta.ConfigFile)
+	if err != nil {
+		return err
+	}
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	proposals, err := workspace.InferLinks(cmd.Context(), store, cfg)
+	if err != nil {
+		return fmt.Errorf("infer links: %w", err)
+	}
+	cfg.LinksProposed = proposals
+	if err := workspace.Save(meta.ConfigFile, cfg); err != nil {
+		return err
+	}
+
+	fmt.Printf("Proposed %d cross-service link(s), written to links_proposed in %s:\n", len(proposals), meta.ConfigFile)
+	for _, l := range proposals {
+		fmt.Printf("  %s -> %s", l.From, l.To)
+		if l.Via != "" {
+			fmt.Printf("  via=%s", l.Via)
+		}
+		if l.Exchange != "" {
+			fmt.Printf("  exchange=%s", l.Exchange)
+		}
+		if l.Hint != "" {
+			fmt.Printf("  hint=%s", l.Hint)
+		}
+		fmt.Println()
+	}
+	if len(proposals) == 0 {
+		fmt.Println("  (none)")
+	}
+	return nil
+}
+
 func runDeps(cmd *cobra.Command, args []string) error {
 	store, err := openStore()
 	if err != nil {
@@ -2006,10 +2065,10 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 // ─── eval ────────────────────────────────────────────────────────────────────
 
 var (
-	evalCorpus   string
-	evalCase     string
-	evalOutput   string
-	evalGate     string
+	evalCorpus string
+	evalCase   string
+	evalOutput string
+	evalGate   string
 )
 
 func initEvalFlags() {
@@ -2641,12 +2700,12 @@ func loadStaleAfter(wsPath string) time.Duration {
 // SHA256 is pinned to detect corrupted/tampered downloads.
 // Sourced from: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
 const (
-	nomicModelURL      = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf"
-	nomicModelFile     = "nomic-embed-text-v1.5.Q8_0.gguf"
+	nomicModelURL  = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf"
+	nomicModelFile = "nomic-embed-text-v1.5.Q8_0.gguf"
 	// nomicModelSHA256 is the expected hex-encoded SHA-256 of the downloaded file.
 	// Verify with: sha256sum ~/.cache/polyflow/models/nomic-embed-text-v1.5.Q8_0.gguf
 	// and update this constant when the upstream model file changes.
-	nomicModelSHA256   = "" // set to the verified SHA-256 before production use; empty = skip check
+	nomicModelSHA256 = "" // set to the verified SHA-256 before production use; empty = skip check
 )
 
 var modelsCmd = &cobra.Command{
