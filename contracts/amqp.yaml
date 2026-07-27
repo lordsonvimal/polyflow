@@ -23,3 +23,23 @@ contracts:
       via_meta:
         exchange: amqp_channel   # non-empty exchange → Meta["via"]="amqp_channel"
     unmatched: drop               # no meaningful ledger entry for unlinked channels
+  # Queue-based AMQP flows (bunny channel.queue(name) publisher declare <->
+  # kicks/Sneakers from_queue consumer). These carry queue_name, not
+  # exchange/routing_key, so they are matched under a separate contract keyed
+  # on queue_name. The two contracts are disjoint: an exchange channel has an
+  # empty queue_name (skipped by keyIsEmpty) under this contract and vice
+  # versa, so neither can produce an empty-key false match.
+  - kind: amqp
+    producer:
+      node: channel
+      key: [queue_name]
+    consumer:
+      node: channel
+      key: [queue_name]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: publishes
+      id_prefix: broker_queue
+      same_service: skip
+    unmatched: drop

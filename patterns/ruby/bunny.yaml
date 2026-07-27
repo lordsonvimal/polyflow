@@ -24,13 +24,28 @@ patterns:
     captures:
       - name: handler
         role: amqp_handler
+  # channel.queue(name, durable: true) — the queue name is the FIRST POSITIONAL
+  # argument. The leading `.` anchor pins @queue_name to that first child; the
+  # node-type allowlist excludes a leading keyword `pair` (durable:/passive:/…),
+  # which the old un-anchored `(_) @queue_name` bug captured instead (every
+  # real queue landed as key_dynamic_raw="durable: …").
   - name: bunny_queue_declare
     query: |
       (call
         method: (identifier) @fn
         (#eq? @fn "queue")
         arguments: (argument_list
-          (_) @queue_name . _*))
+          .
+          [
+            (string)
+            (simple_symbol)
+            (identifier)
+            (constant)
+            (instance_variable)
+            (call)
+            (scope_resolution)
+            (binary)
+          ] @queue_name))
     captures:
       - name: queue_name
         role: amqp_queue

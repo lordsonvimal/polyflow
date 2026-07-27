@@ -133,6 +133,50 @@ func InferLinks(ctx context.Context, s *graph.SQLiteStore, cfg *WorkspaceConfig)
 		}
 	}
 
+	// Tier 3: AMQP registration-handshake overlap. A queue whose name is
+	// negotiated at runtime (a deploy secret / per-org value) leaves no shared
+	// literal, but both services still name the same registration *field
+	// symbol* — the producer as a hash pair key in its REST registration
+	// response, the consumer as `dig(:amqp_..._queue_name)`. The pattern layer
+	// stamps that symbol as broker_field on a channel node on each side; any two
+	// distinct services sharing a broker_field get a proposed link (both
+	// directions), exactly like the exchange-overlap branch above.
+	fieldToServices := make(map[string][]string)
+	fieldSvcSeen := make(map[string]bool)
+	for _, id := range nodeIDs {
+		n := idx.Nodes[id]
+		field := strings.TrimSpace(n.Meta["broker_field"])
+		if field == "" {
+			continue
+		}
+		key := field + "\x00" + n.Service
+		if fieldSvcSeen[key] {
+			continue
+		}
+		fieldSvcSeen[key] = true
+		fieldToServices[field] = append(fieldToServices[field], n.Service)
+	}
+	fields := make([]string, 0, len(fieldToServices))
+	for f := range fieldToServices {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		svcs := append([]string(nil), fieldToServices[field]...)
+		sort.Strings(svcs)
+		for _, from := range svcs {
+			for _, to := range svcs {
+				if from == to {
+					continue
+				}
+				addProposal(
+					Link{From: from, To: to, Via: "rabbitmq", Exchange: field},
+					"brokerfield:"+from+"->"+to+":"+field,
+				)
+			}
+		}
+	}
+
 	sort.Slice(proposals, func(i, j int) bool {
 		a, b := proposals[i], proposals[j]
 		if a.From != b.From {

@@ -847,6 +847,18 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// Tier 3 AMQP handshake fields: normalize the captured registration
+		// field symbol (strip the leading `:` of a simple_symbol and the
+		// trailing `:` of a hash_key_symbol) and surface it as the node label so
+		// InferLinks can group producer/consumer sides on the shared token.
+		if strings.HasPrefix(r.PatternName, "amqp_field") {
+			field := strings.Trim(meta["broker_field"], ":")
+			meta["broker_field"] = field
+			if field != "" {
+				label = field
+			}
+		}
+
 		// Version-gated patterns stamp which package version they matched
 		// against, so the graph/UI can show e.g. "this call uses SDK v1".
 		if r.Package != "" {
@@ -1509,7 +1521,12 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 
 	// ── Message channel declarations (queue/exchange setup, not pub/sub) ─────
-	case strings.Contains(lower, "queue_declare") || strings.Contains(lower, "exchange_declare"):
+	// kicks_from_queue is the Sneakers/kicks consumer-side queue binding; it is
+	// modeled as a channel node (like a queue_declare) so the AMQP contract can
+	// join it, cross-service, to the publisher's channel.queue(name) declaration
+	// on queue_name.
+	case strings.Contains(lower, "queue_declare") || strings.Contains(lower, "exchange_declare") ||
+		lower == "kicks_from_queue" || strings.HasPrefix(lower, "amqp_field"):
 		return graph.NodeTypeChannel, graph.EdgeTypeCalls
 
 	// ── Legacy XHR / jQuery ───────────────────────────────────────────────────
