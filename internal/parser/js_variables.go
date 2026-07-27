@@ -44,6 +44,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 		moduleVars: map[string]*jsVar{},
 		fnDecls:    map[string]int{},
 		classNodes: map[string]string{},
+		signals:    map[string]string{},
 		nodeSeen:   map[string]bool{},
 		edgeSeen:   map[string]bool{},
 	}
@@ -62,6 +63,7 @@ type jsVar struct {
 	nodeID   string
 	dataType string
 	isSetter bool // Solid signal setter (const [x, setX] = createSignal(...))
+	reactive bool // Solid reactive accessor (createSignal/createResource/createMemo)
 }
 
 // jsScope is one lexical function frame (or the module frame at index 0).
@@ -78,6 +80,12 @@ type jsExtractor struct {
 	moduleVars map[string]*jsVar
 	fnDecls    map[string]int    // top-level function name → line
 	classNodes map[string]string // class/interface name → nodeID (same-file)
+	// signals maps a Solid reactive accessor name (createSignal/createResource/
+	// createMemo binding) to its variable node ID, so a JSX interpolation reading
+	// that accessor can source a signal→element dom_write (Y.6). Both module- and
+	// function-local accessors register here; DFS visits a declaration before the
+	// JSX that reads it, so the current binding is resolvable by name.
+	signals map[string]string
 
 	nodes      []graph.Node
 	edges      []graph.Edge
@@ -252,6 +260,8 @@ func (ex *jsExtractor) collectDestructured(decl, pattern *sitter.Node, kind stri
 			init = fn.Content(ex.src)
 		}
 	}
+	prim, resourceFn := reactiveInit(decl, ex.src)
+	accessorTaken := false
 	collectPatternBindings(pattern, ex.src, func(name string, _ int) {
 		line := tsLine(declStatement(decl))
 		id := ex.varNodeID(name, line)
@@ -266,6 +276,18 @@ func (ex *jsExtractor) collectDestructured(decl, pattern *sitter.Node, kind stri
 		}
 		if setter {
 			meta["setter"] = "true"
+		}
+		// Y.6: the first non-setter binding of a reactive primitive is the
+		// accessor — it drives DOM writes and (for createResource) carries the
+		// loader fn the linker joins to the fetch's http_client node.
+		if prim != "" && !setter && !accessorTaken {
+			accessorTaken = true
+			ex.moduleVars[name].reactive = true
+			ex.signals[name] = id
+			meta["reactive"] = reactiveKind(prim)
+			if resourceFn != "" {
+				meta["resource_fn"] = resourceFn
+			}
 		}
 		ex.addNode(graph.Node{
 			ID: id, Type: graph.NodeTypeVariable, Label: name,
@@ -283,6 +305,50 @@ func isSignalSetter(init, name string) bool {
 	}
 	rest, ok := strings.CutPrefix(name, "set")
 	return ok && rest != "" && rest[0] >= 'A' && rest[0] <= 'Z'
+}
+
+// reactiveInit inspects a destructuring declarator's initializer and reports the
+// Solid reactive primitive it calls (createSignal/createResource/createMemo) and,
+// for createResource, the first-argument identifier — the loader fn whose fetch
+// feeds the resource. Empty prim means the binding is not reactive.
+func reactiveInit(decl *sitter.Node, src []byte) (prim, resourceFn string) {
+	value := decl.ChildByFieldName("value")
+	if value == nil || value.Type() != "call_expression" {
+		return "", ""
+	}
+	fn := value.ChildByFieldName("function")
+	if fn == nil {
+		return "", ""
+	}
+	switch fn.Content(src) {
+	case "createSignal", "createResource", "createMemo":
+		prim = fn.Content(src)
+	default:
+		return "", ""
+	}
+	if prim == "createResource" {
+		if args := value.ChildByFieldName("arguments"); args != nil {
+			for i := 0; i < int(args.NamedChildCount()); i++ {
+				if a := args.NamedChild(i); a.Type() == "identifier" {
+					resourceFn = a.Content(src)
+					break
+				}
+			}
+		}
+	}
+	return prim, resourceFn
+}
+
+// reactiveKind maps a reactive primitive callee to the meta.reactive tag.
+func reactiveKind(prim string) string {
+	switch prim {
+	case "createResource":
+		return "resource"
+	case "createMemo":
+		return "memo"
+	default:
+		return "signal"
+	}
 }
 
 // collectPatternBindings visits the identifiers bound by a destructuring
@@ -685,8 +751,38 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 				} else {
 					// Destructured locals (const [sel, setSel] = createSignal(...))
 					// shadow outer names and are capturable by nested closures.
+					prim, resourceFn := reactiveInit(decl, ex.src)
+					init := ""
+					if value := decl.ChildByFieldName("value"); value != nil && value.Type() == "call_expression" {
+						if fn := value.ChildByFieldName("function"); fn != nil {
+							init = fn.Content(ex.src)
+						}
+					}
+					accessorTaken := false
 					collectPatternBindings(nameNode, ex.src, func(name string, _ int) {
 						cur.locals[name] = tsLine(decl)
+						// Y.6: a function-local reactive accessor (the createSignal/
+						// createResource binding inside a component) gets a variable
+						// node so it can source signal→element dom_write. Only the
+						// accessor is materialised — ordinary locals stay out of the
+						// graph — because a signal's reach extends beyond one function.
+						if prim != "" && !isSignalSetter(init, name) && !accessorTaken {
+							accessorTaken = true
+							line := tsLine(declStatement(decl))
+							id := ex.varNodeID(name, line)
+							meta := map[string]string{
+								"kind": "var", "scope": "local", "reactive": reactiveKind(prim),
+							}
+							if resourceFn != "" {
+								meta["resource_fn"] = resourceFn
+							}
+							ex.addNode(graph.Node{
+								ID: id, Type: graph.NodeTypeVariable, Label: name,
+								Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+								Meta: meta,
+							})
+							ex.signals[name] = id
+						}
 					})
 				}
 			}
@@ -702,6 +798,8 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		ex.handleResponseConsume(node, scopes)
 	case "new_expression":
 		ex.handleNew(node, scopes)
+	case "jsx_expression":
+		ex.handleJSXWrite(node)
 	}
 
 	for i := 0; i < int(node.NamedChildCount()); i++ {
@@ -941,6 +1039,95 @@ func (ex *jsExtractor) captureEdge(node *sitter.Node, name string, scopes []*jsS
 		ex.addEdge(graph.EdgeTypeWrites, from, id, graph.ConfidencePartial,
 			map[string]string{"op": "assign", "via": "closure"})
 	}
+}
+
+// handleJSXWrite emits signal→element dom_write edges (Y.6, render tail). A JSX
+// interpolation — text `{sig()}` or attribute `attr={sig()}` — that reads a Solid
+// reactive accessor binds that signal to the enclosing DOM element. The element
+// node is minted lazily (bare `<span>` has no id/class, so the matcher never
+// emitted one) and only when a resolvable signal read is found, so a dom_write
+// never dangles (#10) and dynamic/untyped writes are simply not matched (#11).
+func (ex *jsExtractor) handleJSXWrite(jsxExpr *sitter.Node) {
+	if len(ex.signals) == 0 {
+		return
+	}
+	elID, elLine, tag := ex.enclosingJSXElement(jsxExpr)
+	if elID == "" {
+		return
+	}
+	elementAdded := false
+	seen := map[string]bool{}
+	var visit func(n *sitter.Node)
+	visit = func(n *sitter.Node) {
+		switch n.Type() {
+		case "jsx_element", "jsx_self_closing_element", "jsx_expression":
+			if n != jsxExpr {
+				// Nested elements/expressions own their own writes; walk reaches
+				// them separately. Don't attribute their reads to this element.
+				return
+			}
+		case "identifier":
+			name := n.Content(ex.src)
+			if sigID, ok := ex.signals[name]; ok && !seen[name] {
+				seen[name] = true
+				if !elementAdded {
+					elementAdded = true
+					ex.addNode(graph.Node{
+						ID: elID, Type: graph.NodeTypeElement, Label: tag,
+						Service: ex.service, File: ex.file, Line: elLine, Language: ex.langTag,
+						Meta: map[string]string{"tag": tag},
+					})
+				}
+				ex.addEdge(graph.EdgeTypeDOMWrite, sigID, elID, graph.ConfidenceInferred,
+					map[string]string{"via": "jsx", "element": tag})
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			visit(n.NamedChild(i))
+		}
+	}
+	visit(jsxExpr)
+}
+
+// enclosingJSXElement climbs to the nearest jsx_element / jsx_self_closing_element
+// wrapping an interpolation and returns a deterministic element node ID, its line,
+// and its tag name. Empty ID means the expression is not inside a JSX element.
+func (ex *jsExtractor) enclosingJSXElement(n *sitter.Node) (id string, line int, tag string) {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		switch p.Type() {
+		case "jsx_element":
+			open := p.ChildByFieldName("open_tag")
+			if open == nil {
+				open = p.NamedChild(0)
+			}
+			tag = jsxTagName(open, ex.src)
+			ln := tsLine(p)
+			return fmt.Sprintf("%s:%s:element:%s:%d", ex.service, ex.file, tag, ln), ln, tag
+		case "jsx_self_closing_element":
+			tag = jsxTagName(p, ex.src)
+			ln := tsLine(p)
+			return fmt.Sprintf("%s:%s:element:%s:%d", ex.service, ex.file, tag, ln), ln, tag
+		}
+	}
+	return "", 0, ""
+}
+
+// jsxTagName extracts the tag identifier from a jsx_opening_element or
+// jsx_self_closing_element node, tolerating member/namespaced names.
+func jsxTagName(n *sitter.Node, src []byte) string {
+	if n == nil {
+		return "el"
+	}
+	if name := n.ChildByFieldName("name"); name != nil {
+		return name.Content(src)
+	}
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		c := n.NamedChild(i)
+		if c.Type() == "identifier" || c.Type() == "member_expression" || c.Type() == "jsx_namespace_name" {
+			return c.Content(src)
+		}
+	}
+	return "el"
 }
 
 // handleCall emits flows_to edges when a tracked module variable is passed

@@ -281,6 +281,70 @@ func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 	return newNodes, edges
 }
 
+// LinkResourceSignals closes hop 6's fetch→signal binding (Y.6). A Solid
+// createResource(loaderFn) accessor variable carries meta.resource_fn naming the
+// loader function; the loader's fetch is an http_client node reached by a `calls`
+// edge from the loader's function node. This pass emits `http_client → signal`
+// (flows_to, via:resource) so the response dataflow reaches the reactive signal —
+// and, through Y.6's signal→element dom_write edges, the DOM. A loader that isn't
+// a resolvable same-file function, or that issues no fetch, yields no edge (#12).
+func LinkResourceSignals(nodes []graph.Node, edges []graph.Edge) []graph.Edge {
+	// Loader function lookup by service+file+label (createResource(loaderFn) and
+	// the loader almost always share a file/module).
+	fnByKey := make(map[string]string)
+	isHTTP := make(map[string]bool)
+	for i := range nodes {
+		n := &nodes[i]
+		switch n.Type {
+		case graph.NodeTypeFunction, graph.NodeTypeMethod:
+			k := n.Service + "\x00" + n.File + "\x00" + n.Label
+			if _, ok := fnByKey[k]; !ok {
+				fnByKey[k] = n.ID
+			}
+		case graph.NodeTypeHTTPClient:
+			isHTTP[n.ID] = true
+		}
+	}
+	// http_client nodes each function reaches (fn → http_client `calls` edges,
+	// emitted by matcher Pass 2 from the enclosing function).
+	clientsByFn := make(map[string][]string)
+	for i := range edges {
+		e := &edges[i]
+		if e.Type == graph.EdgeTypeCalls && isHTTP[e.To] {
+			clientsByFn[e.From] = append(clientsByFn[e.From], e.To)
+		}
+	}
+	var out []graph.Edge
+	seen := make(map[string]bool)
+	for i := range nodes {
+		n := &nodes[i]
+		rf := n.Meta["resource_fn"]
+		if rf == "" {
+			continue
+		}
+		fnID := fnByKey[n.Service+"\x00"+n.File+"\x00"+rf]
+		if fnID == "" {
+			continue // loader not a resolvable same-file function — ledger
+		}
+		for _, hc := range clientsByFn[fnID] {
+			id := fmt.Sprintf("%s:%s->%s", string(graph.EdgeTypeFlowsTo), hc, n.ID)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, graph.Edge{
+				ID:         id,
+				From:       hc,
+				To:         n.ID,
+				Type:       graph.EdgeTypeFlowsTo,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"via": "resource", "loader": rf},
+			})
+		}
+	}
+	return out
+}
+
 // parseSQLTable extracts the primary table name from a SQL literal: the token
 // following the first FROM, INTO, or UPDATE keyword. Returns "" when the SQL
 // has no such target (PRAGMA, DDL we don't model) or when the next token opens
