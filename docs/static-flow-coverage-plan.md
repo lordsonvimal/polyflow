@@ -121,7 +121,7 @@ alias). Optional follow-on; low value (frontend-only types), do after Part B.
 **zero** `interface` nodes minted for `io.Reader`/`json.Marshaler`. Second fixture where a struct
 implements `io.Reader` → assert exactly one `io.Reader` node + the `implements` edge.
 
-### Phase Y.2 — Const-read edges via type-checker Uses `pending`
+### Phase Y.2 — Const-read edges via type-checker Uses `done`
 
 **Problem.** Package-level `var`s get `reads`/`writes` edges because they are `*ssa.Global`s the SSA
 instruction walk can see (`internal/parser/go_variables.go:308-382`, `rootGlobal` peel). Go `const`s
@@ -153,6 +153,26 @@ dangling — do **not** fabricate edges for them; #12). `reads` edge count rises
 
 **Test.** Fixture with `const Foo = 3` used in two functions and unused const `Bar` → assert two
 `reads` edges to `Foo`, zero to `Bar`, and `Bar` still dangles (unused is a real state, not a bug).
+
+**Measured outcome (shipped 2026-07-28).** A typed-AST const-read pass *already existed* (the B.2
+`cross-package` pass, go_variables.go:481+) but explicitly skipped same-package consts
+(`c.Pkg() == p.Types`) on the false assumption "SSA handles it." The fix was a one-line correction:
+skip only builtins (`c.Pkg() == nil`, i.e. `true`/`false`/`iota`) and let same-package consts flow
+through the same enclosing-function-range attribution. No new node bookkeeping (const nodes are
+already keyed in `qualifiedNameIDs`). Reads edges 845→969 (+124); total edges 5801→5925; nodes
+unchanged 2772; cross-service links unchanged 78; 0 orphan-endpoint edges (#10). Dangling Go consts
+109→49, total dangling 341-lineage now 78.
+
+The residual 49 (vs. the predicted ~7) is *not* under-attribution — it splits into two correct-to-
+dangle classes (#12): **(a) 39 are test-fixture consts in `_test.go`** used only inside `TestXxx`
+functions, and the indexer mints no function node for test functions (they are not service surface),
+so there is no enclosing node to attribute a read to; **(b) 10 non-test** are either genuinely unused
+(`RoleProducer`/`RoleConsumer`, `EdgeTypeSidekiqEnqueue`, `NodeTypeTemplElement` — no reference
+anywhere) or referenced only inside **package-scope `var … = map{…}` initializers**
+(`graph.EdgeTypeDeclares` in mermaid.go/yield.go) where there is no enclosing function. Emitting a
+function-read edge for either would fabricate (#12), so both correctly dangle. The 7 dangling `var`s
+and 4 TS consts are likewise genuinely-unused. Deviation ledgered: the spec framed this as a new pass;
+it was in fact an unblock of an existing one.
 
 ---
 
