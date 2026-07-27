@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
 // writeGoModule lays out a minimal two-file Go module with a cross-file call
@@ -597,6 +599,76 @@ func TestReal(t *testing.T) {
 		if e.From == "svc:real_impl_test.go:function:TestReal:7" {
 			t.Fatalf("legacy_thing conflicts with legacy_stub.go's Thing declaration and must be declined, but TestReal's edge was emitted: %+v", e)
 		}
+	}
+}
+
+// TestGoSemanticLazyExternalInterfaceStubs is the Y.1 regression: a synthetic
+// external-interface node must be minted only when an in-service struct
+// actually satisfies it. A struct implementing io.Reader yields exactly one
+// io.Reader node + implements edge; the many other exported interfaces in the
+// imported io/encoding/json packages (io.Writer, json.Marshaler, …) that
+// nothing implements must leave NO dangling stub nodes.
+func TestGoSemanticLazyExternalInterfaceStubs(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/semtest\n\ngo 1.25.0\n",
+		"main.go": `package main
+
+import (
+	"encoding/json"
+	"io"
+)
+
+type myReader struct{}
+
+func (m myReader) Read(p []byte) (int, error) { return 0, nil }
+
+func main() {
+	var r io.Reader = myReader{}
+	_ = r
+	_, _ = json.Marshal(0)
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:main.go:function:main:12": true,
+		"svc:main.go:method:Read:10":   true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	var ifaceNodes []string
+	for _, n := range res.Nodes {
+		if n.Type == graph.NodeTypeInterface {
+			ifaceNodes = append(ifaceNodes, n.Label)
+		}
+	}
+	// Only io.Reader (the satisfied interface) may be minted — no io.Writer,
+	// json.Marshaler, or any other unimplemented external interface.
+	if len(ifaceNodes) != 1 || ifaceNodes[0] != "io.Reader" {
+		t.Fatalf("expected exactly one interface node [io.Reader], got %v", ifaceNodes)
+	}
+
+	// The implements edge must target the minted io.Reader node.
+	found := false
+	for _, e := range res.Edges {
+		if e.Type == graph.EdgeTypeImplements && strings.HasSuffix(e.To, "interface:io.Reader:0") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected implements edge → io.Reader, got %d edges", len(res.Edges))
 	}
 }
 
