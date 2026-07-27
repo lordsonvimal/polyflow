@@ -143,6 +143,42 @@ func TestResolveTarget_Ambiguity(t *testing.T) {
 	}
 }
 
+func TestResolveTarget_PrefersNonTestFileOnTie(t *testing.T) {
+	// Two exact-label matches, same service+type, no explicit disambiguating
+	// filter: a same-named mock/helper in a test file must not win over the
+	// real production declaration just because it ranks first in search.
+	mock := node("mock", "renderFileIcon", "ui", "src/Icon.test.jsx", "function")
+	prod := node("prod", "renderFileIcon", "ui", "src/Icon.jsx", "function")
+	s := &stubSearcher{nodes: []*graph.Node{mock, prod}}
+	root, cands, err := graph.ResolveTarget(context.Background(), s, "renderFileIcon", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if root.ID != "prod" {
+		t.Fatalf("want prod (non-test file) to win the tie, got %s", root.ID)
+	}
+	// Both matches must still be visible — the tie-break changes the default
+	// pick, never hides the ambiguity.
+	if len(cands) != 2 {
+		t.Fatalf("want 2 candidates (ambiguity still surfaced), got %d", len(cands))
+	}
+}
+
+func TestResolveTarget_AllTestFileMatchesFallsBackToFirst(t *testing.T) {
+	// Every exact match is in a test file (e.g. two spec helpers of the same
+	// name) — must still resolve to something rather than erroring.
+	n1 := node("t1", "helper", "svc", "a_test.go", "function")
+	n2 := node("t2", "helper", "svc", "b_test.go", "function")
+	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
+	root, _, err := graph.ResolveTarget(context.Background(), s, "helper", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if root.ID != "t1" {
+		t.Fatalf("want first match t1 when all matches are test files, got %s", root.ID)
+	}
+}
+
 func TestResolveTarget_PrefixMatchFallback(t *testing.T) {
 	// No exact-label match (prefix-only) → root = nodes[0], candidates empty.
 	n := node("id1", "LoginPage", "ui", "pages/login.go", "component")

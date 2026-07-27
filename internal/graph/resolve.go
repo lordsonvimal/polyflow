@@ -79,17 +79,60 @@ func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService
 
 	// Choose root: first filtered exact match → first unfiltered exact match
 	// → SearchNodes[0] (recall-over-precision fallback for non-exact queries).
+	// Within a tied set, prefer a non-test-file declaration: test files
+	// commonly redeclare a same-named local helper/mock (e.g. inside
+	// vi.mock(...)) that would otherwise win by search-rank luck and silently
+	// redirect a blast-radius query at the mock instead of the real
+	// production symbol. target_candidates still lists every match either
+	// way, so this only changes which one is picked by default — it never
+	// hides the ambiguity.
 	var root *Node
 	switch {
 	case len(filtered) > 0:
-		root = filtered[0]
+		root = preferNonTestFile(filtered)
 	case len(exact) > 0:
-		root = exact[0]
+		root = preferNonTestFile(exact)
 	default:
 		root = nodes[0]
 	}
 
 	return root, candidates, nil
+}
+
+// preferNonTestFile returns the first node in nodes whose file does not look
+// like a test file, or nodes[0] if every match is in a test file (or nodes
+// has no File set at all, e.g. service-level nodes).
+func preferNonTestFile(nodes []*Node) *Node {
+	for _, n := range nodes {
+		if !isTestFilePath(n.File) {
+			return n
+		}
+	}
+	return nodes[0]
+}
+
+// isTestFilePath reports whether file looks like a test/spec file by common
+// cross-language naming conventions (JS/TS .test./.spec., Go _test.go, Ruby
+// _spec.rb/_test.rb, Python test_*.py, and __tests__/spec/test directories).
+func isTestFilePath(file string) bool {
+	if file == "" {
+		return false
+	}
+	lower := strings.ToLower(file)
+	base := lower
+	if idx := strings.LastIndexByte(lower, '/'); idx >= 0 {
+		base = lower[idx+1:]
+	}
+	switch {
+	case strings.Contains(base, ".test."), strings.Contains(base, ".spec."),
+		strings.HasSuffix(base, "_test.go"), strings.HasSuffix(base, "_test.rb"),
+		strings.HasSuffix(base, "_spec.rb"), strings.HasPrefix(base, "test_"):
+		return true
+	case strings.Contains(lower, "/__tests__/"), strings.Contains(lower, "/spec/"),
+		strings.HasPrefix(lower, "spec/"):
+		return true
+	}
+	return false
 }
 
 // filterNodes returns the subset of nodes matching targetService and targetType

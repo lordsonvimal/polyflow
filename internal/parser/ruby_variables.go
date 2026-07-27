@@ -29,13 +29,18 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 
 	ex := &rubyExtractor{
 		file: file, service: service, src: src,
-		ivarDecl:   map[string]int{},
-		classTable: map[string]string{},
-		nodeSeen:   map[string]bool{},
-		edgeSeen:   map[string]bool{},
+		ivarDecl:           map[string]int{},
+		classTable:         map[string]string{},
+		nodeSeen:           map[string]bool{},
+		edgeSeen:           map[string]bool{},
+		methodsByClassName: map[string]string{},
+		methodsByName:      map[string][]string{},
 	}
-	// Pre-collect class names for same-file constant resolution.
+	// Pre-collect class names for same-file constant resolution, and method
+	// definitions (class-scoped and flat) so calls to a method defined later
+	// in the file still resolve (forward references).
 	ex.preCollectRubyClasses(tree.RootNode())
+	ex.preCollectRubyMethods(tree.RootNode(), "")
 	ex.walk(tree.RootNode(), "", "", "")
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
@@ -49,6 +54,14 @@ type rubyExtractor struct {
 
 	ivarDecl   map[string]int    // "@name" (class-qualified) → first-seen line
 	classTable map[string]string // class/module name → nodeID (same-file)
+
+	// methodsByClassName/methodsByName index same-file method definitions for
+	// bare-call resolution (implicit-self calls): "class\x00name" → nodeID,
+	// and name → every nodeID sharing that name (used only when the
+	// class-scoped lookup misses and there is exactly one file-wide
+	// candidate, so an ambiguous name never misattributes a call).
+	methodsByClassName map[string]string
+	methodsByName      map[string][]string
 
 	nodes      []graph.Node
 	edges      []graph.Edge
@@ -120,6 +133,32 @@ func (ex *rubyExtractor) preCollectRubyClasses(node *sitter.Node) {
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		ex.preCollectRubyClasses(node.NamedChild(i))
+	}
+}
+
+// preCollectRubyMethods scans the AST recursively to build methodsByClassName
+// and methodsByName: every method/singleton_method definition, keyed by its
+// enclosing class (bare name, matching classTable's simplification) and by
+// its bare name alone. Runs before walk so a call to a method defined later
+// in the same file still resolves.
+func (ex *rubyExtractor) preCollectRubyMethods(node *sitter.Node, class string) {
+	switch node.Type() {
+	case "class", "module":
+		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+			class = nameNode.Content(ex.src)
+		}
+	case "method", "singleton_method":
+		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+			name := nameNode.Content(ex.src)
+			id := ex.methodNodeID(name, rbLine(node))
+			if class != "" {
+				ex.methodsByClassName[class+"\x00"+name] = id
+			}
+			ex.methodsByName[name] = append(ex.methodsByName[name], id)
+		}
+	}
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		ex.preCollectRubyMethods(node.NamedChild(i), class)
 	}
 }
 
@@ -195,7 +234,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 				if methodID == "" {
 					name := left.Content(ex.src)
 					ex.addNode(graph.Node{
-						ID: fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, rbLine(node)),
+						ID:   fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, rbLine(node)),
 						Type: graph.NodeTypeVariable, Label: name,
 						Service: ex.service, File: ex.file, Line: rbLine(node), Language: "ruby",
 						Meta: map[string]string{
@@ -275,6 +314,35 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					} // cross-file Foo.new resolved by LinkRubyTypeRelations
 				}
 			}
+		default:
+			// Bare/implicit-self method calls: helper(x), save, self.foo.
+			// Receiver-typed calls (article.save) need static type inference
+			// Ruby's dynamism rules out here, so they are left alone — same
+			// scope restriction as the other patterns in this file (rule 9:
+			// only attribute a call when the target is unambiguous).
+			if methodID == "" {
+				break
+			}
+			if receiver := node.ChildByFieldName("receiver"); receiver != nil && receiver.Content(ex.src) != "self" {
+				break
+			}
+			targetID := ""
+			if class != "" {
+				targetID = ex.methodsByClassName[class+"\x00"+mname]
+			}
+			if targetID == "" {
+				if ids := ex.methodsByName[mname]; len(ids) == 1 {
+					targetID = ids[0]
+				}
+			}
+			if targetID != "" {
+				ex.addEdge(graph.EdgeTypeCalls, methodID, targetID, nil)
+			} else {
+				ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+					Service: ex.service, File: ex.file,
+					Line: rbLine(node), Name: mname, Kind: "call_ref",
+				})
+			}
 		}
 	}
 
@@ -312,7 +380,7 @@ func (ex *rubyExtractor) collectClass(node *sitter.Node, name string) {
 		}
 	}
 	ex.addNode(graph.Node{
-		ID: fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, rbLine(node)),
+		ID:   fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, rbLine(node)),
 		Type: graph.NodeTypeClass, Label: name,
 		Service: ex.service, File: ex.file, Line: rbLine(node), Language: "ruby",
 		Meta: map[string]string{

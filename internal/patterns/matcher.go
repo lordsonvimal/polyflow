@@ -16,8 +16,8 @@ import (
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
 	pythonsitter "github.com/smacker/go-tree-sitter/python"
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
-	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
+	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
@@ -266,6 +266,7 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 			captures := make(map[string]string, len(m2.Captures))
 			var keyNodes map[string]*sitter.Node
 			var minLine int = -1
+			var minLineNamed int = -1
 			var defEndLine int
 			var anchor *sitter.Node
 			for _, cap := range m2.Captures {
@@ -273,6 +274,7 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 					anchor = cap.Node
 				}
 				name := cq.query.CaptureNameForId(cap.Index)
+				row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
 				if strings.HasPrefix(name, "_") {
 					// Positional-only capture: it marks the span of the whole
 					// declaration, so its end row bounds the definition body.
@@ -287,11 +289,23 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 						}
 						keyNodes[name] = cap.Node
 					}
+					// Prefer the line of a real (non-positional) capture: an
+					// underscore-prefixed anchor can sit on a different line
+					// (e.g. a `member do` block-opening keyword) than the
+					// actual matched content (e.g. a verb call several lines
+					// into the block), which would otherwise collapse every
+					// match in the block onto the anchor's line and collide
+					// their node IDs.
+					if minLineNamed < 0 || row < minLineNamed {
+						minLineNamed = row
+					}
 				}
-				row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
 				if minLine < 0 || row < minLine {
 					minLine = row
 				}
+			}
+			if minLineNamed >= 0 {
+				minLine = minLineNamed
 			}
 
 			// Apply Match filters if defined
@@ -634,6 +648,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			label = stripStringLiteral(path)
 		} else if callee, ok := r.Captures["callee"]; ok {
 			label = stripStringLiteral(callee)
+		} else if verb, ok := r.Captures["verb"]; ok {
+			// Rails member/collection route verbs (verb+action, no path
+			// capture): label as "GET :action" so distinct verbs inside
+			// the same block get distinct, readable node labels.
+			if action, ok2 := r.Captures["action"]; ok2 {
+				label = fmt.Sprintf("%s %s", strings.ToUpper(verb), stripStringLiteral(action))
+			} else {
+				label = strings.ToUpper(verb)
+			}
 		} else if fn, ok := r.Captures["fn"]; ok {
 			// For goroutine fn captures: use the identifier only, not the full closure body.
 			// If the captured fn spans multiple lines it's a func_literal — label it "func()".
@@ -1485,10 +1508,6 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "gin_bind") || strings.HasPrefix(lower, "gin_json"):
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 
-	// ── Rails controllers ─────────────────────────────────────────────────────
-	case lower == "controller_action":
-		return graph.NodeTypeMethod, graph.EdgeTypeCalls
-
 	// ── Message channel declarations (queue/exchange setup, not pub/sub) ─────
 	case strings.Contains(lower, "queue_declare") || strings.Contains(lower, "exchange_declare"):
 		return graph.NodeTypeChannel, graph.EdgeTypeCalls
@@ -1652,7 +1671,7 @@ func railsClassify(receiver string) string {
 
 // stripStringLiteral removes surrounding string delimiters from a captured value.
 // Handles: Go/JS/Ruby (", ', `); Python prefix forms (f"", r"", b"", u"",
-// and combinations: rb"", fr"", etc.); Python triple-quoted strings ("""/''').
+// and combinations: rb"", fr"", etc.); Python triple-quoted strings ("""/”').
 func stripStringLiteral(s string) string {
 	// Strip Python/Ruby string prefix letters (f, r, b, u and combinations).
 	// Only strip when the prefix is immediately followed by a quote character.

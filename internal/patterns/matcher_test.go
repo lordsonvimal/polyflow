@@ -105,6 +105,49 @@ func TestMatch_Ruby(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestMatch_Ruby_MemberBlockMultiVerbNoCollision(t *testing.T) {
+	// Regression test (H.5 follow-up): multiple verbs inside one `member do`
+	// block used to collapse onto a single node because the block-opening
+	// `member` keyword's line was used as the match line for every verb
+	// inside it. Each verb must now get its own node, keyed by its own line.
+	reg, err := patterns.DefaultRegistry("../../patterns/ruby")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := []byte(`Rails.application.routes.draw do
+  resources :folders do
+    member do
+      get :publish
+      post :duplicate
+      patch :rename
+    end
+  end
+end
+`)
+	results, err := m.Match("ruby", "config/routes.rb", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	var routeNodes []graph.Node
+	for _, n := range nodes {
+		if n.Meta["pattern"] == "member_verb_route" {
+			routeNodes = append(routeNodes, n)
+		}
+	}
+	require.Len(t, routeNodes, 3, "each verb in the member block should get its own node")
+
+	seenIDs := map[string]bool{}
+	seenLines := map[string]bool{}
+	for _, n := range routeNodes {
+		assert.False(t, seenIDs[n.ID], "duplicate node ID %q", n.ID)
+		seenIDs[n.ID] = true
+		seenLines[n.Label] = true
+	}
+	assert.Contains(t, seenLines, "GET :publish")
+	assert.Contains(t, seenLines, "POST :duplicate")
+	assert.Contains(t, seenLines, "PATCH :rename")
+}
+
 func TestMatch_EmptyPatterns(t *testing.T) {
 	reg := patterns.NewRegistry()
 	m := patterns.NewTreeSitterMatcher(reg)
