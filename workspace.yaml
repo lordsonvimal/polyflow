@@ -18,6 +18,7 @@ index:
         - '**/vendor/**'
         - '**/dist/**'
         - '**/testdata/**'
+        - 'eval/**'
         - '**/*_test.go'
         - '**/*_test/**'
         - '**/*.test.*'
