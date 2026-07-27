@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"golang.org/x/sync/errgroup"
 
 	contractdata "github.com/lordsonvimal/polyflow/contracts"
 	"github.com/lordsonvimal/polyflow/internal/contract"
@@ -250,7 +251,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// set + content hashes + pattern files) matches the previous run, the
 	// graph cannot differ — skip the rebuild entirely.
 	now := time.Now().Unix()
-	hashes := map[string]string{}     // file → content hash
+	hashes := map[string]string{}         // file → content hash
 	svcHashLines := map[string][]string{} // semantic cache key input
 	var fpLines []string
 	for _, sf := range allSvcFiles {
@@ -1230,25 +1231,63 @@ func runEmbedPass(
 		return nil
 	}
 
-	// Embed in batches of 256 to bound memory.
+	// Embed in batches of 256 to bound memory. The embed step is pure CPU and
+	// the default StaticEmbedder is safe for concurrent use, so batches are
+	// computed in parallel across the worker pool (the dominant cost of a cold
+	// index — ~60% on a 3-repo fleet). Vectors are collected per batch and the
+	// DB upsert is serialized afterward because a single *sql.DB write path is
+	// not gained by concurrency and keeps the write deterministic.
 	const batchSize = 256
-	for start := 0; start < len(toEmbed); start += batchSize {
+	type batchResult struct {
+		batch []semantic.Entity
+		vecs  [][]float32
+	}
+	nBatches := (len(toEmbed) + batchSize - 1) / batchSize
+	results := make([]batchResult, nBatches)
+
+	workers := opts.Workers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+	for b := 0; b < nBatches; b++ {
+		b := b
+		start := b * batchSize
 		end := start + batchSize
 		if end > len(toEmbed) {
 			end = len(toEmbed)
 		}
 		batch := toEmbed[start:end]
-		texts := make([]string, len(batch))
-		for i, e := range batch {
-			texts[i] = e.Text
-		}
-		vecs, embErr := emb.Embed(ctx, texts)
-		if embErr != nil {
-			return fmt.Errorf("embed batch [%d:%d]: %w", start, end, embErr)
-		}
-		if uErr := sem.BatchUpsertEmbeddings(ctx, batch, vecs, embedderID); uErr != nil {
-			return fmt.Errorf("upsert embeddings [%d:%d]: %w", start, end, uErr)
-		}
+		g.Go(func() error {
+			texts := make([]string, len(batch))
+			for i, e := range batch {
+				texts[i] = e.Text
+			}
+			vecs, embErr := emb.Embed(gctx, texts)
+			if embErr != nil {
+				return fmt.Errorf("embed batch [%d:%d]: %w", start, end, embErr)
+			}
+			results[b] = batchResult{batch: batch, vecs: vecs}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Flatten in batch order and upsert everything in a SINGLE transaction.
+	// The previous code committed once per 256-entity batch (~150 fsync'd
+	// commits on a large fleet); the embed-side win was being eaten by that
+	// serial write amplification. One transaction = one commit = one fsync.
+	allBatch := make([]semantic.Entity, 0, len(toEmbed))
+	allVecs := make([][]float32, 0, len(toEmbed))
+	for _, r := range results {
+		allBatch = append(allBatch, r.batch...)
+		allVecs = append(allVecs, r.vecs...)
+	}
+	if uErr := sem.BatchUpsertEmbeddings(ctx, allBatch, allVecs, embedderID); uErr != nil {
+		return fmt.Errorf("upsert embeddings: %w", uErr)
 	}
 	return nil
 }

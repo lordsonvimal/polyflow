@@ -82,6 +82,39 @@ func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, ve
 	}
 	defer stmt.Close()
 
+	// entities_fts (FTS5) has entity_id UNINDEXED, so `DELETE ... WHERE
+	// entity_id = ?` cannot seek — it full-scans the FTS index. Doing that
+	// once per row while the table grows under the inserts is O(n²) and was the
+	// entire cost of a cold embed pass (~160s for 37k rows). Instead, clear all
+	// stale rows FIRST, in chunked bulk deletes, so on a fresh --full build the
+	// table is empty during the deletes (each scan is O(0)); then insert. This
+	// turns the pass into O(n).
+	const idChunk = 500
+	for start := 0; start < len(entities); start += idChunk {
+		end := start + idChunk
+		if end > len(entities) {
+			end = len(entities)
+		}
+		chunk := entities[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for i, ent := range chunk {
+			placeholders[i] = "?"
+			args[i] = ent.ID
+		}
+		q := `DELETE FROM entities_fts WHERE entity_id IN (` + strings.Join(placeholders, ",") + `)`
+		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+			return fmt.Errorf("fts bulk delete: %w", err)
+		}
+	}
+
+	ftsInsert, err := tx.PrepareContext(ctx,
+		`INSERT INTO entities_fts (entity_id, entity_type, text) VALUES (?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare fts insert: %w", err)
+	}
+	defer ftsInsert.Close()
+
 	for i, ent := range entities {
 		vec := vecs[i]
 		blob := vecToBlob(vec)
@@ -95,14 +128,7 @@ func (s *Store) BatchUpsertEmbeddings(ctx context.Context, entities []Entity, ve
 			ent.ID, ent.Type, ent.ContentHash, embedderID, len(vec), blob, string(metaJSON)); err != nil {
 			return fmt.Errorf("upsert embedding %s: %w", ent.ID, err)
 		}
-		// entities_fts is the lexical twin — upsert text alongside the vector.
-		// FTS5 virtual tables do not support ON CONFLICT; delete + re-insert.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM entities_fts WHERE entity_id = ?`, ent.ID); err != nil {
-			return fmt.Errorf("fts delete %s: %w", ent.ID, err)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO entities_fts (entity_id, entity_type, text) VALUES (?, ?, ?)`,
-			ent.ID, ent.Type, ent.Text); err != nil {
+		if _, err := ftsInsert.ExecContext(ctx, ent.ID, ent.Type, ent.Text); err != nil {
 			return fmt.Errorf("fts insert %s: %w", ent.ID, err)
 		}
 	}
