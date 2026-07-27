@@ -113,6 +113,10 @@ func extractVariables(
 	structIDsByQName := map[string]string{}
 	// interfaceIDs maps a named interface type to its node ID (Tier I.1).
 	interfaceIDs := map[*types.Named]string{}
+	// interfaceIDsByQName maps "<pkgPath>.<Name>" to an interface node ID — the
+	// pointer-identity fallback for cross-package interface lookups (Y.5), same
+	// rationale as structIDsByQName.
+	interfaceIDsByQName := map[string]string{}
 
 	// Local JSON-marshaling types for type metadata.
 	type fieldInfo struct {
@@ -236,6 +240,14 @@ func extractVariables(
 					methodsJSON, _ := json.Marshal(methods)
 					id := fmt.Sprintf("%s:%s:interface:%s:%d", service, file, v.Name(), pos.Line)
 					interfaceIDs[named] = id
+					if named.Obj() != nil && named.Obj().Pkg() != nil {
+						qk := named.Obj().Pkg().Path() + "." + v.Name()
+						if _, exists := interfaceIDsByQName[qk]; !exists {
+							interfaceIDsByQName[qk] = id
+						} else if !strings.HasSuffix(pos.Filename, "_test.go") {
+							interfaceIDsByQName[qk] = id // prod file wins over test variant
+						}
+					}
 					addNode(graph.Node{
 						ID: id, Type: graph.NodeTypeInterface, Label: v.Name(),
 						Service: service, File: file, Line: pos.Line, Language: "go",
@@ -365,6 +377,15 @@ func extractVariables(
 				}
 				if sid, tracked := structIDs[named]; tracked {
 					addEdge(graph.EdgeTypeUsesType, fnID, sid, nil)
+					return
+				}
+				// Y.5a: interface-typed param/return → uses_type to the interface.
+				if iid, tracked := interfaceIDs[named]; tracked {
+					addEdge(graph.EdgeTypeUsesType, fnID, iid, nil)
+				} else if named.Obj() != nil && named.Obj().Pkg() != nil {
+					if iid, ok := interfaceIDsByQName[named.Obj().Pkg().Path()+"."+named.Obj().Name()]; ok {
+						addEdge(graph.EdgeTypeUsesType, fnID, iid, nil)
+					}
 				}
 			}
 			for i := 0; i < sig.Params().Len(); i++ {
@@ -414,6 +435,29 @@ func extractVariables(
 					}
 				case ssa.CallInstruction:
 					common := in.Common()
+					// Y.5b: interface dispatch. An invoke call routes through an
+					// interface value (StaticCallee is nil — the concrete target
+					// is unknown statically). Emit caller → interface-method
+					// `calls` so "who dispatches through interface I.M" is answerable.
+					if common.IsInvoke() && fnResolved {
+						if named, ok := common.Value.Type().(*types.Named); ok {
+							if iid, tracked := interfaceIDs[named]; tracked {
+								mid := iid + ":m:" + common.Method.Name()
+								obj := named.Obj()
+								pos := fset.Position(obj.Pos())
+								addNode(graph.Node{
+									ID: mid, Type: graph.NodeTypeMethod,
+									Label:   obj.Name() + "." + common.Method.Name(),
+									Service: service, File: relPath(pos.Filename), Line: pos.Line,
+									Language: "go",
+									Meta: map[string]string{
+										"kind": "interface_method", "interface": iid,
+									},
+								})
+								addEdge(graph.EdgeTypeCalls, fnID, mid, map[string]string{"via": "invoke"})
+							}
+						}
+					}
 					callee, _ := common.Value.(*ssa.Function)
 					if callee == nil || !inService[callee] {
 						continue
