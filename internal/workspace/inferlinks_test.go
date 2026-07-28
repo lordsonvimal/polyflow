@@ -125,6 +125,55 @@ func TestInferLinks_BrokerFieldHandshake(t *testing.T) {
 	assert.Equal(t, workspace.Link{From: "main-svc", To: "consumer-a", Via: "rabbitmq", Exchange: "amqp_progress_events_queue_name"}, links[1])
 }
 
+// Tier 3 precision: a broker_field symbol referenced only in a spec/test file
+// is a fixture, not a live handshake endpoint — it must not seed a cross-service
+// proposal. The producer here has a real (non-test) endpoint while the consumer
+// side names the same symbol only in a _spec.rb, so no overlap should survive.
+func TestInferLinks_BrokerField_TestFileExcluded(t *testing.T) {
+	ctx := context.Background()
+	s := newMemStore(t)
+
+	nodes := []graph.Node{
+		{ID: "f:cdr", Type: graph.NodeTypeChannel, Service: "consumer-a",
+			File: "lib/messaging/publisher.rb",
+			Meta: map[string]string{"broker_field": "amqp_progress_events_queue_name"}},
+		// main-svc only references the symbol inside a spec fixture.
+		{ID: "f:ng-spec", Type: graph.NodeTypeChannel, Service: "main-svc",
+			File: "spec/client_api/v1/agents_controller_spec.rb",
+			Meta: map[string]string{"broker_field": "amqp_progress_events_queue_name"}},
+	}
+	for i := range nodes {
+		require.NoError(t, s.UpsertNode(ctx, &nodes[i]))
+	}
+	cfg := &workspace.WorkspaceConfig{Services: []workspace.Service{{Name: "consumer-a"}, {Name: "main-svc"}}}
+
+	links, err := workspace.InferLinks(ctx, s, cfg)
+	require.NoError(t, err)
+	assert.Empty(t, links, "spec-only broker_field must not seed a cross-service link")
+}
+
+// Same exclusion for the exchange-overlap branch: a _spec.rb channel node
+// must not participate in exchange overlap.
+func TestInferLinks_Exchange_TestFileExcluded(t *testing.T) {
+	ctx := context.Background()
+	s := newMemStore(t)
+
+	nodes := []graph.Node{
+		{ID: "chan:a1", Type: graph.NodeTypeChannel, Service: "svc-a",
+			File: "app/messaging/publisher.rb", Meta: map[string]string{"exchange": "orders.events"}},
+		{ID: "chan:b-spec", Type: graph.NodeTypeChannel, Service: "svc-b",
+			File: "spec/consumers/orders_spec.rb", Meta: map[string]string{"exchange": "orders.events"}},
+	}
+	for i := range nodes {
+		require.NoError(t, s.UpsertNode(ctx, &nodes[i]))
+	}
+	cfg := &workspace.WorkspaceConfig{Services: []workspace.Service{{Name: "svc-a"}, {Name: "svc-b"}}}
+
+	links, err := workspace.InferLinks(ctx, s, cfg)
+	require.NoError(t, err)
+	assert.Empty(t, links, "spec-only exchange node must not seed a cross-service link")
+}
+
 // Tier 3 negative: distinct field symbols must not link (no key-collision noise).
 func TestInferLinks_BrokerField_DistinctSymbols_NoLink(t *testing.T) {
 	ctx := context.Background()
