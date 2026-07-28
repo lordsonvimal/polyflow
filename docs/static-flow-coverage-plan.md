@@ -421,7 +421,48 @@ assert `loadNode(http_client) → signal(d) → element(span)` path.
 
 </details>
 
-### Phase Y.7 — DOM event → handler (frontend head) `pending`
+### Phase Y.7 — DOM event → handler (frontend head) `done`
+
+**Measured outcome (shipped 2026-07-28, clean reindex).** The event head now emits real
+`element → function` `dom_listen` edges and the chain closes; schema 23→24.
+
+- **JSX event attributes (`js_variables.go`, `handleJSXEvent`).** For each `jsx_opening_element` /
+  `jsx_self_closing_element`, an `onClick={ref}` (React/Solid camelCase) or `on:click={ref}` (Solid
+  namespaced) attribute whose value is a **bare handler identifier** resolves the handler to its
+  function node and emits `element → function` (`dom_listen`, `meta.event` = the DOM event,
+  `via:jsx`, confidence `static`). The element node is minted lazily on a resolved handler (same ID
+  format as Y.6's `dom_write`, so a listen and a write on one element share a node) → **0 dangling
+  endpoints (#10)**. Inline arrow / call / member handlers carry no stable function node and are
+  **not** matched; cross-file/imported handlers are **ledgered** (`dom_listen_unresolved`) — never
+  fabricated (#12).
+- **Vanilla `addEventListener` (`handleAddEventListener`).** `target.addEventListener("evt",
+  handler)` with a literal event string and a bare handler emits `element → function` `dom_listen`
+  (`via:add_event_listener`), the element labelled by the receiver (`document`/`window`/element ref).
+  Dynamic event names and inline handlers are skipped/ledgered (#12).
+- **Handler resolution reaches component-local consts.** The dominant React/Solid idiom is a
+  function-local `const handleX = () => …`, not a module-level function. A new whole-tree pre-pass
+  (`collectLocalFns`) registers every self-attributable function (nested `function` decls +
+  `const = arrow/function` at any depth) name→decl-line — the same line the walk mints the node at —
+  so `resolveHandlerFn` resolves locals, falling back from the module-level `fnDecls`. Without this
+  every real handler in this repo (all component-local) would have missed.
+
+**Measured (this repo's own frontend):** `dom_listen` 2→**7** — **4 JSX** (`button→copy`,
+`button→loadSource`, `button→exportSVG`, `button→exportPNG`) + **1 addEventListener**
+(`document→closeOnOutsideClick`, a component-local arrow) + the 2 legacy templ `dom_target` edges.
+**1 `dom_listen_unresolved`** ledgered. **0 orphan-endpoint edges** across the whole graph (#10).
+Nodes 2869→**2874**, edges 6199→**6212**. **Honest note:** every JSX handler in polyflow's own
+frontend is an *inline arrow* (`onClick={() => store.foo()}`), correctly ledger-skipped (#12); the 4
+JSX edges that fire are the bare-ref handlers (`onClick={copy}`). The templ `@onclick` path already
+emitted `component → dom_target` `dom_listen` (untouched here) — a separate abstraction from the
+JSX/vanilla `element → function` edges.
+
+**Chain closes (verified):** `button(element) → dom_listen → loadSource(fn) → calls →
+fetch(http_client)`, and likewise `exportSVG`/`exportPNG`. Combined with Y.3/Y.4/Y.6, the head of the
+button→http→handler→db→type→render chain is now a connected static path for bare-ref handlers.
+
+Tests: `TestJSY7_JSXEvent`, `TestJSY7_AddEventListener` (+ schema-version bump). `go vet` clean.
+
+<details><summary>Original spec</summary>
 
 **Problem (hop 1).** `dom_listen` is near-empty (2) and points at a `dom_target` abstraction. The
 real clue is the JSX event attribute `onClick={handler}` / `onInput={…}` (Solid) or templ
@@ -437,6 +478,8 @@ render chain is a connected static path for the typed/literal-or-reconstructable
 
 **Test.** Solid fixture `<button onClick={onRefresh}>` where `onRefresh` calls `fetch(...)` → assert
 `button(element) → onRefresh(fn) → http_client` connected.
+
+</details>
 
 ---
 
