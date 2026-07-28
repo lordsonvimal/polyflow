@@ -1350,6 +1350,47 @@ func runEmbedPass(
 // walkService collects parseable files under root, honoring exclude globs.
 // It also counts skipped non-asset files by extension (or basename for
 // extensionless files) for the B.0 unparsed-file-class ledger.
+// CountFilesModifiedSince counts parser-recognized source files under root
+// (respecting the same excludes as walkService) whose mtime is newer than
+// since. It short-circuits once capN newer files are found, returning
+// capped=true — so `polyflow status` can report staleness without a full stat
+// of an already-obviously-stale tree. capN<=0 disables the cap.
+func CountFilesModifiedSince(root string, excludes []string, since time.Time, capN int) (count int, capped bool) {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		for _, pattern := range excludes {
+			if matched, _ := doublestar.Match(pattern, rel); matched {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		if d.IsDir() || parser.ForFile(path) == nil {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return nil
+		}
+		if info.ModTime().After(since) {
+			count++
+			if capN > 0 && count >= capN {
+				capped = true
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return count, capped
+}
+
 func walkService(root string, excludes []string) ([]string, map[string]int, error) {
 	var files []string
 	unparsed := map[string]int{}

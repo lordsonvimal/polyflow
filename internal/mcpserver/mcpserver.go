@@ -95,10 +95,24 @@ func (s *Server) snapshot() (Store, *graph.AdjacencyIndex, *semantic.Searcher) {
 // *Server handle supports Reload; the *mcp.Server is what runs the session.
 // staleAfter propagates the workspace evidence.stale_after threshold (0 = no
 // stale check — caller can pass the workspace default when loading config).
-func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time.Duration) (*mcp.Server, *Server) {
+//
+// When enabled is false the server registers ONLY a `status` probe tool and
+// skips the seven query tools, so an agent session runs with a genuinely
+// polyflow-free tool list — the control arm of a token A/B (see `polyflow mcp
+// off`). index/status/serve stay fully functional regardless.
+func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time.Duration, enabled bool) (*mcp.Server, *Server) {
 	s := &Server{store: store, idx: idx, staleAfter: staleAfter}
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "polyflow", Version: version}, nil)
+
+	if !enabled {
+		mcp.AddTool(srv, &mcp.Tool{
+			Name: "status",
+			Description: "polyflow is DISABLED for this session (run `polyflow mcp on`, then " +
+				"reconnect/restart the session). No code-graph tools are available.",
+		}, s.disabledProbe)
+		return srv, s
+	}
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search",
@@ -180,6 +194,20 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	}, s.resolve)
 
 	return srv, s
+}
+
+// disabledProbeInput is the (empty) argument set for the disabled-mode probe.
+type disabledProbeInput struct{}
+
+// disabledProbe is the only tool registered when polyflow is toggled off. It
+// exists so the server still starts and the model can see, unambiguously, that
+// the code-graph tools are intentionally absent for this session.
+func (s *Server) disabledProbe(ctx context.Context, req *mcp.CallToolRequest, in disabledProbeInput) (*mcp.CallToolResult, any, error) {
+	return jsonResult(map[string]string{
+		"status": "disabled",
+		"detail": "polyflow query tools are disabled for this session. Run `polyflow mcp on`, " +
+			"then reconnect/restart the session to re-enable search/context/impact/trace/flows/entrypoints/resolve.",
+	})
 }
 
 // jsonResult marshals v into a text content block, the same JSON the CLI
