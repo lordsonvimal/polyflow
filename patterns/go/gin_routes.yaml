@@ -102,6 +102,52 @@ patterns:
       - name: prefix
         role: route_prefix
 
+  # func registerXxxRoutes(rg *gin.RouterGroup, …) { rg.GET(...) } — a route
+  # registrar that receives its group across a function boundary. X.9: the
+  # group→prefix binding lives in the CALLER's file, so EnrichRouteGroups needs
+  # to know (a) which functions take a *gin.RouterGroup and (b) the parameter
+  # name, to seed that parameter with the caller's resolved prefix. The precise
+  # `*gin.RouterGroup` type match is what makes this safe — it never matches a
+  # plain helper. Classified NodeTypeVariable (group bookkeeping, not a call
+  # site): it feeds EnrichRouteGroups and emits no edges.
+  - name: gin_group_registrar_func
+    query: |
+      (function_declaration
+        name: (identifier) @name
+        parameters: (parameter_list
+          (parameter_declaration
+            name: (identifier) @param
+            type: (pointer_type
+              (qualified_type
+                package: (package_identifier) @_pkg
+                name: (type_identifier) @_tname))))
+        (#eq? @_pkg "gin")
+        (#eq? @_tname "RouterGroup")) @_def
+    captures:
+      - name: name
+        role: group_registrar_name
+      - name: param
+        role: group_registrar_param
+
+  # registerXxxRoutes(execCfgView, h) — the call that passes a group variable to
+  # a registrar. The name gate (register*/route*/mount*) bounds node fan-out to
+  # route-wiring calls; correctness is gated downstream — EnrichRouteGroups only
+  # seeds when @callee is a confirmed gin_group_registrar_func, so a non-registrar
+  # `registerMetrics(cfg)` that slips the gate is simply ignored there.
+  - name: gin_group_registrar_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#match? @callee "^(register|route|Register|Route|mount|Mount)")
+        arguments: (argument_list
+          .
+          (identifier) @arg))
+    captures:
+      - name: callee
+        role: group_registrar_callee
+      - name: arg
+        role: group_registrar_arg
+
   # r.Use(authMiddleware()) — middleware registration.
   - name: gin_middleware_use
     query: |

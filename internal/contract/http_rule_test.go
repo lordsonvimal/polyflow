@@ -198,8 +198,11 @@ func TestHTTPRule_NavLink_Unmatched_Dropped(t *testing.T) {
 	assert.Empty(t, res.Unresolved)
 }
 
-// Negative: same-service non-datastar API call goes to unresolved (skip policy).
-func TestHTTPRule_APICall_SameService_NonDatastar_Unresolved(t *testing.T) {
+// same_service=keep: a same-service non-datastar API call (a UI fetch to the
+// service's own handler) IS a real internal edge and resolves. Before the keep
+// switch this went to unresolved and mis-scored as a cross miss; keep moves the
+// svc-c-mgr UI→own-backend family internal (cross_yield_static 0.193→0.348).
+func TestHTTPRule_APICall_SameService_NonDatastar_Resolves(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "app",
 			Meta: map[string]string{"method": "GET", "path": "/users"}},
@@ -207,11 +210,10 @@ func TestHTTPRule_APICall_SameService_NonDatastar_Unresolved(t *testing.T) {
 			Meta: map[string]string{"method": "GET", "path": "/users"}},
 	}
 	res := runHTTP(t, nodes, nil)
-	// same_service=skip_unless_meta:datastar: non-datastar client skips the handler
-	// and emits an unknown_edge to unresolved.
 	require.Len(t, res.Edges, 1)
-	assert.Contains(t, res.Edges[0].To, "unresolved")
-	assert.Equal(t, graph.ConfidenceUnknown, res.Edges[0].Confidence)
+	assert.Equal(t, "c1", res.Edges[0].From)
+	assert.Equal(t, "h1", res.Edges[0].To)
+	assert.NotEqual(t, graph.ConfidenceUnknown, res.Edges[0].Confidence)
 }
 
 // Negative: fully-wildcarded datastar path must not match any handler.

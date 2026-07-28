@@ -191,6 +191,71 @@ func (c *Client) doRequest(method, path string, body any) error {
 	}
 }
 
+// TestWrapperURL_SkipsTestFileCallSites: a wrapper called from a _test.go file
+// (httptest fixtures) must not mint a synthesized producer — that call site is
+// test scaffolding, not a service endpoint, and would otherwise re-enter the
+// cross-service denominator (fix #1 parity for the SSA synthesis path).
+func TestWrapperURL_SkipsTestFileCallSites(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/wraptesttf\n\ngo 1.25.0\n",
+		"client.go": `package client
+
+import "net/http"
+
+type Client struct{ baseURL string }
+
+func (c *Client) RegisterApp(app any) error {
+	return c.doWithRetry(http.MethodPost, "/api/v1/service/apps/register", app)
+}
+
+func (c *Client) doWithRetry(method, path string, body any) error {
+	req, err := http.NewRequest(method, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	_ = req
+	return nil
+}
+`,
+		"client_test.go": `package client
+
+func exercise() error {
+	c := &Client{}
+	return c.doWithRetry("PUT", "/maple/only-in-test", nil)
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:client.go:method:RegisterApp:7":  true,
+		"svc:client.go:method:doWithRetry:11": true,
+	}
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	for _, n := range res.Nodes {
+		if n.Meta["synthesized"] != "wrapper_url" {
+			continue
+		}
+		if graph.IsTestFilePath(n.File) {
+			t.Errorf("synth producer minted at a test-file call site: %s (%s)", n.ID, n.Meta["path"])
+		}
+		if n.Meta["path"] == "/maple/only-in-test" {
+			t.Errorf("the test-only wrapper call must not produce a synth node")
+		}
+	}
+}
+
 // TestWrapperURL_Determinism: two runs produce byte-identical node/edge ID sets.
 func TestWrapperURL_Determinism(t *testing.T) {
 	dir := wrapperModule(t)
