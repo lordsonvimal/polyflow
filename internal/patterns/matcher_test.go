@@ -850,6 +850,36 @@ func TestX0_TestDSL_Go_NegativeKeepsHTTPClient(t *testing.T) {
 	assert.Equal(t, 1, httpClients, "http.Get in a non-Test function is a real http_client node")
 }
 
+// TestX0_TestFilePath_DemotesHTTPClient covers the fix-#1 gap: an http.Get in a
+// plain (non-test-DSL) function still demotes when the *file* is a test file.
+// Same fixture content as prod_go.go (which keeps its http_client above), only
+// the file-path label changes to `_test.go` — isolating the path trigger. A
+// `_test.go` HTTP call is test fixture code, not a production cross-service
+// producer, and must leave the resolution denominator.
+func TestX0_TestFilePath_DemotesHTTPClient(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns/go")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := mustReadFile(t, "testdata/prod_go.go")
+	results, err := m.Match("go", "internal/views/config_association_handler_test.go", src)
+	require.NoError(t, err)
+
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var httpClients, demoted int
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient {
+			httpClients++
+		}
+		if n.Type == graph.NodeTypeFunction && n.Meta[graph.MetaIsTest] == "true" {
+			demoted++
+		}
+	}
+	assert.Equal(t, 0, httpClients, "http.Get in a _test.go file must not mint an http_client node")
+	assert.Equal(t, 1, demoted, "the call site is still indexed, demoted to a function node with is_test=true")
+}
+
 // TestX0_Determinism_TwoRunByteIdentical guards bug-class #2: the ancestor
 // walk must not depend on map iteration order or any other non-deterministic
 // input. Running the same fixture through Match+MatchToGraph twice must

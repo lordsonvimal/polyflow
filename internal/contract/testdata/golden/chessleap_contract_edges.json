@@ -7,13 +7,6 @@
     "confidence": "inferred"
   },
   {
-    "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
-    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "type": "hub_broadcast",
-    "confidence": "inferred"
-  },
-  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
     "from": "chessleap:/Users/lordson/projects/chessleap/game/hub.go:publisher:hub_broadcast_call:119",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
@@ -31,13 +24,6 @@
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
-    "type": "hub_broadcast",
-    "confidence": "inferred"
-  },
-  {
-    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_coach.go:publisher:hub_broadcast_call:413",
-    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -63,13 +49,6 @@
     "confidence": "inferred"
   },
   {
-    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
-    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "type": "hub_broadcast",
-    "confidence": "inferred"
-  },
-  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:149",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
@@ -87,13 +66,6 @@
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/handlers.go:subscriber:hub_subscribe_call:191",
-    "type": "hub_broadcast",
-    "confidence": "inferred"
-  },
-  {
-    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "from": "chessleap:/Users/lordson/projects/chessleap/server/practice_sse.go:publisher:hub_broadcast_call:98",
-    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
     "type": "hub_broadcast",
     "confidence": "inferred"
   },
@@ -119,13 +91,6 @@
     "confidence": "inferred"
   },
   {
-    "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
-    "to": "chessleap:/Users/lordson/projects/chessleap/server/move_resync_test.go:subscriber:hub_subscribe_call:40",
-    "type": "hub_broadcast",
-    "confidence": "inferred"
-  },
-  {
     "id": "hub:chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104-\u003echessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
     "from": "chessleap:/Users/lordson/projects/chessleap/server/sse.go:publisher:hub_broadcast_call:104",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/play_handlers.go:subscriber:hub_subscribe_call:403",
@@ -138,22 +103,6 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/server/practice_handlers.go:subscriber:hub_subscribe_call:600",
     "type": "hub_broadcast",
     "confidence": "inferred"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:120-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/play_move_test.go:http_client:http_new_request:120",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": "http.MethodPost /activity/play/*/move",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_rows_test.go:http_client:http_new_request:65-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_rows_test.go:http_client:http_new_request:65",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": "http.MethodGet /rows?datastar=*",
-    "confidence": "unknown"
   },
   {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/activity/kinds/chess_puzzle/views/author.templ:http_client:GET:*:14-\u003eunresolved",
@@ -348,28 +297,12 @@
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44",
-    "to": "unresolved",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:199",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44",
+    "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:199",
     "type": "http_call",
-    "label": "GET /activity/sessions/*/progress*",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:147-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/liveclass/handlers/sse_test.go:http_client:http_new_request:147",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": "http.MethodGet /liveclass/sessions/*/events",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:78-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_client:http_new_request:78",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": "http.MethodPost /train/puzzles/play/move",
-    "confidence": "unknown"
+    "label": "get /activity/sessions/*/progress",
+    "confidence": "inferred"
   },
   {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/boardflip.templ:http_client:POST:/practice/*/auto-glyph/run:154-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:132",

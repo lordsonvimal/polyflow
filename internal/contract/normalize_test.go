@@ -43,6 +43,20 @@ func TestNormParamWildcard_NoParam(t *testing.T) {
 	assert.Equal(t, "/users/list", callNorm("param_wildcard", "/users/list", env0()))
 }
 
+func TestNormParamWildcard_PrintfVerb(t *testing.T) {
+	// Go fmt.Sprintf-built client paths reduce to the same shape a :id handler does.
+	assert.Equal(t, "/dsw/roles/*/update", callNorm("param_wildcard", "/dsw/roles/%d/update", env0()))
+	assert.Equal(t, "/apps/*/config", callNorm("param_wildcard", "/apps/%s/config", env0()))
+	assert.Equal(t, "/x/*", callNorm("param_wildcard", "/x/%02d", env0()))
+}
+
+func TestNormParamWildcard_PrintfDoesNotEatURLEncoding(t *testing.T) {
+	// %XX URL-encoding must survive: the verb set is d/s/v, and %2f/%20 end in
+	// a non-{d,s,v} char so they are left intact.
+	assert.Equal(t, "/a%2fb", callNorm("param_wildcard", "/a%2fb", env0()))
+	assert.Equal(t, "/a%20b", callNorm("param_wildcard", "/a%20b", env0()))
+}
+
 // --- query_strip ---
 
 func TestNormQueryStrip_WithQuery(t *testing.T) {
