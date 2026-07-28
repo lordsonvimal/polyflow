@@ -234,6 +234,7 @@ from the workspace root (one instance per workspace).
 | `flows` | Full end-to-end flow from a starting point across services (HTTP, jobs, pub/sub, gRPC, renders). |
 | `entrypoints` | Catalog entry nodes (HTTP routes, subscribers, workers, gRPC/GraphQL handlers) by service/keyword. |
 | `read` | Return the exact source span of a symbol (function/method/struct/interface) by node id — its true `Line..end_line`, not a fixed window or the whole file. |
+| `hierarchy` | Structural shape of the workspace: service → directory → file → top-level symbols, with roll-up counts. One call to orient in an unfamiliar repo instead of `ls`/`find`/grep; symbol `id`s feed into `read`/`context`/`impact`. |
 
 Every tool honors a token budget: large results auto-roll-up per file, and the
 `coverage.unresolved` section always survives trimming — those endpoints are the
