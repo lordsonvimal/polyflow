@@ -57,6 +57,20 @@ func TestNormParamWildcard_PrintfDoesNotEatURLEncoding(t *testing.T) {
 	assert.Equal(t, "/a%20b", callNorm("param_wildcard", "/a%20b", env0()))
 }
 
+func TestNormParamWildcard_JSInterpolation(t *testing.T) {
+	// X.10c: a JS template-literal `${…}` collapses its whole segment to * (the
+	// literal decoration `-configs` is a runtime concatenation, not matchable),
+	// so the client path meets the composed handler on the wildcard tier.
+	assert.Equal(t, "/api/v1/*/*/dependent-apps",
+		callNorm("param_wildcard", "/api/v1/${configType}-configs/${configId}/dependent-apps", env0()))
+	// A bare interpolation segment reduces like any dynamic param.
+	assert.Equal(t, "/users/*", callNorm("param_wildcard", "/users/${userId}", env0()))
+	// Interpolation mid-segment with a prefix also collapses the whole segment.
+	assert.Equal(t, "/files/*", callNorm("param_wildcard", "/files/img-${id}.png", env0()))
+	// No interpolation → untouched (the `$` alone is not a trigger).
+	assert.Equal(t, "/price/$5", callNorm("param_wildcard", "/price/$5", env0()))
+}
+
 // --- query_strip ---
 
 func TestNormQueryStrip_WithQuery(t *testing.T) {

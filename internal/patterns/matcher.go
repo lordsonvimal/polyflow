@@ -1440,8 +1440,25 @@ func looksLikeHTTPEndpoint(v string) bool {
 	if v == "" {
 		return false
 	}
-	if v[0] == '/' || v[0] == '*' {
+	if v[0] == '/' {
 		return true
+	}
+	if v[0] == '*' {
+		// X.1 template reconstruction yields "*/api/x" (a wildcarded host) — a
+		// real endpoint. A "*" followed by anything other than "/" ("**&id2=*",
+		// "*?src=*", "*=") is a query-fragment shard bled from a larger
+		// interpolated JS query string, not an endpoint (X.10b) → drop it. A
+		// bare "*" is a fully-dynamic reconstruction and is kept (its dynamism
+		// is ledgered elsewhere, not suppressed here).
+		return len(v) == 1 || v[1] == '/'
+	}
+	// The remaining accept path is "contains ://". A real URL never contains
+	// whitespace, so a value that carries a space only *mentions* a scheme —
+	// e.g. the validation message "Logo path must be a full URL (http:// or
+	// https://) or a path starting with /", a string literal an un-gated
+	// .Post(...) captured by accident (X.10b noise) → reject it.
+	if strings.ContainsAny(v, " \t\n") {
+		return false
 	}
 	return strings.Contains(v, "://")
 }
