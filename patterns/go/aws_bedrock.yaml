@@ -33,7 +33,7 @@ patterns:
           .
           (identifier) @ctx
           .
-          (unary_expression) @input))
+          (_) @input))
     captures:
       - name: fn
         role: bedrock_operation

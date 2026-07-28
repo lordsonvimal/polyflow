@@ -609,7 +609,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// Skip pure structural type declarations (TypeScript interfaces, type aliases, enums)
 	// — they are not runtime entities and would add noise to the call graph.
 	for _, r := range defResults {
-		nodeType, _ := classifyPattern(r.PatternName)
+		nodeType, edgeType := classifyPattern(r.PatternName)
 		if nodeType == graph.NodeTypeInterface || nodeType == graph.NodeTypeTypeAlias {
 			continue
 		}
@@ -629,6 +629,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// constants table above); emitting them as nodes floods the graph
 		// with rootless "function" entries for every const in the codebase.
 		if isConstantPattern(r.PatternName) {
+			continue
+		}
+
+		// AWS client constructors (s3.NewFromConfig, bedrockruntime.NewFromConfig)
+		// bind the client instance; they are not cloud calls. The operation
+		// patterns match by method name + package gate, so the constructor node
+		// is pure noise that shows up as a bogus PutObject/NewFromConfig cloud_call
+		// edge (measured on svc-c: 6 of 22). Suppress it, like a constant.
+		if isAWSClientConstructor(r.PatternName) {
 			continue
 		}
 
@@ -926,6 +935,40 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// HTTP-client precision + external-boundary classification. The generic
+		// .Get(...)/.Post(...) queries are un-gated, so they capture non-HTTP
+		// calls (url.Values.Get("user_id"), http.Header.Get("email"),
+		// cache.Get(k)) and relative asset strings (static/js/x.js) as bogus
+		// http_client producers — measured on svc-c these are 84% of the
+		// "unresolved cross-service" count, poisoning yield denominators and
+		// blast radius. Dynamic-ledgered sites (X.1 key_dynamic/key_candidates)
+		// are legitimately kept.
+		if nodeType == graph.NodeTypeHTTPClient && edgeType == graph.EdgeTypeHTTPCall &&
+			meta["key_dynamic"] != "true" && meta["key_candidates"] == "" {
+			endpoint := meta["url"]
+			if endpoint == "" {
+				endpoint = meta["path"]
+			}
+			switch {
+			case endpoint == "":
+				// No endpoint captured (degenerate/synthetic node) — cannot
+				// judge; leave it. Real http clients always capture a url/path.
+			case externalHTTPHost(endpoint) != "":
+				host := externalHTTPHost(endpoint)
+				// A literal third-party URL (https://pypi.org/…) is a real
+				// external boundary: type it as external_service so it counts
+				// resolved-external, not unresolved.
+				nodeType = graph.NodeTypeExternalService
+				meta["cloud_service"] = host
+				meta["external_url"] = endpoint
+				label = host
+			case !looksLikeHTTPEndpoint(endpoint):
+				// Not a URL at all — suppress the comm classification
+				// (bug-class #8: drop the bogus producer, keep the file indexed).
+				continue
+			}
+		}
+
 		node := graph.Node{
 			ID:      nodeID,
 			Type:    nodeType,
@@ -966,7 +1009,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// producer_alias_url_call on the same fetch(...)); dedupe it the same
 		// way as an undemoted http_client, or the demotion itself becomes a
 		// new source of duplicate nodes.
-		if n.Type == graph.NodeTypeHTTPClient || n.Meta[graph.MetaIsTest] == "true" {
+		// A reclassified-external node (external_url set by the #4 boundary rule)
+		// began life as an http_client, so it shares the same
+		// multiple-patterns-match-one-.Get() duplication and dedups the same way.
+		reclassedExternal := n.Type == graph.NodeTypeExternalService && n.Meta["external_url"] != ""
+		if n.Type == graph.NodeTypeHTTPClient || n.Meta[graph.MetaIsTest] == "true" || reclassedExternal {
 			key := fmt.Sprintf("%s:%d", n.File, n.Line)
 			if handlerLines[key] {
 				continue // drop: a handler pattern already owns this call site
@@ -1364,6 +1411,62 @@ func callRefEdgeType(patternName string) graph.EdgeType {
 	default:
 		return graph.EdgeTypeCalls
 	}
+}
+
+// isAWSClientConstructor reports whether a pattern is an AWS SDK client
+// constructor (s3.NewFromConfig, bedrockruntime.NewFromConfig). These bind the
+// client instance and are not cloud calls, so their nodes are suppressed.
+func isAWSClientConstructor(patternName string) bool {
+	return strings.Contains(patternName, "_client_new")
+}
+
+// looksLikeHTTPEndpoint reports whether v is shaped like an HTTP request target
+// — an absolute path ("/api/x"), a full URL ("https://…"), or an X.1
+// dynamic-template reconstruction ("*/api/x") — as opposed to a bare identifier
+// ("user_id") or relative string ("static/js/x.js") that an un-gated
+// .Get(...)/.Post(...) query captured by accident.
+func looksLikeHTTPEndpoint(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	if v[0] == '/' || v[0] == '*' {
+		return true
+	}
+	return strings.Contains(v, "://")
+}
+
+// externalHTTPHost returns the host of an absolute third-party URL
+// ("https://pypi.org/pypi/x" → "pypi.org"), or "" when the URL is relative,
+// points at localhost, or uses a bare (dot-less) host — which in a workspace is
+// a service name, not a public boundary. A dotted host is the signal for a
+// genuine external service (CRAN, PyPI, api.anthropic.com, …).
+func externalHTTPHost(u string) string {
+	u = strings.TrimSpace(u)
+	rest := ""
+	switch {
+	case strings.HasPrefix(u, "https://"):
+		rest = u[len("https://"):]
+	case strings.HasPrefix(u, "http://"):
+		rest = u[len("http://"):]
+	default:
+		return ""
+	}
+	host := rest
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		host = rest[:i]
+	}
+	if i := strings.Index(host, ":"); i >= 0 { // strip port
+		host = host[:i]
+	}
+	host = strings.TrimSpace(host)
+	if host == "" || host == "localhost" || strings.HasPrefix(host, "127.") {
+		return ""
+	}
+	if !strings.Contains(host, ".") { // bare name → workspace-internal service
+		return ""
+	}
+	return host
 }
 
 // classifyPattern maps a pattern name to appropriate node and edge types.
