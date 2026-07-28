@@ -129,6 +129,16 @@ func extractWrapperURLs(
 					pos = fset.Position(caller.Pos())
 				}
 				file := relPath(pos.Filename)
+				// X.9: a wrapper URL call site inside a _test.go file is test
+				// scaffolding (httptest request builders, fixture helpers), not a
+				// real service endpoint. The tree-sitter matcher already demotes
+				// test-file http_client producers (fix #1); this SSA synthesis path
+				// must apply the same guard, or those test call sites re-enter the
+				// cross-service denominator as fully-synthesized producers (measured:
+				// 21 of 87 unresolved-cross http_call on the svc-c fleet).
+				if graph.IsTestFilePath(file) {
+					continue
+				}
 				name := callee.Name()
 				id := fmt.Sprintf("%s:%s:%s:%s:%d", service, file, graph.NodeTypeHTTPClient, name, pos.Line)
 				if seen[id] {

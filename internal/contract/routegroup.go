@@ -19,9 +19,13 @@ import (
 // The pass operates on a copy of the input slice. Nodes are identified by
 // meta["pattern"] so it is safe to call with the full allNodes set.
 //
-// Scope: variable-scoped groups within a function/file (including nesting).
-// Groups passed across functions/files are NOT resolved here — affected routes
-// surface as unresolved via the normal contract-engine unmatched policy.
+// Scope: variable-scoped groups within a function/file (including nesting),
+// plus (X.9) groups passed across a single function boundary to a registrar
+// (`registerX(rg *gin.RouterGroup)`) — the caller's resolved prefix is seeded
+// onto the callee's parameter so the callee's routes compose correctly. Groups
+// passed through deeper indirection (a param of a param, dynamically built)
+// remain unresolved; those routes surface via the contract-engine's unmatched
+// policy on the consumer side (never a silent drop).
 func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 	// Deep-copy the slice so callers' Meta maps are not mutated.
 	enriched := make([]graph.Node, len(nodes))
@@ -53,8 +57,60 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 	ginGroupsByFile := map[string][]ginGroup{}
 	chiGroupsByFile := map[string][]chiGroup{}
 
+	// X.9 cross-function registrar facts (minted as NodeTypeVariable bookkeeping
+	// nodes by gin_group_registrar_{func,call}). registrarFunc records, per
+	// registrar function name, the file it is defined in and the *gin.RouterGroup
+	// parameter name to seed. registrarCall records each call site passing a
+	// group variable as the first argument.
+	type registrarFunc struct {
+		defFile string
+		param   string
+	}
+	type registrarCall struct {
+		callee string
+		arg    string
+		file   string
+		line   int
+	}
+	registrarFuncs := map[string]registrarFunc{}
+	var registrarCalls []registrarCall
+
 	for i := range enriched {
 		n := &enriched[i]
+		if n.Type == graph.NodeTypeVariable {
+			switch n.Meta["pattern"] {
+			case "gin_group_registrar_func":
+				name, param := n.Meta["name"], n.Meta["param"]
+				if name == "" || param == "" {
+					continue
+				}
+				// A registrar name defined in two files is a real ambiguity; keep
+				// the lexicographically-first (file, param) deterministically (#2)
+				// rather than depend on node order.
+				if existing, ok := registrarFuncs[name]; ok {
+					if n.File > existing.defFile ||
+						(n.File == existing.defFile && param >= existing.param) {
+						continue
+					}
+				}
+				registrarFuncs[name] = registrarFunc{defFile: n.File, param: param}
+			case "gin_group_registrar_call":
+				callee, arg := n.Meta["callee"], n.Meta["arg"]
+				if callee == "" || arg == "" {
+					continue
+				}
+				// Test files wire routes only for the test's own assertions, not
+				// the running service; excluding them avoids seeding a registrar
+				// param from a throwaway `router.Group("/dsw")` in a _test.go.
+				if graph.IsTestFilePath(n.File) {
+					continue
+				}
+				registrarCalls = append(registrarCalls, registrarCall{
+					callee: callee, arg: arg, file: n.File, line: n.Line,
+				})
+			}
+			continue
+		}
 		if n.Type != graph.NodeTypeHTTPHandler {
 			continue
 		}
@@ -100,20 +156,19 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 	// ── Resolve gin prefix chains per file ────────────────────────────────
 	// Each group's full prefix = receiver-chain prefix + own prefix.
 	// Groups whose receiver is not another known group are at the root level.
-	type ginPrefixEntry struct {
-		fullPrefix string
-		resolved   bool
-	}
-	ginPrefixByFile := map[string]map[string]string{} // file → varName → fullPrefix
-
-	for file, groups := range ginGroupsByFile {
-		// Build a set of group var names for fast lookup.
-		knownVars := make(map[string]bool, len(groups))
+	// A `seed` (X.9) pre-binds group variables that were resolved in a caller's
+	// file (a *gin.RouterGroup parameter): a seeded var is a known receiver, so
+	// nested groups declared on top of it compose correctly.
+	resolveGinPrefixes := func(groups []ginGroup, seed map[string]string) map[string]string {
+		knownVars := make(map[string]bool, len(groups)+len(seed))
 		for _, g := range groups {
 			knownVars[g.varName] = true
 		}
-
-		pm := make(map[string]string, len(groups))
+		pm := make(map[string]string, len(groups)+len(seed))
+		for v, p := range seed {
+			knownVars[v] = true
+			pm[v] = p
+		}
 
 		// Iterative fixpoint: resolve groups bottom-up (stop when no progress).
 		for iteration := 0; iteration <= len(groups); iteration++ {
@@ -138,7 +193,51 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 				break
 			}
 		}
-		ginPrefixByFile[file] = pm
+		return pm
+	}
+
+	ginPrefixByFile := map[string]map[string]string{} // file → varName → fullPrefix
+	for file, groups := range ginGroupsByFile {
+		ginPrefixByFile[file] = resolveGinPrefixes(groups, nil)
+	}
+
+	// ── Pass B (X.9): seed cross-function registrar parameters ────────────────
+	// For each `registerX(groupVar, …)` call, resolve groupVar's prefix in the
+	// caller's file and seed it onto registerX's *gin.RouterGroup parameter in
+	// the file where registerX is defined. Registrars called from two different
+	// prefixes are a real ambiguity: seed the lexicographically-first and skip
+	// the rest, deterministically (#2). Then re-resolve each seeded file so any
+	// group nested on the seeded parameter (`sub := rg.Group("/x")`) composes.
+	sort.Slice(registrarCalls, func(a, b int) bool {
+		if registrarCalls[a].file != registrarCalls[b].file {
+			return registrarCalls[a].file < registrarCalls[b].file
+		}
+		return registrarCalls[a].line < registrarCalls[b].line
+	})
+	seedByFile := map[string]map[string]string{} // defFile → param → prefix
+	for _, c := range registrarCalls {
+		callerPrefixes, ok := ginPrefixByFile[c.file]
+		if !ok {
+			continue
+		}
+		fullPrefix, ok := callerPrefixes[c.arg]
+		if !ok {
+			continue // arg is not a resolvable group var in the caller — leave unseeded
+		}
+		rf, ok := registrarFuncs[c.callee]
+		if !ok {
+			continue // not a confirmed *gin.RouterGroup registrar — ignore the call
+		}
+		if seedByFile[rf.defFile] == nil {
+			seedByFile[rf.defFile] = map[string]string{}
+		}
+		if prev, seeded := seedByFile[rf.defFile][rf.param]; seeded && prev <= fullPrefix {
+			continue // keep lexicographically-first prefix on ambiguity
+		}
+		seedByFile[rf.defFile][rf.param] = fullPrefix
+	}
+	for file, seed := range seedByFile {
+		ginPrefixByFile[file] = resolveGinPrefixes(ginGroupsByFile[file], seed)
 	}
 
 	// ── Stamp route nodes ─────────────────────────────────────────────────

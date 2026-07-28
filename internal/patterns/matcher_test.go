@@ -70,6 +70,8 @@ func TestClassifyPattern_AllBranches(t *testing.T) {
 		{"consume", "amqp_consume", graph.NodeTypeSubscriber},
 		{"goroutine", "go_goroutine", graph.NodeTypeWorker},
 		{"spawn", "spawn_worker", graph.NodeTypeWorker},
+		{"gin_registrar_func", "gin_group_registrar_func", graph.NodeTypeVariable},
+		{"gin_registrar_call", "gin_group_registrar_call", graph.NodeTypeVariable},
 		{"default", "some_unknown_pattern", graph.NodeTypeFunction},
 	}
 	for _, tc := range cases {

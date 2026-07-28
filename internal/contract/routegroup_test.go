@@ -132,6 +132,97 @@ func TestEnrichRouteGroups_Gin_EmptyPrefixGroupInChain(t *testing.T) {
 		"route directly on the empty-prefix group keeps the parent prefix")
 }
 
+// ── Positive: gin cross-function registrar (X.9) ──────────────────────────────
+
+func ginRegistrarFuncNode(id, file, name, param string, line int) graph.Node {
+	return graph.Node{
+		ID: id, Type: graph.NodeTypeVariable, File: file, Line: line,
+		Meta: map[string]string{
+			"pattern": "gin_group_registrar_func",
+			"name":    name,
+			"param":   param,
+		},
+	}
+}
+
+func ginRegistrarCallNode(id, file, callee, arg string, line int) graph.Node {
+	return graph.Node{
+		ID: id, Type: graph.NodeTypeVariable, File: file, Line: line,
+		Meta: map[string]string{
+			"pattern": "gin_group_registrar_call",
+			"callee":  callee,
+			"arg":     arg,
+		},
+	}
+}
+
+// The svc-c-mgr shape: views.go builds `execCfgView` (→ /dsw) and passes it to
+// registerConfigAssociationViewRoutes, which is defined in another file and
+// registers `rg.GET("/config-associations")`. X.9 seeds `rg` from the caller so
+// the route composes to /dsw/config-associations.
+func TestEnrichRouteGroups_Gin_CrossFunctionRegistrar(t *testing.T) {
+	nodes := []graph.Node{
+		// caller file
+		ginGroupNode("g1", "views.go", "dswManager", "/dsw", "r", 3),
+		ginGroupNode("g2", "views.go", "execCfgView", "", "dswManager", 4), // middleware-only
+		ginRegistrarCallNode("c1", "views.go", "registerConfigAssociationViewRoutes", "execCfgView", 5),
+		// callee file (different file, group arrives as a parameter)
+		ginRegistrarFuncNode("f1", "assoc.go", "registerConfigAssociationViewRoutes", "rg", 1),
+		ginRouteNode("h1", "assoc.go", "rg", "GET", "/config-associations", 2),
+		// a group nested on top of the seeded parameter must still compose
+		ginGroupNode("g3", "assoc.go", "sub", "/v2", "rg", 3),
+		ginRouteNode("h2", "assoc.go", "sub", "GET", "/deep", 4),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/dsw/config-associations", byID["h1"].Meta["path"],
+		"registrar param must be seeded with the caller's resolved prefix")
+	assert.Equal(t, "/dsw/v2/deep", byID["h2"].Meta["path"],
+		"a group nested on the seeded parameter must compose on top of it")
+}
+
+// Two callers passing different prefixes to the same registrar is a real
+// ambiguity — X.9 seeds the lexicographically-first deterministically, never
+// depending on node order.
+func TestEnrichRouteGroups_Gin_CrossFunctionRegistrar_Ambiguous(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "b_caller.go", "gb", "/beta", "r", 3),
+		ginRegistrarCallNode("c1", "b_caller.go", "registerX", "gb", 4),
+		ginGroupNode("g2", "a_caller.go", "ga", "/alpha", "r", 3),
+		ginRegistrarCallNode("c2", "a_caller.go", "registerX", "ga", 4),
+		ginRegistrarFuncNode("f1", "reg.go", "registerX", "rg", 1),
+		ginRouteNode("h1", "reg.go", "rg", "GET", "/thing", 2),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/alpha/thing", byID["h1"].Meta["path"],
+		"ambiguous registrar must resolve to the lexicographically-first prefix")
+}
+
+// A registrar call in a test file must not seed the real service's registrar
+// parameter — only production wiring counts.
+func TestEnrichRouteGroups_Gin_CrossFunctionRegistrar_SkipsTestFile(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "assoc_test.go", "rgTest", "/dsw", "r", 3),
+		ginRegistrarCallNode("c1", "assoc_test.go", "registerX", "rgTest", 4),
+		ginRegistrarFuncNode("f1", "assoc.go", "registerX", "rg", 1),
+		ginRouteNode("h1", "assoc.go", "rg", "GET", "/thing", 2),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/thing", byID["h1"].Meta["path"],
+		"a test-file registrar call must not seed the production registrar param")
+}
+
 // ── Positive: chi single-level group ─────────────────────────────────────────
 
 func TestEnrichRouteGroups_Chi_SingleGroup(t *testing.T) {
