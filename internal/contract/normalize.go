@@ -46,6 +46,17 @@ var (
 	// a lone trailing verb (`%d/`, `%s?`) is unambiguously not a `%`+2-hex
 	// sequence. Extend the verb set only with evidence.
 	reParamPrintf = regexp.MustCompile(`%\d*[dsv]`)
+	// reInterpSegment matches a whole path segment (a run of non-slash chars)
+	// that embeds a JS template-literal interpolation `${…}` — e.g.
+	// `${configType}-configs` or a bare `${configId}` from
+	// `fetch(`/api/v1/${configType}-configs/${configId}/dependent-apps`)`. The
+	// entire segment is collapsed to `*` (not just the `${…}` span): a segment
+	// carrying an interpolation is dynamic, and its literal decoration
+	// (`-configs`) is a runtime concatenation that cannot be relied on for
+	// matching. This lets the client path reduce to `/api/v1/*/*/dependent-apps`
+	// and meet the composed handler `/api/v1/exec-configs/:config_id/dependent-apps`
+	// on the wildcard tier (X.10c).
+	reInterpSegment = regexp.MustCompile(`[^/]*\$\{[^}]*\}[^/]*`)
 )
 
 // normParamWildcard replaces path parameter segments with *.
@@ -53,7 +64,8 @@ var (
 // `fmt.Sprintf`-built client path (`/maple/roles/%d/update`) reduces to the same
 // `/maple/roles/*/update` shape a `:id` handler does and the two match.
 func normParamWildcard(value string, _ NormalizeEnv) string {
-	p := reParamColon.ReplaceAllString(value, "*")
+	p := reInterpSegment.ReplaceAllString(value, "*")
+	p = reParamColon.ReplaceAllString(p, "*")
 	p = reParamBrace.ReplaceAllString(p, "*")
 	p = reParamRegex.ReplaceAllString(p, "*")
 	p = reParamPrintf.ReplaceAllString(p, "*")
