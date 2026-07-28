@@ -168,7 +168,19 @@ signal so they never silently trust a stale graph. **No schema bump.**
 
 ---
 
-## Phase A.2 — Project hierarchy tool (`hierarchy`)  `pending`
+## Phase A.2 — Project hierarchy tool (`hierarchy`)  `done (commit TBD)`
+
+> **Implementation note.** No schema bump — `hierarchy` only reads existing
+> nodes. Dirs/files are derived from `path.Dir(node.File)` over every located
+> node (files enter the tree even when they hold no listed symbol, so the layout
+> is complete); symbols at depth 3 are restricted to top-level declared types
+> (`function`/`method`/`class`/`struct`/`interface`/`component` + the entrypoint
+> kinds `http_handler`/`subscriber`/`worker`/`grpc_handler`/`graphql_resolver`).
+> `max_tokens` collapses the deepest level globally (depth d → d-1) and retries
+> until it fits or reaches depth 1, setting `truncated`. Verified live against
+> the polyflow graph: `hierarchy(service, path, depth=3)` returns struct/func
+> `id`s that feed straight into `read`. One gotcha: a `jsonschema` tag value must
+> not start with `WORD=`, so the depth description avoids the `1=…` form.
 
 **Problem.** None of the seven tools give a *structural overview*. An agent orienting in an
 unfamiliar repo still runs `ls`/`find`/grep to learn the layout — the exact multi-turn token sink
