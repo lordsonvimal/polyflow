@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "23" {
-		t.Errorf("expected SchemaVersion 23 (Y.6: render dataflow resource→signal + signal→element), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "24" {
+		t.Errorf("expected SchemaVersion 24 (Y.7: event head — JSX onClick + addEventListener → dom_listen), got %q", graph.SchemaVersion)
 	}
 }
 
