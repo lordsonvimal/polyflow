@@ -28,6 +28,64 @@ unresolved-references section (graph blind spots to verify manually).`,
 	RunE: runMCP,
 }
 
+// mcpMarkerPath is the state-file gate: its presence disables the query tools
+// for the next `polyflow mcp` session. Lives under .polyflow so it is workspace-
+// local and gitignored alongside the graph db.
+func mcpMarkerPath() string { return filepath.Join(meta.DBDir, "mcp.disabled") }
+
+// mcpEnabled reports whether the query tools should be registered (marker absent).
+func mcpEnabled() bool {
+	_, err := os.Stat(mcpMarkerPath())
+	return os.IsNotExist(err)
+}
+
+const mcpReconnectHint = "Reconnect your agent (restart the session) for this to take effect — " +
+	"the MCP server is spawned once per session over stdio."
+
+var mcpOnCmd = &cobra.Command{
+	Use:   "on",
+	Short: "Enable polyflow's MCP query tools for the next agent session",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := os.Remove(mcpMarkerPath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Println("polyflow MCP enabled. " + mcpReconnectHint)
+		return nil
+	},
+}
+
+var mcpOffCmd = &cobra.Command{
+	Use:   "off",
+	Short: "Disable polyflow's MCP query tools for the next session (A/B token baseline)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := os.MkdirAll(meta.DBDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(mcpMarkerPath(), nil, 0o644); err != nil {
+			return err
+		}
+		fmt.Println("polyflow MCP disabled — the next session runs WITHOUT polyflow tools. " + mcpReconnectHint)
+		return nil
+	},
+}
+
+var mcpStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Report whether the MCP query tools are enabled or disabled",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if mcpEnabled() {
+			fmt.Println("enabled")
+		} else {
+			fmt.Println("disabled (run 'polyflow mcp on' to re-enable)")
+		}
+		return nil
+	},
+}
+
+func init() {
+	mcpCmd.AddCommand(mcpOnCmd, mcpOffCmd, mcpStatusCmd)
+}
+
 func runMCP(cmd *cobra.Command, args []string) error {
 	store, err := openStore()
 	if err != nil {
@@ -51,7 +109,12 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		synonyms = cfg.Search.Synonyms
 	}
 
-	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile))
+	enabled := mcpEnabled()
+	if !enabled {
+		fmt.Fprintln(os.Stderr, "polyflow mcp: DISABLED — query tools not registered (run `polyflow mcp on` to re-enable)")
+	}
+
+	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile), enabled)
 	handle.SetSearcher(buildSearcher(store, emb, synonyms))
 
 	// Pick up reindexes during the session: polyflow index atomically swaps
