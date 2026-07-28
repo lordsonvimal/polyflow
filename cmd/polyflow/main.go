@@ -733,9 +733,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	lastIndexed := "never"
+	var lastIndexedAt time.Time // zero when never indexed
 	if ts, err := store.GetMeta(ctx, "last_indexed"); err == nil {
 		if unix, err := strconv.ParseInt(ts, 10, 64); err == nil {
 			t := time.Unix(unix, 0)
+			lastIndexedAt = t
 			ago := time.Since(t).Round(time.Second)
 			lastIndexed = fmt.Sprintf("%s (%s ago)", t.Format("2006-01-02 15:04:05"), ago)
 		}
@@ -759,6 +761,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Workspace: %s\n", cfg.Name)
 	fmt.Printf("  Services: %d (%s)\n", len(cfg.Services), strings.Join(langParts, ", "))
 	fmt.Printf("  Last indexed: %s\n", lastIndexed)
+	if freshness := indexFreshness(cfg, lastIndexedAt); freshness != "" {
+		fmt.Printf("  Freshness: %s\n", freshness)
+	}
 	fmt.Printf("  Files: N/A | Nodes: %d | Edges: %d\n", nodeCount, edgeCount)
 	if len(parseErrors) > 0 {
 		fmt.Printf("  Parse errors: %d files (--errors for details)\n", len(parseErrors))
@@ -882,6 +887,59 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// indexFreshness compares source-file mtimes against the last index run and
+// returns a one-line freshness verdict for `polyflow status`. It mirrors the
+// indexer's exclude handling (index.exclude + .polyflowignore + nested-service
+// pruning) so it counts exactly the files a reindex would revisit, and caps the
+// walk so an obviously-stale tree stays instant. Empty string = never indexed
+// (the "Last indexed: never" line already says so).
+func indexFreshness(cfg *workspace.WorkspaceConfig, lastIndexedAt time.Time) string {
+	if lastIndexedAt.IsZero() {
+		return ""
+	}
+	ignorePatterns := workspace.LoadIgnoreFile(".")
+	// Absolute service paths, to prune each service's tree out of the others'.
+	svcPaths := make([]string, len(cfg.Services))
+	for i, svc := range cfg.Services {
+		if abs, err := filepath.Abs(svc.Path); err == nil {
+			svcPaths[i] = abs
+		} else {
+			svcPaths[i] = svc.Path
+		}
+	}
+	const cap = 50
+	total := 0
+	capped := false
+	for i, svc := range cfg.Services {
+		var extra []string
+		for j, other := range svcPaths {
+			if i == j {
+				continue
+			}
+			if rel, err := filepath.Rel(svcPaths[i], other); err == nil &&
+				!strings.HasPrefix(rel, "..") && rel != "." {
+				extra = append(extra, rel+"/**")
+			}
+		}
+		excludes := append(append([]string{}, cfg.Index.Exclude...), ignorePatterns...)
+		excludes = append(excludes, extra...)
+		n, c := indexer.CountFilesModifiedSince(svc.Path, excludes, lastIndexedAt, cap-total)
+		total += n
+		if c {
+			capped = true
+			break
+		}
+	}
+	if total == 0 {
+		return "up to date"
+	}
+	countStr := fmt.Sprintf("%d", total)
+	if capped {
+		countStr = fmt.Sprintf("%d+", total)
+	}
+	return fmt.Sprintf("STALE — %s file(s) changed since last index (run 'polyflow index')", countStr)
 }
 
 // ─── patterns ────────────────────────────────────────────────────────────────

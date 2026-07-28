@@ -66,7 +66,7 @@ func fixture() (*fakeStore, *graph.AdjacencyIndex) {
 // connect wires the server to an in-memory client session.
 func connect(t *testing.T, store Store, idx *graph.AdjacencyIndex) *mcp.ClientSession {
 	t.Helper()
-	srv, _ := New(store, idx, "test", 0)
+	srv, _ := New(store, idx, "test", 0, true)
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
 		t.Fatal(err)
@@ -102,6 +102,34 @@ func TestToolDiscovery(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace", "flows", "entrypoints", "resolve"}, names)
+}
+
+func TestToolDiscovery_Disabled(t *testing.T) {
+	store, idx := fixture()
+
+	srv, _ := New(store, idx, "test", 0, false)
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	cs, err := client.Connect(context.Background(), ct, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { cs.Close() })
+
+	tools, err := cs.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+	}
+	// Disabled: only the probe tool, no code-graph tools (clean A/B control).
+	assert.ElementsMatch(t, []string{"status"}, names)
+
+	var out map[string]string
+	callJSON(t, cs, "status", nil, &out)
+	assert.Equal(t, "disabled", out["status"])
 }
 
 func TestSearchTool(t *testing.T) {
@@ -554,7 +582,7 @@ func connectWithSearcher(t *testing.T, nodes []*graph.Node) (*mcp.ClientSession,
 	sem := semantic.NewStore(store.DB())
 	sr := semantic.NewSearcher(sem, nil, nil) // nil embedder → FTS-only
 
-	srv, handle := New(store, idx, "test", 0)
+	srv, handle := New(store, idx, "test", 0, true)
 	handle.SetSearcher(sr)
 
 	st, ct := mcp.NewInMemoryTransports()
