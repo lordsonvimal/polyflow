@@ -37,7 +37,7 @@ patterns:
           .
           (identifier) @ctx
           .
-          (unary_expression) @input))
+          (_) @input))
     captures:
       - name: fn
         role: s3_operation
