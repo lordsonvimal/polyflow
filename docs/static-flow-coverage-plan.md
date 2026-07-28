@@ -462,6 +462,33 @@ button→http→handler→db→type→render chain is now a connected static pat
 
 Tests: `TestJSY7_JSXEvent`, `TestJSY7_AddEventListener` (+ schema-version bump). `go vet` clean.
 
+**Y.7 extension (shipped 2026-07-28) — inline-arrow handlers + TS `uses_type` dangling closure.**
+A follow-up pass measured that every JSX handler in this repo is an inline arrow (bare-ref was the
+minority) and that 12 TS DTO interfaces still dangled. Both are now closed:
+
+- **Inline-arrow handler linking (`inlineHandlerTargets`).** `onClick={() => doThing()}` binds the
+  element to *each same-file function the arrow body invokes* (`dom_listen`, `handler:inline`,
+  confidence `inferred`) — the possible-flow head (recall over precision). Member/store-method calls
+  (`store.foo()`), signal setters, and no-resolvable-call arrows carry no function node and are
+  ledgered (#12). The same logic extends the `addEventListener` inline path. **Measured:** JSX
+  `dom_listen` 4→**13** (9 inline: `exportMermaid`×3, `loadFileImpact`×2, `selectFile`,
+  `selectResult`, `otherEnd`), total `dom_listen` 7→**16**, 0 orphan endpoints (#10).
+- **Same-file TS `uses_type` (`extractTypeUses`, `js_variables.go`).** A `type_identifier` in an
+  annotation, interface member, class field, or generic argument that resolves to a same-file
+  interface/class emits `<enclosing decl> → type` `uses_type` (`via:type_ref`) — the JS analog of
+  the Go struct `uses_type` pass. `enclosingDeclID` attributes to the owning interface / class /
+  function / variable (incl. destructured signal accessors). **23 same-file edges**; cleared **11 of
+  12** dangling TS interfaces.
+- **Cross-file TS `uses_type` (`LinkJSTypeRelations`).** The last one (`GraphEdge`, defined in
+  `types.ts`, used only as an imported generic arg in `derived.ts`/`graph.ts`) is resolved through
+  the file's import bindings, attributed to the nearest preceding declaration in the consumer file
+  (`via:type_ref_import`, `inferred`). **14 edges;** `GraphEdge` now connected.
+
+**Net dangling-node result:** isolated nodes 341 (baseline) → 75 (post-Y.6) → **63**; **dangling TS
+interfaces 12 → 0**. The remaining 63 are all correct-to-dangle (#12): 59 Go consts/vars
+(test-fixture, genuinely-unused, or package-`var`-map-initializer-only) + 4 TS module vars never read
+across a boundary. Tests: `TestJSY7_InlineHandler`, `TestJSY7_TypeUses`. No schema change (edges-only).
+
 <details><summary>Original spec</summary>
 
 **Problem (hop 1).** `dom_listen` is near-empty (2) and points at a `dom_target` abstraction. The
