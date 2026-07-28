@@ -507,15 +507,19 @@ func normalizeDatastarPath(rest string) (string, bool) {
 	for i < len(rest) {
 		c := rest[i]
 		if c == openQuote {
-			// Inside the string, a closing quote followed by `)` (or end)
-			// terminates the path; otherwise it is a JS-level concat boundary
-			// that flips us out of the string into an interpolated expression.
+			// Inside the string, a closing quote followed by `)`, `,`, or end
+			// terminates the path: the URL is always the first argument of
+			// `@verb(url, opts?)`, so a `,` after the closing quote starts the
+			// options object (`@post('/save', {contentType:'form'})`) and must
+			// not bleed into the path (it produced `/save*form*`). A closing
+			// quote followed by anything else is a JS-level concat boundary that
+			// flips us out of the string into an interpolated expression.
 			if inStr {
 				j := i + 1
 				for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t') {
 					j++
 				}
-				if j >= len(rest) || rest[j] == ')' {
+				if j >= len(rest) || rest[j] == ')' || rest[j] == ',' {
 					break
 				}
 				inStr = false

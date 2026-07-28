@@ -118,6 +118,18 @@ func TestExtractDatastarAction(t *testing.T) {
 			wantMethod: "POST", wantPath: "*/history/navigate?direction=-1", wantPart: true, wantOK: true,
 		},
 		{
+			// The options object is the second argument and must not bleed into
+			// the path (it produced `/app-configs/save*form*`).
+			name:       "options object second arg does not bleed into path",
+			val:        `"@post('/app-configs/save', {contentType: 'form'})"`,
+			wantMethod: "POST", wantPath: "/app-configs/save", wantPart: false, wantOK: true,
+		},
+		{
+			name:       "interpolated path with options second arg",
+			val:        `"@post('/apps/" + appID + "/save', {contentType: 'form'})"`,
+			wantMethod: "POST", wantPath: "/apps/*/save", wantPart: true, wantOK: true,
+		},
+		{
 			name:   "signal-only handler has no action",
 			val:    `"$flipped = !$flipped"`,
 			wantOK: false,

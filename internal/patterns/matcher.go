@@ -615,13 +615,19 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 
 		// X.0: a comm-classified site (http_client/publisher/subscriber) whose
-		// enclosing construct is a test-DSL call/function is not a real
-		// communication endpoint — it's test/scenario code. Demote it to an
-		// ordinary calls node (still indexed, so blast radius still finds
-		// "which tests break") instead of minting a node the contract engine
-		// and coverage denominators would treat as a real producer/consumer.
-		demoteTestDSL := r.IsTestDSL && (nodeType == graph.NodeTypeHTTPClient ||
-			nodeType == graph.NodeTypePublisher || nodeType == graph.NodeTypeSubscriber)
+		// enclosing construct is a test-DSL call/function — OR whose file is a
+		// test/spec file — is not a real communication endpoint; it's
+		// test/scenario code. A `_test.go` http.NewRequest that isn't wrapped in
+		// a recognised test-DSL construct (Go table tests, RSpec `it`) otherwise
+		// slips through as a real producer and pollutes the cross-service
+		// resolution denominator (measured: 32 of 134 unresolved-cross
+		// http_call on the svc-c fleet came from `_test.go` files). Demote
+		// it to an ordinary calls node (still indexed, so blast radius still
+		// finds "which tests break") instead of minting a node the contract
+		// engine and coverage denominators would treat as a real endpoint.
+		demoteTestDSL := (r.IsTestDSL || graph.IsTestFilePath(r.File)) &&
+			(nodeType == graph.NodeTypeHTTPClient ||
+				nodeType == graph.NodeTypePublisher || nodeType == graph.NodeTypeSubscriber)
 		if demoteTestDSL {
 			nodeType = graph.NodeTypeFunction
 		}
