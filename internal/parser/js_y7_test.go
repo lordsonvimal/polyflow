@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -77,6 +78,92 @@ func TestJSY7_JSXEvent(t *testing.T) {
 	}
 	if !ledgered {
 		t.Errorf("onClose not ledgered as dom_listen_unresolved; unresolved: %+v", unresolved)
+	}
+}
+
+// y7InlineSource exercises inline-arrow handler linking: the arrow calls a
+// same-file function (`save`, resolvable → edge) and a store method
+// (`store.refresh()`, member call → no edge), plus an arrow with no resolvable
+// call (`() => noop` — ledgered).
+const y7InlineSource = `import { store } from "./store";
+
+function save() {
+  fetch("/api/save");
+}
+
+function Form() {
+  return (
+    <div>
+      <button onClick={() => save()}>Save</button>
+      <button onClick={() => store.refresh()}>Refresh</button>
+      <button onClick={() => { const x = 1; return x; }}>Noop</button>
+    </div>
+  );
+}
+`
+
+// TestJSY7_InlineHandler verifies an inline arrow handler binds the element to
+// each same-file function it invokes (via:jsx, handler:inline, inferred), while
+// member/store calls and no-op arrows are ledgered (#12).
+func TestJSY7_InlineHandler(t *testing.T) {
+	_, edges, unresolved := extractJSVariables("Form.tsx", "web", "typescript", "tsx", []byte(y7InlineSource))
+
+	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:save:")
+	if e == nil {
+		t.Fatalf("missing inline dom_listen button → save; edges: %+v", edges)
+	}
+	if e.Meta["handler"] != "inline" {
+		t.Errorf("inline dom_listen handler = %q, want inline", e.Meta["handler"])
+	}
+	if e.Meta["event"] != "click" || e.Meta["via"] != "jsx" {
+		t.Errorf("inline dom_listen meta = %+v, want event=click via=jsx", e.Meta)
+	}
+	if e.Confidence != graph.ConfidenceInferred {
+		t.Errorf("inline dom_listen confidence = %q, want inferred", e.Confidence)
+	}
+	// store.refresh() is a member call — no same-file function node, no edge.
+	for _, ed := range edges {
+		if ed.Type == graph.EdgeTypeDOMListen && strings.Contains(ed.To, ":function:refresh:") {
+			t.Errorf("member call store.refresh() should not emit dom_listen, got %+v", ed)
+		}
+	}
+	// The no-op arrow yields no resolvable call → ledgered.
+	var inlineLedgered bool
+	for _, u := range unresolved {
+		if u.Kind == "dom_listen_unresolved" && u.Name == "click:inline" {
+			inlineLedgered = true
+		}
+	}
+	if !inlineLedgered {
+		t.Errorf("no-op inline arrow not ledgered; unresolved: %+v", unresolved)
+	}
+}
+
+// y7TypeUseSource exercises same-file uses_type: an interface field references
+// another interface, and a const's type annotation references a third.
+const y7TypeUseSource = `interface Ref {
+  id: string;
+}
+
+interface Detail {
+  refs: Ref[];
+}
+
+const styles: Ref[] = [];
+`
+
+// TestJSY7_TypeUses verifies same-file type references emit uses_type edges so a
+// declared-but-never-instantiated TS type is not left dangling.
+func TestJSY7_TypeUses(t *testing.T) {
+	_, edges, _ := extractJSVariables("types.ts", "web", "typescript", "typescript", []byte(y7TypeUseSource))
+
+	// Detail interface references Ref in a member type.
+	if e := edgeFromToSub(edges, graph.EdgeTypeUsesType, ":interface:Detail:", ":interface:Ref:"); e == nil {
+		t.Errorf("missing uses_type Detail → Ref (member type); edges: %+v", edges)
+	}
+	// const styles: Ref[] references Ref in its annotation.
+	if e := edgeFromToSub(edges, graph.EdgeTypeUsesType, ":variable:styles:", ":interface:Ref:"); e == nil {
+		t.Errorf("missing uses_type styles → Ref (annotation); edges: %+v", edges)
 	}
 }
 

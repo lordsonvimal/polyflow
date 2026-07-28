@@ -54,6 +54,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 	ex.collectTopLevel(root)
 	ex.collectLocalFns(root)
 	ex.walk(root, []*jsScope{ex.moduleScope()})
+	ex.extractTypeUses(root)
 	ex.stampGlobalSymbols(root)
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
@@ -417,6 +418,110 @@ func collectPatternBindings(n *sitter.Node, src []byte, visit func(name string, 
 	for i := 0; i < int(n.NamedChildCount()); i++ {
 		collectPatternBindings(n.NamedChild(i), src, visit)
 	}
+}
+
+// extractTypeUses emits same-file `uses_type` edges from a declaration to the
+// TypeScript interface/class types it references in annotations, interface
+// members, class fields, and generic arguments — the JS analog of the Go struct
+// `uses_type` pass. It resolves the referenced name against same-file
+// interfaces/classes (ex.classNodes); cross-file references are left for
+// LinkJSTypeRelations. This is what connects otherwise-dangling frontend DTO
+// types (a type declared and used but never instantiated) into the graph.
+func (ex *jsExtractor) extractTypeUses(n *sitter.Node) {
+	if n.Type() == "type_identifier" && isTypeReferenceContext(n) {
+		if toID, ok := ex.classNodes[n.Content(ex.src)]; ok {
+			if fromID := ex.enclosingDeclID(n); fromID != "" && fromID != toID {
+				ex.addEdge(graph.EdgeTypeUsesType, fromID, toID,
+					graph.ConfidenceStatic, map[string]string{"via": "type_ref"})
+			}
+		}
+	}
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		ex.extractTypeUses(n.NamedChild(i))
+	}
+}
+
+// isTypeReferenceContext reports whether a type_identifier is a *use* of a type
+// rather than a declaration name or a heritage target (which are already
+// captured as the type node itself / inherits / implements edges).
+func isTypeReferenceContext(n *sitter.Node) bool {
+	p := n.Parent()
+	if p == nil {
+		return false
+	}
+	switch p.Type() {
+	case "interface_declaration", "class_declaration",
+		"extends_clause", "implements_clause", "extends_type_clause":
+		return false
+	}
+	return true
+}
+
+// enclosingDeclID resolves the graph node ID of the nearest declaration that
+// owns a type reference: an interface, class, function, or variable (including
+// a destructured signal accessor). Returns "" when no backing node exists.
+func (ex *jsExtractor) enclosingDeclID(n *sitter.Node) string {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		switch p.Type() {
+		case "interface_declaration", "class_declaration":
+			if nm := p.ChildByFieldName("name"); nm != nil {
+				if id, ok := ex.classNodes[nm.Content(ex.src)]; ok {
+					return id
+				}
+			}
+		case "function_declaration", "generator_function_declaration":
+			if nm := p.ChildByFieldName("name"); nm != nil {
+				if id, ok := ex.resolveFnID(nm.Content(ex.src)); ok {
+					return id
+				}
+			}
+		case "variable_declarator":
+			nm := p.ChildByFieldName("name")
+			if nm == nil {
+				continue
+			}
+			switch nm.Type() {
+			case "identifier":
+				name := nm.Content(ex.src)
+				if v, ok := ex.moduleVars[name]; ok {
+					return v.nodeID
+				}
+				if id, ok := ex.resolveFnID(name); ok {
+					return id
+				}
+			case "array_pattern", "object_pattern":
+				// Destructured signal accessor (const [x] = createSignal<T>()):
+				// attribute to the accessor's variable node.
+				var id string
+				collectPatternBindings(nm, ex.src, func(bn string, _ int) {
+					if id != "" {
+						return
+					}
+					if v, ok := ex.moduleVars[bn]; ok {
+						id = v.nodeID
+					} else if sid, ok := ex.signals[bn]; ok {
+						id = sid
+					}
+				})
+				if id != "" {
+					return id
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// resolveFnID resolves a function name to its node ID via the module-level then
+// local function registries.
+func (ex *jsExtractor) resolveFnID(name string) (string, bool) {
+	if line, ok := ex.fnDecls[name]; ok {
+		return ex.fnNodeID(name, line), true
+	}
+	if line, ok := ex.localFns[name]; ok {
+		return ex.fnNodeID(name, line), true
+	}
+	return "", false
 }
 
 func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
@@ -1193,30 +1298,99 @@ func (ex *jsExtractor) handleJSXEvent(open *sitter.Node) {
 		if event == "" {
 			continue
 		}
-		ref := jsxAttrHandlerRef(attr, ex.src)
-		if ref == "" {
-			continue // inline arrow / call / member handler — no stable node
-		}
-		fnLine, ok := ex.resolveHandlerFn(ref)
-		if !ok {
-			// Cross-file/imported handler or non-function binding — ledgered.
-			ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
-				Service: ex.service, File: ex.file, Line: elLine,
-				Name: ref, Kind: "dom_listen_unresolved",
-			})
+		val := jsxAttrValueExpr(attr)
+		if val == nil {
 			continue
 		}
-		if !elementAdded {
-			elementAdded = true
-			ex.addNode(graph.Node{
-				ID: elID, Type: graph.NodeTypeElement, Label: tag,
-				Service: ex.service, File: ex.file, Line: elLine, Language: ex.langTag,
-				Meta: map[string]string{"tag": tag},
-			})
+		switch {
+		case val.Type() == "identifier":
+			// Bare handler ref: onClick={handleClick} — a same-file function.
+			ref := val.Content(ex.src)
+			if fnLine, ok := ex.resolveHandlerFn(ref); ok {
+				ex.emitDOMListen(elID, &elementAdded, elLine, tag, ex.fnNodeID(ref, fnLine),
+					event, "", graph.ConfidenceStatic)
+			} else {
+				ex.ledgerDOMListen(elLine, ref)
+			}
+		case isFunctionNode(val.Type()):
+			// Inline handler: onClick={() => doThing()} — no stable node of its
+			// own, so bind the element to each same-file function the arrow body
+			// invokes (the possible-flow head; recall over precision). Member/
+			// store-method and setter calls don't resolve and are ledgered.
+			targets := ex.inlineHandlerTargets(val)
+			if len(targets) == 0 {
+				ex.ledgerDOMListen(elLine, event+":inline")
+				continue
+			}
+			for _, tgt := range targets {
+				ex.emitDOMListen(elID, &elementAdded, elLine, tag, ex.fnNodeID(tgt.name, tgt.line),
+					event, "inline", graph.ConfidenceInferred)
+			}
+		default:
+			// Member/other handler expression (this.onClick, obj.fn) — ledgered.
+			ex.ledgerDOMListen(elLine, strings.TrimSpace(val.Content(ex.src)))
 		}
-		ex.addEdge(graph.EdgeTypeDOMListen, elID, ex.fnNodeID(ref, fnLine),
-			graph.ConfidenceStatic, map[string]string{"event": event, "via": "jsx"})
 	}
+}
+
+// emitDOMListen mints the element node lazily (only on the first resolved
+// handler, so a dom_listen never dangles, #10) and adds the element→function
+// edge. handlerKind distinguishes a bare ref ("") from an inline arrow target.
+func (ex *jsExtractor) emitDOMListen(elID string, elementAdded *bool, elLine int, tag, toID, event, handlerKind, conf string) {
+	if !*elementAdded {
+		*elementAdded = true
+		ex.addNode(graph.Node{
+			ID: elID, Type: graph.NodeTypeElement, Label: tag,
+			Service: ex.service, File: ex.file, Line: elLine, Language: ex.langTag,
+			Meta: map[string]string{"tag": tag},
+		})
+	}
+	meta := map[string]string{"event": event, "via": "jsx"}
+	if handlerKind != "" {
+		meta["handler"] = handlerKind
+	}
+	ex.addEdge(graph.EdgeTypeDOMListen, elID, toID, conf, meta)
+}
+
+// ledgerDOMListen records an unresolvable handler so every event attribute
+// reaches output or the ledger (#12) — never a fabricated edge.
+func (ex *jsExtractor) ledgerDOMListen(line int, name string) {
+	ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+		Service: ex.service, File: ex.file, Line: line,
+		Name: name, Kind: "dom_listen_unresolved",
+	})
+}
+
+// handlerTarget is a same-file function an inline handler invokes.
+type handlerTarget struct {
+	name string
+	line int
+}
+
+// inlineHandlerTargets scans an inline handler (arrow / function expression) for
+// bare-identifier call sites that resolve to a same-file function, returning
+// each once. Member calls (store.method()), signal setters, and unresolved
+// identifiers are skipped — they carry no function node to bind the element to.
+func (ex *jsExtractor) inlineHandlerTargets(fn *sitter.Node) []handlerTarget {
+	var out []handlerTarget
+	seen := map[string]bool{}
+	var visit func(n *sitter.Node)
+	visit = func(n *sitter.Node) {
+		if n.Type() == "call_expression" {
+			if callee := n.ChildByFieldName("function"); callee != nil && callee.Type() == "identifier" {
+				name := callee.Content(ex.src)
+				if line, ok := ex.resolveHandlerFn(name); ok && !seen[name] {
+					seen[name] = true
+					out = append(out, handlerTarget{name, line})
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			visit(n.NamedChild(i))
+		}
+	}
+	visit(fn)
+	return out
 }
 
 // eventName maps a JSX event-attribute name to its DOM event type, or "" when
@@ -1233,10 +1407,11 @@ func eventName(attr string) string {
 	return strings.ToLower(rest)
 }
 
-// jsxAttrHandlerRef returns the bare handler identifier bound by a JSX event
-// attribute value `={ref}`, or "" for inline arrows, calls, and member refs
-// (which carry no stable same-file function node to listen to).
-func jsxAttrHandlerRef(attr *sitter.Node, src []byte) string {
+// jsxAttrValueExpr returns the expression bound by a JSX attribute value
+// `={expr}` — the inner expression of the jsx_expression container — or nil for
+// bare/string attributes. The caller dispatches on its node type (identifier =
+// bare handler ref, arrow/function = inline handler, else = ledgered).
+func jsxAttrValueExpr(attr *sitter.Node) *sitter.Node {
 	var val *sitter.Node
 	for i := int(attr.NamedChildCount()) - 1; i >= 1; i-- {
 		if c := attr.NamedChild(i); c.Type() == "jsx_expression" {
@@ -1245,14 +1420,14 @@ func jsxAttrHandlerRef(attr *sitter.Node, src []byte) string {
 		}
 	}
 	if val == nil {
-		return ""
+		return nil
 	}
 	for i := 0; i < int(val.NamedChildCount()); i++ {
-		if inner := val.NamedChild(i); inner.Type() == "identifier" {
-			return inner.Content(src)
+		if inner := val.NamedChild(i); inner.Type() != "comment" {
+			return inner
 		}
 	}
-	return ""
+	return nil
 }
 
 // handleAddEventListener emits element→function dom_listen for a vanilla
@@ -1281,18 +1456,7 @@ func (ex *jsExtractor) handleAddEventListener(call *sitter.Node) {
 	event := strings.Trim(evtArg.Content(ex.src), "\"'`")
 	handler := args.NamedChild(1)
 	line := tsLine(call)
-	if handler.Type() != "identifier" {
-		return // inline function/arrow handler — no stable node
-	}
-	ref := handler.Content(ex.src)
-	fnLine, ok := ex.resolveHandlerFn(ref)
-	if !ok {
-		ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
-			Service: ex.service, File: ex.file, Line: line,
-			Name: ref, Kind: "dom_listen_unresolved",
-		})
-		return
-	}
+
 	// Concise DOM-target label from the receiver; call-expression receivers
 	// (document.getElementById("x")) stay generic to keep the node ID clean.
 	target := "element"
@@ -1303,13 +1467,43 @@ func (ex *jsExtractor) handleAddEventListener(call *sitter.Node) {
 		}
 	}
 	elID := fmt.Sprintf("%s:%s:element:%s:%d", ex.service, ex.file, target, line)
-	ex.addNode(graph.Node{
-		ID: elID, Type: graph.NodeTypeElement, Label: target,
-		Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
-		Meta: map[string]string{"tag": target, "via": "addEventListener"},
-	})
-	ex.addEdge(graph.EdgeTypeDOMListen, elID, ex.fnNodeID(ref, fnLine),
-		graph.ConfidenceStatic, map[string]string{"event": event, "via": "add_event_listener"})
+	added := false
+	emit := func(toID, kind, conf string) {
+		if !added {
+			added = true
+			ex.addNode(graph.Node{
+				ID: elID, Type: graph.NodeTypeElement, Label: target,
+				Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+				Meta: map[string]string{"tag": target, "via": "addEventListener"},
+			})
+		}
+		meta := map[string]string{"event": event, "via": "add_event_listener"}
+		if kind != "" {
+			meta["handler"] = kind
+		}
+		ex.addEdge(graph.EdgeTypeDOMListen, elID, toID, conf, meta)
+	}
+
+	switch {
+	case handler.Type() == "identifier":
+		ref := handler.Content(ex.src)
+		if fnLine, ok := ex.resolveHandlerFn(ref); ok {
+			emit(ex.fnNodeID(ref, fnLine), "", graph.ConfidenceStatic)
+		} else {
+			ex.ledgerDOMListen(line, ref)
+		}
+	case isFunctionNode(handler.Type()):
+		targets := ex.inlineHandlerTargets(handler)
+		if len(targets) == 0 {
+			ex.ledgerDOMListen(line, event+":inline")
+			return
+		}
+		for _, tgt := range targets {
+			emit(ex.fnNodeID(tgt.name, tgt.line), "inline", graph.ConfidenceInferred)
+		}
+	default:
+		ex.ledgerDOMListen(line, strings.TrimSpace(handler.Content(ex.src)))
+	}
 }
 
 // jsxTagName extracts the tag identifier from a jsx_opening_element or

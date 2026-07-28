@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -40,6 +41,28 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 		_ = nodes[i]
 	}
 
+	// Per-file declaration index (function/method/variable/interface/class),
+	// sorted by line, so a cross-file type reference can attribute its uses_type
+	// edge to the nearest enclosing declaration (nearest preceding decl — no
+	// end_line is stored on JS nodes).
+	declsByFile := make(map[string][]lineNode)
+	for i := range nodes {
+		n := &nodes[i]
+		switch n.Type {
+		case graph.NodeTypeFunction, graph.NodeTypeMethod, graph.NodeTypeVariable,
+			graph.NodeTypeInterface, graph.NodeTypeClass:
+			if n.Label == "(module)" {
+				continue
+			}
+			declsByFile[n.File] = append(declsByFile[n.File], lineNode{line: n.Line, id: n.ID})
+		}
+	}
+	for f := range declsByFile {
+		sort.Slice(declsByFile[f], func(i, j int) bool {
+			return declsByFile[f][i].line < declsByFile[f][j].line
+		})
+	}
+
 	var allEdges []graph.Edge
 	var allUnresolved []graph.UnresolvedRef
 	seen := make(map[string]bool)
@@ -64,7 +87,7 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 			if !isJSFile(file) {
 				continue
 			}
-			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, existingEdges, seen)
+			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[file], existingEdges, seen)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -72,7 +95,7 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 	return allEdges, allUnresolved
 }
 
-func resolveJSTypeRelations(file, svcName string, classTable map[string]string, existingEdges, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, existingEdges, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil
@@ -394,9 +417,69 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 		}
 	}
 
+	// Cross-file uses_type: a type_identifier referencing an imported interface/
+	// class (annotations, generic args, member types) binds the nearest enclosing
+	// declaration to the type's definition node. Same-file references are already
+	// handled by the parser's extractTypeUses; only imports resolve here.
+	var walkTypeRefs func(n *sitter.Node)
+	walkTypeRefs = func(n *sitter.Node) {
+		if n.Type() == "type_identifier" && isTypeUseContext(n) {
+			local := n.Content(src)
+			if exportedName, isImport := plainImport[local]; isImport {
+				if targetID, found := classTable[exportedName]; found {
+					if fromID := nearestDecl(fileDecls, int(n.StartPoint().Row)+1); fromID != "" && fromID != targetID {
+						eid := fmt.Sprintf("uses_type:%s->%s", fromID, targetID)
+						if !seen[eid] {
+							seen[eid] = true
+							edges = append(edges, graph.Edge{
+								ID: eid, From: fromID, To: targetID,
+								Type: graph.EdgeTypeUsesType, Confidence: graph.ConfidenceInferred,
+								Meta: map[string]string{"via": "type_ref_import"},
+							})
+						}
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walkTypeRefs(n.NamedChild(i))
+		}
+	}
+
 	walkNode(root)
 	walkNew(root, "")
+	walkTypeRefs(root)
 	return edges, unresolved
+}
+
+// isTypeUseContext reports whether a type_identifier is a use of a type (not a
+// declaration name or a heritage target, which are captured elsewhere).
+func isTypeUseContext(n *sitter.Node) bool {
+	p := n.Parent()
+	if p == nil {
+		return false
+	}
+	switch p.Type() {
+	case "interface_declaration", "class_declaration",
+		"extends_clause", "implements_clause", "extends_type_clause":
+		return false
+	}
+	return true
+}
+
+// nearestDecl returns the ID of the declaration whose line is the greatest not
+// exceeding refLine (nearest preceding declaration), or "" if none. fileDecls
+// is sorted ascending by line.
+func nearestDecl(fileDecls []lineNode, refLine int) string {
+	id := ""
+	for _, d := range fileDecls {
+		if d.line <= refLine {
+			id = d.id
+		} else {
+			break
+		}
+	}
+	return id
 }
 
 func isFunctionLike(t string) bool {
