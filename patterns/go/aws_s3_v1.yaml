@@ -40,7 +40,7 @@ patterns:
           (#match? @fn "^(PutObject|GetObject|DeleteObject|ListObjectsV2|HeadObject|CopyObject|CreateMultipartUpload|UploadPart|CompleteMultipartUpload)$"))
         arguments: (argument_list
           .
-          (unary_expression) @input
+          (_) @input
           .))
     captures:
       - name: fn
