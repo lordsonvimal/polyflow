@@ -62,10 +62,18 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 		switch {
 		case strings.HasPrefix(pat, "gin_route_group"):
 			vn := n.Meta["var_name"]
-			pfx := stripQuotes(n.Meta["prefix"])
-			if vn == "" || pfx == "" {
+			// An empty prefix is legitimate, not a failed capture: middleware-only
+			// groups (`protected := v1.Group("")`) add no path segment but still
+			// forward their parent's prefix to nested routes. Skipping them here
+			// (the old `pfx == ""` guard did) breaks the chain — every route under
+			// `protected` was treated as root-level and silently lost `/api/v1`.
+			// Gate on var_name only; a real gin_route_group always carries a prefix
+			// meta key (possibly ""), and an absent key means a malformed node.
+			pfxRaw, hasPrefix := n.Meta["prefix"]
+			if vn == "" || !hasPrefix {
 				continue
 			}
+			pfx := stripQuotes(pfxRaw)
 			ginGroupsByFile[n.File] = append(ginGroupsByFile[n.File], ginGroup{
 				varName:  vn,
 				prefix:   pfx,
