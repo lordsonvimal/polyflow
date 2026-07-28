@@ -255,7 +255,7 @@ into `read`/`context`/`impact`. **No schema bump.**
 
 ---
 
-## Phase A.3 — Span-exact reads (`read` tool + span-aware snippets)  `done (commit 2422b0a)`
+## Phase A.3 — Span-exact reads (`read` tool + span-aware snippets)  `done (commit cf2c762)`
 
 > **Implementation note.** The Go-semantic `end_line` gap was NOT in
 > `go_semantic.go` (those sites are SSA position lookups, not node creation).
