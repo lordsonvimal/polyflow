@@ -181,7 +181,7 @@ polyflow config link add --from web --to api --via http
 | `polyflow init` | Auto-discover services and write `workspace.yaml`. |
 | `polyflow index` | Parse all services and build/update the graph (incremental). |
 | `polyflow doctor` | Health check; flags zero-match services, can `--propose` contract rules. |
-| `polyflow status` | Index statistics (node/edge/link counts). |
+| `polyflow status` | Index statistics (node/edge/link counts) and a freshness verdict (STALE when sources changed since the last index). |
 | `polyflow search <query>` | Search the index for matching nodes. |
 | `polyflow context --target <node>` | Callers, callees, and cross-service edges around a node. |
 | `polyflow trace --target <node>` | Multi-hop call chains (`A → B → C`), incl. cross-service hops. |
@@ -191,7 +191,7 @@ polyflow config link add --from web --to api --via http
 | `polyflow deps` | Resolved dependency versions per service. |
 | `polyflow patterns list` / `add <file>` | List loaded pattern packs or register a custom one. |
 | `polyflow config …` | View/edit `workspace.yaml` (`show`, `set`, `service`, `link`). |
-| `polyflow mcp` | Start the MCP stdio server (used by agents; no flags). |
+| `polyflow mcp` | Start the MCP stdio server (used by agents). Subcommands: `on` / `off` / `status` toggle the query tools for the next session (A/B token measurement). |
 | `polyflow serve` | Start the web UI + HTTP API. |
 | `polyflow capture start\|stop\|run\|ingest` | Runtime OTLP trace capture (see below). |
 | `polyflow eval` | Measure recall against ground-truth cases. |
@@ -233,11 +233,39 @@ from the workspace root (one instance per workspace).
 | `trace` | Multi-hop call chains from a node as linear paths, including cross-service hops. |
 | `flows` | Full end-to-end flow from a starting point across services (HTTP, jobs, pub/sub, gRPC, renders). |
 | `entrypoints` | Catalog entry nodes (HTTP routes, subscribers, workers, gRPC/GraphQL handlers) by service/keyword. |
+| `read` | Return the exact source span of a symbol (function/method/struct/interface) by node id — its true `Line..end_line`, not a fixed window or the whole file. |
 
 Every tool honors a token budget: large results auto-roll-up per file, and the
 `coverage.unresolved` section always survives trimming — those endpoints are the
 only ones an agent should fall back to grep for. That is the token-saving
 contract.
+
+### Toggling polyflow on/off (A/B token measurement)
+
+To measure what polyflow actually saves, run the *same* agent task twice — once
+with the tools available, once without — and compare context tokens and turns.
+A state-file gate makes this one command, in any MCP client:
+
+```sh
+polyflow mcp on   && <reconnect the agent>   # "with polyflow": tools available
+polyflow mcp off  && <reconnect the agent>   # "without": query tools absent
+polyflow mcp status                          # enabled | disabled
+```
+
+`off` writes `.polyflow/mcp.disabled`; while present, `polyflow mcp` starts but
+advertises **zero query tools** (only a `status` probe), so the model sees a
+genuinely polyflow-free tool list — the clean control arm. `on` removes the
+marker. The change takes effect on the **next** session, because an MCP stdio
+server is spawned once per session — so reconnect (restart the session) after
+toggling. `polyflow index` / `status` / `serve` keep working regardless.
+
+Alternatives, if you prefer a client-native switch:
+
+| Approach | Works in | Trade-off |
+|---|---|---|
+| `polyflow mcp off` / `on` (above) | any stdio MCP client | one scriptable command; effective on next reconnect |
+| Remove/re-add the server (`claude mcp remove polyflow` / `add`), or `disabledMcpjsonServers` in `.mcp.json` | Claude Code only | per-client syntax; easy to forget to restore |
+| Settings UI toggle | Cursor / Windsurf | a click, but not scriptable |
 
 ## Supported languages & frameworks
 
