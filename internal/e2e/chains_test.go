@@ -137,8 +137,10 @@ func TestChain_TemplDatastarGinHubSSE(t *testing.T) {
 func TestChain_RailsBunnyRabbitGoConsumer(t *testing.T) {
 	idx := indexChains(t)
 
+	// Ruby methods (incl. Rails controller actions) index as function nodes;
+	// the duplicate method-typed action node was removed in e556c69.
 	root := findChainNode(idx, "rails", func(n *graph.Node) bool {
-		return n.Type == graph.NodeTypeMethod && n.Label == "create"
+		return n.Type == graph.NodeTypeFunction && n.Label == "create"
 	})
 	require.NotNil(t, root, "rails controller action node must exist")
 
