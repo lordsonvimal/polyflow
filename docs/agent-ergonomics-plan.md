@@ -75,7 +75,7 @@ control for a token comparison — while leaving `polyflow index`/`status`/`serv
 
 ---
 
-## Phase A.1 — MCP on/off toggle + `status` health  `done (commit 4d9c221)`
+## Phase A.1 — MCP on/off toggle + `status` health  `done (commit 39b1fcf)`
 
 **Problem.** (1) No scriptable, client-agnostic way to run an agent session *without* polyflow's
 tools for a token A/B. (2) `status` reports counts but not **freshness** — an agent cannot tell if
@@ -255,7 +255,17 @@ into `read`/`context`/`impact`. **No schema bump.**
 
 ---
 
-## Phase A.3 — Span-exact reads (`read` tool + span-aware snippets)  `pending`
+## Phase A.3 — Span-exact reads (`read` tool + span-aware snippets)  `done (commit 2422b0a)`
+
+> **Implementation note.** The Go-semantic `end_line` gap was NOT in
+> `go_semantic.go` (those sites are SSA position lookups, not node creation).
+> `function`/`method` nodes already carried `end_line` (they come from the
+> tree-sitter matcher). The real gap was `struct`/`interface` nodes, created in
+> `internal/parser/go_variables.go` from the type checker — filled via a one-time
+> `*ast.TypeSpec` → closing-brace-line map keyed on the type name's `token.Pos`.
+> Verified on the polyflow graph: struct 276/276, function 777/777, local
+> interface 9/9 now carry `end_line` (the 11 external/no-file interface nodes
+> legitimately have no readable span).
 
 **Problem.** `budget.Snippet` (`internal/budget/budget.go:81`) reads a **fixed N-line window** from
 a node's `Line`. A 200-line function is truncated; a 5-line one over-reads — either way the agent
