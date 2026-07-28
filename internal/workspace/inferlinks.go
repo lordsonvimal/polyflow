@@ -104,6 +104,13 @@ func InferLinks(ctx context.Context, s *graph.SQLiteStore, cfg *WorkspaceConfig)
 		if n.Type != graph.NodeTypeChannel {
 			continue
 		}
+		// A queue symbol named only inside a spec/test file is a fixture, not a
+		// runtime producer/consumer; counting it inflates cross-service overlap
+		// with phantom edges (precision). The node stays in the graph (test code
+		// is production code, #8) — it is only excluded from link *inference*.
+		if graph.IsTestFilePath(n.File) {
+			continue
+		}
 		exch := strings.Trim(n.Meta["exchange"], `"'`)
 		if exch == "" {
 			continue
@@ -147,6 +154,12 @@ func InferLinks(ctx context.Context, s *graph.SQLiteStore, cfg *WorkspaceConfig)
 		n := idx.Nodes[id]
 		field := strings.TrimSpace(n.Meta["broker_field"])
 		if field == "" {
+			continue
+		}
+		// Same fixture-exclusion rationale as the exchange branch: a
+		// registration field symbol referenced only in a spec is not a live
+		// handshake endpoint.
+		if graph.IsTestFilePath(n.File) {
 			continue
 		}
 		key := field + "\x00" + n.Service

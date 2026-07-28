@@ -666,6 +666,31 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		allUnresolved = append(allUnresolved, rubyTypeUnresolved...)
 	}
 
+	// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
+	// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
+	// the downstream config_resolve provider can bind them (or ledger a *named*
+	// deploy-secret miss) instead of an unactionable token. Runs before the
+	// contract engine + config_resolve so both see the upgraded key_dynamic_raw;
+	// re-persist the mutated nodes so the store copy matches the in-memory set
+	// the contract provider reads back.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		if hostNodes := linker.ResolveRubyHTTPHosts(allNodes, svcFiles); len(hostNodes) > 0 {
+			for i := range hostNodes {
+				n := hostNodes[i]
+				if err := bw.AddNode(ctx, &n); err != nil {
+					return nil, err
+				}
+			}
+			if err := bw.Flush(ctx); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
 		return nil, err
 	}

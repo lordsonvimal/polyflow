@@ -104,17 +104,17 @@ func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService
 // has no File set at all, e.g. service-level nodes).
 func preferNonTestFile(nodes []*Node) *Node {
 	for _, n := range nodes {
-		if !isTestFilePath(n.File) {
+		if !IsTestFilePath(n.File) {
 			return n
 		}
 	}
 	return nodes[0]
 }
 
-// isTestFilePath reports whether file looks like a test/spec file by common
+// IsTestFilePath reports whether file looks like a test/spec file by common
 // cross-language naming conventions (JS/TS .test./.spec., Go _test.go, Ruby
 // _spec.rb/_test.rb, Python test_*.py, and __tests__/spec/test directories).
-func isTestFilePath(file string) bool {
+func IsTestFilePath(file string) bool {
 	if file == "" {
 		return false
 	}
