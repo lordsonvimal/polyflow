@@ -1092,6 +1092,14 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/attendance_grid.templ:http_client:href:/classroom/classes:39-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:328",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/attendance_grid.templ:http_client:href:/classroom/classes:39",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:328",
+    "type": "navigates_to",
+    "label": "get /classroom/classes",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/attendance_grid.templ:http_client:href:/classroom:37-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
     "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/attendance_grid.templ:http_client:href:/classroom:37",
     "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
@@ -1116,6 +1124,14 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom/classes:84-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:328",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom/classes:84",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:328",
+    "type": "navigates_to",
+    "label": "get /classroom/classes",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom:82-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
     "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/class_detail.templ:http_client:href:/classroom:82",
     "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
@@ -1132,11 +1148,35 @@
     "confidence": "static"
   },
   {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom/classes:78-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:329",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom/classes:78",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:329",
+    "type": "navigates_to",
+    "label": "post /classroom/classes",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom/courses:91-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:319",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom/courses:91",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:319",
+    "type": "navigates_to",
+    "label": "get /classroom/courses",
+    "confidence": "static"
+  },
+  {
     "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom:27-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
     "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/classes.templ:http_client:href:/classroom:27",
     "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:301",
     "type": "navigates_to",
     "label": "get /classroom",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/course_detail.templ:http_client:href:/classroom/courses:20-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:319",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/course_detail.templ:http_client:href:/classroom/courses:20",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:319",
+    "type": "navigates_to",
+    "label": "get /classroom/courses",
     "confidence": "static"
   },
   {
@@ -1153,6 +1193,14 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:311",
     "type": "navigates_to",
     "label": "get /classroom/admin/subjects",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/courses.templ:http_client:href:/classroom/courses:69-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:320",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/courses.templ:http_client:href:/classroom/courses:69",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:320",
+    "type": "navigates_to",
+    "label": "post /classroom/courses",
     "confidence": "static"
   },
   {
@@ -1185,6 +1233,14 @@
     "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:144",
     "type": "navigates_to",
     "label": "get /activity/library/new",
+    "confidence": "static"
+  },
+  {
+    "id": "nav:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:href:/classroom/classes:51-\u003echessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:328",
+    "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:href:/classroom/classes:51",
+    "to": "chessleap:/Users/lordson/projects/chessleap/classroom/module.go:http_handler:gin_route:328",
+    "type": "navigates_to",
+    "label": "get /classroom/classes",
     "confidence": "static"
   },
   {
