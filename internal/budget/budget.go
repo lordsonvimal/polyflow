@@ -100,3 +100,41 @@ func Snippet(root, file string, start, n int) string {
 	}
 	return strings.Join(lines[start-1:end], "\n")
 }
+
+// SnippetSpan returns the exact source of a symbol span [start, end] (1-based,
+// inclusive), capping the read at maxLines to bound a runaway span. When end<=0
+// (the exact end is unknown) it falls back to a maxLines window from start —
+// i.e. Snippet's behaviour. truncated is true when the requested span exceeded
+// maxLines and was cut. Like Snippet, any failure returns ("", false): span
+// reads are best-effort, never an error path. file may be workspace-relative
+// (resolved against root) or already absolute.
+func SnippetSpan(root, file string, start, end, maxLines int) (src string, truncated bool) {
+	if start <= 0 || file == "" || maxLines <= 0 {
+		return "", false
+	}
+	p := file
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(root, file)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", false
+	}
+	lines := strings.Split(string(data), "\n")
+	if start > len(lines) {
+		return "", false
+	}
+	// Unknown end → window from start (current Snippet semantics).
+	last := end
+	if last < start {
+		last = start - 1 + maxLines
+	}
+	if last > len(lines) {
+		last = len(lines)
+	}
+	if last-start+1 > maxLines {
+		last = start - 1 + maxLines
+		truncated = true
+	}
+	return strings.Join(lines[start-1:last], "\n"), truncated
+}

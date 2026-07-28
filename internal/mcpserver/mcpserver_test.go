@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -101,7 +103,7 @@ func TestToolDiscovery(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace", "flows", "entrypoints", "resolve"}, names)
+	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace", "flows", "entrypoints", "resolve", "read"}, names)
 }
 
 func TestToolDiscovery_Disabled(t *testing.T) {
@@ -130,6 +132,51 @@ func TestToolDiscovery_Disabled(t *testing.T) {
 	var out map[string]string
 	callJSON(t, cs, "status", nil, &out)
 	assert.Equal(t, "disabled", out["status"])
+}
+
+// TestReadTool covers span-exact reads: a known end_line returns exactly
+// start..end (span_known=true), a node without end_line falls back to a bounded
+// window (span_known=false), and an unknown target surfaces candidates.
+func TestReadTool(t *testing.T) {
+	dir := t.TempDir()
+	src := "package p\n\nfunc Foo() int {\n\treturn 1\n}\n\nvar loose = 2\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.go"), []byte(src), 0o644))
+	t.Chdir(dir) // read resolves n.File against root "."
+
+	nodes := []*graph.Node{
+		{ID: "p:foo.go:function:Foo:3", Type: graph.NodeTypeFunction, Label: "Foo",
+			Service: "p", File: "foo.go", Line: 3, Language: "go",
+			Meta: map[string]string{"end_line": "5"}},
+		{ID: "p:foo.go:variable:loose:7", Type: graph.NodeTypeVariable, Label: "loose",
+			Service: "p", File: "foo.go", Line: 7, Language: "go"}, // no end_line
+	}
+	store := &fakeStore{nodes: nodes}
+	idx := graph.NewAdjacencyIndex()
+	for _, n := range nodes {
+		idx.AddNode(n)
+	}
+	cs := connect(t, store, idx)
+
+	// Known span → exact lines 3..5, span_known.
+	var out readOutput
+	callJSON(t, cs, "read", map[string]any{"target": "p:foo.go:function:Foo:3"}, &out)
+	assert.True(t, out.SpanKnown)
+	assert.Equal(t, 3, out.StartLine)
+	assert.Equal(t, 5, out.EndLine)
+	assert.Equal(t, "func Foo() int {\n\treturn 1\n}", out.Source)
+	assert.False(t, out.Truncated)
+
+	// No end_line → bounded window, span_known=false.
+	var win readOutput
+	callJSON(t, cs, "read", map[string]any{"target": "p:foo.go:variable:loose:7", "max_lines": 1}, &win)
+	assert.False(t, win.SpanKnown)
+	assert.Equal(t, "var loose = 2", win.Source)
+
+	// Unknown target with no match → tool error (consistent with context/impact).
+	res, err := cs.CallTool(context.Background(),
+		&mcp.CallToolParams{Name: "read", Arguments: map[string]any{"target": "does-not-exist"}})
+	require.NoError(t, err)
+	assert.True(t, res.IsError, "unknown target should return a tool error")
 }
 
 func TestSearchTool(t *testing.T) {
