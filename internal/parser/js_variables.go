@@ -43,6 +43,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 		file: file, service: service, langTag: langTag, src: src,
 		moduleVars: map[string]*jsVar{},
 		fnDecls:    map[string]int{},
+		localFns:   map[string]int{},
 		classNodes: map[string]string{},
 		signals:    map[string]string{},
 		nodeSeen:   map[string]bool{},
@@ -51,6 +52,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 	root := tree.RootNode()
 	ex.preCollectClasses(root)
 	ex.collectTopLevel(root)
+	ex.collectLocalFns(root)
 	ex.walk(root, []*jsScope{ex.moduleScope()})
 	ex.stampGlobalSymbols(root)
 
@@ -79,6 +81,14 @@ type jsExtractor struct {
 
 	moduleVars map[string]*jsVar
 	fnDecls    map[string]int    // top-level function name → line
+	// localFns maps every self-attributable function name (nested function
+	// declarations + `const handler = () => …` locals, at any depth) to its decl
+	// line — the same line the walk mints the function node at. It lets Y.7
+	// resolve JSX/addEventListener handlers that are component-local consts (the
+	// dominant React/Solid idiom) to their function node. Cross-scope name
+	// collisions are approximated (last-wins), consistent with this pass's
+	// reduced-confidence, no-type-checker contract.
+	localFns map[string]int
 	classNodes map[string]string // class/interface name → nodeID (same-file)
 	// signals maps a Solid reactive accessor name (createSignal/createResource/
 	// createMemo binding) to its variable node ID, so a JSX interpolation reading
@@ -247,6 +257,39 @@ func (ex *jsExtractor) collectTopLevel(root *sitter.Node) {
 			ex.collectInterface(stmt)
 		}
 	}
+}
+
+// collectLocalFns scans the whole tree for self-attributable functions — nested
+// `function foo(){}` declarations and `const foo = () => …` / `const foo =
+// function(){}` bindings at any depth — recording name→decl-line so Y.7 handler
+// resolution reaches component-local handlers, not just module-level ones. The
+// line matches the walk's minted function-node line so the resolved ID exists.
+func (ex *jsExtractor) collectLocalFns(n *sitter.Node) {
+	switch n.Type() {
+	case "function_declaration", "generator_function_declaration":
+		if name := n.ChildByFieldName("name"); name != nil {
+			ex.localFns[name.Content(ex.src)] = tsLine(n)
+		}
+	case "variable_declarator":
+		if name := n.ChildByFieldName("name"); name != nil && name.Type() == "identifier" {
+			if val := n.ChildByFieldName("value"); val != nil && isFunctionNode(val.Type()) {
+				ex.localFns[name.Content(ex.src)] = tsLine(declStatement(n))
+			}
+		}
+	}
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		ex.collectLocalFns(n.NamedChild(i))
+	}
+}
+
+// resolveHandlerFn resolves a bare handler identifier to the line of its
+// function node, preferring a module-level declaration over a local one.
+func (ex *jsExtractor) resolveHandlerFn(name string) (int, bool) {
+	if line, ok := ex.fnDecls[name]; ok {
+		return line, true
+	}
+	line, ok := ex.localFns[name]
+	return line, ok
 }
 
 // collectDestructured registers every identifier bound by a destructuring
@@ -796,10 +839,13 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 	case "call_expression":
 		ex.handleCall(node, scopes)
 		ex.handleResponseConsume(node, scopes)
+		ex.handleAddEventListener(node)
 	case "new_expression":
 		ex.handleNew(node, scopes)
 	case "jsx_expression":
 		ex.handleJSXWrite(node)
+	case "jsx_opening_element", "jsx_self_closing_element":
+		ex.handleJSXEvent(node)
 	}
 
 	for i := 0; i < int(node.NamedChildCount()); i++ {
@@ -1110,6 +1156,160 @@ func (ex *jsExtractor) enclosingJSXElement(n *sitter.Node) (id string, line int,
 		}
 	}
 	return "", 0, ""
+}
+
+// handleJSXEvent emits element→function dom_listen edges (Y.7, event head). A JSX
+// event attribute — `onClick={handler}` (React/Solid camelCase) or `on:click={handler}`
+// (Solid namespaced) — binds the enclosing DOM element to its handler function.
+// The ref is resolved to a same-file function declaration; inline arrow handlers,
+// call expressions, and cross-file/member refs carry no stable function node, so
+// they are ledgered (#12) — never fabricated. The element node is minted lazily
+// (only on a resolved handler) so a dom_listen never dangles (#10).
+func (ex *jsExtractor) handleJSXEvent(open *sitter.Node) {
+	tag := jsxTagName(open, ex.src)
+	// The element node anchors on the enclosing jsx_element (for an opening tag)
+	// or the self-closing element itself — matching enclosingJSXElement's IDs so
+	// a dom_write and a dom_listen on the same element share one node.
+	anchor := open
+	if open.Type() == "jsx_opening_element" {
+		if p := open.Parent(); p != nil && p.Type() == "jsx_element" {
+			anchor = p
+		}
+	}
+	elLine := tsLine(anchor)
+	elID := fmt.Sprintf("%s:%s:element:%s:%d", ex.service, ex.file, tag, elLine)
+
+	elementAdded := false
+	for i := 0; i < int(open.NamedChildCount()); i++ {
+		attr := open.NamedChild(i)
+		if attr.Type() != "jsx_attribute" {
+			continue
+		}
+		nameNode := attr.NamedChild(0)
+		if nameNode == nil {
+			continue
+		}
+		event := eventName(nameNode.Content(ex.src))
+		if event == "" {
+			continue
+		}
+		ref := jsxAttrHandlerRef(attr, ex.src)
+		if ref == "" {
+			continue // inline arrow / call / member handler — no stable node
+		}
+		fnLine, ok := ex.resolveHandlerFn(ref)
+		if !ok {
+			// Cross-file/imported handler or non-function binding — ledgered.
+			ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+				Service: ex.service, File: ex.file, Line: elLine,
+				Name: ref, Kind: "dom_listen_unresolved",
+			})
+			continue
+		}
+		if !elementAdded {
+			elementAdded = true
+			ex.addNode(graph.Node{
+				ID: elID, Type: graph.NodeTypeElement, Label: tag,
+				Service: ex.service, File: ex.file, Line: elLine, Language: ex.langTag,
+				Meta: map[string]string{"tag": tag},
+			})
+		}
+		ex.addEdge(graph.EdgeTypeDOMListen, elID, ex.fnNodeID(ref, fnLine),
+			graph.ConfidenceStatic, map[string]string{"event": event, "via": "jsx"})
+	}
+}
+
+// eventName maps a JSX event-attribute name to its DOM event type, or "" when
+// the attribute is not an event handler. Handles React/Solid camelCase
+// (onClick → click, onInput → input) and Solid namespaced (on:click → click).
+func eventName(attr string) string {
+	if rest, ok := strings.CutPrefix(attr, "on:"); ok {
+		return strings.ToLower(rest)
+	}
+	rest, ok := strings.CutPrefix(attr, "on")
+	if !ok || rest == "" || !(rest[0] >= 'A' && rest[0] <= 'Z') {
+		return ""
+	}
+	return strings.ToLower(rest)
+}
+
+// jsxAttrHandlerRef returns the bare handler identifier bound by a JSX event
+// attribute value `={ref}`, or "" for inline arrows, calls, and member refs
+// (which carry no stable same-file function node to listen to).
+func jsxAttrHandlerRef(attr *sitter.Node, src []byte) string {
+	var val *sitter.Node
+	for i := int(attr.NamedChildCount()) - 1; i >= 1; i-- {
+		if c := attr.NamedChild(i); c.Type() == "jsx_expression" {
+			val = c
+			break
+		}
+	}
+	if val == nil {
+		return ""
+	}
+	for i := 0; i < int(val.NamedChildCount()); i++ {
+		if inner := val.NamedChild(i); inner.Type() == "identifier" {
+			return inner.Content(src)
+		}
+	}
+	return ""
+}
+
+// handleAddEventListener emits element→function dom_listen for a vanilla
+// `target.addEventListener("evt", handler)` call (Y.7). The receiver expression
+// is the DOM target (an element ref, document, or window); the handler is
+// resolved to a same-file function. Dynamic event names, inline/anon handlers,
+// and cross-file refs are ledgered (#12). The element node is minted lazily so
+// the edge never dangles (#10).
+func (ex *jsExtractor) handleAddEventListener(call *sitter.Node) {
+	fn := call.ChildByFieldName("function")
+	if fn == nil || fn.Type() != "member_expression" {
+		return
+	}
+	prop := fn.ChildByFieldName("property")
+	if prop == nil || prop.Content(ex.src) != "addEventListener" {
+		return
+	}
+	args := call.ChildByFieldName("arguments")
+	if args == nil || args.NamedChildCount() < 2 {
+		return
+	}
+	evtArg := args.NamedChild(0)
+	if evtArg.Type() != "string" {
+		return // dynamic event name — unresolvable
+	}
+	event := strings.Trim(evtArg.Content(ex.src), "\"'`")
+	handler := args.NamedChild(1)
+	line := tsLine(call)
+	if handler.Type() != "identifier" {
+		return // inline function/arrow handler — no stable node
+	}
+	ref := handler.Content(ex.src)
+	fnLine, ok := ex.resolveHandlerFn(ref)
+	if !ok {
+		ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+			Service: ex.service, File: ex.file, Line: line,
+			Name: ref, Kind: "dom_listen_unresolved",
+		})
+		return
+	}
+	// Concise DOM-target label from the receiver; call-expression receivers
+	// (document.getElementById("x")) stay generic to keep the node ID clean.
+	target := "element"
+	if recv := fn.ChildByFieldName("object"); recv != nil {
+		switch recv.Type() {
+		case "identifier", "member_expression":
+			target = recv.Content(ex.src)
+		}
+	}
+	elID := fmt.Sprintf("%s:%s:element:%s:%d", ex.service, ex.file, target, line)
+	ex.addNode(graph.Node{
+		ID: elID, Type: graph.NodeTypeElement, Label: target,
+		Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+		Meta: map[string]string{"tag": target, "via": "addEventListener"},
+	})
+	ex.addEdge(graph.EdgeTypeDOMListen, elID, ex.fnNodeID(ref, fnLine),
+		graph.ConfidenceStatic, map[string]string{"event": event, "via": "add_event_listener"})
 }
 
 // jsxTagName extracts the tag identifier from a jsx_opening_element or
