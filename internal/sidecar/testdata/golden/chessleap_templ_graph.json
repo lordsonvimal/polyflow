@@ -5910,9 +5910,9 @@
       }
     },
     {
-      "id": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44",
+      "id": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44",
       "type": "http_client",
-      "label": "GET /activity/sessions/*/progress*",
+      "label": "GET /activity/sessions/*/progress",
       "service": "chessleap",
       "file": "/Users/lordson/projects/chessleap/classroom/views/session_detail.templ",
       "line": 44,
@@ -5921,7 +5921,7 @@
         "confidence": "partial",
         "datastar": "true",
         "method": "GET",
-        "path": "/activity/sessions/*/progress*"
+        "path": "/activity/sessions/*/progress"
       }
     },
     {
@@ -29476,9 +29476,9 @@
       "verification_state": "candidate"
     },
     {
-      "id": "datastar_action:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:component:SessionDetailPage:39-\u003echessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44",
+      "id": "datastar_action:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:component:SessionDetailPage:39-\u003echessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44",
       "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:component:SessionDetailPage:39",
-      "to": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44",
+      "to": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44",
       "type": "datastar_action",
       "label": "datastar_action",
       "confidence": "partial",
@@ -31728,19 +31728,20 @@
       "verification_state": "candidate"
     },
     {
-      "id": "link:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44-\u003eunresolved",
-      "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress*:44",
-      "to": "unresolved",
+      "id": "link:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:199",
+      "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44",
+      "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:199",
       "type": "http_call",
-      "label": "GET /activity/sessions/*/progress*",
-      "confidence": "unknown",
+      "label": "get /activity/sessions/*/progress",
+      "confidence": "inferred",
       "meta": {
-        "confidence": "unknown"
+        "confidence": "inferred",
+        "via": "datastar_action"
       },
       "sources": [
         {
           "provider": "static",
-          "confidence": "unknown",
+          "confidence": "inferred",
           "ref": "/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:44"
         }
       ],

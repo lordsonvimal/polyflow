@@ -39,14 +39,24 @@ var (
 	reParamColon = regexp.MustCompile(`:[^/]+`)
 	reParamBrace = regexp.MustCompile(`\{[^}]+\}`)
 	reParamRegex = regexp.MustCompile(`\[[^\]]+\][+*?]?`)
+	// reParamPrintf matches a Go printf verb used as a path parameter in a
+	// `fmt.Sprintf("/x/%d", id)` client URL. The verb set is limited to d/s/v
+	// (with an optional width, `%02d`) so it can never match a URL-encoded
+	// octet `%XX` — the hex-pair form always ends in a hex digit, and d/s/v as
+	// a lone trailing verb (`%d/`, `%s?`) is unambiguously not a `%`+2-hex
+	// sequence. Extend the verb set only with evidence.
+	reParamPrintf = regexp.MustCompile(`%\d*[dsv]`)
 )
 
 // normParamWildcard replaces path parameter segments with *.
-// Handles :id, {id}, and [pattern]+/*/? styles.
+// Handles :id, {id}, [pattern]+/*/? and Go printf-verb (%d/%s/%v) styles, so a
+// `fmt.Sprintf`-built client path (`/maple/roles/%d/update`) reduces to the same
+// `/maple/roles/*/update` shape a `:id` handler does and the two match.
 func normParamWildcard(value string, _ NormalizeEnv) string {
 	p := reParamColon.ReplaceAllString(value, "*")
 	p = reParamBrace.ReplaceAllString(p, "*")
 	p = reParamRegex.ReplaceAllString(p, "*")
+	p = reParamPrintf.ReplaceAllString(p, "*")
 	return p
 }
 
