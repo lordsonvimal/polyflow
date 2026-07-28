@@ -103,7 +103,7 @@ func TestToolDiscovery(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace", "flows", "entrypoints", "resolve", "read"}, names)
+	assert.ElementsMatch(t, []string{"search", "context", "impact", "trace", "flows", "entrypoints", "resolve", "read", "hierarchy"}, names)
 }
 
 func TestToolDiscovery_Disabled(t *testing.T) {
@@ -177,6 +177,86 @@ func TestReadTool(t *testing.T) {
 		&mcp.CallToolParams{Name: "read", Arguments: map[string]any{"target": "does-not-exist"}})
 	require.NoError(t, err)
 	assert.True(t, res.IsError, "unknown target should return a tool error")
+}
+
+// hierFixture: two services with nested dirs, so hierarchy has a real tree to
+// budget. svcA: internal/parser/{parse.go,js.go} + main.go; svcB: app/handler.go.
+func hierFixture() (*fakeStore, *graph.AdjacencyIndex) {
+	nodes := []*graph.Node{
+		{ID: "svcA:internal/parser/parse.go:function:Parse:10", Type: graph.NodeTypeFunction, Label: "Parse", Service: "svcA", File: "internal/parser/parse.go", Line: 10},
+		{ID: "svcA:internal/parser/parse.go:function:helper:30", Type: graph.NodeTypeFunction, Label: "helper", Service: "svcA", File: "internal/parser/parse.go", Line: 30},
+		{ID: "svcA:internal/parser/js.go:function:ParseJS:5", Type: graph.NodeTypeFunction, Label: "ParseJS", Service: "svcA", File: "internal/parser/js.go", Line: 5},
+		{ID: "svcA:main.go:function:main:3", Type: graph.NodeTypeFunction, Label: "main", Service: "svcA", File: "main.go", Line: 3},
+		// A non-symbol node (variable) must not appear at depth 3.
+		{ID: "svcA:main.go:variable:cfg:1", Type: graph.NodeTypeVariable, Label: "cfg", Service: "svcA", File: "main.go", Line: 1},
+		{ID: "svcB:app/handler.go:http_handler:Serve:8", Type: graph.NodeTypeHTTPHandler, Label: "Serve", Service: "svcB", File: "app/handler.go", Line: 8},
+	}
+	idx := graph.NewAdjacencyIndex()
+	for _, n := range nodes {
+		idx.AddNode(n)
+	}
+	return &fakeStore{nodes: nodes}, idx
+}
+
+func TestHierarchyTool(t *testing.T) {
+	store, idx := hierFixture()
+	cs := connect(t, store, idx)
+
+	// depth 1 → service roots only, collapsed to dir counts, no children.
+	var d1 hierarchyOutput
+	callJSON(t, cs, "hierarchy", map[string]any{"depth": 1}, &d1)
+	require.Len(t, d1.Roots, 2)
+	assert.Equal(t, "svcA", d1.Roots[0].Name)
+	assert.Equal(t, "service", d1.Roots[0].Kind)
+	assert.Nil(t, d1.Roots[0].Children)
+	assert.Positive(t, d1.Roots[0].Count)
+
+	// depth 2 → dirs + files, files collapsed to symbol counts (no symbol nodes).
+	var d2 hierarchyOutput
+	callJSON(t, cs, "hierarchy", map[string]any{"depth": 2, "service": "svcA"}, &d2)
+	require.Len(t, d2.Roots, 1)
+	dirs := d2.Roots[0].Children
+	// dirs sorted: "." then "internal/parser"
+	require.Len(t, dirs, 2)
+	assert.Equal(t, ".", dirs[0].Name)
+	assert.Equal(t, "internal/parser", dirs[1].Name)
+	parseDir := dirs[1]
+	require.Len(t, parseDir.Children, 2) // js.go, parse.go
+	assert.Equal(t, "js.go", parseDir.Children[0].Name)
+	assert.Equal(t, "file", parseDir.Children[0].Kind)
+	assert.Equal(t, "internal/parser/js.go", parseDir.Children[0].File)
+	assert.Equal(t, 2, parseDir.Children[1].Count) // parse.go has Parse+helper
+	assert.Nil(t, parseDir.Children[1].Children)
+
+	// depth 3 → top-level symbols with usable ids; ordered by line; no variable.
+	var d3 hierarchyOutput
+	callJSON(t, cs, "hierarchy", map[string]any{"depth": 3, "path": "internal/parser"}, &d3)
+	require.Len(t, d3.Roots, 1) // path scoped out svcB and main.go
+	pdir := d3.Roots[0].Children[0]
+	assert.Equal(t, "internal/parser", pdir.Name)
+	parseFile := pdir.Children[1] // parse.go
+	require.Len(t, parseFile.Children, 2)
+	assert.Equal(t, "Parse", parseFile.Children[0].Name) // line 10 before 30
+	assert.Equal(t, "helper", parseFile.Children[1].Name)
+	assert.Equal(t, "svcA:internal/parser/parse.go:function:Parse:10", parseFile.Children[0].ID)
+	assert.Equal(t, "function", parseFile.Children[0].Kind)
+
+	// service filter excludes svcB.
+	for _, r := range d2.Roots {
+		assert.NotEqual(t, "svcB", r.Name)
+	}
+
+	// max_tokens small → Truncated and the deepest level collapses to counts.
+	var budgeted hierarchyOutput
+	callJSON(t, cs, "hierarchy", map[string]any{"depth": 3, "max_tokens": 1}, &budgeted)
+	assert.True(t, budgeted.Truncated)
+
+	// Deterministic across runs.
+	var again hierarchyOutput
+	callJSON(t, cs, "hierarchy", map[string]any{"depth": 3, "path": "internal/parser"}, &again)
+	a, _ := json.Marshal(d3)
+	b, _ := json.Marshal(again)
+	assert.JSONEq(t, string(a), string(b))
 }
 
 func TestSearchTool(t *testing.T) {

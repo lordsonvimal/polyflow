@@ -201,6 +201,14 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"unknown and a bounded window was returned; max_lines caps runaway spans.",
 	}, s.read)
 
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "hierarchy",
+		Description: "Return the structural shape of the workspace: service → directory → file → " +
+			"top-level symbols, with roll-up counts. Use this FIRST to orient in an unfamiliar repo " +
+			"instead of ls/find/grep — one call replaces directory exploration. Scope with service/path; " +
+			"raise depth to 3 for symbols. Symbol-level `id` feeds directly into read, context, or impact.",
+	}, s.hierarchy)
+
 	return srv, s
 }
 
