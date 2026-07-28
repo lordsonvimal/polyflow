@@ -106,6 +106,32 @@ func TestEnrichRouteGroups_Gin_NestedGroups(t *testing.T) {
 	assert.Equal(t, "/v1/health", byID["h2"].Meta["path"])
 }
 
+// ── Positive: gin empty-prefix (middleware-only) group in the chain ───────────
+
+// X.8: `protected := v1.Group("")` adds middleware but no path segment. It must
+// still forward v1's prefix to its nested routes/groups — the real svc-b
+// api_routes.go shape, where every /api/v1 route is mounted under an empty-prefix
+// group. The old `pfx == ""` skip dropped `protected` from the known set, so its
+// children were treated as root-level and silently lost `/api/v1`.
+func TestEnrichRouteGroups_Gin_EmptyPrefixGroupInChain(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "routes.go", "v1", "/api/v1", "r", 3),
+		ginGroupNode("g2", "routes.go", "protected", "", "v1", 4),   // middleware-only
+		ginGroupNode("g3", "routes.go", "apps", "/apps", "protected", 5),
+		ginRouteNode("h1", "routes.go", "apps", "GET", "/:id", 6),   // → /api/v1/apps/:id
+		ginRouteNode("h2", "routes.go", "protected", "GET", "/me", 7), // → /api/v1/me
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/api/v1/apps/:id", byID["h1"].Meta["path"],
+		"empty-prefix group must forward the parent prefix to nested routes")
+	assert.Equal(t, "/api/v1/me", byID["h2"].Meta["path"],
+		"route directly on the empty-prefix group keeps the parent prefix")
+}
+
 // ── Positive: chi single-level group ─────────────────────────────────────────
 
 func TestEnrichRouteGroups_Chi_SingleGroup(t *testing.T) {
