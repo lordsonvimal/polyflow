@@ -168,7 +168,7 @@ signal so they never silently trust a stale graph. **No schema bump.**
 
 ---
 
-## Phase A.2 — Project hierarchy tool (`hierarchy`)  `done (commit TBD)`
+## Phase A.2 — Project hierarchy tool (`hierarchy`)  `done (commit d77f16a)`
 
 > **Implementation note.** No schema bump — `hierarchy` only reads existing
 > nodes. Dirs/files are derived from `path.Dir(node.File)` over every located
