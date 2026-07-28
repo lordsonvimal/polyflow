@@ -1,0 +1,415 @@
+package parser
+
+import (
+	"fmt"
+	"go/constant"
+	"go/token"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"golang.org/x/tools/go/ssa"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
+)
+
+// Tier X.7 — interprocedural wrapper URL propagation.
+//
+// The dominant real cross-service client shape in typed Go API clients wraps the
+// request construction behind a helper whose URL is a *parameter*:
+//
+//	func (c *Client) RegisterApp(app any) error {
+//	    return c.doWithRetry(http.MethodPost, "/api/v1/service/apps/register", app)
+//	}
+//	func (c *Client) doWithRetry(method, path string, body any) error {
+//	    req, _ := http.NewRequest(method, c.baseURL+path, nil)   // ← real http_client
+//	    ...
+//	}
+//
+// The tree-sitter matcher mints the http_client node at the `http.NewRequest`
+// line, but its URL reconstructs to `*`+`*` (both `c.baseURL` and `path` are
+// non-literal there), so the concrete `/api/v1/service/apps/register` at the
+// call site never reaches a node and every client method is invisible
+// cross-service. This pass closes that one indirection using the SSA program the
+// semantic analyzer already builds: it finds request constructors whose URL is a
+// wrapper parameter, then resolves each call site's literal argument and
+// synthesizes one resolved http_client producer per caller (bug-class #1
+// fan-out). The original param-dynamic matcher node is left in place as the
+// honest ledger for callers that pass a non-literal path — nothing is replaced.
+//
+// Scope: `net/http.NewRequest` / `NewRequestWithContext` with a `path` (or
+// `base+path`) parameter, resolved across exactly one call boundary. Sprintf-
+// composed URLs and resty/other-client wrappers are follow-ups.
+
+// wrapperInfo records a function whose request-URL derives from one of its own
+// parameters.
+type wrapperInfo struct {
+	fn            *ssa.Function
+	urlParamIndex int    // SSA param index (receiver-inclusive) carrying the path
+	base          string // static prefix from the non-param side: "" or a literal, or "*" when dynamic
+	methodIndex   int    // SSA param index carrying the method, or -1
+	methodConst   string // wrapper-hardcoded method literal, when methodIndex < 0
+}
+
+// extractWrapperURLs synthesizes resolved http_client producers for wrapper call
+// sites. It is deterministic: wrappers are gathered as a transitive closure over
+// a name-sorted function list, and the emitted nodes/edges are sorted by ID
+// before return so Go map iteration never reaches output (bug-class #2).
+func extractWrapperURLs(
+	service, dir string,
+	fset *token.FileSet,
+	inService map[*ssa.Function]bool,
+	resolveFunc func(*ssa.Function) (string, bool),
+) ([]graph.Node, []graph.Edge) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	relPath := func(abs string) string {
+		if rel, err := filepath.Rel(canonicalPath(cwd), canonicalPath(abs)); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+		return abs
+	}
+
+	byFn := findURLParamWrappers(inService, fset)
+	if len(byFn) == 0 {
+		return nil, nil
+	}
+
+	// Pass 2: resolve each call site's literal argument into a producer.
+	var nodes []graph.Node
+	var edges []graph.Edge
+	seen := map[string]bool{}
+	for caller := range inService {
+		callerID, ok := resolveFunc(caller)
+		if !ok {
+			continue
+		}
+		for _, b := range caller.Blocks {
+			for _, instr := range b.Instrs {
+				ci, ok := instr.(ssa.CallInstruction)
+				if !ok {
+					continue
+				}
+				common := ci.Common()
+				if common.IsInvoke() {
+					continue // interface dispatch: the concrete wrapper is unknown
+				}
+				callee, ok := common.Value.(*ssa.Function)
+				if !ok {
+					continue
+				}
+				w, ok := byFn[callee]
+				if !ok {
+					continue
+				}
+				if w.urlParamIndex >= len(common.Args) {
+					continue
+				}
+				lit, ok := ssaConstString(common.Args[w.urlParamIndex])
+				if !ok {
+					// Non-literal path — the wrapper's own dynamic node already
+					// ledgers this call (X.1 key_dynamic); skip silently.
+					continue
+				}
+				path := composeWrapperURL(w.base, lit)
+				method := w.methodConst
+				if w.methodIndex >= 0 && w.methodIndex < len(common.Args) {
+					if m, ok := ssaConstString(common.Args[w.methodIndex]); ok {
+						method = strings.ToUpper(m)
+					} else {
+						method = "" // dynamic method → engine's method_fallback tries verbs
+					}
+				}
+
+				pos := fset.Position(instr.Pos())
+				if !pos.IsValid() {
+					pos = fset.Position(caller.Pos())
+				}
+				file := relPath(pos.Filename)
+				name := callee.Name()
+				id := fmt.Sprintf("%s:%s:%s:%s:%d", service, file, graph.NodeTypeHTTPClient, name, pos.Line)
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+
+				label := path
+				if method != "" {
+					label = method + " " + path
+				}
+				meta := map[string]string{
+					"path":           path,
+					"via_wrapper":    name,
+					"url_confidence": graph.ConfidenceInferred,
+					"synthesized":    "wrapper_url",
+				}
+				if method != "" {
+					meta["method"] = method
+				}
+				nodes = append(nodes, graph.Node{
+					ID:       id,
+					Type:     graph.NodeTypeHTTPClient,
+					Label:    label,
+					Service:  service,
+					File:     file,
+					Line:     pos.Line,
+					Language: "go",
+					Meta:     meta,
+				})
+				edges = append(edges, graph.Edge{
+					ID:         fmt.Sprintf("wrapperurl:%s:%s->%s", graph.EdgeTypeCalls, callerID, id),
+					From:       callerID,
+					To:         id,
+					Type:       graph.EdgeTypeCalls,
+					Confidence: graph.ConfidenceStatic,
+					Meta:       map[string]string{"via": "wrapper_url"},
+				})
+			}
+		}
+	}
+
+	// Determinism: sort both slices by ID (bug-class #2).
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
+}
+
+// findURLParamWrappers computes the transitive set of functions whose request
+// URL derives from one of their own parameters. The seed is functions with a
+// direct `net/http.NewRequest(...)` whose URL is `param` or `base+param`; the
+// closure adds pass-through wrappers — a function that forwards its own
+// parameter into a known wrapper's URL-parameter position (the real svc-c-mgr
+// chain is RegisterApp → doWithRetry(method, path) → doRequest(method, path) →
+// http.NewRequest, two hops). Iteration is over a name-sorted function slice to
+// a fixpoint so the resulting set (and each entry's base/method) is
+// order-independent; a round cap guards mutual recursion.
+func findURLParamWrappers(inService map[*ssa.Function]bool, fset *token.FileSet) map[*ssa.Function]wrapperInfo {
+	// Deterministic function order (bug-class #2): pointers can't be sorted, so
+	// key on position + name.
+	fns := make([]*ssa.Function, 0, len(inService))
+	for fn := range inService {
+		fns = append(fns, fn)
+	}
+	sort.Slice(fns, func(i, j int) bool {
+		pi, pj := fset.Position(fns[i].Pos()), fset.Position(fns[j].Pos())
+		if pi.Filename != pj.Filename {
+			return pi.Filename < pj.Filename
+		}
+		if pi.Line != pj.Line {
+			return pi.Line < pj.Line
+		}
+		return fns[i].Name() < fns[j].Name()
+	})
+
+	byFn := make(map[*ssa.Function]wrapperInfo)
+	// Seed: direct request constructors.
+	for _, fn := range fns {
+		if info, ok := directURLParamWrapper(fn); ok {
+			byFn[fn] = info
+		}
+	}
+	// Closure: forward through pass-through wrappers.
+	const maxRounds = 8
+	for round := 0; round < maxRounds; round++ {
+		changed := false
+		for _, fn := range fns {
+			if _, done := byFn[fn]; done {
+				continue
+			}
+			if info, ok := forwardingWrapper(fn, byFn); ok {
+				byFn[fn] = info
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return byFn
+}
+
+// forwardingWrapper reports whether fn forwards one of its own parameters into a
+// known wrapper's URL-parameter slot, making fn itself a URL-param wrapper.
+func forwardingWrapper(fn *ssa.Function, byFn map[*ssa.Function]wrapperInfo) (wrapperInfo, bool) {
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			ci, ok := instr.(ssa.CallInstruction)
+			if !ok {
+				continue
+			}
+			common := ci.Common()
+			if common.IsInvoke() {
+				continue
+			}
+			callee, ok := common.Value.(*ssa.Function)
+			if !ok {
+				continue
+			}
+			g, ok := byFn[callee]
+			if !ok || g.urlParamIndex >= len(common.Args) {
+				continue
+			}
+			// fn must pass its own parameter (bare, base "") into g's URL slot.
+			idx, base, ok := paramURL(common.Args[g.urlParamIndex], fn)
+			if !ok || base != "" {
+				continue // literal or composed forwards don't chain cleanly; skip
+			}
+			info := wrapperInfo{fn: fn, urlParamIndex: idx, base: g.base, methodIndex: -1, methodConst: g.methodConst}
+			// Track the method through the same call, when g carries one.
+			if g.methodIndex >= 0 && g.methodIndex < len(common.Args) {
+				if mi, ok := paramIndex(common.Args[g.methodIndex], fn); ok {
+					info.methodIndex = mi
+				} else if mc, ok := ssaConstString(common.Args[g.methodIndex]); ok {
+					info.methodConst = strings.ToUpper(mc)
+				}
+			}
+			return info, true
+		}
+	}
+	return wrapperInfo{}, false
+}
+
+// directURLParamWrapper inspects fn's body for a request constructor whose URL
+// argument is one of fn's own parameters (directly, or as `base + param`).
+// Returns the parameter index and any static base prefix.
+func directURLParamWrapper(fn *ssa.Function) (wrapperInfo, bool) {
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			ci, ok := instr.(ssa.CallInstruction)
+			if !ok {
+				continue
+			}
+			common := ci.Common()
+			if common.IsInvoke() {
+				continue
+			}
+			methodArg, urlArg, ok := httpRequestArgs(common)
+			if !ok {
+				continue
+			}
+			idx, base, ok := paramURL(urlArg, fn)
+			if !ok {
+				continue
+			}
+			info := wrapperInfo{fn: fn, urlParamIndex: idx, base: base, methodIndex: -1}
+			// Resolve the method argument too: a parameter (propagate from caller)
+			// or a wrapper-hardcoded literal. A dynamic non-param method leaves
+			// methodIndex=-1/methodConst="" so the engine's method_fallback runs.
+			if mi, ok := paramIndex(methodArg, fn); ok {
+				info.methodIndex = mi
+			} else if mc, ok := ssaConstString(methodArg); ok {
+				info.methodConst = strings.ToUpper(mc)
+			}
+			return info, true
+		}
+	}
+	return wrapperInfo{}, false
+}
+
+// httpRequestArgs returns the (method, url) argument values of a
+// net/http.NewRequest / NewRequestWithContext call, or ok=false.
+func httpRequestArgs(common *ssa.CallCommon) (methodArg, urlArg ssa.Value, ok bool) {
+	fn, ok := common.Value.(*ssa.Function)
+	if !ok || fn.Pkg == nil || fn.Pkg.Pkg == nil || fn.Pkg.Pkg.Path() != "net/http" {
+		return nil, nil, false
+	}
+	switch fn.Name() {
+	case "NewRequest": // (method, url, body)
+		if len(common.Args) >= 2 {
+			return common.Args[0], common.Args[1], true
+		}
+	case "NewRequestWithContext": // (ctx, method, url, body)
+		if len(common.Args) >= 3 {
+			return common.Args[1], common.Args[2], true
+		}
+	}
+	return nil, nil, false
+}
+
+// paramURL reports whether v is a parameter of fn (base "") or `base + param`
+// where base is a string literal ("...") or dynamic ("*"). It unwraps the
+// ChangeType/Convert noise SSA emits around string values.
+func paramURL(v ssa.Value, fn *ssa.Function) (idx int, base string, ok bool) {
+	v = ssaUnwrap(v)
+	if i, ok := paramIndex(v, fn); ok {
+		return i, "", true
+	}
+	if bin, ok := v.(*ssa.BinOp); ok && bin.Op == token.ADD {
+		x, y := ssaUnwrap(bin.X), ssaUnwrap(bin.Y)
+		// `base + param`: param on the right, base on the left.
+		if i, ok := paramIndex(y, fn); ok {
+			return i, staticBase(x), true
+		}
+		// `param + suffix`: uncommon, but keep it symmetric.
+		if i, ok := paramIndex(x, fn); ok {
+			return i, staticBase(y), true
+		}
+	}
+	return 0, "", false
+}
+
+// paramIndex returns the receiver-inclusive index of v within fn.Params, or ok=false.
+func paramIndex(v ssa.Value, fn *ssa.Function) (int, bool) {
+	p, ok := ssaUnwrap(v).(*ssa.Parameter)
+	if !ok {
+		return 0, false
+	}
+	for i, fp := range fn.Params {
+		if fp == p {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// staticBase renders the non-param side of a URL concat: a string literal
+// contributes itself; anything else (a field load like c.baseURL) is dynamic,
+// rendered "*" so the dynamic_host_strip normalizer drops it at match time.
+func staticBase(v ssa.Value) string {
+	if s, ok := ssaConstString(v); ok {
+		return s
+	}
+	return "*"
+}
+
+// composeWrapperURL joins the wrapper's static base with the call site's literal
+// path. A dynamic base ("*") is kept as a leading segment (dynamic_host_strip
+// removes it during contract matching, aligning "*/api/x" with the handler's
+// bare "/api/x").
+func composeWrapperURL(base, lit string) string {
+	switch base {
+	case "":
+		return lit
+	default:
+		return base + lit
+	}
+}
+
+// ssaConstString returns the string value of a constant SSA value, unwrapping
+// conversions. Named constants (e.g. http.MethodPost) are already inlined to
+// *ssa.Const by SSA construction.
+func ssaConstString(v ssa.Value) (string, bool) {
+	c, ok := ssaUnwrap(v).(*ssa.Const)
+	if !ok || c.Value == nil || c.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(c.Value), true
+}
+
+// ssaUnwrap strips ChangeType/Convert wrappers that surround string values,
+// returning the underlying value.
+func ssaUnwrap(v ssa.Value) ssa.Value {
+	for {
+		switch t := v.(type) {
+		case *ssa.ChangeType:
+			v = t.X
+		case *ssa.Convert:
+			v = t.X
+		default:
+			return v
+		}
+	}
+}
