@@ -212,6 +212,9 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			name := nameNode.Content(ex.src)
 			methodID = ex.methodNodeID(name, rbLine(node))
 			meta := map[string]string{"class": class}
+			// end_line lets comm-node enclosing attribution (linkRubyEnclosingCalls)
+			// bound this method's body by line range rather than nearest-preceding.
+			meta["end_line"] = fmt.Sprintf("%d", int(node.EndPoint().Row)+1)
 			// X.2: qualified_name is the <Type>#<method> join key delayed_job's
 			// dj_target (matcher.go) and jobs.yaml's contract rules match against.
 			if class != "" {
