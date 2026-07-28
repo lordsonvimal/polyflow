@@ -497,6 +497,16 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 
 	allNodes := append(varResult.Nodes, implNodes...)
 
+	// Tier X.7: interprocedural wrapper URL propagation. Synthesize resolved
+	// http_client producers for API-client wrappers whose URL is a parameter
+	// (e.g. doWithRetry(method, path) → http.NewRequest(method, base+path)),
+	// reading each call site's literal path from SSA. Runs on the same program,
+	// so no extra load. The param-dynamic matcher node stays as the ledger for
+	// non-literal callers.
+	wrapNodes, wrapEdges := extractWrapperURLs(service, dir, fset, inService, resolveFunc)
+	allNodes = append(allNodes, wrapNodes...)
+	edges = append(edges, wrapEdges...)
+
 	referenced := collectReferenced(prog, ssaPkgs, allFns, resolveFunc)
 
 	return SemanticResult{Nodes: allNodes, Edges: edges, Referenced: referenced}
