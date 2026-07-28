@@ -137,6 +137,27 @@ func extractVariables(
 	}
 	var pendingEmbeds []embedEntry
 
+	// A.3: span-exact reads. An *ssa.Type's Pos() is the type name identifier,
+	// which is also the TypeSpec.Name.Pos() in the parsed AST — so a one-time
+	// walk of the syntax trees keyed on that token.Pos yields each named type's
+	// closing-brace line for meta["end_line"] (struct/interface declarations
+	// come from the type checker here, not the tree-sitter matcher that already
+	// stamps end_line on funcs/methods).
+	typeSpecEndLine := map[token.Pos]int{}
+	for _, p := range pkgs {
+		if p == nil {
+			continue
+		}
+		for _, f := range p.Syntax {
+			ast.Inspect(f, func(n ast.Node) bool {
+				if ts, ok := n.(*ast.TypeSpec); ok && ts.Name != nil {
+					typeSpecEndLine[ts.Name.Pos()] = fset.Position(ts.End()).Line
+				}
+				return true
+			})
+		}
+	}
+
 	// ── Package members: globals, consts, struct types, interface types ──────
 	for _, p := range ssaPkgs {
 		if p == nil {
@@ -217,13 +238,17 @@ func extractVariables(
 							structIDsByQName[qk] = id // prod file wins over test variant
 						}
 					}
+					structMeta := map[string]string{
+						"fields":      string(fieldsJSON),
+						"field_count": fmt.Sprintf("%d", under.NumFields()),
+					}
+					if end, ok := typeSpecEndLine[m.Pos()]; ok && end >= pos.Line {
+						structMeta["end_line"] = fmt.Sprintf("%d", end)
+					}
 					addNode(graph.Node{
 						ID: id, Type: graph.NodeTypeStruct, Label: v.Name(),
 						Service: service, File: file, Line: pos.Line, Language: "go",
-						Meta: map[string]string{
-							"fields":      string(fieldsJSON),
-							"field_count": fmt.Sprintf("%d", under.NumFields()),
-						},
+						Meta:    structMeta,
 					})
 					if under.NumFields() > 0 {
 						pendingEmbeds = append(pendingEmbeds, embedEntry{id, under})
@@ -248,10 +273,14 @@ func extractVariables(
 							interfaceIDsByQName[qk] = id // prod file wins over test variant
 						}
 					}
+					ifaceMeta := map[string]string{"methods": string(methodsJSON)}
+					if end, ok := typeSpecEndLine[m.Pos()]; ok && end >= pos.Line {
+						ifaceMeta["end_line"] = fmt.Sprintf("%d", end)
+					}
 					addNode(graph.Node{
 						ID: id, Type: graph.NodeTypeInterface, Label: v.Name(),
 						Service: service, File: file, Line: pos.Line, Language: "go",
-						Meta: map[string]string{"methods": string(methodsJSON)},
+						Meta:    ifaceMeta,
 					})
 				}
 			}

@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "25" {
-		t.Errorf("expected SchemaVersion 25 (Tier-L: Ruby http_client dynamic host → ENV.fetch capture), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "26" {
+		t.Errorf("expected SchemaVersion 26 (A.3: Go struct/interface end_line for span-exact reads), got %q", graph.SchemaVersion)
 	}
 }
 
@@ -98,6 +98,30 @@ func TestGoI1_InterfaceNode(t *testing.T) {
 	// methods JSON should contain "Get"
 	if !contains(n.Meta["methods"], "Get") {
 		t.Errorf("interface node methods JSON missing Get: %s", n.Meta["methods"])
+	}
+}
+
+// TestGoI1_TypeEndLine verifies A.3: struct and interface nodes carry
+// meta["end_line"] equal to their closing-brace line, so `read` can return the
+// exact declaration span.
+func TestGoI1_TypeEndLine(t *testing.T) {
+	res := analyzeIface(t)
+
+	// Store interface spans lines 3..5, memStore struct 7..9 (see fixture).
+	iface := findNode(res, graph.NodeTypeInterface, "Store")
+	if iface == nil {
+		t.Fatalf("Store interface node not emitted")
+	}
+	if got := iface.Meta["end_line"]; got != "5" {
+		t.Errorf("Store interface end_line = %q, want 5 (line=%d)", got, iface.Line)
+	}
+
+	strct := findNode(res, graph.NodeTypeStruct, "memStore")
+	if strct == nil {
+		t.Fatalf("memStore struct node not emitted")
+	}
+	if got := strct.Meta["end_line"]; got != "9" {
+		t.Errorf("memStore struct end_line = %q, want 9 (line=%d)", got, strct.Line)
 	}
 }
 
