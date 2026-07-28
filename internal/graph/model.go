@@ -203,7 +203,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "24" // Y.7: event head — JSX onClick + addEventListener → element→function dom_listen
+const SchemaVersion = "25" // Tier-L: Ruby http_client dynamic host → ENV.fetch capture (cross-file host-method registry)
 
 // Node represents a code entity in the graph.
 type Node struct {
