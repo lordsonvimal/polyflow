@@ -16,7 +16,15 @@ func setup() {
 	api.DELETE("/games/:id", deleteGame)
 	r.Match([]string{"GET", "HEAD"}, "/status", healthCheck)
 	r.Group("/user").Use(optionalAuth).POST("", createUser)
+	registerUserRoutes(api, userHandler)
 	r.Run(":8080")
+}
+
+// X.9: a registrar receiving its group across a function boundary. The caller
+// passes `api` (→ /api/v1); EnrichRouteGroups seeds `rg` from it so this route
+// composes to /api/v1/users.
+func registerUserRoutes(rg *gin.RouterGroup, h *UserHandler) {
+	rg.GET("/users", listUsers)
 }
 
 func createGame(c *gin.Context) {

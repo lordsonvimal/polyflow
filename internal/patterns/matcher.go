@@ -1148,7 +1148,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 		// G.7: alias/instance binding markers are not call sites; they only
 		// contribute to EnrichAliases's alias table and must not emit calls edges.
-		if n.Type == graph.NodeTypeVariable && (n.Meta["alias_name"] != "" || n.Meta["instance_name"] != "") {
+		// X.9: gin route-group registrar bookkeeping nodes are the same shape —
+		// they feed EnrichRouteGroups and would otherwise emit a self-edge from
+		// their enclosing function (the func node sits on the same line).
+		if n.Type == graph.NodeTypeVariable && (n.Meta["alias_name"] != "" || n.Meta["instance_name"] != "" ||
+			strings.HasPrefix(n.Meta["pattern"], "gin_group_registrar")) {
 			continue
 		}
 		var fromID string
@@ -1487,6 +1491,14 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasSuffix(lower, "_alias_binding") || strings.HasSuffix(lower, "_instance_binding") ||
 		lower == "axios_create_with_baseurl" || lower == "resty_new_instance" ||
 		lower == "axios_destructure" || lower == "axios_method_binding":
+		return graph.NodeTypeVariable, graph.EdgeTypeCalls
+
+	// ── X.9: gin route-group cross-function registrar bookkeeping ─────────────
+	// These carry the func↔param and callee↔arg bindings EnrichRouteGroups needs
+	// to compose a group prefix that crosses a function boundary. They are NOT
+	// call sites and MUST NOT emit edges (guarded in Pass 2 by the
+	// gin_group_registrar prefix), same discipline as alias binding markers.
+	case lower == "gin_group_registrar_func" || lower == "gin_group_registrar_call":
 		return graph.NodeTypeVariable, graph.EdgeTypeCalls
 
 	// ── G.7: alias/instance call sites (calls through a named alias or instance) ──

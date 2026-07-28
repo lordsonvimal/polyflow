@@ -33,7 +33,17 @@ contracts:
     edge:
       type: http_call
       id_prefix: link                # edge IDs stay "link:<from>-><to>" (parity!)
-      same_service: skip_unless_meta:datastar   # skip | keep | skip_unless_meta:<key>
+      same_service: keep               # skip | keep | skip_unless_meta:<key>
+                                       # keep: a UI→own-API fetch IS a real internal
+                                       # edge (recall-first). The old
+                                       # skip_unless_meta:datastar let only datastar
+                                       # producers self-match; every plain fetch/xhr
+                                       # to the service's own handler then fell to the
+                                       # service-less `unresolved` node and mis-scored
+                                       # as a cross miss (measured on the svc-c
+                                       # fleet: 44 fetch + 15 datastar svc-c-mgr→
+                                       # svc-c-mgr calls; keep lifted cross_yield_static
+                                       # 0.193→0.348 by moving them internal-resolved).
       via_meta: { datastar: datastar_action }   # producer meta key → edge Meta["via"]
     unmatched: unknown_edge          # visible edge to synthetic unresolved:<svc> node
 
