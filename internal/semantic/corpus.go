@@ -240,10 +240,30 @@ func nearestNodeAt(file string, targetLine int, fileNodes map[string][]fileNodeE
 
 // walkServiceDocs walks one service directory and returns doc entities for all
 // Markdown files and code doc-comments found there.
+// isVendoredDocDir reports whether a directory is a vendored/build tree whose
+// docs are third-party noise, not the project's own documentation.
+func isVendoredDocDir(name string) bool {
+	switch name {
+	case "node_modules", "vendor", ".git", "dist", ".next", ".nuxt",
+		".svelte-kit", "build", ".output", "testdata":
+		return true
+	}
+	return false
+}
+
 func walkServiceDocs(svcPath, service string, fileNodes map[string][]fileNodeEntry) []Entity {
 	var out []Entity
 	_ = filepath.WalkDir(svcPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		// Skip vendored/build trees — indexing their READMEs floods doc search
+		// with third-party noise (node_modules/**/README.md). Mirrors the skip
+		// list the indexer uses (indexer.go) so doc and node corpora agree.
+		if d.IsDir() {
+			if isVendoredDocDir(d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
