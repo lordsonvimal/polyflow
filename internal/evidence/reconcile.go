@@ -312,28 +312,59 @@ func sortSources(s []graph.SourceRef) {
 
 // computeState derives the VerificationState from the Sources slice.
 //
-// verified:          static ∩ (runtime ∨ contract)
-// candidate:         static-only (no confirmation)
-// observed_only_gap: runtime or contract evidence with no matching static edge
+// verified:          static ∩ (runtime ∨ config ∨ (contract ∧ ¬partial-static))
+// candidate:         static-only, OR an ambiguous (partial) static edge confirmed
+//                    ONLY by a spec (contract) source — see the soundness note below
+// observed_only_gap: runtime/contract/config evidence with no matching static edge
 // conflicting:       sources disagree (reserved for F.4)
+//
+// Soundness note (the fan-out phantom guard). The contract matcher fans a producer out
+// to EVERY consumer sharing a key (bug-class #1, deliberate recall bias). When that
+// fan-out spans >1 distinct service, at most one edge is real — the engine stamps those
+// edges ConfidencePartial (internal/contract/engine.go matchProducer), mirroring the
+// LinkDatastores multi-engine idiom. The static provider copies that confidence onto the
+// edge's static SourceRef.
+//
+// A spec (contract) source only attests that a route/channel *exists* on the consumer,
+// NOT which producer reaches it — so it cannot disambiguate a fan-out and must NOT
+// upgrade a `partial` static edge to `verified`. The agent is told "verified → do not
+// re-verify"; letting a fan-out phantom reach `verified` off a mere spec would make that
+// instruction unsound. Such edges stay `candidate` ("one cheap grep confirms").
+//
+// runtime and config are different — each pins the *specific* edge: runtime observed the
+// actual hop; config resolves the producer's dynamic value to a concrete target. Both
+// therefore verify even a `partial` static edge.
 func computeState(sources []graph.SourceRef) string {
 	hasStatic := false
-	hasConfirm := false
+	staticAmbiguous := false // partial-confidence static match — fan-out across >1 service
+	hasPinning := false      // runtime or config: confirms the specific producer→consumer edge
+	hasSpec := false         // contract (spec): attests route existence only
 	for _, s := range sources {
 		switch s.Provider {
 		case "static":
 			hasStatic = true
-		case "runtime", "contract", "config":
-			hasConfirm = true
+			if s.Confidence == graph.ConfidencePartial {
+				staticAmbiguous = true
+			}
+		case "runtime", "config":
+			hasPinning = true
+		case "contract":
+			hasSpec = true
 		}
 	}
 	switch {
-	case hasStatic && hasConfirm:
+	case hasStatic && hasPinning:
+		// Runtime/config confirms this exact edge — verifies even a fan-out match.
+		return graph.StateVerified
+	case hasStatic && hasSpec && !staticAmbiguous:
+		// Spec confirms the route AND the static match resolved to a single service
+		// (not an ambiguous fan-out): sound to verify. A `partial` static edge falls
+		// through to `candidate` — the spec cannot disambiguate the fan-out.
 		return graph.StateVerified
 	case hasStatic:
 		return graph.StateCandidate
-	case hasConfirm:
-		// Non-static confirming evidence: gap — static missed this edge.
+	case hasPinning || hasSpec:
+		// Non-static confirming evidence with no static edge: gap — static missed it.
 		return graph.StateObservedOnlyGap
 	default:
 		return graph.StateCandidate
