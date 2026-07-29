@@ -38,9 +38,33 @@ func TestEngine_FanOut_SharedKeyAcrossServices(t *testing.T) {
 	require.Len(t, result.Edges, 2, "both same-key handlers get an edge")
 	assert.ElementsMatch(t, []string{"link:c1->h1", "link:c1->h2"}, edgeIDs(result.Edges))
 	for _, e := range result.Edges {
-		assert.Equal(t, graph.ConfidenceStatic, e.Confidence)
+		// Fan-out across >1 distinct service is ambiguous — one producer call
+		// reaches exactly one target, so both edges are downgraded to `partial`
+		// (recall preserved: both are still emitted). This keeps evidence fusion
+		// from promoting a spec-only confirmation of a phantom to `verified`.
+		assert.Equal(t, graph.ConfidencePartial, e.Confidence,
+			"cross-service fan-out edges are ambiguous → partial")
 	}
 	assert.Empty(t, result.Unresolved, "a fanned-out producer is matched, not unresolved")
+}
+
+// Same-service fan-out (two handlers on one service share the key) is NOT
+// ambiguous at the service level — the target service is certain — so the edges
+// keep their match confidence and are not downgraded to `partial`.
+func TestEngine_FanOut_SameServiceNotDowngraded(t *testing.T) {
+	nodes := []graph.Node{
+		client("c1", "svc-a", "GET", "/health"),
+		handler("h1", "svc-b", "GET", "/health"),
+		handler("h2", "svc-b", "GET", "/health"), // same service as h1
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{httpRule("skip", contract.UnmatchedUnknownEdge)}, nil)
+
+	require.Len(t, result.Edges, 2, "both same-service handlers get an edge")
+	for _, ed := range result.Edges {
+		assert.Equal(t, graph.ConfidenceStatic, ed.Confidence,
+			"same-service fan-out is not ambiguous → keeps match confidence")
+	}
 }
 
 // Hub broadcast (empty key) must fan out to every subscriber in the service,
