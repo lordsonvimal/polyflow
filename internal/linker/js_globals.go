@@ -52,10 +52,15 @@ func LinkJSGlobals(
 		if svcGlobals[n.Service] == nil {
 			svcGlobals[n.Service] = make(map[string][]globalEntry)
 		}
-		svcGlobals[n.Service][globalName] = append(
-			svcGlobals[n.Service][globalName],
-			globalEntry{nodeID: n.ID, file: n.File},
-		)
+		entry := globalEntry{nodeID: n.ID, file: n.File}
+		// Index under the leaf symbol and, when present, the full dotted path
+		// (window.maple.save). Two keys → one entry; the per-key fan-out/collision
+		// rule (rule 1) is unchanged. Full-path keys let handler resolution
+		// disambiguate namespaces (Z.2).
+		svcGlobals[n.Service][globalName] = append(svcGlobals[n.Service][globalName], entry)
+		if gp := n.Meta["global_path"]; gp != "" && gp != globalName {
+			svcGlobals[n.Service][gp] = append(svcGlobals[n.Service][gp], entry)
+		}
 	}
 	// Sort each entry list by (file, nodeID) for determinism (rule 2).
 	for _, tbl := range svcGlobals {
@@ -230,56 +235,115 @@ func LinkJSGlobals(
 	sort.Slice(domTargets, func(i, j int) bool { return domTargets[i].ID < domTargets[j].ID })
 
 	for _, n := range domTargets {
-		callee := extractHandlerCallee(n.Meta["handler"])
-		if callee == "" {
-			continue
-		}
+		handler := n.Meta["handler"]
 		tbl := svcGlobals[n.Service]
-		if tbl == nil {
-			continue
+		resolved := false
+		// Most-specific first: full dotted path, then leaf, then first identifier.
+		for _, cand := range extractHandlerCandidates(handler) {
+			if tbl == nil {
+				break
+			}
+			if _, ok := tbl[cand]; ok {
+				emitGlobalEdges(n.ID, cand, n.Service)
+				resolved = true
+				break
+			}
 		}
-		if _, ok := tbl[callee]; !ok {
-			continue
+		// Rule #12: an unresolved native on* handler never silently drops — it
+		// lands in the ledger as dom_listen_unresolved so status --unresolved
+		// surfaces it. Scope the ledger to the dom_event_attr pattern this plan
+		// owns: add_event_listener / *_prop_assign / remove_event_listener
+		// dom_targets carry named JS callbacks resolved by other linkers, so
+		// ledgering their misses here would fabricate false-unresolved entries.
+		if !resolved && n.Meta["pattern"] == "dom_event_attr" {
+			unresolvedOut = append(unresolvedOut, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: handler, Kind: "dom_listen_unresolved",
+			})
 		}
-		emitGlobalEdges(n.ID, callee, n.Service)
 	}
 
 	// Sort output for determinism (rule 2).
 	sort.Slice(newEdges, func(i, j int) bool { return newEdges[i].ID < newEdges[j].ID })
 	sort.Slice(unresolvedOut, func(i, j int) bool {
-		if unresolvedOut[i].Service != unresolvedOut[j].Service {
-			return unresolvedOut[i].Service < unresolvedOut[j].Service
+		a, b := unresolvedOut[i], unresolvedOut[j]
+		if a.Service != b.Service {
+			return a.Service < b.Service
 		}
-		return unresolvedOut[i].Name < unresolvedOut[j].Name
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.Line < b.Line
 	})
 	return newEdges, globallyResolved, unresolvedOut
 }
 
-// extractHandlerCallee extracts the leading identifier from an inline event
-// handler string so it can be resolved in the global symbol table.
+// extractHandlerCandidates returns lookup keys for an inline handler, most
+// specific first, with trailing call args stripped:
 //
-//	"save()"          → "save"
-//	"App.submit(this)"→ "App"
-//	"save"            → "save"
-//	""                → ""
-func extractHandlerCallee(handler string) string {
+//	"window.maple.closeVulnerabilityModal()" → ["window.maple.closeVulnerabilityModal", "closeVulnerabilityModal", "window"]
+//	"App.submit(this)"                     → ["App.submit", "submit", "App"]
+//	"save()"                               → ["save"]
+//	"" / "123bad()"                        → nil
+//
+// Order: full dotted path, then leaf, then first identifier (the pre-Z.2
+// behavior, kept as the final fallback so App.submit(this)→App object
+// resolution is preserved). Computed / non-identifier segments
+// (window.maple[name]) yield nil so dynamic dispatch lands in the ledger.
+func extractHandlerCandidates(handler string) []string {
 	handler = strings.TrimSpace(handler)
-	if len(handler) == 0 {
-		return ""
+	// Strip trailing call args: keep the callee expression up to the first '('.
+	if i := strings.IndexByte(handler, '('); i >= 0 {
+		handler = handler[:i]
 	}
-	// First character must be a valid JS identifier start (letter, _, $).
-	c0 := handler[0]
-	if !(c0 >= 'a' && c0 <= 'z' || c0 >= 'A' && c0 <= 'Z' || c0 == '_' || c0 == '$') {
-		return ""
+	handler = strings.TrimSpace(handler)
+	if handler == "" {
+		return nil
 	}
-	end := 1
-	for end < len(handler) {
-		c := handler[end]
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$' {
-			end++
-		} else {
-			break
+	segs := strings.Split(handler, ".")
+	for i := range segs {
+		segs[i] = strings.TrimSpace(segs[i])
+		if !isJSIdent(segs[i]) {
+			return nil
 		}
 	}
-	return handler[:end]
+	dotted := strings.Join(segs, ".")
+
+	var out []string
+	seen := make(map[string]bool)
+	add := func(s string) {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	add(dotted)              // full dotted path
+	add(segs[len(segs)-1])   // leaf property
+	add(segs[0])             // first identifier (object-resolution fallback)
+	return out
+}
+
+// isJSIdent reports whether s is a valid JS identifier (letter/_/$ start,
+// alnum/_/$ tail). Empty is not an identifier.
+func isJSIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	c0 := s[0]
+	if !(c0 >= 'a' && c0 <= 'z' || c0 >= 'A' && c0 <= 'Z' || c0 == '_' || c0 == '$') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$') {
+			return false
+		}
+	}
+	return true
 }

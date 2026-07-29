@@ -205,22 +205,75 @@ func TestLinkJSGlobals_Determinism(t *testing.T) {
 	assert.Equal(t, ids1, ids2, "two runs produce identical edge IDs")
 }
 
-// TestExtractHandlerCallee: unit tests for the inline handler callee extractor.
-func TestExtractHandlerCallee(t *testing.T) {
+// TestExtractHandlerCandidates: unit tests for the inline handler candidate
+// extractor (most-specific first).
+func TestExtractHandlerCandidates(t *testing.T) {
 	cases := []struct {
 		input string
-		want  string
+		want  []string
 	}{
-		{"save()", "save"},
-		{"App.submit(this)", "App"},
-		{"submitForm()", "submitForm"},
-		{"save", "save"},
-		{"", ""},
-		{"123bad()", ""},       // leading digit is not an identifier
-		{"   save() ", "save"}, // leading whitespace stripped
+		{"window.maple.closeVulnerabilityModal()", []string{"window.maple.closeVulnerabilityModal", "closeVulnerabilityModal", "window"}},
+		{"App.submit(this)", []string{"App.submit", "submit", "App"}},
+		{"save()", []string{"save"}},
+		{"save", []string{"save"}},
+		{"   save() ", []string{"save"}},
+		{"", nil},
+		{"123bad()", nil},            // leading digit is not an identifier
+		{"window.maple[name]()", nil},  // computed member → dynamic dispatch
 	}
 	for _, tc := range cases {
-		got := extractHandlerCallee(tc.input)
+		got := extractHandlerCandidates(tc.input)
 		assert.Equal(t, tc.want, got, "input=%q", tc.input)
 	}
+}
+
+// TestLinkJSGlobals_NamespacedHandler: dom_target handler="window.maple.save()"
+// resolves to the global_path node via the full dotted key — exactly one edge.
+func TestLinkJSGlobals_NamespacedHandler(t *testing.T) {
+	libFile := "/svc/maple.js"
+	tmplFile := "/svc/modal.templ"
+
+	saveFn := graph.Node{
+		ID: "svc:" + libFile + ":function:save:7", Type: graph.NodeTypeFunction,
+		Label: "save", Service: "svc", File: libFile, Line: 7,
+		Meta: map[string]string{"global_symbol": "save", "global_path": "window.maple.save"},
+	}
+	listener := graph.Node{
+		ID: "svc:" + tmplFile + ":dom_target:dom_event_attr:5", Type: graph.NodeTypeDOMTarget,
+		Label: "onclick handler", Service: "svc", File: tmplFile, Line: 5,
+		Meta: map[string]string{"handler": "window.maple.save()", "prop": "onclick", "pattern": "dom_event_attr"},
+	}
+	svcFiles := map[string][]string{"svc": {libFile, tmplFile}}
+
+	edges, _, unresolved := LinkJSGlobals([]graph.Node{saveFn, listener}, nil, nil, svcFiles)
+
+	require.Len(t, edges, 1, "listener → namespaced save function")
+	assert.Equal(t, listener.ID, edges[0].From)
+	assert.Equal(t, saveFn.ID, edges[0].To)
+	assert.Equal(t, graph.EdgeTypeCalls, edges[0].Type)
+	assert.Equal(t, "global", edges[0].Meta["via"])
+	assert.Empty(t, unresolved, "resolved handler must not be ledgered")
+}
+
+// TestLinkJSGlobals_UnresolvedHandlerLedgered: a handler referencing an
+// unknown symbol produces zero edges and one dom_listen_unresolved ledger
+// entry (rule #12 — no silent drops).
+func TestLinkJSGlobals_UnresolvedHandlerLedgered(t *testing.T) {
+	tmplFile := "/svc/modal.templ"
+
+	listener := graph.Node{
+		ID: "svc:" + tmplFile + ":dom_target:dom_event_attr:9", Type: graph.NodeTypeDOMTarget,
+		Label: "onclick handler", Service: "svc", File: tmplFile, Line: 9,
+		Meta: map[string]string{"handler": "window.lib.notInRepo()", "prop": "onclick", "pattern": "dom_event_attr"},
+	}
+	svcFiles := map[string][]string{"svc": {tmplFile}}
+
+	edges, _, unresolved := LinkJSGlobals([]graph.Node{listener}, nil, nil, svcFiles)
+
+	assert.Empty(t, edges, "unknown handler resolves to no edge")
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "dom_listen_unresolved", unresolved[0].Kind)
+	assert.Equal(t, "window.lib.notInRepo()", unresolved[0].Name)
+	assert.Equal(t, tmplFile, unresolved[0].File)
+	assert.Equal(t, 9, unresolved[0].Line)
 }

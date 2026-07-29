@@ -203,7 +203,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "26" // A.3: Go struct/interface nodes gain meta["end_line"] for span-exact reads
+const SchemaVersion = "27" // Z.1: namespaced global JS fns gain meta["global_path"] + new nodes for window.<ns>.<fn>=fn
 
 // Node represents a code entity in the graph.
 type Node struct {
