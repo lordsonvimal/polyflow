@@ -558,6 +558,20 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// §3: never return zero nodes when FTS has matches; §2/§3: cap flow/doc
+	// flood and inline snippets. Shared with the MCP search tool.
+	if len(resp.Nodes) == 0 {
+		if nodes, nerr := store.SearchNodes(ctx, args[0], searchLimit); nerr == nil {
+			for _, n := range nodes {
+				resp.Nodes = append(resp.Nodes, semantic.Hit{
+					Entity:    semantic.Entity{ID: n.ID, Type: "node", NodeID: n.ID, File: n.File, Line: n.Line},
+					Retrieval: "lexical",
+				})
+			}
+		}
+	}
+	semantic.ShapeSearchResponse(&resp, ".", semantic.SearchFlowCap, semantic.SearchDocCap, semantic.SearchSnippetLines)
+
 	if searchFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(resp)
 	}
@@ -577,6 +591,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 				h.Retrieval,
 				fmt.Sprintf("%.4f", h.Score),
 			)
+			if h.Snippet != "" {
+				for _, ln := range strings.Split(h.Snippet, "\n") {
+					fmt.Printf("      │ %s\n", ln)
+				}
+			}
 		}
 	}
 	if len(resp.Flows) > 0 {

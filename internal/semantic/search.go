@@ -8,14 +8,52 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
+
+// Search-response shaping defaults (IA §2/§3): the search surface leads with
+// code-bearing nodes rather than a flow/doc flood.
+const (
+	SearchSnippetLines = 4 // source lines inlined per node hit
+	SearchFlowCap      = 5 // flows kept in a search response (full set via flows/trace)
+	SearchDocCap       = 3 // doc chunks kept in a search response
+)
+
+// ShapeSearchResponse applies the shared search-surface ergonomics used by both
+// the CLI and the MCP tool (IA §2/§3): cap the flow/doc sections so nodes stay
+// visible, and inline a few source lines per node so the first call shows code.
+// Snippets are best-effort — budget.Snippet returns "" on any failure. root is
+// the workspace root for relative node files ("." when the process cwd is the
+// workspace). Node backfill for empty results stays with the caller (it needs
+// the graph store).
+func ShapeSearchResponse(resp *Response, root string, flowCap, docCap, snippetLines int) {
+	if flowCap >= 0 && len(resp.Flows) > flowCap {
+		resp.Flows = resp.Flows[:flowCap]
+	}
+	if docCap >= 0 && len(resp.Docs) > docCap {
+		resp.Docs = resp.Docs[:docCap]
+	}
+	if snippetLines <= 0 {
+		return
+	}
+	for i := range resp.Nodes {
+		e := resp.Nodes[i].Entity
+		if e.File == "" || e.Line <= 0 {
+			continue
+		}
+		resp.Nodes[i].Snippet = budget.Snippet(root, e.File, e.Line, snippetLines)
+	}
+}
 
 // Hit is one item in a typed search result section.
 type Hit struct {
 	Entity    Entity  `json:"entity"`
 	Score     float64 `json:"score"`
 	Retrieval string  `json:"retrieval"` // "exact" | "lexical" | "semantic" | "fused"
+	// Snippet is a few source lines inlined at query time (IA §2) so the first
+	// call shows code, not just an id. Empty when unavailable or off.
+	Snippet string `json:"snippet,omitempty"`
 }
 
 // Response is the structured output of Search — typed sections for nodes,

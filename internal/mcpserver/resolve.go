@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -28,7 +29,13 @@ type resolveCandidate struct {
 	Line      int     `json:"line"`
 	Score     float64 `json:"score,omitempty"`
 	Retrieval string  `json:"retrieval,omitempty"`
+	// Snippet inlines a few source lines (IA §2) so the agent can judge the
+	// candidate without a follow-up read. Empty when unavailable.
+	Snippet string `json:"snippet,omitempty"`
 }
+
+// resolveSnippetLines is how many source lines each resolve candidate inlines.
+const resolveSnippetLines = 4
 
 type resolveOutput struct {
 	Root             *graph.Node             `json:"root"`
@@ -77,6 +84,7 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest, in resol
 				candidates = append(candidates, resolveCandidate{
 					ID: n.ID, Type: string(n.Type), Label: n.Label, Service: n.Service,
 					File: n.File, Line: n.Line, Score: h.Score, Retrieval: h.Retrieval,
+					Snippet: budget.Snippet(".", n.File, n.Line, resolveSnippetLines),
 				})
 			}
 		}
@@ -96,6 +104,7 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest, in resol
 			}
 			candidates = append(candidates, resolveCandidate{
 				ID: n.ID, Type: string(n.Type), Label: n.Label, Service: n.Service, File: n.File, Line: n.Line,
+				Snippet: budget.Snippet(".", n.File, n.Line, resolveSnippetLines),
 			})
 		}
 	}

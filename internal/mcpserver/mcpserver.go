@@ -117,10 +117,11 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search",
 		Description: "Search the indexed code graph for nodes (functions, methods, variables, " +
-			"HTTP handlers, …), flow chains, or doc chunks matching a query. " +
-			"Query may be natural language; results include flows — a flows hit's entry " +
-			"node is the starting point for trace. Use this to find the exact node " +
-			"before calling context, impact, or trace.",
+			"HTTP handlers, …), flow chains, or doc chunks matching a query. Query may be " +
+			"natural language. Leads with the matching nodes, each carrying an inline source " +
+			"snippet — so one call shows you the code, no separate read needed. A flows hit's " +
+			"entry node is the starting point for trace. Use this to find the exact node before " +
+			"calling context, impact, or trace.",
 	}, s.search)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -310,6 +311,22 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 		if err != nil {
 			return nil, nil, err
 		}
+		// §3: nodes are the primary answer — never return zero of them when FTS
+		// has matches. Backfill from the node-only index before shaping.
+		if len(resp.Nodes) == 0 {
+			if nodes, nerr := store.SearchNodes(ctx, in.Query, limit); nerr == nil {
+				for _, n := range nodes {
+					resp.Nodes = append(resp.Nodes, semantic.Hit{
+						Entity:    semantic.Entity{ID: n.ID, Type: "node", NodeID: n.ID, File: n.File, Line: n.Line},
+						Retrieval: "lexical",
+					})
+				}
+			}
+		}
+		// §2/§3: cap the flow/doc flood so nodes stay visible, and inline a
+		// source snippet per node so the first call shows code. Shared with the
+		// CLI search command.
+		semantic.ShapeSearchResponse(&resp, ".", semantic.SearchFlowCap, semantic.SearchDocCap, semantic.SearchSnippetLines)
 		return jsonResult(resp)
 	}
 
@@ -351,7 +368,7 @@ type contextInput struct {
 	Depth           int      `json:"depth,omitempty" jsonschema:"max traversal depth (node mode default 5, files mode default 2, -1 = unlimited)"`
 	MaxTokens       int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
 	Summary         bool     `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
-	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 }
@@ -410,8 +427,24 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		result.Upstream = filterTraceNodes(result.Upstream, in.MinVerification)
 		result.Downstream = filterTraceNodes(result.Downstream, in.MinVerification)
 	}
-	result.InlineSnippets(".", in.SnippetLines)
+	// §2: snippets default ON so the first context call shows code. 0 (unset) →
+	// default; negative → off. The max_tokens budget still caps total size.
+	result.InlineSnippets(".", defaultSnippetLines(in.SnippetLines))
 	return jsonResult(result.ApplyBudget(in.MaxTokens, in.Summary))
+}
+
+// defaultSnippetLines maps the snippet_lines input to an effective count:
+// 0 (unset) → the default, negative → off (0), positive → as given. Lets
+// snippets default on while preserving an explicit opt-out (IA §2).
+func defaultSnippetLines(n int) int {
+	switch {
+	case n == 0:
+		return semantic.SearchSnippetLines
+	case n < 0:
+		return 0
+	default:
+		return n
+	}
 }
 
 // ─── impact ──────────────────────────────────────────────────────────────────
@@ -426,7 +459,7 @@ type impactInput struct {
 	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail"`
 	Summary         bool   `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
-	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (0 = off)"`
+	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 }
@@ -469,7 +502,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		out.Callers = filterCallers(out.Callers, in.MinVerification)
 		out.TotalCallers = len(out.Callers)
 	}
-	out.InlineSnippets(".", in.SnippetLines)
+	out.InlineSnippets(".", defaultSnippetLines(in.SnippetLines))
 	return jsonResult(out.ApplyBudget(effectiveBudget(in.MaxTokens), in.Summary))
 }
 
