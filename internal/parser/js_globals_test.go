@@ -96,6 +96,49 @@ func TestStampGlobalSymbols_WindowAssignObject(t *testing.T) {
 	assert.Equal(t, graph.NodeTypeVariable, found.Type)
 }
 
+// TestStampGlobalSymbols_NestedWindowAssign: window.dsw.save = function(){}
+// mints a function node labelled save with global_path=window.dsw.save.
+func TestStampGlobalSymbols_NestedWindowAssign(t *testing.T) {
+	src := `window.dsw = window.dsw || {};
+window.dsw.save = function() { return 1; }
+`
+	nodes, _, _ := parseJS(t, src)
+
+	var found *graph.Node
+	for i := range nodes {
+		if nodes[i].Meta["global_path"] == "window.dsw.save" {
+			found = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "node with global_path=window.dsw.save must exist")
+	assert.Equal(t, "save", found.Label)
+	assert.Equal(t, "save", found.Meta["global_symbol"])
+	assert.Equal(t, graph.NodeTypeFunction, found.Type)
+}
+
+// TestStampGlobalSymbols_WrappedInIIFE: a namespaced registration inside an
+// IIFE still resolves via the recursive assignment walk.
+func TestStampGlobalSymbols_WrappedInIIFE(t *testing.T) {
+	src := `(function () {
+  window.dsw.closeVulnerabilityModal = function () { return 1; };
+})();
+`
+	nodes, _, _ := parseJS(t, src)
+
+	var found *graph.Node
+	for i := range nodes {
+		if nodes[i].Meta["global_path"] == "window.dsw.closeVulnerabilityModal" {
+			found = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "IIFE-wrapped namespaced global must be minted")
+	assert.Equal(t, "closeVulnerabilityModal", found.Label)
+	assert.Equal(t, "closeVulnerabilityModal", found.Meta["global_symbol"])
+	assert.Equal(t, graph.NodeTypeFunction, found.Type)
+}
+
 // TestStampGlobalSymbols_Negative_NonWindow: assignment to non-window object
 // does NOT produce a global_symbol node.
 func TestStampGlobalSymbols_Negative_NonWindow(t *testing.T) {
