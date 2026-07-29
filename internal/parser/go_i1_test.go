@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "27" {
-		t.Errorf("expected SchemaVersion 27 (Z.1: namespaced global JS fn global_path meta), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "28" {
+		t.Errorf("expected SchemaVersion 28 (Z.4: native HTML on* handler (document) scope node + dom_listen edge), got %q", graph.SchemaVersion)
 	}
 }
 

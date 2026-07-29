@@ -53,6 +53,54 @@ func TestHTMLParser_NavLinksAndEvents(t *testing.T) {
 	assert.True(t, events["onclick"], "expected onclick dom_event_attr node; got %v", events)
 }
 
+// TestHTML_InlineEventAttr_EmitsDomTarget verifies Z.4: a native on* attribute
+// in a static .html file emits a dom_target node (pattern=dom_event_attr,
+// Language=html) AND a dom_listen edge from a synthetic per-file (document)
+// scope node — parity with templ, where the enclosing component owns the edge.
+// Without the document node the listener would be an orphan and the
+// document→handler chain would have no entry point.
+func TestHTML_InlineEventAttr_EmitsDomTarget(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "index.html")
+	src := `<html><body>
+  <button onclick="window.app.save()">Save</button>
+</body></html>`
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
+
+	p := parser.ForFile(file)
+	require.NotNil(t, p)
+	nodes, edges, _, err := p.Parse(file, "site", mustMatcher(t))
+	require.NoError(t, err)
+
+	var target, doc *graph.Node
+	for i := range nodes {
+		switch {
+		case nodes[i].Meta["pattern"] == "dom_event_attr":
+			target = &nodes[i]
+		case nodes[i].Meta["scope"] == "document":
+			doc = &nodes[i]
+		}
+	}
+	require.NotNil(t, target, "expected a dom_event_attr dom_target node")
+	assert.Equal(t, graph.NodeTypeDOMTarget, target.Type)
+	assert.Equal(t, "html", target.Language)
+	assert.Equal(t, "window.app.save()", target.Meta["handler"])
+	assert.Equal(t, "click", target.Meta["event"])
+
+	require.NotNil(t, doc, "expected a synthetic (document) scope node")
+	assert.Equal(t, graph.NodeTypeComponent, doc.Type)
+	assert.Equal(t, "html", doc.Language)
+
+	hasListen := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeDOMListen && e.From == doc.ID && e.To == target.ID {
+			hasListen = true
+			assert.Equal(t, "on click", e.Label)
+		}
+	}
+	assert.True(t, hasListen, "expected dom_listen edge (document) → onclick target; edges=%v", edges)
+}
+
 func TestTemplParser_NativeEventAttr(t *testing.T) {
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
