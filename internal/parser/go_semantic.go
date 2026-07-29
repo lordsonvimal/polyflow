@@ -507,6 +507,12 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	allNodes = append(allNodes, wrapNodes...)
 	edges = append(edges, wrapEdges...)
 
+	// W.2: resolve wrapper-mediated / const AMQP publish exchanges into producer
+	// channel nodes so the amqp contract can join them to W.1's consumer binds.
+	amqpNodes, amqpEdges := extractAMQPNames(service, dir, fset, inService, resolveFunc)
+	allNodes = append(allNodes, amqpNodes...)
+	edges = append(edges, amqpEdges...)
+
 	referenced := collectReferenced(prog, ssaPkgs, allFns, resolveFunc)
 
 	return SemanticResult{Nodes: allNodes, Edges: edges, Referenced: referenced}

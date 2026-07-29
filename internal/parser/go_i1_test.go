@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "28" {
-		t.Errorf("expected SchemaVersion 28 (Z.4: native HTML on* handler (document) scope node + dom_listen edge), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "29" {
+		t.Errorf("expected SchemaVersion 29 (W: AMQP QueueBind consumer channels + wrapper/const publish-exchange resolution), got %q", graph.SchemaVersion)
 	}
 }
 

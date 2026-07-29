@@ -103,6 +103,12 @@ patterns:
     captures:
       - name: queue
         role: amqp_queue
+  # NOTE: consumer→exchange binding (QueueBind) is resolved in the SSA pass
+  # (internal/parser/go_amqp_names.go), not here. Positional tree-sitter capture
+  # of QueueBind is defeated by amqp091's convention of one inline comment per
+  # argument — the comment nodes shift the captured positions (measured:
+  # `QueueBind(q, "build.submit", "build_jobs", …)` mis-keyed to exchange
+  # "build.submit"). SSA reads the typed call, which carries no comment nodes.
   # ExchangeDeclare("maple.builds", "topic", ...)
   - name: amqp_exchange_declare
     query: |
