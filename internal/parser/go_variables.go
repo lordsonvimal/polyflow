@@ -75,14 +75,32 @@ func extractVariables(
 	var edges []graph.Edge
 	nodeSeen := map[string]bool{}
 	edgeSeen := map[string]bool{}
+	// skipped collects node IDs we deliberately dropped (generated-templ
+	// variables, see below) so their captures/writes edges are dropped too
+	// rather than left dangling for the reconciler to prune.
+	skipped := map[string]bool{}
 
 	addNode := func(n graph.Node) {
+		// Generated `_templ.go` files wrap every render in a closure, so their
+		// buffer/err/param locals (templ_7745c5c3_Buffer, …) surface as
+		// closure-captured variable nodes. They carry only captures/writes
+		// buffer plumbing and are redundant with the `.templ` component node and
+		// the generated `function:` node — but they outnumber and out-rank the
+		// real nodes in search. Drop them; keep everything else in the file (the
+		// function nodes anchor the Go call graph).
+		if n.Type == graph.NodeTypeVariable && strings.HasSuffix(n.File, "_templ.go") {
+			skipped[n.ID] = true
+			return
+		}
 		if !nodeSeen[n.ID] {
 			nodeSeen[n.ID] = true
 			nodes = append(nodes, n)
 		}
 	}
 	addEdge := func(typ graph.EdgeType, from, to string, meta map[string]string) {
+		if skipped[from] || skipped[to] {
+			return
+		}
 		id := fmt.Sprintf("semantic:%s:%s->%s", typ, from, to)
 		if edgeSeen[id] {
 			return
