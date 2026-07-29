@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "29" {
-		t.Errorf("expected SchemaVersion 29 (W: AMQP QueueBind consumer channels + wrapper/const publish-exchange resolution), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "30" {
+		t.Errorf("expected SchemaVersion 30 (W-SSE: datastar SSE-constructor wrapper + PatchElement* arg render targets), got %q", graph.SchemaVersion)
 	}
 }
 
