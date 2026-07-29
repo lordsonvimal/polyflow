@@ -451,6 +451,63 @@ func TestReconcilerServiceScopedJoin(t *testing.T) {
 	}
 }
 
+// TestReconcilerSpecDoesNotVerifyFanout is the fan-out phantom guard. When the
+// contract matcher fans a producer out across >1 service it stamps the edges
+// ConfidencePartial (at most one is real). A spec (contract) source attests a
+// route EXISTS on a consumer, not which producer reaches it, so it cannot
+// disambiguate the fan-out and must NOT upgrade a `partial` edge to `verified`
+// (which tells the agent "do not re-verify") — it stays `candidate`. runtime and
+// config, which pin the concrete target, still verify it (asserted below).
+func TestReconcilerSpecDoesNotVerifyFanout(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "client", Service: "svc-a", File: "a.go", Line: 1},
+		{ID: "handler", Service: "svc-b", File: "b.go", Line: 2},
+	}
+	// Ambiguous fan-out edge (engine stamped it partial: matched >1 service).
+	fanoutEdge := graph.Edge{
+		ID: "e-fan", From: "client", To: "handler", Type: graph.EdgeTypeHTTPCall,
+		Label: "get /games/*", Confidence: graph.ConfidencePartial,
+	}
+	specSource := graph.SourceRef{Provider: "contract", Confidence: graph.ConfidenceDeclared, Ref: "openapi.yaml#getGame"}
+	specEdge := graph.Edge{
+		ID: "c1", From: "svc-b", To: "", Type: graph.EdgeTypeHTTPCall,
+		Label: "get /games/*", Sources: []graph.SourceRef{specSource},
+	}
+
+	// Spec-only confirmation must leave the partial edge at candidate.
+	sp := evidence.NewStaticProvider(nodes, []graph.Edge{fanoutEdge}, nil)
+	rec, err := evidence.NewReconciler(sp, &fakeProvider{name: "contract",
+		ev: evidence.Evidence{Edges: []graph.Edge{specEdge}}})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+	for _, e := range result.Edges {
+		if e.ID == "e-fan" {
+			assert.Equal(t, graph.StateCandidate, e.VerificationState,
+				"a spec must NOT verify an ambiguous (partial) fan-out edge")
+		}
+	}
+
+	// Runtime, which observed the real hop, DOES verify the same partial edge.
+	rtEdge := graph.Edge{
+		ID: "c1", From: "svc-b", To: "", Type: graph.EdgeTypeHTTPCall,
+		Label:   "get /games/*",
+		Sources: []graph.SourceRef{{Provider: "runtime", Confidence: graph.ConfidenceObserved, ObservedAt: 1}},
+	}
+	sp2 := evidence.NewStaticProvider(nodes, []graph.Edge{fanoutEdge}, nil)
+	rec2, err := evidence.NewReconciler(sp2, &fakeProvider{name: "runtime",
+		ev: evidence.Evidence{Edges: []graph.Edge{rtEdge}}})
+	require.NoError(t, err)
+	result2, err := rec2.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+	for _, e := range result2.Edges {
+		if e.ID == "e-fan" {
+			assert.Equal(t, graph.StateVerified, e.VerificationState,
+				"runtime pins the specific hop and verifies even a fan-out edge")
+		}
+	}
+}
+
 // --- Chessleap static-baseline-unchanged guard ---
 
 // TestChessleapF0StaticBaseline verifies that wrapping the static pipeline

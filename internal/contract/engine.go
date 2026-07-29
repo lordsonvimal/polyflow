@@ -227,13 +227,35 @@ func matchProducer(
 		normKey := strings.Join(normFields, " ")
 
 		hits, confidence := findMatches(rawKey, normKey, rule.Match, idx)
-		emitted := false
-		for _, hit := range hits {
-			if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
-				continue
-			}
 
-			edgeMeta := map[string]string{"confidence": confidence}
+		// Collect the hits that pass the same-service policy first, so fan-out
+		// ambiguity can be judged before edges are emitted (recall is preserved:
+		// every eligible hit still gets an edge — bug-class #1).
+		eligible := make([]*graph.Node, 0, len(hits))
+		for _, hit := range hits {
+			if sameServiceAllowed(rule.Edge.SameService, prod, hit) {
+				eligible = append(eligible, hit)
+			}
+		}
+		if len(eligible) == 0 {
+			continue
+		}
+
+		// Fan-out phantom guard: one producer call site resolves to exactly one
+		// real target. If the key matched consumers across >1 distinct service,
+		// at most one edge is real — downgrade confidence to `partial` (the
+		// LinkDatastores multi-target idiom) so evidence fusion never promotes a
+		// spec-only confirmation of such an edge to `verified`. Runtime/config,
+		// which pin the concrete target, still verify it (see
+		// internal/evidence/reconcile.go computeState). Same-service multi-handler
+		// fan-out is left at its match confidence: the service is unambiguous.
+		edgeConfidence := confidence
+		if distinctTargetServices(eligible) > 1 {
+			edgeConfidence = graph.ConfidencePartial
+		}
+
+		for _, hit := range eligible {
+			edgeMeta := map[string]string{"confidence": edgeConfidence}
 			for metaKey, viaValue := range rule.Edge.ViaMeta {
 				if prod.Meta[metaKey] != "" {
 					edgeMeta["via"] = viaValue
@@ -250,16 +272,27 @@ func matchProducer(
 				To:         hit.ID,
 				Type:       rule.Edge.Type,
 				Label:      normKey,
-				Confidence: confidence,
+				Confidence: edgeConfidence,
 				Meta:       edgeMeta,
 			})
-			emitted = true
 		}
-		if emitted {
-			return true
-		}
+		return true
 	}
 	return false
+}
+
+// distinctTargetServices counts the distinct non-empty Service values among
+// hits. Nodes with an unknown service are ignored — when target identity is
+// unknown the unscoped join applies (recall over precision), so it does not
+// count toward fan-out ambiguity.
+func distinctTargetServices(hits []*graph.Node) int {
+	seen := make(map[string]struct{}, len(hits))
+	for _, h := range hits {
+		if h.Service != "" {
+			seen[h.Service] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 // findMatches tries each tier in order against the consumer indexes and
