@@ -203,7 +203,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "27" // Z.1: namespaced global JS fns gain meta["global_path"] + new nodes for window.<ns>.<fn>=fn
+const SchemaVersion = "28" // Z.4: native HTML on* handlers gain a synthetic (document) scope node + dom_listen edge
 
 // Node represents a code entity in the graph.
 type Node struct {

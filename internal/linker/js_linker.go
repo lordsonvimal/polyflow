@@ -76,6 +76,13 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 		if n.Language == "templ" {
 			continue
 		}
+		// Static-HTML (document) scope nodes (Z.4) are synthetic listener owners
+		// the pattern matcher mints to anchor dom_listen edges — not JSX usage
+		// proxies, and there is no JS declaration to redirect to. Dropping them
+		// would cascade-delete the dom_listen edge and orphan the on* handler.
+		if n.Language == "html" && n.Meta["scope"] == "document" {
+			continue
+		}
 		// Skip framework components (Show, For, Match etc. — no user declaration).
 		if isFrameworkComponent(n.Label) {
 			removeNodeIDs[n.ID] = true

@@ -1134,6 +1134,35 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		return id
 	}
 
+	// htmlDocNodeFor lazily creates a synthetic per-file document node so native
+	// HTML on* event listeners have an enclosing scope to hang a dom_listen edge
+	// on — the parity counterpart to a templ component (templ.go:addEventAttr)
+	// or a JS module node. Static .html has no function/component to own the
+	// binding, so without this the dom_target is an orphan and the
+	// document→handler chain has no entry point (Z.4). Only .html/.htm files get
+	// one; other languages return "". Shares moduleNodes so it materialises via
+	// the same append pass; keys never collide (moduleNodeFor skips non-JS).
+	htmlDocNodeFor := func(file string) string {
+		if !isHTMLFile(file) {
+			return ""
+		}
+		if n, ok := moduleNodes[file]; ok {
+			return n.ID
+		}
+		id := fmt.Sprintf("%s:%s:component:(document):0", service, file)
+		moduleNodes[file] = &graph.Node{
+			ID:       id,
+			Type:     graph.NodeTypeComponent,
+			Label:    "(document)",
+			Service:  service,
+			File:     file,
+			Line:     0,
+			Language: "html",
+			Meta:     map[string]string{"scope": "document"},
+		}
+		return id
+	}
+
 	for i := range nodes {
 		n := &nodes[i]
 		// X.0: a test-DSL-demoted comm site keeps Type=function (an "ordinary
@@ -1161,7 +1190,16 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if best := enclosingFunc(n.File, n.Line, n.ID); best != nil {
 			fromID = best.id
 		} else if fromID = moduleNodeFor(n.File); fromID == "" {
-			continue
+			// Native HTML on* handlers have no enclosing function or JS module
+			// scope; anchor their dom_listen edge at a synthetic per-file
+			// document node (Z.4 templ/html parity). Scoped to DOMTarget so
+			// nav_link producers keep their existing no-caller-edge behaviour.
+			if n.Type == graph.NodeTypeDOMTarget {
+				fromID = htmlDocNodeFor(n.File)
+			}
+			if fromID == "" {
+				continue
+			}
 		}
 		edgeType := graph.EdgeTypeCalls
 		switch n.Type {
@@ -1371,6 +1409,11 @@ func isJSModuleFile(file string) bool {
 		}
 	}
 	return false
+}
+
+// isHTMLFile reports whether file is a static HTML document (.html/.htm).
+func isHTMLFile(file string) bool {
+	return strings.HasSuffix(file, ".html") || strings.HasSuffix(file, ".htm")
 }
 
 // normalizeEventName reduces an event-binding attribute or property to its bare
