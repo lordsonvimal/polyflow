@@ -779,3 +779,147 @@ func main() {
 		}
 	}
 }
+
+// TestGoSemanticSSEWrapperAndPatchArg locks Tier W-SSE: a handler that opens its
+// SSE stream through an in-service forwarder (views.NewSSE → datastar.NewSSE,
+// WS.1) and renders a templ fragment by passing it to a datastar patch method
+// (sse.PatchElementTempl(Fragment()), WS.2) must emit a renders{sse:true} edge
+// and a mirrored sse_endpoint edge to the fragment component — neither of which
+// the direct-Render / direct-NewSSE detector captured. A handler that opens SSE
+// directly but only pushes signals (PatchSignals) must NOT gain a fabricated
+// fragment edge.
+func TestGoSemanticSSEWrapperAndPatchArg(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/ssetest\n\ngo 1.25.0\n",
+		"templ/templ.go": `package templ
+
+import (
+	"context"
+	"io"
+)
+
+type Component interface {
+	Render(ctx context.Context, w io.Writer) error
+}
+`,
+		// datastar-go shape: NewSSE returns *ServerSentEventGenerator, whose
+		// PatchElementTempl renders a templ component passed as an argument and
+		// PatchSignals pushes signals (no fragment).
+		// datastar-go declares its OWN component interface (TemplComponent), so a
+		// templ.Component passed to PatchElementTempl is an interface→interface
+		// ChangeType over the templ call — the real WS.2 shape templComponentFor
+		// must unwrap.
+		"datastar/datastar.go": `package datastar
+
+import (
+	"context"
+	"io"
+)
+
+type TemplComponent interface {
+	Render(ctx context.Context, w io.Writer) error
+}
+
+type ServerSentEventGenerator struct{}
+
+func NewSSE() *ServerSentEventGenerator { return &ServerSentEventGenerator{} }
+
+func (s *ServerSentEventGenerator) PatchElementTempl(c TemplComponent) {}
+func (s *ServerSentEventGenerator) PatchSignals(m map[string]any) {}
+`,
+		// In-service SSE-constructor forwarder (WS-a).
+		"views/sse.go": `package views
+
+import "example.com/ssetest/datastar"
+
+func NewSSE() *datastar.ServerSentEventGenerator { return datastar.NewSSE() }
+`,
+		// Generated templ twin for the Fragment component.
+		"fragment_templ.go": `package main
+
+import (
+	"context"
+	"io"
+
+	"example.com/ssetest/templ"
+)
+
+type frag struct{}
+
+func (frag) Render(ctx context.Context, w io.Writer) error { return nil }
+
+func Fragment() templ.Component { return frag{} }
+`,
+		"handler.go": `package main
+
+import (
+	"example.com/ssetest/datastar"
+	"example.com/ssetest/views"
+)
+
+func Stream() {
+	sse := views.NewSSE()
+	sse.PatchElementTempl(Fragment())
+}
+
+func Signals() {
+	sse := datastar.NewSSE()
+	sse.PatchSignals(map[string]any{"x": 1})
+}
+`,
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	const compID = "svc:fragment.templ:component:Fragment:1"
+	known := map[string]bool{
+		"svc:fragment_templ.go:function:Fragment:14": true,
+		"svc:handler.go:function:Stream:8":           true,
+		"svc:handler.go:function:Signals:13":         true,
+		"svc:views/sse.go:function:NewSSE:5":         true,
+		compID:                                       true,
+	}
+
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	var streamRenders, streamSSE bool
+	var streamSSEMeta string
+	for _, e := range res.Edges {
+		if e.From == "svc:handler.go:function:Stream:8" && e.To == compID {
+			switch e.Type {
+			case "renders":
+				streamRenders = true
+				streamSSEMeta = e.Meta["sse"]
+			case "sse_endpoint":
+				streamSSE = true
+			}
+		}
+		// Signals pushes no templ fragment — it must not draw any edge to compID.
+		if e.From == "svc:handler.go:function:Signals:13" && e.To == compID {
+			t.Errorf("Signals() pushes only signals and must not render a fragment, got %+v", e)
+		}
+	}
+
+	if !streamRenders {
+		t.Fatalf("expected Stream → Fragment renders edge (WS.2 PatchElementTempl arg), got: %+v", res.Edges)
+	}
+	if streamSSEMeta != "true" {
+		t.Errorf("Stream opens SSE via views.NewSSE wrapper (WS.1); renders edge must be sse=true, got sse=%q", streamSSEMeta)
+	}
+	if !streamSSE {
+		t.Errorf("Stream must emit an sse_endpoint edge to Fragment, got: %+v", res.Edges)
+	}
+}

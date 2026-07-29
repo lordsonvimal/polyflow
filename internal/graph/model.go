@@ -203,7 +203,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "29" // W: AMQP QueueBind consumer channels + interprocedural wrapper/const publish-exchange resolution
+const SchemaVersion = "30" // W-SSE: datastar SSE-constructor wrapper + PatchElement* arg render targets
 
 // Node represents a code entity in the graph.
 type Node struct {

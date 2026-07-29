@@ -223,8 +223,20 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// call (`views.PuzzleRows(vm)`). Returns "" for any receiver that is not a
 	// direct call to a `_templ.go` function with a known component twin.
 	templComponentFor := func(recv ssa.Value) string {
-		if mi, ok := recv.(*ssa.MakeInterface); ok {
-			recv = mi.X
+		// Unwrap interface boxing/re-typing: a component passed as an argument to
+		// a method whose param is a *different* component interface (e.g.
+		// datastar's TemplComponent vs templ.Component, WS.2) arrives as a
+		// ChangeType over the templ call; MakeInterface boxes a concrete value.
+	unwrap:
+		for {
+			switch v := recv.(type) {
+			case *ssa.MakeInterface:
+				recv = v.X
+			case *ssa.ChangeType:
+				recv = v.X
+			default:
+				break unwrap
+			}
 		}
 		call, ok := recv.(*ssa.Call)
 		if !ok {
@@ -275,6 +287,11 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	funcArgCounts := make(map[string]int) // callerID+"->"+calleeID for func-arg references
 	var edges []graph.Edge
 
+	// WS.1: in-service forwarders that construct+return a datastar SSE generator,
+	// so a handler calling the wrapper (not datastar.NewSSE directly) is still
+	// flagged as an SSE streamer.
+	sseCtors := sseConstructors(inService)
+
 	for caller := range inService {
 		callerID, ok := resolveFunc(caller)
 		if !ok {
@@ -294,6 +311,18 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 				switch c := instr.(type) {
 				case ssa.CallInstruction:
 					common := c.Common()
+					// WS.2: datastar fragment-patch methods render a templ
+					// component passed as an argument
+					// (sse.PatchElementTempl(Comp(args))), not via
+					// Comp.Render(ctx, w). templComponentFor returns "" for
+					// signals/JS/[]byte args, so nothing is fabricated.
+					if isDatastarPatchRender(callMethodName(common)) {
+						for _, arg := range common.Args {
+							if compID := templComponentFor(arg); compID != "" {
+								renderTargets = append(renderTargets, compID)
+							}
+						}
+					}
 					if common.IsInvoke() {
 						// `X.Render(ctx, w)` on a templ.Component: record the
 						// component X draws so the enclosing func gets a renders
@@ -314,7 +343,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 						}
 					} else if fn, ok2 := common.Value.(*ssa.Function); ok2 {
 						callees = append(callees, fn)
-						if isDatastarNewSSE(fn) {
+						if isDatastarNewSSE(fn) || sseCtors[fn] {
 							callerIsSSE = true
 						}
 					}
@@ -870,6 +899,82 @@ func isDatastarNewSSE(fn *ssa.Function) bool {
 		return false
 	}
 	return strings.Contains(fn.Pkg.Pkg.Path(), "datastar")
+}
+
+// sseConstructors returns the set of in-service functions that yield a Datastar
+// SSE response — either they *are* datastar.NewSSE (external, never in the set)
+// or they are an in-service one-hop forwarder that calls datastar.NewSSE and
+// returns its *datastar.ServerSentEventGenerator result (e.g. views.NewSSE(c)).
+// WS.1: handlers calling such a wrapper cannot be flagged on the direct
+// isDatastarNewSSE check. The return-type guard keeps an unrelated helper that
+// merely references datastar from being swept in.
+func sseConstructors(inService map[*ssa.Function]bool) map[*ssa.Function]bool {
+	out := make(map[*ssa.Function]bool)
+	for fn := range inService {
+		if !sseForwarderReturnType(fn) || !fnCallsDatastarNewSSE(fn) {
+			continue
+		}
+		out[fn] = true
+	}
+	return out
+}
+
+// sseForwarderReturnType reports whether fn returns a
+// *datastar.ServerSentEventGenerator (matched structurally on the type name so it
+// holds across datastar-go versions / vendored forks).
+func sseForwarderReturnType(fn *ssa.Function) bool {
+	if fn.Signature == nil {
+		return false
+	}
+	res := fn.Signature.Results()
+	for i := 0; i < res.Len(); i++ {
+		if strings.Contains(res.At(i).Type().String(), "ServerSentEventGenerator") {
+			return true
+		}
+	}
+	return false
+}
+
+// fnCallsDatastarNewSSE reports whether fn's body contains a direct call to
+// datastar.NewSSE.
+func fnCallsDatastarNewSSE(fn *ssa.Function) bool {
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			c, ok := instr.(ssa.CallInstruction)
+			if !ok {
+				continue
+			}
+			if callee, ok := c.Common().Value.(*ssa.Function); ok && isDatastarNewSSE(callee) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isDatastarPatchRender reports whether a method name is a datastar-go
+// fragment/element patch that renders a templ component passed as an argument
+// (WS.2), rather than via Component.Render(ctx, w). Signal/JS patch methods
+// (MarshalAndPatchSignals, PatchSignals, ExecuteScript) carry no templ fragment
+// and are deliberately excluded.
+func isDatastarPatchRender(name string) bool {
+	switch name {
+	case "PatchElementTempl", "PatchElements", "MergeFragmentTempl", "MergeFragments":
+		return true
+	}
+	return false
+}
+
+// callMethodName returns the method/function name for an SSA call, whether it is
+// an interface invoke (Method set) or a static call (Value is the *ssa.Function).
+func callMethodName(c *ssa.CallCommon) string {
+	if c.Method != nil {
+		return c.Method.Name()
+	}
+	if fn, ok := c.Value.(*ssa.Function); ok {
+		return fn.Name()
+	}
+	return ""
 }
 
 // ssaArgFunc extracts an *ssa.Function from an SSA argument value, resolving
