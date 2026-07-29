@@ -1687,65 +1687,126 @@ func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
 		}
 	}
 
-	// Case 2: window.X = fn|{…} assignments at top level.
+	// Case 2: <global-root>.…X = fn|{…} assignments, at any depth.
+	// Handles both the single-level top-level fast path (window.save = …) and
+	// namespaced/wrapped registrations (window.maple.foo = …, inside IIFEs/modules).
 	// Collect new nodes separately so we don't invalidate funcIdxByLabel during iteration.
 	var newNodes []graph.Node
-	for i := 0; i < int(root.NamedChildCount()); i++ {
-		stmt := root.NamedChild(i)
-		if stmt.Type() != "expression_statement" {
-			continue
-		}
-		// expression_statement → assignment_expression
-		expr := stmt.NamedChild(0)
-		if expr == nil || expr.Type() != "assignment_expression" {
-			continue
-		}
+	stampAssign := func(expr *sitter.Node) {
 		left := expr.ChildByFieldName("left")
 		right := expr.ChildByFieldName("right")
 		if left == nil || right == nil || left.Type() != "member_expression" {
-			continue
+			return
 		}
-		obj := left.ChildByFieldName("object")
-		prop := left.ChildByFieldName("property")
-		if obj == nil || prop == nil || obj.Content(ex.src) != "window" {
-			continue
+		dotted, leaf, ok := globalMemberPath(left, ex.src)
+		if !ok {
+			return
 		}
-		propName := prop.Content(ex.src)
-		lineNo := tsLine(stmt)
+		lineNo := tsLine(expr)
 
 		if isFunctionNode(right.Type()) {
-			// Named or anonymous function assigned to window.X.
-			fnLabel := propName // default: use window property name as label
+			// Named or anonymous function assigned to <global>.…leaf.
+			fnLabel := leaf // default: use the leaf property name as label
 			if rightName := right.ChildByFieldName("name"); rightName != nil {
 				fnLabel = rightName.Content(ex.src)
 			}
 			if idx, ok := funcIdxByLabel[fnLabel]; ok {
-				stamp(idx, propName)
+				stamp(idx, leaf)
+				ex.nodes[idx].Meta["global_path"] = dotted
 			} else {
-				nodeID := ex.fnNodeID(propName, lineNo)
+				nodeID := ex.fnNodeID(leaf, lineNo)
 				if !ex.nodeSeen[nodeID] {
 					newNodes = append(newNodes, graph.Node{
-						ID: nodeID, Type: graph.NodeTypeFunction, Label: propName,
+						ID: nodeID, Type: graph.NodeTypeFunction, Label: leaf,
 						Service: ex.service, File: ex.file, Line: lineNo, Language: ex.langTag,
-						Meta: map[string]string{"global_symbol": propName},
+						Meta: map[string]string{"global_symbol": leaf, "global_path": dotted},
 					})
 				}
 			}
 		} else {
 			// Object or other value: create a variable node for the global.
-			nodeID := ex.varNodeID(propName, lineNo)
+			nodeID := ex.varNodeID(leaf, lineNo)
 			if !ex.nodeSeen[nodeID] {
 				newNodes = append(newNodes, graph.Node{
-					ID: nodeID, Type: graph.NodeTypeVariable, Label: propName,
+					ID: nodeID, Type: graph.NodeTypeVariable, Label: leaf,
 					Service: ex.service, File: ex.file, Line: lineNo, Language: ex.langTag,
-					Meta: map[string]string{"global_symbol": propName, "scope": "global"},
+					Meta: map[string]string{"global_symbol": leaf, "global_path": dotted, "scope": "global"},
 				})
 			}
 		}
 	}
+
+	// Fast path: expression_statement → assignment_expression at root.
+	// Slow path: recurse into every other subtree to catch wrapped registrations.
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "assignment_expression" {
+			stampAssign(n)
+			return
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		stmt := root.NamedChild(i)
+		if stmt.Type() == "expression_statement" {
+			if expr := stmt.NamedChild(0); expr != nil && expr.Type() == "assignment_expression" {
+				stampAssign(expr)
+				continue
+			}
+		}
+		walk(stmt)
+	}
 	for _, n := range newNodes {
 		ex.addNode(n)
 	}
+}
+
+// globalRoots is the set of identifiers that name the global object.
+var globalRoots = map[string]bool{"window": true, "globalThis": true, "self": true}
+
+// globalMemberPath returns (dotted, leaf, ok) for a member_expression whose
+// left-most object identifier is in {window, globalThis, self}.
+//
+//	window.maple.closeVulnerabilityModal  -> ("window.maple.closeVulnerabilityModal", "closeVulnerabilityModal", true)
+//	window.save                         -> ("window.save", "save", true)
+//	foo.bar                             -> ("", "", false)
+func globalMemberPath(left *sitter.Node, src []byte) (dotted, leaf string, ok bool) {
+	if left.Type() != "member_expression" {
+		return "", "", false
+	}
+	prop := left.ChildByFieldName("property")
+	if prop == nil {
+		return "", "", false
+	}
+	leaf = prop.Content(src)
+
+	// Walk the object chain to the root identifier, collecting segments.
+	segs := []string{leaf}
+	obj := left.ChildByFieldName("object")
+	for obj != nil && obj.Type() == "member_expression" {
+		p := obj.ChildByFieldName("property")
+		if p == nil {
+			return "", "", false
+		}
+		segs = append(segs, p.Content(src))
+		obj = obj.ChildByFieldName("object")
+	}
+	if obj == nil || obj.Type() != "identifier" {
+		return "", "", false
+	}
+	rootName := obj.Content(src)
+	if !globalRoots[rootName] {
+		return "", "", false
+	}
+	// segs is leaf-first; reverse and prepend root to build the dotted path.
+	parts := make([]string, 0, len(segs)+1)
+	parts = append(parts, rootName)
+	for i := len(segs) - 1; i >= 0; i-- {
+		parts = append(parts, segs[i])
+	}
+	return strings.Join(parts, "."), leaf, true
 }
 
 // collectIdentifiers visits the identifiers *bound* under n (parameter
