@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,8 +14,6 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/agentbench"
 	"github.com/lordsonvimal/polyflow/internal/eval"
-	"github.com/lordsonvimal/polyflow/internal/meta"
-	_ "modernc.org/sqlite"
 )
 
 var (
@@ -32,10 +29,9 @@ var (
 var benchCmd = &cobra.Command{
 	Use:   "bench",
 	Short: "Run the P.1 agent outcome benchmark (manual-triggered; costs real tokens)",
-	Long: `Run the agent outcome benchmark across three arms:
+	Long: `Run the agent outcome benchmark across two arms:
   1. with_polyflow_semantic — polyflow MCP + vector search active
-  2. with_polyflow_fts_only — polyflow MCP, embeddings skipped (FTS only)
-  3. without_polyflow        — no MCP; agent answers without the graph
+  2. without_polyflow        — no MCP; agent answers without the graph
 
 Tasks are drawn from the eval corpus impact cases. Results are written to
 eval/agent-bench/results/<date>.json and eval/agent-bench/results/<date>.md.
@@ -48,7 +44,7 @@ func init() {
 	benchCmd.Flags().StringVar(&benchCorpus, "corpus", "eval/corpus", "path to eval corpus root")
 	benchCmd.Flags().StringVar(&benchModel, "model", "claude-sonnet-4-6", "claude model to use")
 	benchCmd.Flags().IntVar(&benchTrials, "trials", 1, "trials per task/arm")
-	benchCmd.Flags().StringVar(&benchArm, "arm", "", "run only this arm (leave empty for all three)")
+	benchCmd.Flags().StringVar(&benchArm, "arm", "", "run only this arm (leave empty for both)")
 	benchCmd.Flags().StringVar(&benchRepo, "repo", "", "filter tasks to this corpus repo name (e.g. polyflow)")
 	benchCmd.Flags().StringVar(&benchOutput, "output", "eval/agent-bench/results", "directory for result files")
 	benchCmd.Flags().BoolVar(&benchDryRun, "dry-run", false, "print tasks and prompts without calling claude")
@@ -95,12 +91,12 @@ func runBench(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Determine which arms to run ───────────────────────────────────────────
-	arms := []string{agentbench.ArmWithSemantics, agentbench.ArmFTSOnly, agentbench.ArmNoPolyflow}
+	arms := []string{agentbench.ArmWithSemantics, agentbench.ArmNoPolyflow}
 	if benchArm != "" {
 		arms = []string{benchArm}
 	}
 
-	// ── Write MCP config for arms 1 and 2 ────────────────────────────────────
+	// ── Write MCP config for arm 1 ────────────────────────────────────────────
 	polyflowBin, err := os.Executable()
 	if err != nil {
 		polyflowBin = "polyflow"
@@ -118,21 +114,18 @@ func runBench(cmd *cobra.Command, args []string) error {
 		armLabel := arm
 		fmt.Printf("\n=== Arm: %s ===\n", armLabel)
 
-		var restoreEmbed func()
-		if arm == agentbench.ArmFTSOnly {
-			var ferr error
-			restoreEmbed, ferr = forceEmbedOff(ctx)
-			if ferr != nil {
-				fmt.Printf("  [WARN] could not set embed_status for FTS-only arm: %v\n", ferr)
-				restoreEmbed = func() {}
-			}
-		}
-
 		for _, task := range tasks {
 			for trial := 1; trial <= benchTrials; trial++ {
 				fmt.Printf("  %s trial %d ... ", task.TaskID, trial)
 				start := time.Now()
 				tr, err := callClaude(ctx, task.Prompt, arm, mcpCfgPath, benchModel)
+				if err != nil {
+					// Transient CLI failures happen (~10-15% observed rate);
+					// one retry after a short backoff before recording a hard error.
+					fmt.Printf("retrying after error: %v ... ", err)
+					time.Sleep(5 * time.Second)
+					tr, err = callClaude(ctx, task.Prompt, arm, mcpCfgPath, benchModel)
+				}
 				wall := time.Since(start).Milliseconds()
 
 				tr.DurationMs = wall // prefer local wall time over claude's reported value
@@ -166,10 +159,6 @@ func runBench(cmd *cobra.Command, args []string) error {
 				results = append(results, r)
 			}
 		}
-
-		if restoreEmbed != nil {
-			restoreEmbed()
-		}
 	}
 
 	// ── Produce report ────────────────────────────────────────────────────────
@@ -187,7 +176,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 	if err := writeReport(benchOutput, report); err != nil {
 		return err
 	}
-	fmt.Printf("\nReport written to %s/<date>.{json,md}\n", benchOutput)
+	fmt.Printf("\nReport written to %s/<date>[-repo].{json,md}\n", benchOutput)
 	return nil
 }
 
@@ -205,7 +194,9 @@ func collectBenchTasks(corpusRoot string) ([]benchTask, error) {
 			continue
 		}
 		for _, c := range m.Cases {
-			if c.Kind != "node" && c.Kind != "file" && c.Kind != "flow" {
+			switch c.Kind {
+			case "node", "file", "flow", "feature_add", "test_impact":
+			default:
 				continue // skip semantic/diff cases — they use a different prompt pattern
 			}
 			t := benchTask{
@@ -219,20 +210,31 @@ func collectBenchTasks(corpusRoot string) ([]benchTask, error) {
 			switch c.Kind {
 			case "node":
 				t.Prompt = fmt.Sprintf(
-					"In the %s codebase, if %s were modified or renamed, which source files "+
-						"would need to be updated as a result? List each file path on its own line.",
-					m.Repo.Name, c.Target)
+					"I need to change %s in the %s codebase — what else do I need to touch? "+
+						"List each file path on its own line.",
+					c.Target, m.Repo.Name)
 			case "file":
 				t.Prompt = fmt.Sprintf(
-					"In the %s codebase, if the file %s were modified, which other source files "+
-						"would be affected? List each file path on its own line.",
-					m.Repo.Name, c.Target)
+					"I need to change the file %s in the %s codebase — what else do I need to "+
+						"touch? List each file path on its own line.",
+					c.Target, m.Repo.Name)
 			case "flow":
 				t.Prompt = fmt.Sprintf(
-					"In the %s codebase, trace the flow for %s from entry point to completion, "+
-						"across services if applicable. List each file involved on its own line, "+
-						"in the order they participate in the flow.",
-					m.Repo.Name, c.Target)
+					"Walk me through what happens when %s in the %s codebase — which files are "+
+						"involved, and in what order? List each file involved on its own line, "+
+						"in the order they participate.",
+					c.Target, m.Repo.Name)
+			case "feature_add":
+				t.Prompt = fmt.Sprintf(
+					"I want to add %s alongside the existing %s functionality in the %s "+
+						"codebase. Which existing files do I need to read or extend to do "+
+						"this well? List each file path on its own line.",
+					c.NewCapability, c.Target, m.Repo.Name)
+			case "test_impact":
+				t.Prompt = fmt.Sprintf(
+					"I changed %s in the %s codebase. Which test files should CI run to "+
+						"cover this change? List each test file path on its own line.",
+					c.Target, m.Repo.Name)
 			}
 			tasks = append(tasks, t)
 		}
@@ -277,31 +279,6 @@ func writeMCPConfig(polyflowBin string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
-// forceEmbedOff temporarily sets embed_status to the FTS-only degradation value
-// in the local graph DB and returns a restore function.
-func forceEmbedOff(ctx context.Context) (func(), error) {
-	dbPath := filepath.Join(meta.DBDir, meta.DBFile)
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return func() {}, err
-	}
-	var prev string
-	_ = db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'embed_status'`).Scan(&prev)
-	const off = "unavailable: embeddings skipped"
-	if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key,value) VALUES('embed_status',?)`, off); err != nil {
-		db.Close()
-		return func() {}, err
-	}
-	return func() {
-		if prev == "" {
-			_, _ = db.ExecContext(ctx, `DELETE FROM meta WHERE key = 'embed_status'`)
-		} else {
-			_, _ = db.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key,value) VALUES('embed_status',?)`, prev)
-		}
-		db.Close()
-	}, nil
-}
-
 // callClaude invokes `claude -p --output-format json` and returns the parsed transcript.
 func callClaude(_ context.Context, prompt, arm, mcpCfgPath, model string) (agentbench.Transcript, error) {
 	claudeArgs := []string{
@@ -310,7 +287,7 @@ func callClaude(_ context.Context, prompt, arm, mcpCfgPath, model string) (agent
 		"--model", model,
 	}
 	switch arm {
-	case agentbench.ArmWithSemantics, agentbench.ArmFTSOnly:
+	case agentbench.ArmWithSemantics:
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpCfgPath, "--strict-mcp-config")
 	case agentbench.ArmNoPolyflow:
 		claudeArgs = append(claudeArgs, "--strict-mcp-config")
@@ -318,11 +295,20 @@ func callClaude(_ context.Context, prompt, arm, mcpCfgPath, model string) (agent
 
 	out, err := exec.Command("claude", claudeArgs...).Output()
 	if err != nil {
-		// Include captured stderr when available.
+		// Include captured stderr and any partial stdout when available.
+		var detail strings.Builder
+		fmt.Fprintf(&detail, "claude: %v", err)
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-			return agentbench.Transcript{}, fmt.Errorf("claude: %w\nstderr: %s", err, ee.Stderr)
+			fmt.Fprintf(&detail, "\nstderr: %s", ee.Stderr)
 		}
-		return agentbench.Transcript{}, fmt.Errorf("claude: %w", err)
+		if len(out) > 0 {
+			max := len(out)
+			if max > 2000 {
+				max = 2000
+			}
+			fmt.Fprintf(&detail, "\nstdout: %s", out[:max])
+		}
+		return agentbench.Transcript{}, fmt.Errorf("%s", detail.String())
 	}
 	return agentbench.ParseTranscript(out)
 }
@@ -332,7 +318,11 @@ func writeReport(outDir string, r agentbench.BenchReport) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
-	base := filepath.Join(outDir, r.RunDate)
+	name := r.RunDate
+	if benchRepo != "" {
+		name += "-" + benchRepo
+	}
+	base := filepath.Join(outDir, name)
 
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
