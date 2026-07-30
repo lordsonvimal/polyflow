@@ -30,13 +30,15 @@ type RepoRef struct {
 // Case is one eval test case.
 type Case struct {
 	ID               string   `yaml:"id"`
-	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic
-	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff)
+	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic | feature_add | test_impact
+	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff|feature_add|test_impact)
 	Service          string   `yaml:"service,omitempty"` // pre-filter target resolution to this service (B.3)
 	NodeType         string   `yaml:"node_type,omitempty"` // pre-filter target resolution to this node type (B.3)
 	DiffFile         string   `yaml:"diff_file,omitempty"`
 	ExpectedImpacted []string `yaml:"expected_impacted,omitempty"`
 	MustNotMiss      []string `yaml:"must_not_miss"`
+	// feature_add cases: the new capability to add, anchored to Target (the existing related feature).
+	NewCapability string `yaml:"new_capability,omitempty"`
 	// Semantic search cases (kind=semantic, S.4):
 	Query       string   `yaml:"query,omitempty"`         // natural-language query
 	Section     string   `yaml:"section,omitempty"`       // nodes | flows | docs
@@ -95,15 +97,18 @@ func ValidateManifest(m *Manifest) []ValidationError {
 		}
 		seen[c.ID] = true
 		switch c.Kind {
-		case "node", "file", "diff", "flow":
+		case "node", "file", "diff", "flow", "feature_add", "test_impact":
 			if len(c.ExpectedImpacted) == 0 {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "expected_impacted must not be empty"})
 			}
 			if c.Kind == "diff" && c.DiffFile == "" {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "diff cases require diff_file"})
 			}
-			if (c.Kind == "node" || c.Kind == "file" || c.Kind == "flow") && c.Target == "" {
+			if c.Kind != "diff" && c.Target == "" {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: c.Kind + " cases require target"})
+			}
+			if c.Kind == "feature_add" && c.NewCapability == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "feature_add cases require new_capability"})
 			}
 		case "semantic":
 			if c.Query == "" {
@@ -118,7 +123,7 @@ func ValidateManifest(m *Manifest) []ValidationError {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "semantic cases require expect_any_of"})
 			}
 		default:
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic)", c.Kind)})
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic|feature_add|test_impact)", c.Kind)})
 		}
 		// Lint rule: every case must have at least one must_not_miss entry.
 		if len(c.MustNotMiss) == 0 {
