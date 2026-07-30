@@ -42,8 +42,8 @@ cases:
 	if tk.Kind != "flow" {
 		t.Errorf("Kind = %q, want flow", tk.Kind)
 	}
-	wantPrompt := "In the flowrepo codebase, trace the flow for POST /orders from entry point to completion, " +
-		"across services if applicable. List each file involved on its own line, in the order they participate in the flow."
+	wantPrompt := "Walk me through what happens when POST /orders in the flowrepo codebase — which files are " +
+		"involved, and in what order? List each file involved on its own line, in the order they participate."
 	if tk.Prompt != wantPrompt {
 		t.Errorf("Prompt = %q, want %q", tk.Prompt, wantPrompt)
 	}
