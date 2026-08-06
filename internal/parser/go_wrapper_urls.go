@@ -129,54 +129,12 @@ func extractWrapperURLs(
 					pos = fset.Position(caller.Pos())
 				}
 				file := relPath(pos.Filename)
-				// X.9: a wrapper URL call site inside a _test.go file is test
-				// scaffolding (httptest request builders, fixture helpers), not a
-				// real service endpoint. The tree-sitter matcher already demotes
-				// test-file http_client producers (fix #1); this SSA synthesis path
-				// must apply the same guard, or those test call sites re-enter the
-				// cross-service denominator as fully-synthesized producers (measured:
-				// 21 of 87 unresolved-cross http_call on the svc-c fleet).
-				if graph.IsTestFilePath(file) {
+				node, edge, ok := emitResolvedClient(service, file, pos, callerID, callee.Name(), path, method, "wrapper_url", seen)
+				if !ok {
 					continue
 				}
-				name := callee.Name()
-				id := fmt.Sprintf("%s:%s:%s:%s:%d", service, file, graph.NodeTypeHTTPClient, name, pos.Line)
-				if seen[id] {
-					continue
-				}
-				seen[id] = true
-
-				label := path
-				if method != "" {
-					label = method + " " + path
-				}
-				meta := map[string]string{
-					"path":           path,
-					"via_wrapper":    name,
-					"url_confidence": graph.ConfidenceInferred,
-					"synthesized":    "wrapper_url",
-				}
-				if method != "" {
-					meta["method"] = method
-				}
-				nodes = append(nodes, graph.Node{
-					ID:       id,
-					Type:     graph.NodeTypeHTTPClient,
-					Label:    label,
-					Service:  service,
-					File:     file,
-					Line:     pos.Line,
-					Language: "go",
-					Meta:     meta,
-				})
-				edges = append(edges, graph.Edge{
-					ID:         fmt.Sprintf("wrapperurl:%s:%s->%s", graph.EdgeTypeCalls, callerID, id),
-					From:       callerID,
-					To:         id,
-					Type:       graph.EdgeTypeCalls,
-					Confidence: graph.ConfidenceStatic,
-					Meta:       map[string]string{"via": "wrapper_url"},
-				})
+				nodes = append(nodes, node)
+				edges = append(edges, edge)
 			}
 		}
 	}
@@ -185,6 +143,232 @@ func extractWrapperURLs(
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	return nodes, edges
+}
+
+// emitResolvedClient builds the node/edge pair shared by every "resolve a
+// dynamic client call to a literal path" extractor (X.7 wrapper params, X.11
+// Sprintf-composed URLs): a synthesized http_client producer plus a calls edge
+// from the resolved caller. tag distinguishes provenance in Meta["synthesized"]
+// (downstream consumers key off ConfidenceInferred / key_dynamic, not this exact
+// string, so per-mechanism tags stay honest without breaking anything).
+// Applies the X.9 test-file guard and X.7's dedup-by-ID rule (bug-class #1); ok
+// is false when either causes the call site to be skipped.
+func emitResolvedClient(
+	service, file string, pos token.Position,
+	callerID, name, path, method, tag string,
+	seen map[string]bool,
+) (graph.Node, graph.Edge, bool) {
+	// X.9: a resolved call site inside a _test.go file is test scaffolding
+	// (httptest request builders, fixture helpers), not a real service endpoint —
+	// see extractWrapperURLs' original comment for the measured false-positive
+	// rate this guards against.
+	if graph.IsTestFilePath(file) {
+		return graph.Node{}, graph.Edge{}, false
+	}
+	id := fmt.Sprintf("%s:%s:%s:%s:%d", service, file, graph.NodeTypeHTTPClient, name, pos.Line)
+	if seen[id] {
+		return graph.Node{}, graph.Edge{}, false
+	}
+	seen[id] = true
+
+	label := path
+	if method != "" {
+		label = method + " " + path
+	}
+	meta := map[string]string{
+		"path":           path,
+		"via_wrapper":    name,
+		"url_confidence": graph.ConfidenceInferred,
+		"synthesized":    tag,
+	}
+	if method != "" {
+		meta["method"] = method
+	}
+	node := graph.Node{
+		ID:       id,
+		Type:     graph.NodeTypeHTTPClient,
+		Label:    label,
+		Service:  service,
+		File:     file,
+		Line:     pos.Line,
+		Language: "go",
+		Meta:     meta,
+	}
+	edge := graph.Edge{
+		ID:         fmt.Sprintf("wrapperurl:%s:%s->%s", graph.EdgeTypeCalls, callerID, id),
+		From:       callerID,
+		To:         id,
+		Type:       graph.EdgeTypeCalls,
+		Confidence: graph.ConfidenceStatic,
+		Meta:       map[string]string{"via": tag},
+	}
+	return node, edge, true
+}
+
+// extractSprintfURLs synthesizes resolved http_client producers for request
+// URLs built via fmt.Sprintf within the same function — the sibling shape to
+// extractWrapperURLs' parameter-forwarding case (Tier X.11, docs/sprintf-url-
+// resolution-plan.md). No wrapper closure is needed: this is a single-hop,
+// intra-function pattern —
+//
+//	reqURL := fmt.Sprintf("%s/client_api/v1/folders/details_by_path?path=%s", c.baseURL, ...)
+//	http.NewRequest("GET", reqURL, nil)
+//
+// — where SSA substitutes reqURL's use with the *ssa.Call value for Sprintf
+// directly (no Alloc/Load indirection for a non-address-taken local), the same
+// substitution X.7's `base + param` BinOp case already relies on.
+func extractSprintfURLs(
+	service, dir string,
+	fset *token.FileSet,
+	inService map[*ssa.Function]bool,
+	resolveFunc func(*ssa.Function) (string, bool),
+) ([]graph.Node, []graph.Edge) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	relPath := func(abs string) string {
+		if rel, err := filepath.Rel(canonicalPath(cwd), canonicalPath(abs)); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+		return abs
+	}
+
+	// Deterministic function order (bug-class #2), same key as findURLParamWrappers.
+	fns := make([]*ssa.Function, 0, len(inService))
+	for fn := range inService {
+		fns = append(fns, fn)
+	}
+	sort.Slice(fns, func(i, j int) bool {
+		pi, pj := fset.Position(fns[i].Pos()), fset.Position(fns[j].Pos())
+		if pi.Filename != pj.Filename {
+			return pi.Filename < pj.Filename
+		}
+		if pi.Line != pj.Line {
+			return pi.Line < pj.Line
+		}
+		return fns[i].Name() < fns[j].Name()
+	})
+
+	var nodes []graph.Node
+	var edges []graph.Edge
+	seen := map[string]bool{}
+	for _, fn := range fns {
+		callerID, ok := resolveFunc(fn)
+		if !ok {
+			continue
+		}
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				ci, ok := instr.(ssa.CallInstruction)
+				if !ok {
+					continue
+				}
+				common := ci.Common()
+				if common.IsInvoke() {
+					continue
+				}
+				methodArg, urlArg, ok := httpRequestArgs(common)
+				if !ok {
+					continue
+				}
+				sprintfCall, ok := sprintfCallOf(urlArg)
+				if !ok || len(sprintfCall.Call.Args) == 0 {
+					continue
+				}
+				format, ok := ssaConstString(sprintfCall.Call.Args[0])
+				if !ok {
+					// Dynamic format string — not observed in the measured corpus;
+					// leave the call on the dynamic ledger rather than guess (#12).
+					continue
+				}
+				path, ok := extractSprintfPathPrefix(format)
+				if !ok {
+					continue
+				}
+				composed := composeWrapperURL("*", path)
+				method := ""
+				if m, ok := ssaConstString(methodArg); ok {
+					method = strings.ToUpper(m)
+				}
+
+				pos := fset.Position(instr.Pos())
+				if !pos.IsValid() {
+					pos = fset.Position(fn.Pos())
+				}
+				file := relPath(pos.Filename)
+				node, edge, ok := emitResolvedClient(service, file, pos, callerID, fn.Name(), composed, method, "sprintf_url", seen)
+				if !ok {
+					continue
+				}
+				nodes = append(nodes, node)
+				edges = append(edges, edge)
+			}
+		}
+	}
+
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
+}
+
+// sprintfCallOf reports whether v (after stripping ChangeType/Convert noise) is
+// itself the SSA call value for fmt.Sprintf(...), returning that call.
+func sprintfCallOf(v ssa.Value) (*ssa.Call, bool) {
+	call, ok := ssaUnwrap(v).(*ssa.Call)
+	if !ok {
+		return nil, false
+	}
+	common := call.Common()
+	if common.IsInvoke() {
+		return nil, false
+	}
+	fn, ok := common.Value.(*ssa.Function)
+	if !ok || fn.Pkg == nil || fn.Pkg.Pkg == nil {
+		return nil, false
+	}
+	if fn.Pkg.Pkg.Path() != "fmt" || fn.Name() != "Sprintf" {
+		return nil, false
+	}
+	return call, true
+}
+
+// extractSprintfPathPrefix extracts the literal path segment from a Sprintf
+// format string shaped "%s<literal-path>" or "%s<literal-path>?<query>" — the
+// dominant Go idiom for `fmt.Sprintf("%s/some/path?q=%s", c.baseURL, val)".
+// Only a leading two-byte verb (%s/%d/%v) is recognized, matching the measured
+// corpus (the dynamic base is always the first substitution).
+//
+// If a verb appears in the path itself before any '?' (a dynamic segment
+// *inside* the path, e.g. "%s/v1/%s/detail"), this bails with ok=false rather
+// than truncating to a misleading partial path — out of scope per the plan's
+// non-goals; the call stays on the dynamic ledger (#12, don't guess).
+func extractSprintfPathPrefix(format string) (string, bool) {
+	if len(format) < 2 || format[0] != '%' {
+		return "", false
+	}
+	switch format[1] {
+	case 's', 'd', 'v':
+	default:
+		return "", false
+	}
+	rest := format[2:]
+	if rest == "" {
+		return "", false
+	}
+	qIdx := strings.IndexByte(rest, '?')
+	vIdx := strings.IndexByte(rest, '%')
+	if vIdx >= 0 && (qIdx < 0 || vIdx < qIdx) {
+		return "", false
+	}
+	path := rest
+	if qIdx >= 0 {
+		path = rest[:qIdx]
+	}
+	if path == "" {
+		return "", false
+	}
+	return path, true
 }
 
 // findURLParamWrappers computes the transitive set of functions whose request
