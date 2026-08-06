@@ -14,8 +14,9 @@ import (
 
 // Manifest is the top-level corpus manifest for one repository.
 type Manifest struct {
-	Repo  RepoRef `yaml:"repo"`
-	Cases []Case  `yaml:"cases"`
+	Repo       RepoRef     `yaml:"repo"`
+	Cases      []Case      `yaml:"cases"`
+	AgentCases []AgentCase `yaml:"agent_cases,omitempty"` // T.2: agent-correctness cases, additive (absent = not agent-evaluated)
 }
 
 // RepoRef identifies the target repository.
@@ -43,6 +44,17 @@ type Case struct {
 	Query       string   `yaml:"query,omitempty"`         // natural-language query
 	Section     string   `yaml:"section,omitempty"`       // nodes | flows | docs
 	ExpectAnyOf []string `yaml:"expect_any_of,omitempty"` // entity labels; a hit in top-10 of Section counts as recall=1
+}
+
+// AgentCase (T.2) poses a natural-language question to an agent restricted
+// to polyflow's MCP tools and scores the answer deterministically:
+// RequiredFacts must ALL appear, ForbiddenFacts must NONE appear.
+type AgentCase struct {
+	ID             string   `yaml:"id"`
+	Question       string   `yaml:"question"`
+	RequiredFacts  []string `yaml:"required_facts"`
+	ForbiddenFacts []string `yaml:"forbidden_facts,omitempty"`
+	MaxTurns       int      `yaml:"max_turns,omitempty"`
 }
 
 // LoadManifest reads a corpus manifest from <dir>/manifest.yaml.
@@ -128,6 +140,22 @@ func ValidateManifest(m *Manifest) []ValidationError {
 		// Lint rule: every case must have at least one must_not_miss entry.
 		if len(c.MustNotMiss) == 0 {
 			errs = append(errs, ValidationError{CaseID: c.ID, Message: "must_not_miss is required (every case needs ≥1 hard-failure entry)"})
+		}
+	}
+	agentSeen := make(map[string]bool)
+	for _, c := range m.AgentCases {
+		if c.ID == "" {
+			errs = append(errs, ValidationError{Message: "agent case is missing id"})
+		}
+		if agentSeen[c.ID] {
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: "duplicate agent case id"})
+		}
+		agentSeen[c.ID] = true
+		if c.Question == "" {
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: "agent case requires question"})
+		}
+		if len(c.RequiredFacts) == 0 {
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: "agent case requires required_facts"})
 		}
 	}
 	return errs
