@@ -36,10 +36,11 @@ type Summary struct {
 	Depth                int                   `json:"depth"`
 	TotalCallers         int                   `json:"total_callers"`
 
-	Unresolved          []graph.UnresolvedRef        `json:"unresolved"`
-	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
-	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
-	Budget              *budget.Info                 `json:"budget,omitempty"`
+	Unresolved          []graph.UnresolvedRef     `json:"unresolved"`
+	UnresolvedNote      string                    `json:"unresolved_note,omitempty"`
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	Trust               graph.TrustStamp          `json:"trust"`
+	Budget              *budget.Info              `json:"budget,omitempty"`
 }
 
 // rollupCallers groups blast-radius callers by file, the low-token
@@ -108,6 +109,7 @@ func (r *Result) Summarize() *Summary {
 		Unresolved:           r.Unresolved,
 		UnresolvedNote:       r.UnresolvedNote,
 		VerificationSummary:  r.VerificationSummary,
+		Trust:                r.Trust,
 	}
 }
 

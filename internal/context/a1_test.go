@@ -136,3 +136,41 @@ func TestContext_DeterministicOutput(t *testing.T) {
 	}
 	assert.Equal(t, run(), run())
 }
+
+// TestContext_TrustZeroStateInJSON verifies trust is always present (plan-14
+// T.0), even before a caller sets it — Build has no DB access so Trust stays
+// the zero TrustStamp{Measured:false} until the caller populates it.
+func TestContext_TrustZeroStateInJSON(t *testing.T) {
+	idx := fixtureIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	assert.Equal(t, graph.TrustStamp{Measured: false}, r.Trust)
+
+	data, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"trust":{"measured":false}`)
+}
+
+// TestContextBudgetFloor_TrustAlwaysPresent verifies a tiny max-tokens budget
+// still carries trust.
+func TestContextBudgetFloor_TrustAlwaysPresent(t *testing.T) {
+	idx := provenanceIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0}
+
+	budgeted := r.ApplyBudget(1, false)
+	data, err := json.Marshal(budgeted)
+	require.NoError(t, err)
+	s := string(data)
+
+	assert.Contains(t, s, `"trust"`, "trust must survive budget cut")
+	assert.Contains(t, s, `"chessleap"`)
+}
+
+// TestContextSummarize_TrustCarried verifies trust survives file rollup.
+func TestContextSummarize_TrustCarried(t *testing.T) {
+	idx := provenanceIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0}
+	s := r.Summarize()
+	assert.Equal(t, r.Trust, s.Trust)
+}
