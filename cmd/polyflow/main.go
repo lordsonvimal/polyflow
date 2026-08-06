@@ -2186,6 +2186,12 @@ func initEvalFlags() {
 	promoteGapsCmd.Flags().BoolVar(&promoteGapsWrite, "write", false, "persist the promoted cases (default: dry-run, prints what would be added)")
 	_ = promoteGapsCmd.MarkFlagRequired("corpus")
 	evalCmd.AddCommand(promoteGapsCmd)
+
+	agentCmd.Flags().StringVar(&evalAgentCorpus, "corpus", "", "path to a single corpus dir (with manifest.yaml) whose agent_cases to run")
+	agentCmd.Flags().StringVar(&evalAgentCmd, "agent-cmd", "", "override the agent CLI command template (default: claude -p ...; env POLYFLOW_AGENT_CMD)")
+	agentCmd.Flags().StringVar(&evalAgentOutput, "output", "", "write JSON results to this file")
+	_ = agentCmd.MarkFlagRequired("corpus")
+	evalCmd.AddCommand(agentCmd)
 }
 
 var evalCmd = &cobra.Command{
@@ -2413,6 +2419,68 @@ func runPromoteGaps(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("\n%d case(s) appended to %s\n", len(cases), filepath.Join(promoteGapsCorpus, "manifest.yaml"))
+	return nil
+}
+
+var (
+	evalAgentCorpus string
+	evalAgentCmd    string
+	evalAgentOutput string
+)
+
+var agentCmd = &cobra.Command{
+	Use:   "agent",
+	Short: "Run the agent-correctness corpus: an agent restricted to polyflow MCP tools answers real questions, scored deterministically",
+	RunE:  runEvalAgent,
+}
+
+func runEvalAgent(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	report, err := eval.RunAgentCorpus(ctx, eval.AgentRunOptions{
+		CorpusDir: evalAgentCorpus,
+		AgentCmd:  evalAgentCmd,
+	})
+	if err != nil {
+		if errors.Is(err, eval.ErrAgentCLIUnavailable) {
+			// This phase needs network + a logged-in agent CLI — a release
+			// ritual, not CI. Exit 0 with a distinct message, never a silent pass.
+			fmt.Fprintf(os.Stderr, "SKIPPED: %v\n", err)
+			return nil
+		}
+		return err
+	}
+
+	if len(report.Results) == 0 {
+		fmt.Printf("Repo: %s has no agent_cases in this corpus (nothing to run).\n", report.Repo)
+		return nil
+	}
+
+	fmt.Printf("Repo: %s   agent cases: %d   correctness=%.3f\n\n", report.Repo, len(report.Results), report.Correctness)
+	for _, r := range report.Results {
+		status := "ok"
+		if !r.Correct {
+			status = "INCORRECT"
+		}
+		fmt.Printf("  %-30s %-9s turns=%d  in=%d out=%d\n", r.ID, status, r.Turns, r.InputTokens, r.OutputTokens)
+		if len(r.MissingFacts) > 0 {
+			fmt.Printf("      missing:        %v\n", r.MissingFacts)
+		}
+		if len(r.ForbiddenHit) > 0 {
+			fmt.Printf("      forbidden hit:  %v\n", r.ForbiddenHit)
+		}
+	}
+
+	if evalAgentOutput != "" {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal JSON: %w", err)
+		}
+		if err := os.WriteFile(evalAgentOutput, data, 0o644); err != nil {
+			return fmt.Errorf("write output %s: %w", evalAgentOutput, err)
+		}
+		fmt.Printf("\nResults written to %s\n", evalAgentOutput)
+	}
 	return nil
 }
 
