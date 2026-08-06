@@ -2187,9 +2187,10 @@ func initEvalFlags() {
 	_ = promoteGapsCmd.MarkFlagRequired("corpus")
 	evalCmd.AddCommand(promoteGapsCmd)
 
-	agentCmd.Flags().StringVar(&evalAgentCorpus, "corpus", "", "path to a single corpus dir (with manifest.yaml) whose agent_cases to run")
+	agentCmd.Flags().StringVar(&evalAgentCorpus, "corpus", "", "path to a corpus dir (with manifest.yaml) or a corpus root (a dir of such dirs) whose agent_cases to run")
 	agentCmd.Flags().StringVar(&evalAgentCmd, "agent-cmd", "", "override the agent CLI command template (default: claude -p ...; env POLYFLOW_AGENT_CMD)")
-	agentCmd.Flags().StringVar(&evalAgentOutput, "output", "", "write JSON results to this file")
+	agentCmd.Flags().StringVar(&evalAgentOutput, "output", "", "write JSON results to this file (e.g. eval/agent-baseline.json)")
+	agentCmd.Flags().StringVar(&evalAgentGate, "gate", "", "agent baseline JSON file to gate against; exits non-zero on any regression")
 	_ = agentCmd.MarkFlagRequired("corpus")
 	evalCmd.AddCommand(agentCmd)
 }
@@ -2426,6 +2427,7 @@ var (
 	evalAgentCorpus string
 	evalAgentCmd    string
 	evalAgentOutput string
+	evalAgentGate   string
 )
 
 var agentCmd = &cobra.Command{
@@ -2437,60 +2439,113 @@ var agentCmd = &cobra.Command{
 func runEvalAgent(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	report, err := eval.RunAgentCorpus(ctx, eval.AgentRunOptions{
-		CorpusDir: evalAgentCorpus,
-		AgentCmd:  evalAgentCmd,
-	})
-	if err != nil {
-		if errors.Is(err, eval.ErrAgentCLIUnavailable) {
-			// This phase needs network + a logged-in agent CLI — a release
-			// ritual, not CI. Exit 0 with a distinct message, never a silent pass.
-			fmt.Fprintf(os.Stderr, "SKIPPED: %v\n", err)
-			return nil
+	// Single-corpus path: evalAgentCorpus has its own manifest.yaml.
+	// Multi-corpus path (T.3): evalAgentCorpus is a root of such dirs,
+	// mirroring `polyflow eval`'s single-vs-root split.
+	var multi *eval.AgentMultiReport
+	if _, err := os.Stat(filepath.Join(evalAgentCorpus, "manifest.yaml")); err == nil {
+		report, err := eval.RunAgentCorpus(ctx, eval.AgentRunOptions{
+			CorpusDir: evalAgentCorpus,
+			AgentCmd:  evalAgentCmd,
+		})
+		if err != nil {
+			if errors.Is(err, eval.ErrAgentCLIUnavailable) {
+				// This phase needs network + a logged-in agent CLI — a release
+				// ritual, not CI. Exit 0 with a distinct message, never a silent pass.
+				fmt.Fprintf(os.Stderr, "SKIPPED: %v\n", err)
+				return nil
+			}
+			return err
 		}
-		return err
+		multi = &eval.AgentMultiReport{GeneratedAt: time.Now().UTC()}
+		if len(report.Results) > 0 {
+			multi.Reports = append(multi.Reports, *report)
+		}
+	} else {
+		m, err := eval.RunAllAgent(ctx, evalAgentCorpus, eval.AgentRunOptions{AgentCmd: evalAgentCmd})
+		if err != nil {
+			if errors.Is(err, eval.ErrAgentCLIUnavailable) {
+				fmt.Fprintf(os.Stderr, "SKIPPED: %v\n", err)
+				return nil
+			}
+			return err
+		}
+		multi = m
 	}
 
-	if len(report.Results) == 0 {
-		fmt.Printf("Repo: %s has no agent_cases in this corpus (nothing to run).\n", report.Repo)
+	if len(multi.Reports) == 0 {
+		fmt.Println("No corpus with agent_cases found under", evalAgentCorpus, "(nothing to run).")
 		return nil
 	}
 
-	fmt.Printf("Repo: %s   agent cases: %d   correctness=%.3f\n\n", report.Repo, len(report.Results), report.Correctness)
-	for _, r := range report.Results {
-		status := "ok"
-		if !r.Correct {
-			status = "INCORRECT"
-		}
-		fmt.Printf("  %-30s %-9s turns=%d  in=%d out=%d\n", r.ID, status, r.Turns, r.InputTokens, r.OutputTokens)
-		if len(r.MissingFacts) > 0 {
-			fmt.Printf("      missing:        %v\n", r.MissingFacts)
-		}
-		if len(r.ForbiddenHit) > 0 {
-			fmt.Printf("      forbidden hit:  %v\n", r.ForbiddenHit)
-		}
-	}
-
 	if evalAgentOutput != "" {
-		data, err := json.MarshalIndent(report, "", "  ")
+		data, err := json.MarshalIndent(multi, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal JSON: %w", err)
 		}
 		if err := os.WriteFile(evalAgentOutput, data, 0o644); err != nil {
 			return fmt.Errorf("write output %s: %w", evalAgentOutput, err)
 		}
-		fmt.Printf("\nResults written to %s\n", evalAgentOutput)
+		fmt.Printf("Results written to %s\n\n", evalAgentOutput)
 	}
+
+	for _, report := range multi.Reports {
+		fmt.Printf("Repo: %s   agent cases: %d   correctness=%.3f\n\n", report.Repo, len(report.Results), report.Correctness)
+		for _, r := range report.Results {
+			status := "ok"
+			if !r.Correct {
+				status = "INCORRECT"
+			}
+			fmt.Printf("  %-30s %-9s turns=%d  in=%d out=%d\n", r.ID, status, r.Turns, r.InputTokens, r.OutputTokens)
+			if len(r.MissingFacts) > 0 {
+				fmt.Printf("      missing:        %v\n", r.MissingFacts)
+			}
+			if len(r.ForbiddenHit) > 0 {
+				fmt.Printf("      forbidden hit:  %v\n", r.ForbiddenHit)
+			}
+		}
+		fmt.Println()
+	}
+
+	for _, s := range multi.Skipped {
+		fmt.Fprintf(os.Stderr, "WARNING: skipped corpus %q (%s): %s\n", s.Name, s.Dir, s.Reason)
+	}
+
+	if evalAgentGate != "" {
+		baseline, err := eval.LoadAgentBaseline(evalAgentGate)
+		if err != nil {
+			return fmt.Errorf("load agent gate baseline: %w", err)
+		}
+		gate := eval.CheckAgentGate(multi, baseline)
+		if !gate.OK {
+			fmt.Fprintf(os.Stderr, "Agent gate: %d regression(s) vs %s\n", len(gate.Regressions), evalAgentGate)
+			for _, r := range gate.Regressions {
+				switch r.Reason {
+				case "now_incorrect":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  now_incorrect (was correct in baseline)\n", r.Repo, r.CaseID)
+				case "correctness_drop":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  correctness_drop  baseline=%.3f  current=%.3f\n", r.Repo, r.BaselineCorrectness, r.CurrentCorrectness)
+				case "missing_repo":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  missing_repo  (in baseline but absent from this run)\n", r.Repo)
+				}
+			}
+			fmt.Fprintln(os.Stderr, "Update eval/agent-baseline.json when correctness improves: polyflow eval agent --corpus eval/corpus --output eval/agent-baseline.json")
+			os.Exit(1)
+		}
+		fmt.Printf("Agent gate: no regressions vs %s\n", evalAgentGate)
+	}
+
 	return nil
 }
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
 
 var (
-	doctorBaseline  string
-	doctorPropose   string
-	doctorYield     bool
-	doctorYieldJSON bool
+	doctorBaseline      string
+	doctorAgentBaseline string
+	doctorPropose       string
+	doctorYield         bool
+	doctorYieldJSON     bool
 )
 
 var doctorCmd = &cobra.Command{
@@ -2501,6 +2556,7 @@ var doctorCmd = &cobra.Command{
 
 func init() {
 	doctorCmd.Flags().StringVar(&doctorBaseline, "baseline", "eval/baseline.json", "baseline JSON file for the eval summary row")
+	doctorCmd.Flags().StringVar(&doctorAgentBaseline, "agent-baseline", "eval/agent-baseline.json", "agent-correctness baseline JSON file for the Trust panel's agent correctness row")
 	doctorCmd.Flags().StringVar(&doctorPropose, "propose", "", "write gap-derived rule proposals + fixture skeletons to this directory (e.g. .polyflow/proposals)")
 	doctorCmd.Flags().BoolVar(&doctorYield, "yield", false, "print the X.3 resolution-yield scorecard; CI gate — exits 1 if it fails the bar (internal=100%, cross-static>=95%, every unresolved site reason-coded)")
 	doctorCmd.Flags().BoolVar(&doctorYieldJSON, "json", false, "with --yield, print the scorecard as JSON instead of a table")
@@ -2665,6 +2721,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// C.2: evidence freshness — suggest re-capture when all verified edges are stale.
 	fmt.Println()
+	var trustVS graph.VerificationSummary
 	if storeErr != nil {
 		fmt.Printf("  Evidence freshness:  (no index — run 'polyflow index' first)\n")
 	} else if len(allEdges) > 0 {
@@ -2676,6 +2733,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			staleAfter = workspace.DefaultStaleAfter
 		}
 		vs := graph.BuildVerificationSummaryAt(allEdges, staleAfter, time.Now())
+		trustVS = vs
 		if vs.Verified == 0 {
 			fmt.Printf("  Evidence freshness:  no verified edges (no capture sessions or all edges static)\n")
 		} else if vs.StaleEvidence == vs.Verified {
@@ -2689,6 +2747,67 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		fmt.Printf("  Evidence freshness:  (no cross-service edges — run 'polyflow index' first)\n")
+	}
+
+	// T.3: Trust panel — every row degrades to an explicit UNMEASURED (or
+	// N/A), never blank, mirroring TrustStamp's own convention.
+	fmt.Println()
+	fmt.Println("  Trust")
+	if storeErr != nil {
+		fmt.Printf("    eval recall         UNMEASURED (no index — run 'polyflow index' first)\n")
+	} else {
+		stamp, stampErr := graph.LoadTrustStamp(context.Background(), store)
+		if stampErr != nil || !stamp.Measured {
+			fmt.Printf("    eval recall         UNMEASURED (run 'polyflow eval stamp' against this workspace)\n")
+		} else {
+			suffix := ""
+			if stamp.Stale {
+				suffix = " [STALE — graph changed since this stamp]"
+			}
+			measuredAt := stamp.MeasuredAt
+			if t, pErr := time.Parse(time.RFC3339, stamp.MeasuredAt); pErr == nil {
+				measuredAt = t.Format("2006-01-02")
+			}
+			fmt.Printf("    eval recall         %.3f (%d cases, %s, %s)%s\n", stamp.Recall, stamp.Cases, stamp.Corpus, measuredAt, suffix)
+		}
+	}
+
+	cfgForTrust, cfgErr := workspace.Load(meta.ConfigFile)
+	agentBaseline, agentBaselineErr := eval.LoadAgentBaseline(doctorAgentBaseline)
+	if cfgErr != nil || agentBaselineErr != nil {
+		fmt.Printf("    agent correctness   UNMEASURED (run 'polyflow eval agent --output %s')\n", doctorAgentBaseline)
+	} else {
+		agentSum := eval.SummarizeAgentForDoctor(agentBaseline, cfgForTrust.Name)
+		if !agentSum.Measured {
+			fmt.Printf("    agent correctness   UNMEASURED (run 'polyflow eval agent --output %s')\n", doctorAgentBaseline)
+		} else {
+			fmt.Printf("    agent correctness   %.3f (%d cases, %s)\n", agentSum.Correctness, agentSum.Cases, agentSum.MeasuredAt)
+		}
+	}
+
+	if storeErr != nil || len(allEdges) == 0 {
+		fmt.Printf("    edges verified      UNMEASURED (no index — run 'polyflow index' first)\n")
+	} else {
+		total := trustVS.Verified + trustVS.Candidate + trustVS.ObservedOnlyGap + trustVS.Conflicting
+		if total == 0 {
+			fmt.Printf("    edges verified      UNMEASURED (no verification-state edges)\n")
+		} else {
+			pct := func(n int) float64 { return 100 * float64(n) / float64(total) }
+			fmt.Printf("    edges verified      %.0f%% verified · %.0f%% candidate · %.0f%% observed-gap\n",
+				pct(trustVS.Verified), pct(trustVS.Candidate), pct(trustVS.ObservedOnlyGap))
+		}
+	}
+
+	if storeErr != nil {
+		fmt.Printf("    unresolved density  UNMEASURED (no index — run 'polyflow index' first)\n")
+	} else {
+		unresolved, uErr := store.ListUnresolvedRefs(context.Background())
+		if uErr != nil || len(allEdges) == 0 {
+			fmt.Printf("    unresolved density  UNMEASURED\n")
+		} else {
+			density := 100 * float64(len(unresolved)) / float64(len(allEdges))
+			fmt.Printf("    unresolved density  %d refs / %d edges (%.1f%%)\n", len(unresolved), len(allEdges), density)
+		}
 	}
 
 	// X.3: resolution-yield scorecard — the trust-signal source for whether
