@@ -732,6 +732,25 @@ var statusCmd = &cobra.Command{
 	RunE:  runStatus,
 }
 
+// formatTrustLine renders the workspace's measured-eval trust state (plan-14
+// T.0): recall + corpus + date when measured, UNMEASURED when never stamped,
+// and a STALE suffix when the index was rebuilt after the last measurement.
+func formatTrustLine(store graph.Store, ctx context.Context) string {
+	stamp, err := graph.LoadTrustStamp(ctx, store)
+	if err != nil || !stamp.Measured {
+		return "Trust: UNMEASURED — run 'polyflow eval stamp' (see docs/plan-14)"
+	}
+	date := stamp.MeasuredAt
+	if t, perr := time.Parse(time.RFC3339, stamp.MeasuredAt); perr == nil {
+		date = t.Format("2006-01-02")
+	}
+	line := fmt.Sprintf("Trust: recall %.3f over %d cases (%s corpus, %s)", stamp.Recall, stamp.Cases, stamp.Corpus, date)
+	if stamp.Stale {
+		line += " STALE (index newer than measurement)"
+	}
+	return line
+}
+
 func runStatus(cmd *cobra.Command, args []string) error {
 	cfg, err := workspace.Load(statusWS)
 	if err != nil {
@@ -780,6 +799,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Workspace: %s\n", cfg.Name)
 	fmt.Printf("  Services: %d (%s)\n", len(cfg.Services), strings.Join(langParts, ", "))
 	fmt.Printf("  Last indexed: %s\n", lastIndexed)
+	fmt.Printf("  %s\n", formatTrustLine(store, ctx))
 	if freshness := indexFreshness(cfg, lastIndexedAt); freshness != "" {
 		fmt.Printf("  Freshness: %s\n", freshness)
 	}
@@ -1117,6 +1137,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile))
 	result.TargetCandidates = candidates
+	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1303,6 +1324,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
 	result.TargetCandidates = candidates
+	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -1479,6 +1501,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	out := impact.Build(idx, root, impactDepth, impactService, impactVerboseSources, loadStaleAfter(meta.ConfigFile))
 	out.TargetCandidates = candidates
+	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -2153,6 +2176,11 @@ func initEvalFlags() {
 	evalCmd.Flags().StringVar(&evalCase, "case", "", "run only this case ID (default: all cases in the corpus)")
 	evalCmd.Flags().StringVar(&evalOutput, "output", "", "write JSON results to this file (e.g. eval/baseline.json)")
 	evalCmd.Flags().StringVar(&evalGate, "gate", "", "baseline JSON file to gate against; exits non-zero on any regression")
+
+	stampCmd.Flags().StringVar(&evalStampCorpus, "corpus", "", "path to a single corpus dir (with manifest.yaml) to stamp against the current workspace")
+	stampCmd.Flags().StringVar(&evalStampWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
+	_ = stampCmd.MarkFlagRequired("corpus")
+	evalCmd.AddCommand(stampCmd)
 }
 
 var evalCmd = &cobra.Command{
@@ -2277,6 +2305,57 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 		fmt.Fprintln(os.Stderr, "\nFailed: one or more cases hard-failed (must_not_miss file silently missed)")
 		os.Exit(1)
 	}
+	return nil
+}
+
+var (
+	evalStampCorpus string
+	evalStampWS     string
+)
+
+var stampCmd = &cobra.Command{
+	Use:   "stamp",
+	Short: "Score a corpus against the current workspace and persist the result as a trust stamp",
+	RunE:  runEvalStamp,
+}
+
+func runEvalStamp(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	m, err := eval.LoadManifest(evalStampCorpus)
+	if err != nil {
+		return fmt.Errorf("load corpus manifest: %w", err)
+	}
+
+	cfg, err := workspace.Load(evalStampWS)
+	if err != nil {
+		return err
+	}
+	// repo.workspace is a path/filename field (always "workspace.yaml" in
+	// practice); repo.name is what actually identifies the target
+	// workspace — it matches the loaded workspace.yaml's top-level `name:`.
+	if m.Repo.Name != cfg.Name {
+		return fmt.Errorf("corpus %q targets workspace %q, but the loaded workspace is %q — stamp must run against its own corpus's workspace",
+			evalStampCorpus, m.Repo.Name, cfg.Name)
+	}
+
+	report, err := eval.Run(ctx, eval.RunOptions{CorpusDir: evalStampCorpus})
+	if err != nil {
+		return err
+	}
+
+	dbPath := filepath.Join(meta.DBDir, meta.DBFile)
+	store, err := graph.NewSQLiteStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("open store (run `polyflow index` first): %w", err)
+	}
+	defer store.Close()
+
+	if err := eval.SaveTrustStamp(ctx, store, m.Repo.Name, report); err != nil {
+		return err
+	}
+
+	fmt.Printf("Stamped %s: recall=%.3f over %d cases (corpus=%s)\n", cfg.Name, report.Recall, len(report.Results), m.Repo.Name)
 	return nil
 }
 

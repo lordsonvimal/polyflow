@@ -10,14 +10,14 @@ import (
 
 // Result is the structured output of a context query.
 type Result struct {
-	Target       *graph.Node   `json:"target"`
-	Task         string        `json:"task"`
-	Upstream     []TraceNode   `json:"upstream"`
-	Downstream   []TraceNode   `json:"downstream"`
-	CrossService []CrossEdge   `json:"cross_service"`
-	Depth        int           `json:"depth"`
-	TotalNodes   int           `json:"total_nodes"`
-	TotalEdges   int           `json:"total_edges"`
+	Target       *graph.Node `json:"target"`
+	Task         string      `json:"task"`
+	Upstream     []TraceNode `json:"upstream"`
+	Downstream   []TraceNode `json:"downstream"`
+	CrossService []CrossEdge `json:"cross_service"`
+	Depth        int         `json:"depth"`
+	TotalNodes   int         `json:"total_nodes"`
+	TotalEdges   int         `json:"total_edges"`
 
 	// Unresolved lists references in the traversed files that the indexer
 	// could not resolve — edges that may be missing from this answer. Always
@@ -28,6 +28,12 @@ type Result struct {
 	// VerificationSummary aggregates edge provenance counts. Always present;
 	// survives any token budget cut.
 	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+
+	// Trust reports the workspace's last measured eval recall (plan-14 T.0).
+	// Always present; Measured=false or Stale=true means this answer is
+	// unaudited. Callers set this after Build (Build has no DB access).
+	// Survives any token budget.
+	Trust graph.TrustStamp `json:"trust"`
 
 	// TargetCandidates lists every exact-label match when >1 candidate exists,
 	// sorted by (service, file). Always present ([] when unambiguous). Agents

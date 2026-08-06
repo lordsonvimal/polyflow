@@ -72,6 +72,11 @@ type Result struct {
 	// survives any token budget cut.
 	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 
+	// Trust reports the workspace's last measured eval recall (plan-14 T.0).
+	// Always present; Measured=false or Stale=true means this answer is
+	// unaudited. Callers set this after Run (Run has no DB access).
+	Trust graph.TrustStamp `json:"trust"`
+
 	// TargetCandidates lists every exact-label match when >1 candidate exists,
 	// sorted by (service, file). Always present ([] when unambiguous). Agents
 	// should re-query with target_service/--target-service when non-empty.

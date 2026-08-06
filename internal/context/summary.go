@@ -32,10 +32,11 @@ type Summary struct {
 	TotalNodes   int          `json:"total_nodes"`
 	TotalEdges   int          `json:"total_edges"`
 
-	Unresolved          []graph.UnresolvedRef        `json:"unresolved"`
-	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
-	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
-	Budget              *budget.Info                 `json:"budget,omitempty"`
+	Unresolved          []graph.UnresolvedRef     `json:"unresolved"`
+	UnresolvedNote      string                    `json:"unresolved_note,omitempty"`
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	Trust               graph.TrustStamp          `json:"trust"`
+	Budget              *budget.Info              `json:"budget,omitempty"`
 }
 
 // Summarize rolls the per-node traversal detail up into per-file entries.
@@ -98,6 +99,7 @@ func (r *Result) Summarize() *Summary {
 		Unresolved:          r.Unresolved,
 		UnresolvedNote:      r.UnresolvedNote,
 		VerificationSummary: r.VerificationSummary,
+		Trust:               r.Trust,
 	}
 }
 

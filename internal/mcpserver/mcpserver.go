@@ -27,7 +27,10 @@ const semanticsParagraph = "Edges carry verification_state: `verified` edges are
 	"or declared contracts — do not re-verify. `candidate` edges are static-only — " +
 	"one cheap grep confirms them. `observed_only_gap` edges were seen at runtime " +
 	"but missed by static analysis — treat as real. The verification_summary and " +
-	"unresolved sections are always present; empty means clean, absent means error."
+	"unresolved sections are always present; empty means clean, absent means error. " +
+	"The trust section reports this workspace's last measured eval recall; " +
+	"measured=false or stale=true means answers here are unaudited — weigh the " +
+	"unresolved section more heavily."
 
 // minVerificationPasses reports whether an edge's VerificationState meets the
 // requested threshold. Default "any" passes all states including empty
@@ -51,6 +54,7 @@ func minVerificationPasses(state, minVerification string) bool {
 type Store interface {
 	SearchNodes(ctx context.Context, query string, limit int) ([]*graph.Node, error)
 	ListUnresolvedRefs(ctx context.Context) ([]graph.UnresolvedRef, error)
+	GetMeta(ctx context.Context, key string) (string, error)
 }
 
 // Server wires the query layer behind MCP tool handlers. The store and index
@@ -429,6 +433,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 
 	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter)
 	result.TargetCandidates = candidates
+	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -508,6 +513,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 	out := impact.Build(idx, root, depth, in.Service, in.VerboseSources, s.staleAfter)
 	out.TargetCandidates = candidates
+	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	out.AttachUnresolved(unresolved)
 	if in.MinVerification != "" && in.MinVerification != "any" {
 		out.Callers = filterCallers(out.Callers, in.MinVerification)
@@ -551,6 +557,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}
 	result.TargetCandidates = candidates
+	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err

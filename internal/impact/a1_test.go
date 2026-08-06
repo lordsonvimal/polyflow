@@ -190,3 +190,40 @@ func TestBudget_VerificationSummaryInSummaryShape(t *testing.T) {
 	assert.True(t, hasBudget, "budget field present when forceSummary=true")
 }
 
+// TestBuild_TrustZeroStateInJSON verifies the trust field is always present
+// (plan-14 T.0), even before a caller sets it — Build itself has no DB access
+// so Trust is the zero TrustStamp{Measured:false} until the caller populates it.
+func TestBuild_TrustZeroStateInJSON(t *testing.T) {
+	idx := fixtureIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	assert.Equal(t, graph.TrustStamp{Measured: false}, out.Trust)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"trust":{"measured":false}`)
+}
+
+// TestBudgetFloor_TrustAlwaysPresent verifies a tiny max-tokens budget still
+// carries trust — it must survive any token budget cut like verification_summary.
+func TestBudgetFloor_TrustAlwaysPresent(t *testing.T) {
+	idx := provenanceIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0, MeasuredAt: "2026-07-19T10:31:00Z"}
+
+	budgeted := out.ApplyBudget(1, false)
+	data, err := json.Marshal(budgeted)
+	require.NoError(t, err)
+	s := string(data)
+
+	assert.Contains(t, s, `"trust"`, "trust must survive budget cut")
+	assert.Contains(t, s, `"chessleap"`)
+}
+
+// TestSummarize_TrustCarried verifies trust survives file rollup.
+func TestSummarize_TrustCarried(t *testing.T) {
+	idx := provenanceIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0}
+	s := out.Summarize()
+	assert.Equal(t, out.Trust, s.Trust)
+}
