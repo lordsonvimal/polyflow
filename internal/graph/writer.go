@@ -16,13 +16,6 @@ type BatchWriter struct {
 	nodes     []*Node
 	edges     []*Edge
 
-	// fresh: the target DB started empty (index builds write to a new tmp
-	// file), so an FTS row can only pre-exist for IDs this writer already
-	// wrote. `DELETE FROM nodes_fts WHERE id = ?` is a full FTS-table scan
-	// (id is not the rowid), which made index builds O(n²) — in fresh mode
-	// the delete runs only on the rare duplicate-ID re-upsert.
-	fresh   bool
-	ftsSeen map[string]bool
 }
 
 // NewBatchWriter creates a BatchWriter with the default batch size.
@@ -31,12 +24,12 @@ func NewBatchWriter(store *SQLiteStore) *BatchWriter {
 }
 
 // NewFreshBatchWriter creates a BatchWriter for a database known to start
-// empty, enabling the FTS fast path (see the fresh field).
+// empty. The FTS fast path it used to enable now lives on the store (see
+// SQLiteStore.ftsJournal), so that every writer against a build store — not
+// just the one that happens to write a node first — skips the redundant
+// nodes_fts delete. Kept as a distinct constructor for call-site clarity.
 func NewFreshBatchWriter(store *SQLiteStore) *BatchWriter {
-	w := NewBatchWriterWithSize(store, defaultBatchSize)
-	w.fresh = true
-	w.ftsSeen = make(map[string]bool)
-	return w
+	return NewBatchWriterWithSize(store, defaultBatchSize)
 }
 
 // NewBatchWriterWithSize creates a BatchWriter with a custom batch size.
@@ -114,18 +107,20 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 				n.ID, string(n.Type), n.Label, n.Service, n.File, n.Line, n.Language, metaJSON); err != nil {
 				return fmt.Errorf("upsert node %s: %w", n.ID, err)
 			}
-			// keep FTS in sync; skip the (full-scan) delete when this is the
-			// first time a fresh-DB writer sees the ID
-			if !w.fresh || w.ftsSeen[n.ID] {
+			// Keep FTS in sync. On a build store the journal knows whether a
+			// row exists and whether its content would change, so both the
+			// full-scan delete and the insert are skipped when they'd be
+			// no-ops (see SQLiteStore.ftsPlan).
+			del, ins := w.store.ftsPlan(n)
+			if del {
 				if _, err = ftsDelete.ExecContext(ctx, n.ID); err != nil {
 					return fmt.Errorf("fts delete %s: %w", n.ID, err)
 				}
 			}
-			if w.fresh {
-				w.ftsSeen[n.ID] = true
-			}
-			if _, err = ftsInsert.ExecContext(ctx, n.ID, n.Label, n.File, n.Service); err != nil {
-				return fmt.Errorf("fts insert %s: %w", n.ID, err)
+			if ins {
+				if _, err = ftsInsert.ExecContext(ctx, n.ID, n.Label, n.File, n.Service); err != nil {
+					return fmt.Errorf("fts insert %s: %w", n.ID, err)
+				}
 			}
 		}
 		return nil

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -183,6 +184,54 @@ type Store interface {
 // SQLiteStore is the SQLite-backed implementation of Store.
 type SQLiteStore struct {
 	db *sql.DB
+
+	// ftsJournal records the nodes_fts row content last written for each node
+	// ID, for stores whose DB is known to have started empty (NewBuildStore).
+	// nodes_fts declares `id UNINDEXED`, so `DELETE FROM nodes_fts WHERE id=?`
+	// is a full scan of the FTS content — and an index build re-upserts most
+	// nodes several times (semantic pass, linking passes, root classification,
+	// evidence reconciliation), each re-upsert paying another scan. The journal
+	// makes the delete unnecessary: no entry means no row exists yet (insert
+	// only), and an unchanged entry means the existing row is already correct
+	// (skip entirely). Only a genuine content change pays the scan.
+	//
+	// nil for stores opened over a pre-existing DB, which keeps the original
+	// delete-then-insert behavior.
+	ftsMu      sync.Mutex
+	ftsJournal map[string]string // node ID → label\x00file\x00service
+}
+
+// ftsRowKey is the nodes_fts row content for a node: the FTS row is a pure
+// function of these three fields, so an upsert that leaves all three unchanged
+// (a meta-only rewrite, e.g. root classification) needs no FTS write at all.
+func ftsRowKey(n *Node) string {
+	return n.Label + "\x00" + n.File + "\x00" + n.Service
+}
+
+// ftsPlan reports what nodes_fts work a node upsert needs: whether to delete
+// the existing row first, and whether to insert a new one. It records the new
+// content in the journal as a side effect.
+//
+// Without a journal (pre-existing DB) it always reports delete+insert, which
+// is what the store did before the journal existed.
+func (s *SQLiteStore) ftsPlan(n *Node) (del, ins bool) {
+	if s == nil || s.ftsJournal == nil {
+		return true, true
+	}
+	key := ftsRowKey(n)
+	s.ftsMu.Lock()
+	defer s.ftsMu.Unlock()
+	prev, seen := s.ftsJournal[n.ID]
+	switch {
+	case !seen:
+		s.ftsJournal[n.ID] = key
+		return false, true // nothing to delete: this build has never written this ID
+	case prev == key:
+		return false, false // row already present with exactly this content
+	default:
+		s.ftsJournal[n.ID] = key
+		return true, true // content changed: replace
+	}
 }
 
 // NewSQLiteStore opens (or creates) the SQLite database at dsn and applies the schema.
@@ -243,6 +292,9 @@ func NewBuildStore(dsn string) (*SQLiteStore, error) {
 		s.Close()
 		return nil, fmt.Errorf("apply build pragmas: %w", err)
 	}
+	// The build DB starts empty, so nodes_fts row state is fully determined by
+	// what this store writes — see SQLiteStore.ftsJournal.
+	s.ftsJournal = make(map[string]string)
 	return s, nil
 }
 
