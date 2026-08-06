@@ -78,9 +78,9 @@ type templVisitor struct {
 	service             string
 	nodes               []graph.Node
 	edges               []graph.Edge
-	currentComponent    string // node ID of the enclosing HTMLTemplate component
-	currentComponentIdx int    // index of the enclosing component in v.nodes, -1 outside one
-	formMethod          string // method attr of the enclosing <form> (upper-case), "" outside forms
+	currentComponent    string                  // node ID of the enclosing HTMLTemplate component
+	currentComponentIdx int                     // index of the enclosing component in v.nodes, -1 outside one
+	formMethod          string                  // method attr of the enclosing <form> (upper-case), "" outside forms
 	vocab               toolchain.DatastarVocab // version-selected attribute vocabulary
 }
 
@@ -247,6 +247,13 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 	case strings.ToLower(key) == "id" && val != "":
 		v.addComponentMeta("dom_ids", fmt.Sprintf("%s@%d", val, lineNo))
 
+	// Any other data-* attribute (data-testid, data-role, …) not already a
+	// datastar/reactive binding is a stable selector hook a JS attribute
+	// selector may target (`[data-testid="…"]`). Recorded per attribute so
+	// LinkDOMContracts can resolve the templ→JS `dom_contract` seam (IA.5).
+	case strings.HasPrefix(strings.ToLower(key), "data-") && val != "":
+		v.addComponentMeta("dom_data_attrs", fmt.Sprintf("%s=%s@%d", strings.ToLower(key), val, lineNo))
+
 	// Native DOM event attributes: onclick="save()" etc.
 	case reOnEventAttr.MatchString(key):
 		v.addEventAttr(key, val, lineNo)
@@ -293,8 +300,41 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 	// Native DOM event attributes with expression values: onclick={ handler }
 	if reOnEventAttr.MatchString(key) {
 		v.addEventAttr(key, stripQuotes(raw), lineNo)
+		return nil
+	}
+
+	// data-* attribute with a computed value, e.g.
+	// data-testid={ "promotion-button-" + strings.ToLower(x) } — only the
+	// leading string-literal segment is knowable statically; recorded as a
+	// prefix (trailing "*") so LinkDOMContracts can prefix-match it against a
+	// JS template-literal selector's static prefix (IA.5).
+	if strings.HasPrefix(strings.ToLower(key), "data-") {
+		if prefix, ok := leadingStringLiteralPrefix(raw); ok && prefix != "" {
+			v.addComponentMeta("dom_data_attrs", fmt.Sprintf("%s=%s*@%d", strings.ToLower(key), prefix, lineNo))
+		}
 	}
 	return nil
+}
+
+// leadingStringLiteralPrefix returns the unquoted content of a Go expression
+// that starts with a double-quoted string literal (e.g. `"promotion-button-"
+// + strings.ToLower(x)` -> "promotion-button-", true). Anything else
+// (identifier, call, non-string-leading concat) is not statically knowable.
+func leadingStringLiteralPrefix(expr string) (string, bool) {
+	s := strings.TrimSpace(expr)
+	if len(s) < 2 || s[0] != '"' {
+		return "", false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] == '\\' {
+			i++
+			continue
+		}
+		if s[i] == '"' {
+			return s[1:i], true
+		}
+	}
+	return "", false
 }
 
 // isReactiveAttrKey reports whether an attribute is a datastar reactive binding
@@ -570,8 +610,9 @@ func (v *templVisitor) VisitConstantCSSProperty(*templparser.ConstantCSSProperty
 func (v *templVisitor) VisitExpressionCSSProperty(*templparser.ExpressionCSSProperty) error {
 	return nil
 }
-func (v *templVisitor) VisitDocType(*templparser.DocType) error   { return nil }
-func (v *templVisitor) VisitText(*templparser.Text) error         { return nil }
+func (v *templVisitor) VisitDocType(*templparser.DocType) error { return nil }
+func (v *templVisitor) VisitText(*templparser.Text) error       { return nil }
+
 // VisitScriptElement records the JS asset a <script src=…> loads so the
 // LinkTemplScripts pass can draw an `imports` edge from the templ component to
 // the JS file node. The src is a Go expression (`helpers.Asset("js/x.js")`) or
@@ -616,11 +657,12 @@ func (v *templVisitor) VisitSpreadAttributes(*templparser.SpreadAttributes) erro
 func (v *templVisitor) VisitConditionalAttribute(*templparser.ConditionalAttribute) error {
 	return nil
 }
-func (v *templVisitor) VisitGoComment(*templparser.GoComment) error   { return nil }
+func (v *templVisitor) VisitGoComment(*templparser.GoComment) error     { return nil }
 func (v *templVisitor) VisitHTMLComment(*templparser.HTMLComment) error { return nil }
 func (v *templVisitor) VisitCallTemplateExpression(*templparser.CallTemplateExpression) error {
 	return nil
 }
+
 // VisitTemplElementExpression descends into the children of a component-call
 // block (`@Layout(...) { ...children... }`) so datastar actions and DOM targets
 // nested inside layout wrappers are not dropped. (Composition/renders edges for
@@ -665,7 +707,7 @@ func (v *templVisitor) VisitForExpression(fe *templparser.ForExpression) error {
 	}
 	return nil
 }
-func (v *templVisitor) VisitGoCode(*templparser.GoCode) error             { return nil }
+func (v *templVisitor) VisitGoCode(*templparser.GoCode) error                     { return nil }
 func (v *templVisitor) VisitStringExpression(*templparser.StringExpression) error { return nil }
 func (v *templVisitor) VisitScriptTemplate(*templparser.ScriptTemplate) error     { return nil }
 func (v *templVisitor) VisitFallthrough(*templparser.Fallthrough) error           { return nil }

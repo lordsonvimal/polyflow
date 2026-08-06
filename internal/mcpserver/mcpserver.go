@@ -115,6 +115,17 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	}
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "investigate",
+		Description: "Investigate a symptom or feature and get the root-cause neighbourhood in one " +
+			"call: the resolved node with its source inlined, its callers and callees, the flows it " +
+			"sits on, and the short coverage_unresolved list. Prefer this over search/context/trace/" +
+			"read when the task is \"understand X / find why X\" — it resolves and assembles the whole " +
+			"picture so you don't sequence those calls yourself. The returned edges are the resolved " +
+			"set; the only thing to verify by grep is coverage_unresolved. If target_candidates is " +
+			"non-empty, re-query with target_service/target_type to pin the intended node.",
+	}, s.investigate)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search",
 		Description: "Search the indexed code graph for nodes (functions, methods, variables, " +
 			"HTTP handlers, …), flow chains, or doc chunks matching a query. Query may be " +
