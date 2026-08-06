@@ -536,6 +536,13 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	allNodes = append(allNodes, wrapNodes...)
 	edges = append(edges, wrapEdges...)
 
+	// Tier X.11: sibling to X.7 — request URLs built via fmt.Sprintf within the
+	// same function (no wrapper parameter involved). See docs/sprintf-url-
+	// resolution-plan.md.
+	sprintfNodes, sprintfEdges := extractSprintfURLs(service, dir, fset, inService, resolveFunc)
+	allNodes = append(allNodes, sprintfNodes...)
+	edges = append(edges, sprintfEdges...)
+
 	// W.2: resolve wrapper-mediated / const AMQP publish exchanges into producer
 	// channel nodes so the amqp contract can join them to W.1's consumer binds.
 	amqpNodes, amqpEdges := extractAMQPNames(service, dir, fset, inService, resolveFunc)
