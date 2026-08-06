@@ -79,6 +79,33 @@ func TestRunAgentCorpus_NoAgentCasesIsEmptyReport(t *testing.T) {
 	assert.Empty(t, report.Results)
 }
 
+func TestRunAllAgent_UnavailableAgentCLISkips(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "fixture")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\nagent_cases:\n  - id: q1\n    question: \"What files?\"\n    required_facts:\n      - a.go\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "manifest.yaml"), []byte(manifest), 0o644))
+
+	_, err := eval.RunAllAgent(context.Background(), root, eval.AgentRunOptions{
+		AgentCmd: "definitely-not-a-real-agent-cli-binary --foo {mcp_config} {max_turns}",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, eval.ErrAgentCLIUnavailable))
+}
+
+func TestRunAllAgent_SkipsCorporaWithNoAgentCases(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "fixture")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "manifest.yaml"), []byte(manifest), 0o644))
+
+	report, err := eval.RunAllAgent(context.Background(), root, eval.AgentRunOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, report.Reports)
+	assert.Empty(t, report.Skipped)
+}
+
 func TestRunAgentCorpus_UnavailableAgentCLISkips(t *testing.T) {
 	dir := t.TempDir()
 	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\nagent_cases:\n  - id: q1\n    question: \"What files?\"\n    required_facts:\n      - a.go\n"
