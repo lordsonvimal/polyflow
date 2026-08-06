@@ -145,67 +145,67 @@
     "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1014-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:145",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1014",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1001-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:150",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1001",
+    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:150",
+    "type": "http_call",
+    "label": "post /practice/*/save",
+    "confidence": "inferred"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1017-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:145",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1017",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:145",
     "type": "http_call",
     "label": "post /practice/*/coach",
     "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:403-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:403",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:406-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:406",
     "to": "unresolved",
     "type": "http_call",
     "label": " */*/move/*/*?*",
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:462-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:462",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:465-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:465",
     "to": "unresolved",
     "type": "http_call",
     "label": " */*/resync",
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:479-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:479",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:482-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:482",
     "to": "unresolved",
     "type": "http_call",
     "label": " */*/move/*/*?*",
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:831-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:137",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:831",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:834-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:137",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:834",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:137",
     "type": "http_call",
     "label": "post /practice/*/node/*/square/*/*",
     "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:844-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:139",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:844",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:847-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:139",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:847",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:139",
     "type": "http_call",
     "label": "post /practice/*/node/*/arrow/*/*/*",
     "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:861-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:142",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:861",
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:864-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:142",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:864",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:142",
     "type": "http_call",
     "label": "delete /practice/*/node/*/annotations",
-    "confidence": "inferred"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:998-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:150",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:998",
-    "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:150",
-    "type": "http_call",
-    "label": "post /practice/*/save",
     "confidence": "inferred"
   },
   {
