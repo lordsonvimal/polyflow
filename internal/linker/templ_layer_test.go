@@ -282,3 +282,64 @@ func TestLinkDOMDefinitions_Determinism(t *testing.T) {
 		}
 	}
 }
+
+// Two services can vendor the same bundle under the same logical path. The
+// script tag belongs to whichever service's template declares it, and the
+// answer must not depend on map iteration order — this used to flip between
+// runs, making the whole index nondeterministic.
+func TestLinkTemplScriptsIsServiceScopedAndDeterministic(t *testing.T) {
+	nodes := []graph.Node{
+		{
+			ID: "svc-a:page.templ:component:Head:12", Type: graph.NodeTypeComponent,
+			Label: "Head", Service: "svc-a", File: "/repo/svc-a/page.templ", Language: "templ",
+			Meta: map[string]string{"script_srcs": "/static/js/datastar.min.js"},
+		},
+		{
+			ID: "svc-a:datastar:function:(module):0", Type: graph.NodeTypeFunction,
+			Label: "(module)", Service: "svc-a", File: "/repo/svc-a/static/js/datastar.min.js",
+			Language: "javascript", Meta: map[string]string{"scope": "module"},
+		},
+		{
+			ID: "svc-b:datastar:function:(module):0", Type: graph.NodeTypeFunction,
+			Label: "(module)", Service: "svc-b", File: "/repo/svc-b/static/js/datastar.min.js",
+			Language: "javascript", Meta: map[string]string{"scope": "module"},
+		},
+	}
+
+	// /repo/svc-b/... sorts before /repo/svc-a/... on neither side by accident:
+	// run repeatedly so a map-order regression cannot pass by luck.
+	for i := range 50 {
+		edges, _ := LinkTemplScripts(nodes)
+		if len(edges) != 1 {
+			t.Fatalf("iteration %d: imports edges = %d, want 1: %+v", i, len(edges), edges)
+		}
+		if edges[0].To != "svc-a:datastar:function:(module):0" {
+			t.Fatalf("iteration %d: resolved to %q, want svc-a's own copy", i, edges[0].To)
+		}
+	}
+}
+
+// With no in-service candidate the reference is a genuine blind spot: it must
+// be ledgered, not silently bound to another service's file.
+func TestLinkTemplScriptsLedgersCrossServiceOnlyMatch(t *testing.T) {
+	nodes := []graph.Node{
+		{
+			ID: "svc-a:page.templ:component:Head:12", Type: graph.NodeTypeComponent,
+			Label: "Head", Service: "svc-a", File: "/repo/svc-a/page.templ", Language: "templ",
+			Meta: map[string]string{"script_srcs": "/static/js/vendor.js"},
+		},
+		{
+			ID: "svc-b:vendor:function:(module):0", Type: graph.NodeTypeFunction,
+			Label: "(module)", Service: "svc-b", File: "/repo/svc-b/static/js/vendor.js",
+			Language: "javascript", Meta: map[string]string{"scope": "module"},
+		},
+	}
+
+	edges, unresolved := LinkTemplScripts(nodes)
+	if len(edges) != 0 {
+		t.Fatalf("imports edges = %d, want 0 (cross-service match must not link): %+v", len(edges), edges)
+	}
+	if len(unresolved) != 1 || unresolved[0].Name != "/static/js/vendor.js" {
+		t.Fatalf("unresolved = %+v, want one ledger entry for /static/js/vendor.js", unresolved)
+	}
+}

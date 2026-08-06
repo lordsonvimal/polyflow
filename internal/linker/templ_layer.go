@@ -22,9 +22,10 @@ func isVendorPath(file string) bool {
 // synthetic module node when present, otherwise the lowest-line node in the
 // file. Cross-file `imports` edges target this representative.
 type jsFileRep struct {
-	id     string
-	line   int
-	module bool
+	id      string
+	service string
+	line    int
+	module  bool
 }
 
 // LinkTemplScripts draws `imports` edges from a templ component to the JS file
@@ -42,12 +43,21 @@ func LinkTemplScripts(nodes []graph.Node) ([]graph.Edge, []graph.UnresolvedRef) 
 		module := n.Meta["scope"] == "module"
 		cur, ok := reps[n.File]
 		if !ok || (module && !cur.module) || (module == cur.module && n.Line < cur.line) {
-			reps[n.File] = jsFileRep{id: n.ID, line: n.Line, module: module}
+			reps[n.File] = jsFileRep{id: n.ID, service: n.Service, line: n.Line, module: module}
 		}
 	}
 	if len(reps) == 0 {
 		return nil, nil
 	}
+	// Candidate order must not depend on map iteration: two files can match the
+	// same `<script src>` equally well (the same vendored bundle checked into
+	// two services), and picking between them by range order made the whole
+	// index nondeterministic — successive runs emitted a different edge.
+	repFiles := make([]string, 0, len(reps))
+	for file := range reps {
+		repFiles = append(repFiles, file)
+	}
+	sort.Strings(repFiles)
 
 	var edges []graph.Edge
 	var unresolved []graph.UnresolvedRef
@@ -62,7 +72,7 @@ func LinkTemplScripts(nodes []graph.Node) ([]graph.Edge, []graph.UnresolvedRef) 
 			continue
 		}
 		for _, src := range strings.Split(srcs, "\n") {
-			targetID, conf := resolveAssetFile(src, reps)
+			targetID, conf := resolveAssetFile(src, n.Service, reps, repFiles)
 			if targetID == "" {
 				unresolved = append(unresolved, graph.UnresolvedRef{
 					Service: n.Service, File: n.File, Line: n.Line,
@@ -92,7 +102,14 @@ func LinkTemplScripts(nodes []graph.Node) ([]graph.Edge, []graph.UnresolvedRef) 
 // as `/static/js/board.js`) to an indexed JS file's representative node. A path
 // suffix match is confident (static); a basename-only fallback is partial —
 // build tooling can remap the directory (`js/datastar.js` → `assets/datastar.js`).
-func resolveAssetFile(src string, reps map[string]jsFileRep) (id, confidence string) {
+//
+// Resolution is confined to svc, the service that owns the templ component: a
+// `<script src>` is served by its own service, so matching another service's
+// file is never right. Shared vendored bundle names (datastar.min.js checked
+// into two services) made that misfire routinely, and the winner depended on
+// map order. repFiles must be the sorted key set of reps so that ties between
+// two equally good in-service candidates resolve the same way on every run.
+func resolveAssetFile(src, svc string, reps map[string]jsFileRep, repFiles []string) (id, confidence string) {
 	norm := src
 	if i := strings.IndexByte(norm, '?'); i >= 0 {
 		norm = norm[:i]
@@ -105,12 +122,19 @@ func resolveAssetFile(src string, reps map[string]jsFileRep) (id, confidence str
 	base := path.Base(norm)
 
 	var suffixID, baseID string
-	for file, rep := range reps {
+	for _, file := range repFiles {
+		rep := reps[file]
+		// An empty service on either side means the caller is not
+		// service-scoped (unit fixtures, single-service workspaces) — fall
+		// back to matching on path alone rather than dropping the edge.
+		if svc != "" && rep.service != "" && rep.service != svc {
+			continue
+		}
 		if file == norm || strings.HasSuffix(file, "/"+norm) {
 			suffixID = rep.id
 			break
 		}
-		if path.Base(file) == base {
+		if baseID == "" && path.Base(file) == base {
 			baseID = rep.id // keep looking for a stronger suffix match
 		}
 	}
