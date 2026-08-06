@@ -34,6 +34,11 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	// tracking so it only sees the pattern-matched comm nodes.
 	resolveRubyQueueKeys(file, src, nodes)
 
+	// Tier R: compose Rails' namespace/resources/resource nesting + symbol-based
+	// member/collection action names into each route's full absolute path.
+	// See docs/rails-route-path-composition-plan.md.
+	composeRailsRoutePaths(file, src, nodes)
+
 	// Structural variable tracking: constants, classes, ivar reads/writes.
 	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, src)
 	nodes = append(nodes, varNodes...)
