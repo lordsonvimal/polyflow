@@ -81,3 +81,46 @@ patterns:
         role: http_method
       - name: action
         role: rails_collection_action
+  # Tier R: the bare `get :action, on: :member` / `on: :collection` form —
+  # measured (2026-08-06) as the *dominant* idiom in orion's routes.rb (80
+  # occurrences vs. 56 explicit `member do`/`collection do` blocks), so this
+  # is not an edge case alongside member_verb_route/collection_verb_route,
+  # it is the majority shape. See docs/rails-route-path-composition-plan.md.
+  - name: member_verb_route_inline
+    query: |
+      (call
+        !receiver
+        method: (identifier) @verb
+        (#match? @verb "^(get|post|put|patch|delete|head|options)$")
+        arguments: (argument_list
+          (simple_symbol) @action
+          (pair
+            key: (hash_key_symbol) @_on_key
+            (#eq? @_on_key "on")
+            value: (simple_symbol) @on)))
+    match:
+      on: [":member"]
+    captures:
+      - name: verb
+        role: http_method
+      - name: action
+        role: rails_member_action
+  - name: collection_verb_route_inline
+    query: |
+      (call
+        !receiver
+        method: (identifier) @verb
+        (#match? @verb "^(get|post|put|patch|delete|head|options)$")
+        arguments: (argument_list
+          (simple_symbol) @action
+          (pair
+            key: (hash_key_symbol) @_on_key
+            (#eq? @_on_key "on")
+            value: (simple_symbol) @on)))
+    match:
+      on: [":collection"]
+    captures:
+      - name: verb
+        role: http_method
+      - name: action
+        role: rails_collection_action
