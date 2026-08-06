@@ -2181,6 +2181,11 @@ func initEvalFlags() {
 	stampCmd.Flags().StringVar(&evalStampWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
 	_ = stampCmd.MarkFlagRequired("corpus")
 	evalCmd.AddCommand(stampCmd)
+
+	promoteGapsCmd.Flags().StringVar(&promoteGapsCorpus, "corpus", "", "path to a single corpus dir (with manifest.yaml) to append promoted gap cases to")
+	promoteGapsCmd.Flags().BoolVar(&promoteGapsWrite, "write", false, "persist the promoted cases (default: dry-run, prints what would be added)")
+	_ = promoteGapsCmd.MarkFlagRequired("corpus")
+	evalCmd.AddCommand(promoteGapsCmd)
 }
 
 var evalCmd = &cobra.Command{
@@ -2356,6 +2361,58 @@ func runEvalStamp(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Stamped %s: recall=%.3f over %d cases (corpus=%s)\n", cfg.Name, report.Recall, len(report.Results), m.Repo.Name)
+	return nil
+}
+
+var (
+	promoteGapsCorpus string
+	promoteGapsWrite  bool
+)
+
+var promoteGapsCmd = &cobra.Command{
+	Use:   "promote-gaps",
+	Short: "Promote runtime-observed static-analysis gaps into permanent eval cases",
+	RunE:  runPromoteGaps,
+}
+
+func runPromoteGaps(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	m, err := eval.LoadManifest(promoteGapsCorpus)
+	if err != nil {
+		return fmt.Errorf("load corpus manifest: %w", err)
+	}
+
+	dbPath := filepath.Join(meta.DBDir, meta.DBFile)
+	store, err := graph.NewSQLiteStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("open store (run `polyflow index` first): %w", err)
+	}
+	defer store.Close()
+
+	cases, err := eval.PromoteGaps(ctx, store, m)
+	if err != nil {
+		return err
+	}
+
+	if len(cases) == 0 {
+		fmt.Println("No new observed_only_gap edges to promote.")
+		return nil
+	}
+
+	for _, c := range cases {
+		fmt.Printf("  %s  target=%s  service=%s  must_not_miss=%v\n", c.ID, c.Target, c.Service, c.MustNotMiss)
+	}
+
+	if !promoteGapsWrite {
+		fmt.Printf("\n%d case(s) would be added to %s (dry-run; pass --write to persist)\n", len(cases), filepath.Join(promoteGapsCorpus, "manifest.yaml"))
+		return nil
+	}
+
+	if err := eval.AppendCasesToManifest(promoteGapsCorpus, cases); err != nil {
+		return err
+	}
+	fmt.Printf("\n%d case(s) appended to %s\n", len(cases), filepath.Join(promoteGapsCorpus, "manifest.yaml"))
 	return nil
 }
 
