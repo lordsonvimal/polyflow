@@ -68,14 +68,22 @@ func (m *Manager) lookup(backend string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("sidecar: unknown backend %q", backend)
 	}
+	// An explicit location — constructor argument or SidecarDirEnv — is
+	// authoritative: search it and nothing else. Falling through to the
+	// executable's directory and PATH would let a stale binary from an old
+	// `go install` silently substitute itself for the one that was asked for,
+	// which changes index output with no note in the coverage ledger. It also
+	// defeats pointing SidecarDirEnv at an empty dir to force the in-process
+	// fallback (see the constant's doc comment).
 	var dirs []string
-	if m.dir != "" {
-		dirs = append(dirs, m.dir)
-	} else {
+	exclusive := false
+	switch {
+	case m.dir != "":
+		dirs, exclusive = []string{m.dir}, true
+	default:
 		if env := os.Getenv(SidecarDirEnv); env != "" {
-			dirs = append(dirs, env)
-		}
-		if exe, err := os.Executable(); err == nil {
+			dirs, exclusive = []string{env}, true
+		} else if exe, err := os.Executable(); err == nil {
 			dirs = append(dirs, filepath.Dir(exe))
 		}
 	}
@@ -85,7 +93,7 @@ func (m *Manager) lookup(backend string) (string, error) {
 			return p, nil
 		}
 	}
-	if m.dir == "" {
+	if !exclusive {
 		if p, err := exec.LookPath(bin); err == nil {
 			return p, nil
 		}

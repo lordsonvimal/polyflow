@@ -415,3 +415,33 @@ func TestIndexerSidecarUsedAndProfilesStamped(t *testing.T) {
 	assert.False(t, web["templ"].Inferred)
 	assert.Equal(t, "datastar-v1", web["datastar"].Profile)
 }
+
+// A stale polyflow-parse-templ left on PATH by an old `go install` must never
+// stand in for the binary the caller asked for: it silently changes parser
+// output with no note in the coverage ledger, and it defeats pointing
+// SidecarDirEnv at an empty dir to force the in-process fallback.
+func TestManagerHonorsExplicitDirOverPATH(t *testing.T) {
+	// Put a plausible-looking binary on PATH.
+	pathDir := t.TempDir()
+	stale := filepath.Join(pathDir, "polyflow-parse-templ")
+	require.NoError(t, os.WriteFile(stale, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// An empty explicit dir must fail lookup rather than fall through to PATH.
+	t.Setenv(sidecar.SidecarDirEnv, t.TempDir())
+	_, err := sidecar.NewManager("").Client("templ-v0.3")
+	require.Error(t, err, "empty SidecarDirEnv must force the in-process fallback, not resolve via PATH")
+
+	// Same for the constructor argument.
+	_, err = sidecar.NewManager(t.TempDir()).Client("templ-v0.3")
+	require.Error(t, err, "explicit manager dir must not fall through to PATH")
+
+	// With no explicit dir at all, PATH remains a valid last resort.
+	os.Unsetenv(sidecar.SidecarDirEnv)
+	if _, err := sidecar.NewManager("").Client("templ-v0.3"); err != nil {
+		// Starting the stub will fail (it is not a real sidecar), but the
+		// failure must be a start/handshake error, not "binary not found".
+		assert.NotContains(t, err.Error(), "not found",
+			"PATH lookup must still be reachable when no explicit dir is set")
+	}
+}
