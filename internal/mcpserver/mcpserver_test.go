@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ import (
 type fakeStore struct {
 	nodes      []*graph.Node
 	unresolved []graph.UnresolvedRef
+	meta       map[string]string
 }
 
 func (f *fakeStore) SearchNodes(_ context.Context, query string, limit int) ([]*graph.Node, error) {
@@ -39,6 +41,13 @@ func (f *fakeStore) SearchNodes(_ context.Context, query string, limit int) ([]*
 
 func (f *fakeStore) ListUnresolvedRefs(_ context.Context) ([]graph.UnresolvedRef, error) {
 	return f.unresolved, nil
+}
+
+func (f *fakeStore) GetMeta(_ context.Context, key string) (string, error) {
+	if v, ok := f.meta[key]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("meta key not found: %s", key)
 }
 
 // fixture: frontend:fetchUser --http_call--> backend:getUser --calls--> backend:queryDB
@@ -294,6 +303,37 @@ func TestContextTool_CarriesUnresolved(t *testing.T) {
 	assert.Contains(t, out.Note, "verify this 1 unresolved reference manually")
 }
 
+func TestContextTool_CarriesTrust(t *testing.T) {
+	store, idx := fixture()
+	data, err := graph.EncodeTrustStamp(graph.TrustStamp{
+		Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0, MeasuredAt: "2026-07-19T10:31:00Z",
+	})
+	require.NoError(t, err)
+	store.meta = map[string]string{graph.TrustStampMetaKey: string(data)}
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Trust graph.TrustStamp `json:"trust"`
+	}
+	callJSON(t, cs, "context", map[string]any{"target": "getUser"}, &out)
+
+	assert.True(t, out.Trust.Measured)
+	assert.Equal(t, "chessleap", out.Trust.Corpus)
+	assert.InDelta(t, 1.0, out.Trust.Recall, 1e-9)
+}
+
+func TestContextTool_TrustUnmeasuredByDefault(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Trust graph.TrustStamp `json:"trust"`
+	}
+	callJSON(t, cs, "context", map[string]any{"target": "getUser"}, &out)
+
+	assert.Equal(t, graph.TrustStamp{Measured: false}, out.Trust)
+}
+
 func TestContextTool_FilesMode(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
@@ -357,6 +397,24 @@ func TestImpactTool_NodeMode(t *testing.T) {
 	assert.Equal(t, "dynDispatch", out.Unresolved[0].Name)
 }
 
+func TestImpactTool_CarriesTrust(t *testing.T) {
+	store, idx := fixture()
+	data, err := graph.EncodeTrustStamp(graph.TrustStamp{
+		Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0, MeasuredAt: "2026-07-19T10:31:00Z",
+	})
+	require.NoError(t, err)
+	store.meta = map[string]string{graph.TrustStampMetaKey: string(data)}
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Trust graph.TrustStamp `json:"trust"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
+
+	assert.True(t, out.Trust.Measured)
+	assert.Equal(t, "chessleap", out.Trust.Corpus)
+}
+
 func TestImpactTool_FileMode(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
@@ -400,6 +458,24 @@ func TestTraceTool_BackwardChain(t *testing.T) {
 	assert.Contains(t, out.Chains[0].Text, "fetchUser")
 	assert.Contains(t, out.Chains[0].Text, "queryDB")
 	require.Len(t, out.Unresolved, 1)
+}
+
+func TestTraceTool_CarriesTrust(t *testing.T) {
+	store, idx := fixture()
+	data, err := graph.EncodeTrustStamp(graph.TrustStamp{
+		Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0, MeasuredAt: "2026-07-19T10:31:00Z",
+	})
+	require.NoError(t, err)
+	store.meta = map[string]string{graph.TrustStampMetaKey: string(data)}
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Trust graph.TrustStamp `json:"trust"`
+	}
+	callJSON(t, cs, "trace", map[string]any{"root": "queryDB", "direction": "backward"}, &out)
+
+	assert.True(t, out.Trust.Measured)
+	assert.Equal(t, "chessleap", out.Trust.Corpus)
 }
 
 func TestContextTool_SummaryRollsUpPerFile(t *testing.T) {
@@ -519,7 +595,7 @@ func fixtureWithVerification() (*fakeStore, *graph.AdjacencyIndex) {
 	})
 	idx.AddEdge(&graph.Edge{
 		ID: "e2", From: "be:getUser", To: "be:queryDB",
-		Type: graph.EdgeTypeCalls,
+		Type:              graph.EdgeTypeCalls,
 		VerificationState: graph.StateCandidate,
 	})
 	store := &fakeStore{nodes: nodes}
@@ -608,8 +684,8 @@ func TestContextTool_MinVerificationFiltersNodes(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Upstream   []map[string]any          `json:"upstream"`
-		Downstream []map[string]any          `json:"downstream"`
+		Upstream            []map[string]any          `json:"upstream"`
+		Downstream          []map[string]any          `json:"downstream"`
 		VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 	}
 	// getUser: upstream=fetchUser (verified), downstream=queryDB (candidate)
@@ -791,7 +867,7 @@ func TestImpactTool_TargetServiceFilter(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Target           *graph.Node              `json:"target"`
+		Target           *graph.Node             `json:"target"`
 		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 	}
 	callJSON(t, cs, "impact", map[string]any{
@@ -812,7 +888,7 @@ func TestImpactTool_AmbiguityInResponse(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Target           *graph.Node              `json:"target"`
+		Target           *graph.Node             `json:"target"`
 		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 	}
 	callJSON(t, cs, "impact", map[string]any{"target": "Login"}, &out)
@@ -829,7 +905,7 @@ func TestImpactTool_UnambiguousEmptyCandidates(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Target           *graph.Node              `json:"target"`
+		Target           *graph.Node             `json:"target"`
 		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 	}
 	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
