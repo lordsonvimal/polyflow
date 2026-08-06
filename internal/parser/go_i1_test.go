@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "30" {
-		t.Errorf("expected SchemaVersion 30 (W-SSE: datastar SSE-constructor wrapper + PatchElement* arg render targets), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "31" {
+		t.Errorf("expected SchemaVersion 31 (IA.5: dom_contract producer->consumer edge), got %q", graph.SchemaVersion)
 	}
 }
 
@@ -256,9 +256,9 @@ func main() { sort.Sort(mySlice{}) }
 	t.Chdir(dir)
 
 	known := map[string]bool{
-		"svc:main.go:method:Len:13":  true,
-		"svc:main.go:method:Less:14": true,
-		"svc:main.go:method:Swap:15": true,
+		"svc:main.go:method:Len:13":    true,
+		"svc:main.go:method:Less:14":   true,
+		"svc:main.go:method:Swap:15":   true,
 		"svc:main.go:function:main:17": true,
 	}
 
@@ -316,9 +316,9 @@ func main() { sort.Sort(byLen{"a"}) }
 
 	known := map[string]bool{
 		"svc:main.go:function:main:11": true,
-		"svc:main.go:method:Len:7":    true,
-		"svc:main.go:method:Less:8":   true,
-		"svc:main.go:method:Swap:9":   true,
+		"svc:main.go:method:Len:7":     true,
+		"svc:main.go:method:Less:8":    true,
+		"svc:main.go:method:Swap:9":    true,
 	}
 
 	a := &GoSemanticAnalyzer{}

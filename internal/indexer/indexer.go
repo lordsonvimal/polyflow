@@ -730,6 +730,16 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, domUnresolved...)
 	}
+	// templ producer (data-testid/id) attribute -> JS attribute-selector
+	// consumer `dom_contract` (IA.5): component -> JS site directly, no
+	// intermediate node, so investigate/walkFlows reach it in one hop.
+	{
+		_, contractEdges, contractUnresolved := linker.LinkDOMContracts(allNodes)
+		if err := writeEdges(contractEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, contractUnresolved...)
+	}
 	// Structural backbone: service→file→declaration + struct→method contains
 	// edges (mints synthetic service/file nodes, so persist them before wiring).
 	{

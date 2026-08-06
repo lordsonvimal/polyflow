@@ -6,23 +6,23 @@ import "sort"
 type NodeType string
 
 const (
-	NodeTypeHTTPHandler  NodeType = "http_handler"
-	NodeTypeHTTPClient   NodeType = "http_client"
-	NodeTypeFunction     NodeType = "function"
+	NodeTypeHTTPHandler NodeType = "http_handler"
+	NodeTypeHTTPClient  NodeType = "http_client"
+	NodeTypeFunction    NodeType = "function"
 	// NodeTypeMethod is a concrete method (struct/class receiver) or, when
 	// meta.kind="interface_method" (Tier Y.5b), an abstract interface method —
 	// the dispatch target of an SSA invoke call. Interface-method nodes carry
 	// meta.interface=<interface node ID> and are minted only when a `calls`
 	// edge dispatches through them.
-	NodeTypeMethod       NodeType = "method"
-	NodeTypeComponent    NodeType = "component"
-	NodeTypeRoute        NodeType = "route"
-	NodeTypeWorker       NodeType = "worker"
-	NodeTypePublisher    NodeType = "publisher"
-	NodeTypeSubscriber   NodeType = "subscriber"
+	NodeTypeMethod     NodeType = "method"
+	NodeTypeComponent  NodeType = "component"
+	NodeTypeRoute      NodeType = "route"
+	NodeTypeWorker     NodeType = "worker"
+	NodeTypePublisher  NodeType = "publisher"
+	NodeTypeSubscriber NodeType = "subscriber"
 	// NodeTypeElement is a generic DOM element node (successor to NodeTypeTemplElement).
 	// The Language field distinguishes the source: templ, html, jsx, erb.
-	NodeTypeElement  NodeType = "element"
+	NodeTypeElement NodeType = "element"
 	// NodeTypeTemplElement is kept as a deprecated alias for stored graphs; new
 	// minting uses NodeTypeElement. (job_enqueue/sidekiq_enqueue precedent.)
 	NodeTypeTemplElement NodeType = "templ_element"
@@ -92,9 +92,9 @@ const MetaIsTest = "is_test"
 type EdgeType string
 
 const (
-	EdgeTypeHTTPCall        EdgeType = "http_call"
-	EdgeTypeCalls           EdgeType = "calls"
-	EdgeTypeRenders         EdgeType = "renders"
+	EdgeTypeHTTPCall EdgeType = "http_call"
+	EdgeTypeCalls    EdgeType = "calls"
+	EdgeTypeRenders  EdgeType = "renders"
 	// EdgeTypeComponentImpl bridges a templ component to its generated Go twin
 	// (`x.templ` component ↔ `x_templ.go` function). The generated function is
 	// what the go/packages call graph reaches, so the edge runs from that
@@ -103,25 +103,25 @@ const (
 	EdgeTypeComponentImpl EdgeType = "component_impl"
 	// Page navigation (href/action attributes) — user-driven, not an API call.
 	EdgeTypeNavigatesTo EdgeType = "navigates_to"
-	EdgeTypePublishes       EdgeType = "publishes"
-	EdgeTypeSubscribes      EdgeType = "subscribes"
-	EdgeTypeImports         EdgeType = "imports"
+	EdgeTypePublishes   EdgeType = "publishes"
+	EdgeTypeSubscribes  EdgeType = "subscribes"
+	EdgeTypeImports     EdgeType = "imports"
 	// EdgeTypeDefinedIn links a JS DOM-target (querySelector/getElementById) to
 	// the templ element that declares the matching id=/class= — the JS↔templ DOM
 	// seam. Runs from the JS target to the templ_element definition node.
-	EdgeTypeDefinedIn       EdgeType = "defined_in"
-	EdgeTypeSpawns          EdgeType = "spawns"
-	EdgeTypeSSEEndpoint     EdgeType = "sse_endpoint"
-	EdgeTypeDatastarAction  EdgeType = "datastar_action"
-	EdgeTypeDatastarBind    EdgeType = "datastar_bind"
+	EdgeTypeDefinedIn      EdgeType = "defined_in"
+	EdgeTypeSpawns         EdgeType = "spawns"
+	EdgeTypeSSEEndpoint    EdgeType = "sse_endpoint"
+	EdgeTypeDatastarAction EdgeType = "datastar_action"
+	EdgeTypeDatastarBind   EdgeType = "datastar_bind"
 	// Generic background-job edges: delayed_job, solid_queue, ActiveJob,
 	// Sidekiq all map onto these; the meta records which queue system.
 	EdgeTypeJobEnqueue EdgeType = "job_enqueue"
 	EdgeTypeJobPerform EdgeType = "job_perform"
 	// Deprecated: kept as aliases for stored graphs; new code emits the
 	// generic job_enqueue/job_perform types.
-	EdgeTypeSidekiqEnqueue EdgeType = "sidekiq_enqueue"
-	EdgeTypeSidekiqPerform EdgeType = "sidekiq_perform"
+	EdgeTypeSidekiqEnqueue  EdgeType = "sidekiq_enqueue"
+	EdgeTypeSidekiqPerform  EdgeType = "sidekiq_perform"
 	EdgeTypePusherTrigger   EdgeType = "pusher_trigger"
 	EdgeTypePusherSubscribe EdgeType = "pusher_subscribe"
 	EdgeTypeDOMRead         EdgeType = "dom_read"
@@ -129,9 +129,17 @@ const (
 	EdgeTypeDOMCreate       EdgeType = "dom_create"
 	EdgeTypeDOMRemove       EdgeType = "dom_remove"
 	EdgeTypeDOMListen       EdgeType = "dom_listen"
-	EdgeTypeQueries         EdgeType = "queries"  // reads from a datastore
-	EdgeTypePersists        EdgeType = "persists" // writes to a datastore
-	EdgeTypeCloudCall       EdgeType = "cloud_call"
+	// EdgeTypeDOMContract links a templ component that declares a stable
+	// selector attribute (data-testid, id, other data-*) to the JS site that
+	// reads it via a matching attribute selector
+	// (querySelector('[data-testid="…"]')). Runs component -> consumer
+	// (opposite direction from defined_in, and no intermediate element node)
+	// so investigate/walkFlows reach the JS clone/read site in one hop out of
+	// the rendering component that resolveNode already landed on.
+	EdgeTypeDOMContract EdgeType = "dom_contract"
+	EdgeTypeQueries     EdgeType = "queries"  // reads from a datastore
+	EdgeTypePersists    EdgeType = "persists" // writes to a datastore
+	EdgeTypeCloudCall   EdgeType = "cloud_call"
 	// WebSocket edges
 	EdgeTypeWSUpgrade EdgeType = "ws_upgrade" // HTTP handler upgrades to a WebSocket
 	EdgeTypeWSConnect EdgeType = "ws_connect" // client opens a WebSocket
@@ -203,7 +211,7 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "30" // W-SSE: datastar SSE-constructor wrapper + PatchElement* arg render targets
+const SchemaVersion = "31" // IA.5: dom_contract producer->consumer edge (data-testid/id attribute-selector seam)
 
 // Node represents a code entity in the graph.
 type Node struct {
@@ -327,7 +335,7 @@ type UnresolvedRef struct {
 // Each index run writes one row per (service, kind) pair; the history table
 // keeps the last 50 distinct run timestamps for trend computation.
 type UnresolvedHistoryRow struct {
-	RunAt   int64  `json:"run_at"`  // unix timestamp of the index run
+	RunAt   int64  `json:"run_at"` // unix timestamp of the index run
 	Service string `json:"service"`
 	Kind    string `json:"kind"`
 	Count   int    `json:"count"`
