@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // DefaultAgentCmd is the pinned default agent CLI invocation for
@@ -246,13 +247,7 @@ func RunAgentCorpus(ctx context.Context, opts AgentRunOptions) (*AgentReport, er
 		return &AgentReport{Repo: m.Repo.Name}, nil
 	}
 
-	cmdTemplate := opts.AgentCmd
-	if cmdTemplate == "" {
-		cmdTemplate = os.Getenv("POLYFLOW_AGENT_CMD")
-	}
-	if cmdTemplate == "" {
-		cmdTemplate = DefaultAgentCmd
-	}
+	cmdTemplate := resolveAgentCmd(opts.AgentCmd)
 
 	argv0 := splitCmd(cmdTemplate)
 	if len(argv0) == 0 {
@@ -304,4 +299,69 @@ func RunAgentCorpus(ctx context.Context, opts AgentRunOptions) (*AgentReport, er
 	}
 
 	return &AgentReport{Repo: m.Repo.Name, Correctness: correctness, Results: results}, nil
+}
+
+// resolveAgentCmd applies the override → POLYFLOW_AGENT_CMD → DefaultAgentCmd
+// precedence shared by RunAgentCorpus and RunAllAgent.
+func resolveAgentCmd(override string) string {
+	if override != "" {
+		return override
+	}
+	if env := os.Getenv("POLYFLOW_AGENT_CMD"); env != "" {
+		return env
+	}
+	return DefaultAgentCmd
+}
+
+// RunAllAgent runs every corpus under root whose manifest declares
+// agent_cases against the configured agent CLI and returns an
+// AgentMultiReport (T.3), mirroring RunAll (T.1) so the same baseline/gate
+// conventions apply to agent-correctness numbers. Corpora with no
+// agent_cases are silently omitted — T.2 is additive, so opting out is the
+// default and not worth reporting as a skip.
+//
+// The agent CLI's availability is checked once, up front — it is shared
+// across every corpus in root — so ErrAgentCLIUnavailable is returned
+// before anything runs, exactly like RunAgentCorpus.
+func RunAllAgent(ctx context.Context, root string, opts AgentRunOptions) (*AgentMultiReport, error) {
+	dirs, err := FindCorpusDirs(root)
+	if err != nil {
+		return nil, err
+	}
+	if len(dirs) == 0 {
+		return nil, fmt.Errorf("no corpus directories (with manifest.yaml) found under %s", root)
+	}
+
+	cmdTemplate := resolveAgentCmd(opts.AgentCmd)
+	argv0 := splitCmd(cmdTemplate)
+	if len(argv0) == 0 {
+		return nil, fmt.Errorf("empty agent command template")
+	}
+	if _, err := exec.LookPath(argv0[0]); err != nil {
+		return nil, fmt.Errorf("%w: %q (set --agent-cmd or POLYFLOW_AGENT_CMD)", ErrAgentCLIUnavailable, argv0[0])
+	}
+
+	out := &AgentMultiReport{GeneratedAt: time.Now().UTC()}
+	for _, dir := range dirs {
+		m, err := LoadManifest(dir)
+		if err != nil {
+			out.Skipped = append(out.Skipped, SkippedCorpus{Name: dir, Dir: dir, Reason: err.Error()})
+			continue
+		}
+		if len(m.AgentCases) == 0 {
+			continue
+		}
+		report, err := RunAgentCorpus(ctx, AgentRunOptions{CorpusDir: dir, AgentCmd: opts.AgentCmd})
+		if err != nil {
+			out.Skipped = append(out.Skipped, SkippedCorpus{
+				Name:      m.Repo.Name,
+				Dir:       dir,
+				Reason:    err.Error(),
+				LocalOnly: m.Repo.URL == "" && m.Repo.Path != "",
+			})
+			continue
+		}
+		out.Reports = append(out.Reports, *report)
+	}
+	return out, nil
 }
