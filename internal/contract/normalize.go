@@ -33,6 +33,7 @@ func init() {
 	RegisterNormalizer("shared_anchor_guard", normSharedAnchorGuard)
 	RegisterNormalizer("url_to_path", normURLToPath)
 	RegisterNormalizer("dynamic_host_strip", normDynamicHostStrip)
+	RegisterNormalizer("amqp_topic_wildcard", normAMQPTopicWildcard)
 }
 
 var (
@@ -179,6 +180,48 @@ func normDynamicHostStrip(value string, _ NormalizeEnv) string {
 		return value[1:]
 	}
 	return value
+}
+
+// normAMQPTopicWildcard collapses every wildcard segment of a dot-separated AMQP
+// routing key to "*", so the two sides of a topic binding meet: a producer key
+// reconstructed from `fmt.Sprintf("container.%s", ev)` reduces to `container.*`
+// (X.11), while the consumer binds `container.#`. Both become `container.*`.
+// Literal segments are untouched (`logs.build.*` stays `logs.build.*`,
+// `build.submit` stays `build.submit`), and a value with no wildcard segment —
+// every exchange name, and any non-AMQP field this chain is applied to — is
+// returned unchanged.
+//
+// AMQP's two wildcards differ in arity (`*` is one segment, `#` is zero or more),
+// so collapsing them together is a deliberate widening: it can join a producer to
+// a binding whose pattern would not have matched at runtime. That is the
+// recall-first trade, and the resulting edge is never more than `inferred`.
+func normAMQPTopicWildcard(value string, _ NormalizeEnv) string {
+	if !strings.ContainsAny(value, "#*") {
+		return value
+	}
+	segs := strings.Split(value, ".")
+	for i, s := range segs {
+		if s == "#" || s == "*" {
+			segs[i] = "*"
+		}
+	}
+	return strings.Join(segs, ".")
+}
+
+// topicIsOpen reports whether a routing key constrains nothing: it is empty
+// (a fanout publish or an unresolvable key) or every one of its segments is a
+// wildcard. Such a key carries no routing information, which is what admits the
+// exchange_only match tier.
+func topicIsOpen(key string) bool {
+	if key == "" {
+		return true
+	}
+	for _, seg := range strings.Split(key, ".") {
+		if seg != "*" && seg != "#" {
+			return false
+		}
+	}
+	return true
 }
 
 // NormalizeFields applies the named normalizer chain to each field independently

@@ -168,6 +168,77 @@ func TestAMQPRule_DifferentRoutingKey_NoEdge(t *testing.T) {
 	assert.Empty(t, res.Unresolved, "unmatched channels are silently dropped")
 }
 
+// J.1 positive: a producer whose routing key was reconstructed as "container.*"
+// (X.11 Sprintf) meets a binding declared "container.#" once both collapse under
+// amqp_topic_wildcard. This is the container_events pair the fleet audit found
+// missing entirely.
+func TestAMQPRule_TopicWildcard_ProducerMeetsHashBinding(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "maple-agent:channel:container_events/container.*", Type: graph.NodeTypeChannel, Service: "maple-agent",
+			Meta: map[string]string{"exchange": "container_events", "routing_key": "container.*"}},
+		{ID: "maple-manager:channel:container_events/container.#", Type: graph.NodeTypeChannel, Service: "maple-manager",
+			Meta: map[string]string{"exchange": "container_events", "routing_key": "container.#",
+				"resolved_via": "static_table"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	require.NotEmpty(t, res.Edges, "container.* must meet container.# after wildcard collapse")
+	for _, e := range res.Edges {
+		assert.Equal(t, graph.EdgeTypePublishes, e.Type)
+		assert.NotEqual(t, graph.ConfidenceStatic, e.Confidence,
+			"a wildcard-collapsed match is inferred, never static")
+	}
+}
+
+// J.1 negative: collapsing wildcards must not join two distinct literal topics on
+// one exchange.
+func TestAMQPRule_TopicWildcard_DistinctLiteralKeysStillNoEdge(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:channel:build_logs/logs.build.*", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"exchange": "build_logs", "routing_key": "logs.build.*"}},
+		{ID: "b:channel:build_logs/logs.runner.*", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"exchange": "build_logs", "routing_key": "logs.runner.*"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	assert.Empty(t, res.Edges, "logs.build.* and logs.runner.* are different topics")
+}
+
+// J.1: the exchange_only tier fires when the producer's routing key is
+// unresolvable, and stamps `partial` — a fanout exchange with an unknown key is
+// a partial answer and must not be promotable to verified (plan-14).
+func TestAMQPExchangeOnlyTier_StampsPartial(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:channel:container_events/", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"exchange": "container_events", "routing_key": ""}},
+		{ID: "b:channel:container_events/container.#", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"exchange": "container_events", "routing_key": "container.#"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+
+	var edges []graph.Edge
+	for _, e := range res.Edges {
+		if e.From == "a:channel:container_events/" {
+			edges = append(edges, e)
+		}
+	}
+	require.Len(t, edges, 1, "exactly one edge — no earlier tier may also fire")
+	assert.Equal(t, "b:channel:container_events/container.#", edges[0].To)
+	assert.Equal(t, graph.ConfidencePartial, edges[0].Confidence)
+	assert.Equal(t, graph.ConfidencePartial, edges[0].Meta["confidence"])
+}
+
+// J.1 negative: exchange_only must not join two concrete, differing routing keys
+// on the same exchange — that is two topics, not one rendezvous.
+func TestAMQPExchangeOnlyTier_ConcreteKeysBothSides_NoEdge(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "a:channel:orders/placed", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"exchange": "orders", "routing_key": "placed"}},
+		{ID: "b:channel:orders/shipped", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"exchange": "orders", "routing_key": "shipped"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	assert.Empty(t, res.Edges, "exchange_only must not collapse distinct topics")
+}
+
 // ── Hub ───────────────────────────────────────────────────────────────────────
 
 // Positive: hub_broadcast_call producer links to hub_subscribe_call consumer

@@ -137,7 +137,7 @@ func validateRule(r Rule) error {
 	}
 	for _, tier := range r.Match {
 		switch tier {
-		case TierExact, TierNormalized, TierWildcardAnchored:
+		case TierExact, TierNormalized, TierWildcardAnchored, TierExchangeOnly:
 		default:
 			return fmt.Errorf("unknown match tier %q", tier)
 		}

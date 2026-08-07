@@ -67,6 +67,13 @@ const (
 	TierExact            MatchTier = "exact"             // hash join on RawKey
 	TierNormalized       MatchTier = "normalized"        // hash join on Key
 	TierWildcardAnchored MatchTier = "wildcard_anchored" // segment match; ≥1 shared concrete segment required
+	// TierExchangeOnly joins on the first key field alone (the exchange, for
+	// amqp) when the remaining fields carry no routing information on at least
+	// one side — an unresolvable producer routing key, or a fanout binding.
+	// It stamps ConfidencePartial: a fanout exchange with an unknown key
+	// genuinely is a partial answer and must never be stampable as verified
+	// (plan-14 trust soundness).
+	TierExchangeOnly MatchTier = "exchange_only"
 )
 
 // UnmatchedPolicy controls what happens when a producer finds no consumer.

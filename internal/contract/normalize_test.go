@@ -228,3 +228,30 @@ func TestRegisterNormalizer_DuplicatePanics(t *testing.T) {
 		contract.RegisterNormalizer("trim_slash", func(v string, _ contract.NormalizeEnv) string { return v })
 	})
 }
+
+// TestAMQPTopicWildcard_Normalizer locks J.1's topic collapse: wildcard segments
+// (both AMQP forms) become "*", literal segments are untouched, and a value with
+// no wildcard — every exchange name — is returned unchanged.
+func TestAMQPTopicWildcard_Normalizer(t *testing.T) {
+	fn := contract.NormalizerByName("amqp_topic_wildcard")
+	if fn == nil {
+		t.Fatal("amqp_topic_wildcard is not registered")
+	}
+	cases := []struct{ in, want string }{
+		{"container.#", "container.*"},
+		{"container.*", "container.*"},
+		{"logs.build.*", "logs.build.*"},
+		{"build.submit", "build.submit"},
+		{"#", "*"},
+		{"*", "*"},
+		{"", ""},
+		{"build_logs", "build_logs"},
+		{"pdv.#", "pdv.*"},
+		{"a.#.b", "a.*.b"},
+	}
+	for _, tc := range cases {
+		if got := fn(tc.in, contract.NormalizeEnv{}); got != tc.want {
+			t.Errorf("amqp_topic_wildcard(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
