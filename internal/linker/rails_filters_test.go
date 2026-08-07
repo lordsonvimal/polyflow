@@ -27,10 +27,15 @@ var filterFixtureFiles = []string{
 	"testdata/rails_filters/app/controllers/application_controller.rb",
 	"testdata/rails_filters/app/controllers/categories_controller.rb",
 	"testdata/rails_filters/app/controllers/client_api/v1/agents_controller.rb",
+	"testdata/rails_filters/app/controllers/client_api/v1/api_base_controller.rb",
+	"testdata/rails_filters/app/controllers/client_api/v1/repository_controller.rb",
+	"testdata/rails_filters/app/controllers/documents_controller.rb",
+	"testdata/rails_filters/app/controllers/repository_controller.rb",
 	"testdata/rails_filters/app/controllers/concerns/auditable.rb",
 	"testdata/rails_filters/app/controllers/concerns/security_checks.rb",
 	"testdata/rails_filters/app/controllers/concerns/task_security_checks.rb",
 	"testdata/rails_filters/app/controllers/concerns/token_authenticatable.rb",
+	"testdata/rails_filters/app/controllers/public_pages_controller.rb",
 	"testdata/rails_filters/app/controllers/reports_controller.rb",
 }
 
@@ -196,36 +201,84 @@ func TestLinkRailsFilters_BaseControllerStillProducesAnEdge(t *testing.T) {
 	assert.Equal(t, []string{"authenticate_user!/class"}, filterTargets(nodes, edges, classID))
 }
 
-// TestLinkRailsFilters_NotPropagatedToSubclasses pins the documented scope. The
-// filter really does run for ReportsController#index at runtime, but minting it
-// here means one line in a base controller producing an edge per action in the
-// app -- a decision to make with a measurement, not by accident.
-func TestLinkRailsFilters_NotPropagatedToSubclasses(t *testing.T) {
+// TestLinkRailsFilters_PropagatesToSubclasses: almost every guarded action in a
+// Rails app is guarded from a file it does not appear in. CategoriesController
+// declares no authentication and its actions are authenticated, and an agent
+// asking "what runs before this request" has to be told so.
+func TestLinkRailsFilters_PropagatesToSubclasses(t *testing.T) {
 	nodes, edges, _ := filterFixture(t)
 
-	id := methodID(t, nodes, "ReportsController#index")
-	for _, tgt := range filterTargets(nodes, edges, id) {
-		assert.NotContains(t, tgt, "authenticate_user!")
+	for _, action := range []string{"index", "show"} {
+		assert.Contains(t, filterTargets(nodes, edges, methodID(t, nodes, "CategoriesController#"+action)),
+			"authenticate_user!/action",
+			"%s inherits the filter but does not reach it", action)
+	}
+	assert.Contains(t, filterTargets(nodes, edges, nodeIDFor(t, nodes, graph.NodeTypeClass, "CategoriesController")),
+		"authenticate_user!/class")
+
+	// The subclass's own file says nothing about this filter, so the edge has to
+	// name the class to go read, and cannot claim to be certain: the superclass
+	// chain is reconstructed from constant names.
+	target := methodID(t, nodes, "ApplicationController#authenticate_user!")
+	var checked int
+	for _, e := range edges {
+		if e.To != target || e.Meta["inherited_from"] == "" {
+			continue
+		}
+		checked++
+		assert.Equal(t, "ApplicationController", e.Meta["inherited_from"])
+		assert.Equal(t, graph.ConfidenceInferred, e.Confidence)
+	}
+	assert.Positive(t, checked)
+}
+
+// TestLinkRailsFilters_SuperclassResolvesLexically: two controllers can share a
+// simple name in different namespaces, and picking the wrong one is silent --
+// the subclass gets a plausible chain from the other hierarchy and loses its
+// real one. orion has exactly this: FilesController < FilesResourcesController
+// resolved into ClientApi::V1 and every action in the file lost
+// authenticate_user!.
+func TestLinkRailsFilters_SuperclassResolvesLexically(t *testing.T) {
+	nodes, edges, _ := filterFixture(t)
+
+	targets := filterTargets(nodes, edges, methodID(t, nodes, "DocumentsController#index"))
+	assert.Contains(t, targets, "authenticate_user!/action",
+		"the chain through the top-level RepositoryController was not walked")
+	assert.NotContains(t, targets, "restrict_access/action",
+		"inherited a filter from ClientApi::V1, a hierarchy this class is not in")
+}
+
+// TestLinkRailsFilters_SkipRetractsAnInheritedFilter: a skip is the only thing
+// standing between `before_action :authenticate_user!` and an edge onto every
+// action in the app -- including the ones that must stay reachable without a
+// session. Reading the registration and ignoring the retraction asserts exactly
+// the wrong thing about the endpoints that matter most.
+func TestLinkRailsFilters_SkipRetractsAnInheritedFilter(t *testing.T) {
+	nodes, edges, unresolved := filterFixture(t)
+
+	// A bare skip retracts it outright: ReportsController inherits nothing.
+	assert.NotContains(t, filterTargets(nodes, edges, methodID(t, nodes, "ReportsController#index")),
+		"authenticate_user!/action")
+	assert.NotContains(t, filterTargets(nodes, edges, nodeIDFor(t, nodes, graph.NodeTypeClass, "ReportsController")),
+		"authenticate_user!/class")
+
+	// A skip is not itself a registration, and not an unresolved one either.
+	for _, u := range unresolved {
+		assert.NotEqual(t, "authenticate_user!", u.Name)
 	}
 }
 
-// TestLinkRailsFilters_SkipIsNotARegistration: skip_before_action removes an
-// inherited filter. Reading it as a registration would invent a call that never
-// happens.
-func TestLinkRailsFilters_SkipIsNotARegistration(t *testing.T) {
-	nodes, edges, unresolved := filterFixture(t)
+// TestLinkRailsFilters_PartialSkipIsPerAction: `skip_before_action :x, only:
+// %i[landing]` retracts the filter for one action and leaves it for the rest.
+// Treating it as a whole-class retraction would drop the check from every other
+// endpoint in the file.
+func TestLinkRailsFilters_PartialSkipIsPerAction(t *testing.T) {
+	nodes, edges, _ := filterFixture(t)
 
-	target := methodID(t, nodes, "ApplicationController#authenticate_user!")
-	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "ReportsController")
-	for _, e := range edges {
-		if e.To == target {
-			assert.NotEqual(t, classID, e.From, "skip_before_action minted a call")
-		}
-	}
-	for _, u := range unresolved {
-		assert.NotEqual(t, "authenticate_user!", u.Name,
-			"a skip is not an unresolved registration either")
-	}
+	assert.NotContains(t, filterTargets(nodes, edges, methodID(t, nodes, "PublicPagesController#landing")),
+		"authenticate_user!/action", "the landing page is the one action the skip names")
+	assert.Contains(t, filterTargets(nodes, edges, methodID(t, nodes, "PublicPagesController#dashboard")),
+		"authenticate_user!/action", "a partial skip must not disarm the rest of the controller")
 }
 
 // TestLinkRailsFilters_UnresolvableIsLedgered (bug-class #12): a callback with
