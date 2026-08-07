@@ -88,7 +88,7 @@ func TestChains_RabbitMQCrossRepo(t *testing.T) {
 	allNodes := append(append([]graph.Node{}, pubNodes...), subNodes...)
 	allEdges := append(append([]graph.Edge{}, pubEdges...), subEdges...)
 
-	hintNodes, hintEdges := linker.LinkBrokerHints([]workspace.Link{
+	hintNodes, hintEdges, _ := linker.LinkBrokerHints([]workspace.Link{
 		{From: "main-svc", To: "svc-c-agent", Via: "rabbitmq", Exchange: "dsw.builds"},
 	}, allNodes)
 	allNodes = append(allNodes, hintNodes...)
@@ -105,15 +105,18 @@ func TestChains_RabbitMQCrossRepo(t *testing.T) {
 	require.NotNil(t, r)
 	require.NotEmpty(t, r.Chains)
 
+	// Since J.3 the hint attaches to the consumer's own `dsw.builds` channel
+	// instead of minting a parallel `broker:channel:dsw.builds`, so the service
+	// boundary is crossed one hop earlier — at the channel, not the consumer.
 	var hit string
 	for _, c := range r.Chains {
-		if strings.Contains(c.Text, "-[publishes]-> dsw.builds") &&
-			strings.Contains(c.Text, "-[subscribes]-> ‖svc-c-agent‖") {
+		if strings.Contains(c.Text, "-[publishes]-> ‖svc-c-agent‖ dsw.builds") &&
+			strings.Contains(c.Text, "-[subscribes]-> ConsumeWithContext") {
 			hit = c.Text
 		}
 	}
 	require.NotEmpty(t, hit,
-		"expected a chain main-svc publisher → dsw.builds channel → ‖svc-c-agent‖ consumer, got:\n%s",
+		"expected a chain main-svc publisher → dsw.builds channel → svc-c-agent consumer, got:\n%s",
 		chainTexts(r))
 	assert.True(t, strings.HasPrefix(hit, "(main-svc) "), "chain starts at the publishing service: %s", hit)
 	assert.Contains(t, r.Services, "svc-c-agent")

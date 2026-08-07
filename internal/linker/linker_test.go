@@ -258,7 +258,8 @@ func TestLinkBrokerHints_CrossLanguage(t *testing.T) {
 		{From: "main-svc", To: "svc-c-agent", Via: "rabbitmq", Exchange: "dsw.builds"},
 	}
 
-	chanNodes, edges := LinkBrokerHints(links, nodes)
+	chanNodes, edges, unresolved := LinkBrokerHints(links, nodes)
+	assert.Empty(t, unresolved, "a single hinted exchange is unambiguous evidence-free wiring")
 	require.Len(t, chanNodes, 1)
 	assert.Equal(t, graph.NodeTypeChannel, chanNodes[0].Type)
 	assert.Equal(t, "dsw.builds", chanNodes[0].Meta["exchange"])
@@ -277,9 +278,138 @@ func TestLinkBrokerHints_CrossLanguage(t *testing.T) {
 
 func TestLinkBrokerHints_NoRabbitLinks(t *testing.T) {
 	nodes := []graph.Node{{ID: "a", Type: graph.NodeTypePublisher, Service: "svc"}}
-	n, e := LinkBrokerHints([]workspace.Link{{From: "a", To: "b", BaseURL: "/api"}}, nodes)
+	n, e, u := LinkBrokerHints([]workspace.Link{{From: "a", To: "b", BaseURL: "/api"}}, nodes)
 	assert.Empty(t, n)
 	assert.Empty(t, e)
+	assert.Empty(t, u, "no rabbitmq link means nothing was even attempted")
+}
+
+// J.3 regression for the 25-edge cartesian: an exchange-less `dynamic`
+// subscriber facing 5 hinted exchanges was joined to all 5 and stamped
+// `static`. It must now produce nothing, and say so in the ledger.
+func TestLinkBrokerHints_RequiresExchangeEvidence(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "agent:sub:dynamic", Label: "dynamic", Type: graph.NodeTypeSubscriber,
+			Service: "dsw-agent", File: "amqp.go", Line: 238,
+			Meta: map[string]string{"pattern": "amqp_consume", "key_dynamic": "true"}},
+	}
+	links := []workspace.Link{
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_jobs"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_logs"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "file_sync"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "container_events"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "shinyproxy_config"},
+	}
+
+	chanNodes, edges, unresolved := LinkBrokerHints(links, nodes)
+	assert.Empty(t, edges, "no evidence + 5 candidate exchanges is a guess, not a link")
+	assert.Empty(t, chanNodes, "no edge means no channel to mint")
+	require.Len(t, unresolved, 1, "one ledger entry per node, not per link")
+	assert.Equal(t, "amqp_exchange_unresolved", unresolved[0].Kind)
+	assert.Equal(t, "dynamic", unresolved[0].Name)
+	assert.Equal(t, "dsw-agent", unresolved[0].Service)
+	assert.Equal(t, 238, unresolved[0].Line)
+}
+
+func TestLinkBrokerHints_MatchingExchangeStillLinks(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "agent:sub:jobs", Type: graph.NodeTypeSubscriber, Service: "dsw-agent",
+			Meta: map[string]string{"pattern": "amqp_consume", "exchange": `"build_jobs"`}},
+		{ID: "agent:sub:other", Type: graph.NodeTypeSubscriber, Service: "dsw-agent",
+			Meta: map[string]string{"pattern": "amqp_consume", "exchange": "unlinked_exchange"}},
+	}
+	links := []workspace.Link{
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_jobs"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_logs"},
+	}
+
+	_, edges, unresolved := LinkBrokerHints(links, nodes)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "agent:sub:jobs", edges[0].To)
+	assert.Equal(t, graph.ConfidenceStatic, edges[0].Confidence)
+	assert.Empty(t, edges[0].Meta["fanout"])
+	require.Len(t, unresolved, 1, "the node naming an unlinked exchange is a miss, not a link")
+	assert.Equal(t, "agent:sub:other", unresolved[0].Name)
+}
+
+func TestLinkBrokerHints_MultiCandidateStampsPartial(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "agent:sub:multi", Type: graph.NodeTypeSubscriber, Service: "dsw-agent",
+			Meta: map[string]string{"pattern": "amqp_consume",
+				"exchange_candidates": "build_jobs,build_logs"}},
+	}
+	links := []workspace.Link{
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_jobs"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_logs"},
+	}
+
+	_, edges, unresolved := LinkBrokerHints(links, nodes)
+	require.Len(t, edges, 2)
+	assert.Empty(t, unresolved)
+	for _, e := range edges {
+		assert.Equal(t, graph.ConfidencePartial, e.Confidence,
+			"two candidate exchanges cannot both be the deployed topology")
+		assert.Equal(t, "2", e.Meta["fanout"])
+	}
+}
+
+// The hint must meet the real channel a resolved binding already produced;
+// minting `broker:channel:<exchange>` beside `<svc>:channel:<exchange>/<key>`
+// is what created channel→channel publishes edges.
+func TestLinkBrokerHints_ReusesExistingChannelID(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "dsw-agent:channel:build_logs/", Label: "build_logs/", Type: graph.NodeTypeChannel,
+			Service: "dsw-agent", Meta: map[string]string{"exchange": "build_logs"}},
+		{ID: "dsw-agent:sub:logs", Type: graph.NodeTypeSubscriber, Service: "dsw-agent",
+			Meta: map[string]string{"pattern": "amqp_consume", "exchange": "build_logs"}},
+	}
+	links := []workspace.Link{
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_logs"},
+	}
+
+	chanNodes, edges, _ := LinkBrokerHints(links, nodes)
+	assert.Empty(t, chanNodes, "a real channel exists; no synthetic node may be minted")
+	require.Len(t, edges, 1)
+	assert.Equal(t, "dsw-agent:channel:build_logs/", edges[0].From)
+}
+
+// A queue name is exchange evidence when a resolved binding table (J.1) says
+// which exchange that queue is bound to.
+func TestLinkBrokerHints_QueueNameResolvesExchange(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "dsw-manager:channel:build_logs/logs.build.*", Type: graph.NodeTypeChannel,
+			Service: "dsw-manager", Meta: map[string]string{
+				"exchange": "build_logs", "routing_key": "logs.build.*",
+				"queue_name": "build_logs_queue", "resolved_via": "static_table"}},
+		{ID: "agent:sub:q", Type: graph.NodeTypeSubscriber, Service: "dsw-agent",
+			Meta: map[string]string{"pattern": "amqp_consume", "queue": "build_logs_queue"}},
+	}
+	links := []workspace.Link{
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_logs"},
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "file_sync"},
+	}
+
+	_, edges, unresolved := LinkBrokerHints(links, nodes)
+	require.Len(t, edges, 1, "the queue binds one exchange, so only one hint applies")
+	assert.Equal(t, "dsw-manager:channel:build_logs/logs.build.*", edges[0].From)
+	assert.Equal(t, graph.ConfidenceStatic, edges[0].Confidence)
+	assert.Empty(t, unresolved)
+}
+
+// Publishers keep their pre-J.3 gate: one that resolved its own exchange has a
+// real channel already and must not collect a second, hint-borne one.
+func TestLinkBrokerHints_ResolvedPublisherSkipped(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "mgr:pub:resolved", Type: graph.NodeTypePublisher, Service: "dsw-manager",
+			Meta: map[string]string{"pattern": "amqp_publish", "exchange": "build_jobs"}},
+	}
+	links := []workspace.Link{
+		{From: "dsw-manager", To: "dsw-agent", Via: "rabbitmq", Exchange: "build_jobs"},
+	}
+
+	_, edges, unresolved := LinkBrokerHints(links, nodes)
+	assert.Empty(t, edges)
+	assert.Empty(t, unresolved, "a statically resolved publisher is not a miss")
 }
 
 
@@ -310,9 +440,10 @@ func TestLinkBrokerHints_SkipsNonBrokerPublishers(t *testing.T) {
 			Meta: map[string]string{"pattern": "hub_subscribe_call"}},
 	}
 	links := []workspace.Link{{From: "a", To: "b", Via: "rabbitmq", Exchange: "ex"}}
-	n, e := LinkBrokerHints(links, nodes)
+	n, e, u := LinkBrokerHints(links, nodes)
 	assert.Empty(t, n)
 	assert.Empty(t, e)
+	assert.Empty(t, u, "non-broker traffic is out of scope, not unresolved")
 }
 
 
