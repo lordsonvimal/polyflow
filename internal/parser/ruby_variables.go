@@ -389,6 +389,13 @@ func (ex *rubyExtractor) collectClass(node *sitter.Node, name string) {
 		Meta: map[string]string{
 			"methods": strings.Join(methods, ","),
 			"attrs":   strings.Join(attrs, ","),
+			// end_line bounds the class body so linkRubyEnclosingCalls can attribute
+			// a class-body DSL call (Sneakers `from_queue`) to the class that
+			// declares it. Without a bound, nearest-preceding would be the only
+			// option, and it is wrong: lib/tasks/cdr_events.rake closes `module
+			// Kicks` at line 20 and declares a queue at line 80, inside a rake task
+			// block that the module does not contain.
+			"end_line": fmt.Sprintf("%d", int(node.EndPoint().Row)+1),
 		},
 	})
 }

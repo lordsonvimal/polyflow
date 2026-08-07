@@ -111,9 +111,16 @@ func linkRubyClassMembers(nodes []graph.Node) []graph.Edge {
 // rubyCommEdge maps a comm node type to the caller edge kind it should receive
 // from its enclosing method (mirrors matcher.go Pass 2's edge-type switch).
 var rubyCommEdge = map[graph.NodeType]graph.EdgeType{
-	graph.NodeTypePublisher:       graph.EdgeTypeCalls,
-	graph.NodeTypeSubscriber:      graph.EdgeTypeCalls,
-	graph.NodeTypeHTTPClient:      graph.EdgeTypeCalls,
+	graph.NodeTypePublisher:  graph.EdgeTypeCalls,
+	graph.NodeTypeSubscriber: graph.EdgeTypeCalls,
+	graph.NodeTypeHTTPClient: graph.EdgeTypeCalls,
+	// A queue/exchange declaration is a comm node like any other; matcher.go's
+	// Pass 2 falls through to EdgeTypeCalls for it (classifyPattern returns
+	// NodeTypeChannel with EdgeTypeCalls). Omitting it here left every Ruby
+	// `channel.queue(...)` with no caller, so a trace rooted at the publishing
+	// method stopped one hop short of the queue it publishes to — the AMQP link
+	// was in the graph but not reachable from either end.
+	graph.NodeTypeChannel:         graph.EdgeTypeCalls,
 	graph.NodeTypeWorker:          graph.EdgeTypeSpawns,
 	graph.NodeTypeExternalService: graph.EdgeTypeCloudCall,
 }
@@ -122,12 +129,24 @@ var rubyCommEdge = map[graph.NodeType]graph.EdgeType{
 // enclosing method (by line range within the same file) when that comm node has
 // no incoming caller edge yet. Idempotent gap-filler: it never duplicates an edge
 // the matcher already produced. Deterministic — iterates nodes in slice order.
+//
+// A comm node with no enclosing method falls back to its innermost enclosing
+// class, with `contains` rather than a caller edge. That is the shape of a
+// class-body DSL declaration — a Sneakers worker names its queue at class level:
+//
+//	class WorkspaceEventWorker < BaseWorker
+//	  from_queue resolved_queue_name, ack: true   # no method encloses this
+//
+// so without the fallback the one node that says what the worker consumes hangs
+// off nothing, and `trace --root WorkspaceEventWorker` never reaches its queue.
+// The class edge is `contains` because a class body declares; it does not call.
 func linkRubyEnclosingCalls(nodes []graph.Node, edges []graph.Edge) []graph.Edge {
 	type span struct {
 		line, end int
 		id        string
 	}
 	funcsByFile := map[string][]span{}
+	classesByFile := map[string][]span{}
 	hasCaller := map[string]bool{}
 	for i := range edges {
 		switch edges[i].Type {
@@ -137,18 +156,29 @@ func linkRubyEnclosingCalls(nodes []graph.Node, edges []graph.Edge) []graph.Edge
 	}
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
-			continue
-		}
 		end := 0
 		if v, ok := n.Meta["end_line"]; ok {
 			fmt.Sscanf(v, "%d", &end)
 		}
-		funcsByFile[n.File] = append(funcsByFile[n.File], span{n.Line, end, n.ID})
+		switch n.Type {
+		case graph.NodeTypeFunction, graph.NodeTypeMethod:
+			funcsByFile[n.File] = append(funcsByFile[n.File], span{n.Line, end, n.ID})
+		case graph.NodeTypeClass:
+			// Unlike a method, an unbounded class is not usable: nearest-preceding
+			// would swallow everything after the class ends. cdr_events.rake closes
+			// `module Kicks` at line 20 and declares a queue at line 80, inside a
+			// rake task block — attributing it to Kicks would be a fabricated edge
+			// (bug-class #12), so a class with no end_line is simply not a
+			// candidate.
+			if end > 0 {
+				classesByFile[n.File] = append(classesByFile[n.File], span{n.Line, end, n.ID})
+			}
+		}
 	}
-	enclosing := func(file string, line int) (string, bool) {
+	// innermost returns the containing span that starts latest — the tightest
+	// scope around the line.
+	innermost := func(spans []span, line int) (string, bool) {
 		best := -1
-		spans := funcsByFile[file]
 		for j := range spans {
 			f := &spans[j]
 			if f.line > line {
@@ -172,7 +202,12 @@ func linkRubyEnclosingCalls(nodes []graph.Node, edges []graph.Edge) []graph.Edge
 		if !ok || hasCaller[n.ID] {
 			continue
 		}
-		fromID, found := enclosing(n.File, n.Line)
+		fromID, found := innermost(funcsByFile[n.File], n.Line)
+		if !found {
+			if fromID, found = innermost(classesByFile[n.File], n.Line); found {
+				et = graph.EdgeTypeContains
+			}
+		}
 		if !found || fromID == n.ID {
 			continue
 		}
