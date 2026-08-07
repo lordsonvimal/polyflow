@@ -842,6 +842,29 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, assetUnresolved...)
 	}
+	// Tier K.2: Rails view layer — partial nesting, the controller→template
+	// convention, and the react_component mount seam.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		viewNodes, viewEdges, viewUnresolved := linker.LinkRailsViews(allNodes, svcFiles)
+		for i := range viewNodes {
+			n := viewNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(viewEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, viewUnresolved...)
+	}
 	{
 		svcFiles := make(map[string][]string, len(allSvcFiles))
 		for _, sf := range allSvcFiles {

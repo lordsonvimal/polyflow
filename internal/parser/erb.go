@@ -1,11 +1,11 @@
 package parser
 
 import (
-	"bytes"
 	"os"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
 
 // ERBParser parses Rails ERB template files (.erb / .html.erb).
@@ -34,7 +34,7 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 		return nil, nil, nil, err
 	}
 
-	blankedHTML, virtualRuby := splitERB(src)
+	blankedHTML, virtualRuby := railsview.SplitERB(src)
 
 	// HTML pass: nav links and inline event attributes from static markup.
 	htmlResults, _ := matcher.Match("html", file, blankedHTML)
@@ -58,86 +58,6 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 	unresolved = append(unresolved, varUnresolved...)
 
 	return nodes, edges, unresolved, nil
-}
-
-// splitERB produces:
-//   - blankedHTML: src with ERB tags (including <% and %>) replaced by spaces
-//     (newlines preserved to keep line numbers intact).
-//   - virtualRuby: src with everything OUTSIDE ERB tags replaced by spaces
-//     (newlines preserved); the ERB delimiters and modifier chars (=, -, #)
-//     are also blanked so the Ruby parser sees clean code.
-func splitERB(src []byte) (blankedHTML, virtualRuby []byte) {
-	blankedHTML = bytes.Clone(src)
-	virtualRuby = bytes.Clone(src)
-
-	i := 0
-	for i < len(src) {
-		if i+1 < len(src) && src[i] == '<' && src[i+1] == '%' {
-			tagStart := i
-			// Scan for closing %>
-			j := i + 2
-			for j+1 < len(src) && !(src[j] == '%' && src[j+1] == '>') {
-				j++
-			}
-			var tagEnd int
-			if j+1 < len(src) {
-				tagEnd = j + 2
-			} else {
-				tagEnd = len(src) // unclosed tag: consume to end
-			}
-
-			// blankedHTML: blank the entire tag but preserve newlines.
-			for k := tagStart; k < tagEnd; k++ {
-				if blankedHTML[k] != '\n' {
-					blankedHTML[k] = ' '
-				}
-			}
-
-			// virtualRuby: blank delimiters (<%, %>) and any modifier char
-			// (=, -) immediately after <%; keep the inner Ruby content.
-			// Comment tags (<%# ... %>) are blanked entirely — their body is
-			// dead text, and leaving it live would mint phantom nodes/edges
-			// from commented-out helpers.
-			if tagStart < len(virtualRuby) {
-				virtualRuby[tagStart] = ' ' // <
-			}
-			if tagStart+1 < len(virtualRuby) {
-				virtualRuby[tagStart+1] = ' ' // %
-			}
-			inner := tagStart + 2
-			if inner < len(src) {
-				switch src[inner] {
-				case '#':
-					for k := inner; k < tagEnd; k++ {
-						if virtualRuby[k] != '\n' {
-							virtualRuby[k] = ' '
-						}
-					}
-				case '=', '-':
-					virtualRuby[inner] = ' '
-				}
-			}
-			// Blank %> (and optional leading - before it)
-			if j > tagStart+2 && src[j-1] == '-' {
-				virtualRuby[j-1] = ' '
-			}
-			if j < len(virtualRuby) {
-				virtualRuby[j] = ' ' // %
-			}
-			if j+1 < len(virtualRuby) {
-				virtualRuby[j+1] = ' ' // >
-			}
-
-			i = tagEnd
-		} else {
-			// Non-ERB byte: blank in virtualRuby but keep newlines.
-			if src[i] != '\n' {
-				virtualRuby[i] = ' '
-			}
-			i++
-		}
-	}
-	return blankedHTML, virtualRuby
 }
 
 func init() {
