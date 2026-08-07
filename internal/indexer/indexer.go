@@ -819,6 +819,29 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, cssUnresolved...)
 	}
+	// Tier K.3: Rails asset pipeline — `//= require` directives plus the
+	// `javascript_include_tag` page bindings that sit on top of them.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		assetNodes, assetEdges, assetUnresolved := linker.LinkSprocketsAssets(allNodes, svcFiles)
+		for i := range assetNodes {
+			n := assetNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(assetEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, assetUnresolved...)
+	}
 	{
 		svcFiles := make(map[string][]string, len(allSvcFiles))
 		for _, sf := range allSvcFiles {
