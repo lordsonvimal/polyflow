@@ -279,6 +279,41 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 		})
 	}
 
+	// listenEdge closes the Tier K.4 chain. `defined_in` already points the
+	// registration site at the elements its selector names; this points the
+	// *element* at the handler that runs, which is the direction a trace has to
+	// walk to answer "what happens when I click this". Only jQuery event nodes
+	// carry handler_node, so an ordinary querySelector target adds nothing here.
+	//
+	// Confidence is inferred, never static: a selector fans out to every element
+	// declaring that class across the whole service, and only the request that
+	// rendered the page decides which ones were on it (rule #1 — fan out, do not
+	// pick).
+	listenEdge := func(target *graph.Node, elemID string) {
+		handler := target.Meta["handler_node"]
+		if handler == "" {
+			return
+		}
+		edgeID := fmt.Sprintf("%s:%s->%s", string(graph.EdgeTypeDOMListen), elemID, handler)
+		if seenEdge[edgeID] {
+			return
+		}
+		seenEdge[edgeID] = true
+		meta := map[string]string{"event": target.Meta["event"], "via": "jquery"}
+		if target.Meta["delegated"] == "true" {
+			meta["delegated"] = "true"
+			meta["delegate_root"] = target.Meta["delegate_root"]
+		}
+		edges = append(edges, graph.Edge{
+			ID:         edgeID,
+			From:       elemID,
+			To:         handler,
+			Type:       graph.EdgeTypeDOMListen,
+			Confidence: graph.ConfidenceInferred,
+			Meta:       meta,
+		})
+	}
+
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeDOMTarget {
@@ -290,7 +325,12 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 		id, cls, isComplex := parseDOMSelector(fn, rawSel)
 
 		if isComplex {
-			if rawSel != "" && !strings.ContainsAny(stripQuote(rawSel), "${}`+") {
+			// A bare tag selector — $("body"), querySelector("div") — names an
+			// element *type*. This index holds ids and classes only, so nothing
+			// was attempted and nothing failed; ledgering it would fabricate a
+			// clue (Tier K.4, same call as K.2's `render json:`).
+			if sel := stripQuote(rawSel); rawSel != "" && !strings.ContainsAny(sel, "${}`+") &&
+				strings.ContainsAny(sel, ".#[:") {
 				// Simple-enough to recognize as complex CSS — surface in ledger.
 				unresolved = append(unresolved, graph.UnresolvedRef{
 					Service: n.Service, File: n.File, Line: n.Line,
@@ -312,6 +352,7 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 			for _, d := range defs {
 				elemID, _ := elemNodeFor(n.Service, d, id)
 				addEdge(n.ID, elemID, graph.ConfidenceStatic)
+				listenEdge(n, elemID)
 			}
 			continue
 		}
@@ -329,6 +370,7 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 					continue
 				}
 				addEdge(n.ID, elemID, graph.ConfidenceInferred)
+				listenEdge(n, elemID)
 			}
 		}
 	}

@@ -63,7 +63,15 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 
 	// Structural variable tracking: module vars, classes, reads/writes,
 	// closure captures, flows. Lower confidence than the Go semantic pass.
-	varNodes, varEdges, varUnresolved := extractJSVariables(file, service, langTag, grammarLang, src)
+	varNodes, varEdges, varUnresolved, jqListeners := extractJSVariables(file, service, langTag, grammarLang, src)
+
+	// Tier K.4: hand the matcher's jQuery event nodes the handler the structural
+	// pass just minted, so LinkDOMDefinitions can close element→handler once it
+	// has resolved the selector. Runs before the append so it only rewrites
+	// matcher output, mirroring resolveRubyQueueKeys in ruby.go.
+	stampJQueryHandlers(nodes, jqListeners)
+	edges = reattributeJQueryHandlers(nodes, edges, jqListeners)
+
 	nodes = append(nodes, varNodes...)
 	edges = append(edges, varEdges...)
 	unresolved = append(unresolved, varUnresolved...)

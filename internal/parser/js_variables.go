@@ -21,7 +21,12 @@ import (
 // "partial". Tracked variables are module-scope declarations and locals
 // captured by nested functions; function-local variables stay out of the
 // graph.
-func extractJSVariables(file, service, langTag, grammarLang string, src []byte) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
+//
+// The fourth return value carries the jQuery event registrations this pass read
+// (Tier K.4). They are not graph objects yet: the element a selector names lives
+// in another file, so the join is the linker's, and javascript.go stamps them
+// onto the pattern matcher's dom_target nodes on the way out.
+func extractJSVariables(file, service, langTag, grammarLang string, src []byte) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, []jqListener) {
 	var lang *sitter.Language
 	switch grammarLang {
 	case "typescript":
@@ -35,7 +40,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 	p.SetLanguage(lang)
 	tree, err := p.ParseCtx(context.Background(), nil, src)
 	if err != nil || tree == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	defer tree.Close()
 
@@ -59,7 +64,7 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
 	sort.Slice(ex.edges, func(i, j int) bool { return ex.edges[i].ID < ex.edges[j].ID })
-	return ex.nodes, ex.edges, ex.unresolved
+	return ex.nodes, ex.edges, ex.unresolved, ex.jqListeners
 }
 
 type jsVar struct {
@@ -97,6 +102,15 @@ type jsExtractor struct {
 	// function-local accessors register here; DFS visits a declaration before the
 	// JSX that reads it, so the current binding is resolvable by name.
 	signals map[string]string
+
+	// jqHandlers claims an inline jQuery handler's function body for the
+	// synthetic handler node minted at its registration site (Tier K.4), keyed
+	// by the handler's start byte. Without it every listener body attributes to
+	// the file's single (module) node.
+	jqHandlers map[uint32]jsScope
+	// jqListeners are the resolved jQuery registrations, handed back to
+	// javascript.go to stamp onto the matcher's dom_target nodes.
+	jqListeners []jqListener
 
 	nodes      []graph.Node
 	edges      []graph.Edge
@@ -839,6 +853,12 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 				frame.fnLine = tsLine(declStatement(decl))
 				selfAttributed = true
 			}
+		} else if h, claimed := ex.jqHandlers[node.StartByte()]; claimed {
+			// An inline jQuery handler: anonymous in the source, but K.4 gave it
+			// a node named after the element and event it serves, so its body
+			// attributes there instead of to (module).
+			frame.fnName, frame.fnLine = h.fnName, h.fnLine
+			selfAttributed = true
 		}
 		// Materialise the function node when this frame attributes to the
 		// function node itself. The pattern matcher only emits nodes for
@@ -945,6 +965,7 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		ex.handleCall(node, scopes)
 		ex.handleResponseConsume(node, scopes)
 		ex.handleAddEventListener(node)
+		ex.handleJQueryListener(node)
 	case "new_expression":
 		ex.handleNew(node, scopes)
 	case "jsx_expression":

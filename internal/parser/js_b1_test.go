@@ -25,7 +25,7 @@ function init() {
   setup();
 }
 `)
-	_, edges, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
+	_, edges, _, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
 
 	found := false
 	for _, e := range edges {
@@ -54,7 +54,7 @@ function run() {
   multi(alpha, beta);
 }
 `)
-	_, edges, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
+	_, edges, _, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
 
 	var funcArgEdges []graph.Edge
 	for _, e := range edges {
@@ -79,7 +79,7 @@ function run() { someReg(alpha, beta); }
 function someReg(a, b) {}
 `)
 	collect := func() []string {
-		_, edges, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
+		_, edges, _, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
 		var ids []string
 		for _, e := range edges {
 			if e.Meta["via"] == "func_arg" {
@@ -112,7 +112,7 @@ function run() {
   dispatch(handler2);    // not a function — no edge
 }
 `)
-	_, edges, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
+	_, edges, _, _ := extractJSVariables("app.js", "web", "javascript", "javascript", src)
 
 	for _, e := range edges {
 		if e.Meta["via"] == "func_arg" && strings.Contains(e.To, ":handler:") {
@@ -135,7 +135,7 @@ function Form() {
   return <button onClick={save}>Save</button>;
 }
 `)
-	_, edges, _ := extractJSVariables("form.tsx", "web", "tsx", "tsx", src)
+	_, edges, _, _ := extractJSVariables("form.tsx", "web", "tsx", "tsx", src)
 
 	for _, e := range edges {
 		if e.Type == graph.EdgeTypeCalls && e.Meta["via"] == "func_arg" &&
@@ -176,8 +176,8 @@ function init() {
 	libSrcB, _ := os.ReadFile(libFile)
 	mainSrcB, _ := os.ReadFile(mainFile)
 
-	libNodes, libEdges, _ := extractJSVariables(libFile, "web", "javascript", "javascript", libSrcB)
-	mainNodes, mainEdges, _ := extractJSVariables(mainFile, "web", "javascript", "javascript", mainSrcB)
+	libNodes, libEdges, _, _ := extractJSVariables(libFile, "web", "javascript", "javascript", libSrcB)
+	mainNodes, mainEdges, _, _ := extractJSVariables(mainFile, "web", "javascript", "javascript", mainSrcB)
 
 	allNodes := append(libNodes, mainNodes...)
 	allEdges := append(libEdges, mainEdges...)
@@ -223,8 +223,8 @@ function run() { reg(alpha); }`
 	mainFile := filepath.Join(dir, "main.js")
 	libSrcB, _ := os.ReadFile(libFile)
 	mainSrcB, _ := os.ReadFile(mainFile)
-	libNodes, libEdges, _ := extractJSVariables(libFile, "web", "javascript", "javascript", libSrcB)
-	mainNodes, mainEdges, _ := extractJSVariables(mainFile, "web", "javascript", "javascript", mainSrcB)
+	libNodes, libEdges, _, _ := extractJSVariables(libFile, "web", "javascript", "javascript", libSrcB)
+	mainNodes, mainEdges, _, _ := extractJSVariables(mainFile, "web", "javascript", "javascript", mainSrcB)
 	allNodes := append(libNodes, mainNodes...)
 	allEdges := append(libEdges, mainEdges...)
 	serviceFiles := map[string][]string{"web": {libFile, mainFile}}
