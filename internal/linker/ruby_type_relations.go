@@ -16,25 +16,48 @@ import (
 // LinkRubyTypeRelations resolves cross-file inherits (superclass + mixins) and
 // instantiates (Foo.new) edges for Ruby. It re-parses each Ruby file, looks up
 // constant names in the service-level class table, and emits inferred edges.
-// Collisions (same class name in N files) emit N candidate edges + a ledger entry.
+// Collisions (same class name in N files of the SAME service) emit N candidate
+// edges + a ledger entry.
+//
+// Tier K.7a: the class table is keyed by service. Ruby constant lookup is
+// process-local, so a class in service A can never inherit from — or mix in, or
+// instantiate — a class defined in separately deployed service B. Resolving bare
+// constant names workspace-wide produced 744 phantom cross-service edges in the
+// 8-service datascience fleet, where all three Ruby repos vendor their own copy of
+// lib/dx.rb and app/.../api_base_controller.rb: a single `include Dx` in nextGen
+// bound to the CDR-Agent and SCE-Agent copies as well, minting 221 edges from one
+// statement. An unresolvable constant is ledgered, never bound across a service.
 func LinkRubyTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
-	// Build service-level class table: name → []nodeID (collision-aware).
-	classTableMulti := make(map[string][]string)
+	// Build per-service class table: service → name → []nodeID (collision-aware).
+	classTableByService := make(map[string]map[string][]string)
+	total := 0
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type == graph.NodeTypeClass {
-			classTableMulti[n.Label] = append(classTableMulti[n.Label], n.ID)
+		if n.Type != graph.NodeTypeClass {
+			continue
 		}
+		byName := classTableByService[n.Service]
+		if byName == nil {
+			byName = make(map[string][]string)
+			classTableByService[n.Service] = byName
+		}
+		byName[n.Label] = append(byName[n.Label], n.ID)
+		total++
 	}
-	if len(classTableMulti) == 0 {
+	if total == 0 {
 		return nil, nil
 	}
 
-		var allEdges []graph.Edge
+	var allEdges []graph.Edge
 	var allUnresolved []graph.UnresolvedRef
 	seen := make(map[string]bool)
 
 	for svcName, files := range serviceFiles {
+		// Only this service's classes are candidate binding targets.
+		classTableMulti := classTableByService[svcName]
+		if classTableMulti == nil {
+			classTableMulti = map[string][]string{}
+		}
 		for _, file := range files {
 			if !isRubyFile(file) {
 				continue
@@ -213,7 +236,7 @@ func resolveRubyTypeRelations(file, svcName string, classTableMulti map[string][
 					clsName := recv.Content(src)
 					emitTypeEdge(graph.EdgeTypeInstantiates, methodID, clsName,
 						map[string]string{"count": "1"},
-						int(recv.StartPoint().Row)+1, "")
+						int(recv.StartPoint().Row)+1, "instantiates_unresolved")
 				}
 			}
 		}
