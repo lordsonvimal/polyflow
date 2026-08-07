@@ -536,10 +536,11 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	allNodes = append(allNodes, wrapNodes...)
 	edges = append(edges, wrapEdges...)
 
-	// Tier X.11: sibling to X.7 — request URLs built via fmt.Sprintf within the
-	// same function (no wrapper parameter involved). See docs/sprintf-url-
-	// resolution-plan.md.
-	sprintfNodes, sprintfEdges := extractSprintfURLs(service, dir, fset, inService, resolveFunc)
+	// Tier X.11 + K.1: sibling to X.7 — request URLs composed within the calling
+	// function itself, via fmt.Sprintf and/or concatenation onto an opaque host
+	// field (no wrapper parameter involved). See docs/sprintf-url-resolution-plan.md
+	// and docs/rails-asset-erb-coverage-plan.md.
+	sprintfNodes, sprintfEdges := extractComposedURLs(service, dir, fset, inService, resolveFunc)
 	allNodes = append(allNodes, sprintfNodes...)
 	edges = append(edges, sprintfEdges...)
 

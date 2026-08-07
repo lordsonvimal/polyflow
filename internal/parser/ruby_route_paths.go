@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -20,9 +21,16 @@ import (
 // avoids the extra parse on every other Ruby file (mirrors
 // resolveRubyQueueKeys' needsWork early-out). See
 // docs/rails-route-path-composition-plan.md (Tier R).
-func composeRailsRoutePaths(file string, src []byte, nodes []graph.Node) {
-	if !isRailsRoutesFile(file) || len(nodes) == 0 {
-		return
+// It additionally *synthesizes* the routes Rails generates implicitly, which no
+// verb call names and which therefore have no matcher node to stamp: `resources
+// :users` alone declares index/create/new/edit/show/update/destroy. Those are the
+// bulk of a real REST surface — in orion's client_api the entire user, study and
+// folder CRUD lives there — so without them a caller's `GET /client_api/v1/users`
+// has nothing in the graph to match, however well its own URL resolved (Tier K.1).
+// Returns the synthesized nodes for the caller to append.
+func composeRailsRoutePaths(file, service string, src []byte, nodes []graph.Node) []graph.Node {
+	if !isRailsRoutesFile(file) {
+		return nil
 	}
 
 	byLine := map[int]*graph.Node{}
@@ -37,19 +45,35 @@ func composeRailsRoutePaths(file string, src []byte, nodes []graph.Node) {
 			byLine[n.Line] = n
 		}
 	}
-	if len(byLine) == 0 {
-		return
-	}
 
 	p := sitter.NewParser()
 	p.SetLanguage(rubysitter.GetLanguage())
 	tree, err := p.ParseCtx(context.Background(), nil, src)
 	if err != nil || tree == nil {
-		return
+		return nil
 	}
 	defer tree.Close()
 
-	walkRoutes(tree.RootNode(), src, nil, byLine)
+	w := &routeWalker{
+		src:     src,
+		file:    file,
+		service: service,
+		byLine:  byLine,
+		seen:    map[string]bool{},
+	}
+	w.walk(tree.RootNode(), nil, "")
+	return w.out
+}
+
+// routeWalker threads the traversal state that walkRoutes used to pass as
+// arguments, plus the accumulator for synthesized REST routes.
+type routeWalker struct {
+	src     []byte
+	file    string
+	service string
+	byLine  map[int]*graph.Node
+	out     []graph.Node
+	seen    map[string]bool
 }
 
 // isRailsRoutesFile is the cheap filename gate: config/routes.rb itself, or
@@ -63,17 +87,26 @@ func isRailsRoutesFile(file string) bool {
 	return strings.HasSuffix(dir, "/config/routes") || strings.Contains(dir, "/config/routes/")
 }
 
-// walkRoutes recurses over call nodes, threading a path-segment prefix stack
-// through namespace/resources/resource/member/collection nesting. Verb calls
+// walk recurses over call nodes, threading a path-segment prefix stack through
+// namespace/resources/resource/member/collection nesting. Verb calls
 // (get/post/put/patch/delete) are stamped via composeAndStamp against the
-// pre-built byLine index.
-func walkRoutes(n *sitter.Node, src []byte, prefix []string, byLine map[int]*graph.Node) {
+// pre-built byLine index; `resources`/`resource` additionally synthesize their
+// implicit REST routes.
+//
+// nestParam carries the enclosing resource's nesting parameter (`:folder_id` for
+// `resources :folders`). Rails scopes a resource's *own* actions under a bare
+// `/folders` — `get :details_by_path, on: :collection` is `/folders/details_by_path`
+// — but scopes anything *declared inside* it under `/folders/:folder_id`. Conflating
+// the two dropped the parent's id entirely, so `resources :files` nested in
+// `resources :folders` composed as `/folders/files/:id/copy` instead of
+// `/folders/:folder_id/files/:id/copy`.
+func (w *routeWalker) walk(n *sitter.Node, prefix []string, nestParam string) {
 	if n == nil {
 		return
 	}
 	if n.Type() != "call" {
 		for i := 0; i < int(n.ChildCount()); i++ {
-			walkRoutes(n.Child(i), src, prefix, byLine)
+			w.walk(n.Child(i), prefix, nestParam)
 		}
 		return
 	}
@@ -81,33 +114,221 @@ func walkRoutes(n *sitter.Node, src []byte, prefix []string, byLine map[int]*gra
 	if methodNode == nil {
 		return
 	}
-	method := string(src[methodNode.StartByte():methodNode.EndByte()])
+	method := string(w.src[methodNode.StartByte():methodNode.EndByte()])
 	blockNode := n.ChildByFieldName("block")
 
+	// A declaration nested inside a resource sits under that resource's member id.
+	base := append([]string{}, prefix...)
+	if nestParam != "" {
+		base = append(base, nestParam)
+	}
+
 	switch method {
-	case "namespace", "resources", "resource":
-		seg, ok := firstPositionalSegment(n, src)
+	case "namespace":
+		seg, ok := firstPositionalSegment(n, w.src)
 		if ok && blockNode != nil {
-			walkRoutes(blockBody(blockNode), src, append(append([]string{}, prefix...), seg), byLine)
+			w.walk(blockBody(blockNode), append(base, seg), "")
+		}
+		return
+	case "resources", "resource":
+		seg, ok := firstPositionalSegment(n, w.src)
+		if !ok {
+			return
+		}
+		plural := method == "resources"
+		scope := append(base, seg)
+		w.emitRESTRoutes(n, scope, seg, plural)
+		if blockNode != nil {
+			w.walk(blockBody(blockNode), scope, nestingParam(seg, plural))
 		}
 		return
 	case "member":
 		if blockNode != nil {
-			walkRoutes(blockBody(blockNode), src, append(append([]string{}, prefix...), ":id"), byLine)
+			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), "")
 		}
 		return
 	case "collection":
 		if blockNode != nil {
-			walkRoutes(blockBody(blockNode), src, prefix, byLine)
+			w.walk(blockBody(blockNode), prefix, "")
 		}
 		return
 	case "get", "post", "put", "patch", "delete":
-		composeAndStamp(n, src, prefix, byLine)
+		composeAndStamp(n, w.src, prefix, w.byLine)
 		return
 	}
 	if blockNode != nil {
-		walkRoutes(blockBody(blockNode), src, prefix, byLine)
+		w.walk(blockBody(blockNode), prefix, nestParam)
 	}
+}
+
+// restAction describes one of the seven routes Rails derives from `resources`.
+type restAction struct {
+	name   string
+	method string
+	member bool   // path carries the member `:id` segment
+	suffix string // trailing literal segment (`new`, `edit`), if any
+}
+
+// pluralRESTActions is Rails' default route set for `resources :x`, in the order
+// `rails routes` prints them. `update` maps to both PATCH and PUT; PATCH is the
+// canonical verb and PUT is emitted alongside it so a client using either matches.
+var pluralRESTActions = []restAction{
+	{name: "index", method: "GET"},
+	{name: "create", method: "POST"},
+	{name: "new", method: "GET", suffix: "new"},
+	{name: "edit", method: "GET", member: true, suffix: "edit"},
+	{name: "show", method: "GET", member: true},
+	{name: "update", method: "PATCH", member: true},
+	{name: "update", method: "PUT", member: true},
+	{name: "destroy", method: "DELETE", member: true},
+}
+
+// emitRESTRoutes synthesizes the implicit routes for a `resources`/`resource`
+// declaration, honouring `only:` and `except:`.
+//
+// A singular `resource :profile` has no index and no `:id`: there is only ever one
+// of it, so show/update/destroy address the collection path directly.
+func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope []string, seg string, plural bool) {
+	only, hasOnly, except := restActionFilters(call, w.src)
+	if hasOnly && len(only) == 0 {
+		// `resources :users, only: []` declares the resource purely as a nesting
+		// scope and generates no routes of its own — a real idiom in the fleet
+		// (orion-vega-agent's config/routes.rb:44). Treating an empty list as
+		// "no filter" invented all seven.
+		return
+	}
+	line := int(call.StartPoint().Row) + 1
+
+	for _, a := range pluralRESTActions {
+		if !plural && a.name == "index" {
+			continue
+		}
+		if hasOnly && !only[a.name] {
+			continue
+		}
+		if except[a.name] {
+			continue
+		}
+		segs := append([]string{}, scope...)
+		if a.member && plural {
+			segs = append(segs, ":id")
+		}
+		if a.suffix != "" {
+			segs = append(segs, a.suffix)
+		}
+		path := "/" + strings.Join(segs, "/")
+
+		key := a.method + " " + path
+		if w.seen[key] {
+			continue
+		}
+		w.seen[key] = true
+
+		w.out = append(w.out, graph.Node{
+			ID:       w.service + ":" + w.file + ":" + string(graph.NodeTypeHTTPHandler) + ":" + key + ":" + strconv.Itoa(line),
+			Type:     graph.NodeTypeHTTPHandler,
+			Label:    key,
+			Service:  w.service,
+			File:     w.file,
+			Line:     line,
+			Language: "ruby",
+			Meta: map[string]string{
+				"pattern":  "rest_resource_route",
+				"path":     path,
+				"method":   a.method,
+				"action":   a.name,
+				"resource": seg,
+			},
+		})
+	}
+}
+
+// restActionFilters reads the `only:`/`except:` keyword arguments of a
+// resources/resource call. Both accept a single symbol or an array of them
+// (`only: :show`, `only: [:index, :show]`, `only: %i[index show]`).
+//
+// hasOnly distinguishes an absent `only:` from an empty one: `only: []` is a
+// deliberate "generate nothing", not "generate everything".
+func restActionFilters(call *sitter.Node, src []byte) (only map[string]bool, hasOnly bool, except map[string]bool) {
+	only, except = map[string]bool{}, map[string]bool{}
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return only, false, except
+	}
+	for i := 0; i < int(args.ChildCount()); i++ {
+		c := args.Child(i)
+		if c == nil || c.Type() != "pair" {
+			continue
+		}
+		key, value := c.ChildByFieldName("key"), c.ChildByFieldName("value")
+		if key == nil || value == nil {
+			continue
+		}
+		var target map[string]bool
+		switch strings.TrimSuffix(string(src[key.StartByte():key.EndByte()]), ":") {
+		case "only":
+			target, hasOnly = only, true
+		case "except":
+			target = except
+		default:
+			continue
+		}
+		for _, name := range symbolNames(value, src) {
+			target[name] = true
+		}
+	}
+	return only, hasOnly, except
+}
+
+// symbolNames collects the action names out of a symbol, an array of symbols, or a
+// `%i[...]` symbol-array literal.
+func symbolNames(v *sitter.Node, src []byte) []string {
+	switch v.Type() {
+	case "simple_symbol":
+		return []string{strings.TrimPrefix(string(src[v.StartByte():v.EndByte()]), ":")}
+	case "bare_symbol":
+		return []string{string(src[v.StartByte():v.EndByte()])}
+	}
+	var out []string
+	for i := 0; i < int(v.NamedChildCount()); i++ {
+		out = append(out, symbolNames(v.NamedChild(i), src)...)
+	}
+	return out
+}
+
+// nestingParam builds the parameter Rails uses for routes nested inside a
+// resource: `resources :folders` scopes its children under `:folder_id`. Singular
+// resources contribute no parameter at all.
+//
+// Matching never depends on the exact name — param_wildcard reduces `:folder_id`
+// and the caller's `%d` alike to `*` — but the segment must be there, or every
+// nested path comes out one segment short.
+func nestingParam(seg string, plural bool) string {
+	if !plural {
+		return ""
+	}
+	return ":" + singularize(seg) + "_id"
+}
+
+// singularize applies the handful of English inflections Rails' own defaults cover
+// for route parameters. It is deliberately not a full inflector: an irregular noun
+// yields a cosmetically wrong parameter name in a segment that always normalizes to
+// a wildcard anyway.
+func singularize(s string) string {
+	switch {
+	case strings.HasSuffix(s, "ies") && len(s) > 3:
+		return s[:len(s)-3] + "y"
+	case strings.HasSuffix(s, "ses"), strings.HasSuffix(s, "xes"),
+		strings.HasSuffix(s, "zes"), strings.HasSuffix(s, "ches"),
+		strings.HasSuffix(s, "shes"):
+		return s[:len(s)-2]
+	case strings.HasSuffix(s, "us"):
+		// Already singular: status, campus, bonus.
+		return s
+	case strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss"):
+		return s[:len(s)-1]
+	}
+	return s
 }
 
 // blockBody returns a do_block's body_statement node (the container of its
