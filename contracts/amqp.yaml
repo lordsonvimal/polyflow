@@ -11,11 +11,19 @@ contracts:
     consumer:
       node: channel
       key: [exchange, routing_key]
-    normalizers: [quote_strip, dynamic_host_strip]  # dynamic_host_strip is a
-                                     # no-op here (exchange/routing_key never
-                                     # carry a leading "*" host segment);
-                                     # added for chain consistency (X.1b).
-    match: [exact, normalized]
+    normalizers: [quote_strip, dynamic_host_strip, amqp_topic_wildcard]
+                                     # dynamic_host_strip is a no-op here
+                                     # (exchange/routing_key never carry a
+                                     # leading "*" host segment); added for
+                                     # chain consistency (X.1b).
+                                     # amqp_topic_wildcard (J.1) collapses topic
+                                     # wildcards so a producer's reconstructed
+                                     # "container.*" meets a binding's
+                                     # "container.#".
+    match: [exact, normalized, exchange_only]
+                                     # exchange_only is last and stamps
+                                     # `partial`: it fires only when one side's
+                                     # routing key carries no information.
     edge:
       type: publishes
       id_prefix: broker

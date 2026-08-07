@@ -313,6 +313,10 @@ func findMatches(rawKey, normKey string, tiers []MatchTier, idx consumerIndexes)
 			if hs := wildcardScan(normKey, idx); len(hs) > 0 {
 				return hs, graph.ConfidenceInferred
 			}
+		case TierExchangeOnly:
+			if hs := exchangeOnlyScan(normKey, idx); len(hs) > 0 {
+				return hs, graph.ConfidencePartial
+			}
 		}
 	}
 	return nil, ""
@@ -611,6 +615,46 @@ func wildcardScan(key string, idx consumerIndexes) []*graph.Node {
 		}
 	}
 	return hits
+}
+
+// exchangeOnlyScan matches on the first key field alone (the exchange) when the
+// rest of the key — the routing key — constrains nothing on at least one side.
+// It is the last-resort tier for AMQP: a publish whose routing key could not be
+// resolved, or a fanout exchange bound with `#`, still names its exchange, and an
+// exchange is a real rendezvous. Both sides keeping a concrete, differing routing
+// key is *not* a match: that is two distinct topics on one exchange.
+//
+// Keys are scanned in first-seen (node-input) order — never map order — so
+// results are deterministic across runs.
+func exchangeOnlyScan(key string, idx consumerIndexes) []*graph.Node {
+	prodHead, prodRest, ok := splitFirstField(key)
+	if !ok || prodHead == "" {
+		return nil
+	}
+	prodOpen := topicIsOpen(prodRest)
+	var hits []*graph.Node
+	for _, consKey := range idx.normKeys {
+		consHead, consRest, ok := splitFirstField(consKey)
+		if !ok || consHead != prodHead {
+			continue
+		}
+		if !prodOpen && !topicIsOpen(consRest) {
+			continue
+		}
+		hits = append(hits, idx.norm[consKey]...)
+	}
+	return hits
+}
+
+// splitFirstField splits a compound key into its first field and the remainder.
+// ok=false for a single-field key, where the tier would degenerate into the
+// normalized tier and match nothing new.
+func splitFirstField(key string) (head, rest string, ok bool) {
+	i := strings.Index(key, " ")
+	if i < 0 {
+		return "", "", false
+	}
+	return key[:i], key[i+1:], true
 }
 
 // splitAtFirstSlash splits a compound key at the first '/' occurrence.
