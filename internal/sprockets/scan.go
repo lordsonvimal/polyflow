@@ -3,15 +3,16 @@
 // `javascript_include_tag` / `stylesheet_link_tag` calls in an ERB template
 // (Tier K.3).
 //
-// Both are scanners rather than grammar passes. Sprockets directives live in
-// *comments*, which no JS grammar surfaces, and the ERB helpers are read from
-// the same hand-rolled tag split internal/parser/erb.go uses — duplicated here
-// in a leaf package because internal/linker must not import internal/parser
-// (parser's in-package tests already import linker).
+// Both are scanners rather than grammar passes: Sprockets directives live in
+// *comments*, which no JS grammar surfaces. The Ruby argument-list primitives
+// the include-tag half needs are shared with internal/railsview, which owns
+// the rest of the ERB reading (Tier K.2).
 package sprockets
 
 import (
 	"strings"
+
+	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
 
 // Directive is one `= <verb> <args>` line from an asset file's header comment
@@ -168,36 +169,13 @@ func ScanIncludeTags(src []byte) []IncludeTag {
 			i += end
 			continue
 		}
-		for n, tagLine := range strings.Split(blankDelimiters(body), "\n") {
+		for n, tagLine := range strings.Split(railsview.BlankERBDelimiters(body), "\n") {
 			out = append(out, scanIncludeLine(tagLine, line+n)...)
 		}
 		line += strings.Count(body, "\n")
 		i += end
 	}
 	return out
-}
-
-// blankDelimiters replaces an ERB tag's own `<%=`/`-%>` markers with spaces,
-// keeping every other byte at its offset so line numbers and the argument
-// parser both see plain Ruby. Without this the trailing `%>` reads as trailing
-// junk after the last string literal and the whole call looks dynamic.
-func blankDelimiters(body string) string {
-	b := []byte(body)
-	for i := 0; i < len(b) && i < 3; i++ {
-		if b[i] == '<' || b[i] == '%' || b[i] == '=' || b[i] == '-' {
-			b[i] = ' '
-			continue
-		}
-		break
-	}
-	for i := len(b) - 1; i >= 0 && i >= len(b)-3; i-- {
-		if b[i] == '>' || b[i] == '%' || b[i] == '-' {
-			b[i] = ' '
-			continue
-		}
-		break
-	}
-	return string(b)
 }
 
 // scanIncludeLine pulls the literal sources out of one line of Ruby. A helper
@@ -215,12 +193,12 @@ func scanIncludeLine(line string, lineNo int) []IncludeTag {
 			}
 			at := idx + rel
 			idx = at + len(helper)
-			if at > 0 && isRubyNameByte(line[at-1]) {
+			if at > 0 && railsview.IsRubyNameByte(line[at-1]) {
 				continue // `custom_javascript_include_tag`
 			}
 			args := strings.TrimSpace(line[idx:])
 			args = strings.TrimPrefix(args, "(")
-			names, dynamic := literalSources(args)
+			names, dynamic := railsview.LiteralSources(args)
 			if dynamic {
 				out = append(out, IncludeTag{Helper: helper, Name: strings.TrimSpace(args), Line: lineNo, Dynamic: true})
 				continue
@@ -231,91 +209,4 @@ func scanIncludeLine(line string, lineNo int) []IncludeTag {
 		}
 	}
 	return out
-}
-
-// literalSources splits a helper's argument list on top-level commas and takes
-// the leading run of bare string literals.
-//
-// Collection stops at the first argument that is not a bare literal, because
-// that is where the options hash begins — and its *values* are strings too.
-// `stylesheet_link_tag 'application', media: 'all'` names one asset, not two,
-// and `javascript_include_tag 'application', 'data-turbolinks-track' => true`
-// names one, not two.
-func literalSources(args string) (names []string, dynamic bool) {
-	for _, part := range splitTopLevel(args) {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			break
-		}
-		lit, ok := bareStringLiteral(part)
-		if !ok {
-			if len(names) == 0 {
-				// Nothing literal at all: `javascript_include_tag @asset` or an
-				// interpolated path. Ledger it (phases.md #12).
-				return nil, true
-			}
-			break
-		}
-		names = append(names, lit)
-	}
-	return names, false
-}
-
-// bareStringLiteral reports whether part is exactly one quoted string with no
-// interpolation and nothing after it.
-func bareStringLiteral(part string) (string, bool) {
-	if len(part) < 2 {
-		return "", false
-	}
-	q := part[0]
-	if q != '\'' && q != '"' {
-		return "", false
-	}
-	closing := strings.IndexByte(part[1:], q)
-	if closing < 0 {
-		return "", false
-	}
-	inner := part[1 : 1+closing]
-	if strings.TrimSpace(part[2+closing:]) != "" {
-		return "", false // `'x' => true`: a hash key, not a source
-	}
-	if strings.Contains(inner, "#{") || inner == "" {
-		return "", false
-	}
-	return inner, true
-}
-
-// splitTopLevel splits on commas that are not inside quotes, brackets or
-// braces, so a hash or array argument stays in one piece.
-func splitTopLevel(s string) []string {
-	var parts []string
-	depth := 0
-	var quote byte
-	start := 0
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case quote != 0:
-			if c == quote && (i == 0 || s[i-1] != '\\') {
-				quote = 0
-			}
-		case c == '\'' || c == '"':
-			quote = c
-		case c == '(' || c == '[' || c == '{':
-			depth++
-		case c == ')' || c == ']' || c == '}':
-			if depth == 0 {
-				return append(parts, s[start:i]) // call's own closing paren
-			}
-			depth--
-		case c == ',' && depth == 0:
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	return append(parts, s[start:])
-}
-
-func isRubyNameByte(c byte) bool {
-	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

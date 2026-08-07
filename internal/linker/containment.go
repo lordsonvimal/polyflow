@@ -154,6 +154,8 @@ func languageForFile(file string) string {
 		return "typescript"
 	case strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".jsx") || strings.HasSuffix(file, ".mjs") || strings.HasSuffix(file, ".es6"):
 		return "javascript"
+	case strings.HasSuffix(file, ".erb"):
+		return "erb"
 	case strings.HasSuffix(file, ".rb"):
 		return "ruby"
 	case strings.HasSuffix(file, ".scss"):

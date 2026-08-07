@@ -55,7 +55,46 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	// see). Fill the gap here now that both are in `nodes`.
 	edges = linkRubyEnclosingCalls(nodes, edges)
 
+	// Hang each method off its class. Without this a Ruby class node's only
+	// outgoing edges are `inherits`, so a trace rooted at "FooController" — the
+	// name an agent actually types — walks the ancestor chain and never reaches
+	// the action, let alone the view the action renders (Tier K.2).
+	edges = append(edges, linkRubyClassMembers(nodes)...)
+
 	return nodes, edges, unresolved, nil
+}
+
+// linkRubyClassMembers emits `class --contains--> method` for every method the
+// structural pass attributed to a class in the same file. Deterministic: it
+// walks nodes in slice order and never consults a map for ordering.
+func linkRubyClassMembers(nodes []graph.Node) []graph.Edge {
+	classID := map[string]string{} // "file\x00ClassName" → node ID
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeClass {
+			classID[nodes[i].File+"\x00"+nodes[i].Label] = nodes[i].ID
+		}
+	}
+	if len(classID) == 0 {
+		return nil
+	}
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
+			continue
+		}
+		owner, ok := classID[n.File+"\x00"+n.Meta["class"]]
+		if !ok || owner == n.ID {
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:   fmt.Sprintf("%s:%s->%s", string(graph.EdgeTypeContains), owner, n.ID),
+			From: owner,
+			To:   n.ID,
+			Type: graph.EdgeTypeContains,
+		})
+	}
+	return edges
 }
 
 // rubyCommEdge maps a comm node type to the caller edge kind it should receive
