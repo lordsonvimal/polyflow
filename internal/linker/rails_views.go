@@ -304,6 +304,16 @@ func linkControllerActions(
 		}
 		end := 0
 		fmt.Sscanf(n.Meta["end_line"], "%d", &end)
+		// A pattern-derived function node with no end_line is a call site, not a
+		// declaration — a *call* pattern captures no body and so cannot record
+		// where one ends (the @_def contract, see patterns/go/functions.yaml).
+		// Its span is then unbounded, and every render below it in the file gets
+		// attributed to it: `before_action :authenticate_user!` at line 7 was
+		// claiming to render index.html.erb, 97 times across the fleet. Same
+		// discriminator the matcher's Pass 2 uses for enclosing scopes.
+		if n.Meta["pattern"] != "" && end == 0 {
+			continue
+		}
 		byFile[n.File] = append(byFile[n.File], action{n.ID, n.Label, n.Line, end})
 	}
 

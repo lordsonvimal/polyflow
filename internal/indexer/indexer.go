@@ -665,6 +665,21 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, rubyTypeUnresolved...)
 	}
+	// Rails filter chain: before_action/around_action/after_action → the method
+	// the callback names, from the declaring class and from each action it
+	// guards. Needs the Ruby method nodes' qualified_name, so it runs after the
+	// parse phase; independent of the type-relation edges above.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		filterEdges, filterUnresolved := linker.LinkRailsFilters(allNodes, svcFiles)
+		if err := writeEdges(filterEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, filterUnresolved...)
+	}
 
 	// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
 	// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
