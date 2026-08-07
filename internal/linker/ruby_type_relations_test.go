@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -140,5 +141,258 @@ func TestLinkRubyTypeRelations_UnresolvedIsLedgered(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected an inherits_unresolved ledger entry for RemoteOnlyBase, got %+v", unresolved)
+	}
+}
+
+// rubyClassNodeAt builds a class node with the ID the parser really mints,
+// which carries the declaration line. The line is what joins a node to the
+// namespace the scan recovered for it, so a test that elides it is not
+// exercising the lookup.
+func rubyClassNodeAt(service, file, label string, line int) graph.Node {
+	n := rubyClassNode(service, file, label, line)
+	n.ID = fmt.Sprintf("%s:%s:class:%s:%d", service, file, label, line)
+	return n
+}
+
+// targetsOf returns the labels an edge from fromID points at.
+func targetsOf(t *testing.T, edges []graph.Edge, nodes []graph.Node, fromID string) []string {
+	t.Helper()
+	label := map[string]string{}
+	for _, n := range nodes {
+		label[n.ID] = n.Label
+	}
+	var out []string
+	for _, e := range edges {
+		if e.From == fromID {
+			out = append(out, label[e.To])
+		}
+	}
+	return out
+}
+
+// TestLinkRubyTypeRelations_SuperclassResolvesLexically is the regression guard
+// for the simple-name trap.
+//
+// Scoping the class table to a service (K.7a) stopped constants binding across
+// repos, but within one service the table was still keyed by bare name and the
+// superclass reference was reduced to its *last component* before lookup. So the
+// two RepositoryControllers nextGen ships — one top level, one under
+// ClientApi::V1 — were indistinguishable, and every subclass of either bound to
+// both. What reaches the graph is then a class that inherits from two unrelated
+// hierarchies at once, and downstream passes that walk ancestors (the Rails
+// filter chain, which is where this was found) follow whichever comes first.
+//
+// Ruby resolves innermost enclosing namespace outward, so each subclass here has
+// exactly one correct answer and they are different answers.
+func TestLinkRubyTypeRelations_SuperclassResolvesLexically(t *testing.T) {
+	dir := t.TempDir()
+
+	topBase := writeRuby(t, dir, "repository_controller.rb", `
+class RepositoryController
+end
+`)
+	apiBase := writeRuby(t, dir, "v1_repository_controller.rb", `
+module ClientApi
+  module V1
+    class RepositoryController
+    end
+  end
+end
+`)
+	topSub := writeRuby(t, dir, "documents_controller.rb", `
+class DocumentsController < RepositoryController
+end
+`)
+	apiSub := writeRuby(t, dir, "v1_files_controller.rb", `
+module ClientApi
+  module V1
+    class FilesController < RepositoryController
+    end
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNodeAt("svc", topBase, "RepositoryController", 2),
+		rubyClassNodeAt("svc", apiBase, "RepositoryController", 4),
+		rubyClassNodeAt("svc", topSub, "DocumentsController", 2),
+		rubyClassNodeAt("svc", apiSub, "FilesController", 4),
+	}
+	edges, _ := LinkRubyTypeRelations(nodes, map[string][]string{
+		"svc": {topBase, apiBase, topSub, apiSub},
+	})
+
+	for _, tc := range []struct {
+		from, want string
+	}{
+		{fmt.Sprintf("svc:%s:class:DocumentsController:2", topSub), topBase},
+		{fmt.Sprintf("svc:%s:class:FilesController:4", apiSub), apiBase},
+	} {
+		var got []string
+		for _, e := range edges {
+			if e.From == tc.from && e.Type == graph.EdgeTypeInherits {
+				got = append(got, e.To)
+			}
+		}
+		wantID := ""
+		for _, n := range nodes {
+			if n.File == tc.want {
+				wantID = n.ID
+			}
+		}
+		if len(got) != 1 || got[0] != wantID {
+			t.Errorf("%s inherits %v; want exactly [%s] — the other "+
+				"RepositoryController is in a namespace this class is not in",
+				tc.from, got, wantID)
+		}
+	}
+}
+
+// TestLinkRubyTypeRelations_QualifiedReferenceKeepsEveryComponent covers the
+// half of the trap that was pure information loss: a `scope_resolution`
+// superclass was read for its last component only, so
+// `ClientApi::V1::ApiBaseController` was indistinguishable from a top-level
+// `ApiBaseController` even though the source spells out which one it means.
+func TestLinkRubyTypeRelations_QualifiedReferenceKeepsEveryComponent(t *testing.T) {
+	dir := t.TempDir()
+
+	topBase := writeRuby(t, dir, "api_base_controller.rb", "class ApiBaseController\nend\n")
+	nsBase := writeRuby(t, dir, "v1_api_base_controller.rb", `
+module ClientApi
+  module V1
+    class ApiBaseController
+    end
+  end
+end
+`)
+	sub := writeRuby(t, dir, "agents_controller.rb", `
+class AgentsController < ClientApi::V1::ApiBaseController
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNodeAt("svc", topBase, "ApiBaseController", 1),
+		rubyClassNodeAt("svc", nsBase, "ApiBaseController", 4),
+		rubyClassNodeAt("svc", sub, "AgentsController", 2),
+	}
+	edges, _ := LinkRubyTypeRelations(nodes, map[string][]string{
+		"svc": {topBase, nsBase, sub},
+	})
+
+	from := fmt.Sprintf("svc:%s:class:AgentsController:2", sub)
+	var got []string
+	for _, e := range edges {
+		if e.From == from {
+			got = append(got, e.To)
+		}
+	}
+	want := fmt.Sprintf("svc:%s:class:ApiBaseController:4", nsBase)
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("AgentsController inherits %v; want exactly [%s] — the source "+
+			"names the namespaced base outright", got, want)
+	}
+}
+
+// TestLinkRubyTypeRelations_MixinResolvesInsideTheBody pins the namespace a
+// mixin is looked up in: `include Dx` sits in the class *body*, so it resolves
+// with the class itself on the nesting, not outside it.
+func TestLinkRubyTypeRelations_MixinResolvesInsideTheBody(t *testing.T) {
+	dir := t.TempDir()
+
+	topDx := writeRuby(t, dir, "dx.rb", "module Dx\nend\n")
+	nsDx := writeRuby(t, dir, "v1_dx.rb", `
+module ClientApi
+  module V1
+    module Dx
+    end
+  end
+end
+`)
+	consumer := writeRuby(t, dir, "v1_agents_controller.rb", `
+module ClientApi
+  module V1
+    class AgentsController
+      include Dx
+    end
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNodeAt("svc", topDx, "Dx", 1),
+		rubyClassNodeAt("svc", nsDx, "Dx", 4),
+		rubyClassNodeAt("svc", consumer, "AgentsController", 4),
+	}
+	edges, _ := LinkRubyTypeRelations(nodes, map[string][]string{
+		"svc": {topDx, nsDx, consumer},
+	})
+
+	got := targetsOf(t, edges, nodes, fmt.Sprintf("svc:%s:class:AgentsController:4", consumer))
+	if len(got) != 1 {
+		t.Fatalf("include Dx bound to %d definitions %v; ClientApi::V1::Dx is "+
+			"the only one on the nesting", len(got), got)
+	}
+	for _, e := range edges {
+		if e.To == fmt.Sprintf("svc:%s:class:Dx:1", topDx) {
+			t.Errorf("bound to the top-level Dx, which the nesting shadows")
+		}
+	}
+}
+
+// TestLinkRubyTypeRelations_AmbiguousNameStaysAmbiguous keeps the fix from
+// turning into a first-match guess. When lexical resolution finds nothing — the
+// constant is declared in neither the enclosing namespaces nor at top level —
+// the simple-name fallback is all that is left, and two same-named definitions
+// must produce two candidate edges and a ledger entry rather than one confident
+// wrong edge (bug-class #1: fan out, never first-match).
+func TestLinkRubyTypeRelations_AmbiguousNameStaysAmbiguous(t *testing.T) {
+	dir := t.TempDir()
+
+	a := writeRuby(t, dir, "a_helper.rb", `
+module Alpha
+  class Helper
+  end
+end
+`)
+	b := writeRuby(t, dir, "b_helper.rb", `
+module Beta
+  class Helper
+  end
+end
+`)
+	consumer := writeRuby(t, dir, "widget.rb", `
+module Gamma
+  class Widget < Helper
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNodeAt("svc", a, "Helper", 3),
+		rubyClassNodeAt("svc", b, "Helper", 3),
+		rubyClassNodeAt("svc", consumer, "Widget", 3),
+	}
+	edges, unresolved := LinkRubyTypeRelations(nodes, map[string][]string{
+		"svc": {a, b, consumer},
+	})
+
+	got := targetsOf(t, edges, nodes, fmt.Sprintf("svc:%s:class:Widget:3", consumer))
+	if len(got) != 2 {
+		t.Errorf("got %d candidate edges %v; both Helpers are equally plausible "+
+			"once the nesting rules neither in", len(got), got)
+	}
+	for _, e := range edges {
+		if e.Confidence != graph.ConfidencePartial {
+			t.Errorf("candidate edge %s has confidence %q; want partial", e.ID, e.Confidence)
+		}
+	}
+	found := false
+	for _, u := range unresolved {
+		if u.Name == "Helper" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ambiguous Helper was not ledgered, got %+v", unresolved)
 	}
 }
