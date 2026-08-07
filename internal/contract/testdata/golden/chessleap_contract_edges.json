@@ -313,6 +313,14 @@
     "confidence": "inferred"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/llm/ollama.go:http_client:Stream:104-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/practice/llm/ollama.go:http_client:Stream:104",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "POST */api/chat",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/ui/components/boardflip.templ:http_client:POST:/practice/*/auto-glyph/run:154-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:132",
     "from": "chessleap:/Users/lordson/projects/chessleap/ui/components/boardflip.templ:http_client:POST:/practice/*/auto-glyph/run:154",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:132",
