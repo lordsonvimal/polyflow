@@ -205,11 +205,11 @@ func emitResolvedClient(
 	return node, edge, true
 }
 
-// extractSprintfURLs synthesizes resolved http_client producers for request
-// URLs built via fmt.Sprintf within the same function — the sibling shape to
+// extractComposedURLs synthesizes resolved http_client producers for request
+// URLs composed inside the calling function — the sibling shape to
 // extractWrapperURLs' parameter-forwarding case (Tier X.11, docs/sprintf-url-
-// resolution-plan.md). No wrapper closure is needed: this is a single-hop,
-// intra-function pattern —
+// resolution-plan.md; extended by Tier K.1, docs/rails-asset-erb-coverage-plan.md).
+// No wrapper closure is needed: this is a single-hop, intra-function pattern —
 //
 //	reqURL := fmt.Sprintf("%s/client_api/v1/folders/details_by_path?path=%s", c.baseURL, ...)
 //	http.NewRequest("GET", reqURL, nil)
@@ -217,7 +217,21 @@ func emitResolvedClient(
 // — where SSA substitutes reqURL's use with the *ssa.Call value for Sprintf
 // directly (no Alloc/Load indirection for a non-address-taken local), the same
 // substitution X.7's `base + param` BinOp case already relies on.
-func extractSprintfURLs(
+//
+// Tier K.1 generalizes the URL argument from "is an fmt.Sprintf call" to "is any
+// composition of literals, concatenations and Sprintf calls" (resolveComposedURL),
+// because the other half of the measured Maple→orion client surface builds its URL
+// by concatenating a constructor-injected host field with a literal:
+//
+//	http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/client_api/v1/users/", body)
+//
+// The host is opaque either way — it is a struct field assigned from a `New*`
+// parameter — so it renders as `*` and `dynamic_host_strip` drops it at match
+// time. The evidence that makes the edge honest is the *path*, which is fully
+// static at the call site. A bare literal URL argument is deliberately left to the
+// tree-sitter matcher that already owns it, and a composition that yields no
+// literal path segment is skipped rather than guessed (bug-class #12).
+func extractComposedURLs(
 	service, dir string,
 	fset *token.FileSet,
 	inService map[*ssa.Function]bool,
@@ -272,21 +286,18 @@ func extractSprintfURLs(
 				if !ok {
 					continue
 				}
-				sprintfCall, ok := sprintfCallOf(urlArg)
-				if !ok || len(sprintfCall.Call.Args) == 0 {
-					continue
-				}
-				format, ok := ssaConstString(sprintfCall.Call.Args[0])
+				tag, ok := composedURLTag(urlArg)
 				if !ok {
-					// Dynamic format string — not observed in the measured corpus;
-					// leave the call on the dynamic ledger rather than guess (#12).
+					// Bare literal (the tree-sitter matcher owns it) or a shape
+					// this pass cannot compose — nothing to add.
 					continue
 				}
-				path, ok := extractSprintfPathPrefix(format)
+				composed, ok := composedRequestPath(urlArg)
 				if !ok {
+					// No literal path segment survived: zero evidence, so the call
+					// stays on the dynamic ledger rather than fanning out (#12).
 					continue
 				}
-				composed := composeWrapperURL("*", path)
 				method := ""
 				if m, ok := ssaConstString(methodArg); ok {
 					method = strings.ToUpper(m)
@@ -297,7 +308,7 @@ func extractSprintfURLs(
 					pos = fset.Position(fn.Pos())
 				}
 				file := relPath(pos.Filename)
-				node, edge, ok := emitResolvedClient(service, file, pos, callerID, fn.Name(), composed, method, "sprintf_url", seen)
+				node, edge, ok := emitResolvedClient(service, file, pos, callerID, fn.Name(), composed, method, tag, seen)
 				if !ok {
 					continue
 				}
@@ -333,42 +344,185 @@ func sprintfCallOf(v ssa.Value) (*ssa.Call, bool) {
 	return call, true
 }
 
-// extractSprintfPathPrefix extracts the literal path segment from a Sprintf
-// format string shaped "%s<literal-path>" or "%s<literal-path>?<query>" — the
-// dominant Go idiom for `fmt.Sprintf("%s/some/path?q=%s", c.baseURL, val)".
-// Only a leading two-byte verb (%s/%d/%v) is recognized, matching the measured
-// corpus (the dynamic base is always the first substitution).
+// urlComposeMaxDepth caps resolveComposedURL's recursion. Request URLs in the
+// measured corpus nest two levels at most (`host + Sprintf(...)`); the cap only
+// exists so a pathological expression tree cannot stall the parser.
+const urlComposeMaxDepth = 8
+
+// composedURLTag classifies the request-URL argument and reports whether this
+// pass should own it. A bare string constant is excluded: the tree-sitter HTTP
+// matcher already mints a fully-resolved node for literal URLs, and emitting a
+// second one here would double-count the call site.
+func composedURLTag(v ssa.Value) (string, bool) {
+	v = ssaUnwrap(v)
+	if _, isConst := ssaConstString(v); isConst {
+		return "", false
+	}
+	if _, isSprintf := sprintfCallOf(v); isSprintf {
+		return "sprintf_url", true
+	}
+	if bin, ok := v.(*ssa.BinOp); ok && bin.Op == token.ADD {
+		return "concat_url", true
+	}
+	return "", false
+}
+
+// composedRequestPath renders a request-URL argument into the match-ready path
+// stored on the synthesized producer, or ok=false when the composition carries no
+// static evidence.
 //
-// If a verb appears in the path itself before any '?' (a dynamic segment
-// *inside* the path, e.g. "%s/v1/%s/detail"), this bails with ok=false rather
-// than truncating to a misleading partial path — out of scope per the plan's
-// non-goals; the call stays on the dynamic ledger (#12, don't guess).
-func extractSprintfPathPrefix(format string) (string, bool) {
-	if len(format) < 2 || format[0] != '%' {
+// The query string is dropped here rather than left to the contract engine's
+// `query_strip` normalizer so that the node's own label and Meta["path"] read as
+// the endpoint a human would recognize.
+func composedRequestPath(v ssa.Value) (string, bool) {
+	pattern := collapseWildcards(resolveComposedURL(v, 0))
+	if i := strings.IndexByte(pattern, '?'); i >= 0 {
+		pattern = pattern[:i]
+	}
+	if hasLiteralAuthority(pattern) {
+		// The call names its host outright, so this pass — which exists to recover
+		// paths hidden behind an *opaque* host — has nothing to add, and the
+		// tree-sitter matcher already holds the literal prefix. Emitting anyway is
+		// actively harmful: `fmt.Sprintf("https://api.github.com/users/%s", u)`
+		// reduces to `/users/*` once url_to_path drops the authority, which then
+		// matches unrelated `users` member routes in workspace services.
 		return "", false
 	}
-	switch format[1] {
-	case 's', 'd', 'v':
-	default:
+	if !hasDiscriminatingPath(pattern) {
 		return "", false
 	}
-	rest := format[2:]
-	if rest == "" {
-		return "", false
+	return pattern, true
+}
+
+// hasLiteralAuthority reports whether the pattern names a concrete host, as
+// opposed to composing onto one it could not resolve (`*/api/x`, `http://*/api/x`).
+func hasLiteralAuthority(pattern string) bool {
+	i := strings.Index(pattern, "://")
+	if i < 0 {
+		return false
 	}
-	qIdx := strings.IndexByte(rest, '?')
-	vIdx := strings.IndexByte(rest, '%')
-	if vIdx >= 0 && (qIdx < 0 || vIdx < qIdx) {
-		return "", false
+	authority := pattern[i+3:]
+	if j := strings.IndexByte(authority, '/'); j >= 0 {
+		authority = authority[:j]
 	}
-	path := rest
-	if qIdx >= 0 {
-		path = rest[:qIdx]
+	return authority != "" && !strings.Contains(authority, "*")
+}
+
+// resolveComposedURL renders an SSA string value into a URL pattern, substituting
+// `*` for every part it cannot prove. Concatenation and fmt.Sprintf are the two
+// composition forms that appear in Go request construction; anything else (a field
+// load, a helper call, a parameter) is opaque and becomes `*`, which
+// `dynamic_host_strip` / `param_wildcard` reduce at match time.
+func resolveComposedURL(v ssa.Value, depth int) string {
+	if depth > urlComposeMaxDepth {
+		return "*"
 	}
-	if path == "" {
-		return "", false
+	v = ssaUnwrap(v)
+	if s, ok := ssaConstString(v); ok {
+		return s
 	}
-	return path, true
+	switch t := v.(type) {
+	case *ssa.BinOp:
+		if t.Op == token.ADD {
+			return resolveComposedURL(t.X, depth+1) + resolveComposedURL(t.Y, depth+1)
+		}
+	case *ssa.Call:
+		if call, ok := sprintfCallOf(t); ok && len(call.Call.Args) > 0 {
+			if format, ok := ssaConstString(call.Call.Args[0]); ok {
+				return expandFormatVerbs(format)
+			}
+			// Dynamic format string — not observed in the measured corpus; fall
+			// through to opaque rather than guess (#12).
+		}
+	}
+	return "*"
+}
+
+// expandFormatVerbs rewrites every printf verb in a format string to `*`.
+//
+// The substituted arguments are deliberately *not* consulted. fmt.Sprintf is
+// variadic, so SSA hands the arguments over as a constructed `[]any` slice whose
+// element stores would have to be walked back; and across the measured corpus every
+// substitution is a runtime value (a host field, an ID, a url.QueryEscape call)
+// anyway. Wildcarding a substitution that happened to be constant only widens the
+// pattern, which costs match precision on the wildcard tier but can never invent a
+// path segment that is not there.
+func expandFormatVerbs(format string) string {
+	var b strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			continue
+		}
+		j := i + 1
+		// Skip flags, width and precision: `%-10.2f`, `%02d`.
+		for j < len(format) && strings.IndexByte("+-# 0123456789.", format[j]) >= 0 {
+			j++
+		}
+		if j >= len(format) {
+			b.WriteByte('%')
+			break
+		}
+		if format[j] == '%' { // `%%` is a literal percent, not a substitution.
+			b.WriteByte('%')
+		} else {
+			b.WriteByte('*')
+		}
+		i = j
+	}
+	return b.String()
+}
+
+// collapseWildcards folds runs of `*` into one so `c.host + "/" + id` renders
+// `*/*` rather than `*/**`, keeping patterns comparable segment by segment.
+func collapseWildcards(s string) string {
+	var b strings.Builder
+	prevStar := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '*' {
+			if prevStar {
+				continue
+			}
+			prevStar = true
+		} else {
+			prevStar = false
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// hasDiscriminatingPath is the evidence gate for emitting a producer at all: the
+// pattern must pin enough path to identify *which* service is being called.
+//
+// When the host is opaque — a struct field, a parameter, anything rendered `*` —
+// the path is the only evidence there is, and one generic segment is not enough of
+// it. Measured on the juniper fleet: `c.baseURL+"/health"` appears at four
+// call sites across the migration tool, and `*/health` matches a health handler in
+// maple-agent, maple-manager and willow alike — ten edges out of one call, none of
+// which say anything true about the topology. Requiring two literal segments
+// leaves `*/client_api/v1/users` and `*/api/v1/pdv/reindex` (which name a real
+// API surface) while dropping `*/health` and `*/*/*/messages` (which name a
+// convention). Those call sites keep their tree-sitter node as the honest ledger;
+// they simply stop fanning out (bug-class #1, #12).
+//
+// A known host is self-discriminating, so one literal segment suffices there.
+func hasDiscriminatingPath(pattern string) bool {
+	literals := 0
+	for _, seg := range strings.Split(pattern, "/") {
+		if seg == "" || strings.Contains(seg, "*") {
+			continue
+		}
+		// A bare scheme (`http:`) is not path evidence.
+		if strings.HasSuffix(seg, ":") {
+			continue
+		}
+		literals++
+	}
+	if literals == 0 {
+		return false
+	}
+	return literals >= 2 || !strings.Contains(pattern, "*")
 }
 
 // findURLParamWrappers computes the transitive set of functions whose request
