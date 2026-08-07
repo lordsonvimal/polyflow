@@ -272,7 +272,7 @@ func walkServiceDocs(svcPath, service string, fileNodes map[string][]fileNodeEnt
 			out = append(out, chunkMarkdownFile(path, service)...)
 		case ".go":
 			out = append(out, extractGoDocComments(path, service, fileNodes)...)
-		case ".ts", ".tsx", ".js", ".jsx":
+		case ".ts", ".tsx", ".js", ".jsx", ".es6":
 			out = append(out, extractJSDocComments(path, service, fileNodes)...)
 		case ".rb":
 			out = append(out, extractRubyDocComments(path, service, fileNodes)...)

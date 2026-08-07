@@ -796,6 +796,29 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, jsImportUnresolved...)
 	}
+	// Tier K.5: stylesheet @import graph + containment for the selector and
+	// @font-face nodes the stylesheet parser mints.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		cssNodes, cssEdges, cssUnresolved := linker.LinkStylesheetImports(allNodes, svcFiles)
+		for i := range cssNodes {
+			n := cssNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(cssEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, cssUnresolved...)
+	}
 	{
 		svcFiles := make(map[string][]string, len(allSvcFiles))
 		for _, sf := range allSvcFiles {

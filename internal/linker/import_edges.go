@@ -154,7 +154,7 @@ func parseJSImportSources(file string) (relative []string, externalCount int) {
 }
 
 // jsExtensions are tried in order when a relative import has no extension.
-var jsExtensions = []string{".ts", ".tsx", ".js", ".jsx", ".mjs"}
+var jsExtensions = []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".es6"}
 
 // resolveJSImportPath resolves a relative import specifier (e.g. "./utils",
 // "../lib/foo") to the absolute-or-relative file path used by the service
@@ -165,7 +165,7 @@ func resolveJSImportPath(importingFile, specifier string, indexedFiles map[strin
 
 	ext := strings.ToLower(filepath.Ext(specifier))
 	switch ext {
-	case ".ts", ".tsx", ".js", ".jsx", ".mjs":
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".es6":
 		if indexedFiles[base] {
 			return base
 		}

@@ -594,7 +594,7 @@ func firstRootWithFiles(svcDir string, rootDirs []string, sorted []string) strin
 
 func isJSExt(ext string) bool {
 	switch ext {
-	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts":
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts", ".es6":
 		return true
 	}
 	return false
@@ -605,7 +605,7 @@ func fileLanguage(absFile string) string {
 	switch strings.ToLower(filepath.Ext(absFile)) {
 	case ".ts", ".tsx", ".mts":
 		return "typescript"
-	case ".js", ".jsx", ".mjs":
+	case ".js", ".jsx", ".mjs", ".es6":
 		return "javascript"
 	case ".svelte":
 		return "svelte"

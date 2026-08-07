@@ -1403,7 +1403,7 @@ func goTopLevelScope(file, skipID string, nameByFileAndName map[string]string) s
 // module — languages whose top-level statements execute on load and therefore
 // need a synthetic (module) caller node for top-level call-ref attribution.
 func isJSModuleFile(file string) bool {
-	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".py"} {
+	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".es6", ".py"} {
 		if strings.HasSuffix(file, ext) {
 			return true
 		}
