@@ -38,7 +38,7 @@ class Admin extends User {
   ban() {}
 }
 `)
-	nodes, edges, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
+	nodes, edges, _, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
 
 	user := jsNodeI2(nodes, graph.NodeTypeClass, "User")
 	if user == nil {
@@ -66,7 +66,7 @@ func TestJSI2_UnresolvedExpressionSuperclass(t *testing.T) {
 	src := []byte(`
 class X extends mixin(Base) {}
 `)
-	nodes, edges, unresolved := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
+	nodes, edges, unresolved, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
 	_ = nodes
 
 	// No inherits edge should exist.
@@ -97,7 +97,7 @@ class English implements Greeter {
   greet() { return "hello"; }
 }
 `)
-	nodes, edges, _ := extractJSVariables("svc.ts", "svc", "typescript", "typescript", src)
+	nodes, edges, _, _ := extractJSVariables("svc.ts", "svc", "typescript", "typescript", src)
 
 	iface := jsNodeI2(nodes, graph.NodeTypeInterface, "Greeter")
 	if iface == nil {
@@ -126,7 +126,7 @@ interface Extended extends Base {
   name(): string;
 }
 `)
-	nodes, edges, _ := extractJSVariables("svc.ts", "svc", "typescript", "typescript", src)
+	nodes, edges, _, _ := extractJSVariables("svc.ts", "svc", "typescript", "typescript", src)
 
 	// No calls edge between interface nodes.
 	for _, e := range edges {
@@ -160,7 +160,7 @@ interface Shape {
   perimeter(): number;
 }
 `)
-	nodes, _, _ := extractJSVariables("svc.ts", "svc", "typescript", "typescript", src)
+	nodes, _, _, _ := extractJSVariables("svc.ts", "svc", "typescript", "typescript", src)
 
 	n := jsNodeI2(nodes, graph.NodeTypeInterface, "Shape")
 	if n == nil {
@@ -183,7 +183,7 @@ function createStore() {
   return new Store();
 }
 `)
-	nodes, edges, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
+	nodes, edges, _, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
 
 	cls := jsNodeI2(nodes, graph.NodeTypeClass, "Store")
 	if cls == nil {
@@ -209,7 +209,7 @@ function makeService() {
   return new ExternalService();
 }
 `)
-	_, edges, unresolved := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
+	_, edges, unresolved, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
 
 	for _, e := range edges {
 		if e.Type == graph.EdgeTypeInstantiates {
@@ -232,7 +232,7 @@ class Admin extends User {
   ban() {}
 }
 `)
-	_, edges, unresolved := extractJSVariables("admin.js", "svc", "javascript", "javascript", src)
+	_, edges, unresolved, _ := extractJSVariables("admin.js", "svc", "javascript", "javascript", src)
 
 	// No inherits edge (cross-file, not resolved here).
 	for _, e := range edges {

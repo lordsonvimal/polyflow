@@ -32,7 +32,7 @@ async function loadUntyped() {
   return data;
 }
 `)
-	_, edges, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src)
+	_, edges, _, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src)
 
 	consumes := map[string]graph.Edge{} // fn substring → edge
 	for _, e := range edges {

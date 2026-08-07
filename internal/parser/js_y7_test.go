@@ -32,7 +32,7 @@ function Toolbar() {
 // handler emits element→function dom_listen, that the element node is minted
 // (no dangling endpoint, #10), and that unresolved handlers are ledgered (#12).
 func TestJSY7_JSXEvent(t *testing.T) {
-	nodes, edges, unresolved := extractJSVariables("Toolbar.tsx", "web", "typescript", "tsx", []byte(y7JSXSource))
+	nodes, edges, unresolved, _ := extractJSVariables("Toolbar.tsx", "web", "typescript", "tsx", []byte(y7JSXSource))
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:onRefresh:")
 	if e == nil {
@@ -106,7 +106,7 @@ function Form() {
 // each same-file function it invokes (via:jsx, handler:inline, inferred), while
 // member/store calls and no-op arrows are ledgered (#12).
 func TestJSY7_InlineHandler(t *testing.T) {
-	_, edges, unresolved := extractJSVariables("Form.tsx", "web", "typescript", "tsx", []byte(y7InlineSource))
+	_, edges, unresolved, _ := extractJSVariables("Form.tsx", "web", "typescript", "tsx", []byte(y7InlineSource))
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:save:")
 	if e == nil {
@@ -155,7 +155,7 @@ const styles: Ref[] = [];
 // TestJSY7_TypeUses verifies same-file type references emit uses_type edges so a
 // declared-but-never-instantiated TS type is not left dangling.
 func TestJSY7_TypeUses(t *testing.T) {
-	_, edges, _ := extractJSVariables("types.ts", "web", "typescript", "typescript", []byte(y7TypeUseSource))
+	_, edges, _, _ := extractJSVariables("types.ts", "web", "typescript", "typescript", []byte(y7TypeUseSource))
 
 	// Detail interface references Ref in a member type.
 	if e := edgeFromToSub(edges, graph.EdgeTypeUsesType, ":interface:Detail:", ":interface:Ref:"); e == nil {
@@ -185,7 +185,7 @@ function wire(evt) {
 // element→function dom_listen for a resolvable handler, and ledgers/skips the
 // dynamic-event-name and inline-handler cases (#12).
 func TestJSY7_AddEventListener(t *testing.T) {
-	_, edges, _ := extractJSVariables("wire.ts", "web", "typescript", "typescript", []byte(y7ListenerSource))
+	_, edges, _, _ := extractJSVariables("wire.ts", "web", "typescript", "typescript", []byte(y7ListenerSource))
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:document:", ":function:onScroll:")
 	if e == nil {
