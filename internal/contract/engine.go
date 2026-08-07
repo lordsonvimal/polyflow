@@ -262,6 +262,13 @@ func matchProducer(
 		if distinctTargetServices(eligible) > 1 {
 			edgeConfidence = graph.ConfidencePartial
 		}
+		// A producer key that was itself resolved by inference cannot yield a
+		// stronger edge than the inference that produced it. The AMQP
+		// registration handshake (K.6) is the first such key: the field symbol
+		// proves the two services agreed on a queue name, not that this call
+		// site is reachable from that consumer in production, so the match tier
+		// would otherwise report `exact` for a fact no source line states.
+		edgeConfidence = capConfidence(edgeConfidence, prod.Meta["confidence_ceiling"])
 
 		for _, hit := range eligible {
 			edgeMeta := map[string]string{"confidence": edgeConfidence}
@@ -273,6 +280,18 @@ func matchProducer(
 			// G.7: propagate alias/wrapper indirection from producer node to edge.
 			if via := prod.Meta["via"]; via != "" && edgeMeta["via"] == "" {
 				edgeMeta["via"] = via
+			}
+			// When the producer's key was not written at the call site but
+			// derived (K.6: carried across repos on a handshake field symbol),
+			// name the mechanism on the edge. Otherwise the node reads
+			// `dynamic`, the edge reads `partial`, and nothing anywhere says
+			// which field the two services agreed on — leaving an edge a reader
+			// has to take on faith.
+			if rv := prod.Meta["key_resolved_via"]; rv != "" {
+				edgeMeta["resolved_via"] = rv
+				if f := prod.Meta["broker_field"]; f != "" {
+					edgeMeta["handshake_field"] = f
+				}
 			}
 
 			result.Edges = append(result.Edges, graph.Edge{
@@ -288,6 +307,36 @@ func matchProducer(
 		return true
 	}
 	return false
+}
+
+// confidenceRank orders the confidence tiers so a ceiling can be applied
+// without a table of pairwise comparisons. Unknown strings rank highest so an
+// unrecognised ceiling never silently weakens an edge.
+func confidenceRank(c string) int {
+	switch c {
+	case graph.ConfidenceUnknown:
+		return 0
+	case graph.ConfidencePartial:
+		return 1
+	case graph.ConfidenceInferred:
+		return 2
+	case graph.ConfidenceStatic:
+		return 3
+	default:
+		return 4
+	}
+}
+
+// capConfidence lowers conf to ceiling when ceiling is the weaker of the two.
+// An empty ceiling means the producer sets no cap.
+func capConfidence(conf, ceiling string) string {
+	if ceiling == "" {
+		return conf
+	}
+	if confidenceRank(ceiling) < confidenceRank(conf) {
+		return ceiling
+	}
+	return conf
 }
 
 // distinctTargetServices counts the distinct non-empty Service values among
@@ -374,14 +423,33 @@ func applyUnmatched(prod *graph.Node, rule Rule, targetSvc string, result *Resul
 func partitionNodes(nodes []graph.Node, rule Rule) (producers, consumers []*graph.Node) {
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type == rule.Producer.Node && matchesWhere(n, rule.Producer.Where) {
+		if n.Type == rule.Producer.Node && matchesWhere(n, rule.Producer.Where) &&
+			matchesNotWhere(n, rule.Producer.NotWhere) {
 			producers = append(producers, n)
 		}
-		if n.Type == rule.Consumer.Node && matchesWhere(n, rule.Consumer.Where) {
+		if n.Type == rule.Consumer.Node && matchesWhere(n, rule.Consumer.Where) &&
+			matchesNotWhere(n, rule.Consumer.NotWhere) {
 			consumers = append(consumers, n)
 		}
 	}
 	return
+}
+
+// matchesNotWhere is the negation of matchesWhere: the node is admitted only if
+// none of the listed meta keys holds the excluded value. It exists because some
+// node shapes are unambiguously one-sided — a Sneakers `from_queue` binding
+// consumes and can never publish — while the rule that matches them has to stay
+// symmetric for the shapes that genuinely are (a bunny `channel.queue(name)`
+// declaration is written identically by publishers and consumers). Without it
+// the queue contract emits both directions and claims a worker publishes to the
+// agent that feeds it.
+func matchesNotWhere(n *graph.Node, notWhere map[string]string) bool {
+	for key, excluded := range notWhere {
+		if n.Meta[key] == excluded {
+			return false
+		}
+	}
+	return true
 }
 
 // matchesWhere checks a node's meta against a where gate.

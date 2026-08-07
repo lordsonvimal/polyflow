@@ -40,6 +40,13 @@ contracts:
   - kind: amqp
     producer:
       node: channel
+      # A Sneakers/kicks `from_queue` binding is unambiguously the consuming
+      # side, so it can never be the producer of a publishes edge. The rest of
+      # the rule stays symmetric because a bunny `channel.queue(name)` really is
+      # written identically by both sides. Without this exclusion K.6's
+      # handshake resolution makes each nextGen worker "publish" to the CDR
+      # agent that feeds it — an edge backwards to the message flow.
+      not_where: {pattern: kicks_from_queue}
       key: [queue_name]
     consumer:
       node: channel

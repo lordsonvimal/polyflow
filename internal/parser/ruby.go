@@ -46,6 +46,17 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	edges = append(edges, varEdges...)
 	unresolved = append(unresolved, varUnresolved...)
 
+	// Tier K.6 step 3: stamp the same-file facts a registration handshake needs
+	// — queue-name method → literal, handshake field → its value method, and
+	// dynamic queue site → the field symbol it digs. The cross-service join
+	// itself is LinkAMQPHandshake's.
+	//
+	// This must run after extractRubyVariables, not next to Tier 2: the queue
+	// literal is stamped onto the *method's* node, and Ruby method nodes are
+	// structural, appended above. nextGen's lib/queue_names.rb is nothing but
+	// such methods, so running earlier stamped an empty file.
+	stampRubyHandshakeFacts(file, src, nodes)
+
 	// Attribute comm nodes to their enclosing Ruby method. The pattern matcher's
 	// Pass 2 caller attribution only sees pattern-matched scope nodes, but Ruby
 	// method nodes come from extractRubyVariables (structural), appended above —

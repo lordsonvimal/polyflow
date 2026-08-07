@@ -1016,6 +1016,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// the alias table used to rewrite call nodes before Engine.Link.
 	enrichedNodes, aliasUnresolved := contract.EnrichAliases(enrichedNodes)
 	allUnresolved = append(allUnresolved, aliasUnresolved...)
+	// K.6 step 3 pre-engine enrichment: carry a runtime-negotiated queue name
+	// across the repo boundary on the registration handshake's field symbol, so
+	// the existing queue_name contract can join publisher to consumer. Resolves
+	// keys only — it emits no edges of its own.
+	handshakeUnresolved, handshakeResolved := linker.LinkAMQPHandshake(enrichedNodes)
+	allUnresolved = linker.DropResolvedRefs(allUnresolved, handshakeResolved)
+	allUnresolved = append(allUnresolved, handshakeUnresolved...)
 	eng := &contract.Engine{}
 	contractResult := eng.Link(enrichedNodes, contractRules, cfg.Links)
 
@@ -1128,6 +1135,11 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		// Use the reconciler's unresolved list (may include gap ledger entries
 		// from non-static providers in F.1+; for F.0 it equals allUnresolved).
 		allUnresolved = result.Unresolved
+		// The config provider re-derives its ledger from the *persisted* nodes,
+		// which still read key_dynamic because the handshake resolution lives on
+		// the pre-engine working copy. Retract again here, or the three sites
+		// K.6 just linked come back reported as unresolvable.
+		allUnresolved = linker.DropResolvedRefs(allUnresolved, handshakeResolved)
 	}
 
 	// ── Embed pass (S.0) ─────────────────────────────────────────────────────
