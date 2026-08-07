@@ -16,7 +16,8 @@ func parseJS(t *testing.T, src string) ([]graph.Node, []graph.Edge, []graph.Unre
 	dir := t.TempDir()
 	file := filepath.Join(dir, "app.js")
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
-	return extractJSVariables(file, "svc", "javascript", "javascript", []byte(src))
+	n, e, u, _ := extractJSVariables(file, "svc", "javascript", "javascript", []byte(src))
+	return n, e, u
 }
 
 // TestStampGlobalSymbols_NonModuleFunctionDecl: top-level function declarations
