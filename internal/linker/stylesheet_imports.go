@@ -3,7 +3,6 @@ package linker
 import (
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -24,16 +23,7 @@ import (
 // of nothing but `$variables` declares nothing — yet those partials are the
 // majority of every import graph's *targets*. Skipping them left 7 of 40 edges.
 func LinkStylesheetImports(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, newEdges []graph.Edge, unresolved []graph.UnresolvedRef) {
-	fileNodeID := make(map[string]string) // "svc\x00file" → file node ID
-	haveService := make(map[string]bool)
-	for i := range nodes {
-		switch nodes[i].Type {
-		case graph.NodeTypeFile:
-			fileNodeID[nodes[i].Service+"\x00"+nodes[i].File] = nodes[i].ID
-		case graph.NodeTypeService:
-			haveService[nodes[i].Label] = true
-		}
-	}
+	files := newFileNodeIndex(nodes)
 
 	seen := make(map[string]bool)
 	addEdge := func(from, to, label string, conf string, meta map[string]string) {
@@ -54,30 +44,6 @@ func LinkStylesheetImports(nodes []graph.Node, serviceFiles map[string][]string)
 	}
 	sort.Strings(svcNames) // map iteration must never reach output (bug-class #2)
 
-	// ensureFileNode returns the file node ID for a stylesheet, minting the
-	// node (and its service→file contains edge) when containment did not.
-	ensureFileNode := func(svc, file string) string {
-		key := svc + "\x00" + file
-		if id, ok := fileNodeID[key]; ok {
-			return id
-		}
-		id := fmt.Sprintf("%s:%s:%s", svc, file, graph.NodeTypeFile)
-		fileNodeID[key] = id
-		newNodes = append(newNodes, graph.Node{
-			ID:       id,
-			Type:     graph.NodeTypeFile,
-			Label:    file,
-			Service:  svc,
-			File:     file,
-			Language: languageForFile(file),
-			Meta:     map[string]string{"basename": path.Base(file)},
-		})
-		if haveService[svc] {
-			newEdges = append(newEdges, containsEdge("service:"+svc, id))
-		}
-		return id
-	}
-
 	for _, svc := range svcNames {
 		idx := newStylesheetIndex(serviceFiles[svc])
 		if len(idx.files) == 0 {
@@ -92,7 +58,7 @@ func LinkStylesheetImports(nodes []graph.Node, serviceFiles map[string][]string)
 			if len(imports) == 0 {
 				continue
 			}
-			fromID := ensureFileNode(svc, file)
+			fromID := files.ensure(svc, file)
 			for _, imp := range imports {
 				if isExternalStylesheetSpec(imp.Spec) {
 					continue // CDN / protocol URL: no edge, no ledger (JS precedent)
@@ -114,7 +80,7 @@ func LinkStylesheetImports(nodes []graph.Node, serviceFiles map[string][]string)
 					conf = graph.ConfidencePartial
 				}
 				for _, t := range targets {
-					toID := ensureFileNode(svc, t)
+					toID := files.ensure(svc, t)
 					addEdge(fromID, toID, "@"+imp.Rule+" "+imp.Spec, conf,
 						map[string]string{"rule": imp.Rule, "specifier": imp.Spec})
 				}
@@ -122,7 +88,7 @@ func LinkStylesheetImports(nodes []graph.Node, serviceFiles map[string][]string)
 		}
 	}
 
-	return newNodes, newEdges, unresolved
+	return files.minted, append(newEdges, files.mintedEdges...), unresolved
 }
 
 func isStylesheetFile(file string) bool {
