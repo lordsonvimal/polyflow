@@ -165,6 +165,41 @@ func TestRubyChannel_MethodBeatsClass(t *testing.T) {
 	}
 }
 
+// TestRubyChannel_CallSiteIsNotAScope: `before_action :ensure_valid_token` is a
+// class-body callback registration. The pattern matcher mints it as a function
+// node, and in a Rails controller it is the ONLY scope candidate Pass 2 can see
+// (real Ruby methods are structural, added after MatchToGraph), so it used to
+// collect every comm node in the file — here, queue declarations inside a
+// private method 8 lines below it.
+//
+// A call site has no body. The signal is end_line: a declaration pattern
+// captures @_def and records its span, a call pattern cannot.
+func TestRubyChannel_CallSiteIsNotAScope(t *testing.T) {
+	nodes, edges := parseRuby(t, "testdata/amqp_attribution/agents_controller.rb")
+
+	byID := map[string]*graph.Node{}
+	for i := range nodes {
+		byID[nodes[i].ID] = &nodes[i]
+	}
+
+	channels := nodesOfType(nodes, graph.NodeTypeChannel)
+	require.NotEmpty(t, channels, "fixture produced no queue-name declarations")
+
+	for _, ch := range channels {
+		in := inboundOf(edges, ch.ID)
+		require.NotEmpty(t, in, "queue declaration at line %d has no inbound edge", ch.Line)
+		for _, e := range in {
+			from := byID[e.From]
+			require.NotNil(t, from)
+			assert.NotEqual(t, "before_action", from.Label,
+				"queue at line %d attributed to a callback registration at line %d",
+				ch.Line, from.Line)
+			assert.Equal(t, "registration_json", from.Label,
+				"queue at line %d belongs to the method that declares it", ch.Line)
+		}
+	}
+}
+
 // TestRubyChannel_AttributionDeterministic: the pass consults maps keyed by
 // file, so pin that repeated parses agree (bug-class #2).
 func TestRubyChannel_AttributionDeterministic(t *testing.T) {
@@ -172,6 +207,7 @@ func TestRubyChannel_AttributionDeterministic(t *testing.T) {
 		"testdata/amqp_attribution/publisher.rb",
 		"testdata/amqp_attribution/event_worker.rb",
 		"testdata/amqp_attribution/tasks.rake",
+		"testdata/amqp_attribution/agents_controller.rb",
 	}
 	for _, f := range files {
 		firstNodes, firstEdges := parseRuby(t, f)

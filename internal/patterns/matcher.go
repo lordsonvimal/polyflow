@@ -1073,7 +1073,25 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			if v, ok := n.Meta["end_line"]; ok {
 				fmt.Sscanf(v, "%d", &end)
 			}
-			funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, end, n.ID})
+			// Same reasoning as the is_test guard above, generalised: a pattern
+			// that matches a *declaration* captures a body and stamps end_line;
+			// a pattern that matches a *call* cannot, so a pattern-derived
+			// function node with no end_line is a call site, not a scope. It has
+			// no body to contain anything, and treating it as unbounded lets it
+			// swallow every later line in the file.
+			//
+			// `before_action :ensure_valid_token` is the case that surfaced this:
+			// a class-body callback registration was the only scope candidate
+			// Pass 2 could see in a Rails controller (real Ruby methods are
+			// structural and appear after MatchToGraph), so the four queue-name
+			// declarations inside `registration_json` were attributed to the
+			// auth filter fifteen lines above them.
+			//
+			// Only the scope span is withheld — the node still registers its name,
+			// so callee resolution by name is unaffected.
+			if n.Meta["pattern"] == "" || end > 0 {
+				funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, end, n.ID})
+			}
 			nameByFileAndName[n.File+"\x00"+n.Label] = n.ID
 		case graph.NodeTypeWorker:
 			// Goroutine bodies are enclosing scopes too: calls inside
