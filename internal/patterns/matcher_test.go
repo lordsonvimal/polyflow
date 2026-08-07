@@ -167,8 +167,11 @@ func TestMatchToGraph_EmptyResults(t *testing.T) {
 func TestMatchToGraph_GoroutineCallIsEdge(t *testing.T) {
 	// goroutine_call must be a call-ref: no new node, one spawns edge from enclosing func.
 	results := []patterns.MatchResult{
-		{PatternName: "func_decl", File: "f.go", Line: 1, Captures: map[string]string{"name": "New"}},
-		{PatternName: "func_decl", File: "f.go", Line: 10, Captures: map[string]string{"name": "fanOut"}},
+		// EndLine mirrors what a real parse produces: func_decl captures @_def, so
+		// every declaration carries its body span. Only a *call*-site pattern
+		// leaves it unset, which is how Pass 2 tells a scope from a call.
+		{PatternName: "func_decl", File: "f.go", Line: 1, Captures: map[string]string{"name": "New"}, EndLine: 8},
+		{PatternName: "func_decl", File: "f.go", Line: 10, Captures: map[string]string{"name": "fanOut"}, EndLine: 15},
 		{PatternName: "goroutine_call", File: "f.go", Line: 5, Captures: map[string]string{"callee": "fanOut"}},
 	}
 	nodes, edges, _ := patterns.MatchToGraph("svc", results)
