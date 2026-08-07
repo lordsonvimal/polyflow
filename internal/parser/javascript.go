@@ -14,7 +14,9 @@ type JavaScriptParser struct{}
 
 func (p *JavaScriptParser) Language() string { return "javascript" }
 func (p *JavaScriptParser) Extensions() []string {
-	return []string{".js", ".ts", ".jsx", ".tsx", ".mjs"}
+	// .es6 is plain ES2015 handled by the JS grammar unchanged (Tier K.5);
+	// nextGen ships its per-page Sprockets assets under that extension.
+	return []string{".js", ".ts", ".jsx", ".tsx", ".mjs", ".es6"}
 }
 
 func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {

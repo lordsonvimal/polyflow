@@ -17,12 +17,13 @@ var assetExts = map[string]bool{
 	".pdf": true, ".zip": true, ".gz": true, ".tar": true, ".map": true,
 	".lock": true, ".sum": true, ".mod": true, ".toml": true, ".ini": true,
 	".env": true, ".example": true, ".md": true, ".txt": true,
-	".json": true, ".yaml": true, ".yml": true, ".css": true, ".scss": true,
+	".json": true, ".yaml": true, ".yml": true,
 }
 
-// NOTE: .json/.yaml/.yml/.css move OUT of this list the moment a plan
-// gives them a reader (plan 4 K.1/K.2 for yaml, plan 5 Q.2 for json IaC).
-// Each removal is part of that plan's phase, with this comment updated.
+// NOTE: .json/.yaml/.yml move OUT of this list the moment a plan gives them a
+// reader (plan 4 K.1/K.2 for yaml, plan 5 Q.2 for json IaC). Each removal is
+// part of that plan's phase, with this comment updated. .css/.scss left in
+// Tier K.5, which gave them internal/parser/scss.go.
 
 // unparsedKey returns the extension or basename for extensionless files.
 func unparsedKey(path string) string {
