@@ -255,3 +255,28 @@ func TestAMQPTopicWildcard_Normalizer(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyPathGuard_Normalizer(t *testing.T) {
+	fn := contract.NormalizerByName("empty_path_guard")
+	if fn == nil {
+		t.Fatal("empty_path_guard is not registered")
+	}
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"/", "/"}, // the root route is real routing information (see the doc comment)
+		{"*", ""},
+		{"/*", ""},
+		{"*/*", ""},
+		{"//", "//"}, // trim_slash has already reduced any real "//" to "/"
+		{"/api", "/api"},
+		{"/api/*", "/api/*"},
+		{"/*/users", "/*/users"},
+		{"get", "get"}, // non-path key fields pass through untouched
+		{"post", "post"},
+	}
+	for _, tc := range cases {
+		if got := fn(tc.in, contract.NormalizeEnv{}); got != tc.want {
+			t.Errorf("empty_path_guard(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
