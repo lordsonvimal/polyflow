@@ -101,7 +101,8 @@ type Rule struct {
 // EndpointSpec describes how to identify and key producer or consumer nodes.
 type EndpointSpec struct {
 	Node              graph.NodeType      `yaml:"node"`
-	Where             map[string]string   `yaml:"where,omitempty"`         // meta equality; "" ⇒ absent/empty
+	Where             map[string]string   `yaml:"where,omitempty"`     // meta equality; "" ⇒ absent/empty
+	NotWhere          map[string]string   `yaml:"not_where,omitempty"` // meta inequality; excludes nodes holding the value
 	Key               []string            `yaml:"key"`                     // meta fields, joined with " "
 	KeyFallbacks      map[string][]string `yaml:"key_fallbacks,omitempty"` // per-field meta fallbacks
 	MethodFallback    []string            `yaml:"method_fallback,omitempty"`
