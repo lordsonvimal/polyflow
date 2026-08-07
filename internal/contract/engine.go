@@ -54,6 +54,11 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 			if rule.Producer.TargetServiceMeta != "" {
 				targetSvc = prod.Meta[rule.Producer.TargetServiceMeta]
 			}
+			// J.2c: an unattributed relative URL cannot leave its own origin.
+			if targetSvc == "" && rule.Producer.SameOriginRelative &&
+				prod.Service != "" && producerKeyIsRootRelative(prod, rule.Producer) {
+				targetSvc = prod.Service
+			}
 			env := NormalizeEnv{
 				FromService: prod.Service,
 				ToService:   targetSvc,
@@ -151,9 +156,11 @@ func matchProducerWithKeyOverride(
 	for _, methodOverride := range candidateMethodOverrides(prod, rule.Producer) {
 		override := mergeOverrides(baseOverride, methodOverride)
 		rawFields := buildRawFields(prod, rule.Producer, override)
-		rawKey := strings.Join(rawFields, " ")
-
 		normFields := applyNormsToFields(rawFields, norms, env)
+		if keyVoided(rawFields, normFields) {
+			continue
+		}
+		rawKey := strings.Join(rawFields, " ")
 		normKey := strings.Join(normFields, " ")
 
 		hits, _ := findMatches(rawKey, normKey, rule.Match, idx)
@@ -221,9 +228,11 @@ func matchProducer(
 		if keyIsEmpty(rawFields) {
 			continue
 		}
-		rawKey := strings.Join(rawFields, " ")
-
 		normFields := applyNormsToFields(rawFields, norms, env)
+		if keyVoided(rawFields, normFields) {
+			continue
+		}
+		rawKey := strings.Join(rawFields, " ")
 		normKey := strings.Join(normFields, " ")
 
 		hits, confidence := findMatches(rawKey, normKey, rule.Match, idx)
@@ -464,9 +473,12 @@ func buildConsumerIndexes(
 		if keyIsEmpty(rawFields) {
 			continue
 		}
+		normFields := applyNormsToFields(rawFields, norms, env)
+		if keyVoided(rawFields, normFields) {
+			continue
+		}
 		rawKey := strings.Join(rawFields, " ")
 		idx.exact[rawKey] = append(idx.exact[rawKey], c)
-		normFields := applyNormsToFields(rawFields, norms, env)
 		normKey := strings.Join(normFields, " ")
 		if _, exists := idx.norm[normKey]; !exists {
 			idx.normKeys = append(idx.normKeys, normKey)
@@ -498,6 +510,41 @@ func keyIsEmpty(fields []string) bool {
 		}
 	}
 	return true
+}
+
+// producerKeyIsRootRelative reports whether a producer's key is both relative
+// (no "scheme://" and no protocol-relative "//host") and rootward — no path
+// field carrying a segment to discriminate on. See EndpointSpec.SameOriginRelative.
+func producerKeyIsRootRelative(prod *graph.Node, spec EndpointSpec) bool {
+	for _, v := range buildRawFields(prod, spec, nil) {
+		v = normQuoteStrip(v, NormalizeEnv{})
+		if strings.Contains(v, "://") || strings.HasPrefix(v, "//") {
+			return false
+		}
+		if strings.HasPrefix(v, "/") && len(splitPath(v)) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// keyVoided reports whether a guard normalizer (empty_path_guard,
+// shared_anchor_guard) blanked a key field that had a value — the chain's way of
+// saying "this field carries no routing information".
+//
+// It must be judged per field, not on the joined key: a voided path leaves a
+// non-empty method behind, so `keyIsEmpty` never fires and the pair
+// (producer "get ", root handler "get ") would meet on the very emptiness the
+// guard introduced. Voiding is therefore applied symmetrically — the producer
+// skips matching and falls to its `unmatched` policy, and the consumer is left
+// out of both indexes.
+func keyVoided(rawFields, normFields []string) bool {
+	for i := range rawFields {
+		if rawFields[i] != "" && normFields[i] == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // buildRawFields extracts the key field values from a node's meta,

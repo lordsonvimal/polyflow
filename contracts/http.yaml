@@ -18,7 +18,7 @@ contracts:
       node: http_handler
       key: [method, path]
     normalizers:                     # applied in order to each key field
-      [case_fold, url_to_path, dynamic_host_strip, base_url_strip, query_strip, param_wildcard, trim_slash]
+      [case_fold, url_to_path, dynamic_host_strip, base_url_strip, query_strip, param_wildcard, trim_slash, empty_path_guard]
                                      # case_fold first: chi emits "Post", templ emits
                                      # "POST" — normalizing to lowercase before key
                                      # comparison gives method-case-insensitive parity
@@ -29,6 +29,13 @@ contracts:
                                      # → "*/api/v1/x") so it aligns with the handler's
                                      # bare "/api/v1/x" — placed after url_to_path,
                                      # before base_url_strip per the worked example.
+                                     # empty_path_guard (J.2c) LAST: a path that has
+                                     # reduced to nothing ("", "/", all-wildcard) is
+                                     # voided, so an unresolvable client URL falls to
+                                     # `unmatched` instead of exact-matching every
+                                     # service's `GET /` handler (120 of 152 junk
+                                     # cross-service http_call edges on the
+                                     # datascience fleet came through that hole).
     match: [exact, normalized, wildcard_anchored]  # tiers in order; first hit wins
     edge:
       type: http_call
@@ -55,10 +62,18 @@ contracts:
       key: [method, path]
       key_fallbacks: { path: [url] }
       target_service_meta: target_service  # shared lookup path in Linker.Link
+      same_origin_relative: true   # J.2c: a relative link with no path segment
+                                   # (`href="/"`) stays in its own service. Every
+                                   # service has a root route, so matching them
+                                   # all is information-free fan-out — all 19
+                                   # cross-service navigates_to edges on the
+                                   # datascience fleet were `/` → `GET /`. A
+                                   # relative link that names a path, and any
+                                   # absolute href, still crosses services.
     consumer:
       node: http_handler
       key: [method, path]
-    normalizers: [case_fold, url_to_path, dynamic_host_strip, query_strip, param_wildcard, trim_slash]
+    normalizers: [case_fold, url_to_path, dynamic_host_strip, query_strip, param_wildcard, trim_slash, empty_path_guard]
     match: [exact, normalized, wildcard_anchored]
     edge:
       type: navigates_to

@@ -263,3 +263,111 @@ func TestHTTPRule_NonHTTPNodes_NoEdges(t *testing.T) {
 	res := runHTTP(t, nodes, nil)
 	assert.Empty(t, res.Edges, "non-HTTP node types must produce no edges under http.yaml rules")
 }
+
+// ── J.2c: empty-path guard + target_service allowlist ────────────────────────
+
+// A client whose URL could not be resolved to any path must not exact-match
+// every service's root handler. It falls to `unmatched` (unknown_edge) instead.
+// The producer here has NO path at all — the axios/fetch shape behind all 88
+// nextGen false positives — which is a different fact from an explicit "/".
+func TestHTTPRule_EmptyPathProducerDoesNotMatchRootHandler(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "svc-a",
+			Meta: map[string]string{"method": "GET", "path": "", "url": ""}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc-c",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "svc-d",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+	}
+	res := runHTTP(t, nodes, nil)
+
+	for _, e := range res.Edges {
+		assert.Equal(t, "unresolved", e.To, "the only edge allowed is the ledger edge")
+		assert.Equal(t, graph.ConfidenceUnknown, e.Confidence)
+	}
+	assert.Len(t, res.Edges, 1, "one visible ledger edge, not three phantom http_calls")
+}
+
+// An explicit root link is real, but it is same-origin: it reaches its own
+// service's root route and no other service's (J.2c same_origin_relative).
+func TestHTTPRule_RootNavLinkStaysSameOrigin(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "n1", Type: graph.NodeTypeHTTPClient, Service: "svc-a",
+			Meta: map[string]string{"method": "GET", "nav_link": "true", "path": "/"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-a",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "svc-c",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1, "the own-service root route only")
+	assert.Equal(t, "nav:n1->h1", res.Edges[0].ID)
+}
+
+// An absolute href genuinely crosses the origin and is left alone.
+func TestHTTPRule_AbsoluteRootNavLinkStillCrossesServices(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "n1", Type: graph.NodeTypeHTTPClient, Service: "svc-a",
+			Meta: map[string]string{"method": "GET", "nav_link": "true", "url": "https://svc-b.internal/"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, "nav:n1->h1", res.Edges[0].ID)
+}
+
+// A wildcard-only path (all that survives of a URL whose host was the only
+// resolvable part) is voided the same way.
+func TestHTTPRule_AllWildcardPathVoided(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "svc-a",
+			Meta: map[string]string{"method": "GET", "path": "*"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/:id"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	for _, e := range res.Edges {
+		assert.Equal(t, "unresolved", e.To)
+	}
+}
+
+// A real path still matches: the guard must not cost recall.
+func TestHTTPRule_EmptyPathGuardKeepsRealPaths(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "svc-a",
+			Meta: map[string]string{"method": "GET", "path": "/api/v1/users"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/api/v1/users"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
+}
+
+// J.2c end to end: an env-var hint narrows a generic /health call from four
+// candidate services to the one the workspace declares.
+func TestHTTPRule_TargetServiceNarrowsHealthFanout(t *testing.T) {
+	links := []workspace.Link{
+		{From: "migrator", To: "dsw-manager", Hint: "DSW_MANAGER_API_URL"},
+	}
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "migrator",
+			Meta: map[string]string{"method": "GET", "path": "*/health", "target_service": "dsw-manager"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "dsw-manager",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "dsw-agent",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "mysycamore",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+		{ID: "h4", Type: graph.NodeTypeHTTPHandler, Service: "nextGen",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+	}
+	res := runHTTP(t, nodes, links)
+	require.Len(t, res.Edges, 1, "the allowlist must leave exactly one candidate")
+	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
+}
