@@ -45,14 +45,27 @@ import (
 // survives into a MatchResult. Re-parsing the controller tree is what
 // LinkRubyTypeRelations and LinkRailsViews already do for the same reason.
 //
-// # Scope
+// # Inheritance
 //
-// Filters bind to the actions of the class that declares them. They are not
-// propagated to subclasses: `before_action` in ApplicationController really does
-// run before every action in every controller, but minting that would be one
-// line producing thousands of edges, and the class-scope edge already records
-// the fact. Callback *lookup* does walk ancestors, because that is where the
-// method almost always lives.
+// Filters bind to the actions of the class that declares them *and* of every
+// subclass, because that is where almost all of them land: nextGen's
+// authentication, session check and breadcrumbs are six lines in
+// ApplicationController and SecuredController, and not one of the actions they
+// guard is in either file. An inherited edge carries `inherited_from` so the
+// subclass's file, which says nothing about the filter, still points at where to
+// read it, and is never better than `inferred` because the superclass chain is
+// reconstructed from constant names.
+//
+// Inheritance is what finally makes `skip_before_action` mean something. It is
+// the only thing standing between `before_action :authenticate_user!` and an
+// edge onto every action in the app, including the login form and the public
+// landing page — the endpoints where being wrong about authentication matters
+// most. Skips are collected down the same chain, and a skip carrying
+// `only:`/`except:` retracts per action rather than wholesale.
+//
+// Only the superclass chain propagates. A module cannot legally declare a filter
+// in its body — the spelling is `included do`, which is ledgered — so `include`
+// contributes methods to look up, never registrations to inherit.
 func LinkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
 	svcNames := make([]string, 0, len(serviceFiles))
 	for svc := range serviceFiles {
@@ -119,14 +132,26 @@ type ctrlAction struct {
 
 // ctrlClass is one class body in a controller file.
 type ctrlClass struct {
-	name     string
-	file     string
-	line     int
+	name string
+	ns   []string // enclosing module/class names, outermost first
+	file string
+	line int
+
 	prepends []string // prepend Foo, source order
 	includes []string // include/extend Foo, source order
-	super    string
+	super    string   // last component, for the simple-name method table
+	superRef string   // as written: `ClientApi::V1::ApiBaseController`
 	actions  []ctrlAction
 	filters  []filterReg
+	skips    []filterReg // skip_before_action &c — only meaningful once filters inherit
+}
+
+// qualified is the constant path Ruby knows this class by.
+func (c *ctrlClass) qualified() string {
+	if len(c.ns) == 0 {
+		return c.name
+	}
+	return strings.Join(c.ns, "::") + "::" + c.name
 }
 
 // ancestorNames is the class's own lookup order for a method it does not
@@ -156,6 +181,7 @@ type filterIndex struct {
 
 	classes  []*ctrlClass            // every class body, sorted by file+line
 	byName   map[string][]*ctrlClass // simple name → declarations (collision-aware)
+	byQual   map[string][]*ctrlClass // full constant path → declarations
 	methodQN map[string][]string     // "Class#method" → method node IDs
 	classID  map[string]string       // file\x00Name\x00line → class node ID
 
@@ -168,6 +194,7 @@ func newFilterIndex(nodes []graph.Node, svc string, files []string) *filterIndex
 	ix := &filterIndex{
 		svc:          svc,
 		byName:       map[string][]*ctrlClass{},
+		byQual:       map[string][]*ctrlClass{},
 		methodQN:     map[string][]string{},
 		classID:      map[string]string{},
 		strayFilters: map[string]int{},
@@ -205,18 +232,49 @@ func newFilterIndex(nodes []graph.Node, svc string, files []string) *filterIndex
 	})
 	for _, c := range ix.classes {
 		ix.byName[c.name] = append(ix.byName[c.name], c)
+		ix.byQual[c.qualified()] = append(ix.byQual[c.qualified()], c)
 	}
 	return ix
+}
+
+// resolveSuper finds the class a `< Super` reference names, the way Ruby does:
+// innermost enclosing namespace first, then outward, then top level.
+//
+// Simple-name keying is not good enough here and the failure is silent.
+// nextGen has two FilesResourcesControllers — one top level under
+// RepositoryController, one under ClientApi::V1 — and sorting by file put the
+// namespaced one first, so `FilesController < FilesResourcesController` walked
+// into ClientApi::V1's hierarchy and never reached SecuredController. Every
+// action in the file lost `authenticate_user!` and gained a chain it does not
+// have, with nothing anywhere reporting a problem.
+func (ix *filterIndex) resolveSuper(c *ctrlClass) []*ctrlClass {
+	ref := c.superRef
+	if ref == "" {
+		return nil
+	}
+	for i := len(c.ns); i >= 0; i-- {
+		key := ref
+		if i > 0 {
+			key = strings.Join(c.ns[:i], "::") + "::" + ref
+		}
+		if decls := ix.byQual[key]; len(decls) > 0 {
+			return decls
+		}
+	}
+	// A superclass this pass never parsed (a gem, or a controller outside
+	// app/controllers). Falling back to the simple name is what produced the
+	// FilesController mix-up, so it is only taken when the name is unambiguous.
+	if decls := ix.byName[lastConstComponent(ref)]; len(decls) == 1 {
+		return decls
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
 // parse
 // ---------------------------------------------------------------------------
 
-// filterKinds are the registrations this pass understands. skip_* is absent on
-// purpose: it removes an *inherited* filter, and since inherited filters are not
-// propagated there is nothing for it to remove — treating it as a registration
-// would invent a call that never happens.
+// filterKinds are the registrations that add a filter.
 var filterKinds = map[string]bool{
 	"before_action":         true,
 	"around_action":         true,
@@ -227,6 +285,31 @@ var filterKinds = map[string]bool{
 	"append_before_action":  true,
 	"append_around_action":  true,
 	"append_after_action":   true,
+}
+
+// skipKinds remove an inherited filter. They only mean anything now that
+// filters are inherited: a skip is the *only* thing standing between
+// `before_action :authenticate_user!` in ApplicationController and an edge onto
+// every action in the app, including the login form that must stay reachable
+// without a session. Reading the registration and ignoring the retraction would
+// assert precisely the wrong thing about the endpoints that matter most.
+var skipKinds = map[string]bool{
+	"skip_before_action":   true,
+	"skip_around_action":   true,
+	"skip_after_action":    true,
+	"skip_action_callback": true,
+}
+
+// filterFamily reduces a registration or retraction to the chain it acts on, so
+// `skip_before_action :x` cancels `prepend_before_action :x`.
+func filterFamily(kind string) string {
+	for _, p := range []string{"skip_", "prepend_", "append_"} {
+		kind = strings.TrimPrefix(kind, p)
+	}
+	if kind == "action_callback" {
+		return "before_action" // Rails 4 spelling, before/after undifferentiated
+	}
+	return kind
 }
 
 func (ix *filterIndex) scanFile(file string) {
@@ -259,8 +342,9 @@ func (ix *filterIndex) scanFile(file string) {
 	}
 	markStray(tree.RootNode())
 
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
+	var walk func(n *sitter.Node, ns []string)
+	walk = func(n *sitter.Node, ns []string) {
+		inner := ns
 		// Modules matter as much as classes here. nextGen's chain to
 		// `can_manage_task_for_study?` runs CategoriesController → SecuredController
 		// → `include SecurityChecks` → `include TaskSecurityChecks`, and the middle
@@ -268,19 +352,26 @@ func (ix *filterIndex) scanFile(file string) {
 		// controllers report a callback that is plainly defined in the repo.
 		if t := n.Type(); t == "class" || t == "module" {
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
-				ix.collectClass(n, nameNode, file, src, t == "module")
+				// `class ClientApi::V1::Base` declares one class inside a
+				// namespace it names inline, so the prefix joins the nesting.
+				parts := strings.Split(nameNode.Content(src), "::")
+				outer := append(append([]string{}, ns...), parts[:len(parts)-1]...)
+				name := parts[len(parts)-1]
+				ix.collectClass(n, name, outer, file, src, t == "module")
+				inner = append(outer, name)
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+			walk(n.NamedChild(i), inner)
 		}
 	}
-	walk(tree.RootNode())
+	walk(tree.RootNode(), nil)
 }
 
-func (ix *filterIndex) collectClass(node, nameNode *sitter.Node, file string, src []byte, isModule bool) {
+func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string, file string, src []byte, isModule bool) {
 	c := &ctrlClass{
-		name: lastConstComponent(nameNode.Content(src)),
+		name: name,
+		ns:   ns,
 		file: file,
 		line: int(node.StartPoint().Row) + 1,
 	}
@@ -288,7 +379,8 @@ func (ix *filterIndex) collectClass(node, nameNode *sitter.Node, file string, sr
 		for i := 0; i < int(sup.NamedChildCount()); i++ {
 			ch := sup.NamedChild(i)
 			if ch.Type() == "constant" || ch.Type() == "scope_resolution" {
-				c.super = lastConstComponent(ch.Content(src))
+				c.superRef = ch.Content(src)
+				c.super = lastConstComponent(c.superRef)
 				break
 			}
 		}
@@ -346,6 +438,15 @@ func (ix *filterIndex) collectClass(node, nameNode *sitter.Node, file string, sr
 				if reg, ok := parseFilterCall(stmt, name, src); ok {
 					c.filters = append(c.filters, reg)
 					delete(ix.strayFilters, fmt.Sprintf("%s\x00%d", file, reg.line))
+				}
+			case skipKinds[name]:
+				if isModule {
+					continue
+				}
+				// A skip names a symbol or it names nothing this pass can act
+				// on; `skip_before_action :x, raise: false` is the common form.
+				if reg, ok := parseFilterCall(stmt, name, src); ok && !reg.inline {
+					c.skips = append(c.skips, reg)
 				}
 			}
 		}
@@ -523,6 +624,124 @@ func lastConstComponent(s string) string {
 }
 
 // ---------------------------------------------------------------------------
+// inheritance
+// ---------------------------------------------------------------------------
+
+// effFilter is a registration as it applies to one class: the class's own, or
+// one inherited from a superclass, which is where most of them come from.
+// ApplicationController and SecuredController between them declare the filters
+// that guard almost every action nextGen serves, and none of those actions are
+// in either file.
+type effFilter struct {
+	reg   filterReg
+	owner *ctrlClass // the class whose body declares it
+}
+
+// effectiveFilters is the filter chain a request to this class actually runs:
+// the class's own registrations, then each superclass's, nearest first, minus
+// anything a skip along the chain retracts.
+//
+// Superclasses only. A module cannot legally declare a filter in its body — the
+// spelling is `included do`, which is ledgered — so `include` contributes
+// methods to look up, never registrations to inherit.
+func (ix *filterIndex) effectiveFilters(c *ctrlClass) []effFilter {
+	skips := ix.chainSkips(c)
+
+	var out []effFilter
+	for _, reg := range c.filters {
+		out = append(out, effFilter{reg, c})
+	}
+	ix.eachSuperclass(c, func(decl *ctrlClass) {
+		for _, reg := range decl.filters {
+			if !retracted(skips, reg) {
+				out = append(out, effFilter{reg, decl})
+			}
+		}
+	})
+	return out
+}
+
+// eachSuperclass walks the superclass chain, nearest first, calling fn once per
+// declaration. Cycle-safe: a constant that resolves back to a class already
+// seen ends the walk.
+func (ix *filterIndex) eachSuperclass(c *ctrlClass, fn func(*ctrlClass)) {
+	visited := map[string]bool{c.qualified(): true}
+	cur := c
+	for depth := 0; depth < 32; depth++ {
+		decls := ix.resolveSuper(cur)
+		if len(decls) == 0 {
+			return
+		}
+		var next *ctrlClass
+		for _, decl := range decls {
+			if visited[decl.qualified()] {
+				continue
+			}
+			visited[decl.qualified()] = true
+			fn(decl)
+			if next == nil {
+				next = decl
+			}
+		}
+		if next == nil {
+			return
+		}
+		cur = next
+	}
+}
+
+// chainSkips collects the retractions in force for a class: its own, and every
+// superclass's, since a skip applies to the class that writes it and everything
+// below.
+func (ix *filterIndex) chainSkips(c *ctrlClass) []filterReg {
+	out := append([]filterReg{}, c.skips...)
+	ix.eachSuperclass(c, func(decl *ctrlClass) {
+		out = append(out, decl.skips...)
+	})
+	return out
+}
+
+// retracted reports whether a skip cancels a registration outright. A skip
+// carrying only:/except: cancels it for some actions only, which is decided per
+// action in skippedFor — the filter itself survives.
+func retracted(skips []filterReg, reg filterReg) bool {
+	for _, s := range skips {
+		if len(s.only) > 0 || len(s.except) > 0 {
+			continue
+		}
+		if filterFamily(s.kind) != filterFamily(reg.kind) {
+			continue
+		}
+		for _, sc := range s.callbacks {
+			for _, rc := range reg.callbacks {
+				if sc == rc {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// skippedFor reports whether a partial skip removes one callback for one action.
+func skippedFor(skips []filterReg, reg filterReg, cb, action string) bool {
+	for _, s := range skips {
+		if filterFamily(s.kind) != filterFamily(reg.kind) {
+			continue
+		}
+		if !s.appliesTo(action) {
+			continue
+		}
+		for _, sc := range s.callbacks {
+			if sc == cb {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
 // resolve + emit
 // ---------------------------------------------------------------------------
 
@@ -550,11 +769,20 @@ func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
 
 	for _, c := range ix.classes {
 		classNodeID := ix.classID[fmt.Sprintf("%s\x00%s\x00%d", c.file, c.name, c.line)]
+		skips := ix.chainSkips(c)
 
-		for _, reg := range c.filters {
+		for _, ef := range ix.effectiveFilters(c) {
+			reg, owner := ef.reg, ef.owner
+			inherited := owner != c
 			for _, cb := range reg.callbacks {
-				targets, depth := ix.resolveCallback(c, cb)
+				// Resolution runs from the declaring class: `before_action :x` in
+				// ApplicationController names ApplicationController's `x`, even
+				// when the subclass this edge hangs off defines an `x` of its own.
+				targets, depth := ix.resolveCallback(owner, cb)
 				if len(targets) == 0 {
+					if inherited {
+						continue // the owner already ledgered this miss
+					}
 					key := fmt.Sprintf("%s\x00%s\x00%s", c.file, c.name, cb)
 					if !seenMiss[key] {
 						seenMiss[key] = true
@@ -574,19 +802,31 @@ func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
 				}
 				if len(targets) > 1 {
 					conf = graph.ConfidencePartial
-					key := fmt.Sprintf("ambiguous\x00%s\x00%s\x00%s", c.file, c.name, cb)
-					if !seenMiss[key] {
-						seenMiss[key] = true
-						unresolved = append(unresolved, graph.UnresolvedRef{
-							Service: ix.svc, File: c.file, Line: reg.line,
-							Name: cb, Kind: "rails_filter_ambiguous",
-						})
+					if !inherited {
+						key := fmt.Sprintf("ambiguous\x00%s\x00%s\x00%s", c.file, c.name, cb)
+						if !seenMiss[key] {
+							seenMiss[key] = true
+							unresolved = append(unresolved, graph.UnresolvedRef{
+								Service: ix.svc, File: c.file, Line: reg.line,
+								Name: cb, Kind: "rails_filter_ambiguous",
+							})
+						}
 					}
 				}
 
 				base := map[string]string{
 					"via":    "rails_filter",
 					"filter": reg.kind,
+				}
+				if inherited {
+					// The subclass's file contains no trace of this filter, so the
+					// edge has to say where to go read it. The superclass chain is
+					// reconstructed from constant names, so an inherited edge is
+					// never better than inferred.
+					base["inherited_from"] = owner.name
+					if conf == graph.ConfidenceStatic {
+						conf = graph.ConfidenceInferred
+					}
 				}
 				if reg.conditional {
 					base["conditional"] = "true"
@@ -610,6 +850,9 @@ func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
 				}
 				for _, a := range c.actions {
 					if !reg.appliesTo(a.name) {
+						continue
+					}
+					if inherited && skippedFor(skips, reg, cb, a.name) {
 						continue
 					}
 					for _, aid := range ix.methodQN[c.name+"#"+a.name] {
