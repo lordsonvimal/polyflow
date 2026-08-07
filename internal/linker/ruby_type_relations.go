@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -14,10 +15,11 @@ import (
 )
 
 // LinkRubyTypeRelations resolves cross-file inherits (superclass + mixins) and
-// instantiates (Foo.new) edges for Ruby. It re-parses each Ruby file, looks up
-// constant names in the service-level class table, and emits inferred edges.
-// Collisions (same class name in N files of the SAME service) emit N candidate
-// edges + a ledger entry.
+// instantiates (Foo.new) edges for Ruby. It scans each Ruby file for constant
+// declarations and constant references, resolves each reference the way Ruby
+// does — innermost enclosing namespace outward — and emits inferred edges.
+// Collisions (a name that stays ambiguous after lexical resolution) emit a
+// candidate edge per definition plus a ledger entry.
 //
 // Tier K.7a: the class table is keyed by service. Ruby constant lookup is
 // process-local, so a class in service A can never inherit from — or mix in, or
@@ -27,42 +29,95 @@ import (
 // lib/dx.rb and app/.../api_base_controller.rb: a single `include Dx` in orion
 // bound to the Vega-Agent and Lyra-Agent copies as well, minting 221 edges from one
 // statement. An unresolvable constant is ledgered, never bound across a service.
+//
+// Scoping to a service is not enough on its own, because one service is free to
+// declare the same simple name twice under different namespaces. `class Foo <
+// Bar` used to be resolved by Bar's *last component* against a table keyed by
+// simple name, so a reference from inside `ClientApi::V1` and one from the top
+// level were indistinguishable: orion's two RepositoryControllers collapsed
+// into one another and a subclass silently acquired the wrong ancestor chain
+// (the same trap fixed for the filter chain in e8e0daf — see resolveSuper in
+// rails_filters.go). Namespaces are tracked during the scan and a reference now
+// binds to the nearest enclosing definition; the simple-name table survives only
+// as the fallback for constants this pass never saw declared.
 func LinkRubyTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
-	// Build per-service class table: service → name → []nodeID (collision-aware).
-	classTableByService := make(map[string]map[string][]string)
+	// Per-service class tables, both keyed off the nodes the parser emitted so a
+	// target is always a node that exists:
+	//   byName  label → []nodeID, the pre-namespace fallback
+	//   byDecl  file\x00label\x00line → nodeID, the join the scan uses to attach
+	//           a qualified name to a node it did not create
+	byNameByService := make(map[string]map[string][]string)
+	byDeclByService := make(map[string]map[string]string)
+	fileByID := make(map[string]string)
 	total := 0
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeClass {
 			continue
 		}
-		byName := classTableByService[n.Service]
+		byName := byNameByService[n.Service]
 		if byName == nil {
 			byName = make(map[string][]string)
-			classTableByService[n.Service] = byName
+			byNameByService[n.Service] = byName
+			byDeclByService[n.Service] = make(map[string]string)
 		}
 		byName[n.Label] = append(byName[n.Label], n.ID)
+		byDeclByService[n.Service][declKey(n.File, n.Label, n.Line)] = n.ID
+		fileByID[n.ID] = n.File
 		total++
 	}
 	if total == 0 {
 		return nil, nil
 	}
 
+	// Service order decides edge order, so it cannot come from a map.
+	svcNames := make([]string, 0, len(serviceFiles))
+	for svcName := range serviceFiles {
+		svcNames = append(svcNames, svcName)
+	}
+	sort.Strings(svcNames)
+
 	var allEdges []graph.Edge
 	var allUnresolved []graph.UnresolvedRef
 	seen := make(map[string]bool)
 
-	for svcName, files := range serviceFiles {
-		// Only this service's classes are candidate binding targets.
-		classTableMulti := classTableByService[svcName]
-		if classTableMulti == nil {
-			classTableMulti = map[string][]string{}
+	for _, svcName := range svcNames {
+		files := append([]string{}, serviceFiles[svcName]...)
+		sort.Strings(files)
+
+		ix := &rubyTypeIndex{
+			svc:      svcName,
+			byName:   byNameByService[svcName],
+			byQual:   map[string][]string{},
+			fileByID: fileByID,
 		}
+		if ix.byName == nil {
+			ix.byName = map[string][]string{}
+		}
+		byDecl := byDeclByService[svcName]
+
+		// Pass 1: every declaration in the service, with the namespace it sits in.
+		// A reference cannot be resolved until the whole service has been read —
+		// the definition it names is usually in another file.
+		var refs []rubyTypeRef
 		for _, file := range files {
 			if !isRubyFile(file) {
 				continue
 			}
-			edges, unresolved := resolveRubyTypeRelations(file, svcName, classTableMulti, seen)
+			decls, fileRefs := scanRubyTypes(file, svcName)
+			for _, d := range decls {
+				id, ok := byDecl[declKey(d.file, d.name, d.line)]
+				if !ok {
+					continue // no node for it; the byName fallback still covers the name
+				}
+				ix.byQual[d.qualified()] = append(ix.byQual[d.qualified()], id)
+			}
+			refs = append(refs, fileRefs...)
+		}
+
+		// Pass 2: resolve.
+		for _, ref := range refs {
+			edges, unresolved := ix.emit(ref, seen)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -70,12 +125,56 @@ func LinkRubyTypeRelations(nodes []graph.Node, serviceFiles map[string][]string)
 	return allEdges, allUnresolved
 }
 
+func declKey(file, label string, line int) string {
+	return fmt.Sprintf("%s\x00%s\x00%d", file, label, line)
+}
+
 func isRubyFile(file string) bool {
 	ext := strings.ToLower(filepath.Ext(file))
 	return ext == ".rb" || ext == ".rake"
 }
 
-func resolveRubyTypeRelations(file, svcName string, classTableMulti map[string][]string, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+// ---------------------------------------------------------------------------
+// scan
+// ---------------------------------------------------------------------------
+
+// rubyDecl is one `class`/`module` declaration and where it sits. `name` is the
+// constant exactly as written, which is what the parser used for the node label,
+// so `class ClientApi::V1::Base` keeps its compound name and picks up no
+// namespace from an enclosing block it does not have.
+type rubyDecl struct {
+	name string
+	ns   []string // enclosing module/class names, outermost first
+	file string
+	line int
+}
+
+func (d rubyDecl) qualified() string {
+	if len(d.ns) == 0 {
+		return d.name
+	}
+	return strings.Join(d.ns, "::") + "::" + d.name
+}
+
+// rubyTypeRef is one constant reference to resolve, carrying the namespace it
+// was written in. Without the namespace the reference is just a name and the
+// resolver has to guess.
+type rubyTypeRef struct {
+	ref      string // as written: `Base`, `ClientApi::V1::Base`, `::Base`
+	ns       []string
+	file     string
+	line     int
+	fromID   string
+	edgeType graph.EdgeType
+	meta     map[string]string
+	missKind string
+	// sameFile names declared in the reference's own file. Same-file relations
+	// are already emitted by extractRubyVariables, so they are dropped here
+	// rather than duplicated.
+	sameFile map[string]bool
+}
+
+func scanRubyTypes(file, svcName string) ([]rubyDecl, []rubyTypeRef) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil
@@ -89,14 +188,12 @@ func resolveRubyTypeRelations(file, svcName string, classTableMulti map[string][
 	defer tree.Close()
 	root := tree.RootNode()
 
-	// Build per-file class table for same-file constant resolution (skip cross-file only).
-	fileClassNames := make(map[string]bool)
+	sameFile := map[string]bool{}
 	var collectNames func(n *sitter.Node)
 	collectNames = func(n *sitter.Node) {
-		t := n.Type()
-		if t == "class" || t == "module" {
+		if t := n.Type(); t == "class" || t == "module" {
 			if nn := n.ChildByFieldName("name"); nn != nil {
-				fileClassNames[nn.Content(src)] = true
+				sameFile[nn.Content(src)] = true
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
@@ -105,93 +202,41 @@ func resolveRubyTypeRelations(file, svcName string, classTableMulti map[string][
 	}
 	collectNames(root)
 
-	// emitTypeEdge emits an edge to each matching node (collision → candidate edges + ledger).
-	var edges []graph.Edge
-	var unresolved []graph.UnresolvedRef
-	emitTypeEdge := func(edgeType graph.EdgeType, fromID, constName string, meta map[string]string, line int, missKind string) {
-		targets, found := classTableMulti[constName]
-		if !found {
-			// Not in service at all — emit ledger entry if not same-file.
-			if !fileClassNames[constName] {
-				missKey := fmt.Sprintf("%s:%s:%s", file, constName, missKind)
-				if !seen[missKey] {
-					seen[missKey] = true
-					unresolved = append(unresolved, graph.UnresolvedRef{
-						Service: svcName, File: file, Line: line,
-						Name: constName, Kind: missKind,
-					})
-				}
-			}
+	var decls []rubyDecl
+	var refs []rubyTypeRef
+	addRef := func(ref string, ns []string, fromID string, et graph.EdgeType, meta map[string]string, line int, missKind string) {
+		if ref == "" || fromID == "" {
 			return
 		}
-		if fileClassNames[constName] {
-			return // same-file: already handled by extractRubyVariables
-		}
-		if len(targets) > 1 {
-			// Collision: emit candidate edge to each + ledger entry.
-			missKey := fmt.Sprintf("collision:%s:%s:%s", file, constName, missKind)
-			if !seen[missKey] {
-				seen[missKey] = true
-				unresolved = append(unresolved, graph.UnresolvedRef{
-					Service: svcName, File: file, Line: line,
-					Name: constName, Kind: "inherits_unresolved",
-				})
-			}
-		}
-		for _, targetID := range targets {
-			eid := fmt.Sprintf("%s:%s->%s", string(edgeType), fromID, targetID)
-			if !seen[eid] {
-				seen[eid] = true
-				conf := graph.ConfidenceInferred
-				if len(targets) > 1 {
-					conf = graph.ConfidencePartial
-				}
-				edges = append(edges, graph.Edge{
-					ID: eid, From: fromID, To: targetID,
-					Type: edgeType, Confidence: conf, Meta: meta,
-				})
-			}
-		}
+		refs = append(refs, rubyTypeRef{
+			ref: ref, ns: append([]string{}, ns...), file: file, line: line,
+			fromID: fromID, edgeType: et, meta: meta, missKind: missKind,
+			sameFile: sameFile,
+		})
 	}
 
-	// Walk the AST to find class declarations, mixins, and Foo.new.
-	var walk func(n *sitter.Node, classID, methodID string)
-	walk = func(n *sitter.Node, classID, methodID string) {
-		t := n.Type()
-		switch t {
+	var walk func(n *sitter.Node, ns []string, classID, methodID string)
+	walk = func(n *sitter.Node, ns []string, classID, methodID string) {
+		inner := ns
+		switch n.Type() {
 		case "class", "module":
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
 				clsName := nameNode.Content(src)
-				newClassID := fmt.Sprintf("%s:%s:class:%s:%d", svcName, file, clsName, int(n.StartPoint().Row)+1)
+				line := int(n.StartPoint().Row) + 1
+				decls = append(decls, rubyDecl{name: clsName, ns: ns, file: file, line: line})
+				classID = fmt.Sprintf("%s:%s:class:%s:%d", svcName, file, clsName, line)
 
-				// Superclass → cross-file inherits.
 				if superNode := n.ChildByFieldName("superclass"); superNode != nil {
-					var superConst *sitter.Node
-					for i := 0; i < int(superNode.NamedChildCount()); i++ {
-						c := superNode.NamedChild(i)
-						if c.Type() == "constant" || c.Type() == "scope_resolution" {
-							superConst = c
-							break
-						}
-					}
-					if superConst != nil {
-						superName := ""
-						if superConst.Type() == "constant" {
-							superName = superConst.Content(src)
-						} else if superConst.Type() == "scope_resolution" {
-							if last := superConst.ChildByFieldName("name"); last != nil {
-								superName = last.Content(src)
-							}
-						}
-						if superName != "" {
-							emitTypeEdge(graph.EdgeTypeInherits, newClassID, superName,
-								map[string]string{"via": "superclass"},
-								int(superNode.StartPoint().Row)+1, "inherits_unresolved")
-						}
+					if ref := constRef(superNode, src); ref != "" {
+						addRef(ref, ns, classID, graph.EdgeTypeInherits,
+							map[string]string{"via": "superclass"},
+							int(superNode.StartPoint().Row)+1, "inherits_unresolved")
 					}
 				}
 
-				// Walk body for mixin calls.
+				// Mixins are declared in the class body, so they resolve in the
+				// namespace *inside* the declaration, not outside it.
+				bodyNS := append(append([]string{}, ns...), strings.Split(clsName, "::")...)
 				if body := n.ChildByFieldName("body"); body != nil {
 					for i := 0; i < int(body.NamedChildCount()); i++ {
 						m := body.NamedChild(i)
@@ -206,44 +251,172 @@ func resolveRubyTypeRelations(file, svcName string, classTableMulti map[string][
 						if mname != "include" && mname != "extend" && mname != "prepend" {
 							continue
 						}
-						if args := m.ChildByFieldName("arguments"); args != nil {
-							for j := 0; j < int(args.NamedChildCount()); j++ {
-								a := args.NamedChild(j)
-								if a.Type() != "constant" {
-									continue
-								}
-								modName := a.Content(src)
-								emitTypeEdge(graph.EdgeTypeInherits, newClassID, modName,
-									map[string]string{"via": "mixin", "mixin": mname},
-									int(a.StartPoint().Row)+1, "inherits_unresolved")
+						args := m.ChildByFieldName("arguments")
+						if args == nil {
+							continue
+						}
+						for j := 0; j < int(args.NamedChildCount()); j++ {
+							a := args.NamedChild(j)
+							ref := constRef(a, src)
+							if ref == "" {
+								continue
 							}
+							addRef(ref, bodyNS, classID, graph.EdgeTypeInherits,
+								map[string]string{"via": "mixin", "mixin": mname},
+								int(a.StartPoint().Row)+1, "inherits_unresolved")
 						}
 					}
 				}
-				classID = newClassID
+				inner = bodyNS
 			}
 		case "method", "singleton_method":
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
-				mName := nameNode.Content(src)
-				methodID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, file, mName, int(n.StartPoint().Row)+1)
+				methodID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, file,
+					nameNode.Content(src), int(n.StartPoint().Row)+1)
 			}
 		case "call":
-			// Foo.new → cross-file instantiates.
 			mn := n.ChildByFieldName("method")
 			if mn != nil && mn.Content(src) == "new" && methodID != "" {
-				recv := n.ChildByFieldName("receiver")
-				if recv != nil && recv.Type() == "constant" {
-					clsName := recv.Content(src)
-					emitTypeEdge(graph.EdgeTypeInstantiates, methodID, clsName,
+				if recv := n.ChildByFieldName("receiver"); recv != nil && recv.Type() == "constant" {
+					addRef(recv.Content(src), ns, methodID, graph.EdgeTypeInstantiates,
 						map[string]string{"count": "1"},
 						int(recv.StartPoint().Row)+1, "instantiates_unresolved")
 				}
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i), classID, methodID)
+			walk(n.NamedChild(i), inner, classID, methodID)
 		}
 	}
-	walk(root, "", "")
+	walk(root, nil, "", "")
+	return decls, refs
+}
+
+// constRef reads the constant a node names, keeping every component.
+//
+// The superclass path used to take the last component of a scope_resolution and
+// throw the rest away, which is exactly the information that tells
+// `ClientApi::V1::ApiBaseController` apart from a top-level `ApiBaseController`.
+// A `superclass` node wraps its constant, so unwrap one level before reading.
+func constRef(n *sitter.Node, src []byte) string {
+	switch n.Type() {
+	case "constant", "scope_resolution":
+		return n.Content(src)
+	case "superclass":
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			if ref := constRef(n.NamedChild(i), src); ref != "" {
+				return ref
+			}
+		}
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
+// resolve
+// ---------------------------------------------------------------------------
+
+type rubyTypeIndex struct {
+	svc      string
+	byName   map[string][]string // label → node IDs, simple-name fallback
+	byQual   map[string][]string // fully qualified name → node IDs
+	fileByID map[string]string
+}
+
+// resolve finds the definitions a constant reference names, innermost enclosing
+// namespace first and then outward, the way Ruby's own lookup walks Module.nesting.
+func (ix *rubyTypeIndex) resolve(ref string, ns []string) []string {
+	if strings.HasPrefix(ref, "::") {
+		// `::Foo` is explicitly top level and must not pick up a nesting.
+		ref = strings.TrimPrefix(ref, "::")
+		if ids := ix.byQual[ref]; len(ids) > 0 {
+			return ids
+		}
+		return ix.byName[ref]
+	}
+	for i := len(ns); i >= 0; i-- {
+		key := ref
+		if i > 0 {
+			key = strings.Join(ns[:i], "::") + "::" + ref
+		}
+		if ids := ix.byQual[key]; len(ids) > 0 {
+			return ids
+		}
+	}
+	if strings.Contains(ref, "::") {
+		// The reference says which namespace it means and no declaration in this
+		// service answers to it, so it belongs to a gem or a framework: `class
+		// Application < Rails::Application`. Falling back to the last component
+		// is the information loss this whole pass exists to undo, and it is not
+		// harmless — it bound orion's `Orion::Application` to the unrelated
+		// `module Application` in config/initializers/version.rb. Ledger it.
+		return nil
+	}
+	// Nothing in the service declares it under any enclosing namespace. For a
+	// bare name the simple-name table is the last resort: it is how this pass
+	// behaved throughout, and dropping it would cost the constants whose
+	// declaration this pass never parsed. It stays ambiguity-aware — several
+	// matches mean several candidate edges and a ledger entry, not a
+	// first-match guess.
+	return ix.byName[ref]
+}
+
+func (ix *rubyTypeIndex) emit(r rubyTypeRef, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
+
+	targets := ix.resolve(r.ref, r.ns)
+	if len(targets) == 0 {
+		if !r.sameFile[r.ref] {
+			missKey := fmt.Sprintf("%s:%s:%s", r.file, r.ref, r.missKind)
+			if !seen[missKey] {
+				seen[missKey] = true
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: ix.svc, File: r.file, Line: r.line,
+					Name: r.ref, Kind: r.missKind,
+				})
+			}
+		}
+		return nil, unresolved
+	}
+
+	// Same-file relations are extractRubyVariables' job. Filtering by the
+	// resolved target's file rather than by name keeps a reference that resolves
+	// out of the file even when a same-named class happens to sit in it.
+	kept := targets[:0:0]
+	for _, id := range targets {
+		if ix.fileByID[id] != r.file {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, nil
+	}
+
+	if len(kept) > 1 {
+		missKey := fmt.Sprintf("collision:%s:%s:%s", r.file, r.ref, r.missKind)
+		if !seen[missKey] {
+			seen[missKey] = true
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: ix.svc, File: r.file, Line: r.line,
+				Name: r.ref, Kind: "inherits_unresolved",
+			})
+		}
+	}
+	for _, targetID := range kept {
+		eid := fmt.Sprintf("%s:%s->%s", string(r.edgeType), r.fromID, targetID)
+		if seen[eid] {
+			continue
+		}
+		seen[eid] = true
+		conf := graph.ConfidenceInferred
+		if len(kept) > 1 {
+			conf = graph.ConfidencePartial
+		}
+		edges = append(edges, graph.Edge{
+			ID: eid, From: r.fromID, To: targetID,
+			Type: r.edgeType, Confidence: conf, Meta: r.meta,
+		})
+	}
 	return edges, unresolved
 }
