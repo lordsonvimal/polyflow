@@ -265,6 +265,69 @@ export default App;
 	}
 }
 
+// J.3: broker hints attach to a real channel node when one exists rather than
+// minting a parallel `broker:channel:<exchange>`. Whichever node they land on,
+// every stored edge must resolve to a stored node (phases.md rule 10).
+func TestRun_BrokerHintsNoDanglingEdges(t *testing.T) {
+	dir := t.TempDir()
+
+	pubSvc := filepath.Join(dir, "producer")
+	require.NoError(t, os.MkdirAll(pubSvc, 0o755))
+	writeFile(t, pubSvc, "go.mod", "module example.com/producer\n\ngo 1.22\n")
+	writeFile(t, pubSvc, "publish.go", `package main
+
+func publishBuild(ctx Context, ch *amqp.Channel, exchange string) {
+	ch.PublishWithContext(ctx, exchange, "build.start", false, false, amqp.Publishing{})
+}
+`)
+
+	subSvc := filepath.Join(dir, "consumer")
+	require.NoError(t, os.MkdirAll(subSvc, 0o755))
+	writeFile(t, subSvc, "go.mod", "module example.com/consumer\n\ngo 1.22\n")
+	writeFile(t, subSvc, "consume.go", `package main
+
+func consumeBuild(ctx Context, ch *amqp.Channel) {
+	ch.ConsumeWithContext(ctx, "build-queue", "agent", true, false, false, false, nil)
+}
+`)
+
+	cfg := &workspace.WorkspaceConfig{
+		Name: "test", Version: "1",
+		Services: []workspace.Service{
+			{Name: "producer", Path: pubSvc, Language: "go"},
+			{Name: "consumer", Path: subSvc, Language: "go"},
+		},
+		Links: []workspace.Link{
+			{From: "producer", To: "consumer", Via: "rabbitmq", Exchange: "maple.builds"},
+		},
+	}
+	dbDir := filepath.Join(dir, ".polyflow")
+	runIndexer(t, cfg, dbDir, true)
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+
+	for _, e := range idx.AllEdges() {
+		assert.NotNil(t, idx.Nodes[e.From], "edge %s has dangling From", e.ID)
+		assert.NotNil(t, idx.Nodes[e.To], "edge %s has dangling To", e.ID)
+	}
+
+	// And no channel is ever wired to another channel: that pairing only ever
+	// arose from the synthetic hint node failing to dedupe with the real one.
+	for _, e := range idx.AllEdges() {
+		from, to := idx.Nodes[e.From], idx.Nodes[e.To]
+		if from == nil || to == nil {
+			continue
+		}
+		if from.Type == graph.NodeTypeChannel && to.Type == graph.NodeTypeChannel && from.Label != to.Label {
+			t.Errorf("channel→channel edge %s (%s -> %s)", e.ID, from.Label, to.Label)
+		}
+	}
+}
+
 // --- S.0 embed pass acceptance tests ---
 
 // TestRun_EmbedPassFirstRun verifies that a fresh index embeds all entities

@@ -97,7 +97,7 @@ func fixtureGraph(t *testing.T) ([]graph.Node, []graph.Edge) {
 	// Broker hint pass, as a workspace links: entry would drive it — the
 	// bunny fixture's exchange is variable-held, so only a hint can connect
 	// it to the amqp091 consumer (the confirmed MainSvc → svc-c-agent shape).
-	hintNodes, hintEdges := linker.LinkBrokerHints([]workspace.Link{
+	hintNodes, hintEdges, _ := linker.LinkBrokerHints([]workspace.Link{
 		{From: "bunny", To: "amqp091", Via: "rabbitmq", Exchange: "maple.builds"},
 	}, allNodes)
 	allNodes = append(allNodes, hintNodes...)
