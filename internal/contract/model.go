@@ -106,6 +106,18 @@ type EndpointSpec struct {
 	KeyFallbacks      map[string][]string `yaml:"key_fallbacks,omitempty"` // per-field meta fallbacks
 	MethodFallback    []string            `yaml:"method_fallback,omitempty"`
 	TargetServiceMeta string              `yaml:"target_service_meta,omitempty"` // producer meta key → restrict to that service
+	// SameOriginRelative restricts a producer whose key is a *relative root*
+	// URL — no scheme://, and no path segment to discriminate on ("/" or an
+	// absent path) — to consumers in its own service, when no target_service
+	// was stamped.
+	//
+	// Every web service has a root route, so `href="/"` matching them all is
+	// information-free fan-out: all 19 cross-service navigates_to edges in the
+	// fleet-juniper audit were `/` → `GET /`, and all 19 were false. A
+	// relative link that *does* name a path (`/reports`) is deliberately left
+	// alone: services fronted by one reverse proxy share an origin, and
+	// polyflow prefers recall there (see TestHTTPRule_NavLink_CrossService).
+	SameOriginRelative bool `yaml:"same_origin_relative,omitempty"`
 }
 
 // EdgeSpec describes the edge emitted on a successful match.

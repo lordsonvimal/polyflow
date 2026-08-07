@@ -689,6 +689,22 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				return nil, err
 			}
 		}
+
+		// J.2b: the Go analogue — stamp Meta["env_var"] on Go http_client nodes
+		// whose base URL traces back to an os.Getenv read, so ApplyHints (J.2c)
+		// can turn a workspace `hint: SOME_URL` into a target_service allowlist.
+		// Must run before ApplyHints, like the Ruby pass.
+		if hostNodes := linker.ResolveGoHTTPHosts(allNodes, svcFiles); len(hostNodes) > 0 {
+			for i := range hostNodes {
+				n := hostNodes[i]
+				if err := bw.AddNode(ctx, &n); err != nil {
+					return nil, err
+				}
+			}
+			if err := bw.Flush(ctx); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {

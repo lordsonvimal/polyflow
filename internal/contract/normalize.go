@@ -34,6 +34,7 @@ func init() {
 	RegisterNormalizer("url_to_path", normURLToPath)
 	RegisterNormalizer("dynamic_host_strip", normDynamicHostStrip)
 	RegisterNormalizer("amqp_topic_wildcard", normAMQPTopicWildcard)
+	RegisterNormalizer("empty_path_guard", normEmptyPathGuard)
 }
 
 var (
@@ -98,7 +99,18 @@ func normCaseFold(value string, _ NormalizeEnv) string {
 }
 
 // normTrimSlash removes trailing slashes, preserving "/" as the root.
+//
+// An empty value stays empty (J.2c). It used to become "/" as well, which
+// silently equated "this client's URL could not be resolved at all" with "this
+// client calls the root route" — every path-less producer then exact-matched
+// every service's `GET /` handler. That single coercion was the whole of the 88
+// orion cross-service http_call false positives in the fleet-juniper
+// audit. An absent path and the root path are different facts and now normalize
+// differently ("" vs "/").
 func normTrimSlash(value string, _ NormalizeEnv) string {
+	if value == "" {
+		return ""
+	}
 	p := strings.TrimRight(value, "/")
 	if p == "" {
 		return "/"
@@ -143,6 +155,44 @@ func normSharedAnchorGuard(value string, _ NormalizeEnv) string {
 		}
 	}
 	return "" // all wildcards: block matching
+}
+
+// normEmptyPathGuard blanks a path that carries no routing information: an
+// empty value, or one whose every segment is a wildcard (`*`, `/*`, `*/*` —
+// what param_wildcard leaves of `/:id`, or of a URL whose host was the only
+// resolvable part). Such a path must not match every same-shaped route in the
+// workspace.
+//
+// It is the sibling of normSharedAnchorGuard, which blocks the multi-segment
+// all-wildcard case but lets the single-segment one through.
+//
+// Placed LAST in the chain, after trim_slash, so it sees the final path shape.
+// A blanked field voids the whole key (see keyVoided in engine.go): the producer
+// falls to the rule's `unmatched` policy and the consumer leaves the index, so
+// two voided keys can never meet each other on the "" they share.
+//
+// Deviation from the J.2c spec, which also had it blank "/": the root path is
+// real routing information, and voiding it deleted five *correct* same-service
+// `href="/"` → `GET /` nav edges from the chessleap golden. The defect the spec
+// was aiming at — an *absent* path matching root handlers — is fixed at its
+// source in normTrimSlash instead, which no longer turns "" into "/".
+//
+// Non-path key fields are unaffected: an HTTP method ("get") is not empty and
+// not all-wildcard, so it passes through untouched.
+func normEmptyPathGuard(value string, _ NormalizeEnv) string {
+	if value == "" {
+		return ""
+	}
+	segs := splitPath(value)
+	if len(segs) == 0 {
+		return value // "/" — the root route, kept
+	}
+	for _, seg := range segs {
+		if seg != "*" {
+			return value
+		}
+	}
+	return "" // "*", "/*", "*/*", …
 }
 
 // normURLToPath extracts the path from an absolute URL. Non-URL, non-path
