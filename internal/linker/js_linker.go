@@ -224,7 +224,7 @@ func isFrameworkComponent(label string) bool {
 
 func isJSFile(file string) bool {
 	ext := strings.ToLower(filepath.Ext(file))
-	return ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".mjs"
+	return ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".es6"
 }
 
 // resolveImportCalls parses file for import declarations and member-expression
@@ -761,7 +761,7 @@ func grammarLangForFile(file string) *sitter.Language {
 	switch ext {
 	case ".tsx", ".jsx":
 		return tsxsitter.GetLanguage()
-	case ".ts", ".js", ".mjs":
+	case ".ts", ".js", ".mjs", ".es6":
 		return tssitter.GetLanguage()
 	default:
 		return tssitter.GetLanguage()

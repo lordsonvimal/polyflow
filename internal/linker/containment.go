@@ -87,7 +87,7 @@ func LinkContainment(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 
 	for i := range nodes {
 		n := &nodes[i]
-		if !containedTypes[n.Type] || n.File == "" {
+		if n.File == "" || !(containedTypes[n.Type] || isStylesheetDecl(n)) {
 			continue
 		}
 		fID := ensureFile(n.Service, n.File)
@@ -106,6 +106,19 @@ func LinkContainment(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 	}
 
 	return newNodes, edges
+}
+
+// stylesheetPattern marks the node patterns internal/parser/scss.go mints
+// (Tier K.5). They are contained by pattern rather than by node type: an
+// `element` node from JSX or ERB has its own attribution and must not be swept
+// in here, and 1,900 stylesheet selectors would otherwise dangle.
+var stylesheetPattern = map[string]bool{
+	"stylesheet_selector": true,
+	"font_face_src":       true,
+}
+
+func isStylesheetDecl(n *graph.Node) bool {
+	return n.Meta != nil && stylesheetPattern[n.Meta["pattern"]]
 }
 
 // structKey keys a struct by service + package directory + label, so a method's
@@ -139,10 +152,14 @@ func languageForFile(file string) string {
 		return "go"
 	case strings.HasSuffix(file, ".ts") || strings.HasSuffix(file, ".tsx"):
 		return "typescript"
-	case strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".jsx") || strings.HasSuffix(file, ".mjs"):
+	case strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".jsx") || strings.HasSuffix(file, ".mjs") || strings.HasSuffix(file, ".es6"):
 		return "javascript"
 	case strings.HasSuffix(file, ".rb"):
 		return "ruby"
+	case strings.HasSuffix(file, ".scss"):
+		return "scss"
+	case strings.HasSuffix(file, ".css"):
+		return "css"
 	}
 	return ""
 }
