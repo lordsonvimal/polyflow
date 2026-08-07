@@ -847,7 +847,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	// Broker hint linking (via: rabbitmq + exchange).
 	{
-		hintNodes, hintEdges := linker.LinkBrokerHints(cfg.Links, allNodes)
+		hintNodes, hintEdges, hintUnresolved := linker.LinkBrokerHints(cfg.Links, allNodes)
+		allUnresolved = append(allUnresolved, hintUnresolved...)
 		for i := range hintNodes {
 			n := hintNodes[i]
 			if err := bw.AddNode(ctx, &n); err != nil {

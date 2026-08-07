@@ -2,6 +2,8 @@ package linker
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -397,62 +399,313 @@ func cleanTableToken(tok string) string {
 //
 //	publisher(from-service) → channel(exchange) → subscriber(to-service)
 //
-// Hint edges are user-declared, so they carry confidence "static".
-func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, []graph.Edge) {
+// Tier J.3 gates the attachment on evidence. Before it, this was an
+// unconditional cartesian join: every exchange-less publisher in `From` and
+// *every* subscriber in `To` was joined to every hinted exchange, so a
+// workspace declaring 5 exchanges turned 5 exchange-less subscribers into 25
+// `subscribes` edges, 20 of them phantom, all stamped `static`. A node now
+// attaches to a hinted exchange only when it either
+//
+//   - names that exchange (its own `exchange` meta, its `exchange_candidates`,
+//     or a queue name that a resolved binding table maps to it), or
+//   - names nothing at all *and* the workspace offers it exactly one
+//     candidate exchange for its role — a single user declaration is
+//     unambiguous, and this is the shape the feature exists for (a bunny
+//     publisher holding its exchange in a variable).
+//
+// Everything else — no evidence, several candidates — is a guess, so it emits
+// no edge and lands in the ledger instead (phases.md rule 12: intake is
+// accounted for, not silently dropped).
+//
+// Where a real channel node already exists for the hinted exchange on either
+// endpoint, the hint attaches to it rather than minting a parallel
+// `broker:channel:<exchange>`; the two IDs never deduped, which is what
+// produced nonsensical channel→channel `publishes` edges.
+func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
+	rabbit := make([]workspace.Link, 0, len(links))
+	for _, l := range links {
+		if l.Via == "rabbitmq" && l.Exchange != "" {
+			rabbit = append(rabbit, l)
+		}
+	}
+	if len(rabbit) == 0 {
+		return nil, nil, nil
+	}
+
+	queueEx := queueExchangeIndex(nodes)
+	chanIdx := realChannelIndex(nodes)
+
 	var newNodes []graph.Node
 	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
+	minted := make(map[string]bool)  // synthetic channel ID → already appended
+	seenEdge := make(map[string]bool) // edge ID → already emitted
 
-	for _, link := range links {
-		if link.Via != "rabbitmq" || link.Exchange == "" {
-			continue
+	// channelsFor resolves the node(s) a hint for this exchange should meet on.
+	// Real channels win over the synthetic one; among real channels the bare
+	// exchange rendezvous (empty routing key) wins over per-routing-key nodes,
+	// so a hint does not fan out across a topic exchange's keys.
+	channelsFor := func(link workspace.Link) []string {
+		if real := chanIdx[link.From+"\x00"+link.Exchange]; len(real) > 0 {
+			return real
 		}
-		channelID := "broker:channel:" + link.Exchange
-		channelCreated := false
-
-		ensureChannel := func() {
-			if channelCreated {
-				return
-			}
-			channelCreated = true
+		if real := chanIdx[link.To+"\x00"+link.Exchange]; len(real) > 0 {
+			return real
+		}
+		id := "broker:channel:" + link.Exchange
+		if !minted[id] {
+			minted[id] = true
 			newNodes = append(newNodes, graph.Node{
-				ID:      channelID,
+				ID:      id,
 				Type:    graph.NodeTypeChannel,
 				Label:   link.Exchange,
 				Service: link.From,
-				Meta:    map[string]string{"exchange": link.Exchange, "hint": "true"},
+				Meta: map[string]string{
+					"exchange": link.Exchange,
+					"hint":     "true",
+					// doctor and the trust stamp must be able to exclude a node
+					// that corresponds to no line of source anywhere.
+					"synthetic": "true",
+				},
 			})
 		}
+		return []string{id}
+	}
 
-		for i := range nodes {
-			n := &nodes[i]
-			if !isBrokerPattern(n.Meta["pattern"]) {
-				continue // ws/hub/pusher/job publishers are not RabbitMQ traffic
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypePublisher && n.Type != graph.NodeTypeSubscriber {
+			continue
+		}
+		if !isBrokerPattern(n.Meta["pattern"]) {
+			continue // ws/hub/pusher/job publishers are not RabbitMQ traffic
+		}
+		isPub := n.Type == graph.NodeTypePublisher
+
+		// Links this node could serve, by role and service alone.
+		var eligible []workspace.Link
+		for _, link := range rabbit {
+			if isPub && n.Service == link.From {
+				// A publisher that already resolved its own exchange has a real
+				// channel from Tier W; the hint has nothing to add.
+				if stripMeta(n.Meta["exchange"]) == "" {
+					eligible = append(eligible, link)
+				}
+			} else if !isPub && n.Service == link.To {
+				eligible = append(eligible, link)
 			}
-			switch {
-			case n.Type == graph.NodeTypePublisher && n.Service == link.From && stripMeta(n.Meta["exchange"]) == "":
-				ensureChannel()
-				edges = append(edges, graph.Edge{
-					ID:         fmt.Sprintf("publishes:%s->%s", n.ID, channelID),
-					From:       n.ID,
-					To:         channelID,
-					Type:       graph.EdgeTypePublishes,
-					Confidence: graph.ConfidenceStatic,
-					Meta:       map[string]string{"via": "workspace_hint"},
-				})
-			case n.Type == graph.NodeTypeSubscriber && n.Service == link.To:
-				ensureChannel()
-				edges = append(edges, graph.Edge{
-					ID:         fmt.Sprintf("subscribes:%s->%s", channelID, n.ID),
-					From:       channelID,
-					To:         n.ID,
-					Type:       graph.EdgeTypeSubscribes,
-					Confidence: graph.ConfidenceStatic,
-					Meta:       map[string]string{"via": "workspace_hint"},
-				})
+		}
+		if len(eligible) == 0 {
+			continue
+		}
+
+		// Of those, the ones this node actually names.
+		evidence := nodeExchangeEvidence(n, queueEx)
+		var matched []workspace.Link
+		for _, link := range eligible {
+			if evidence[link.Exchange] {
+				matched = append(matched, link)
+			}
+		}
+
+		switch {
+		case len(matched) > 0:
+			// Evidence decides. More than one exchange named is a genuine
+			// ambiguity: keep the edges (recall) but never claim they are
+			// verified topology (plan-14 trust soundness).
+			conf := graph.ConfidenceStatic
+			if len(matched) > 1 {
+				conf = graph.ConfidencePartial
+			}
+			for _, link := range matched {
+				emitHintEdges(&edges, seenEdge, n, channelsFor(link), conf, len(matched), "workspace_hint")
+			}
+		case len(evidence) == 0 && len(eligible) == 1:
+			// No evidence, but the workspace offers exactly one answer.
+			emitHintEdges(&edges, seenEdge, n, channelsFor(eligible[0]), graph.ConfidenceStatic, 1, "workspace_hint")
+		default:
+			// Either the node names exchanges none of which this workspace
+			// links, or it names nothing while several exchanges compete.
+			// Both are unresolved, not attachable.
+			name := n.Label
+			if name == "" {
+				name = n.ID
+			}
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service,
+				File:    n.File,
+				Line:    n.Line,
+				Name:    name,
+				Kind:    "amqp_exchange_unresolved",
+			})
+		}
+	}
+	return newNodes, edges, unresolved
+}
+
+// emitHintEdges connects one broker node to the channel(s) a hint resolved to.
+// fanout is the number of candidate exchanges the node's evidence admitted; it
+// is recorded on the edge so a reader can tell a single declaration from a
+// hedge.
+func emitHintEdges(edges *[]graph.Edge, seen map[string]bool, n *graph.Node, channelIDs []string, conf string, fanout int, via string) {
+	if len(channelIDs) > 1 {
+		// Several real channels answer to one exchange (a topic exchange with
+		// per-routing-key nodes). Attaching to all of them is a hedge.
+		conf = graph.ConfidencePartial
+		fanout *= len(channelIDs)
+	}
+	for _, chanID := range channelIDs {
+		if chanID == n.ID {
+			continue
+		}
+		meta := map[string]string{"via": via}
+		if fanout > 1 {
+			meta["fanout"] = strconv.Itoa(fanout)
+		}
+		var e graph.Edge
+		if n.Type == graph.NodeTypePublisher {
+			e = graph.Edge{
+				ID:   fmt.Sprintf("publishes:%s->%s", n.ID, chanID),
+				From: n.ID, To: chanID, Type: graph.EdgeTypePublishes,
+			}
+		} else {
+			e = graph.Edge{
+				ID:   fmt.Sprintf("subscribes:%s->%s", chanID, n.ID),
+				From: chanID, To: n.ID, Type: graph.EdgeTypeSubscribes,
+			}
+		}
+		if seen[e.ID] {
+			continue
+		}
+		seen[e.ID] = true
+		e.Confidence = conf
+		e.Meta = meta
+		*edges = append(*edges, e)
+	}
+}
+
+// nodeExchangeEvidence collects every exchange name a broker node points at:
+// its own resolved exchange, the candidate list a partial resolution left
+// behind, and the exchange(s) its queue is bound to according to the channels
+// a binding table produced (Tier J.1). An empty result means the node names
+// nothing — not that it names nothing matching.
+func nodeExchangeEvidence(n *graph.Node, queueEx map[string][]string) map[string]bool {
+	ev := make(map[string]bool)
+	add := func(s string) {
+		s = strings.TrimSpace(stripMeta(s))
+		// "dynamic"/"*" are the matcher's words for "unresolved"; they are not
+		// exchange names and must never be treated as evidence.
+		if s == "" || s == "dynamic" || s == "*" {
+			return
+		}
+		ev[s] = true
+	}
+	add(n.Meta["exchange"])
+	for _, c := range strings.Split(n.Meta["exchange_candidates"], ",") {
+		add(c)
+	}
+	for _, key := range []string{"queue_name", "queue"} {
+		q := strings.TrimSpace(stripMeta(n.Meta[key]))
+		if q == "" {
+			continue
+		}
+		for _, ex := range queueEx[q] {
+			add(ex)
+		}
+	}
+	return ev
+}
+
+// queueExchangeIndex maps a queue name to the exchanges it is bound to, using
+// the channel nodes that carry a resolved binding (Tier J.1's static tables).
+// Values are sorted: two channels can bind one queue to one exchange under
+// different routing keys, and map order must never reach the output
+// (bug-class #2).
+func queueExchangeIndex(nodes []graph.Node) map[string][]string {
+	set := make(map[string]map[string]bool)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeChannel {
+			continue
+		}
+		q := stripMeta(n.Meta["queue_name"])
+		ex := stripMeta(n.Meta["exchange"])
+		if q == "" || ex == "" {
+			continue
+		}
+		if set[q] == nil {
+			set[q] = make(map[string]bool)
+		}
+		set[q][ex] = true
+	}
+	out := make(map[string][]string, len(set))
+	for q, exs := range set {
+		list := make([]string, 0, len(exs))
+		for ex := range exs {
+			list = append(list, ex)
+		}
+		sort.Strings(list)
+		out[q] = list
+	}
+	return out
+}
+
+// realChannelIndex maps service+exchange to the IDs of the channel nodes that
+// actually exist for it. Three preference tiers, most specific first, so a hint
+// meets one node rather than every node that mentions the exchange:
+//
+//  1. the canonical rendezvous `<svc>:channel:<exchange>/` — the ID the
+//     matcher and Tier W both converge on, and the one rule 3 exists to reuse;
+//  2. canonical per-routing-key channels `<svc>:channel:<exchange>/<key>`;
+//  3. anything else carrying the exchange (a declaration call site such as
+//     `ExchangeDeclare`, which describes the exchange but is not the point
+//     traffic meets at).
+//
+// Without the tiers a fixture holding both an `ExchangeDeclare` node and the
+// canonical channel would fan a single unambiguous hint across both and
+// degrade it to `partial`.
+func realChannelIndex(nodes []graph.Node) map[string][]string {
+	const (
+		tierRendezvous = 0
+		tierKeyed      = 1
+		tierOther      = 2
+	)
+	byTier := make(map[string]map[int][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeChannel || n.Meta["hint"] == "true" {
+			continue
+		}
+		ex := stripMeta(n.Meta["exchange"])
+		if ex == "" || n.Service == "" {
+			continue
+		}
+		canonical := strings.HasPrefix(n.ID, n.Service+":channel:"+ex)
+		tier := tierOther
+		switch {
+		case canonical && stripMeta(n.Meta["routing_key"]) == "":
+			tier = tierRendezvous
+		case canonical:
+			tier = tierKeyed
+		}
+		k := n.Service + "\x00" + ex
+		if byTier[k] == nil {
+			byTier[k] = make(map[int][]string)
+		}
+		byTier[k][tier] = append(byTier[k][tier], n.ID)
+	}
+
+	out := make(map[string][]string, len(byTier))
+	for k, tiers := range byTier {
+		for _, tier := range []int{tierRendezvous, tierKeyed, tierOther} {
+			if ids := tiers[tier]; len(ids) > 0 {
+				sort.Strings(ids)
+				out[k] = ids
+				break
 			}
 		}
 	}
-	return newNodes, edges
+	return out
 }
 
 // isBrokerPattern reports whether a pattern name represents message-broker
