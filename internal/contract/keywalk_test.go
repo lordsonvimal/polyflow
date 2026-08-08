@@ -380,6 +380,34 @@ func TestRubyWalker_Identifier_Dynamic(t *testing.T) {
 	assert.Nil(t, vals)
 }
 
+func TestRubyWalker_SimpleSymbol_Resolved(t *testing.T) {
+	// PR.1: a symbol is a literal, so a key field holding one (`queue_name:
+	// :builds`) must not be ledgered dynamic. Deliberately not upper-cased —
+	// the contract engine's case_fold normalizer aligns the two sides.
+	root, src := parseRuby(t, `:builds`)
+	w := contract.KeyWalkerFor("ruby")
+	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "builds", vals[0])
+}
+
+func TestRubyWalker_SimpleSymbol_ConstResolverStillWins(t *testing.T) {
+	// The new symbol case sits on a different node type than the constant
+	// case, so constant precedence is untouched. Pinned because a symbol and
+	// a constant can name the same queue.
+	root, src := parseRuby(t, `QUEUE`)
+	w := contract.KeyWalkerFor("ruby")
+	vals, dyn := w.WalkKey(firstExpr(root), src, func(name string) (string, bool) {
+		if name == "QUEUE" {
+			return "builds.high", true
+		}
+		return "", false
+	})
+	assert.False(t, dyn)
+	assert.Equal(t, []string{"builds.high"}, vals)
+}
+
 func TestRubyWalker_Interpolation_Reconstructed(t *testing.T) {
 	// X.1b: "room-#{room.id}" reconstructs to "room-*" instead of leaking
 	// the #{...} marker into the raw key text (bug-class #6).

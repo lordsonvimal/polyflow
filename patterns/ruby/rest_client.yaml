@@ -1,6 +1,10 @@
 language: ruby
 version: "1"
 patterns:
+  # `RestClient.get(url)` / `RestClient::Resource.post(url, payload)` — the
+  # verb is the method name and the URL is the first positional argument.
+  # Restricted to real HTTP verbs so it does not also claim the keyword-arg
+  # form below, whose first argument is a `pair`, not a URL.
   - name: rest_client_verb
     query: |
       (call
@@ -9,8 +13,37 @@ patterns:
           (#eq? @ns "RestClient")
           name: (constant) @cls)
         method: (identifier) @method
+        (#match? @method "^(get|post|put|patch|delete|head|options)$")
         arguments: (argument_list
           (_) @url . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
+  # `RestClient::Request.execute(method: :get, url: url, ...)` — the keyword
+  # form. Matching it positionally captured the `method: :get` pair as the URL
+  # and the literal string "execute" as the verb, so every such call site
+  # carried a fabricated method and an unresolvable URL.
+  - name: rest_client_request
+    query: |
+      (call
+        receiver: (scope_resolution
+          scope: (constant) @ns
+          (#eq? @ns "RestClient")
+          name: (constant) @cls
+          (#eq? @cls "Request"))
+        method: (identifier) @fn
+        (#match? @fn "^(execute|new)$")
+        arguments: (argument_list
+          (pair
+            key: (hash_key_symbol) @_mkey
+            (#eq? @_mkey "method")
+            value: (_) @method)
+          (pair
+            key: (hash_key_symbol) @_ukey
+            (#eq? @_ukey "url")
+            value: (_) @url)))
     captures:
       - name: method
         role: http_method
