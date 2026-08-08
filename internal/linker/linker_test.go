@@ -72,6 +72,124 @@ func TestLinkTemplComponents_NoTwin(t *testing.T) {
 }
 
 
+// routeHandlerNode builds an http_handler route node referencing handler as
+// written at the call site ("baseImageHandler.SaveConfig").
+func routeHandlerNode(id, label, handler string) graph.Node {
+	return graph.Node{
+		ID: id, Type: graph.NodeTypeHTTPHandler, Label: label, Service: "app",
+		File: "internal/routes/views.go",
+		Meta: map[string]string{"handler": handler},
+	}
+}
+
+// handlerMethod builds a method node carrying its receiver struct.
+func handlerMethod(file, recv, label string) graph.Node {
+	return graph.Node{
+		ID: "app:" + file + ":method:" + label, Type: graph.NodeTypeMethod, Label: label,
+		Service: "app", File: file,
+		Meta: map[string]string{"receiver": recv},
+	}
+}
+
+// Three handler structs defining the same method name is the ordinary Rails-ish
+// Go shape. Matching on the bare label collapses every route onto whichever
+// method was indexed first, which both mislinks the route and strands the real
+// handler with no caller (it then reads as dead code). The receiver qualifier
+// recorded on each side must pin them apart.
+func TestLinkRouteHandlers_DisambiguatesByReceiver(t *testing.T) {
+	nodes := []graph.Node{
+		routeHandlerNode("app:routes:http_handler:1", "POST /app-configs/save", "appConfigHandler.SaveConfig"),
+		routeHandlerNode("app:routes:http_handler:2", "POST /base-images/save", "baseImageHandler.SaveConfig"),
+		routeHandlerNode("app:routes:http_handler:3", "POST /exec-configs/save", "execConfigHandler.SaveConfig"),
+		handlerMethod("internal/views/app_config_handler.go", "AppConfigHandler", "SaveConfig"),
+		handlerMethod("internal/views/base_image_handler.go", "BaseImageHandler", "SaveConfig"),
+		handlerMethod("internal/views/exec_config_handler.go", "ExecConfigHandler", "SaveConfig"),
+	}
+
+	got := map[string]string{}
+	for _, e := range LinkRouteHandlers(nodes) {
+		got[e.From] = e.To
+	}
+
+	assert.Equal(t, "app:internal/views/app_config_handler.go:method:SaveConfig", got["app:routes:http_handler:1"])
+	assert.Equal(t, "app:internal/views/base_image_handler.go:method:SaveConfig", got["app:routes:http_handler:2"])
+	assert.Equal(t, "app:internal/views/exec_config_handler.go:method:SaveConfig", got["app:routes:http_handler:3"])
+}
+
+// Only the innermost segment names the value being called; a field path or a
+// package qualifier must not defeat the receiver match.
+func TestLinkRouteHandlers_ChainedQualifier(t *testing.T) {
+	nodes := []graph.Node{
+		routeHandlerNode("app:routes:http_handler:1", "GET /x", "s.execConfigHandler.Show"),
+		handlerMethod("internal/views/app_config_handler.go", "AppConfigHandler", "Show"),
+		handlerMethod("internal/views/exec_config_handler.go", "ExecConfigHandler", "Show"),
+	}
+
+	edges := LinkRouteHandlers(nodes)
+
+	require.Len(t, edges, 1)
+	assert.Equal(t, "app:internal/views/exec_config_handler.go:method:Show", edges[0].To)
+}
+
+// When the qualifier names nothing we can resolve — a local variable or a
+// package — the label-only lookup still has to produce an edge, since a missing
+// route→handler hop breaks every downstream flow.
+func TestLinkRouteHandlers_UnresolvableQualifierFallsBack(t *testing.T) {
+	nodes := []graph.Node{
+		routeHandlerNode("app:routes:http_handler:1", "GET /y", "h.List"),
+		handlerMethod("internal/views/base_image_handler.go", "BaseImageHandler", "List"),
+	}
+
+	edges := LinkRouteHandlers(nodes)
+
+	require.Len(t, edges, 1, "falls back to the label match rather than dropping the hop")
+	assert.Equal(t, "app:internal/views/base_image_handler.go:method:List", edges[0].To)
+}
+
+// `appController := controllers.NewUserAppController(...)` names the variable
+// for a shortened form of its type, so the exact receiver match misses. A
+// unique suffix relationship still identifies the struct — without it the
+// label-only fallback picked an unrelated `SessionStore.Create`.
+func TestLinkRouteHandlers_AbbreviatedQualifier(t *testing.T) {
+	nodes := []graph.Node{
+		routeHandlerNode("app:routes:http_handler:1", "POST /apps", "appController.Create"),
+		handlerMethod("internal/auth/saml/session.go", "SessionStore", "Create"),
+		handlerMethod("internal/controllers/user_app_controller.go", "UserAppController", "Create"),
+	}
+
+	edges := LinkRouteHandlers(nodes)
+
+	require.Len(t, edges, 1)
+	assert.Equal(t, "app:internal/controllers/user_app_controller.go:method:Create", edges[0].To)
+}
+
+// Two structs fitting the same abbreviation is not evidence, so the guess is
+// declined and the existing fallback decides.
+func TestLinkRouteHandlers_AmbiguousAbbreviationDeclined(t *testing.T) {
+	nodes := []graph.Node{
+		routeHandlerNode("app:routes:http_handler:1", "POST /x", "appController.Create"),
+		handlerMethod("a.go", "UserAppController", "Create"),
+		handlerMethod("b.go", "AdminAppController", "Create"),
+	}
+
+	edges := LinkRouteHandlers(nodes)
+
+	require.Len(t, edges, 1)
+	assert.Equal(t, "app:a.go:method:Create", edges[0].To, "falls back to the first label match, not an arbitrary abbreviation pick")
+}
+
+// A receiver match must not reach across service boundaries.
+func TestLinkRouteHandlers_ReceiverMatchIsServiceScoped(t *testing.T) {
+	other := handlerMethod("internal/views/exec_config_handler.go", "ExecConfigHandler", "Save")
+	other.ID, other.Service = "other:exec:method:Save", "other"
+	nodes := []graph.Node{
+		routeHandlerNode("app:routes:http_handler:1", "GET /z", "execConfigHandler.Save"),
+		other,
+	}
+
+	assert.Empty(t, LinkRouteHandlers(nodes), "no handler in this service, so no edge")
+}
+
 func TestLinkRouteComponents(t *testing.T) {
 	route := graph.Node{
 		ID:      "app:src/App.tsx:route:%2Fsettings:10",
