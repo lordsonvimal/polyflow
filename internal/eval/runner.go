@@ -131,7 +131,7 @@ func Run(ctx context.Context, opts RunOptions) (*Report, error) {
 		if opts.CaseID != "" && c.ID != opts.CaseID {
 			continue
 		}
-		cr, err := runCase(ctx, store, idx, unresolvedFileSet, c)
+		cr, err := runCase(ctx, store, idx, unresolvedFileSet, c, newPathCanon(repoRoot))
 		if err != nil {
 			return nil, fmt.Errorf("case %s: %w", c.ID, err)
 		}
@@ -142,7 +142,7 @@ func Run(ctx context.Context, opts RunOptions) (*Report, error) {
 	return &report, nil
 }
 
-func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.AdjacencyIndex, unresolvedFiles map[string]bool, c Case) (CaseResult, error) {
+func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.AdjacencyIndex, unresolvedFiles map[string]bool, c Case, pc *pathCanon) (CaseResult, error) {
 	var returned []string
 	switch c.Kind {
 	case "node":
@@ -162,11 +162,20 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 		// Diff cases require E.2 corpus infrastructure (clone + patch apply).
 		return CaseResult{}, fmt.Errorf("diff cases not supported until Phase E.2")
 	case "semantic":
+		// Semantic cases score entity labels, not file paths — canonicalising
+		// them would be meaningless.
 		return runSemanticCase(ctx, store, c)
 	default:
 		return CaseResult{}, fmt.Errorf("unknown case kind %q", c.Kind)
 	}
-	return Score(c.ID, returned, c.ExpectedImpacted, c.MustNotMiss, unresolvedFiles), nil
+	// Impact cases compare file paths, so put both sides — and the unresolved
+	// ledger that decides honest-vs-silent — into one coordinate system first.
+	return Score(c.ID,
+		pc.keys(returned),
+		pc.keys(c.ExpectedImpacted),
+		pc.keys(c.MustNotMiss),
+		pc.keySet(unresolvedFiles),
+	), nil
 }
 
 // runSemanticCase executes a kind=semantic eval case (S.4): NL query →
