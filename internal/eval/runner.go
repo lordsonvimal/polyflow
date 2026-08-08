@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -23,9 +24,29 @@ type RunOptions struct {
 
 // MultiReport holds scored reports for all corpus repos in one run.
 type MultiReport struct {
-	GeneratedAt time.Time        `json:"generated_at"`
-	Reports     []Report         `json:"repos"`
-	Skipped     []SkippedCorpus  `json:"skipped,omitempty"`
+	GeneratedAt time.Time       `json:"generated_at"`
+	Reports     []Report        `json:"repos"`
+	Skipped     []SkippedCorpus `json:"skipped,omitempty"`
+	Broken      []BrokenCorpus  `json:"broken,omitempty"`
+}
+
+// ErrCorpusUnavailable marks the one failure that is a legitimate skip: the
+// corpus DB could not be opened because the repo was never cloned or indexed.
+// Every other failure means the corpus is present but broken, which must reach
+// the gate rather than be filed away as an absence.
+var ErrCorpusUnavailable = errors.New("corpus unavailable")
+
+// BrokenCorpus records a corpus that was available but failed to run — an
+// unreadable manifest, an index that would not build, or a case that could not
+// be executed (e.g. its target file is no longer in the index).
+//
+// This is deliberately not a SkippedCorpus. A skip is exempt from the gate for
+// local-only repos, and routing real defects through that exemption is how the
+// fleet corpus sat dead for weeks while `eval --gate` still exited 0.
+type BrokenCorpus struct {
+	Name   string `json:"name"`
+	Dir    string `json:"dir"`
+	Reason string `json:"reason"`
 }
 
 // SkippedCorpus records a corpus that was unavailable (not cloned/indexed).
@@ -56,13 +77,22 @@ func RunAll(ctx context.Context, root string) (*MultiReport, error) {
 	for _, dir := range dirs {
 		r, err := Run(ctx, RunOptions{CorpusDir: dir})
 		if err != nil {
-			// Surface unavailable repos as explicit skips (never silent).
 			m, mErr := LoadManifest(dir)
 			name := dir
 			localOnly := false
 			if mErr == nil {
 				name = m.Repo.Name
 				localOnly = m.Repo.URL == "" && m.Repo.Path != ""
+			}
+			// Only an absent corpus is a skip. A corpus that is present but
+			// fails to run is a defect and must reach the gate.
+			if !errors.Is(err, ErrCorpusUnavailable) {
+				out.Broken = append(out.Broken, BrokenCorpus{
+					Name:   name,
+					Dir:    dir,
+					Reason: err.Error(),
+				})
+				continue
 			}
 			out.Skipped = append(out.Skipped, SkippedCorpus{
 				Name:      name,
@@ -108,7 +138,8 @@ func Run(ctx context.Context, opts RunOptions) (*Report, error) {
 	dbPath := filepath.Join(repoRoot, meta.DBDir, meta.DBFile)
 	store, err := graph.NewSQLiteStore(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open graph DB at %s (run `polyflow index` first): %w", dbPath, err)
+		return nil, fmt.Errorf("%w: open graph DB at %s (run `polyflow index` first): %v",
+			ErrCorpusUnavailable, dbPath, err)
 	}
 	defer store.Close()
 
