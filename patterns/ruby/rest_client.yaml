@@ -49,6 +49,26 @@ patterns:
         role: http_method
       - name: url
         role: http_url
+  # `RestClient.get(url, headers)` / `RestClient.post(url, payload)` — the bare
+  # constant receiver, as opposed to the `RestClient::Resource` scope_resolution
+  # form above. These were previously matched only by httparty.yaml's un-gated
+  # `Constant.verb(arg)` query; now that it is gated on the httparty gem they
+  # need an owner here, or every real bare-RestClient call in a repo without
+  # httparty would silently lose its node.
+  - name: rest_client_bare_verb
+    query: |
+      (call
+        receiver: (constant) @client
+        (#eq? @client "RestClient")
+        method: (identifier) @method
+        (#match? @method "^(get|post|put|patch|delete|head|options)$")
+        arguments: (argument_list
+          (_) @url . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
   - name: rest_client_resource
     query: |
       (call

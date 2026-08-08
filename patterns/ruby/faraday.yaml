@@ -13,6 +13,20 @@ patterns:
     captures:
       - name: url
         role: http_url
+  # A verb call on a plain local receiver — `rest.post(path: url, payload: p)`,
+  # the wrapper-client shape every Ruby agent in the fleet uses. The receiver is
+  # an untyped local, so `pools.delete(key)`, `p_params.delete(key)` and
+  # `debounced_folders.delete(folder)` are *the same shape* as a real request:
+  # with no constraint on the argument this query produced 38 of the 42 spurious
+  # Ruby http_client nodes on the juniper fleet, every one a `Hash#delete`
+  # or `Array#delete`.
+  #
+  # The first argument must therefore look like a URL: a `path:`/`url:` keyword
+  # (here) or a string literal (below). Deliberately NOT matched:
+  # `conn.get(some_url)` with a bare identifier argument — it is syntactically
+  # indistinguishable from `hash.delete(key)` without type information, and
+  # accepting it is what made this pattern a net negative. `Faraday.new` above
+  # is unaffected.
   - name: faraday_http_verb
     query: |
       (call
@@ -20,7 +34,25 @@ patterns:
         method: (identifier) @method
         (#match? @method "^(get|post|put|patch|delete|head|options)$")
         arguments: (argument_list
-          (_) @path . _*))
+          (pair
+            key: (hash_key_symbol) @_pkey
+            (#match? @_pkey "^(path|url|uri|endpoint)$")
+            value: (_) @path) . _*))
+    captures:
+      - name: via_alias
+        role: alias_receiver
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+  - name: faraday_http_verb_literal
+    query: |
+      (call
+        receiver: (identifier) @via_alias
+        method: (identifier) @method
+        (#match? @method "^(get|post|put|patch|delete|head|options)$")
+        arguments: (argument_list
+          (string) @path . _*))
     captures:
       - name: via_alias
         role: alias_receiver
