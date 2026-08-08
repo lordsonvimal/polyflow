@@ -1,3 +1,5 @@
 conn = Faraday.new(url: 'http://api-svc')
 conn.get('/api/users')
 conn.post('/api/users', payload)
+rest.post(path: url, payload: params)
+rest.get(path: Connection.instance.file_download_url)

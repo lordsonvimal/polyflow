@@ -1,5 +1,15 @@
 language: ruby
 version: "1"
+# Gated on the gem. HTTParty's API is `SomeClass.get(url)` on a class that
+# `include HTTParty`, which is the same syntax as *every* constant-receiver call
+# in Ruby — un-gated, this file claimed `File.delete(path)`,
+# `REGISTRY.delete(name)`, `EVENT_CACHE.delete(file)` and
+# `UserFileVersion.get(file, number:)` as HTTP clients. On the juniper fleet
+# that was 22 http_client nodes in three services, none of which depend on
+# httparty at all. The receiver cannot be typed, so the gem is the only honest
+# discriminator; bare `RestClient.verb(...)` calls, which this file used to pick
+# up incidentally, are matched by rest_client.yaml's rest_client_bare_verb.
+package: httparty
 patterns:
   - name: httparty_verb
     query: |
