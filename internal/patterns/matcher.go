@@ -900,6 +900,31 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			meta["end_line"] = fmt.Sprintf("%d", r.EndLine)
 		}
 
+		// PR.1: resolve constant/symbol HTTP verbs (`http.MethodGet`, `:get`)
+		// to a bare upper-cased method. The capture is raw source text, and
+		// the contract engine matches producer method against handler method
+		// after case_fold only — so an unresolved `http.MethodGet` is not a
+		// near miss, it is a guaranteed miss that also evades
+		// method_fallback (which fires only on an *empty* method) and emits a
+		// junk edge to the synthetic `unresolved` node. Scoped to http_client
+		// because that is the only node type whose method is a matched key;
+		// route/handler patterns capture the verb as the DSL function name
+		// (`r.GET`), which is already bare.
+		if nodeType == graph.NodeTypeHTTPClient {
+			if raw := meta["method"]; raw != "" {
+				if v, ok := normalizeHTTPVerb(raw); ok && v != raw {
+					// The label was minted above as `method + " " + url` from
+					// the *raw* captures, so rewrite only that leading token
+					// and leave the URL half exactly as the label builder left
+					// it — a prefix match, not a reconstruction.
+					if strings.HasPrefix(label, raw+" ") {
+						label = v + strings.TrimPrefix(label, raw)
+					}
+					meta["method"] = v
+				}
+			}
+		}
+
 		// URL constant propagation: resolve variable references in http_client URL/path captures.
 		if nodeType == graph.NodeTypeHTTPClient {
 			for _, key := range []string{"url", "path"} {
