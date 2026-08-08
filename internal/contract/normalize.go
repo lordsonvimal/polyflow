@@ -316,11 +316,56 @@ func hasLiteralSegment(value string) bool {
 	return false
 }
 
+// pathBoilerplate are segments so common across services that two paths
+// agreeing on them carries no routing information. Anchoring on these alone is
+// what let `/api/v1/*/*/dependent-apps` match `/api/v1/admin/users/*` in a
+// different service — 6 of the 8 edges from that one call site were false.
+// Version segments are matched by shape below rather than enumerated.
+//
+// This list is corpus-fit and deliberately short: a segment belongs here only
+// if agreeing on it says nothing about *which* route was hit. It will not
+// generalise to a fleet whose routes all sit under `/svc/<name>/…`, where the
+// service segment would be the boilerplate — that is a tuning problem, not a
+// bug in the rule.
+var pathBoilerplate = map[string]bool{
+	"api":      true,
+	"apis":     true,
+	"rest":     true,
+	"public":   true,
+	"internal": true,
+}
+
+// reVersionSegment matches an API version segment (`v1`, `v2`, `v10`).
+var reVersionSegment = regexp.MustCompile(`^v[0-9]+$`)
+
+// isBoilerplateSegment reports whether agreeing on this path segment is
+// evidence that two paths name the same route.
+func isBoilerplateSegment(seg string) bool {
+	return pathBoilerplate[strings.ToLower(seg)] || reVersionSegment.MatchString(strings.ToLower(seg))
+}
+
 // pathMatchesPattern does segment-for-segment matching where "*" on either
-// side matches any single non-empty segment. When the candidate key itself
-// contains wildcards (e.g. a datastar partial path), at least one concrete
-// segment must match — otherwise two routes of different meaning but the same
-// shape would spuriously match on wildcards alone.
+// side matches any single non-empty segment.
+//
+// A key with no wildcards of its own is matched leniently: it is a concrete
+// URL, and every `*` it meets on the pattern side is a route parameter it is
+// legitimately binding (`/api/v1/users/123` ↔ `/api/v1/users/:id`).
+//
+// A key that is *itself* wildcarded (a partial path recovered from an
+// interpolated template) has to clear one further bar: it must agree with the
+// pattern, literal↔literal, on at least one segment that is not fleet-wide
+// boilerplate. On a REST fleet the shared literals are almost always the
+// `/api/v1` prefix that every route in every service carries, so an anchor
+// made of those alone is satisfied before the discriminating segment is ever
+// examined, and two routes of different meaning but the same shape match on
+// wildcards alone.
+//
+// A concrete key segment aligned against a pattern-side `*` deliberately
+// remains a match: that is a client binding a route parameter
+// (`/practice/*/assign-color/black` ↔ `POST /practice/:id/assign-color/:color`),
+// and rejecting it costs true positives without buying precision — the
+// boilerplate rule above already rejects the whole measured false-positive
+// fan-out on its own.
 func pathMatchesPattern(key, pattern string) bool {
 	ks := splitPath(key)
 	ps := splitPath(pattern)
@@ -328,7 +373,7 @@ func pathMatchesPattern(key, pattern string) bool {
 		return false
 	}
 	keyHasWild := false
-	sharedConcrete := false
+	discriminating := false
 	for i := range ks {
 		kw := ks[i] == "*"
 		pw := ps[i] == "*"
@@ -339,11 +384,13 @@ func pathMatchesPattern(key, pattern string) bool {
 			if ks[i] != ps[i] {
 				return false
 			}
-			sharedConcrete = true
+			if !isBoilerplateSegment(ks[i]) {
+				discriminating = true
+			}
 		}
 	}
-	if keyHasWild && !sharedConcrete {
-		return false
+	if !keyHasWild {
+		return true
 	}
-	return true
+	return discriminating
 }
