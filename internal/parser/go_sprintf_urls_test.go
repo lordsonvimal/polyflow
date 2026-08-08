@@ -95,7 +95,8 @@ func (c *Client) Opaque(seg string) error {
 // TestSprintfURL_ResolvesLiteralPathPrefix: every caller whose format string pins
 // at least one literal path segment yields a resolved http_client producer, with
 // dynamic segments rendered as wildcards; the caller whose path is entirely
-// dynamic yields none (dynamic ledger, not a guess).
+// dynamic yields none (dynamic ledger, not a guess). A single literal segment
+// behind an opaque host is emitted but stamped weak + capped at `partial`.
 func TestSprintfURL_ResolvesLiteralPathPrefix(t *testing.T) {
 	dir := sprintfModule(t)
 	t.Chdir(dir)
@@ -125,6 +126,10 @@ func TestSprintfURL_ResolvesLiteralPathPrefix(t *testing.T) {
 		"*/client_api/v1/folders/details_by_path": "GetFolderByPath",
 		"*/api/v1/users":                          "LookupUserByEmail",
 		"*/v1/*/*/detail":                         "FetchResourceDetail",
+		// One literal segment behind an opaque host is emitted too, marked
+		// weak: whether `*/health` names a route or a convention depends on how
+		// many services answer to it, which only the contract engine can see.
+		"*/health": "HealthCheck",
 	}
 	if len(synth) != len(want) {
 		t.Fatalf("expected %d synth producers, got %d: %+v", len(want), len(synth), synth)
@@ -145,13 +150,30 @@ func TestSprintfURL_ResolvesLiteralPathPrefix(t *testing.T) {
 		}
 	}
 
-	// The all-wildcard caller and the generic single-segment caller must NOT
-	// produce synth nodes.
+	// The all-wildcard caller has no evidence at all and must NOT produce a
+	// synth node.
 	for path, n := range synth {
-		switch n.Meta["via_wrapper"] {
-		case "Opaque", "HealthCheck":
+		if n.Meta["via_wrapper"] == "Opaque" {
 			t.Errorf("evidence-free caller wrongly resolved: %q -> %+v", path, n)
 		}
+	}
+
+	// The single-segment caller is emitted, but must carry both markers: the
+	// engine needs `path_evidence` to suppress it when the path spans services,
+	// and the ceiling keeps a surviving edge from being promoted to `verified`
+	// on spec evidence alone.
+	if got := synth["*/health"].Meta["path_evidence"]; got != "weak" {
+		t.Errorf("*/health: path_evidence=%q, want weak", got)
+	}
+	if got := synth["*/health"].Meta["confidence_ceiling"]; got != graph.ConfidencePartial {
+		t.Errorf("*/health: confidence_ceiling=%q, want %q", got, graph.ConfidencePartial)
+	}
+	// A multi-segment path is strong evidence and carries neither marker.
+	if got := synth["*/api/v1/users"].Meta["path_evidence"]; got != "" {
+		t.Errorf("*/api/v1/users: path_evidence=%q, want unset", got)
+	}
+	if got := synth["*/api/v1/users"].Meta["confidence_ceiling"]; got != "" {
+		t.Errorf("*/api/v1/users: confidence_ceiling=%q, want unset", got)
 	}
 
 	// Each synth node must be attributed to its caller via a calls edge tagged sprintf_url.
@@ -421,32 +443,38 @@ func TestExpandFormatVerbs(t *testing.T) {
 	}
 }
 
-// TestHasDiscriminatingPath pins the evidence gate: with an opaque host, a pattern
-// must anchor two path segments to literals before it may become a producer, so a
-// single generic segment cannot fan out across every service that happens to expose
-// the same convention (bug-class #1, #12).
-func TestHasDiscriminatingPath(t *testing.T) {
+// TestPathEvidence pins the evidence grading. With an opaque host, two literal
+// segments name an API surface and are strong evidence; a single literal segment
+// is *weak* — it may name a real endpoint (`*/user-apps`) or a convention every
+// service implements (`*/health`), and which one it is depends on how many
+// services answer to it, not on the pattern. The contract engine settles that;
+// this function must not pre-judge it (bug-class #1, #12).
+func TestPathEvidence(t *testing.T) {
 	cases := []struct {
 		name    string
 		pattern string
-		want    bool
+		want    string
 	}{
-		{"named API surface", "*/client_api/v1/users", true},
-		{"wildcards between literals", "*/v1/*/*/detail", true},
-		{"two literals with opaque host", "http://*/api/things", true},
-		{"fully literal single segment", "/health", true},
-		{"generic single segment, opaque host", "*/health", false},
-		{"single segment, opaque host", "*/payment_links", false},
-		{"single literal after wildcards", "*/*/*/messages", false},
-		{"bare wildcard", "*", false},
-		{"no literals", "*/*", false},
-		{"empty", "", false},
-		{"root", "/", false},
+		{"named API surface", "*/client_api/v1/users", pathEvidenceStrong},
+		{"wildcards between literals", "*/v1/*/*/detail", pathEvidenceStrong},
+		{"two literals with opaque host", "http://*/api/things", pathEvidenceStrong},
+		{"fully literal single segment", "/health", pathEvidenceStrong},
+		// Weak, not rejected: the engine suppresses these only when the path
+		// resolves in more than one service. On the juniper fleet that
+		// suppresses `*/health` (3 services) and keeps `*/user-apps` (1).
+		{"generic single segment, opaque host", "*/health", pathEvidenceWeak},
+		{"single segment, opaque host", "*/payment_links", pathEvidenceWeak},
+		{"real endpoint, single segment", "*/user-apps", pathEvidenceWeak},
+		{"single literal after wildcards", "*/*/*/messages", pathEvidenceWeak},
+		{"bare wildcard", "*", pathEvidenceNone},
+		{"no literals", "*/*", pathEvidenceNone},
+		{"empty", "", pathEvidenceNone},
+		{"root", "/", pathEvidenceNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := hasDiscriminatingPath(tc.pattern); got != tc.want {
-				t.Errorf("hasDiscriminatingPath(%q) = %v, want %v", tc.pattern, got, tc.want)
+			if got := pathEvidence(tc.pattern); got != tc.want {
+				t.Errorf("pathEvidence(%q) = %q, want %q", tc.pattern, got, tc.want)
 			}
 		})
 	}
