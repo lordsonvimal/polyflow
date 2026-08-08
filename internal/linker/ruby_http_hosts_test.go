@@ -80,6 +80,16 @@ end
 	if got := nodes[0].Meta["host_resolved_via"]; got != "ruby_env_method" {
 		t.Errorf("host_resolved_via = %q, want ruby_env_method", got)
 	}
+	// PR.3: the endpoint is the *argument* the call site passes, spliced into
+	// the host method's parameter hole. `sce_app` resolves to no path of its own
+	// (it is a conditional, not a literal), so it reads as the "*" host segment
+	// dynamic_host_strip removes downstream.
+	if got := nodes[0].Meta["path"]; got != "*/client_api/v1/agents/register" {
+		t.Errorf("path = %q, want */client_api/v1/agents/register", got)
+	}
+	if nodes[0].Meta["key_dynamic"] != "" {
+		t.Errorf("a node that gained a path must stop being key_dynamic, got %q", nodes[0].Meta["key_dynamic"])
+	}
 }
 
 // TestResolveRubyHTTPHosts_ParamCaller covers shape (3): the http_client posts
@@ -149,6 +159,177 @@ end
 	ResolveRubyHTTPHosts(nodes, svcFiles)
 	if got := nodes[0].Meta["host_env_var"]; got != "SCE_HOST" {
 		t.Errorf("host_env_var = %q, want SCE_HOST (ivar chain via attr)", got)
+	}
+	// PR.3: the path is composed across *two* hops of the same chain the env var
+	// travels — @service_base_url contributes "/service_api/v1" and the method
+	// body appends "/job_items/update_job_status". Before PR.3 both were
+	// traversed and thrown away, which is why nextgen-sce resolved 0% of its
+	// client URLs despite this pass already reaching the right method.
+	if got := nodes[0].Meta["path"]; got != "*/service_api/v1/job_items/update_job_status" {
+		t.Errorf("path = %q, want */service_api/v1/job_items/update_job_status", got)
+	}
+	if got := nodes[0].Meta["path_resolved_via"]; got != "ruby_host_method" {
+		t.Errorf("path_resolved_via = %q, want ruby_host_method", got)
+	}
+}
+
+// TestResolveRubyHTTPHosts_HostOnlyKeepsDynamic pins the boundary of the PR.3
+// trade: a host method that appends no route resolves the *host* exactly as
+// before and stays key_dynamic, so config_resolve still gets to bind it (or
+// ledger a named deploy-secret miss). Only nodes that gain a real path leave
+// that path.
+func TestResolveRubyHTTPHosts_HostOnlyKeepsDynamic(t *testing.T) {
+	dir := t.TempDir()
+	conn := writeRuby(t, dir, "conn.rb", `
+class Conn
+  def sce_host_url
+    ENV.fetch("SCE_HOST")
+  end
+end
+`)
+	caller := writeRuby(t, dir, "caller.rb", `
+class Caller
+  def go
+    RestClient.post(sce_host_url, {})
+  end
+end
+`)
+	nodes := []graph.Node{httpClientNode(caller, 4, "sce_host_url")}
+	changed := ResolveRubyHTTPHosts(nodes, map[string][]string{"svc": {conn, caller}})
+	if len(changed) != 1 {
+		t.Fatalf("expected the host to still resolve, got %d", len(changed))
+	}
+	if got := nodes[0].Meta["host_env_var"]; got != "SCE_HOST" {
+		t.Errorf("host_env_var = %q, want SCE_HOST", got)
+	}
+	if got := nodes[0].Meta["path"]; got != "" {
+		t.Errorf("a host with no route must set no path, got %q", got)
+	}
+	if nodes[0].Meta["key_dynamic"] != "true" {
+		t.Error("host-only resolution must stay key_dynamic for config_resolve")
+	}
+}
+
+// TestResolveRubyHTTPHosts_UnfilledHoleIsNotAPath verifies a host method whose
+// endpoint parameter the call site does not supply as a literal yields no path
+// at all rather than "*/*" — a template of nothing but wildcards would match
+// every route in every service.
+func TestResolveRubyHTTPHosts_UnfilledHoleIsNotAPath(t *testing.T) {
+	dir := t.TempDir()
+	conn := writeRuby(t, dir, "conn.rb", `
+module Conn
+  def server_api_url(endpoint)
+    "#{ENV.fetch('SCE_APP')}/#{endpoint}"
+  end
+end
+`)
+	caller := writeRuby(t, dir, "caller.rb", `
+class Caller
+  def go(ep)
+    RestClient.post(server_api_url(ep), {})
+  end
+end
+`)
+	nodes := []graph.Node{httpClientNode(caller, 4, "server_api_url(ep)")}
+	ResolveRubyHTTPHosts(nodes, map[string][]string{"svc": {conn, caller}})
+	if got := nodes[0].Meta["host_env_var"]; got != "SCE_APP" {
+		t.Errorf("host_env_var = %q, want SCE_APP", got)
+	}
+	if got := nodes[0].Meta["path"]; got != "" {
+		t.Errorf("an all-wildcard template must not become a path, got %q", got)
+	}
+	if nodes[0].Meta["key_dynamic"] != "true" {
+		t.Error("no path means the node stays key_dynamic")
+	}
+}
+
+// TestResolveRubyHTTPHosts_PathConflictKeepsHost verifies a host-method name
+// defined twice with the same env var but *different* routes keeps the
+// unambiguous host and drops the ambiguous path, rather than picking one.
+func TestResolveRubyHTTPHosts_PathConflictKeepsHost(t *testing.T) {
+	dir := t.TempDir()
+	a := writeRuby(t, dir, "a.rb", `
+module A
+  def status_url
+    "#{ENV.fetch('SCE_HOST')}/api/v1/alpha"
+  end
+end
+`)
+	b := writeRuby(t, dir, "b.rb", `
+module B
+  def status_url
+    "#{ENV.fetch('SCE_HOST')}/api/v1/beta"
+  end
+end
+`)
+	caller := writeRuby(t, dir, "caller.rb", `
+class Caller
+  def go
+    RestClient.post(status_url, {})
+  end
+end
+`)
+	nodes := []graph.Node{httpClientNode(caller, 4, "status_url")}
+	ResolveRubyHTTPHosts(nodes, map[string][]string{"svc": {a, b, caller}})
+	if got := nodes[0].Meta["host_env_var"]; got != "SCE_HOST" {
+		t.Errorf("host_env_var = %q, want SCE_HOST (env is unambiguous)", got)
+	}
+	if got := nodes[0].Meta["path"]; got != "" {
+		t.Errorf("conflicting routes must yield no path, got %q", got)
+	}
+}
+
+// TestRubyClientPath covers the host-placeholder and concreteness rules of the
+// final path stamp directly.
+func TestRubyClientPath(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"prefixes the host placeholder", "/api/v1/health", "*/api/v1/health"},
+		{"keeps an existing placeholder", "*/api/v1/health", "*/api/v1/health"},
+		{"adds a leading slash", "api/v1/health", "*/api/v1/health"},
+		{"unfilled hole becomes a wildcard", "/api/\x00id\x00/health", "*/api/*/health"},
+		{"all-wildcard is not a path", "*/*", ""},
+		{"host alone is not a path", "*", ""},
+		{"empty stays empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rubyClientPath(tc.in); got != tc.want {
+				t.Errorf("rubyClientPath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRubyCallArgs covers the text-level argument splitter, including the
+// nested-call and unbalanced cases where it must yield nothing rather than a
+// wrong split.
+func TestRubyCallArgs(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     []string
+	}{
+		{"single string literal", `server_api_url("client_api/v1/x")`, []string{`"client_api/v1/x"`}},
+		{"interpolated literal", `server_api_url("client_api/v1/lros/#{id}")`, []string{`"client_api/v1/lros/#{id}"`}},
+		{"two args", `f("a", b)`, []string{`"a"`, "b"}},
+		{"comma inside nested call", `f(g(a, b), c)`, []string{"g(a, b)", "c"}},
+		{"comma inside string", `f("a,b")`, []string{`"a,b"`}},
+		{"no arg list", `plain_url`, nil},
+		{"unbalanced yields nothing", `f("a"`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rubyCallArgs(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("rubyCallArgs(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("arg %d = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
 	}
 }
 
