@@ -173,13 +173,63 @@ func Run(ctx context.Context, opts RunOptions) (*Report, error) {
 	return &report, nil
 }
 
+// pinCandidateByFile selects the declaration a node case meant, from the
+// ambiguous set ResolveTarget reports when a label is shared.
+//
+// Without it a case like `target: index` in the lobsters corpus resolved to
+// whichever of 20 same-named controller actions sorted first — measuring
+// CabinetController#index for a case written about SearchController#index, and
+// scoring recall 0.000 forever. Neither `service` nor `node_type` can separate
+// them: they are all `function` nodes in one service.
+//
+// An unmatched or ambiguous suffix is an error rather than a silent fallback to
+// root; a corpus case that no longer names a real declaration must fail loudly,
+// since its whole purpose is to be a fixed reference point.
+func pinCandidateByFile(ctx context.Context, store *graph.SQLiteStore, root *graph.Node, candidates []graph.TargetCandidate, wantFile string) (*graph.Node, error) {
+	// ResolveTarget leaves candidates empty when the label was unambiguous; the
+	// single match still has to satisfy the pin.
+	if len(candidates) == 0 {
+		if root != nil && strings.HasSuffix(filepath.ToSlash(root.File), wantFile) {
+			return root, nil
+		}
+		return nil, fmt.Errorf("sole match is %s", rootFile(root))
+	}
+	var matched []graph.TargetCandidate
+	for _, cand := range candidates {
+		if strings.HasSuffix(filepath.ToSlash(cand.File), wantFile) {
+			matched = append(matched, cand)
+		}
+	}
+	switch len(matched) {
+	case 1:
+		return store.GetNode(ctx, matched[0].ID)
+	case 0:
+		return nil, fmt.Errorf("no candidate declared there (%d candidates)", len(candidates))
+	default:
+		return nil, fmt.Errorf("%d candidates match that suffix — make it more specific", len(matched))
+	}
+}
+
+func rootFile(n *graph.Node) string {
+	if n == nil {
+		return "<none>"
+	}
+	return n.File
+}
+
 func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.AdjacencyIndex, unresolvedFiles map[string]bool, c Case, pc *pathCanon) (CaseResult, error) {
 	var returned []string
 	switch c.Kind {
 	case "node":
-		root, _, err := graph.ResolveTarget(ctx, store, c.Target, c.Service, c.NodeType)
+		root, candidates, err := graph.ResolveTarget(ctx, store, c.Target, c.Service, c.NodeType)
 		if err != nil {
 			return CaseResult{}, fmt.Errorf("node not found for target %q: %w", c.Target, err)
+		}
+		if c.TargetFile != "" {
+			root, err = pinCandidateByFile(ctx, store, root, candidates, c.TargetFile)
+			if err != nil {
+				return CaseResult{}, fmt.Errorf("target %q in %q: %w", c.Target, c.TargetFile, err)
+			}
 		}
 		out := impact.Build(idx, root, 10, "", false, 0)
 		returned = nodeImpactFiles(out)

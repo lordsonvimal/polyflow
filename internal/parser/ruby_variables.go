@@ -340,7 +340,10 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			}
 			if targetID != "" {
 				ex.addEdge(graph.EdgeTypeCalls, methodID, targetID, nil)
-			} else {
+			} else if !isRubyBuiltinCall(mname, ex.file) {
+				// A framework or language builtin is not a blind spot: no pass
+				// can ever resolve it, so ledgering it only inflates the
+				// "verify N manually" footer agents are told to act on.
 				ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
 					Service: ex.service, File: ex.file,
 					Line: rbLine(node), Name: mname, Kind: "call_ref",

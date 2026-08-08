@@ -162,16 +162,39 @@ func TestRubyVariables_BareCallForwardReferenceResolves(t *testing.T) {
 }
 
 func TestRubyVariables_UnresolvableBareCallGoesToLedger(t *testing.T) {
-	_, _, unresolved := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(rubyVarFixture))
+	// `audit_trail` is app-defined somewhere the extractor cannot see (a
+	// concern, say) — a real blind spot, and the ledger must keep it.
+	//
+	// `render` sits beside it as the control: it is an ActionController method
+	// that no repository defines, so no future pass can ever resolve it.
+	// Ledgering it only inflated the "verify N unresolved references manually"
+	// footer that agents act on by opening files (see ruby_builtins.go).
+	src := `class OrdersController
+  def show
+    render json: @order
+    audit_trail(@order)
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(src))
 
-	found := false
+	var gotAudit, gotRender bool
 	for _, u := range unresolved {
-		if u.Kind == "call_ref" && u.Name == "render" {
-			found = true
+		if u.Kind != "call_ref" {
+			continue
+		}
+		switch u.Name {
+		case "audit_trail":
+			gotAudit = true
+		case "render":
+			gotRender = true
 		}
 	}
-	if !found {
-		t.Errorf("expected unresolved call_ref for `render` (no matching method); unresolved: %+v", unresolved)
+	if !gotAudit {
+		t.Errorf("expected unresolved call_ref for app-defined `audit_trail`; unresolved: %+v", unresolved)
+	}
+	if gotRender {
+		t.Errorf("framework builtin `render` must not be ledgered; unresolved: %+v", unresolved)
 	}
 }
 

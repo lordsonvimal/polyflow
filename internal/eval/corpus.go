@@ -35,6 +35,12 @@ type Case struct {
 	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff|feature_add|test_impact)
 	Service          string   `yaml:"service,omitempty"` // pre-filter target resolution to this service (B.3)
 	NodeType         string   `yaml:"node_type,omitempty"` // pre-filter target resolution to this node type (B.3)
+	// TargetFile pins a node case to one declaration when the label is shared.
+	// `target: index` matches 20 Rails controllers, and neither Service nor
+	// NodeType separates them — they are all `function` in one service — so
+	// resolution silently picked whichever sorted first and the case measured a
+	// controller nobody wrote it for. Matched as a path suffix.
+	TargetFile string `yaml:"target_file,omitempty"`
 	DiffFile         string   `yaml:"diff_file,omitempty"`
 	ExpectedImpacted []string `yaml:"expected_impacted,omitempty"`
 	MustNotMiss      []string `yaml:"must_not_miss"`
