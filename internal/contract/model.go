@@ -119,6 +119,40 @@ type EndpointSpec struct {
 	// alone: services fronted by one reverse proxy share an origin, and
 	// polyflow prefers recall there (see TestHTTPRule_NavLink_CrossService).
 	SameOriginRelative bool `yaml:"same_origin_relative,omitempty"`
+	// BrowserSameOrigin makes a producer that is *executed by a browser* and
+	// whose URL is relative prefer consumers in its own service.
+	//
+	// This is the SameOriginRelative rule minus its "no path segment" caveat,
+	// applied only where that caveat is not needed. A relative URL in
+	// browser-executed code resolves against the origin that served the page,
+	// which is normally the producer's own service — `/api/v1/users` in a React
+	// bundle shipped by CAM reaches CAM. Server-side code is excluded because
+	// there a leading-slash string is a *fragment* joined to a configured base
+	// URL and carries no origin at all (dsw-manager's resty client posts
+	// "/api/v1/configs/remove" to dsw-agent).
+	//
+	// It is a preference, not a restriction, and the difference is load-bearing:
+	// a JS bundle that is its own service with no routes of its own is proxied
+	// to a backend, and forcing it to its origin would erase a real edge. The
+	// own service is therefore chosen only when it actually answers the key.
+	// That also pre-empts tier ordering — findMatches indexes the exact tier on
+	// the *raw* key and the first hitting tier wins, so an own-service route
+	// whose raw verb case differs would otherwise lose to a foreign route that
+	// happens to match exactly (the `POST /login` false positive: nextGen-CAM's
+	// own Rails route is keyed "post /login" and mysycamore's gin route
+	// "POST /login", so the SPA's own backend never even reached a tier).
+	//
+	// Measured on the nine-service fleet (2026-08-08): of 13 cross-service
+	// http_call edges from a relative URL, the 10 with a browser-executed
+	// producer (7 TypeScript, 3 datastar-in-templ) were ALL false — CAM's own
+	// SPA linked to mysycamore and nextGen, and mysycamore's launcher linked to
+	// dsw-manager for a route mysycamore itself serves — while the 3 with a Go
+	// producer were all true. The reverse-proxy shared-origin case that
+	// SameOriginRelative deliberately preserves recall for does not arise here:
+	// a proxy fronting several services still serves the bundle from one of
+	// them, and the same-service handler is the one the bundle was built
+	// against.
+	BrowserSameOrigin bool `yaml:"browser_same_origin,omitempty"`
 }
 
 // EdgeSpec describes the edge emitted on a successful match.

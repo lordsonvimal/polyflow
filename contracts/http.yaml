@@ -14,6 +14,19 @@ contracts:
                                      # try verbs in this order (candidateMethods parity)
       target_service_meta: target_service  # when set on the node (by ApplyHints),
                                      # only consumers of that service are candidates
+      browser_same_origin: true      # a relative URL in browser-executed code
+                                     # (JS/TS bundle, or a datastar action
+                                     # attribute) resolves against the origin
+                                     # that served the page — the producer's own
+                                     # service. Server-side clients are excluded:
+                                     # there "/api/v1/configs/remove" is a
+                                     # fragment joined to a configured base URL.
+                                     # Fleet 2026-08-08: 10 of 10 cross-service
+                                     # edges from a browser-executed relative URL
+                                     # were false (CAM's own SPA → mysycamore and
+                                     # nextGen; mysycamore's launcher →
+                                     # dsw-manager for a route mysycamore serves),
+                                     # while 3 of 3 from a Go producer were true.
     consumer:
       node: http_handler
       key: [method, path]
