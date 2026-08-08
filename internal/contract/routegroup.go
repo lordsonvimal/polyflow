@@ -111,7 +111,11 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 			}
 			continue
 		}
-		if n.Type != graph.NodeTypeHTTPHandler {
+		// HH.3: the group nodes harvested below are route_group, not
+		// http_handler. Both types are admitted because this loop is the single
+		// place gin/chi groups are collected and retyping them must not silently
+		// empty ginGroupsByFile — that would drop every nested route's prefix.
+		if n.Type != graph.NodeTypeHTTPHandler && n.Type != graph.NodeTypeRouteGroup {
 			continue
 		}
 		pat := n.Meta["pattern"]
@@ -247,8 +251,12 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 			continue
 		}
 		pat := n.Meta["pattern"]
+		// Group nodes are not stamped. Since HH.3 they are route_group and the
+		// type check above already excluded them; this stays as the belt for a
+		// group node that reaches here typed as a handler (a stored graph
+		// indexed before HH.3, which this pass also runs over).
 		if strings.HasPrefix(pat, "gin_route_group") || strings.HasPrefix(pat, "chi_route_group") {
-			continue // group nodes themselves are not stamped
+			continue
 		}
 
 		currentPath := n.Meta["path"]

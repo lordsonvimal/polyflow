@@ -78,6 +78,19 @@ const (
 	// NodeTypeGraphQLResolver is a server-side GraphQL resolver registration.
 	// Meta: operation (name matching the client's query/mutation field).
 	NodeTypeGraphQLResolver NodeType = "graphql_resolver"
+	// NodeTypeRouteGroup is route *scaffolding*: a group declaration that
+	// contributes a path prefix to the routes nested inside it, but is not
+	// itself an endpoint anyone can call — `resources :users do`,
+	// `namespace :api do`, `api := r.Group("/v1")`. Kept as a node because
+	// path composition reads it (composeRailsRoutePaths, EnrichRouteGroups),
+	// but typed apart from http_handler so that type keeps meaning "an
+	// endpoint you can call": it is what the contract engine matches clients
+	// against, what `entrypoints`/`flows` treat as a flow root, and what the
+	// file hierarchy lists as a symbol. A group carries no method and no
+	// composed path, so it could only ever have been noise in those three
+	// places. Meta: pattern, plus the group's own capture (resource, ns,
+	// prefix/var_name/receiver). Tier HH.3.
+	NodeTypeRouteGroup NodeType = "route_group"
 )
 
 // MetaIsTest marks a node whose call site sits inside a test-DSL harness

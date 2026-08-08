@@ -1797,6 +1797,18 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case lower == "solid_route":
 		return graph.NodeTypeRoute, graph.EdgeTypeCalls
 
+	// HH.3: route *scaffolding* — a group declaration that lends its prefix to
+	// the routes nested inside it (`resources :users do`, `namespace :api do`,
+	// `api := r.Group("/v1")`). It is not an endpoint, so it must not be an
+	// http_handler; it stays a node because path composition reads it.
+	// Explicit case, and it must precede both the chi_* case below (which
+	// `chi_route_group` matches on the "chi_route" prefix) and the generic
+	// `contains "route"` heuristic (which every name here matches).
+	case lower == "resources_route" || lower == "resource_route" ||
+		lower == "namespace_route" ||
+		strings.HasPrefix(lower, "gin_route_group") || strings.HasPrefix(lower, "chi_route_group"):
+		return graph.NodeTypeRouteGroup, graph.EdgeTypeHTTPCall
+
 	// ── HTTP routes / handlers ────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "chi_get") || strings.HasPrefix(lower, "chi_post") ||
 		strings.HasPrefix(lower, "chi_put") || strings.HasPrefix(lower, "chi_patch") ||

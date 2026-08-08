@@ -101,8 +101,27 @@ var receiverlessRoutePatterns = map[string]bool{
 	"collection_verb_route_inline": true,
 }
 
+// routeScaffoldingPatterns are the Rails route-*group* patterns: they declare a
+// path prefix for the routes nested inside them rather than an endpoint. Unlike
+// receiverlessRoutePatterns their queries match a call regardless of receiver,
+// so HH.1's gate never covered them and they need their own entry here.
+//
+// They are gated for a different reason than the receiverless family. `namespace
+// :db do` in a .rake file is Rake's *task* namespace — a different DSL that
+// happens to share a method name, and 85 of the fleet's 100 namespace_route
+// nodes were exactly that. More generally, composeRailsRoutePaths is itself
+// gated on isRailsRoutesFile, so a scaffolding match outside a routes file can
+// never contribute a prefix to anything; gating on the same predicate keeps the
+// node set aligned with the pass that consumes it.
+var routeScaffoldingPatterns = map[string]bool{
+	"resources_route": true,
+	"resource_route":  true,
+	"namespace_route": true,
+}
+
 // dropNonRoutesFileRouteMatches discards receiverless Rails route matches in
-// files that are not routes files (Tier HH.1).
+// files that are not routes files (Tier HH.1), and route-group scaffolding
+// matches in the same files (Tier HH.3).
 //
 // The canonical offender is orion/app/services/atlas/user_category_rules_client.rb,
 // where `get("#{base_url}/client_api/v1/user_category_rules/#{id}")` calls a
@@ -124,7 +143,7 @@ func dropNonRoutesFileRouteMatches(file string, results []patterns.MatchResult) 
 	}
 	out := results[:0]
 	for _, r := range results {
-		if receiverlessRoutePatterns[r.PatternName] {
+		if receiverlessRoutePatterns[r.PatternName] || routeScaffoldingPatterns[r.PatternName] {
 			continue
 		}
 		out = append(out, r)

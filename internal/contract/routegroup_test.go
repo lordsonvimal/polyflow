@@ -519,3 +519,41 @@ func TestEnrichRouteGroups_UngroupedRouteHasNoFullPath(t *testing.T) {
 	assert.Empty(t, byID["h1"].Meta["full_path"], "an uncomposed route has no distinct full path")
 	assert.Equal(t, "GET /health", byID["h1"].Label)
 }
+
+// ── HH.3: groups arrive typed route_group ────────────────────────────────────
+
+// retype returns n with its Type replaced — HH.3 mints gin/chi group nodes as
+// route_group rather than http_handler.
+func retype(n graph.Node, typ graph.NodeType) graph.Node {
+	n.Type = typ
+	return n
+}
+
+// TestEnrichRouteGroups_AcceptsRouteGroupType is the HH.3 regression guard for
+// this pass. Every other fixture in this file hand-builds its group nodes as
+// http_handler, so all of them would keep passing even if the harvest loop
+// rejected the new type — and the symptom would not be a failing test but a
+// fleet-wide silent loss of every gin route's prefix. This asserts the same
+// enrichment against groups typed the way the parser now emits them.
+func TestEnrichRouteGroups_AcceptsRouteGroupType(t *testing.T) {
+	nodes := []graph.Node{
+		retype(ginGroupNode("g1", "routes.go", "v1", "/v1", "r", 3), graph.NodeTypeRouteGroup),
+		retype(ginGroupNode("g2", "routes.go", "v2", "/v2", "v1", 4), graph.NodeTypeRouteGroup),
+		ginRouteNode("h1", "routes.go", "v2", "GET", "/users", 5),
+		retype(chiGroupNode("c1", "chi.go", "/admin", 1, 20), graph.NodeTypeRouteGroup),
+		chiRouteNode("h2", "chi.go", "r", "GET", "/stats", 5),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/v1/v2/users", byID["h1"].Meta["path"],
+		"a route_group-typed gin group must still contribute its prefix")
+	assert.Equal(t, "/admin/stats", byID["h2"].Meta["path"],
+		"a route_group-typed chi group must still contribute its prefix")
+
+	// The groups themselves stay unstamped: no path is invented for them.
+	assert.Empty(t, byID["g1"].Meta["path"])
+	assert.Empty(t, byID["c1"].Meta["path"])
+}

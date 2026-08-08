@@ -37,6 +37,13 @@ export const NODE_TYPE_STYLES: NodeTypeStyle[] = [
   { type: "http_handler", shape: "round-rectangle", glyph: "◼", desc: "HTTP handler / route" },
   { type: "http_client", shape: "round-tag", glyph: "◗", desc: "HTTP/SSE/WS client call" },
   { type: "route", shape: "round-rectangle", glyph: "◼", desc: "declared route" },
+  {
+    type: "route_group",
+    shape: "round-rectangle",
+    color: "#64748b",
+    glyph: "▭",
+    desc: "route group / namespace (path prefix, not an endpoint)",
+  },
   { type: "channel", shape: "diamond", color: "#f59e0b", glyph: "◆", desc: "broker channel / exchange" },
   { type: "publisher", shape: "vee", glyph: "▼", desc: "message publisher / job enqueue" },
   { type: "subscriber", shape: "rhomboid", glyph: "▱", desc: "message subscriber / handler" },
