@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -508,6 +509,79 @@ func TestFTSSearch_ReturnsResults(t *testing.T) {
 	}
 	if hits[0].Label != "loginUser" {
 		t.Errorf("expected label loginUser, got %q", hits[0].Label)
+	}
+}
+
+// The corpus shape that broke node retrieval on fleet-juniper: a central
+// handler sits on hundreds of flow chains but has only a handful of
+// definitions, so a pooled `ORDER BY rank LIMIT n` spends the window on flows.
+// Each type must get its own quota.
+func TestFTSSearchPerType_FlowsDoNotStarveNodes(t *testing.T) {
+	db := openTestDB(t)
+	sem := NewStore(db)
+	ctx := context.Background()
+
+	for i := 0; i < 300; i++ {
+		seedEntity(t, db, Entity{
+			ID:   fmt.Sprintf("chain:route:%d", i),
+			Type: "flow",
+			Text: fmt.Sprintf("POST /save SaveConfig step%d", i),
+		}, nil)
+	}
+	for _, f := range []string{"app_config_handler.go", "base_image_handler.go", "exec_config_handler.go"} {
+		seedNode(t, db, &graph.Node{
+			ID: "maple:" + f + ":method:SaveConfig", Type: graph.NodeTypeMethod,
+			Label: "SaveConfig", Service: "maple", File: f, Line: 1,
+		}, nil)
+	}
+
+	hits, err := sem.FTSSearchPerType(ctx, buildFTS5Query("SaveConfig"), 50)
+	if err != nil {
+		t.Fatalf("fts search per type: %v", err)
+	}
+	nodes := map[string]bool{}
+	for _, h := range hits {
+		if h.EntityType == "node" {
+			nodes[h.EntityID] = true
+		}
+	}
+	if len(nodes) != 3 {
+		t.Errorf("all 3 SaveConfig methods must survive 300 competing flows, got %d", len(nodes))
+	}
+}
+
+// Ranks restart at 1 for each type so RRF compares like with like; a pooled
+// rank would score the first flow above every node.
+func TestFTSSearchPerType_RanksAreScopedToType(t *testing.T) {
+	db := openTestDB(t)
+	sem := NewStore(db)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		seedEntity(t, db, Entity{
+			ID: fmt.Sprintf("chain:%d", i), Type: "flow",
+			Text: fmt.Sprintf("checkout flow %d", i),
+		}, nil)
+	}
+	seedNode(t, db, &graph.Node{
+		ID: "svc:checkout.go:function:checkout", Type: graph.NodeTypeFunction,
+		Label: "checkout", Service: "svc", File: "checkout.go", Line: 1,
+	}, nil)
+
+	hits, err := sem.FTSSearchPerType(ctx, buildFTS5Query("checkout"), 50)
+	if err != nil {
+		t.Fatalf("fts search per type: %v", err)
+	}
+	best := map[string]int{}
+	for _, h := range hits {
+		if r, seen := best[h.EntityType]; !seen || h.Rank < r {
+			best[h.EntityType] = h.Rank
+		}
+	}
+	for et, r := range best {
+		if r != 1 {
+			t.Errorf("type %q best rank = %d, want 1", et, r)
+		}
 	}
 }
 

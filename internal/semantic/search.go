@@ -101,6 +101,16 @@ func (sr *Searcher) Invalidate() {
 
 const rrfK = 60
 
+// retrievalQuota is how many candidates each arm pulls per entity type. It sits
+// above the section cap so fusion ranks from a wider pool than it emits, while
+// still guaranteeing every section can fill from either arm alone.
+func retrievalQuota(limit int) int {
+	if q := limit * 2; q > 50 {
+		return q
+	}
+	return 50
+}
+
 // Search performs hybrid FTS+vector retrieval and returns typed result sections.
 // limit is applied per section (nodes, flows, docs).
 func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, error) {
@@ -108,9 +118,13 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 		limit = 20
 	}
 	expanded := sr.expandQuery(q)
+	// Each arm retrieves a quota per entity type, never a pooled window: the
+	// sections are capped independently below, so a pooled window just lets the
+	// most numerous type (flows) decide what the others get to show.
+	perType := retrievalQuota(limit)
 
 	// ── Lexical arm ──────────────────────────────────────────────────────────
-	ftsHits, ftsErr := sr.Store.FTSSearch(ctx, buildFTS5Query(expanded), 50)
+	ftsHits, ftsErr := sr.Store.FTSSearchPerType(ctx, buildFTS5Query(expanded), perType)
 	if ftsErr != nil {
 		return Response{}, fmt.Errorf("fts search: %w", ftsErr)
 	}
@@ -138,7 +152,7 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 			if embErr != nil {
 				semanticNote = "unavailable: " + embErr.Error()
 			} else {
-				vHits = cosineTopK(qVecs[0], mat, 50)
+				vHits = cosineTopKPerType(qVecs[0], mat, perType)
 			}
 		}
 	}
@@ -259,6 +273,27 @@ func cosineTopK(qvec []float32, m matrixState, k int) []rawVecHit {
 	out := make([]rawVecHit, k)
 	for i := range out {
 		out[i] = rawVecHit{scores[i].id, scores[i].etype, i + 1}
+	}
+	return out
+}
+
+// cosineTopKPerType takes the best perType entities of each type rather than
+// the best perType overall, so the vector arm cannot starve a section the way a
+// pooled top-k does (see Store.FTSSearchPerType). Ranks are 1-based per type,
+// matching the lexical arm so RRF weighs the two symmetrically.
+func cosineTopKPerType(qvec []float32, m matrixState, perType int) []rawVecHit {
+	if perType <= 0 {
+		return nil
+	}
+	all := cosineTopK(qvec, m, m.n)
+	counts := make(map[string]int, len(EntityTypes))
+	out := make([]rawVecHit, 0, perType*len(EntityTypes))
+	for _, h := range all {
+		if counts[h.entityType] >= perType {
+			continue
+		}
+		counts[h.entityType]++
+		out = append(out, rawVecHit{h.entityID, h.entityType, counts[h.entityType]})
 	}
 	return out
 }
