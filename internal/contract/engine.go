@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -42,6 +43,7 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 		norms := resolveNormalizers(rule.Normalizers)
 
 		producers, consumers := partitionNodes(nodes, rule)
+		producers = dedupeProducers(producers, rule.Producer)
 
 		for _, prod := range producers {
 			// G.6: dynamic key → surface to ledger, never silently drop
@@ -68,6 +70,25 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 			cands := filterByService(consumers, targetSvc)
 			cands = filterBySameServicePolicy(cands, rule.Edge.SameService, prod.Service)
 			idx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
+
+			// A relative URL in browser-executed code resolves against the
+			// origin that served the page. Prefer — rather than force — the
+			// producer's own service: a JS bundle that is its own service with
+			// no routes of its own is proxied to a backend, and pinning it to
+			// its origin would erase a real edge. So restrict the candidate set
+			// only when the own service actually answers this key, which also
+			// pre-empts the tier ordering: an own-service route that would have
+			// matched at the normalized tier must not lose to a foreign one
+			// that happens to match at the exact tier.
+			if rule.Producer.BrowserSameOrigin && targetSvc == "" && prod.Service != "" &&
+				isBrowserExecuted(prod) && producerKeyIsRelativeURL(prod, rule.Producer) {
+				ownIdx := buildConsumerIndexes(
+					filterByService(cands, prod.Service), rule.Consumer, norms, env)
+				var probe Result
+				if matchProducer(prod, rule, norms, env, ownIdx, &probe) {
+					idx = ownIdx
+				}
+			}
 
 			// G.6: key_candidates fan-out — try each candidate independently
 			keyCands := ParseKeyCandidates(prod.Meta["key_candidates"])
@@ -628,6 +649,123 @@ func producerKeyIsRootRelative(prod *graph.Node, spec EndpointSpec) bool {
 		}
 	}
 	return true
+}
+
+// browserLanguages are the languages whose http_client nodes describe code the
+// browser executes, so a relative URL in them resolves same-origin. `templ`,
+// `erb` and `html` are absent deliberately: those files are server-rendered and
+// mostly contain server-side calls. The browser-executed subset of them is
+// reached through the datastar meta gate in isBrowserExecuted instead.
+var browserLanguages = map[string]bool{
+	"javascript": true,
+	"typescript": true,
+	"jsx":        true,
+	"tsx":        true,
+	"vue":        true,
+	"svelte":     true,
+}
+
+// isBrowserExecuted reports whether a producer node describes a request issued
+// by a browser. Two signals: the node's language is a browser bundle language,
+// or the call is a datastar action attribute — `data-on:input="@get('/x')"` in
+// a templ/ERB template is rendered into HTML and fired by datastar in the page,
+// however server-side the file around it looks.
+func isBrowserExecuted(prod *graph.Node) bool {
+	if browserLanguages[strings.ToLower(prod.Language)] {
+		return true
+	}
+	return prod.Meta["datastar"] != ""
+}
+
+// producerKeyIsRelativeURL reports whether every key field that carries a URL
+// is relative — no "scheme://" and no protocol-relative "//host". Unlike
+// producerKeyIsRootRelative it does NOT require the path to be segment-less: a
+// browser-executed "/api/v1/users" is exactly the case this must catch. A field
+// that names no path at all (a bare method) is ignored rather than treated as
+// relative, so a producer with no URL evidence never gets pinned to its own
+// service on the strength of its verb.
+func producerKeyIsRelativeURL(prod *graph.Node, spec EndpointSpec) bool {
+	sawPath := false
+	for _, v := range buildRawFields(prod, spec, nil) {
+		v = normQuoteStrip(v, NormalizeEnv{})
+		if v == "" {
+			continue
+		}
+		if strings.Contains(v, "://") || strings.HasPrefix(v, "//") {
+			return false
+		}
+		if strings.HasPrefix(v, "/") {
+			sawPath = true
+		}
+	}
+	return sawPath
+}
+
+// dedupeProducers collapses producer nodes that describe the *same call site*.
+//
+// The Go SSA wrapper pass (go_wrapper_urls.go) adds a resolved node without
+// superseding the raw tree-sitter node it was derived from, so one call site
+// yields two producers at the same file:line with the same key — e.g.
+// build_api_client.go:120 emits both `http_new_request:120` (url "*/health",
+// ungraded) and `HealthCheck:120` (path "*/health", path_evidence "weak",
+// confidence_ceiling "partial").
+//
+// That is not merely redundant, it is a *bypass*: matchProducer suppresses a
+// weak-path producer that fans out across services, but the ungraded twin
+// carries no path_evidence and sails straight through the guard. On the
+// nine-service fleet three `/health` call sites each produced three
+// cross-service edges — one right, two wrong — entirely through the twin.
+//
+// Keeping the richer node preserves every grading the resolvers computed; the
+// dropped twin adds no information by construction, since the pair share a key.
+// Only contract link formation is affected — both nodes stay in the graph and
+// stay searchable, the same line partitionNodes already draws for test files.
+func dedupeProducers(producers []*graph.Node, spec EndpointSpec) []*graph.Node {
+	if len(producers) < 2 {
+		return producers
+	}
+	bestAt := make(map[string]int, len(producers))
+	keep := make([]bool, len(producers))
+	for i, p := range producers {
+		k := p.Service + "\x00" + p.File + "\x00" + strconv.Itoa(p.Line) + "\x00" +
+			strings.Join(buildRawFields(p, spec, nil), " ")
+		prev, seen := bestAt[k]
+		if !seen {
+			bestAt[k] = i
+			keep[i] = true
+			continue
+		}
+		if producerEvidenceScore(p) > producerEvidenceScore(producers[prev]) {
+			keep[prev] = false
+			keep[i] = true
+			bestAt[k] = i
+		}
+	}
+	out := make([]*graph.Node, 0, len(producers))
+	for i, p := range producers {
+		if keep[i] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// producerEvidenceScore ranks two nodes describing one call site by how much
+// resolver evidence they carry. Graded path evidence outranks everything: it is
+// the signal matchProducer's fan-out suppression reads, and losing it is what
+// made the duplicate a bypass rather than a duplicate.
+func producerEvidenceScore(n *graph.Node) int {
+	score := 0
+	if n.Meta["path_evidence"] != "" {
+		score += 4
+	}
+	if n.Meta["confidence_ceiling"] != "" {
+		score += 2
+	}
+	if n.Meta["via_wrapper"] != "" || n.Meta["synthesized"] != "" {
+		score++
+	}
+	return score
 }
 
 // keyVoided reports whether a guard normalizer (empty_path_guard,
