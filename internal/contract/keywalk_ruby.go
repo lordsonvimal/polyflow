@@ -65,6 +65,21 @@ func walkRubyExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int
 		}
 		return combined, false
 
+	case "simple_symbol":
+		// `method: :get`, `queue_name: :builds` — a Ruby symbol is a literal,
+		// not an unresolvable name, so ledgering it as dynamic discards
+		// evidence that is right there in the source. Applied to any key
+		// field rather than just `method`: every key field declared by
+		// contracts/*.yaml (method, path, exchange, routing_key, queue_name)
+		// takes a plain scalar, and a symbol in any of them is the literal
+		// value. The `case_fold` normalizer aligns `get` with `GET` on the
+		// handler side, so this deliberately does not upper-case.
+		text := string(src[node.StartByte():node.EndByte()])
+		if v := strings.TrimPrefix(text, ":"); v != "" {
+			return []string{v}, false
+		}
+		return nil, true
+
 	case "constant":
 		// Shape (b): Ruby constant (ALL_CAPS by convention)
 		name := string(src[node.StartByte():node.EndByte()])

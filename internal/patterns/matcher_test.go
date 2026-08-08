@@ -182,6 +182,57 @@ func TestMatchToGraph_GoroutineCallIsEdge(t *testing.T) {
 	assert.Equal(t, graph.EdgeTypeSpawns, edges[0].Type)
 }
 
+func TestMatchToGraph_ConstantHTTPVerbResolves(t *testing.T) {
+	// PR.1: `http.NewRequest(http.MethodGet, ...)` captures the verb as raw
+	// source. Stored verbatim it case_folds to `http.methodget`, which equals
+	// no handler's method — and is not *empty*, so http.yaml's
+	// method_fallback never retries it, and the producer emits a junk edge to
+	// the synthetic `unresolved` node instead of matching a real route.
+	results := []patterns.MatchResult{{
+		PatternName: "http_new_request",
+		File:        "client.go",
+		Line:        42,
+		Captures:    map[string]string{"method": "http.MethodGet", "url": `"/api/v1/health"`},
+	}}
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "GET", nodes[0].Meta["method"])
+	// The label is minted from the raw captures, so the verb token must be
+	// rewritten there too or search shows agents a method that no longer
+	// matches the node's own meta.
+	assert.Equal(t, "GET /api/v1/health", nodes[0].Label)
+}
+
+func TestMatchToGraph_RubySymbolHTTPVerbResolves(t *testing.T) {
+	// The Ruby half of the same defect: `RestClient::Request.execute(method:
+	// :get, ...)` captures `:get`.
+	results := []patterns.MatchResult{{
+		PatternName: "rest_client_request",
+		File:        "app/decorators/file.rb",
+		Line:        39,
+		Captures:    map[string]string{"method": ":get", "url": `"/api/v1/files"`},
+	}}
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "GET", nodes[0].Meta["method"])
+}
+
+func TestMatchToGraph_UnrecognizedVerbExpressionIsLeftVerbatim(t *testing.T) {
+	// Declining must be lossless. A verb this pass cannot resolve keeps its
+	// captured text so the existing dynamic-ledger path still sees it —
+	// guessing here would match a real handler under the wrong method, which
+	// is worse than not matching at all.
+	results := []patterns.MatchResult{{
+		PatternName: "http_new_request",
+		File:        "client.go",
+		Line:        7,
+		Captures:    map[string]string{"method": "req.method", "url": `"/api/v1/health"`},
+	}}
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "req.method", nodes[0].Meta["method"])
+}
+
 func TestMatchToGraph_CobraRunIsEdge(t *testing.T) {
 	// cobra_run must be a call-ref: no new node, edge from enclosing func to RunE target.
 	results := []patterns.MatchResult{
