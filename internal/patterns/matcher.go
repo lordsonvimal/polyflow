@@ -258,18 +258,26 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				continue
 			}
 
+			// A comment between two arguments is a named sibling, so it can bind
+			// to an anchored `(_)` capture and shift every later capture by one.
+			// Re-align before any capture text is read.
+			matchCaps, ok2 := repairCommentCaptures(m2.Captures, cq.query.CaptureNameForId)
+			if !ok2 {
+				continue
+			}
+
 			// Build capture map: capture name -> text.
 			// Captures whose name starts with "_" are positional only: they
 			// contribute line-range information (e.g. @_def spanning a whole
 			// function body) but their text is not stored, so declaration
 			// bodies never leak into node meta.
-			captures := make(map[string]string, len(m2.Captures))
+			captures := make(map[string]string, len(matchCaps))
 			var keyNodes map[string]*sitter.Node
 			var minLine int = -1
 			var minLineNamed int = -1
 			var defEndLine int
 			var anchor *sitter.Node
-			for _, cap := range m2.Captures {
+			for _, cap := range matchCaps {
 				if anchor == nil {
 					anchor = cap.Node
 				}
@@ -835,7 +843,14 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 				consts := constResolverFor(constants[r.File])
 				dynamicHit := false
 				candidateHit := false
-				for field, node := range r.KeyNodes {
+				// Sorted, not map order: a node with two dynamic key fields
+				// (an amqp_publish whose exchange *and* routing key are both
+				// expressions) records only the first one in key_dynamic_raw,
+				// so ranging the map made that meta value differ between
+				// otherwise-identical indexes. Same for key_candidates, which
+				// the last multi-candidate field wins.
+				for _, field := range slices.Sorted(maps.Keys(r.KeyNodes)) {
+					node := r.KeyNodes[field]
 					cands, dynamic := walker.WalkKey(node, r.Src, consts)
 					switch {
 					case dynamic:
