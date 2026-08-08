@@ -622,8 +622,30 @@ func (s *SQLiteStore) ListFileHashes(ctx context.Context) (map[string]*FileHash,
 	return out, rows.Err()
 }
 
+// ReplaceUnresolvedRefs makes the ledger equal the given set, deleting rows
+// no longer present.
+//
+// UpsertUnresolvedRefs alone is insert-only, so the table accumulated across
+// runs: a reference that a code change or a new linker pass had since resolved
+// stayed in the ledger until the DB was deleted (15436 rows grew to 15633 over
+// four re-indexes of an unchanged fleet). That makes retraction invisible and
+// the "verify N manually" footer permanently wrong in one direction.
+//
+// Replacing is correct because the caller's slice is the complete state for the
+// run, not a delta — the indexer re-appends cached refs for files it did not
+// reparse, so unchanged files are represented too.
+func (s *SQLiteStore) ReplaceUnresolvedRefs(ctx context.Context, refs []UnresolvedRef) error {
+	if err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM unresolved_refs`)
+		return err
+	}); err != nil {
+		return fmt.Errorf("clear unresolved refs: %w", err)
+	}
+	return s.UpsertUnresolvedRefs(ctx, refs)
+}
+
 // UpsertUnresolvedRefs records references that could not be resolved to
-// nodes. The primary key dedupes re-submissions across index runs.
+// nodes. The primary key dedupes re-submissions within one call.
 func (s *SQLiteStore) UpsertUnresolvedRefs(ctx context.Context, refs []UnresolvedRef) error {
 	if len(refs) == 0 {
 		return nil

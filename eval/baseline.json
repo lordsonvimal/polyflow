@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-08T19:50:09.2768Z",
+  "generated_at": "2026-08-08T20:13:55.390692Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -553,33 +553,33 @@
       "results": [
         {
           "case_id": "stories-create-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
         {
           "case_id": "stories-show-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
         {
           "case_id": "stories-upvote-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
         {
           "case_id": "stories-new-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
@@ -593,9 +593,9 @@
         },
         {
           "case_id": "comments-create-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
@@ -633,9 +633,9 @@
         },
         {
           "case_id": "home-index-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
@@ -657,9 +657,9 @@
         },
         {
           "case_id": "search-index-action",
-          "recall": 0,
-          "precision": 0,
-          "honest_misses": 1,
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
@@ -672,8 +672,8 @@
           "hard_fail": false
         }
       ],
-      "recall": 0.5333333333333333,
-      "precision": 0.4
+      "recall": 1,
+      "precision": 0.7222222222222221
     },
     {
       "repo": "polyflow",

@@ -27,6 +27,7 @@ cases:
   - id: stories-create-action
     kind: node
     target: create
+    target_file: app/controllers/stories_controller.rb  # same-named action in many controllers
     # StoriesController#create (app/controllers/stories_controller.rb): the POST
     # action for submitting new stories. Defined as `def create` inside the class.
     # Must be reachable from the controller class node.
@@ -41,6 +42,7 @@ cases:
   - id: stories-show-action
     kind: node
     target: show
+    target_file: app/controllers/stories_controller.rb  # same-named action in many controllers
     # StoriesController#show (app/controllers/stories_controller.rb): renders
     # a story's page. Defined as `def show` in the controller.
     # Verified: read stories_controller.rb — def show found.
@@ -52,6 +54,7 @@ cases:
   - id: stories-upvote-action
     kind: node
     target: upvote
+    target_file: app/controllers/stories_controller.rb  # same-named action in many controllers
     # StoriesController#upvote (app/controllers/stories_controller.rb): handles
     # story upvoting via AJAX. Defined as `def upvote`.
     # Verified: method list grep — `upvote` found in stories_controller.rb.
@@ -63,6 +66,7 @@ cases:
   - id: stories-new-action
     kind: node
     target: new
+    target_file: app/controllers/stories_controller.rb  # same-named action in many controllers
     # StoriesController#new (app/controllers/stories_controller.rb): renders
     # the submission form.
     # Verified: method list grep — `new` found in stories_controller.rb.
@@ -87,6 +91,7 @@ cases:
   - id: comments-create-action
     kind: node
     target: create
+    target_file: app/controllers/comments_controller.rb  # same-named action in many controllers
     # CommentsController#create (app/controllers/comments_controller.rb): POST
     # action for posting a new comment.
     # Verified: read comments_controller.rb — def create found.
@@ -148,6 +153,7 @@ cases:
   - id: home-index-action
     kind: node
     target: index
+    target_file: app/controllers/home_controller.rb  # same-named action in many controllers
     # HomeController#index (app/controllers/home_controller.rb): main page.
     # routes.rb: `root to: "home#index"`. Verified: read home_controller.rb.
     expected_impacted:
@@ -181,6 +187,13 @@ cases:
   - id: search-index-action
     kind: node
     target: index
+    # `index` is declared by 20 Rails controllers and they are all `function`
+    # nodes in one service, so neither service nor node_type separates them.
+    # Without target_file this case resolved to CabinetController#index and
+    # scored recall 0.000 from the day it was written — masked as an "honest"
+    # miss only because an unrelated false alarm sat in the ledger for
+    # search_controller.rb (retracted 2026-08-09, phase B).
+    target_file: app/controllers/search_controller.rb
     # SearchController#index: handles search queries.
     # Verified: read app/controllers/search_controller.rb — def index found.
     expected_impacted:
