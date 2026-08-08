@@ -297,12 +297,36 @@
     "confidence": "unknown"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/billing/payment/razorpay.go:http_client:CreateLink:70-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/billing/payment/razorpay.go:http_client:CreateLink:70",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "POST */payment_links",
+    "confidence": "unknown"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:199",
     "from": "chessleap:/Users/lordson/projects/chessleap/classroom/views/session_detail.templ:http_client:GET:/activity/sessions/*/progress:44",
     "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:199",
     "type": "http_call",
     "label": "get /activity/sessions/*/progress",
     "confidence": "inferred"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/notifications/channel/email_resend.go:http_client:Send:45-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/notifications/channel/email_resend.go:http_client:Send:45",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "POST */emails",
+    "confidence": "unknown"
+  },
+  {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/notifications/channel/whatsapp_meta.go:http_client:Send:76-\u003eunresolved",
+    "from": "chessleap:/Users/lordson/projects/chessleap/notifications/channel/whatsapp_meta.go:http_client:Send:76",
+    "to": "unresolved",
+    "type": "http_call",
+    "label": "POST */*/*/messages",
+    "confidence": "unknown"
   },
   {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/practice/llm/ollama.go:http_client:Stream:104-\u003eunresolved",

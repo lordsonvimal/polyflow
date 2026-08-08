@@ -129,7 +129,11 @@ func extractWrapperURLs(
 					pos = fset.Position(caller.Pos())
 				}
 				file := relPath(pos.Filename)
-				node, edge, ok := emitResolvedClient(service, file, pos, callerID, callee.Name(), path, method, "wrapper_url", seen)
+				// Graded the same way as the sprintf/concat path: a wrapper
+				// called with "/health" onto an opaque base is the same
+				// convention-not-a-route problem, and grading it here is what
+				// keeps the two synthesis paths from disagreeing.
+				node, edge, ok := emitResolvedClient(service, file, pos, callerID, callee.Name(), path, method, "wrapper_url", pathEvidence(path), seen)
 				if !ok {
 					continue
 				}
@@ -155,7 +159,7 @@ func extractWrapperURLs(
 // is false when either causes the call site to be skipped.
 func emitResolvedClient(
 	service, file string, pos token.Position,
-	callerID, name, path, method, tag string,
+	callerID, name, path, method, tag, evidence string,
 	seen map[string]bool,
 ) (graph.Node, graph.Edge, bool) {
 	// X.9: a resolved call site inside a _test.go file is test scaffolding
@@ -183,6 +187,19 @@ func emitResolvedClient(
 	}
 	if method != "" {
 		meta["method"] = method
+	}
+	if evidence == pathEvidenceWeak {
+		// One literal segment behind an opaque host. Whether that names a route
+		// or a convention is not decidable here — the contract engine settles it
+		// by counting the services that answer to the path.
+		meta["path_evidence"] = pathEvidenceWeak
+		// Even when it resolves in exactly one service, one segment behind an
+		// opaque host is thin: an outbound call to a third-party API
+		// (`*/emails` → Resend, `*/payment_links`) collides with a workspace
+		// route on the segment alone. Capping at `partial` keeps such an edge
+		// visible without letting a spec-only match promote it to `verified`;
+		// runtime or config evidence, which pins the real host, still can.
+		meta["confidence_ceiling"] = graph.ConfidencePartial
 	}
 	node := graph.Node{
 		ID:       id,
@@ -292,7 +309,7 @@ func extractComposedURLs(
 					// this pass cannot compose — nothing to add.
 					continue
 				}
-				composed, ok := composedRequestPath(urlArg)
+				composed, evidence, ok := composedRequestPath(urlArg)
 				if !ok {
 					// No literal path segment survived: zero evidence, so the call
 					// stays on the dynamic ledger rather than fanning out (#12).
@@ -308,7 +325,7 @@ func extractComposedURLs(
 					pos = fset.Position(fn.Pos())
 				}
 				file := relPath(pos.Filename)
-				node, edge, ok := emitResolvedClient(service, file, pos, callerID, fn.Name(), composed, method, tag, seen)
+				node, edge, ok := emitResolvedClient(service, file, pos, callerID, fn.Name(), composed, method, tag, evidence, seen)
 				if !ok {
 					continue
 				}
@@ -374,7 +391,7 @@ func composedURLTag(v ssa.Value) (string, bool) {
 // The query string is dropped here rather than left to the contract engine's
 // `query_strip` normalizer so that the node's own label and Meta["path"] read as
 // the endpoint a human would recognize.
-func composedRequestPath(v ssa.Value) (string, bool) {
+func composedRequestPath(v ssa.Value) (string, string, bool) {
 	pattern := collapseWildcards(resolveComposedURL(v, 0))
 	if i := strings.IndexByte(pattern, '?'); i >= 0 {
 		pattern = pattern[:i]
@@ -386,12 +403,13 @@ func composedRequestPath(v ssa.Value) (string, bool) {
 		// actively harmful: `fmt.Sprintf("https://api.github.com/users/%s", u)`
 		// reduces to `/users/*` once url_to_path drops the authority, which then
 		// matches unrelated `users` member routes in workspace services.
-		return "", false
+		return "", "", false
 	}
-	if !hasDiscriminatingPath(pattern) {
-		return "", false
+	evidence := pathEvidence(pattern)
+	if evidence == pathEvidenceNone {
+		return "", "", false
 	}
-	return pattern, true
+	return pattern, evidence, true
 }
 
 // hasLiteralAuthority reports whether the pattern names a concrete host, as
@@ -492,22 +510,38 @@ func collapseWildcards(s string) string {
 	return b.String()
 }
 
-// hasDiscriminatingPath is the evidence gate for emitting a producer at all: the
-// pattern must pin enough path to identify *which* service is being called.
+// Path-evidence strengths reported by pathEvidence and carried to the contract
+// engine in Meta["path_evidence"]. Only "weak" is stamped; "strong" is the
+// default and needs no marker.
+const (
+	pathEvidenceNone   = ""
+	pathEvidenceWeak   = "weak"
+	pathEvidenceStrong = "strong"
+)
+
+// pathEvidence grades how well a composed pattern pins *which* service is being
+// called. It is the gate for emitting a producer at all.
 //
 // When the host is opaque — a struct field, a parameter, anything rendered `*` —
-// the path is the only evidence there is, and one generic segment is not enough of
-// it. Measured on the datascience fleet: `c.baseURL+"/health"` appears at four
-// call sites across the migration tool, and `*/health` matches a health handler in
-// dsw-agent, dsw-manager and mysycamore alike — ten edges out of one call, none of
-// which say anything true about the topology. Requiring two literal segments
-// leaves `*/client_api/v1/users` and `*/api/v1/pdv/reindex` (which name a real
-// API surface) while dropping `*/health` and `*/*/*/messages` (which name a
-// convention). Those call sites keep their tree-sitter node as the honest ledger;
-// they simply stop fanning out (bug-class #1, #12).
+// the path is the only evidence there is. Two or more literal segments name an
+// API surface (`*/client_api/v1/users`, `*/api/v1/pdv/reindex`) and are strong
+// evidence. A single literal segment is the interesting case: `*/user-apps`
+// names a real endpoint that exists in exactly one service, while `*/health`
+// and `*/login` name conventions that every service implements.
 //
-// A known host is self-discriminating, so one literal segment suffices there.
-func hasDiscriminatingPath(pattern string) bool {
+// This used to be decided here by requiring two literal segments, which is a
+// proxy for the real question and got `*/user-apps` wrong — a silent false
+// negative for every single-segment path behind an opaque host. The count
+// cannot tell the two apart because the difference is not in the pattern: it is
+// in how many services answer to it. So a single segment is now reported as
+// *weak* rather than rejected, and the contract engine — which can see the
+// handlers — suppresses it exactly when it spans more than one service.
+// Measured on the datascience fleet: `/health` resolves in 3 services (7
+// handlers) and `/login` in 2 (8 handlers), both suppressed; `/user-apps`
+// resolves in 1 (2 handlers) and links.
+//
+// A known host is self-discriminating, so one literal segment is strong there.
+func pathEvidence(pattern string) string {
 	literals := 0
 	for _, seg := range strings.Split(pattern, "/") {
 		if seg == "" || strings.Contains(seg, "*") {
@@ -519,10 +553,14 @@ func hasDiscriminatingPath(pattern string) bool {
 		}
 		literals++
 	}
-	if literals == 0 {
-		return false
+	switch {
+	case literals == 0:
+		return pathEvidenceNone
+	case literals >= 2 || !strings.Contains(pattern, "*"):
+		return pathEvidenceStrong
+	default:
+		return pathEvidenceWeak
 	}
-	return literals >= 2 || !strings.Contains(pattern, "*")
 }
 
 // findURLParamWrappers computes the transitive set of functions whose request
