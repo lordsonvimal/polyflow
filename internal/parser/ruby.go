@@ -20,6 +20,13 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 		return nil, nil, nil, err
 	}
 	results, err := matcher.Match("ruby", file, src)
+
+	// Tier HH.1: a receiverless `get "…"` only declares a route inside a Rails
+	// routes file. Elsewhere it is a call to a helper named `get`, and admitting
+	// it as an http_handler both invents an endpoint in the wrong service and
+	// (via MatchToGraph pass 1b) suppresses the http_client at that same line.
+	results = dropNonRoutesFileRouteMatches(file, results)
+
 	if err != nil {
 		nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 		setLanguage(nodes, "ruby")
