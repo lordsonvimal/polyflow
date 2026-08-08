@@ -404,3 +404,79 @@ func TestEngine_NoMatchingNodes(t *testing.T) {
 
 	assert.Empty(t, result.Edges)
 }
+
+// --- Test/spec files are excluded from link formation ---
+
+// handlerInFile is handler() with an explicit File, so IsTestFilePath can see it.
+func handlerInFile(id, service, method, path, file string) graph.Node {
+	n := handler(id, service, method, path)
+	n.File = file
+	return n
+}
+
+// A route registered inside a _test.go wires the test's own assertions, not the
+// running service. Before this gate, `handlers_test.go:27` was linked as
+// dsw-agent's real `/health` endpoint on the datascience fleet.
+func TestEngine_TestFileHandlerIsNotAConsumer(t *testing.T) {
+	rule := httpRule("skip", contract.UnmatchedDrop)
+	prod := client("c1", "svc-a", "GET", "/health")
+	prod.File = "svc-a/client.go"
+
+	nodes := []graph.Node{
+		prod,
+		handlerInFile("h_test", "svc-b", "GET", "/health", "svc-b/internal/api/handlers_test.go"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{rule}, nil)
+
+	assert.Empty(t, result.Edges, "a handler declared in a _test.go must not be a link target")
+}
+
+// The gate must not cost recall: a real handler alongside a test one still links.
+func TestEngine_RealHandlerStillLinksAlongsideTestFile(t *testing.T) {
+	rule := httpRule("skip", contract.UnmatchedDrop)
+	prod := client("c1", "svc-a", "GET", "/health")
+	prod.File = "svc-a/client.go"
+
+	nodes := []graph.Node{
+		prod,
+		handlerInFile("h_test", "svc-b", "GET", "/health", "svc-b/internal/api/handlers_test.go"),
+		handlerInFile("h_real", "svc-b", "GET", "/health", "svc-b/internal/api/handlers.go"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{rule}, nil)
+
+	require.Len(t, result.Edges, 1)
+	assert.Equal(t, "h_real", result.Edges[0].To)
+}
+
+// A request built inside a spec is not a production call site either.
+func TestEngine_SpecFileClientIsNotAProducer(t *testing.T) {
+	rule := httpRule("skip", contract.UnmatchedDrop)
+	prod := client("c1", "svc-a", "GET", "/health")
+	prod.File = "svc-a/spec/api_spec.rb"
+
+	nodes := []graph.Node{
+		prod,
+		handlerInFile("h_real", "svc-b", "GET", "/health", "svc-b/api/handlers.go"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{rule}, nil)
+
+	assert.Empty(t, result.Edges, "a client declared in a spec file must not produce a link")
+}
+
+// Nodes without a File (service-level, synthesized channels) must stay eligible —
+// IsTestFilePath("") is false and the gate must not swallow them.
+func TestEngine_FilelessNodesStillLink(t *testing.T) {
+	rule := httpRule("skip", contract.UnmatchedDrop)
+	nodes := []graph.Node{
+		client("c1", "svc-a", "GET", "/users"),
+		handler("h1", "svc-b", "GET", "/users"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{rule}, nil)
+
+	require.Len(t, result.Edges, 1)
+	assert.Equal(t, "h1", result.Edges[0].To)
+}

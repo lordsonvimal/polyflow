@@ -437,3 +437,85 @@ func TestEnrichRouteGroups_QuotedPrefixStripped(t *testing.T) {
 	assert.Equal(t, "/play/:gameID/draw", route.Meta["path"],
 		"quoted prefix must be stripped before concatenation")
 }
+
+// ── full_path + label: what the persisted graph shows an agent ────────────────
+
+// ginRouteNodeLabelled is ginRouteNode with the `method + " " + path` label the
+// pattern matcher actually mints, so the label-rewrite path is exercised.
+func ginRouteNodeLabelled(id, file, router, method, path string, line int) graph.Node {
+	n := ginRouteNode(id, file, router, method, path, line)
+	n.Label = method + " " + path
+	return n
+}
+
+// The composed route is the only form a caller can use. nodes_fts indexes label,
+// not meta, so without the label rewrite a search for the real path finds nothing.
+func TestEnrichRouteGroups_StampsFullPathAndLabel(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "routes.go", "v1", "/api/v1", "r", 3),
+		ginGroupNode("g2", "routes.go", "admin", "/admin", "v1", 4),
+		ginRouteNodeLabelled("h1", "routes.go", "admin", "GET", "/users/:id", 5),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/api/v1/admin/users/:id", byID["h1"].Meta["path"])
+	assert.Equal(t, "/api/v1/admin/users/:id", byID["h1"].Meta["full_path"],
+		"the composed route must be recorded for the persisted graph")
+	assert.Equal(t, "GET /api/v1/admin/users/:id", byID["h1"].Label,
+		"label carries the composed route; nodes_fts indexes label, not meta")
+}
+
+// An empty route literal (`camUsers.GET("")`) is the shape that made the
+// mysycamore CAM provisioning routes unfindable: path "" and label "GET ".
+func TestEnrichRouteGroups_EmptyRouteLiteralGetsFullPath(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "routes.go", "v1", "/api/v1", "r", 3),
+		ginGroupNode("g2", "routes.go", "camUsers", "/users", "v1", 4),
+		ginRouteNodeLabelled("h1", "routes.go", "camUsers", "GET", "", 5),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/api/v1/users", byID["h1"].Meta["full_path"])
+	assert.Equal(t, "GET /api/v1/users", byID["h1"].Label)
+}
+
+// Idempotency is what lets meta["path"] stay raw in the store: re-running the
+// pass over an already-enriched node must not stack the prefix a second time.
+func TestEnrichRouteGroups_IsIdempotent(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "routes.go", "v1", "/api/v1", "r", 3),
+		ginRouteNodeLabelled("h1", "routes.go", "v1", "GET", "/users", 4),
+	}
+	once := contract.EnrichRouteGroups(nodes)
+	twice := contract.EnrichRouteGroups(once)
+
+	byID := make(map[string]graph.Node)
+	for _, n := range twice {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "/api/v1/users", byID["h1"].Meta["path"],
+		"re-enriching an already-composed node must not double-prefix")
+	assert.Equal(t, "GET /api/v1/users", byID["h1"].Label)
+}
+
+// A route outside any group is not composed, so it must gain no full_path and
+// keep its label untouched.
+func TestEnrichRouteGroups_UngroupedRouteHasNoFullPath(t *testing.T) {
+	nodes := []graph.Node{
+		ginGroupNode("g1", "routes.go", "api", "/api/v1", "r", 3),
+		ginRouteNodeLabelled("h1", "routes.go", "r", "GET", "/health", 2),
+	}
+	out := contract.EnrichRouteGroups(nodes)
+	byID := make(map[string]graph.Node)
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+	assert.Empty(t, byID["h1"].Meta["full_path"], "an uncomposed route has no distinct full path")
+	assert.Equal(t, "GET /health", byID["h1"].Label)
+}
