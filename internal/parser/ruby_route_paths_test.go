@@ -448,3 +448,105 @@ end
 	composeRailsRoutePaths(file, "svc", []byte(src), nodes)
 	require.Equal(t, before, snapshot())
 }
+
+// ─── Tier HH.3: route scaffolding is not an endpoint ────────────────────────
+
+// typedNodes returns every node of a given type, whatever its pattern.
+// routeNode cannot be reused here: it hard-filters on NodeTypeHTTPHandler,
+// which is precisely the property these tests are about.
+func typedNodes(nodes []graph.Node, typ graph.NodeType) []*graph.Node {
+	var out []*graph.Node
+	for i := range nodes {
+		if nodes[i].Type == typ {
+			out = append(out, &nodes[i])
+		}
+	}
+	return out
+}
+
+// TestRakeNamespaceIsNotARoute pins the largest single population of fake
+// handlers at HEAD: 85 of the fleet's 100 namespace_route nodes came from
+// `namespace :db do` in a .rake file. That is Rake's *task* namespace — a
+// different DSL that happens to share a method name with Rails' route scope —
+// and it has nothing to do with HTTP. HH.1's gate did not cover it, because
+// namespace_route's query matches a call regardless of receiver.
+func TestRakeNamespaceIsNotARoute(t *testing.T) {
+	nodes := parseRubyAt(t, "lib/tasks/db_hardening.rake", `namespace :db do
+  namespace :hardening do
+    task :backfill => :environment do
+      puts "backfilling"
+    end
+  end
+end
+`)
+	require.Empty(t, typedNodes(nodes, graph.NodeTypeHTTPHandler),
+		"a Rake task namespace is not an endpoint")
+	require.Empty(t, typedNodes(nodes, graph.NodeTypeRouteGroup),
+		"nor is it route scaffolding — it must not be admitted at all")
+}
+
+// TestResourcesRouteIsRouteGroupNotHandler is the core HH.3 retyping: the
+// `resources :users` declaration itself is a group, while the seven routes it
+// implicitly declares are real, callable endpoints and stay http_handler.
+func TestResourcesRouteIsRouteGroupNotHandler(t *testing.T) {
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resources :users
+end
+`)
+
+	groups := typedNodes(nodes, graph.NodeTypeRouteGroup)
+	require.Len(t, groups, 1, "got %v", groups)
+	require.Equal(t, "resources_route", groups[0].Meta["pattern"])
+
+	// Every remaining handler is a synthesized REST route, and each one has the
+	// method+path a client can actually be matched against — the property that
+	// makes it an endpoint and the group not one.
+	// Eight, not seven: `resources` declares seven *actions*, but `update` is
+	// reachable by both PATCH and PUT, so it contributes two routes.
+	handlers := typedNodes(nodes, graph.NodeTypeHTTPHandler)
+	require.Len(t, handlers, 8, "the default REST surface must survive")
+	for _, h := range handlers {
+		require.Equal(t, "rest_resource_route", h.Meta["pattern"])
+		require.NotEmpty(t, h.Meta["method"], "endpoint without a method: %+v", h)
+		require.NotEmpty(t, h.Meta["path"], "endpoint without a path: %+v", h)
+	}
+}
+
+// TestRouteGroupStillComposesPrefix is the regression that matters. The
+// scaffolding nodes are load-bearing for path composition, so retyping them
+// must change their Type and nothing else: `namespace :api` / `namespace :v1`
+// / `resources :users` still has to compose to /api/v1/users.
+func TestRouteGroupStillComposesPrefix(t *testing.T) {
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  namespace :api do
+    namespace :v1 do
+      resources :users
+      get "health", to: "health#show"
+    end
+  end
+end
+`)
+
+	got := map[string]bool{}
+	for _, h := range typedNodes(nodes, graph.NodeTypeHTTPHandler) {
+		got[h.Label] = true
+	}
+	for _, want := range []string{
+		"GET /api/v1/users",
+		"POST /api/v1/users",
+		"GET /api/v1/users/:id",
+		"DELETE /api/v1/users/:id",
+		"GET /api/v1/health",
+	} {
+		require.True(t, got[want], "prefix composition broke; missing %q, got %v", want, got)
+	}
+
+	// Both namespaces plus the resources declaration are groups, and no group
+	// carries a composed path — composition writes to the routes, not to the
+	// scaffolding that scoped them.
+	groups := typedNodes(nodes, graph.NodeTypeRouteGroup)
+	require.Len(t, groups, 3)
+	for _, g := range groups {
+		require.Empty(t, g.Meta["path"], "a group is not an endpoint: %+v", g)
+	}
+}
