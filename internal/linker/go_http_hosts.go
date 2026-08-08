@@ -33,7 +33,8 @@ import (
 // allowlist), not a new false positive. Scope is bounded and stated honestly:
 //
 //   - single-assignment name → env var mapping within one service,
-//   - ≤ 2 constructor hops (config field → constructor param → receiver field),
+//   - up to maxHostHops constructor frames (config field → constructor param →
+//     … → receiver field), each forwarding hop requiring a host-named parameter,
 //   - the request call site must sit in a method whose receiver type owns
 //     exactly one env-derived, host-named field (hostishName — the same
 //     base/url/host/endpoint test Tier L applies to Ruby host methods).
@@ -156,7 +157,7 @@ func buildGoHostIndex(files []string) *goHostIndex {
 
 	nameEnv := collectNameEnv(parsed)
 	ctorFields := collectCtorFields(parsed)
-	ctorArgEnv := collectCtorArgEnvs(parsed, nameEnv)
+	ctorArgEnv := resolveCtorArgEnvs(parsed, nameEnv)
 
 	// (1) fields filled directly from an env expression, e.g. `&T{base: os.Getenv("X")}`
 	// or `&T{base: cfg.APIURL}` where APIURL is env-derived.
@@ -520,17 +521,165 @@ func collectCtorArgEnvs(files []*ast.File, nameEnv map[string]string) map[argKey
 				if env == "" || env == envConflict {
 					continue
 				}
-				k := argKey{fn: fnName, idx: i}
-				if prev, seen := out[k]; seen && prev != env {
-					out[k] = envConflict
-					continue
-				}
-				out[k] = env
+				recordArgEnv(out, argKey{fn: fnName, idx: i}, env)
 			}
 			return true
 		})
 	}
 	return out
+}
+
+// recordArgEnv binds env to k, degrading to envConflict when a different env var
+// was already recorded there. Reports whether the map changed, so a propagation
+// round can tell it has reached a fixed point. envConflict is sticky: once two
+// call sites disagree, nothing restores agreement.
+func recordArgEnv(out map[argKey]string, k argKey, env string) bool {
+	prev, seen := out[k]
+	switch {
+	case !seen:
+		out[k] = env
+		return true
+	case prev == env:
+		return false
+	default:
+		if prev == envConflict {
+			return false
+		}
+		out[k] = envConflict
+		return true
+	}
+}
+
+// ── step 3b: carry an env var across constructor frames ─────────────────────
+
+// maxHostHops bounds how many function frames an env var may be forwarded
+// through. Each round of propagation buys exactly one frame, so this is the
+// hop limit made explicit — it used to be a hard 1 (an argument had to be
+// env-derived by name at the call site, so a parameter forwarded onward
+// dead-ended).
+//
+// The bound is not a performance guard: propagation converges on the fleet in
+// 2 rounds and the walk is cheap next to parsing. It bounds *credulity*. Every
+// extra frame is another place a syntactic, type-free trace can carry an env
+// var somewhere it does not belong, and a fabricated host is worse than an
+// unresolved one.
+const maxHostHops = 4
+
+// resolveCtorArgEnvs resolves, for every (function, positional argument), the
+// single env var callers pass there — following an argument that is itself a
+// forwarded parameter, which is how real wiring is written:
+//
+//	main.go              NewTilePublisher(config.MapleManagerAPIURL, …)
+//	tile_publisher.go    NewMapleManagerUserAppClient(apiURL, authToken)
+//	client.go            &MapleManagerUserAppClient{baseURL: baseURL}
+//
+// `apiURL` is nothing but NewTilePublisher's parameter — it is never assigned,
+// so the by-name lookup in collectCtorArgEnvs finds nothing and the chain died
+// at the second line. Knowing that callers pass MAPLE_MANAGER_API_URL to
+// NewTilePublisher's parameter 0 is exactly what licenses carrying it to
+// NewMapleManagerUserAppClient's parameter 0.
+//
+// Each round is recomputed from the direct facts rather than mutated in place.
+// That matters for conflicts: a fact can *become* envConflict in a later round
+// when a second caller shows up, and anything derived from it must lose its
+// support too. Mutating in place would strand the stale derivation.
+func resolveCtorArgEnvs(files []*ast.File, nameEnv map[string]string) map[argKey]string {
+	direct := collectCtorArgEnvs(files, nameEnv)
+	cur := direct
+	for hop := 0; hop < maxHostHops; hop++ {
+		next := make(map[argKey]string, len(cur))
+		for k, v := range direct {
+			next[k] = v
+		}
+		propagateArgEnvs(files, cur, next)
+		if sameArgEnv(cur, next) {
+			break
+		}
+		cur = next
+	}
+	return cur
+}
+
+// propagateArgEnvs reads the previous round's facts and writes one frame's
+// worth of consequences into next.
+func propagateArgEnvs(files []*ast.File, prev, next map[argKey]string) {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			params := paramNames(fn)
+			carried := carriedParamEnvs(fn.Name.Name, params, prev)
+			if len(carried) == 0 {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee := finalName(call.Fun)
+				if callee == "" {
+					return true
+				}
+				for j, arg := range call.Args {
+					// paramRefIndex looks through the string plumbing a
+					// forwarder applies (`strings.TrimSuffix(baseURL, "/")`)
+					// and refuses an expression naming two parameters.
+					i := paramRefIndex(arg, params)
+					if i < 0 {
+						continue
+					}
+					if env := carried[i]; env != "" {
+						recordArgEnv(next, argKey{fn: callee, idx: j}, env)
+					}
+				}
+				return true
+			})
+		}
+	}
+}
+
+// carriedParamEnvs returns, for the parameters of fnName that may forward an
+// env var onward, the env var each carries.
+//
+// A parameter must be host-named to be forwarded. Positional agreement alone is
+// thin evidence across a frame: a function taking (dbURL, apiKey, baseURL) will
+// happily hand any of them to a constructor's parameter 0, and the only thing
+// standing between that and a fabricated host is the hostishName test Tier L
+// already applies to Ruby host methods. The terminal `hostishName(field)` gate
+// in buildGoHostIndex checks where the value lands; this checks what was picked
+// up in the first place.
+func carriedParamEnvs(fnName string, params []string, argEnv map[argKey]string) map[int]string {
+	var out map[int]string
+	for i, p := range params {
+		if p == "" || !hostishName(p) {
+			continue
+		}
+		env := argEnv[argKey{fn: fnName, idx: i}]
+		if env == "" || env == envConflict {
+			continue
+		}
+		if out == nil {
+			out = make(map[int]string, len(params))
+		}
+		out[i] = env
+	}
+	return out
+}
+
+// sameArgEnv reports whether two rounds produced identical facts.
+func sameArgEnv(a, b map[argKey]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // ── small helpers ───────────────────────────────────────────────────────────
