@@ -759,6 +759,15 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
 		return nil, err
 	}
+	// Rails routes name their action by convention, not by the Meta["handler"]
+	// receiver string LinkRouteHandlers keys on, so they need their own pass.
+	{
+		railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(allNodes)
+		if err := writeEdges(railsActionEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, railsActionUnresolved...)
+	}
 	{
 		routeCompEdges, routeCompUnresolved := linker.LinkRouteComponents(allNodes)
 		if err := writeEdges(routeCompEdges); err != nil {
