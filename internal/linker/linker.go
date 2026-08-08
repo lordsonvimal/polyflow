@@ -15,15 +15,40 @@ import (
 // since parsing is per-file the reference can't be resolved there. This pass
 // runs after all nodes are collected and matches by function label within the
 // same service.
+//
+// A bare label match is not enough: a service routinely defines the same method
+// name on several handler structs (`appConfigHandler.SaveConfig` /
+// `baseImageHandler.SaveConfig` / `execConfigHandler.SaveConfig`), and a
+// label-only index collapses all of them onto whichever node was seen first.
+// That mislinks the route *and* leaves the real handler with no inbound caller,
+// so it reads as dead code. The receiver is recoverable on both sides — the
+// route records the qualifier in Meta["handler"], the method records its struct
+// in Meta["receiver"] — so prefer a receiver-qualified match and fall back to
+// the label-only lookup only when the qualifier identifies nothing (a package
+// name, or a local variable whose type we can't see).
 func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
-	// Index function/method nodes: service + "\x00" + label → nodeID
+	// Index function/method nodes: service + "\x00" + label → nodeID, plus a
+	// receiver-qualified index: service + "\x00" + lower(receiver) + "\x00" + label.
+	// Go names a handler variable after its type (`baseImageHandler` for
+	// `BaseImageHandler`), so the qualifier is compared case-insensitively.
 	funcIndex := make(map[string]string)
+	recvIndex := make(map[string]string)
+	// byLabel keeps every same-label candidate in node order so an abbreviated
+	// qualifier can still be narrowed; the first entry reproduces funcIndex.
+	byLabel := make(map[string][]*graph.Node)
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
 			key := n.Service + "\x00" + n.Label
 			if _, exists := funcIndex[key]; !exists {
 				funcIndex[key] = n.ID
+			}
+			byLabel[key] = append(byLabel[key], n)
+			if recv := n.Meta["receiver"]; recv != "" {
+				rkey := n.Service + "\x00" + strings.ToLower(recv) + "\x00" + n.Label
+				if _, exists := recvIndex[rkey]; !exists {
+					recvIndex[rkey] = n.ID
+				}
 			}
 		}
 	}
@@ -38,11 +63,28 @@ func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
 		if !ok || handlerName == "" {
 			continue
 		}
-		// Strip method receiver: "s.handleSearch" → "handleSearch"
+		// Split the receiver off: "baseImageHandler.SaveConfig" → qualifier
+		// "baseImageHandler", label "SaveConfig".
+		qualifier := ""
 		if dot := strings.LastIndex(handlerName, "."); dot >= 0 {
-			handlerName = handlerName[dot+1:]
+			qualifier, handlerName = handlerName[:dot], handlerName[dot+1:]
 		}
-		calleeID, ok := funcIndex[n.Service+"\x00"+handlerName]
+		// Only the innermost segment names the value being called:
+		// "s.appConfigHandler.SaveConfig" → "appConfigHandler".
+		if dot := strings.LastIndex(qualifier, "."); dot >= 0 {
+			qualifier = qualifier[dot+1:]
+		}
+		// A qualifier that names a receiver type pins the handler exactly.
+		calleeID, ok := "", false
+		if qualifier != "" {
+			calleeID, ok = recvIndex[n.Service+"\x00"+strings.ToLower(qualifier)+"\x00"+handlerName]
+		}
+		if !ok && qualifier != "" {
+			calleeID, ok = uniqueAbbreviatedReceiver(byLabel[n.Service+"\x00"+handlerName], qualifier)
+		}
+		if !ok {
+			calleeID, ok = funcIndex[n.Service+"\x00"+handlerName]
+		}
 		if !ok {
 			continue
 		}
@@ -54,6 +96,32 @@ func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
 		})
 	}
 	return edges
+}
+
+// uniqueAbbreviatedReceiver narrows same-label handler candidates using a
+// qualifier that abbreviates its type rather than mirroring it — `appController`
+// for a `*UserAppController`, the shape `x := NewUserAppController(...)`
+// produces. Only a suffix relationship counts (`appcontroller` ends
+// `userappcontroller`), and only when exactly one candidate matches: an
+// abbreviation is a hint, not a proof, so an ambiguous one must defer to the
+// caller's fallback instead of guessing between two plausible structs.
+func uniqueAbbreviatedReceiver(candidates []*graph.Node, qualifier string) (string, bool) {
+	if len(candidates) < 2 {
+		return "", false
+	}
+	q := strings.ToLower(qualifier)
+	found := ""
+	for _, c := range candidates {
+		recv := strings.ToLower(c.Meta["receiver"])
+		if recv == "" || (!strings.HasSuffix(recv, q) && !strings.HasSuffix(q, recv)) {
+			continue
+		}
+		if found != "" {
+			return "", false // ambiguous — two structs fit the abbreviation
+		}
+		found = c.ID
+	}
+	return found, found != ""
 }
 
 // LinkRouteComponents emits renders edges from Solid Router client-route
