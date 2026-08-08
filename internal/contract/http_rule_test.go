@@ -371,3 +371,129 @@ func TestHTTPRule_TargetServiceNarrowsHealthFanout(t *testing.T) {
 	require.Len(t, res.Edges, 1, "the allowlist must leave exactly one candidate")
 	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
 }
+
+// ── Browser same-origin (fleet 2026-08-08) ───────────────────────────────────
+
+// orion-atlas's own React SPA posts to "/login". A relative URL in a browser
+// bundle resolves against the origin that served it, so it reaches Atlas's own
+// route and cannot reach willow's identically-named one — which is what it
+// linked to at HEAD, at `static` confidence, because the exact tier indexes the
+// raw key and Atlas's Rails route carries a lowercase verb (see Tier HH.2).
+func TestHTTPRule_BrowserRelativeURLStaysSameOrigin(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "orion-atlas",
+			Language: "typescript",
+			Meta:     map[string]string{"method": "POST", "url": "/api/v1/users"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "orion-atlas",
+			Meta: map[string]string{"method": "POST", "path": "/api/v1/users"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "willow",
+			Meta: map[string]string{"method": "POST", "path": "/api/v1/users"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1, "the SPA's own backend only")
+	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
+}
+
+// A datastar action attribute is rendered into HTML and fired by the browser,
+// however server-side the .templ file around it looks. willow's launcher
+// `@get('/apps/search')` names a route willow itself serves; at HEAD it
+// fanned out to maple-manager's same-named route as well.
+func TestHTTPRule_DatastarActionStaysSameOrigin(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "willow",
+			Language: "templ",
+			Meta:     map[string]string{"method": "GET", "path": "/apps/search", "datastar": "true"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "willow",
+			Meta: map[string]string{"method": "GET", "path": "/apps/search"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "maple-manager",
+			Meta: map[string]string{"method": "GET", "path": "/apps/search"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1, "willow serves /apps/search itself")
+	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
+}
+
+// The rule must not leak to server-side clients: maple-manager's resty client
+// posts the relative fragment "/api/v1/configs/remove" to maple-agent, joined to
+// a base URL configured elsewhere. A leading slash there implies no origin.
+func TestHTTPRule_ServerSideRelativeURLStillCrossesServices(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "maple-manager",
+			Language: "go",
+			Meta:     map[string]string{"method": "POST", "url": "/api/v1/configs/remove"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "maple-agent",
+			Meta: map[string]string{"method": "POST", "path": "/api/v1/configs/remove"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1, "a Go client's relative path is a fragment, not an origin")
+	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
+}
+
+// An absolute URL in browser code genuinely names another origin.
+func TestHTTPRule_BrowserAbsoluteURLStillCrossesServices(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "orion-atlas",
+			Language: "typescript",
+			Meta:     map[string]string{"method": "GET", "url": "https://willow.internal/api/v1/users"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "willow",
+			Meta: map[string]string{"method": "GET", "path": "/api/v1/users"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, "link:c1->h1", res.Edges[0].ID)
+}
+
+// ── Producer dedupe (fleet 2026-08-08) ───────────────────────────────────────
+
+// The Go SSA wrapper pass adds a graded node without superseding the raw
+// tree-sitter node, so build_api_client.go:120 yields two producers for one
+// call site. matchProducer suppresses a weak-path producer that fans out across
+// services — but the ungraded twin carries no path_evidence and bypassed the
+// guard, producing three cross-service /health edges of which two were false.
+func TestHTTPRule_DuplicateProducerAtOneCallSiteKeepsGradedNode(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "raw", Type: graph.NodeTypeHTTPClient, Service: "migrate", Language: "go",
+			File: "build_api_client.go", Line: 120,
+			Meta: map[string]string{"method": "GET", "url": "*/health"}},
+		{ID: "graded", Type: graph.NodeTypeHTTPClient, Service: "migrate", Language: "go",
+			File: "build_api_client.go", Line: 120,
+			Meta: map[string]string{
+				"method": "GET", "path": "*/health",
+				"path_evidence": "weak", "confidence_ceiling": "partial",
+				"via_wrapper": "HealthCheck",
+			}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "maple-agent",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "maple-manager",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "willow",
+			Meta: map[string]string{"method": "GET", "path": "/health"}},
+	}
+	res := runHTTP(t, nodes, nil)
+
+	for _, e := range res.Edges {
+		assert.Equal(t, "unresolved", e.To,
+			"a weak-path producer fanning out to 3 services reaches the ledger, not a handler")
+		assert.NotEqual(t, "raw", e.From, "the ungraded twin must not survive dedupe")
+	}
+	assert.Len(t, res.Edges, 1, "one ledger edge, not three phantom /health calls")
+}
+
+// Dedupe keys on the resolved key, not the line: willow's launcher.templ
+// puts two distinct datastar actions on one line, and both are real.
+func TestHTTPRule_DistinctPathsOnOneLineBothSurvive(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "svc-a", Language: "go",
+			File: "launcher.templ", Line: 648,
+			Meta: map[string]string{"method": "GET", "path": "/apps/search"}},
+		{ID: "c2", Type: graph.NodeTypeHTTPClient, Service: "svc-a", Language: "go",
+			File: "launcher.templ", Line: 648,
+			Meta: map[string]string{"method": "GET", "path": "/apps/filter"}},
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/apps/search"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"method": "GET", "path": "/apps/filter"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	require.Len(t, res.Edges, 2, "two distinct calls on one line are two call sites")
+}
