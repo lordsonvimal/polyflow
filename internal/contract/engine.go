@@ -250,6 +250,24 @@ func matchProducer(
 			continue
 		}
 
+		// Weak path evidence: the producer's host was opaque and its path pinned
+		// exactly one literal segment (`c.baseURL+"/health"`), so the path is the
+		// only thing naming the callee. That is real evidence when one service
+		// answers to it and none at all when several do — `/health` resolves in
+		// three fleet services and `/login` in two, because they name conventions
+		// every service implements rather than routes. The confidence downgrade
+		// below cannot express this: it still emits an edge per hit, and ten
+		// `partial` edges from one call site are ten wrong answers, not a hedge.
+		// So suppress here and let the call fall through to the ledger, where its
+		// tree-sitter node already records the call honestly.
+		//
+		// This is deliberately narrower than it looks: only the Go SSA wrapper
+		// pass stamps `path_evidence`, and only for the single-segment case it
+		// used to drop outright. Everything it used to accept is unaffected.
+		if prod.Meta["path_evidence"] == "weak" && distinctTargetServices(eligible) > 1 {
+			continue
+		}
+
 		// Fan-out phantom guard: one producer call site resolves to exactly one
 		// real target. If the key matched consumers across >1 distinct service,
 		// at most one edge is real — downgrade confidence to `partial` (the

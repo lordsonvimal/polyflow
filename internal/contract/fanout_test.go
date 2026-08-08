@@ -144,3 +144,64 @@ func TestEngine_FanOut_KeyCandidatesTimesConsumers(t *testing.T) {
 		assert.Equal(t, "branch_enum", ed.Meta["via"])
 	}
 }
+
+// A producer whose path is one literal segment behind an opaque host
+// (`c.baseURL+"/health"`, stamped path_evidence=weak by the Go SSA wrapper pass)
+// names the callee only if one service answers to it. When several do, the path
+// is naming a convention every service implements, so no edge is real and the
+// producer is suppressed rather than downgraded — ten `partial` edges from one
+// call site are ten wrong answers, not a hedge.
+func TestEngine_WeakPathEvidence_SuppressedAcrossServices(t *testing.T) {
+	nodes := []graph.Node{
+		client("c1", "svc-a", "GET", "/health", "path_evidence", "weak"),
+		handler("h1", "svc-b", "GET", "/health"),
+		handler("h2", "svc-c", "GET", "/health"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{httpRule("skip", contract.UnmatchedUnknownEdge)}, nil)
+
+	// Under the unknown_edge policy the suppressed call is not dropped: it falls
+	// through to applyUnmatched and is recorded pointing at the synthetic
+	// `unresolved` node, so the call site stays visible with an honest verdict.
+	require.Len(t, result.Edges, 1)
+	assert.Equal(t, "unresolved", result.Edges[0].To,
+		"weak evidence spanning services must not link a handler")
+	assert.Equal(t, graph.ConfidenceUnknown, result.Edges[0].Confidence)
+}
+
+// The same weak producer resolving inside exactly one service is real evidence —
+// this is the `*/user-apps` case the old two-literal-segment gate dropped
+// outright. The edge is emitted, and its confidence_ceiling (stamped alongside
+// path_evidence) keeps a spec-only match from being promoted to `verified`.
+func TestEngine_WeakPathEvidence_LinksWithinOneService(t *testing.T) {
+	nodes := []graph.Node{
+		client("c1", "svc-a", "GET", "/user-apps",
+			"path_evidence", "weak", "confidence_ceiling", graph.ConfidencePartial),
+		handler("h1", "svc-b", "GET", "/user-apps"),
+		handler("h2", "svc-b", "GET", "/user-apps"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{httpRule("skip", contract.UnmatchedUnknownEdge)}, nil)
+
+	require.Len(t, result.Edges, 2, "both handlers of the one matching service link")
+	assert.ElementsMatch(t, []string{"link:c1->h1", "link:c1->h2"}, edgeIDs(result.Edges))
+	for _, edge := range result.Edges {
+		assert.Equal(t, graph.ConfidencePartial, edge.Confidence,
+			"one segment behind an opaque host is capped at partial")
+	}
+}
+
+// Strong evidence (two or more literal segments) is untouched by the weak-path
+// rule: it still fans out across services at `partial`, exactly as before.
+func TestEngine_StrongPathEvidence_UnaffectedByWeakRule(t *testing.T) {
+	nodes := []graph.Node{
+		client("c1", "svc-a", "GET", "/api/v1/users"),
+		handler("h1", "svc-b", "GET", "/api/v1/users"),
+		handler("h2", "svc-c", "GET", "/api/v1/users"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{httpRule("skip", contract.UnmatchedUnknownEdge)}, nil)
+
+	require.Len(t, result.Edges, 2, "strong evidence still fans out")
+	assert.ElementsMatch(t, []string{"link:c1->h1", "link:c1->h2"}, edgeIDs(result.Edges))
+}
