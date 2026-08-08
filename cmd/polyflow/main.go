@@ -286,7 +286,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("\nDone. %d files indexed in %s (%d parsed, %d unchanged)\n",
 		stats.TotalFiles, stats.Elapsed.Truncate(time.Millisecond), stats.ParsedFiles, stats.SkippedFiles)
-	fmt.Printf("  Nodes: %d | Edges: %d | Links: %d cross-service\n", stats.Nodes, stats.Edges, stats.CrossLinks)
+	// Both figures are reported: the contract total is the honest measure of
+	// linking work done, but most of it is same-service by design, so printing
+	// it alone under a "cross-service" label overstated the cross-service graph
+	// several-fold.
+	fmt.Printf("  Nodes: %d | Edges: %d | Contract links: %d (%d cross-service)\n",
+		stats.Nodes, stats.Edges, stats.ContractEdges, stats.CrossLinks)
 	if stats.ErrorFiles > 0 {
 		fmt.Printf("  Errors: %d files (run `polyflow status --errors` for details)\n", stats.ErrorFiles)
 	}

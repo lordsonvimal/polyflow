@@ -420,9 +420,25 @@ func applyUnmatched(prod *graph.Node, rule Rule, targetSvc string, result *Resul
 }
 
 // partitionNodes separates nodes into producers and consumers for a rule.
+//
+// Test and spec files are admitted to neither role. A route registered inside a
+// `_test.go` / `_spec.rb` wires that test's own assertions, not the running
+// service, so it is not an endpoint another service can call; likewise a
+// request built in a test is not a production call site. The nodes stay in the
+// graph and stay searchable — only contract *link formation* skips them, the
+// same line already drawn by X.9's URL synthesis, the AMQP handshake pass,
+// InferLinks and route-group registrar seeding.
+//
+// Measured on the juniper fleet (2026-08-08): 205 http_handler nodes lived
+// in test files and were being matched as real endpoints — `handlers_test.go:27`
+// was linked as maple-agent's `/health` endpoint, and a settings controller test
+// as maple-manager's `PUT /api/v1/settings`.
 func partitionNodes(nodes []graph.Node, rule Rule) (producers, consumers []*graph.Node) {
 	for i := range nodes {
 		n := &nodes[i]
+		if graph.IsTestFilePath(n.File) {
+			continue
+		}
 		if n.Type == rule.Producer.Node && matchesWhere(n, rule.Producer.Where) &&
 			matchesNotWhere(n, rule.Producer.NotWhere) {
 			producers = append(producers, n)

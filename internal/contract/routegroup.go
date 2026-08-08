@@ -254,6 +254,17 @@ func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
 		currentPath := n.Meta["path"]
 		router := n.Meta["router"]
 
+		// Already composed. Composition reads meta["path"] and writes it back,
+		// so running the pass over its own output — or over a node whose
+		// composed path was persisted — would stack the prefix a second time
+		// (`/api/v1/admin/api/v1/admin/users/:id`). meta["full_path"] equal to
+		// meta["path"] is the marker that this node has been through the pass;
+		// the guard makes the pass idempotent by construction rather than by
+		// relying on every caller to feed it raw nodes.
+		if fp := n.Meta["full_path"]; fp != "" && fp == currentPath {
+			continue
+		}
+
 		// Gin enrichment: look up router variable in the file's prefix map.
 		if pm, ok := ginPrefixByFile[n.File]; ok && router != "" {
 			if fullPrefix, found := pm[router]; found {
@@ -305,9 +316,35 @@ func stripQuotes(s string) string {
 }
 
 // setPath updates meta["path"] on a node, initialising meta if needed.
+//
+// When composition actually changes the path, the composed form is also
+// recorded as meta["full_path"] and folded into the label. Those two exist for
+// the *persisted* graph rather than for matching: a handler stored as
+// `GET /users/:id` with meta["router"]="admin" names a route nothing can call,
+// and since nodes_fts indexes label (not meta), a search for the real
+// `/api/v1/admin/users/:id` finds nothing. The label rewrite is what makes the
+// route reachable; see persistComposedRoutes in internal/indexer.
+//
+// meta["path"] keeps composing in place because the contract engine keys on it.
+// It is still not written back to the store: the stamp loop's full_path guard
+// makes re-composition safe either way, but keeping the stored path as the raw
+// route literal preserves the distinction between "what this call site writes"
+// and "where it actually routes", which is the pair a reader needs.
 func setPath(n *graph.Node, path string) {
 	if n.Meta == nil {
 		n.Meta = make(map[string]string)
 	}
+	old := n.Meta["path"]
 	n.Meta["path"] = path
+	if path == old {
+		return
+	}
+	n.Meta["full_path"] = path
+	// Handler labels are minted as `method + " " + path` (including the
+	// trailing space when the route literal is empty, e.g. `camUsers.GET("")`).
+	// Rewrite only on an exact match so a pattern that labels its nodes some
+	// other way is left alone rather than silently reformatted.
+	if method := n.Meta["method"]; n.Label == method+" "+old {
+		n.Label = method + " " + path
+	}
 }

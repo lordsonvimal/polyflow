@@ -68,8 +68,16 @@ type Stats struct {
 	ErrorFiles   int
 	Nodes        int
 	Edges        int
-	CrossLinks   int
-	Elapsed      time.Duration
+	// ContractEdges is every distinct edge the contract engine emitted, most of
+	// which are same-service by design (http.yaml is `same_service: keep`, so a
+	// page fetching its own API is a real internal edge).
+	ContractEdges int
+	// CrossLinks counts only the contract edges whose endpoints resolve to two
+	// different, known services. It was previously set to len(contractResult.
+	// Edges) while being printed as "cross-service", which overstated the real
+	// figure 5.5× on the juniper fleet (563 reported, 103 actual).
+	CrossLinks int
+	Elapsed    time.Duration
 }
 
 // Run executes the pipeline and atomically swaps the graph DB on success.
@@ -290,6 +298,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 			if v, err := finalStore.GetMeta(ctx, "cross_links"); err == nil {
 				stats.CrossLinks, _ = strconv.Atoi(v)
+			}
+			if v, err := finalStore.GetMeta(ctx, "contract_edges"); err == nil {
+				stats.ContractEdges, _ = strconv.Atoi(v)
 			}
 			// D.2: record history row using the persisted unresolved refs.
 			if refs, hErr := finalStore.ListUnresolvedRefs(ctx); hErr == nil {
@@ -1025,6 +1036,15 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// that normalizers cannot perform; it mutates only the working copy returned
 	// by ApplyHints, not the persisted allNodes.
 	enrichedNodes := contract.EnrichRouteGroups(hintedNodes)
+	// The composition above is computed for matching, on a working copy. Agents
+	// query the *stored* graph, so the composed route has to reach it too —
+	// otherwise a gin handler declared inside `v1.Group("/api/v1")` is persisted
+	// reading `/users/:id`, which routes nowhere and which no search for the
+	// real path can find. Only label + meta["full_path"] are written back; see
+	// contract.setPath for why meta["path"] must stay raw.
+	if err := persistComposedRoutes(ctx, bw, enrichedNodes, allNodes); err != nil {
+		return nil, err
+	}
 	// G.7 pre-engine enrichment: resolve alias/instance bindings and one-hop
 	// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name
 	// or instance_name meta) are removed from the working copy; their info feeds
@@ -1052,7 +1072,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, err
 	}
 	allUnresolved = append(allUnresolved, contractResult.Unresolved...)
-	stats.CrossLinks = len(contractResult.Edges)
+	stats.ContractEdges, stats.CrossLinks = countContractEdges(contractResult.Edges, enrichedNodes)
 
 	// G.5: persist per-kind coverage so `polyflow doctor` can report matched/unresolved.
 	coverage := contract.ComputeCoverage(contractRules, contractResult)
@@ -1236,6 +1256,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := store.SetMeta(ctx, "cross_links", strconv.Itoa(stats.CrossLinks)); err != nil {
 		return nil, err
 	}
+	if err := store.SetMeta(ctx, "contract_edges", strconv.Itoa(stats.ContractEdges)); err != nil {
+		return nil, err
+	}
 	store.Close()
 
 	// Atomic swap. The previous DB's WAL sidecar files must go too: the new
@@ -1306,6 +1329,92 @@ func aggregateUnresolvedHistory(refs []graph.UnresolvedRef, runAt int64) []graph
 		return rows[i].Kind < rows[j].Kind
 	})
 	return rows
+}
+
+// countContractEdges counts distinct contract edges, and how many of those
+// genuinely cross a service boundary.
+//
+// Both counts are deduplicated by edge ID, because the ID is the graph's
+// primary key: an edge emitted twice (the same producer matched under two
+// rules, or via two tiers) is one row after upsert. Counting the raw slice
+// instead reports a number no query against the graph can reproduce — on the
+// juniper fleet the engine emitted 109 cross-service edges that stored as
+// 94. Reporting the pre-upsert figure would be a smaller version of the very
+// overstatement this counter exists to fix.
+//
+// Cross-service requires both endpoints to resolve to a known, non-empty
+// service, and the two to differ. The synthetic `unresolved:<svc>` target
+// minted by the unknown_edge policy carries no Service, so an unmatched call is
+// excluded — it names a service it failed to reach, which is the opposite of a
+// link.
+func countContractEdges(edges []graph.Edge, nodes []graph.Node) (total, cross int) {
+	service := make(map[string]string, len(nodes))
+	for i := range nodes {
+		service[nodes[i].ID] = nodes[i].Service
+	}
+	seen := make(map[string]struct{}, len(edges))
+	for _, e := range edges {
+		if _, dup := seen[e.ID]; dup {
+			continue
+		}
+		seen[e.ID] = struct{}{}
+		total++
+		from, to := service[e.From], service[e.To]
+		if from != "" && to != "" && from != to {
+			cross++
+		}
+	}
+	return total, cross
+}
+
+// persistComposedRoutes copies the route-group composition from the contract
+// engine's working copy back onto the persisted nodes.
+//
+// contract.EnrichRouteGroups deliberately works on a deep copy, because the
+// engine needs composed paths only for key matching. But the stored graph is
+// what agents and the UI read, and there a handler declared inside
+// `v1.Group("/api/v1")` → `protected.Group("")` → `admin.Group("/admin")` was
+// left as `GET /users/:id` with meta["router"]="admin" — a route that does not
+// exist, and one that a search for `/api/v1/admin/users/:id` cannot find, since
+// nodes_fts indexes label rather than meta.
+//
+// Only Label and meta["full_path"] are written back. meta["path"] stays raw on
+// purpose: it is the input EnrichRouteGroups composes from, so persisting the
+// composed form would double-compose on the next incremental re-index, when the
+// cached node is fed through the pass again.
+func persistComposedRoutes(
+	ctx context.Context,
+	bw *graph.BatchWriter,
+	enriched []graph.Node,
+	persisted []graph.Node,
+) error {
+	type composedRoute struct{ fullPath, label string }
+	composed := make(map[string]composedRoute, len(enriched))
+	for i := range enriched {
+		n := &enriched[i]
+		if fp := n.Meta["full_path"]; fp != "" {
+			composed[n.ID] = composedRoute{fullPath: fp, label: n.Label}
+		}
+	}
+	if len(composed) == 0 {
+		return nil
+	}
+	for i := range persisted {
+		n := &persisted[i]
+		c, ok := composed[n.ID]
+		if !ok {
+			continue
+		}
+		if n.Meta == nil {
+			n.Meta = make(map[string]string)
+		}
+		n.Meta["full_path"] = c.fullPath
+		n.Label = c.label
+		if err := bw.AddNode(ctx, n); err != nil {
+			return err
+		}
+	}
+	return bw.Flush(ctx)
 }
 
 // fingerprintLines hashes the sorted per-file hash lines of a service.

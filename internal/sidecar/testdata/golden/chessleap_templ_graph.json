@@ -32634,26 +32634,6 @@
       "verification_state": "candidate"
     },
     {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:50",
-      "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201",
-      "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:50",
-      "type": "navigates_to",
-      "label": "get /activity/puzzles/new",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:201"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
       "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:165",
       "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/new:201",
       "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:165",
@@ -32669,26 +32649,6 @@
           "provider": "static",
           "confidence": "static",
           "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:201"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/stats:200-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:49",
-      "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles/stats:200",
-      "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:49",
-      "type": "navigates_to",
-      "label": "get /activity/puzzles/stats",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:200"
         }
       ],
       "verification_state": "candidate"
@@ -32714,26 +32674,6 @@
       "verification_state": "candidate"
     },
     {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520",
-      "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "type": "navigates_to",
-      "label": "get /activity/puzzles",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:520"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
       "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
       "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:520",
       "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
@@ -32749,26 +32689,6 @@
           "provider": "static",
           "confidence": "static",
           "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:520"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:633-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:633",
-      "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "type": "navigates_to",
-      "label": "get /activity/puzzles",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:633"
         }
       ],
       "verification_state": "candidate"
@@ -32794,26 +32714,6 @@
       "verification_state": "candidate"
     },
     {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655",
-      "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "type": "navigates_to",
-      "label": "get /activity/puzzles",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:655"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
       "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655-\u003echessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
       "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:655",
       "to": "chessleap:/Users/lordson/projects/chessleap/activity/module.go:http_handler:gin_route:162",
@@ -32829,26 +32729,6 @@
           "provider": "static",
           "confidence": "static",
           "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:655"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:679-\u003echessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "from": "chessleap:/Users/lordson/projects/chessleap/activity/views/puzzles.templ:http_client:href:/activity/puzzles:679",
-      "to": "chessleap:/Users/lordson/projects/chessleap/activity/handlers/puzzle_bank_test.go:http_handler:gin_route:48",
-      "type": "navigates_to",
-      "label": "get /activity/puzzles",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/activity/views/puzzles.templ:679"
         }
       ],
       "verification_state": "candidate"
@@ -34809,26 +34689,6 @@
           "provider": "static",
           "confidence": "static",
           "ref": "/Users/lordson/projects/chessleap/ui/pages/train_index.templ:143"
-        }
-      ],
-      "verification_state": "candidate"
-    },
-    {
-      "id": "nav:chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/train/puzzles:84-\u003echessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_handler:gin_route:90",
-      "from": "chessleap:/Users/lordson/projects/chessleap/ui/pages/train_index.templ:http_client:href:/train/puzzles:84",
-      "to": "chessleap:/Users/lordson/projects/chessleap/server/puzzletrain_handlers_test.go:http_handler:gin_route:90",
-      "type": "navigates_to",
-      "label": "get /train/puzzles",
-      "confidence": "static",
-      "meta": {
-        "confidence": "static",
-        "via": "nav_link"
-      },
-      "sources": [
-        {
-          "provider": "static",
-          "confidence": "static",
-          "ref": "/Users/lordson/projects/chessleap/ui/pages/train_index.templ:84"
         }
       ],
       "verification_state": "candidate"

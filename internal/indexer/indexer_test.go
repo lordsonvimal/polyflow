@@ -633,3 +633,44 @@ func TestRun_UnparsedFileLedger_CleanService(t *testing.T) {
 	require.NoError(t, err, "unparsed_files key must be written even for clean services")
 	assert.Equal(t, "{}", val, "clean service must yield empty JSON object")
 }
+
+// TestRun_CrossLinksCountsOnlyBoundaryCrossings guards the counter that used to
+// report len(contractResult.Edges) under a "cross-service" label — a 5.5×
+// overstatement on the juniper fleet (563 printed, 103 real). CrossLinks
+// must never exceed ContractEdges, and must equal the boundary-crossing edges
+// actually present in the graph.
+func TestRun_CrossLinksCountsOnlyBoundaryCrossings(t *testing.T) {
+	cfg, dir := testWorkspace(t)
+	dbDir := filepath.Join(dir, ".polyflow")
+
+	stats := runIndexer(t, cfg, dbDir, false)
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+
+	contractTypes := map[graph.EdgeType]bool{
+		graph.EdgeTypeHTTPCall: true, graph.EdgeTypeNavigatesTo: true,
+	}
+	want := 0
+	for _, edges := range idx.OutEdges {
+		for _, e := range edges {
+			if !contractTypes[e.Type] {
+				continue
+			}
+			from, to := idx.Nodes[e.From], idx.Nodes[e.To]
+			if from != nil && to != nil && from.Service != "" && to.Service != "" &&
+				from.Service != to.Service {
+				want++
+			}
+		}
+	}
+
+	assert.Equal(t, want, stats.CrossLinks,
+		"CrossLinks must equal the contract edges that actually cross a service boundary")
+	assert.LessOrEqual(t, stats.CrossLinks, stats.ContractEdges,
+		"cross-service edges are a subset of all contract edges")
+	assert.Greater(t, stats.ContractEdges, 0)
+}
