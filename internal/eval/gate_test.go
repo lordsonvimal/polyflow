@@ -271,3 +271,33 @@ func TestCheckGate_LocalOnlySkipExempt(t *testing.T) {
 	require.Len(t, gate.Regressions, 1)
 	assert.Equal(t, "missing_repo", gate.Regressions[0].Reason)
 }
+
+// A corpus that was present but failed to run measured nothing, so it must
+// fail the gate. Routing such failures through the local-only skip exemption
+// is how a dead corpus stayed invisible while the gate kept exiting 0.
+func TestCheckGate_BrokenCorpusIsRegression(t *testing.T) {
+	baseline := makeReport(eval.CaseResult{CaseID: "c1", Recall: 1.0})
+	current := makeReport(eval.CaseResult{CaseID: "c1", Recall: 1.0})
+	current.Broken = []eval.BrokenCorpus{{
+		Name: "fleet", Dir: "eval/corpus/fleet", Reason: "file not found in index",
+	}}
+
+	gate := eval.CheckGate(current, baseline)
+
+	require.False(t, gate.OK, "a corpus that could not run must fail the gate")
+	require.Len(t, gate.Regressions, 1)
+	assert.Equal(t, "corpus_error", gate.Regressions[0].Reason)
+	assert.Equal(t, "fleet", gate.Regressions[0].Repo)
+}
+
+// A broken corpus is not excused by being absent from the baseline either —
+// the failure is about this run, not about history.
+func TestCheckGate_BrokenCorpusFailsEvenWhenNotInBaseline(t *testing.T) {
+	baseline := makeReport(eval.CaseResult{CaseID: "c1", Recall: 1.0})
+	current := makeReport(eval.CaseResult{CaseID: "c1", Recall: 1.0})
+	current.Broken = []eval.BrokenCorpus{{Name: "brand-new", Reason: "bad manifest"}}
+
+	gate := eval.CheckGate(current, baseline)
+
+	assert.False(t, gate.OK)
+}

@@ -121,6 +121,17 @@ func CheckGate(current, baseline *MultiReport) *GateResult {
 		}
 	}
 
+	// Condition 5: a corpus that was present but failed to run. Never exempt —
+	// local-only status excuses an absent repo, not a broken one. Without this
+	// a corpus can stop measuring anything while the gate still exits 0.
+	for _, b := range current.Broken {
+		regressions = append(regressions, Regression{
+			Repo:   b.Name,
+			CaseID: "*",
+			Reason: "corpus_error",
+		})
+	}
+
 	return &GateResult{
 		Regressions: regressions,
 		OK:          len(regressions) == 0,
