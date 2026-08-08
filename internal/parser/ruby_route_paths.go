@@ -10,6 +10,7 @@ import (
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // composeRailsRoutePaths walks routes.rb's tree-sitter AST maintaining a
@@ -85,6 +86,50 @@ func isRailsRoutesFile(file string) bool {
 	}
 	dir := filepath.ToSlash(filepath.Dir(file))
 	return strings.HasSuffix(dir, "/config/routes") || strings.Contains(dir, "/config/routes/")
+}
+
+// receiverlessRoutePatterns are the Rails route patterns whose tree-sitter
+// query matches a *receiverless* call — `get "x"`, or a verb call inside a
+// `member do` / `collection do` block. Inside config/routes.rb that shape is
+// unambiguously a route declaration; anywhere else it is ordinary Ruby, since
+// calling a private helper named `get` is receiverless too.
+var receiverlessRoutePatterns = map[string]bool{
+	"http_verb_route":              true,
+	"member_verb_route":            true,
+	"collection_verb_route":        true,
+	"member_verb_route_inline":     true,
+	"collection_verb_route_inline": true,
+}
+
+// dropNonRoutesFileRouteMatches discards receiverless Rails route matches in
+// files that are not routes files (Tier HH.1).
+//
+// The canonical offender is orion/app/services/atlas/user_category_rules_client.rb,
+// where `get("#{base_url}/client_api/v1/user_category_rules/#{id}")` calls a
+// private helper defined ten lines below, and was indexed as an http_handler
+// owned by orion — a phantom endpoint in the wrong service, and the only node
+// in the fleet whose path kept a raw `#{` (composeRailsRoutePaths is gated on
+// the same predicate, so it never ran to reduce it).
+//
+// This filters MatchResults rather than dropping finished nodes so the gate
+// runs *before* MatchToGraph's pass 1b, where an http_handler suppresses any
+// http_client at the same file:line. No Ruby client pattern is receiverless
+// today (the only other `!receiver` queries are link_to/form_with wrappers, so
+// they can never be named `get`), meaning no client is currently recovered by
+// ordering it this way — but a post-hoc node drop would silently eat one the
+// day a receiverless client pattern is added.
+func dropNonRoutesFileRouteMatches(file string, results []patterns.MatchResult) []patterns.MatchResult {
+	if isRailsRoutesFile(file) {
+		return results
+	}
+	out := results[:0]
+	for _, r := range results {
+		if receiverlessRoutePatterns[r.PatternName] {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // walk recurses over call nodes, threading a path-segment prefix stack through

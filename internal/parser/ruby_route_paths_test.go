@@ -120,13 +120,29 @@ end
 	require.Equal(t, "GET", collection[0].Meta["method"])
 }
 
+// parseRubyAt runs the RubyParser on inline source at a caller-chosen path
+// relative to a temp dir, so the routes-file gates can be exercised directly.
+func parseRubyAt(t *testing.T, rel, src string) []graph.Node {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
+	reg, err := patterns.DefaultRegistry(rbPatternsDir)
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+	p := &RubyParser{}
+	nodes, _, _, err := p.Parse(file, "svc", m)
+	require.NoError(t, err)
+	return nodes
+}
+
 // TestComposeRailsRoutePaths_SkipsNonRoutesFile confirms the filename gate:
-// the exact same source, parsed under a non-routes.rb filename, must not
-// have its Meta["path"] rewritten.
+// the exact same source, parsed under a non-routes.rb filename, composes
+// nothing. Since Tier HH.1 the receiverless verb call is not admitted as a
+// route node at all, so what remains to assert is that `resources` does not
+// synthesize its implicit REST surface outside a routes file.
 func TestComposeRailsRoutePaths_SkipsNonRoutesFile(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "not_routes.rb")
-	src := `Rails.application.routes.draw do
+	nodes := parseRubyAt(t, "not_routes.rb", `Rails.application.routes.draw do
   namespace :client_api do
     resources :folders do
       collection do
@@ -135,18 +151,70 @@ func TestComposeRailsRoutePaths_SkipsNonRoutesFile(t *testing.T) {
     end
   end
 end
-`
-	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
-	reg, err := patterns.DefaultRegistry(rbPatternsDir)
-	require.NoError(t, err)
-	m := patterns.NewTreeSitterMatcher(reg)
-	p := &RubyParser{}
-	nodes, _, _, err := p.Parse(file, "svc", m)
-	require.NoError(t, err)
+`)
+	require.Empty(t, routeNode(nodes, "collection_verb_route"))
+	require.Empty(t, routeNode(nodes, "rest_resource_route"))
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPHandler {
+			require.Empty(t, n.Meta["path"], "no route path may compose outside a routes file: %+v", n)
+		}
+	}
+}
 
-	collection := routeNode(nodes, "collection_verb_route")
-	require.Len(t, collection, 1)
-	require.Empty(t, collection[0].Meta["path"])
+// TestRouteNodesOnlyInRoutesFiles is the Tier HH.1 gate (worked example:
+// orion/app/services/atlas/user_category_rules_client.rb:22). A receiverless
+// `get("…")` in a service object calls the private helper named `get` defined
+// below it — it is an outbound HTTP call, not a route declaration.
+func TestRouteNodesOnlyInRoutesFiles(t *testing.T) {
+	src := `module Cam
+  class UserCategoryRulesClient
+    def show(id)
+      get("#{base_url}/client_api/v1/user_category_rules/#{id}")
+    end
+
+    def get(url)
+      RestClient::Request.execute(method: :get, url: url)
+    end
+  end
+end
+`
+	nodes := parseRubyAt(t, "app/services/foo_client.rb", src)
+	for _, n := range nodes {
+		require.NotEqual(t, graph.NodeTypeHTTPHandler, n.Type,
+			"a service object must not declare routes: %+v", n)
+	}
+
+	// The same text under config/routes.rb is a route declaration and is kept.
+	routes := parseRubyAt(t, "config/routes.rb", src)
+	require.NotEmpty(t, routeNode(routes, "http_verb_route"))
+}
+
+// TestRoutesConcernsFileStillAdmitted guards against over-tightening the gate
+// to a literal routes.rb: Rails' routes-concerns convention puts real route
+// files under config/routes/.
+func TestRoutesConcernsFileStillAdmitted(t *testing.T) {
+	nodes := parseRubyAt(t, "config/routes/admin.rb", `namespace :admin do
+  get "reports", to: "reports#index"
+end
+`)
+	got := routeNode(nodes, "http_verb_route")
+	require.Len(t, got, 1)
+	require.Equal(t, "/admin/reports", got[0].Meta["path"])
+}
+
+// TestLiteralPathRouteStillDroppedOutsideRoutesFile: the gate is positional,
+// not evidence-based. A receiverless verb call with a fully literal path in a
+// service object is still a helper call, not a route.
+func TestLiteralPathRouteStillDroppedOutsideRoutesFile(t *testing.T) {
+	nodes := parseRubyAt(t, "app/services/foo_client.rb", `class FooClient
+  def index
+    get("/client_api/v1/user_category_rules")
+  end
+end
+`)
+	for _, n := range nodes {
+		require.NotEqual(t, graph.NodeTypeHTTPHandler, n.Type, "phantom route survived: %+v", n)
+	}
 }
 
 // TestComposeRailsRoutePaths_Determinism: two runs produce byte-identical
