@@ -1,4 +1,4 @@
-package config_resolve
+package configsrc
 
 import (
 	"bufio"
@@ -13,8 +13,8 @@ import (
 // overlay. Values have surrounding quotes stripped. Source ref is "rel:line".
 // HCL2 full parse is avoided intentionally: only simple key = "value" / key =
 // value lines are read; complex expressions stay unresolved (they are not
-// config values this provider can safely emit). Returns nil for missing dirs.
-func terraformEnvValues(dir string) (map[string][]resolvedValue, error) {
+// config values a consumer can safely emit). Returns nil for missing dirs.
+func terraformEnvValues(dir string) map[string][]Value {
 	var files []string
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -28,17 +28,15 @@ func terraformEnvValues(dir string) (map[string][]resolvedValue, error) {
 	})
 	sort.Strings(files)
 
-	result := make(map[string][]resolvedValue)
+	result := make(map[string][]Value)
 	for _, p := range files {
 		rel, _ := filepath.Rel(dir, p)
-		if err := readTFVars(p, rel, result); err != nil {
-			continue
-		}
+		_ = readTFVars(p, rel, result)
 	}
-	return result, nil
+	return result
 }
 
-func readTFVars(path, relName string, out map[string][]resolvedValue) error {
+func readTFVars(path, relName string, out map[string][]Value) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -58,7 +56,7 @@ func readTFVars(path, relName string, out map[string][]resolvedValue) error {
 			continue
 		}
 		key := strings.TrimSpace(line[:idx])
-		val := stripConfigValue(strings.TrimSpace(line[idx+1:]))
+		val := stripValue(strings.TrimSpace(line[idx+1:]))
 		if key == "" || val == "" {
 			continue
 		}
@@ -66,8 +64,7 @@ func readTFVars(path, relName string, out map[string][]resolvedValue) error {
 		if strings.ContainsAny(val, "{}[]()$") {
 			continue
 		}
-		ref := configRef(relName, lineNum)
-		out[key] = appendUnique(out[key], resolvedValue{value: val, ref: ref})
+		out[key] = appendUnique(out[key], Value{Value: val, Ref: ref(relName, lineNum)})
 	}
 	return scanner.Err()
 }

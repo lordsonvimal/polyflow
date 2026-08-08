@@ -1,4 +1,4 @@
-package config_resolve
+package configsrc
 
 import (
 	"os"
@@ -14,7 +14,7 @@ import (
 // container env: sections. Each distinct YAML file is one overlay/environment
 // (fan-out for same-var-different-file). Values have quotes stripped. The
 // source ref is "rel-path:line". Returns nil on missing or unreadable dirs.
-func k8sEnvValues(dir string) (map[string][]resolvedValue, error) {
+func k8sEnvValues(dir string) map[string][]Value {
 	var yamlFiles []string
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -28,7 +28,7 @@ func k8sEnvValues(dir string) (map[string][]resolvedValue, error) {
 	})
 	sort.Strings(yamlFiles)
 
-	result := make(map[string][]resolvedValue)
+	result := make(map[string][]Value)
 	for _, p := range yamlFiles {
 		data, err := os.ReadFile(p)
 		if err != nil {
@@ -37,7 +37,7 @@ func k8sEnvValues(dir string) (map[string][]resolvedValue, error) {
 		rel, _ := filepath.Rel(dir, p)
 		extractK8sEnvVars(data, rel, result)
 	}
-	return result, nil
+	return result
 }
 
 // k8sDoc is the minimal subset of a Kubernetes manifest we inspect.
@@ -59,7 +59,7 @@ type k8sContainer struct {
 	} `yaml:"env"`
 }
 
-func extractK8sEnvVars(data []byte, relPath string, out map[string][]resolvedValue) {
+func extractK8sEnvVars(data []byte, relPath string, out map[string][]Value) {
 	var doc k8sDoc
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return
@@ -70,12 +70,11 @@ func extractK8sEnvVars(data []byte, relPath string, out map[string][]resolvedVal
 			if e.Name == "" || e.Value == "" {
 				continue
 			}
-			val := stripConfigValue(e.Value)
+			val := stripValue(e.Value)
 			if val == "" {
 				continue
 			}
-			ref := configRef(relPath, i+1)
-			out[e.Name] = appendUnique(out[e.Name], resolvedValue{value: val, ref: ref})
+			out[e.Name] = appendUnique(out[e.Name], Value{Value: val, Ref: ref(relPath, i+1)})
 		}
 	}
 }
