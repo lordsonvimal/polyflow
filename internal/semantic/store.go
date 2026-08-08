@@ -201,6 +201,66 @@ func (s *Store) FTSSearch(ctx context.Context, ftsQuery string, limit int) ([]ft
 	return hits, rows.Err()
 }
 
+// EntityTypes are the corpus sections, each retrieved against its own quota.
+var EntityTypes = []string{"node", "flow", "doc"}
+
+// FTSSearchPerType runs ftsQuery once per entity type, giving each its own
+// quota of perType hits.
+//
+// A single pooled limit cannot serve a typed response. Flow chains outnumber
+// node entities by orders of magnitude for exactly the symbols worth asking
+// about — a central handler is, by definition, on many chains — so one
+// `ORDER BY rank LIMIT n` over the pool spends the whole window on flows and
+// starves the node section. Searching "SaveConfig" across a nine-service fleet
+// matched 300 flows against 4 nodes and surfaced a single node, from the wrong
+// service. Retrieval quality then degrades precisely as a symbol becomes more
+// connected, which is backwards.
+//
+// Ranks are 1-based within each type. Sections are capped independently
+// downstream, so a per-type rank preserves the order that matters (within a
+// section) without letting one type's volume price out another.
+func (s *Store) FTSSearchPerType(ctx context.Context, ftsQuery string, perType int) ([]ftsHit, error) {
+	if ftsQuery == "" || perType <= 0 {
+		return nil, nil
+	}
+	var hits []ftsHit
+	for _, et := range EntityTypes {
+		// entity_type is UNINDEXED, so it is filtered as an ordinary column
+		// against the matched set rather than through the FTS index.
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT f.entity_id, f.entity_type, COALESCE(n.label,'') AS label
+			FROM (
+				SELECT entity_id, entity_type
+				FROM entities_fts
+				WHERE entities_fts MATCH ? AND entity_type = ?
+				ORDER BY rank
+				LIMIT ?
+			) f
+			LEFT JOIN nodes n ON n.id = f.entity_id AND f.entity_type = 'node'`,
+			ftsQuery, et, perType)
+		if err != nil {
+			return nil, fmt.Errorf("fts search (%s): %w", et, err)
+		}
+		rank := 0
+		for rows.Next() {
+			var h ftsHit
+			if err := rows.Scan(&h.EntityID, &h.EntityType, &h.Label); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan fts hit (%s): %w", et, err)
+			}
+			rank++
+			h.Rank = rank
+			hits = append(hits, h)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("fts search (%s): %w", et, err)
+		}
+		rows.Close()
+	}
+	return hits, nil
+}
+
 // LoadEntitiesByIDs loads entity metadata (anchors) for the given ids from the
 // embeddings table.  Node entities are additionally enriched with authoritative
 // file/line from the nodes table, which handles pre-S.2 rows whose meta is '{}'.
