@@ -426,6 +426,15 @@ func composeAndStamp(call *sitter.Node, src []byte, prefix []string, byLine map[
 		return
 	}
 
+	// Idempotency guard, same construction as setPath in
+	// internal/contract/routegroup.go: a node whose recorded full_path still
+	// equals its path has already been composed, and re-composing would treat
+	// the composed path as a fresh literal and prepend the prefix a second time
+	// ("/api/v1/api/v1/users"). Its Go twin shipped that bug once.
+	if fp := node.Meta["full_path"]; fp != "" && fp == node.Meta["path"] {
+		return
+	}
+
 	segs := append([]string{}, prefix...)
 
 	switch node.Meta["pattern"] {
@@ -479,6 +488,24 @@ func composeAndStamp(call *sitter.Node, src []byte, prefix []string, byLine map[
 	// so a route stamped with a path but no method still never matches.
 	if node.Meta["method"] == "" && node.Meta["verb"] != "" {
 		node.Meta["method"] = strings.ToUpper(node.Meta["verb"])
+	}
+
+	// http_verb_route captures @method straight from source, so it keeps Ruby's
+	// lowercase `get`/`post`. That is not cosmetic: the contract engine's exact
+	// tier indexes on the *raw* key, before case folding, and the first tier
+	// that hits wins. A Atlas route keyed "post /login" therefore misses the
+	// exact tier entirely while a Gin route elsewhere in the fleet keyed
+	// "POST /login" hits it — the wrong service wins at the highest confidence
+	// and the normalized tier, where Atlas would have matched, never runs.
+	node.Meta["method"] = strings.ToUpper(node.Meta["method"])
+
+	// Record the composed path (the idempotency marker above) and refresh the
+	// label, which was minted from the raw capture at node-creation time and
+	// still reads "post login" rather than "POST /login" like every other
+	// handler in the graph.
+	node.Meta["full_path"] = node.Meta["path"]
+	if m := node.Meta["method"]; m != "" {
+		node.Label = m + " " + node.Meta["path"]
 	}
 }
 

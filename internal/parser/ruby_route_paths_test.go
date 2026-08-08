@@ -377,3 +377,74 @@ func TestSingularize(t *testing.T) {
 		require.Equal(t, want, singularize(in), "singularize(%q)", in)
 	}
 }
+
+// TestBareStringRouteVerbUpcased pins the Tier HH.2 normalization: a
+// bare-string route captures @method verbatim, so it used to keep Ruby's
+// lowercase `post` while every other handler in the graph carries `POST`.
+func TestBareStringRouteVerbUpcased(t *testing.T) {
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  post "login", to: "sessions#create"
+end
+`)
+	got := routeNode(nodes, "http_verb_route")
+	require.Len(t, got, 1)
+	require.Equal(t, "POST", got[0].Meta["method"])
+	require.Equal(t, "/login", got[0].Meta["path"])
+}
+
+// TestBareStringRouteLabelRefreshed: the label is minted from the raw capture
+// at node-creation time, before composeRailsRoutePaths rewrites the path, so it
+// read "patch Users/:id" — neither the composed path nor the graph-wide
+// "METHOD /path" shape an agent searches for.
+func TestBareStringRouteLabelRefreshed(t *testing.T) {
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  post "login", to: "sessions#create"
+  namespace :scim do
+    namespace :v2 do
+      patch "Users/:id", to: "users#update"
+    end
+  end
+end
+`)
+	labels := map[string]bool{}
+	for _, n := range routeNode(nodes, "http_verb_route") {
+		labels[n.Label] = true
+	}
+	require.True(t, labels["POST /login"], "got labels %v", labels)
+	require.True(t, labels["PATCH /scim/v2/Users/:id"], "got labels %v", labels)
+}
+
+// TestComposeRoutePathsIdempotent guards the failure mode the Go route-group
+// twin shipped once: re-composing an already-composed node treats its composed
+// path as a fresh literal and prepends the prefix again
+// ("/api/v1/api/v1/users").
+func TestComposeRoutePathsIdempotent(t *testing.T) {
+	src := `Rails.application.routes.draw do
+  namespace :api do
+    namespace :v1 do
+      get "users/:id", to: "users#show"
+      post "users", to: "users#create"
+    end
+  end
+end
+`
+	dir := t.TempDir()
+	file := filepath.Join(dir, "routes.rb")
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
+	nodes := parseRubyRoutes(t, src)
+
+	snapshot := func() []string {
+		var out []string
+		for _, n := range routeNode(nodes, "http_verb_route") {
+			out = append(out, n.Label+"|"+n.Meta["method"]+"|"+n.Meta["path"])
+		}
+		return out
+	}
+	before := snapshot()
+	require.ElementsMatch(t,
+		[]string{"GET /api/v1/users/:id|GET|/api/v1/users/:id", "POST /api/v1/users|POST|/api/v1/users"},
+		before)
+
+	composeRailsRoutePaths(file, "svc", []byte(src), nodes)
+	require.Equal(t, before, snapshot())
+}
