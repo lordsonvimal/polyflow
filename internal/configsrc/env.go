@@ -1,36 +1,39 @@
-package config_resolve
+package configsrc
 
 import (
 	"bufio"
 	"os"
+	"sort"
 	"strings"
 )
 
 // dotenvValues reads all .env* files from dir and returns a map from
-// variable name to a list of {value, sourceRef} pairs. Each file is one
+// variable name to a list of {value, ref} pairs. Each file is one
 // "environment"; if the same variable appears in multiple files all values are
 // kept (fan-out, bug-class rule 1). Values have surrounding quotes stripped
 // (bug-class rule 6). Only KEY=value lines are read; blank lines and
 // #-comments are skipped. The source ref is "rel-path:line".
-func dotenvValues(dir string) (map[string][]resolvedValue, error) {
+func dotenvValues(dir string) map[string][]Value {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// Directory may not exist; graceful degradation.
-		return nil, nil
+		return nil
 	}
-	result := make(map[string][]resolvedValue)
+	var names []string
 	for _, de := range entries {
-		name := de.Name()
-		if de.IsDir() || !isDotenvFile(name) {
+		if de.IsDir() || !isDotenvFile(de.Name()) {
 			continue
 		}
-		path := dir + "/" + name
-		if err2 := readDotenv(path, name, result); err2 != nil {
-			// Unreadable file: skip, don't fail the whole provider.
-			continue
-		}
+		names = append(names, de.Name())
 	}
-	return result, nil
+	sort.Strings(names)
+
+	result := make(map[string][]Value)
+	for _, name := range names {
+		// Unreadable file: skip, don't fail the whole load.
+		_ = readDotenv(dir+"/"+name, name, result)
+	}
+	return result
 }
 
 func isDotenvFile(name string) bool {
@@ -39,7 +42,7 @@ func isDotenvFile(name string) bool {
 		strings.HasSuffix(name, ".env")
 }
 
-func readDotenv(path, relName string, out map[string][]resolvedValue) error {
+func readDotenv(path, relName string, out map[string][]Value) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -58,12 +61,11 @@ func readDotenv(path, relName string, out map[string][]resolvedValue) error {
 			continue
 		}
 		key := strings.TrimSpace(line[:idx])
-		val := stripConfigValue(strings.TrimSpace(line[idx+1:]))
+		val := stripValue(strings.TrimSpace(line[idx+1:]))
 		if key == "" || val == "" {
 			continue
 		}
-		ref := configRef(relName, lineNum)
-		out[key] = appendUnique(out[key], resolvedValue{value: val, ref: ref})
+		out[key] = appendUnique(out[key], Value{Value: val, Ref: ref(relName, lineNum)})
 	}
 	return scanner.Err()
 }

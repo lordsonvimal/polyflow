@@ -20,17 +20,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lordsonvimal/polyflow/internal/configsrc"
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
-
-// resolvedValue is one (value, sourceRef) pair from a config file.
-type resolvedValue struct {
-	value string
-	ref   string
-}
 
 // ConfigProvider implements evidence.Provider for config/IaC files.
 // Constructed with the static-pipeline nodes and unresolved refs so it can
@@ -92,25 +87,9 @@ func (p *ConfigProvider) Collect(_ context.Context, ws *workspace.WorkspaceConfi
 	}
 
 	// For each service, load config values from all three sources.
-	type svcValues struct {
-		env       map[string][]resolvedValue
-		k8s       map[string][]resolvedValue
-		terraform map[string][]resolvedValue
-	}
-	svcMap := make(map[string]*svcValues, len(ws.Services))
+	svcMap := make(map[string]map[string][]configsrc.Value, len(ws.Services))
 	for _, svc := range ws.Services {
-		sv := &svcValues{}
-		sv.env, _ = dotenvValues(svc.Path)
-		// k8s and terraform: look for k8s/ kubernetes/ deploy/ and terraform/ infra/ subdirs.
-		for _, sub := range k8sSubdirs {
-			m, _ := k8sEnvValues(svc.Path + "/" + sub)
-			sv.k8s = mergeMaps(sv.k8s, m)
-		}
-		for _, sub := range tfSubdirs {
-			m, _ := terraformEnvValues(svc.Path + "/" + sub)
-			sv.terraform = mergeMaps(sv.terraform, m)
-		}
-		svcMap[svc.Name] = sv
+		svcMap[svc.Name] = configsrc.Load(svc.Path)
 	}
 
 	// Stable iteration over dynamic entries (bug-class rule 2).
@@ -146,16 +125,12 @@ func (p *ConfigProvider) Collect(_ context.Context, ws *workspace.WorkspaceConfi
 		raw := n.Meta["key_dynamic_raw"]
 
 		varName := extractEnvVarName(raw)
-		sv := svcMap[n.Service]
 
-		// Collect all resolved values for this variable from all config sources.
-		var resolved []resolvedValue
-		if sv != nil && varName != "" {
-			for _, vals := range []map[string][]resolvedValue{sv.env, sv.k8s, sv.terraform} {
-				for _, rv := range vals[varName] {
-					resolved = appendUnique(resolved, rv)
-				}
-			}
+		// All values this variable takes across the service's config sources,
+		// already merged and de-duplicated in source order by configsrc.Load.
+		var resolved []configsrc.Value
+		if varName != "" {
+			resolved = svcMap[n.Service][varName]
 		}
 
 		// Signal that we have handled this dynamic entry regardless of outcome.
@@ -178,7 +153,7 @@ func (p *ConfigProvider) Collect(_ context.Context, ws *workspace.WorkspaceConfi
 		// Emit one edge per resolved value (fan-out, bug-class rule 1).
 		edgeType := edgeTypeForNode(n)
 		for _, rv := range resolved {
-			label, err := buildChannelLabel(n, rv.value, edgeType)
+			label, err := buildChannelLabel(n, rv.Value, edgeType)
 			if err != nil || label == "" {
 				unresolved = append(unresolved, graph.UnresolvedRef{
 					Service: n.Service,
@@ -205,7 +180,7 @@ func (p *ConfigProvider) Collect(_ context.Context, ws *workspace.WorkspaceConfi
 				Sources: []graph.SourceRef{{
 					Provider:   "config",
 					Confidence: graph.ConfidenceDeclared,
-					Ref:        rv.ref,
+					Ref:        rv.Ref,
 				}},
 			})
 		}
@@ -219,12 +194,6 @@ func (p *ConfigProvider) Collect(_ context.Context, ws *workspace.WorkspaceConfi
 		ClearsUnresolved: clears,
 	}, nil
 }
-
-// k8sSubdirs are relative subdirectory names searched for k8s manifests.
-var k8sSubdirs = []string{"k8s", "kubernetes", "deploy", "deployment"}
-
-// tfSubdirs are relative subdirectory names searched for terraform files.
-var tfSubdirs = []string{"terraform", "infra", "infrastructure"}
 
 // edgeTypeForNode returns the most specific edge type for a dynamic producer.
 func edgeTypeForNode(n graph.Node) graph.EdgeType {
@@ -318,48 +287,4 @@ func isBareEnvVarName(s string) bool {
 		}
 	}
 	return true
-}
-
-// stripConfigValue strips surrounding single/double quotes and whitespace from
-// a raw config file value (bug-class rule 6: captured source text is raw).
-func stripConfigValue(v string) string {
-	v = strings.TrimSpace(v)
-	if len(v) >= 2 {
-		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
-			v = v[1 : len(v)-1]
-		}
-	}
-	// Strip inline comments (# ...) after an unquoted value.
-	if idx := strings.Index(v, " #"); idx >= 0 {
-		v = strings.TrimSpace(v[:idx])
-	}
-	return v
-}
-
-// configRef builds a source provenance ref string "relPath:line".
-func configRef(relPath string, line int) string {
-	return fmt.Sprintf("%s:%d", relPath, line)
-}
-
-// appendUnique appends rv to out only if the same value does not already exist.
-func appendUnique(out []resolvedValue, rv resolvedValue) []resolvedValue {
-	for _, existing := range out {
-		if existing.value == rv.value {
-			return out
-		}
-	}
-	return append(out, rv)
-}
-
-// mergeMaps adds all entries from src into dst (fan-out: multiple environments).
-func mergeMaps(dst, src map[string][]resolvedValue) map[string][]resolvedValue {
-	if dst == nil {
-		dst = make(map[string][]resolvedValue)
-	}
-	for k, vals := range src {
-		for _, v := range vals {
-			dst[k] = appendUnique(dst[k], v)
-		}
-	}
-	return dst
 }
