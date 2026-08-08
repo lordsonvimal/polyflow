@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-08T18:05:33.421091Z",
+  "generated_at": "2026-08-08T18:15:18.198816Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -127,6 +127,61 @@
       ],
       "recall": 1,
       "precision": 0.4155389848246991
+    },
+    {
+      "repo": "fleet",
+      "results": [
+        {
+          "case_id": "rest-register-rails-consumer1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rest-register-rails-consumer2",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rest-update-job-status-rails-consumer2",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 1,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rabbitmq-progress-events",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rabbitmq-audit-events",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "rabbitmq-workspace-compare-ack",
+          "recall": 1,
+          "precision": 0.5,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 0.5,
+      "precision": 0.25
     },
     {
       "repo": "mysycamore",
@@ -1400,14 +1455,6 @@
       ],
       "recall": 1,
       "precision": 0.3638888888888889
-    }
-  ],
-  "skipped": [
-    {
-      "name": "fleet",
-      "dir": "eval/corpus/fleet",
-      "reason": "case rest-register-rails-consumer1: file impact: file not found in index: /Users/lordson/Projects/RailsSvc/app/controllers/client_api/v1/agents_controller.rb",
-      "local_only": true
     }
   ]
 }
