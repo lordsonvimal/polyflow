@@ -731,6 +731,29 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				return nil, err
 			}
 		}
+
+		// Tier CB: the two passes above recover *which* env var a client's base
+		// URL comes from; this one reads the path component out of that
+		// variable's checked-in value and composes it onto the node's own path,
+		// so a client deployed behind `API_URL=https://host/api/v2` can join the
+		// `/api/v2/...` route it really calls. Runs here so it sees fresh stamps
+		// from both, and well before ApplyHints. Both passes mutate allNodes in
+		// place, so only re-persisting is needed.
+		svcDirs := make(map[string]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcDirs[sf.svc.Name] = sf.svc.Path
+		}
+		if prefixNodes := linker.ResolveConfigBaseURLPaths(allNodes, svcDirs); len(prefixNodes) > 0 {
+			for i := range prefixNodes {
+				n := prefixNodes[i]
+				if err := bw.AddNode(ctx, &n); err != nil {
+					return nil, err
+				}
+			}
+			if err := bw.Flush(ctx); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
