@@ -1241,7 +1241,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			allUnresolved[i].Service = "unknown"
 		}
 	}
-	if err := store.UpsertUnresolvedRefs(ctx, allUnresolved); err != nil {
+	// Refs are recorded at parse time, when they really are unresolved; the
+	// linkers above then resolve many of them. Drop those now, so the
+	// "verify these N manually" footer names blind spots that are still blind
+	// rather than sending an agent to read files the graph already connected.
+	allUnresolved = graph.RetractResolvedRefs(allUnresolved, allNodes, allEdges)
+	if err := store.ReplaceUnresolvedRefs(ctx, allUnresolved); err != nil {
 		return nil, err
 	}
 	if err := store.SetMeta(ctx, "unresolved_refs", strconv.Itoa(len(allUnresolved))); err != nil {

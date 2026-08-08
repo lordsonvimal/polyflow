@@ -1258,16 +1258,60 @@ func printContextText(r *pfcontext.Result) error {
 	return nil
 }
 
+// unresolvedPerFileCap bounds how many blind spots one file may contribute to
+// a query's footer.
+//
+// The footer is scoped to traversed *files*, which assumes a file holds a
+// handful of references. config/routes.rb breaks that assumption: it declares
+// every route in the application, so an impact query that reaches it inherited
+// 178 rails_route_action_unresolved lines about routes unrelated to the
+// question asked. A footer that long stops being a caveat and becomes the
+// answer — and it is a footer whose whole purpose is to tell an agent which
+// files to go open.
+const unresolvedPerFileCap = 5
+
 // printUnresolvedText renders the traversal-scoped blind spots appended to
-// text-format query output.
+// text-format query output, capped per file so one index-like file cannot
+// crowd out the rest. The full ledger stays available via
+// `polyflow status --unresolved`.
 func printUnresolvedText(refs []graph.UnresolvedRef) {
 	if len(refs) == 0 {
 		return
 	}
+	shown, omitted := capPerFile(refs, unresolvedPerFileCap)
 	fmt.Fprintf(os.Stdout, "Unresolved references in traversed files (%d — verify manually, edges may be missing):\n", len(refs))
-	for _, u := range refs {
+	for _, u := range shown {
 		fmt.Fprintf(os.Stdout, "  %s:%d  %s (%s)\n", u.File, u.Line, u.Name, u.Kind)
 	}
+	for _, f := range sortedKeys(omitted) {
+		fmt.Fprintf(os.Stdout, "  … and %d more in %s (polyflow status --unresolved)\n", omitted[f], f)
+	}
+}
+
+// capPerFile keeps at most n refs per file, in input order, and reports how
+// many each file dropped.
+func capPerFile(refs []graph.UnresolvedRef, n int) ([]graph.UnresolvedRef, map[string]int) {
+	seen := map[string]int{}
+	omitted := map[string]int{}
+	shown := make([]graph.UnresolvedRef, 0, len(refs))
+	for _, u := range refs {
+		if seen[u.File] < n {
+			shown = append(shown, u)
+		} else {
+			omitted[u.File]++
+		}
+		seen[u.File]++
+	}
+	return shown, omitted
+}
+
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ─── trace ───────────────────────────────────────────────────────────────────
