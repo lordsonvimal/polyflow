@@ -78,3 +78,46 @@ func TestLinkContainment(t *testing.T) {
 		t.Errorf("variable node wrongly contained")
 	}
 }
+
+// C.5: markup element nodes hang off their template file. An ERB view has no
+// enclosing declaration node, so before this the whole markup layer of every
+// template was unreachable in both directions — 82% of orion's ERB element
+// nodes had no edge at all. JSX elements are excluded because the component
+// that renders them already claims them.
+func TestLinkContainment_MarkupElements(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "app:views/tasks/index.html.erb:element:.cell:18", Type: graph.NodeTypeElement, Label: ".cell",
+			Service: "app", File: "views/tasks/index.html.erb", Meta: map[string]string{"pattern": "html_element_class", "class": "cell"}},
+		{ID: "app:views/tasks/index.html.erb:element:#save:20", Type: graph.NodeTypeElement, Label: "#save",
+			Service: "app", File: "views/tasks/index.html.erb", Meta: map[string]string{"pattern": "html_element_id", "id": "save"}},
+		{ID: "app:app/javascript/Task.jsx:element:.cell:4", Type: graph.NodeTypeElement, Label: ".cell",
+			Service: "app", File: "app/javascript/Task.jsx", Meta: map[string]string{"pattern": "jsx_element_class", "class": "cell"}},
+		// A minted templ/dom element carries no pattern at all.
+		{ID: "app:views/home.templ:element:#btn:5", Type: graph.NodeTypeElement, Label: "#btn",
+			Service: "app", File: "views/home.templ", Meta: map[string]string{"dom_id": "btn"}},
+	}
+
+	_, edges := LinkContainment(nodes)
+
+	contained := map[string]bool{}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeContains {
+			contained[e.To] = true
+		}
+	}
+
+	for _, id := range []string{
+		"app:views/tasks/index.html.erb:element:.cell:18",
+		"app:views/tasks/index.html.erb:element:#save:20",
+	} {
+		if !contained[id] {
+			t.Errorf("markup element %s not contained by its file", id)
+		}
+	}
+	if contained["app:app/javascript/Task.jsx:element:.cell:4"] {
+		t.Errorf("jsx element wrongly contained: its component already attributes it")
+	}
+	if contained["app:views/home.templ:element:#btn:5"] {
+		t.Errorf("minted element wrongly contained: it has no source markup pattern")
+	}
+}
