@@ -2284,8 +2284,8 @@ func runEval(cmd *cobra.Command, args []string) error {
 
 	hardFailed := false
 	for _, report := range multi.Reports {
-		fmt.Printf("Repo: %-20s  cases: %d  recall=%.3f  precision=%.3f\n",
-			report.Repo, len(report.Results), report.Recall, report.Precision)
+		fmt.Printf("Repo: %-20s  cases: %d  recall=%.3f  precision=%s\n",
+			report.Repo, len(report.Results), report.Recall, evalRepoPrecision(report))
 		for _, r := range report.Results {
 			status := "ok"
 			if r.HardFail {
@@ -2297,8 +2297,8 @@ func runEval(cmd *cobra.Command, args []string) error {
 					r.CaseID, evalRank1Label(r), r.ScoreGap(), status)
 				continue
 			}
-			fmt.Printf("  %-44s recall=%.3f precision=%.3f honest=%d silent=%d  %s\n",
-				r.CaseID, r.Recall, r.Precision, r.HonestMisses, r.SilentMisses, status)
+			fmt.Printf("  %-44s recall=%.3f precision=%-13s honest=%d silent=%d  %s%s\n",
+				r.CaseID, r.Recall, evalCasePrecision(r), r.HonestMisses, r.SilentMisses, status, evalForbidden(r))
 		}
 		if report.Rank1Accuracy > 0 || rank1Cases(report.Results) > 0 {
 			fmt.Printf("  %-44s rank1_accuracy=%.3f  min_gap=%s\n",
@@ -2348,6 +2348,8 @@ func runEval(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  missing_repo  (in baseline but absent from this run — clone/index failed?)\n", r.Repo)
 				case "corpus_error":
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  corpus_error  (present but failed to run — it measured nothing)\n", r.Repo)
+				case "forbidden_hit":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  forbidden_hit  (blast radius newly includes: %s)\n", r.Repo, r.CaseID, strings.Join(r.ForbiddenHits, ", "))
 				}
 			}
 			fmt.Fprintln(os.Stderr, "Update eval/baseline.json when recall improves: polyflow eval --output eval/baseline.json")
@@ -2357,6 +2359,36 @@ func runEval(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// evalCasePrecision renders a case's precision, or "n/a (not exhaustive)" when
+// the case never claimed a complete truth set (D.1). Printing a number there
+// invites it to be quoted as a false-positive rate, which it is not: it is
+// hits over returned against a hand-picked sample, so a *more* complete answer
+// scores worse.
+func evalCasePrecision(r eval.CaseResult) string {
+	if r.Precision == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.3f", *r.Precision)
+}
+
+// evalRepoPrecision renders the repo macro-average over exhaustive cases only,
+// naming the denominator so a 1.000 over two cases cannot read as a fleet claim.
+func evalRepoPrecision(r eval.Report) string {
+	if r.Precision == nil {
+		return "n/a (0 exhaustive cases)"
+	}
+	return fmt.Sprintf("%.3f (%d exhaustive)", *r.Precision, r.ExhaustiveCases)
+}
+
+// evalForbidden appends the must_not_include files a case actually returned, so
+// a precision failure names the phantom on the line that reports it.
+func evalForbidden(r eval.CaseResult) string {
+	if len(r.ForbiddenHits) == 0 {
+		return ""
+	}
+	return "  FORBIDDEN: " + strings.Join(r.ForbiddenHits, ", ")
 }
 
 // evalMinGap renders the thinnest passing rank-1 margin, or n/a when no rank1
@@ -2403,7 +2435,7 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 	}
 
 	fmt.Printf("Repo: %s   cases: %d\n", report.Repo, len(report.Results))
-	fmt.Printf("Corpus  recall=%.3f  precision=%.3f\n\n", report.Recall, report.Precision)
+	fmt.Printf("Corpus  recall=%.3f  precision=%s\n\n", report.Recall, evalRepoPrecision(*report))
 
 	hardFailed := false
 	for _, r := range report.Results {
@@ -2417,8 +2449,8 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 				r.CaseID, evalRank1Label(r), r.ScoreGap(), status)
 			continue
 		}
-		fmt.Printf("  %-40s recall=%.3f precision=%.3f honest=%d silent=%d  %s\n",
-			r.CaseID, r.Recall, r.Precision, r.HonestMisses, r.SilentMisses, status)
+		fmt.Printf("  %-40s recall=%.3f precision=%-13s honest=%d silent=%d  %s%s\n",
+			r.CaseID, r.Recall, evalCasePrecision(r), r.HonestMisses, r.SilentMisses, status, evalForbidden(r))
 	}
 	if rank1Cases(report.Results) > 0 {
 		fmt.Printf("  %-40s rank1_accuracy=%.3f  min_gap=%+.4f\n",

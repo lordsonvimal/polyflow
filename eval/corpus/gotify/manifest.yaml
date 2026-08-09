@@ -38,10 +38,23 @@ cases:
     # api.MessageAPI.GetMessages (api/message.go) is registered in router/router.go:
     # `message.GET("", messageHandler.GetMessages)`.
     # Verified: grep -n "GetMessages" router/router.go → line found.
+    #
+    # D.1: exhaustive, same six-file closure and the same verification as
+    # delete-message-callers (the `GET /message` route replaces the DELETE one,
+    # and api/message_test.go's Test_GetMessages* call the handler directly).
+    exhaustive: true
     expected_impacted:
+      - api/message.go
+      - api/message_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    must_not_include:
+      - api/user.go
+      - auth/authentication.go
 
   - id: create-message-callers
     kind: node
@@ -60,10 +73,36 @@ cases:
     # api.MessageAPI.DeleteMessage (api/message.go) registered in router/router.go:
     # `message.DELETE("/:id", messageHandler.DeleteMessage)`.
     # Verified: grep -n "DeleteMessage" router/router.go → line found.
+    #
+    # D.1: exhaustive. The depth-10 backward closure is these six files and
+    # nothing else, each hand-checked 2026-08-09 against the impact output:
+    #   api/message.go        the declaration itself
+    #   api/message_test.go   Test_DeleteMessage{,_invalidID,_notExistingID,
+    #                         _existingIDButNotOwner} call it directly
+    #   router/router.go      `DELETE /message/:id` → the handler
+    #   router/router_test.go calls router.Create, which registers that route
+    #   app.go                serve → router.Create → the route
+    #   app_test.go           TestRun → run → serve
+    # Every one is a file a change to this handler can genuinely require
+    # touching, so precision here is a real number rather than a sampling
+    # artifact.
+    exhaustive: true
     expected_impacted:
+      - api/message.go
+      - api/message_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    # Deleting a message cannot reach the user or client APIs, and nothing in
+    # the auth middleware calls this handler. These are the neighbours a
+    # fan-out phantom would most plausibly drag in.
+    must_not_include:
+      - api/user.go
+      - api/client.go
+      - auth/authentication.go
 
   - id: health-handler-callers
     kind: node

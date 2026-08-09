@@ -16,7 +16,8 @@ func TestScore_AllMatch(t *testing.T) {
 
 	assert.Equal(t, "q1", got.CaseID)
 	assert.InDelta(t, 1.0, got.Recall, 1e-9)
-	assert.InDelta(t, 1.0, got.Precision, 1e-9)
+	assert.Nil(t, got.Precision, "Score never sets precision — only an exhaustive case has a truth set that makes it mean anything (D.1)")
+	assert.InDelta(t, 1.0, eval.Precision(returned, expected), 1e-9)
 	assert.Equal(t, 0, got.HonestMisses)
 	assert.Equal(t, 0, got.SilentMisses)
 	assert.False(t, got.HardFail)
@@ -30,7 +31,7 @@ func TestScore_NoMatch(t *testing.T) {
 	got := eval.Score("q2", returned, expected, mustNotMiss, nil)
 
 	assert.InDelta(t, 0.0, got.Recall, 1e-9)
-	assert.InDelta(t, 0.0, got.Precision, 1e-9)
+	assert.InDelta(t, 0.0, eval.Precision(returned, expected), 1e-9)
 	assert.Equal(t, 0, got.HonestMisses)
 	assert.Equal(t, 2, got.SilentMisses)
 	assert.True(t, got.HardFail)
@@ -47,7 +48,7 @@ func TestScore_PartialHonestMiss(t *testing.T) {
 	got := eval.Score("q3", returned, expected, mustNotMiss, unresolvedFiles)
 
 	assert.InDelta(t, 1.0/3.0, got.Recall, 1e-9)
-	assert.InDelta(t, 1.0, got.Precision, 1e-9) // 1/1 returned files match
+	assert.InDelta(t, 1.0, eval.Precision(returned, expected), 1e-9) // 1/1 returned files match
 	assert.Equal(t, 1, got.HonestMisses)
 	assert.Equal(t, 1, got.SilentMisses)
 	assert.False(t, got.HardFail)
@@ -85,14 +86,15 @@ func TestScore_HonestMissOnMustNotMissNoHardFail(t *testing.T) {
 // AggregateReport macro-averages recall and precision across cases.
 func TestAggregateReport(t *testing.T) {
 	results := []eval.CaseResult{
-		{CaseID: "a", Recall: 1.0, Precision: 0.5},
-		{CaseID: "b", Recall: 0.5, Precision: 1.0},
+		{CaseID: "a", Recall: 1.0},
+		{CaseID: "b", Recall: 0.5},
 	}
 	r := eval.AggregateReport("myrepo", results)
 
 	assert.Equal(t, "myrepo", r.Repo)
 	assert.InDelta(t, 0.75, r.Recall, 1e-9)
-	assert.InDelta(t, 0.75, r.Precision, 1e-9)
+	assert.Nil(t, r.Precision, "no exhaustive case means the repo has no precision, not a precision of zero")
+	assert.Equal(t, 0, r.ExhaustiveCases)
 }
 
 // AggregateReport on empty results returns zero values, no panic.
@@ -100,7 +102,7 @@ func TestAggregateReport_Empty(t *testing.T) {
 	r := eval.AggregateReport("empty", nil)
 	assert.Equal(t, "empty", r.Repo)
 	assert.InDelta(t, 0.0, r.Recall, 1e-9)
-	assert.InDelta(t, 0.0, r.Precision, 1e-9)
+	assert.Nil(t, r.Precision)
 }
 
 // Empty expected list: recall stays 0 (no expected = no hits possible), precision
@@ -108,6 +110,6 @@ func TestAggregateReport_Empty(t *testing.T) {
 func TestScore_EmptyExpected(t *testing.T) {
 	got := eval.Score("empty-exp", []string{"a.go"}, nil, nil, nil)
 	assert.InDelta(t, 0.0, got.Recall, 1e-9)
-	assert.InDelta(t, 0.0, got.Precision, 1e-9)
+	assert.InDelta(t, 0.0, eval.Precision([]string{"a.go"}, nil), 1e-9)
 	assert.False(t, got.HardFail)
 }

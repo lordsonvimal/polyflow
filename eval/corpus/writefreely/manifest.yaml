@@ -184,6 +184,35 @@ cases:
     must_not_miss:
       - cmd/writefreely/main.go
 
+  # --- D.1 precision: exhaustive truth sets and forbidden files -------------
+
+  - id: api-logout-blast-exhaustive
+    kind: node
+    target: handleAPILogout
+    # account.go:288. The complete depth-10 backward closure, hand-checked
+    # 2026-08-09 against the impact output:
+    #   account.go              the declaration itself
+    #   routes.go               InitRoutes registers the handler
+    #   cmd/writefreely/web.go  serveAction → InitRoutes
+    #   cmd/writefreely/main.go legacyActions → InitRoutes
+    # Four files, and the two cmd/ entries are the only callers of InitRoutes
+    # in the tree (grep -n "InitRoutes" → routes.go decl + those two).
+    exhaustive: true
+    expected_impacted:
+      - account.go
+      - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
+    must_not_miss:
+      - routes.go
+    # Logging out touches no post, collection or storage code. database.go is
+    # the file a query-layer fan-out would reach first, and it is 102 KB — the
+    # single worst thing to hand an agent by mistake.
+    must_not_include:
+      - posts.go
+      - collections.go
+      - database.go
+
   # --- C.6 rank-1 identity -------------------------------------------------
 
   - id: rank1-handle-api-logout
