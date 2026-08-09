@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T10:05:21.829599Z",
+  "generated_at": "2026-08-09T10:56:30.665274Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -578,7 +578,7 @@
         {
           "case_id": "stories-new-action",
           "recall": 1,
-          "precision": 0.5,
+          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -610,7 +610,7 @@
         {
           "case_id": "story-already-posted-recently",
           "recall": 1,
-          "precision": 0.3333333333333333,
+          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -618,7 +618,7 @@
         {
           "case_id": "story-is-resubmit",
           "recall": 1,
-          "precision": 0.3333333333333333,
+          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -626,7 +626,7 @@
         {
           "case_id": "story-comments-closing-soon",
           "recall": 1,
-          "precision": 0.3333333333333333,
+          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -673,7 +673,7 @@
         }
       ],
       "recall": 1,
-      "precision": 0.7222222222222221
+      "precision": 0.6944444444444444
     },
     {
       "repo": "polyflow",
@@ -1003,7 +1003,7 @@
         {
           "case_id": "instantiates-dss-org-info-wrapper",
           "recall": 1,
-          "precision": 0.06666666666666667,
+          "precision": 0.0625,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1018,7 +1018,7 @@
         }
       ],
       "recall": 1,
-      "precision": 0.2631479631479631
+      "precision": 0.26273129648129645
     },
     {
       "repo": "nextgen-sce",
@@ -1161,7 +1161,7 @@
         {
           "case_id": "inherits-application-record",
           "recall": 1,
-          "precision": 0.004796163069544364,
+          "precision": 0.004761904761904762,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1201,7 +1201,7 @@
         {
           "case_id": "fill-file-display-category-helper",
           "recall": 1,
-          "precision": 0.0136986301369863,
+          "precision": 0.012195121951219513,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1209,7 +1209,7 @@
         {
           "case_id": "fill-user-file-model",
           "recall": 1,
-          "precision": 0.018691588785046728,
+          "precision": 0.01834862385321101,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1225,7 +1225,7 @@
         {
           "case_id": "fill-user-file-copier",
           "recall": 1,
-          "precision": 0.045454545454545456,
+          "precision": 0.043478260869565216,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1309,10 +1309,18 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "redirect-imports-index",
+          "recall": 1,
+          "precision": 0.4,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
         }
       ],
       "recall": 1,
-      "precision": 0.3162620345799298
+      "precision": 0.31933437878800086
     },
     {
       "repo": "synergy",
