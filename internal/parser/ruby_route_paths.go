@@ -62,7 +62,7 @@ func composeRailsRoutePaths(file, service string, src []byte, nodes []graph.Node
 		byLine:  byLine,
 		seen:    map[string]bool{},
 	}
-	w.walk(tree.RootNode(), nil, "")
+	w.walk(tree.RootNode(), nil, nil, "")
 	return w.out
 }
 
@@ -164,13 +164,20 @@ func dropNonRoutesFileRouteMatches(file string, results []patterns.MatchResult) 
 // the two dropped the parent's id entirely, so `resources :files` nested in
 // `resources :folders` composed as `/folders/files/:id/copy` instead of
 // `/folders/:folder_id/files/:id/copy`.
-func (w *routeWalker) walk(n *sitter.Node, prefix []string, nestParam string) {
+//
+// mod is the *controller module* stack, threaded separately from the URL prefix
+// because Rails' two grouping constructs differ precisely there:
+// `namespace :client_api` contributes to both, `scope "app"` contributes only a
+// URL prefix and `scope module: "admin"` only a module. Deriving one from the
+// other is not possible, and getting it wrong is expensive in both directions —
+// see composeAndStamp's controller_module note.
+func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, nestParam string) {
 	if n == nil {
 		return
 	}
 	if n.Type() != "call" {
 		for i := 0; i < int(n.ChildCount()); i++ {
-			w.walk(n.Child(i), prefix, nestParam)
+			w.walk(n.Child(i), prefix, mod, nestParam)
 		}
 		return
 	}
@@ -191,8 +198,22 @@ func (w *routeWalker) walk(n *sitter.Node, prefix []string, nestParam string) {
 	case "namespace":
 		seg, ok := firstPositionalSegment(n, w.src)
 		if ok && blockNode != nil {
-			w.walk(blockBody(blockNode), append(base, seg), "")
+			w.walk(blockBody(blockNode), append(base, seg), appendSeg(mod, seg), "")
 		}
+		return
+	case "scope":
+		// `scope` is the half of Rails' grouping vocabulary that was missing
+		// entirely, and it is not a rare corner: orion wraps roughly 400
+		// routes — every URL the frontend calls — in a single `scope "app" do`
+		// at config/routes.rb:83. Without it those handlers were recorded at
+		// `/studies/:study_id/...` while every caller asked for
+		// `/app/studies/...`, so no frontend HTTP call could match its own
+		// route no matter how well the caller's URL resolved.
+		if blockNode == nil {
+			return
+		}
+		pathSeg, modSeg := scopeSegments(n, w.src)
+		w.walk(blockBody(blockNode), appendSeg(base, pathSeg), appendSeg(mod, modSeg), "")
 		return
 	case "resources", "resource":
 		seg, ok := firstPositionalSegment(n, w.src)
@@ -201,28 +222,101 @@ func (w *routeWalker) walk(n *sitter.Node, prefix []string, nestParam string) {
 		}
 		plural := method == "resources"
 		scope := append(base, seg)
-		w.emitRESTRoutes(n, scope, seg, plural)
+		w.emitRESTRoutes(n, scope, mod, seg, plural)
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), scope, nestingParam(seg, plural))
+			w.walk(blockBody(blockNode), scope, mod, nestingParam(seg, plural))
 		}
 		return
 	case "member":
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), "")
+			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), mod, "")
 		}
 		return
 	case "collection":
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), prefix, "")
+			w.walk(blockBody(blockNode), prefix, mod, "")
 		}
 		return
 	case "get", "post", "put", "patch", "delete":
-		composeAndStamp(n, w.src, prefix, w.byLine)
+		composeAndStamp(n, w.src, prefix, mod, w.byLine)
 		return
 	}
 	if blockNode != nil {
-		w.walk(blockBody(blockNode), prefix, nestParam)
+		w.walk(blockBody(blockNode), prefix, mod, nestParam)
 	}
+}
+
+// appendSeg appends seg to a copy of stack, skipping empty segments. Copying is
+// not optional: `append` on a shared backing array let two sibling scopes
+// overwrite each other's segment.
+func appendSeg(stack []string, seg string) []string {
+	if seg == "" {
+		return stack
+	}
+	out := make([]string, len(stack), len(stack)+1)
+	copy(out, stack)
+	return append(out, seg)
+}
+
+// scopeSegments reads a `scope` call's path and module contributions.
+//
+// Rails' forms, all present in the fleet:
+//
+//	scope "app"                    → path "app"
+//	scope :api                     → path "api"
+//	scope path: "v1"               → path "v1"
+//	scope module: "admin"          → module "admin", no path
+//	scope :admin, module: :admin   → path "admin", module "admin"
+//	scope format: false            → neither
+//
+// An explicit `path:` wins over the positional argument, which is Rails'
+// own precedence. Options that affect neither (`as:`, `constraints:`,
+// `defaults:`, `shallow:`) are ignored rather than guessed at: a scope whose
+// contribution cannot be read must contribute nothing, since inventing a
+// segment shifts every route beneath it.
+func scopeSegments(call *sitter.Node, src []byte) (pathSeg, modSeg string) {
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return "", ""
+	}
+	for i := 0; i < int(args.ChildCount()); i++ {
+		c := args.Child(i)
+		if c == nil || !c.IsNamed() {
+			continue
+		}
+		if c.Type() != "pair" {
+			if pathSeg == "" {
+				pathSeg = literalSegment(c, src)
+			}
+			continue
+		}
+		key := c.ChildByFieldName("key")
+		value := c.ChildByFieldName("value")
+		if key == nil || value == nil {
+			continue
+		}
+		switch strings.TrimSuffix(strings.TrimPrefix(string(src[key.StartByte():key.EndByte()]), ":"), ":") {
+		case "path":
+			pathSeg = literalSegment(value, src)
+		case "module":
+			modSeg = literalSegment(value, src)
+		}
+	}
+	return pathSeg, modSeg
+}
+
+// literalSegment reduces a symbol or string literal to a bare path segment.
+// Anything else (an interpolation, a constant, a lambda) yields "".
+func literalSegment(n *sitter.Node, src []byte) string {
+	switch n.Type() {
+	case "simple_symbol":
+		return strings.Trim(strings.TrimPrefix(string(src[n.StartByte():n.EndByte()]), ":"), "/")
+	case "string":
+		if lit, ok := rubyConcreteString(n, src); ok {
+			return strings.Trim(lit, "/")
+		}
+	}
+	return ""
 }
 
 // restAction describes one of the seven routes Rails derives from `resources`.
@@ -252,7 +346,7 @@ var pluralRESTActions = []restAction{
 //
 // A singular `resource :profile` has no index and no `:id`: there is only ever one
 // of it, so show/update/destroy address the collection path directly.
-func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope []string, seg string, plural bool) {
+func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, seg string, plural bool) {
 	only, hasOnly, except := restActionFilters(call, w.src)
 	if hasOnly && len(only) == 0 {
 		// `resources :users, only: []` declares the resource purely as a nesting
@@ -297,11 +391,12 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope []string, seg stri
 			Line:     line,
 			Language: "ruby",
 			Meta: map[string]string{
-				"pattern":  "rest_resource_route",
-				"path":     path,
-				"method":   a.method,
-				"action":   a.name,
-				"resource": seg,
+				"pattern":           "rest_resource_route",
+				"path":              path,
+				"method":            a.method,
+				"action":            a.name,
+				"resource":          seg,
+				"controller_module": strings.Join(mod, "/"),
 			},
 		})
 	}
@@ -438,12 +533,19 @@ func firstPositionalSegment(call *sitter.Node, src []byte) (string, bool) {
 // own line (matcher.go's r.Line for member_verb_route/collection_verb_route
 // is the innermost named capture's line — the verb call itself — not the
 // enclosing member/collection block's line).
-func composeAndStamp(call *sitter.Node, src []byte, prefix []string, byLine map[int]*graph.Node) {
+func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, byLine map[int]*graph.Node) {
 	line := int(call.StartPoint().Row) + 1
 	node, ok := byLine[line]
 	if !ok {
 		return
 	}
+
+	// The controller module the route resolves against, recorded rather than
+	// re-derived from the URL. Stamped unconditionally — including as "" — so a
+	// consumer can tell "this route is at the top level" from "this route never
+	// went through the walker", which are different facts with different
+	// correct fallbacks.
+	node.Meta["controller_module"] = strings.Join(mod, "/")
 
 	// Idempotency guard, same construction as setPath in
 	// internal/contract/routegroup.go: a node whose recorded full_path still
