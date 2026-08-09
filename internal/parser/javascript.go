@@ -58,6 +58,8 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 		allResults = append(allResults, results...)
 	}
 
+	allResults = dropNonHTTPJSMatches(allResults)
+
 	nodes, edges, unresolved := patterns.MatchToGraph(service, allResults)
 	setLanguage(nodes, langTag)
 
