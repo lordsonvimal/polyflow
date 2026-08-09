@@ -10,8 +10,9 @@ import (
 // call rather than a literal, and which therefore capture a *name* to resolve
 // against the route table.
 var navHelperPatterns = map[string]bool{
-	"nav_link_rails_helper":      true,
-	"nav_link_rails_form_helper": true,
+	"nav_link_rails_helper":          true,
+	"nav_link_rails_form_helper":     true,
+	"nav_link_rails_redirect_helper": true,
 }
 
 // dropNonRouteHelperNavMatches discards nav matches whose captured helper is

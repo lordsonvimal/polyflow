@@ -50,12 +50,13 @@ var rubyBuiltinCalls = map[string]bool{
 	"cookies": true, "flash": true, "number_to_human_size": true,
 	"number_to_human": true, "content_tag": true,
 
-	// NOTE: `redirect_to` (129 on the fleet) is deliberately absent. It is as
-	// much a framework builtin as `render`, but phase C.3 mines redirect targets
-	// to build the `navigates_to` graph — orion currently has exactly one such
-	// edge across 2186 files — and dropping the entries first would remove the
-	// only inventory of where those calls are. Add it once C.3 reads the call
-	// sites from the AST instead.
+	// `redirect_to` was held out of this list until phase C.3 read its targets
+	// from the AST, because the ledger was the only inventory of where those
+	// calls were. patterns/ruby/rails_nav.yaml now emits a nav_link producer
+	// per redirect, so the call sites survive as nodes with a resolved
+	// destination — strictly more than the ledger recorded — and the 129
+	// entries are pure noise on every trace footer.
+	"redirect_to": true,
 }
 
 // railsMigrationDSL are ActiveRecord::Migration schema methods. They are
