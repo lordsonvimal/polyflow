@@ -363,7 +363,10 @@ end
 	require.Equal(t, first, second)
 }
 
-// TestSingularize covers the inflections used for nested-resource parameters.
+// TestSingularize covers the inflections used for nested-resource parameters
+// and, since C.2, for route names. The irregulars matter more in the second
+// role: a parameter name normalizes to a wildcard when matched, but a view's
+// `person_path` is looked up verbatim and either hits or does not.
 func TestSingularize(t *testing.T) {
 	for in, want := range map[string]string{
 		"folders":  "folder",
@@ -373,6 +376,13 @@ func TestSingularize(t *testing.T) {
 		"branches": "branch",
 		"status":   "status",
 		"user":     "user",
+		"people":   "person",
+		"children": "child",
+		"media":    "medium",
+		// Deliberately not inflected: the -ves rule that would give "leaf"
+		// gives "archif" and "mof" for the names real apps actually use.
+		"archives": "archive",
+		"moves":    "move",
 	} {
 		require.Equal(t, want, singularize(in), "singularize(%q)", in)
 	}

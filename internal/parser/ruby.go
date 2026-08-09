@@ -27,6 +27,10 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	// (via MatchToGraph pass 1b) suppresses the http_client at that same line.
 	results = dropNonRoutesFileRouteMatches(file, results)
 
+	// C.2: `link_to t(".edit"), edit_study_path(s)` is one link, but the nav
+	// patterns' `_` wildcard lets @helper bind to a non-route call as well.
+	results = dropNonRouteHelperNavMatches(results)
+
 	if err != nil {
 		nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 		setLanguage(nodes, "ruby")
