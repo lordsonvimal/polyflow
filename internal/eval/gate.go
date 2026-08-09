@@ -10,11 +10,15 @@ import (
 type Regression struct {
 	Repo           string  `json:"repo"`
 	CaseID         string  `json:"case_id"`
-	Reason         string  `json:"reason"` // "hard_fail" | "recall_drop" | "silent_miss_rise"
+	Reason         string  `json:"reason"` // "hard_fail" | "recall_drop" | "silent_miss_rise" | "missing_repo" | "corpus_error" | "forbidden_hit"
 	BaselineRecall float64 `json:"baseline_recall,omitempty"`
 	CurrentRecall  float64 `json:"current_recall,omitempty"`
 	BaselineSilent int     `json:"baseline_silent,omitempty"`
 	CurrentSilent  int     `json:"current_silent,omitempty"`
+	// ForbiddenHits names the must_not_include files that are newly returned
+	// (D.1) — the point of the condition is which phantom appeared, not that
+	// one did.
+	ForbiddenHits []string `json:"forbidden_hits,omitempty"`
 }
 
 // GateResult holds the outcome of comparing a run against the baseline.
@@ -36,6 +40,10 @@ type GateResult struct {
 //  4. a repo present in the baseline is absent from the current run — a repo
 //     that fails to clone or crashes during indexing must read as a failure,
 //     not as a silent pass (its cases were never compared).
+//  5. a corpus that was present but failed to run.
+//  6. a case returns a must_not_include file it did not return in the baseline
+//     (D.1) — the false-positive condition, and the only one that can fail a
+//     case for being too broad rather than too narrow.
 func CheckGate(current, baseline *MultiReport) *GateResult {
 	// Index baseline by repo → caseID.
 	type baselineKey struct{ repo, caseID string }
@@ -50,9 +58,46 @@ func CheckGate(current, baseline *MultiReport) *GateResult {
 
 	var regressions []Regression
 	for _, rep := range current.Reports {
+		// Condition 6: a NEW must_not_include violation (D.1).
+		//
+		// Checked as a set difference rather than "any hit at all", for the same
+		// reason condition 1 exempts a pre-existing hard fail: a case authored
+		// against a known-live false positive is a recorded defect, and a gate
+		// that a recorded defect blocks forever is a gate people delete. What
+		// must never pass silently is a phantom that was not there before —
+		// including one appearing on a case that is already red for a recall
+		// reason, which condition 1 skips over.
+		//
+		// Evaluated before condition 1 because a forbidden hit sets HardFail
+		// too, and reporting the same defect twice under two names inflates the
+		// regression count that `polyflow doctor` shows.
+		freshForbidden := make(map[string]bool)
+		for _, cr := range rep.Results {
+			if len(cr.ForbiddenHits) == 0 {
+				continue
+			}
+			base := baselineCases[baselineKey{rep.Repo, cr.CaseID}]
+			known := toSet(base.ForbiddenHits)
+			var fresh []string
+			for _, f := range cr.ForbiddenHits {
+				if !known[f] {
+					fresh = append(fresh, f)
+				}
+			}
+			if len(fresh) > 0 {
+				freshForbidden[cr.CaseID] = true
+				regressions = append(regressions, Regression{
+					Repo:          rep.Repo,
+					CaseID:        cr.CaseID,
+					Reason:        "forbidden_hit",
+					ForbiddenHits: fresh,
+				})
+			}
+		}
+
 		// Condition 1: new HardFail per case.
 		for _, cr := range rep.Results {
-			if !cr.HardFail {
+			if !cr.HardFail || freshForbidden[cr.CaseID] {
 				continue
 			}
 			key := baselineKey{rep.Repo, cr.CaseID}

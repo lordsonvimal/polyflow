@@ -31,7 +31,7 @@ type RepoRef struct {
 // Case is one eval test case.
 type Case struct {
 	ID               string   `yaml:"id"`
-	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic | feature_add | test_impact
+	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic | rank1 | feature_add | test_impact
 	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff|feature_add|test_impact)
 	Service          string   `yaml:"service,omitempty"` // pre-filter target resolution to this service (B.3)
 	NodeType         string   `yaml:"node_type,omitempty"` // pre-filter target resolution to this node type (B.3)
@@ -44,6 +44,17 @@ type Case struct {
 	DiffFile         string   `yaml:"diff_file,omitempty"`
 	ExpectedImpacted []string `yaml:"expected_impacted,omitempty"`
 	MustNotMiss      []string `yaml:"must_not_miss"`
+	// MustNotInclude (D.1) is the precision half of MustNotMiss: hand-verified
+	// files that must NOT appear in the result. Any hit is a hard failure.
+	// Cheap to author from a false-positive audit, and it catches the fan-out
+	// phantom class directly — the failure mode a recall-only corpus is blind to.
+	MustNotInclude []string `yaml:"must_not_include,omitempty"`
+	// Exhaustive (D.1) declares that ExpectedImpacted is the COMPLETE truth set
+	// for this case, not a sample. Precision is computed and reported only for
+	// these cases; for every other case it is left unset rather than emitted as
+	// a number, because hits/returned against a partial truth set measures how
+	// short the sample is, not how precise the tool is.
+	Exhaustive bool `yaml:"exhaustive,omitempty"`
 	// feature_add cases: the new capability to add, anchored to Target (the existing related feature).
 	NewCapability string `yaml:"new_capability,omitempty"`
 	// Semantic search cases (kind=semantic, S.4):
@@ -161,8 +172,34 @@ func ValidateManifest(m *Manifest) []ValidationError {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "rank1 cases use expect_rank1, not expect_any_of (top-10 presence is a semantic case)"})
 			}
 		default:
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic|feature_add|test_impact)", c.Kind)})
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic|rank1|feature_add|test_impact)", c.Kind)})
 		}
+		// D.1 precision keys assert about file paths, so they are meaningful
+		// only for the impact kinds. A semantic or rank1 case scores entity
+		// labels; accepting them there would create a key that reads as a
+		// precision assertion and silently does nothing.
+		if c.Kind == "semantic" || c.Kind == "rank1" {
+			if len(c.MustNotInclude) > 0 {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: c.Kind + " cases cannot use must_not_include (it asserts about file paths, not entity labels)"})
+			}
+			if c.Exhaustive {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: c.Kind + " cases cannot be exhaustive (top-10 search results are never a complete truth set)"})
+			}
+		}
+		// A file cannot be both required and forbidden. Written down separately
+		// these two lists look independent, and a case that contradicts itself
+		// would hard-fail whatever the tool did — an unfixable red case teaches
+		// the reader to ignore the gate.
+		forbidden := toSet(c.MustNotInclude)
+		for _, f := range append(append([]string{}, c.ExpectedImpacted...), c.MustNotMiss...) {
+			if forbidden[f] {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("%q is in both must_not_include and the expected set", f)})
+			}
+		}
+		if c.Exhaustive && len(c.ExpectedImpacted) == 0 {
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: "exhaustive requires expected_impacted (an empty complete truth set means the case expects nothing)"})
+		}
+
 		// Lint rule: every case must have at least one must_not_miss entry.
 		// rank1 is exempt: its single assertion IS the hard failure, so a
 		// must_not_miss list would only restate expect_rank1, and a list that

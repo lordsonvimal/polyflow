@@ -253,12 +253,14 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 	}
 	// Impact cases compare file paths, so put both sides — and the unresolved
 	// ledger that decides honest-vs-silent — into one coordinate system first.
-	return Score(c.ID,
-		pc.keys(returned),
-		pc.keys(c.ExpectedImpacted),
-		pc.keys(c.MustNotMiss),
-		pc.keySet(unresolvedFiles),
-	), nil
+	// must_not_include is a file-path assertion like the rest and goes through
+	// the same canonicalisation: a forbidden path spelled through the
+	// eval/.cache symlink would otherwise never match, and a precision
+	// assertion that cannot fire is worse than none.
+	ret := pc.keys(returned)
+	exp := pc.keys(c.ExpectedImpacted)
+	cr := Score(c.ID, ret, exp, pc.keys(c.MustNotMiss), pc.keySet(unresolvedFiles))
+	return ApplyPrecision(cr, ret, exp, pc.keys(c.MustNotInclude), c.Exhaustive), nil
 }
 
 // runSemanticCase executes a kind=semantic eval case (S.4): NL query →
@@ -345,9 +347,10 @@ func runRank1Case(ctx context.Context, store *graph.SQLiteStore, c Case) (CaseRe
 		cr.Rank2Score = hits[1].Score
 	}
 
+	// No Precision: one hit is either the expected one or it is not, and a
+	// ratio of 1.0 beside that would be a second name for the same bit (D.1).
 	if cr.Rank1 == c.ExpectRank1 && rank1FileMatches(hits[0], c.TargetFile) {
 		cr.Recall = 1
-		cr.Precision = 1
 		cr.HardFail = false
 	}
 	return cr, nil

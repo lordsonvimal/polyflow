@@ -149,7 +149,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 					r.TotalCostUSD = tr.TotalCostUSD
 					cr := agentbench.ScoreTranscript(task.CaseID, tr, task.Expected, task.MustNotMiss)
 					r.Recall = cr.Recall
-					r.Precision = cr.Precision
+					r.Precision = agentbench.TranscriptPrecision(tr, task.Expected)
 					r.SilentMisses = cr.SilentMisses
 					r.HardFail = cr.HardFail
 					r.ExtractedFiles = agentbench.ExtractFiles(tr.Result)

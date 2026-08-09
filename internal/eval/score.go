@@ -9,13 +9,26 @@ import "math"
 // a reference to/from it. A miss with no such trace is SilentMiss — the
 // failure mode the whole project exists to prevent.
 type CaseResult struct {
-	CaseID       string  `json:"case_id"`
-	Kind         string  `json:"kind,omitempty"` // "semantic" (S.4) | "rank1" (C.6); empty for impact cases
-	Recall       float64 `json:"recall"`
-	Precision    float64 `json:"precision"`
-	HonestMisses int     `json:"honest_misses"`
-	SilentMisses int     `json:"silent_misses"`
-	HardFail     bool    `json:"hard_fail"`
+	CaseID string  `json:"case_id"`
+	Kind   string  `json:"kind,omitempty"` // "semantic" (S.4) | "rank1" (C.6); empty for impact cases
+	Recall float64 `json:"recall"`
+	// Precision is a pointer because for most cases there is no such number
+	// (D.1). Scoring hits/returned against an expected_impacted list that is a
+	// hand-picked sample measures how short the sample is, not how precise the
+	// tool is — one corpus reported "precision" against a 2-file sample of 193
+	// returned files. Only an `exhaustive: true` case has a complete enough
+	// truth set for the ratio to mean anything; everywhere else this stays nil
+	// and is omitted from the JSON entirely, so it cannot be quoted by mistake.
+	Precision    *float64 `json:"precision,omitempty"`
+	Exhaustive   bool     `json:"exhaustive,omitempty"`
+	HonestMisses int      `json:"honest_misses"`
+	SilentMisses int      `json:"silent_misses"`
+	HardFail     bool     `json:"hard_fail"`
+
+	// ForbiddenHits (D.1) are the must_not_include entries the query actually
+	// returned — named, not counted, because a precision failure is only
+	// actionable if you know which phantom fired.
+	ForbiddenHits []string `json:"forbidden_hits,omitempty"`
 
 	// Rank-1 diagnostics (kind=rank1, C.6). Rank1 is what actually came back
 	// first, so a failing case names its own usurper. The two scores are
@@ -43,8 +56,17 @@ type Report struct {
 	Repo           string       `json:"repo"`
 	Results        []CaseResult `json:"results"`
 	Recall         float64      `json:"recall"`                    // macro-average over all cases
-	Precision      float64      `json:"precision"`                 // macro-average over all cases
 	SemanticRecall float64      `json:"semantic_recall,omitempty"` // macro-average over kind=semantic cases (S.4)
+	// Precision is the macro-average over `exhaustive: true` cases ONLY (D.1),
+	// and is absent when the repo has none. It used to average every case,
+	// which made it a measure of corpus authoring effort rather than of the
+	// tool. ExhaustiveCases is published beside it so the denominator is never
+	// invisible.
+	Precision       *float64 `json:"precision,omitempty"`
+	ExhaustiveCases int      `json:"exhaustive_cases,omitempty"`
+	// ForbiddenHits is the total number of must_not_include violations across
+	// the repo's cases — the corpus's only direct false-positive signal.
+	ForbiddenHits int `json:"forbidden_hits,omitempty"`
 	// Rank1Accuracy is the fraction of kind=rank1 cases whose expected entity
 	// came back first (C.6). Separated from Recall for the same reason
 	// SemanticRecall is: "did the blast radius reach the right files" and "did
@@ -77,10 +99,6 @@ func Score(caseID string, returned, expected, mustNotMiss []string, unresolvedFi
 	if len(expSet) > 0 {
 		recall = float64(hitCount) / float64(len(expSet))
 	}
-	precision := 0.0
-	if len(retSet) > 0 {
-		precision = float64(hitCount) / float64(len(retSet))
-	}
 
 	honestMisses, silentMisses := 0, 0
 	for f := range expSet {
@@ -105,11 +123,55 @@ func Score(caseID string, returned, expected, mustNotMiss []string, unresolvedFi
 	return CaseResult{
 		CaseID:       caseID,
 		Recall:       recall,
-		Precision:    precision,
 		HonestMisses: honestMisses,
 		SilentMisses: silentMisses,
 		HardFail:     hardFail,
 	}
+}
+
+// Precision is hits/returned. Exported as a separate function precisely so that
+// computing it is an explicit act at each call site: it is a valid number only
+// where `expected` is the complete truth set (D.1), and callers that ask for it
+// against a sample are making a claim they have to justify.
+func Precision(returned, expected []string) float64 {
+	retSet := toSet(returned)
+	if len(retSet) == 0 {
+		return 0
+	}
+	expSet := toSet(expected)
+	hits := 0
+	for f := range retSet {
+		if expSet[f] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(retSet))
+}
+
+// ApplyPrecision scores the D.1 precision half of a case onto an already-scored
+// CaseResult: the must_not_include violations, and — only for an exhaustive
+// case — the precision ratio itself.
+//
+// A forbidden hit is a hard failure on its own. It is not folded into the
+// existing hardFail flag silently: an over-broad blast radius and a missed file
+// are opposite defects, and an agent told "unnecessary work" needs a different
+// fix from one told "you'll ship a regression".
+func ApplyPrecision(cr CaseResult, returned, expected, mustNotInclude []string, exhaustive bool) CaseResult {
+	retSet := toSet(returned)
+	for _, f := range mustNotInclude {
+		if retSet[f] {
+			cr.ForbiddenHits = append(cr.ForbiddenHits, f)
+		}
+	}
+	if len(cr.ForbiddenHits) > 0 {
+		cr.HardFail = true
+	}
+	if exhaustive {
+		cr.Exhaustive = true
+		p := Precision(returned, expected)
+		cr.Precision = &p
+	}
+	return cr
 }
 
 // AggregateReport computes corpus-level macro-averaged recall and precision
@@ -121,11 +183,15 @@ func AggregateReport(repo string, results []CaseResult) Report {
 	}
 	var sumR, sumP float64
 	var sumSR, sumRank1 float64
-	var nSem, nRank1 int
+	var nSem, nRank1, nExh, nForbidden int
 	minGap := math.Inf(1)
 	for _, r := range results {
 		sumR += r.Recall
-		sumP += r.Precision
+		if r.Exhaustive && r.Precision != nil {
+			sumP += *r.Precision
+			nExh++
+		}
+		nForbidden += len(r.ForbiddenHits)
 		switch r.Kind {
 		case "semantic":
 			sumSR += r.Recall
@@ -140,10 +206,15 @@ func AggregateReport(repo string, results []CaseResult) Report {
 	}
 	n := float64(len(results))
 	rep := Report{
-		Repo:      repo,
-		Results:   results,
-		Recall:    sumR / n,
-		Precision: sumP / n,
+		Repo:            repo,
+		Results:         results,
+		Recall:          sumR / n,
+		ExhaustiveCases: nExh,
+		ForbiddenHits:   nForbidden,
+	}
+	if nExh > 0 {
+		p := sumP / float64(nExh)
+		rep.Precision = &p
 	}
 	if nSem > 0 {
 		rep.SemanticRecall = sumSR / float64(nSem)
