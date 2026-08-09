@@ -38,6 +38,9 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 
 	// HTML pass: nav links and inline event attributes from static markup.
 	htmlResults, _ := matcher.Match("html", file, blankedHTML)
+	// C.5: blanking an ERB tag leaves whitespace where an interpolated id= or
+	// class= value used to be, and that value is what names the element node.
+	htmlResults = normalizeHTMLElementMatches(htmlResults)
 	htmlNodes, htmlEdges, htmlUnresolved := patterns.MatchToGraph(service, htmlResults)
 	setLanguage(htmlNodes, "html")
 

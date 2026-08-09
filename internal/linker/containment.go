@@ -87,7 +87,7 @@ func LinkContainment(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 
 	for i := range nodes {
 		n := &nodes[i]
-		if n.File == "" || !(containedTypes[n.Type] || isStylesheetDecl(n)) {
+		if n.File == "" || !(containedTypes[n.Type] || isStylesheetDecl(n) || isMarkupElement(n)) {
 			continue
 		}
 		fID := ensureFile(n.Service, n.File)
@@ -119,6 +119,35 @@ var stylesheetPattern = map[string]bool{
 
 func isStylesheetDecl(n *graph.Node) bool {
 	return n.Meta != nil && stylesheetPattern[n.Meta["pattern"]]
+}
+
+// markupElementPattern marks the element nodes the HTML patterns mint —
+// `<div id=…>` / `<div class=…>` in a .html file or in the static half of an
+// .erb template.
+//
+// C.5: 2,394 of orion's 2,933 ERB element nodes (82%) had no edge in either
+// direction, and the reason was not that the markup is unreachable. A JSX
+// element node is attached to the component that renders it (`calls`, from the
+// enclosing function), and a stylesheet selector is attached to its sheet by
+// the clause above — an ERB element was attached to nothing, because a template
+// has no enclosing declaration node to hang it off. The file is that node.
+//
+// Containing them is what puts the view's markup on a path a traversal can
+// walk: controller →`renders`→ view →`contains`→ element →`dom_listen`→ the
+// jQuery handler that fires. Before this, that last hop was only reachable
+// backwards from the JavaScript, so "what happens when this view is edited"
+// stopped at the file.
+//
+// jsx_element_* is deliberately absent: those nodes already have their own
+// attribution, and their component is itself contained by the file, so adding
+// containment would only duplicate a path that exists.
+var markupElementPattern = map[string]bool{
+	"html_element_id":    true,
+	"html_element_class": true,
+}
+
+func isMarkupElement(n *graph.Node) bool {
+	return n.Type == graph.NodeTypeElement && n.Meta != nil && markupElementPattern[n.Meta["pattern"]]
 }
 
 // structKey keys a struct by service + package directory + label, so a method's
