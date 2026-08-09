@@ -20,6 +20,7 @@ func (p *HTMLParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 		return nil, nil, nil, err
 	}
 	results, matchErr := matcher.Match("html", file, src)
+	results = normalizeHTMLElementMatches(results)
 	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "html")
 	return nodes, edges, unresolved, matchErr

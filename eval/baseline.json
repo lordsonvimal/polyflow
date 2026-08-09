@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T10:56:30.665274Z",
+  "generated_at": "2026-08-09T11:38:18.341651Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -1317,10 +1317,18 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "agent-message-delete-handler-page",
+          "recall": 1,
+          "precision": 0.14285714285714285,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
         }
       ],
       "recall": 1,
-      "precision": 0.31933437878800086
+      "precision": 0.31279818486463573
     },
     {
       "repo": "synergy",
