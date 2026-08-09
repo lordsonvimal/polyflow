@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T15:24:34.916865Z",
+  "generated_at": "2026-08-09T15:47:29.440835Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -211,6 +211,113 @@
       "recall": 0.8571428571428571,
       "rank1_accuracy": 1,
       "rank1_min_gap": 0.007000000000000001
+    },
+    {
+      "repo": "fleet-datascience",
+      "results": [
+        {
+          "case_id": "health-no-foreign-healthcheck-clients",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/datascience/dsw-manager/internal/clients/cam_client.go",
+            "/Users/lordson/Projects/datascience/dsw-manager/internal/clients/mysycamore_client.go",
+            "/Users/lordson/Projects/mysycamore/internal/clients/cam_client.go"
+          ]
+        },
+        {
+          "case_id": "mysycamore-create-user-not-cam-clients",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/datascience/dsw-manager/internal/clients/cam_client.go",
+            "/Users/lordson/Projects/mysycamore/internal/clients/cam_client.go"
+          ]
+        },
+        {
+          "case_id": "cam-users-not-mysycamore-client",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/datascience/dsw-manager/internal/clients/mysycamore_client.go"
+          ]
+        },
+        {
+          "case_id": "mysycamore-settings-not-dsw-manager-client",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/datascience/migrate-from-legacy/26.1.0_to_26.2.0/dsw_manager_client.go"
+          ]
+        },
+        {
+          "case_id": "agent-config-remove-blast",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "agent-configs-fetch-blast",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "container-stats-heartbeat-blast",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sce-job-start-reaches-nextgen",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "cdr-lros-update-reaches-nextgen",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "cdr-agent-register-reaches-nextgen",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "dsw-manager-user-sync-reaches-nextgen",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 1,
+      "exhaustive_cases": 3,
+      "forbidden_hits": 7
     },
     {
       "repo": "mysycamore",
