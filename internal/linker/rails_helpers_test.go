@@ -7,12 +7,12 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
-// makeRouteNode is a test helper that builds a ruby route node.
-func makeRouteNode(id, svc, file string, line int, pattern string, meta map[string]string) graph.Node {
-	if meta == nil {
-		meta = map[string]string{}
-	}
-	meta["pattern"] = pattern
+// makeRouteNode builds an http_handler node the way the Rails route walker
+// emits one: an already-composed path plus the route name it was declared
+// under. Both are facts only the walker can know — the earlier fixtures passed
+// a bare resource name and expected the map to reconstruct a path from it,
+// which is precisely the model this pass replaced.
+func makeRouteNode(id, svc, file string, line int, helper, method, path string) graph.Node {
 	return graph.Node{
 		ID:       id,
 		Type:     graph.NodeTypeHTTPHandler,
@@ -20,7 +20,12 @@ func makeRouteNode(id, svc, file string, line int, pattern string, meta map[stri
 		File:     file,
 		Line:     line,
 		Language: "ruby",
-		Meta:     meta,
+		Meta: map[string]string{
+			"pattern":      "rest_resource_route",
+			"route_helper": helper,
+			"method":       method,
+			"path":         path,
+		},
 	}
 }
 
@@ -42,101 +47,96 @@ func makeNavHelperNode(id, svc, file string, line int, helper string) graph.Node
 	}
 }
 
-// TestBuildRailsHelperMap_Resources verifies RESTful helper generation.
-func TestBuildRailsHelperMap_Resources(t *testing.T) {
+// TestBuildRailsHelperMap_ReadsComposedRoutes verifies that a helper resolves
+// to the path the walker composed, prefix and all — not to one rebuilt from the
+// resource name. `scope "app" { resources :folders }` is the shape that broke:
+// folder_path is /app/folders/:id, and no amount of inflection on "folders"
+// produces the "app" segment.
+func TestBuildRailsHelperMap_ReadsComposedRoutes(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("n1", "svc", "config/routes.rb", 2, "resources_route",
-			map[string]string{"resource": ":reports"}),
+		makeRouteNode("n1", "svc", "config/routes.rb", 2, "folders", "GET", "/app/folders"),
+		makeRouteNode("n2", "svc", "config/routes.rb", 2, "folders", "POST", "/app/folders"),
+		makeRouteNode("n3", "svc", "config/routes.rb", 2, "folder", "GET", "/app/folders/:id"),
+		makeRouteNode("n4", "svc", "config/routes.rb", 2, "new_folder", "GET", "/app/folders/new"),
+		makeRouteNode("n5", "svc", "config/routes.rb", 2, "edit_folder", "GET", "/app/folders/:id/edit"),
 	}
 	m := BuildRailsHelperMap(nodes)
 	svc := m["svc"]
 
-	// Index (GET /reports)
-	assertHelperGet(t, svc, "reports_path", "GET", "/reports")
-	// Create (POST /reports)
-	assertHelperGet(t, svc, "reports_path", "POST", "/reports")
-	// Show (GET /reports/:id)
-	assertHelperGet(t, svc, "report_path", "GET", "/reports/:id")
-	// New
-	assertHelperGet(t, svc, "new_report_path", "GET", "/reports/new")
-	// Edit
-	assertHelperGet(t, svc, "edit_report_path", "GET", "/reports/:id/edit")
-	// _url aliases
-	if len(svc["reports_url"]) == 0 {
-		t.Error("missing reports_url alias")
+	assertHelperGet(t, svc, "folders_path", "GET", "/app/folders")
+	assertHelperGet(t, svc, "folders_path", "POST", "/app/folders")
+	assertHelperGet(t, svc, "folder_path", "GET", "/app/folders/:id")
+	assertHelperGet(t, svc, "new_folder_path", "GET", "/app/folders/new")
+	assertHelperGet(t, svc, "edit_folder_path", "GET", "/app/folders/:id/edit")
+
+	// _url is the same route under the other name Rails generates.
+	assertHelperGet(t, svc, "folder_url", "GET", "/app/folders/:id")
+}
+
+// TestBuildRailsHelperMap_UnnamedRouteIsSkipped verifies that a route the walker
+// could not name contributes nothing. A nameless route is a gap the ledger
+// records; inventing a name for it would shadow a real helper.
+func TestBuildRailsHelperMap_UnnamedRouteIsSkipped(t *testing.T) {
+	nodes := []graph.Node{
+		makeRouteNode("n1", "svc", "config/routes.rb", 2, "", "GET", "/app/*glob"),
+	}
+	if len(BuildRailsHelperMap(nodes)) != 0 {
+		t.Error("a route with no route_helper must contribute no entry")
 	}
 }
 
-// TestBuildRailsHelperMap_SingularResource verifies resource (singular) helper generation.
-func TestBuildRailsHelperMap_SingularResource(t *testing.T) {
+// TestBuildRailsHelperMap_ScopedNamesDoNotCollide verifies that two resources
+// with the same name in different namespaces stay distinct helpers rather than
+// fanning out. Their *paths* differ and so do their Rails names, which is the
+// whole reason the name is recorded at declaration time.
+func TestBuildRailsHelperMap_ScopedNamesDoNotCollide(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("n1", "svc", "config/routes.rb", 2, "resource_route",
-			map[string]string{"resource": ":profile"}),
+		makeRouteNode("n1", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
+		makeRouteNode("n2", "svc", "routes.rb", 10, "client_api_v1_users", "GET", "/client_api/v1/users"),
 	}
-	m := BuildRailsHelperMap(nodes)
-	svc := m["svc"]
+	svc := BuildRailsHelperMap(nodes)["svc"]
 
-	assertHelperGet(t, svc, "profile_path", "GET", "/profile")
-	assertHelperGet(t, svc, "new_profile_path", "GET", "/profile/new")
-	assertHelperGet(t, svc, "edit_profile_path", "GET", "/profile/edit")
+	if got := len(svc["users_path"]); got != 1 {
+		t.Errorf("users_path: expected 1 route, got %d: %v", got, svc["users_path"])
+	}
+	assertHelperGet(t, svc, "users_path", "GET", "/app/users")
+	assertHelperGet(t, svc, "client_api_v1_users_path", "GET", "/client_api/v1/users")
+}
 
-	// Singular resource has NO :id in paths.
-	for _, r := range svc["profile_path"] {
-		if r.Path == "/profiles/:id" || r.Path == "/profile/:id" {
-			t.Errorf("singular resource must not have :id path; got %s %s", r.Method, r.Path)
-		}
+// TestBuildRailsHelperMap_FanOutOnGenuineDuplicate verifies that when one name
+// really does map to two paths, both survive for the fan-out rule (rule 1).
+func TestBuildRailsHelperMap_FanOutOnGenuineDuplicate(t *testing.T) {
+	nodes := []graph.Node{
+		makeRouteNode("n1", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
+		makeRouteNode("n2", "svc", "config/routes/admin.rb", 3, "users", "GET", "/admin/users"),
+	}
+	svc := BuildRailsHelperMap(nodes)["svc"]
+	if got := len(svc["users_path"]); got != 2 {
+		t.Errorf("fan-out: expected 2 routes for users_path, got %d", got)
 	}
 }
 
-// TestBuildRailsHelperMap_MemberCollection verifies member/collection route helpers.
-func TestBuildRailsHelperMap_MemberCollection(t *testing.T) {
+// TestBuildRailsHelperMap_DedupesIdenticalRoutes verifies that the same
+// (name, method, path) recorded twice yields one entry, so a duplicate node
+// cannot masquerade as a collision and trigger candidate fan-out.
+func TestBuildRailsHelperMap_DedupesIdenticalRoutes(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("n1", "svc", "config/routes.rb", 2, "resources_route",
-			map[string]string{"resource": ":reports"}),
-		// member do; get :archive; end  (line 3 = inside the resources block)
-		makeRouteNode("n2", "svc", "config/routes.rb", 3, "member_verb_route",
-			map[string]string{"verb": "get", "action": ":archive"}),
-		// collection do; get :recent; end
-		makeRouteNode("n3", "svc", "config/routes.rb", 6, "collection_verb_route",
-			map[string]string{"verb": "get", "action": ":recent"}),
+		makeRouteNode("n1", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
+		makeRouteNode("n2", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
 	}
-	m := BuildRailsHelperMap(nodes)
-	svc := m["svc"]
-
-	// member: archive_report_path → GET /reports/:id/archive
-	assertHelperGet(t, svc, "archive_report_path", "GET", "/reports/:id/archive")
-	// collection: recent_reports_path → GET /reports/recent
-	assertHelperGet(t, svc, "recent_reports_path", "GET", "/reports/recent")
-}
-
-// TestBuildRailsHelperMap_FanOutCollision verifies that two resources with the
-// same singular name (collision across namespaces) each get a helper entry (rule 1).
-func TestBuildRailsHelperMap_FanOutCollision(t *testing.T) {
-	nodes := []graph.Node{
-		makeRouteNode("n1", "svc", "routes.rb", 1, "resources_route",
-			map[string]string{"resource": ":users"}),
-		makeRouteNode("n2", "svc", "routes.rb", 10, "resources_route",
-			map[string]string{"resource": ":users"}), // same name, different block
-	}
-	m := BuildRailsHelperMap(nodes)
-	svc := m["svc"]
-
-	// Both entries must produce routes — fan-out means ≥2 entries for users_path.
-	routes := svc["users_path"]
-	if len(routes) < 2 {
-		t.Errorf("fan-out: expected ≥2 routes for users_path, got %d", len(routes))
+	svc := BuildRailsHelperMap(nodes)["svc"]
+	if got := len(svc["users_path"]); got != 1 {
+		t.Errorf("expected identical routes deduped to 1, got %d", got)
 	}
 }
 
 // TestBuildRailsHelperMap_Determinism verifies that running twice produces identical output (rule 2).
 func TestBuildRailsHelperMap_Determinism(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("n1", "svc", "routes.rb", 1, "resources_route",
-			map[string]string{"resource": ":reports"}),
-		makeRouteNode("n2", "svc", "routes.rb", 2, "member_verb_route",
-			map[string]string{"verb": "get", "action": ":archive"}),
-		makeRouteNode("n3", "svc", "routes.rb", 5, "resources_route",
-			map[string]string{"resource": ":users"}),
+		makeRouteNode("n1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
+		makeRouteNode("n2", "svc", "routes.rb", 2, "archive_report", "GET", "/app/reports/:id/archive"),
+		makeRouteNode("n3", "svc", "routes.rb", 5, "users", "GET", "/app/users"),
+		makeRouteNode("n4", "svc", "routes.rb", 6, "users", "GET", "/admin/users"),
 	}
 
 	run := func() string {
@@ -165,8 +165,7 @@ func TestBuildRailsHelperMap_Determinism(t *testing.T) {
 // TestResolveRailsNavHelpers_Basic verifies path resolution for a simple link_to.
 func TestResolveRailsNavHelpers_Basic(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("r1", "svc", "routes.rb", 1, "resources_route",
-			map[string]string{"resource": ":reports"}),
+		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
 		makeNavHelperNode("c1", "svc", "views/index.erb", 5, "reports_path"),
 	}
 
@@ -179,7 +178,7 @@ func TestResolveRailsNavHelpers_Basic(t *testing.T) {
 	}
 	found := false
 	for _, n := range updated {
-		if n.ID == "c1" && n.Meta["path"] == "/reports" && n.Meta["method"] == "GET" {
+		if n.ID == "c1" && n.Meta["path"] == "/app/reports" && n.Meta["method"] == "GET" {
 			found = true
 		}
 	}
@@ -213,8 +212,7 @@ func TestResolveRailsNavHelpers_Unresolved(t *testing.T) {
 // is removed from the updated node (the helper is now resolved into path/method).
 func TestResolveRailsNavHelpers_HelperRemoved(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("r1", "svc", "routes.rb", 1, "resources_route",
-			map[string]string{"resource": ":reports"}),
+		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
 		makeNavHelperNode("c1", "svc", "views/index.erb", 5, "reports_path"),
 	}
 
@@ -231,8 +229,8 @@ func TestResolveRailsNavHelpers_HelperRemoved(t *testing.T) {
 // TestResolveRailsNavHelpers_Determinism verifies two-run byte-identical output (rule 2).
 func TestResolveRailsNavHelpers_Determinism(t *testing.T) {
 	nodes := []graph.Node{
-		makeRouteNode("r1", "svc", "routes.rb", 1, "resources_route",
-			map[string]string{"resource": ":reports"}),
+		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
+		makeRouteNode("r2", "svc", "routes.rb", 1, "report", "GET", "/app/reports/:id"),
 		makeNavHelperNode("c1", "svc", "views/a.erb", 5, "reports_path"),
 		makeNavHelperNode("c2", "svc", "views/b.erb", 3, "report_path"),
 		makeNavHelperNode("c3", "svc", "views/b.erb", 7, "unknown_path"),
@@ -253,25 +251,6 @@ func TestResolveRailsNavHelpers_Determinism(t *testing.T) {
 	a, b := run(), run()
 	if a != b {
 		t.Errorf("determinism failed\nrun1: %s\nrun2: %s", a, b)
-	}
-}
-
-// TestSingularize covers the most common English plural forms.
-func TestSingularize(t *testing.T) {
-	cases := []struct{ plural, want string }{
-		{"reports", "report"},
-		{"users", "user"},
-		{"categories", "category"},
-		{"buses", "bus"},
-		{"branches", "branch"},
-		{"people", "person"},
-		{"media", "medium"},
-	}
-	for _, c := range cases {
-		got := singularize(c.plural)
-		if got != c.want {
-			t.Errorf("singularize(%q) = %q, want %q", c.plural, got, c.want)
-		}
 	}
 }
 

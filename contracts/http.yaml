@@ -83,6 +83,18 @@ contracts:
                                    # juniper fleet were `/` → `GET /`. A
                                    # relative link that names a path, and any
                                    # absolute href, still crosses services.
+      browser_same_origin: true    # C.2: …unless the linking service serves that
+                                   # path itself, in which case the page is
+                                   # linking to its own app. An href has no base
+                                   # URL to be joined to — the browser resolves
+                                   # it against the origin that served the page —
+                                   # so every nav producer counts as
+                                   # browser-executed regardless of the language
+                                   # that rendered it. Restricts only when the
+                                   # own service actually answers the key, so a
+                                   # genuine cross-service link (maple-manager's
+                                   # login page → willow's /saml/login, a
+                                   # route maple-manager does not serve) survives.
     consumer:
       node: http_handler
       key: [method, path]
