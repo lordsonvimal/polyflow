@@ -1393,7 +1393,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// For every publisher/subscriber node that has "exchange" in its meta, create
 	// a NodeTypeChannel node keyed by "service:exchange/routing_key" and emit
 	// publishes/subscribes edges.
-	seenChannels := make(map[string]bool)
+	// channelID → index in nodes, so a second site for the same exchange can
+	// merge its role into the node the first one minted.
+	seenChannels := make(map[string]int)
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Meta[graph.MetaIsTest] == "true" {
@@ -1408,14 +1410,33 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		channelKey := exchange + "/" + routingKey
 		channelID := fmt.Sprintf("%s:channel:%s", service, channelKey)
 
-		if !seenChannels[channelID] {
-			seenChannels[channelID] = true
+		// The site's own node type says which side of the exchange this service
+		// sits on; the channel node it mints is otherwise role-blind, which is
+		// what lets the cross-service amqp contract run edges backwards along
+		// the message flow. A site that is neither publisher nor subscriber
+		// leaves the role unset rather than guessing.
+		channelRole := ""
+		switch n.Type {
+		case graph.NodeTypePublisher:
+			channelRole = graph.ChannelRoleProducer
+		case graph.NodeTypeSubscriber:
+			channelRole = graph.ChannelRoleConsumer
+		}
+		if idx, ok := seenChannels[channelID]; ok {
+			m := nodes[idx].Meta
+			m[graph.MetaChannelRole] = graph.MergeChannelRole(m[graph.MetaChannelRole], channelRole)
+		} else {
+			meta := map[string]string{"exchange": exchange, "routing_key": routingKey}
+			if channelRole != "" {
+				meta[graph.MetaChannelRole] = channelRole
+			}
+			seenChannels[channelID] = len(nodes)
 			nodes = append(nodes, graph.Node{
 				ID:      channelID,
 				Type:    graph.NodeTypeChannel,
 				Label:   channelKey,
 				Service: service,
-				Meta:    map[string]string{"exchange": exchange, "routing_key": routingKey},
+				Meta:    meta,
 			})
 		}
 

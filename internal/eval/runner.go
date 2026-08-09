@@ -231,10 +231,14 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 				return CaseResult{}, fmt.Errorf("target %q in %q: %w", c.Target, c.TargetFile, err)
 			}
 		}
-		out := impact.Build(idx, root, 10, "", false, 0)
+		out := impact.Build(idx, root, impact.Options{Depth: 10, Policy: graph.BlastRadiusPolicy()})
 		returned = nodeImpactFiles(out)
 	case "file":
-		out, err := impact.BuildFile(idx, "", c.Target, "backward", 10)
+		out, err := impact.BuildFile(idx, c.Target, impact.Options{
+			Depth:     10,
+			Direction: "backward",
+			Policy:    graph.BlastRadiusPolicy(),
+		})
 		if err != nil {
 			return CaseResult{}, fmt.Errorf("file impact: %w", err)
 		}

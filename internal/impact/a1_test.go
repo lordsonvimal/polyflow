@@ -46,7 +46,7 @@ func provenanceIndex() *graph.AdjacencyIndex {
 // verification_summary is computed from traversed edges.
 func TestBuild_VerificationSummaryPopulated(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 
 	// e1 (verified) and e2 (candidate) are in the blast radius
 	assert.Equal(t, 1, out.VerificationSummary.Verified)
@@ -60,14 +60,14 @@ func TestBuild_VerificationSummaryPopulated(t *testing.T) {
 // present but all-zero when no edges have verification state.
 func TestBuild_VerificationSummaryEmptyWhenNoFusedEdges(t *testing.T) {
 	idx := fixtureIndex() // edges have no VerificationState
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	assert.Equal(t, graph.VerificationSummary{}, out.VerificationSummary)
 }
 
 // TestBuild_VerificationSummaryPresentInJSON verifies {}-never-absent.
 func TestBuild_VerificationSummaryPresentInJSON(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	data, err := json.Marshal(out)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"verification_summary"`)
@@ -76,7 +76,7 @@ func TestBuild_VerificationSummaryPresentInJSON(t *testing.T) {
 // TestBuild_PerEdgeProvenance verifies per-caller verification fields are set.
 func TestBuild_PerEdgeProvenance(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 
 	// be:getUser is depth 1; its via edge is e2 (candidate)
 	require.NotEmpty(t, out.Callers)
@@ -96,7 +96,7 @@ func TestBuild_PerEdgeProvenance(t *testing.T) {
 // TestBuild_SourcesCompactFormat verifies compact "provider:ref" encoding.
 func TestBuild_SourcesCompactFormat(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 
 	var feCallerSources []string
 	for _, c := range out.Callers {
@@ -114,7 +114,7 @@ func TestBuild_SourcesCompactFormat(t *testing.T) {
 // TestBuild_SourcesVerboseFormat verifies full SourceRef structs under verbose.
 func TestBuild_SourcesVerboseFormat(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", true, 0) // verboseSources
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10, VerboseSources: true}) // verboseSources
 
 	for _, c := range out.Callers {
 		if c.ID == "fe:fetchUser" {
@@ -132,7 +132,7 @@ func TestBuild_SourcesVerboseFormat(t *testing.T) {
 // TestSummarize_VerificationSummaryCarried verifies the summary survives rollup.
 func TestSummarize_VerificationSummaryCarried(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	s := out.Summarize()
 	assert.Equal(t, out.VerificationSummary, s.VerificationSummary)
 }
@@ -141,7 +141,7 @@ func TestSummarize_VerificationSummaryCarried(t *testing.T) {
 // max-tokens budget still carries both unresolved and verification_summary.
 func TestBudgetFloor_VerificationSummaryAlwaysPresent(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "db.go", Line: 5, Name: "missingFn", Kind: "call_ref"},
 	})
@@ -160,7 +160,7 @@ func TestBudgetFloor_VerificationSummaryAlwaysPresent(t *testing.T) {
 func TestBuild_DeterministicOutput(t *testing.T) {
 	idx := provenanceIndex()
 	run := func() string {
-		out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+		out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 		data, err := json.Marshal(out)
 		require.NoError(t, err)
 		return string(data)
@@ -172,7 +172,7 @@ func TestBuild_DeterministicOutput(t *testing.T) {
 // present in the file-rollup (Summary) shape too.
 func TestBudget_VerificationSummaryInSummaryShape(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 
 	// forceSummary=true to get the Summary shape.
 	budgeted := out.ApplyBudget(0, true)
@@ -195,7 +195,7 @@ func TestBudget_VerificationSummaryInSummaryShape(t *testing.T) {
 // so Trust is the zero TrustStamp{Measured:false} until the caller populates it.
 func TestBuild_TrustZeroStateInJSON(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	assert.Equal(t, graph.TrustStamp{Measured: false}, out.Trust)
 
 	data, err := json.Marshal(out)
@@ -207,7 +207,7 @@ func TestBuild_TrustZeroStateInJSON(t *testing.T) {
 // carries trust — it must survive any token budget cut like verification_summary.
 func TestBudgetFloor_TrustAlwaysPresent(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	out.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0, MeasuredAt: "2026-07-19T10:31:00Z"}
 
 	budgeted := out.ApplyBudget(1, false)
@@ -222,7 +222,7 @@ func TestBudgetFloor_TrustAlwaysPresent(t *testing.T) {
 // TestSummarize_TrustCarried verifies trust survives file rollup.
 func TestSummarize_TrustCarried(t *testing.T) {
 	idx := provenanceIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	out.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0}
 	s := out.Summarize()
 	assert.Equal(t, out.Trust, s.Trust)

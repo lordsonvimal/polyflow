@@ -49,7 +49,10 @@ type Result struct {
 	ServicesAffected     []string              `json:"services_affected"`
 	CrossServiceTriggers []CrossServiceTrigger `json:"cross_service_triggers"`
 	Depth                int                   `json:"depth"`
-	TotalCallers         int                   `json:"total_callers"`
+	// Direction is the question this answer is to: "backward" (what breaks),
+	// "forward" (what this reaches) or "both". Always present.
+	Direction    string `json:"direction"`
+	TotalCallers int    `json:"total_callers"`
 
 	// Unresolved lists references in the traversed files that the indexer
 	// could not resolve — the blast radius may be under-reported where these
@@ -77,24 +80,63 @@ type Result struct {
 	Budget *budget.Info `json:"budget,omitempty"`
 }
 
-// Build computes the blast radius of root: its ancestors up to depth
-// (<= 0 means unlimited), optionally filtered to one service. verboseSources
-// controls whether per-caller Sources contains compact "provider:ref" strings
-// (false, default) or full SourceRef structs (true, --verbose-sources).
-// Build computes the blast radius of root. staleAfter is the workspace-configured
-// freshness threshold (0 = no stale check).
-func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service string, verboseSources bool, staleAfter time.Duration) *Result {
-	ancestors := graph.Ancestors(idx, root.ID, depth)
+// Options shapes a Build call. The zero value is the historical behaviour
+// (backward, raw walk) so a caller that only wants a blast radius need not
+// think about any of it.
+type Options struct {
+	Depth   int    // <= 0 means unlimited
+	Service string // filter results to one service ("" = all)
+	// Direction selects which question is being asked: "backward" (default)
+	// is "what breaks if I change this", "forward" is "what does this reach"
+	// — what an agent needs to read. "both" unions them.
+	Direction string
+	// Policy shapes the walk; see graph.TraversalPolicy. Callers wanting the
+	// blast-radius shape pass graph.BlastRadiusPolicy().
+	Policy graph.TraversalPolicy
 
-	if service != "" {
+	VerboseSources bool
+	StaleAfter     time.Duration
+}
+
+// Build computes the blast radius of root under opts. verboseSources controls
+// whether per-caller Sources contains compact "provider:ref" strings (false,
+// default) or full SourceRef structs (true, --verbose-sources). StaleAfter is
+// the workspace-configured freshness threshold (0 = no stale check).
+//
+// The result field is still called Callers for compatibility with the output
+// contract; under Direction "forward" they are callees.
+func Build(idx *graph.AdjacencyIndex, root *graph.Node, opts Options) *Result {
+	var ancestors []graph.TraversalResult
+	switch opts.Direction {
+	case "forward":
+		ancestors = graph.TraverseWithPolicy(idx, root.ID, "out", graph.BFS, opts.Depth, opts.Policy)
+	case "both":
+		ancestors = graph.TraverseWithPolicy(idx, root.ID, "in", graph.BFS, opts.Depth, opts.Policy)
+		seen := make(map[string]bool, len(ancestors))
+		for _, a := range ancestors {
+			seen[a.Node.ID] = true
+		}
+		// A node reachable both ways keeps its backward hit: "it breaks" is
+		// the stronger claim and the one the depth was measured for.
+		for _, d := range graph.TraverseWithPolicy(idx, root.ID, "out", graph.BFS, opts.Depth, opts.Policy) {
+			if !seen[d.Node.ID] {
+				ancestors = append(ancestors, d)
+			}
+		}
+	default:
+		ancestors = graph.TraverseWithPolicy(idx, root.ID, "in", graph.BFS, opts.Depth, opts.Policy)
+	}
+
+	if opts.Service != "" {
 		filtered := ancestors[:0]
 		for _, a := range ancestors {
-			if a.Node.Service == service {
+			if a.Node.Service == opts.Service {
 				filtered = append(filtered, a)
 			}
 		}
 		ancestors = filtered
 	}
+	verboseSources := opts.VerboseSources
 
 	callers, entryPoints, servicesAffected, triggers, edges := assemble(idx, ancestors, verboseSources)
 
@@ -104,11 +146,21 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, depth int, service strin
 		EntryPoints:          entryPoints,
 		ServicesAffected:     servicesAffected,
 		CrossServiceTriggers: triggers,
-		Depth:                depth,
+		Depth:                opts.Depth,
+		Direction:            direction(opts.Direction),
 		TotalCallers:         len(callers),
 		Unresolved:           []graph.UnresolvedRef{},
-		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, staleAfter, time.Now()),
+		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, opts.StaleAfter, time.Now()),
 	}
+}
+
+// direction normalises the reported direction so the output never omits it —
+// an absent direction reads as "backward" to some agents and "both" to others.
+func direction(d string) string {
+	if d == "" {
+		return "backward"
+	}
+	return d
 }
 
 // assemble turns a traversed ancestor set into the shared output pieces:

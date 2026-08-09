@@ -115,16 +115,47 @@ cases:
     must_not_miss:
       - router/router.go
 
+  # D.4: the seven handler cases below are `exhaustive`. They all close over the
+  # same six files for the same reason, established call-level in D.1 on
+  # DeleteMessage/GetMessages and re-verified here per handler:
+  #
+  #   api/<x>.go        the declaration
+  #   api/<x>_test.go   the suite that calls the handler directly (`s.a.<X>(...)`)
+  #   router/router.go  the one registration site (grep -c → exactly 1 each)
+  #   router/router_test.go  calls router.Create, which runs that registration
+  #   app.go            serve() → router.Create (app.go:116)
+  #   app_test.go       TestRun → run → serve
+  #
+  # Checked for extra callers with a full-repo grep per name. Every additional
+  # file it turned up (database/*.go, plugin/manager.go, test/testdb/*,
+  # api/session_test.go, api/oidc_test.go) calls a SAME-NAMED method on
+  # GormDatabase — `db.GetUsers()`, `s.db.CreateUser(...)`,
+  # `db.GetClientsByUser(...)` — not the API handler. None belongs in the
+  # closure and none is returned.
+
   - id: get-applications-callers
     kind: node
     target: GetApplications
     # api.ApplicationAPI.GetApplications (api/application.go) registered:
     # `app.GET("", applicationHandler.GetApplications)`.
     # Verified: grep -n "GetApplications" router/router.go → line found.
+    exhaustive: true
     expected_impacted:
+      - api/application.go
+      - api/application_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    # Listing applications cannot reach the message or user handlers, and the
+    # auth middleware calls no handler. The database layer is reached the other
+    # way round (the handler calls it), so it must not appear in a BACKWARD walk.
+    must_not_include:
+      - api/message.go
+      - api/user.go
+      - database/application.go
 
   - id: create-application-callers
     kind: node
@@ -132,10 +163,27 @@ cases:
     # api.ApplicationAPI.CreateApplication (api/application.go) registered:
     # `app.POST("", applicationHandler.CreateApplication)`.
     # Verified: grep -n "CreateApplication" router/router.go → line found.
+    #
+    # target_file pins this to the API handler: `CreateApplication` is also a
+    # GormDatabase method (database/application.go:39), and ResolveTarget
+    # separates same-named methods by neither service nor node type — both are
+    # `method` in service `server`. It resolves to the API one today only
+    # because that path sorts first, which is not something an exhaustive truth
+    # set should rest on.
+    target_file: api/application.go
+    exhaustive: true
     expected_impacted:
+      - api/application.go
+      - api/application_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    must_not_include:
+      - database/application.go
+      - plugin/manager.go
 
   - id: login-callers
     kind: node
@@ -157,10 +205,20 @@ cases:
     # api.ClientAPI.GetClients (api/client.go) registered in router/router.go:
     # `client.GET("", clientHandler.GetClients)`.
     # Verified: grep -n "GetClients" router/router.go → line found.
+    # api/session_test.go mentions GetClients only as `s.db.GetClientsByUser`.
+    exhaustive: true
     expected_impacted:
+      - api/client.go
+      - api/client_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    must_not_include:
+      - api/session_test.go
+      - database/client.go
 
   - id: get-current-user-callers
     kind: node
@@ -168,8 +226,15 @@ cases:
     # api.UserAPI.GetCurrentUser (api/user.go) registered in router/router.go:
     # `clientAuth.GET("current/user", userHandler.GetCurrentUser)`.
     # Verified: grep -n "GetCurrentUser" router/router.go → line found.
+    # Unambiguous: the only GetCurrentUser in the repo (no database twin).
+    exhaustive: true
     expected_impacted:
+      - api/user.go
+      - api/user_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
 
@@ -179,10 +244,23 @@ cases:
     # api.UserAPI.GetUsers (api/user.go) registered in router/router.go:
     # `authAdmin.GET("", userHandler.GetUsers)`.
     # Verified: grep -n "GetUsers" router/router.go → line found.
+    # Pinned: GormDatabase.GetUsers (database/user.go:61) is the same label.
+    target_file: api/user.go
+    exhaustive: true
     expected_impacted:
+      - api/user.go
+      - api/user_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    # plugin/manager.go:90 calls `manager.db.GetUsers()` — the database method,
+    # not this handler. It is the most likely wrong-receiver hit on this name.
+    must_not_include:
+      - plugin/manager.go
+      - database/user.go
 
   - id: create-user-callers
     kind: node
@@ -190,10 +268,24 @@ cases:
     # api.UserAPI.CreateUser (api/user.go) registered:
     # `g.Group("/user").Use(authentication.Optional).POST("", userHandler.CreateUser)`.
     # Verified: grep -n "CreateUser" router/router.go → line found.
+    # Pinned: GormDatabase.CreateUser (database/user.go:90) is the same label,
+    # and it is the one api/oidc_test.go and api/session_test.go call
+    # (`s.db.CreateUser(&model.User{...})`) — hence those two are forbidden.
+    target_file: api/user.go
+    exhaustive: true
     expected_impacted:
+      - api/user.go
+      - api/user_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    must_not_include:
+      - api/oidc_test.go
+      - api/session_test.go
+      - database/user.go
 
   - id: get-plugins-callers
     kind: node
@@ -201,10 +293,20 @@ cases:
     # api.PluginAPI.GetPlugins (api/plugin.go) registered:
     # `g.GET("/plugin", authentication.RequireClient, pluginHandler.GetPlugins)`.
     # Verified: grep -n "GetPlugins" router/router.go → line found.
+    # Unambiguous: api/plugin.go, api/plugin_test.go and router/router.go are
+    # the only three files in the repo that mention the name at all.
+    exhaustive: true
     expected_impacted:
+      - api/plugin.go
+      - api/plugin_test.go
       - router/router.go
+      - router/router_test.go
+      - app.go
+      - app_test.go
     must_not_miss:
       - router/router.go
+    must_not_include:
+      - plugin/manager.go
 
   # ── TypeScript frontend cases ─────────────────────────────────────────────
 

@@ -19,91 +19,154 @@ repo:
 # or `handler.Web/User/All` in routes.go was confirmed as the caller.
 cases:
   # ── Route-handler blast-radius cases ─────────────────────────────────────
+  #
+  # D.4: all eight are `exhaustive`, and they share one four-file closure whose
+  # tail was established in D.1 on api-logout-blast-exhaustive:
+  #
+  #   <decl>.go               the declaration
+  #   routes.go               InitRoutes registers it as a handler value
+  #   cmd/writefreely/web.go  serveAction → InitRoutes
+  #   cmd/writefreely/main.go legacyActions → InitRoutes
+  #
+  # Completeness check, run per handler 2026-08-09:
+  #   grep -rln "\b<name>\b" --include='*.go' .
+  # returns exactly two files for every one of the eight — its declaration and
+  # routes.go. writefreely registers handlers as bare function values and calls
+  # them nowhere else, so there is no third caller to find, and the two cmd/
+  # entries are the only callers of InitRoutes in the tree.
+  #
+  # Note the declaration files below are the ones the graph reports and `grep`
+  # confirms; three of the original comments guessed collections.go/stats.go
+  # for handlers that actually live in account.go.
 
   - id: handle-view-home-callers
     kind: node
     target: handleViewHome
-    # handleViewHome (app.go) is referenced as a function value in routes.go:
+    # handleViewHome (app.go:226) is referenced as a function value in routes.go:
     # `write.HandleFunc("/", handler.Web(handleViewHome, UserLevelReader))`.
-    # Verified: grep -n "handleViewHome" routes.go → found; app.go → defined.
+    exhaustive: true
     expected_impacted:
+      - app.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
+    # Same rationale as api-logout-blast-exhaustive: database.go is 102 KB and
+    # is the first thing a query-layer fan-out would drag in.
+    must_not_include:
+      - database.go
+      - posts.go
 
   - id: handle-view-landing-callers
     kind: node
     target: handleViewLanding
-    # handleViewLanding (app.go) referenced in routes.go as handler function.
-    # Verified: defined in app.go, referenced in routes.go.
+    # handleViewLanding (app.go:263) referenced in routes.go as handler function.
+    exhaustive: true
     expected_impacted:
+      - app.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
 
   - id: view-collections-callers
     kind: node
     target: viewCollections
-    # viewCollections (collections.go or account.go) registered in routes.go:
+    # viewCollections (account.go:818) registered in routes.go:
     # `me.HandleFunc("/c/", handler.User(viewCollections))`.
-    # Verified: grep -n "viewCollections" routes.go → found.
+    exhaustive: true
     expected_impacted:
+      - account.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
+    # collections.go is the tempting wrong answer on the name alone — the
+    # handler lives in account.go and never calls into it on a backward walk.
+    must_not_include:
+      - collections.go
+      - database.go
 
   - id: view-edit-collection-callers
     kind: node
     target: viewEditCollection
-    # viewEditCollection (collections.go) registered in routes.go:
+    # viewEditCollection (account.go:859) registered in routes.go:
     # `me.HandleFunc("/c/{collection}", handler.User(viewEditCollection))`.
-    # Verified: grep -n "viewEditCollection" routes.go → found.
+    exhaustive: true
     expected_impacted:
+      - account.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
+    must_not_include:
+      - collections.go
 
   - id: view-articles-callers
     kind: node
     target: viewArticles
-    # viewArticles (account.go) registered in routes.go:
+    # viewArticles (account.go:772) registered in routes.go:
     # `me.HandleFunc("/posts/", handler.User(viewArticles))`.
-    # Verified: grep -n "viewArticles" routes.go → found.
+    exhaustive: true
     expected_impacted:
+      - account.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
+    must_not_include:
+      - posts.go
 
   - id: handle-user-delete-callers
     kind: node
     target: handleUserDelete
-    # handleUserDelete (account.go) registered in routes.go:
+    # handleUserDelete (account.go:1496) registered in routes.go:
     # `me.Path("/delete").Handler(csrf.Protect(...)(handler.User(handleUserDelete)))`.
-    # Verified: grep -n "handleUserDelete" routes.go → found.
+    exhaustive: true
     expected_impacted:
+      - account.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
+    # Deleting a user reads as "touches everything" and is exactly the case
+    # where an over-broad radius is most plausible and most expensive.
+    must_not_include:
+      - database.go
+      - posts.go
+      - collections.go
 
   - id: view-stats-callers
     kind: node
     target: viewStats
-    # viewStats (account.go or stats.go) registered in routes.go:
+    # viewStats (account.go:1028) registered in routes.go:
     # `me.HandleFunc("/c/{collection}/stats", handler.User(viewStats))`.
-    # Verified: grep -n "viewStats" routes.go → found.
+    exhaustive: true
     expected_impacted:
+      - account.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
 
   - id: handle-view-subscribers-callers
     kind: node
     target: handleViewSubscribers
-    # handleViewSubscribers registered in routes.go:
+    # handleViewSubscribers (account.go:1101) registered in routes.go:
     # `me.HandleFunc("/c/{collection}/subscribers", handler.User(handleViewSubscribers))`.
-    # Verified: grep -n "handleViewSubscribers" routes.go → found.
+    exhaustive: true
     expected_impacted:
+      - account.go
       - routes.go
+      - cmd/writefreely/web.go
+      - cmd/writefreely/main.go
     must_not_miss:
       - routes.go
 

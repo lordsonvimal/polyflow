@@ -7,6 +7,23 @@ contracts:
   - kind: amqp
     producer:
       node: channel
+      # A channel node reached only through a QueueBind is the consuming side
+      # and can never be the producer of a publishes edge. Both endpoints of
+      # this rule are `channel`, so without this the join is symmetric and
+      # emits an edge in each direction for every shared exchange — half of
+      # them running backwards along the message flow. Measured on the
+      # juniper fleet 2026-08-09: 8 of 30 cross-service publishes edges,
+      # e.g. "maple-manager publishes runner_heartbeat to maple-agent" when the
+      # agent publishes the heartbeats and the manager binds the queue.
+      #
+      # Exact-value exclusion, so a service that both publishes and binds
+      # (channel_role "producer,consumer") stays eligible as a producer; only
+      # pure consumers are dropped. A channel with no channel_role at all is
+      # unclassified, not consumer, and is still admitted.
+      #
+      # Same fix, same reason as the queue contract's kicks_from_queue
+      # exclusion below.
+      not_where: {channel_role: consumer}
       key: [exchange, routing_key]
     consumer:
       node: channel

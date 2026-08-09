@@ -3,10 +3,20 @@ package impact
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
+
+// DefaultBudget is the token budget applied when a caller does not ask for
+// one. An unbounded blast radius is a context-window hazard: on
+// fleet-juniper `impact --target JobMessage` is 23.8 KB of JSON, and the
+// worst function in the graph reaches 131 files. At this budget a small blast
+// radius still returns full per-node detail (it fits), while a large one rolls
+// up to the per-file summary instead of dumping the verbose form. Pass a
+// negative max-tokens to opt back out.
+const DefaultBudget = 2000
 
 // FileRollup aggregates the blast-radius callers that landed in one file —
 // the low-token-budget representation of an impact answer.
@@ -34,6 +44,7 @@ type Summary struct {
 	ServicesAffected     []string              `json:"services_affected"`
 	CrossServiceTriggers []CrossServiceTrigger `json:"cross_service_triggers"`
 	Depth                int                   `json:"depth"`
+	Direction            string                `json:"direction"`
 	TotalCallers         int                   `json:"total_callers"`
 
 	Unresolved          []graph.UnresolvedRef     `json:"unresolved"`
@@ -89,6 +100,42 @@ func rollupCallers(callers []Caller) []FileRollup {
 	return files
 }
 
+// maxSummaryMetaValue is the longest meta value the rollup shape carries.
+// Above it the value is a serialised payload rather than a label: a 27-field
+// Go struct's `fields` meta is 2.4 KB, which at the default budget is 30% of
+// the whole answer spent describing the node the caller already named. Small
+// metas — route path, handler, end_line — stay, because they are what makes
+// the target line identifiable.
+const maxSummaryMetaValue = 200
+
+// compactTarget copies n with oversized meta values dropped. The copy matters:
+// the node aliases the shared adjacency index, so mutating in place would
+// corrupt every later query in a long-lived process (the MCP server).
+func compactTarget(n *graph.Node) *graph.Node {
+	if n == nil {
+		return nil
+	}
+	var dropped []string
+	for k, v := range n.Meta {
+		if len(v) > maxSummaryMetaValue {
+			dropped = append(dropped, k)
+		}
+	}
+	if len(dropped) == 0 {
+		return n
+	}
+	c := *n
+	c.Meta = make(map[string]string, len(n.Meta))
+	for k, v := range n.Meta {
+		if len(v) <= maxSummaryMetaValue {
+			c.Meta[k] = v
+		}
+	}
+	sort.Strings(dropped) // map iteration must never reach output
+	c.Meta["meta_omitted"] = strings.Join(dropped, ",")
+	return &c
+}
+
 // Summarize rolls the per-node blast radius up into per-file entries.
 func (r *Result) Summarize() *Summary {
 	entryPoints := make([]string, 0, len(r.EntryPoints))
@@ -97,7 +144,7 @@ func (r *Result) Summarize() *Summary {
 	}
 
 	return &Summary{
-		Target:               r.Target,
+		Target:               compactTarget(r.Target),
 		Summary:              true,
 		Ranking:              "depth,verification",
 		Files:                rollupCallers(r.Callers),
@@ -105,6 +152,7 @@ func (r *Result) Summarize() *Summary {
 		ServicesAffected:     r.ServicesAffected,
 		CrossServiceTriggers: r.CrossServiceTriggers,
 		Depth:                r.Depth,
+		Direction:            r.Direction,
 		TotalCallers:         r.TotalCallers,
 		Unresolved:           r.Unresolved,
 		UnresolvedNote:       r.UnresolvedNote,
@@ -133,6 +181,16 @@ func (r *Result) ApplyBudget(maxTokens int, forceSummary bool) any {
 		s.Budget.AppendNote("full per-node detail exceeds the token budget; rolled up per file")
 	}
 	if maxTokens > 0 {
+		// Trim the caveat before the answer. The unresolved list used to be
+		// exempt from budgeting on the grounds that blind spots must never be
+		// hidden to save tokens — sound when a budget was opt-in, but once one
+		// applies by default it inverts into the caveat evicting the answer: on
+		// fleet-juniper `impact --target JobMessage` came back with 1 of 25
+		// files because 6 KB of unresolved refs had first claim on the budget.
+		// The blind-spot SIGNAL (the count and the note) still always survives;
+		// only the per-ref detail is trimmed, and it says how much it dropped.
+		s.Unresolved = trimUnresolved(s.Unresolved, maxTokens, s.Budget)
+
 		all := s.Files
 		keep := budget.TrimToFit(len(all), maxTokens, func(n int) int {
 			s.Files = all[:n]
@@ -146,6 +204,38 @@ func (r *Result) ApplyBudget(maxTokens int, forceSummary bool) any {
 	}
 	s.Budget.EstimatedTokens = budget.Estimate(s)
 	return s
+}
+
+// unresolvedReserve is the share of a token budget the answer keeps for
+// itself; the unresolved list may claim at most the remainder. Three quarters,
+// because the file list is what was asked for and the unresolved list is a
+// caveat on it — at an even split, JobMessage still returned only 12 of its 25
+// files while printing 24 unresolved refs.
+const unresolvedReserve = 0.75
+
+// trimUnresolved shrinks an unresolved detail list so it cannot claim more
+// than (1-unresolvedReserve) of the budget, returning the kept prefix. The
+// caller's UnresolvedNote is left describing the true total — an agent must
+// not read a trimmed list as a complete one — and info records how many refs
+// went. Shared by every budgeted impact shape: node, file and diff all attach
+// the same ledger and all became budget-bound by default in D.3.
+func trimUnresolved(refs []graph.UnresolvedRef, maxTokens int, info *budget.Info) []graph.UnresolvedRef {
+	total := len(refs)
+	if total == 0 {
+		return refs
+	}
+	limit := int(float64(maxTokens) * (1 - unresolvedReserve))
+	keep := budget.TrimToFit(total, limit, func(n int) int { return budget.Estimate(refs[:n]) })
+	if budget.Estimate(refs[:keep]) > limit {
+		// TrimToFit floors at one entry; here even that is too big.
+		keep = 0
+	}
+	if omitted := total - keep; omitted > 0 {
+		info.AppendNote(fmt.Sprintf(
+			"%d of %d unresolved references omitted to fit the budget (the count above is the true total)",
+			omitted, total))
+	}
+	return refs[:keep]
 }
 
 // InlineSnippets attaches source snippets (lines from each node's declaration

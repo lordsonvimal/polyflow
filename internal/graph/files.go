@@ -96,6 +96,14 @@ type FileImpactEntry struct {
 // (upstream) or "both", matching the trace API. The source file itself is
 // excluded from the result. maxDepth <= 0 means unlimited.
 func FileImpact(idx *AdjacencyIndex, service, path, direction string, maxDepth int) []FileImpactEntry {
+	return FileImpactWithPolicy(idx, service, path, direction, maxDepth, TraversalPolicy{})
+}
+
+// FileImpactWithPolicy is FileImpact with blast-radius shaping applied; see
+// TraversalPolicy. A file-granularity answer needs it as much as a node one:
+// the rollup hides which nodes were counted, so a file reached only through a
+// closure-captured local looks identical to one reached through a call.
+func FileImpactWithPolicy(idx *AdjacencyIndex, service, path, direction string, maxDepth int, policy TraversalPolicy) []FileImpactEntry {
 	seeds := NodesInFile(idx, service, path)
 	if len(seeds) == 0 {
 		return nil
@@ -121,7 +129,7 @@ func FileImpact(idx *AdjacencyIndex, service, path, direction string, maxDepth i
 
 	for _, dir := range directions {
 		for _, seed := range seeds {
-			for _, res := range Traverse(idx, seed.ID, dir, BFS, maxDepth) {
+			for _, res := range TraverseWithPolicy(idx, seed.ID, dir, BFS, maxDepth, policy) {
 				if prev, seen := nodeDepth[res.Node.ID]; seen && prev <= res.Depth {
 					continue
 				}
