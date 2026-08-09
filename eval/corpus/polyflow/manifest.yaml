@@ -105,3 +105,53 @@ cases:
       - AdjacencyIndex
     must_not_miss:
       - AdjacencyIndex
+
+  # --- C.6 rank-1 identity -------------------------------------------------
+  # A semantic case asserts the right entity is somewhere in the top 10; a rank1
+  # case asserts it comes back FIRST, and records the score margin it holds that
+  # position by. The two kinds are deliberately kept side by side here: the
+  # nl-confidence-filter semantic case above still passes while its own comment
+  # ("position 1") has been wrong for some time — filterEdgesByConfidence is
+  # rank 7 today. Only a rank-1 assertion can see that kind of drift.
+
+  - id: rank1-unresolved-note
+    kind: rank1
+    query: "UnresolvedNote graph ledger builder"
+    section: nodes
+    # internal/graph/unresolved.go:22. Measured 2026-08-09: rank1 UnresolvedNote
+    # 0.0160 exact, rank2 `ledger` 0.0130 exact — gap +0.0030.
+    expect_rank1: UnresolvedNote
+
+  - id: rank1-adjacency-index
+    kind: rank1
+    query: "AdjacencyIndex traversal builder"
+    section: nodes
+    # internal/graph/model.go:347. Measured 2026-08-09: rank1 AdjacencyIndex
+    # 0.0160 exact, rank2 buildErr 0.0260 fused — gap **−0.0100**. The correct
+    # answer is held on top purely by tier ordering (exact before fused) while
+    # scoring *below* an unrelated test variable, which is the exact
+    # discrimination failure C.6 exists to make visible.
+    expect_rank1: AdjacencyIndex
+
+  - id: rank1-link-route-handlers
+    kind: rank1
+    query: "LinkRouteHandlers wiring indexer"
+    section: nodes
+    # internal/linker/linker.go:16. Measured 2026-08-09: rank1 0.0160 exact,
+    # rank2 pythonCeleryFixtureWS 0.0160 semantic — gap 0.0000.
+    expect_rank1: LinkRouteHandlers
+
+  - id: rank1-confidence-filter
+    kind: rank1
+    query: "confidence filter edges javascript"
+    section: nodes
+    # web/src/lib/confidence.ts:filterEdgesByConfidence — the only declaration
+    # in the repo that filters edges by confidence, and what an agent asking
+    # this question wants.
+    #
+    # RECORDED DEFECT, red at baseline. Measured 2026-08-09: rank1 is the
+    # synthetic `polyflow:table:edges` datastore node (0.0120), followed by four
+    # local variables literally named `edges`; filterEdgesByConfidence is rank 7.
+    # A one-word-per-concept query is answered by whichever node's *label* is a
+    # bare query token, not by the declaration that does the thing.
+    expect_rank1: filterEdgesByConfidence

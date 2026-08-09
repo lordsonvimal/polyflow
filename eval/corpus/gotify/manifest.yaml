@@ -192,3 +192,61 @@ cases:
       - ui/src/application/AppStore.ts
     must_not_miss:
       - ui/src/message/Messages.tsx
+
+  # --- C.6 rank-1 identity -------------------------------------------------
+
+  - id: rank1-create-application
+    kind: rank1
+    query: "CreateApplication"
+    section: nodes
+    # api/application.go:92 (the HTTP handler) — measured 2026-08-09 as rank1
+    # 0.0160 exact, with database/application.go's same-named method rank2 at an
+    # identical 0.0160. Gap 0.0000 between two same-labelled declarations, so
+    # the label assertion passes either way and no target_file pin is claimed:
+    # nothing in the bare query prefers one over the other, and pinning would
+    # assert a preference the ranker never expressed.
+    expect_rank1: CreateApplication
+
+  - id: rank1-create-application-descriptive
+    kind: rank1
+    query: "CreateApplication gin handler"
+    section: nodes
+    # The pair to the case above, and the point of including both: adding two
+    # *correct* descriptive words demotes the answer.
+    #
+    # RECORDED DEFECT, red at baseline. Measured 2026-08-09: rank1 becomes the
+    # unrelated `Handler` struct in error/handler.go (0.0160) and
+    # CreateApplication falls to rank2 at 0.0130 — the generic word outscores
+    # the identifier that names the thing.
+    expect_rank1: CreateApplication
+
+  - id: rank1-delete-message
+    kind: rank1
+    query: "DeleteMessage api handler"
+    section: nodes
+    # api/message.go:306. Measured 2026-08-09: rank1 0.0150 exact, rank2
+    # error/handler.go's `Handler` 0.0150 exact — gap 0.0000. The same usurper
+    # as the case above, one thousandth of a point away from winning.
+    expect_rank1: DeleteMessage
+
+  - id: rank1-create-password
+    kind: rank1
+    query: "CreatePassword bcrypt strength"
+    section: nodes
+    # auth/password/password.go:6. Measured 2026-08-09: rank1 0.0160 exact,
+    # rank2 extraGoBuildFlags 0.0160 semantic — gap 0.0000.
+    expect_rank1: CreatePassword
+
+  - id: rank1-password-hashing-nl
+    kind: rank1
+    query: "user password hashing"
+    section: nodes
+    # auth/password/password.go:CreatePassword is the only bcrypt call site in
+    # the repo, and this is how an agent that does not already know the name
+    # would ask.
+    #
+    # RECORDED DEFECT, red at baseline. Measured 2026-08-09: rank1 is the `User`
+    # model (0.0240), then three UI `password` form variables. A purely
+    # descriptive query — no identifier to anchor on — returns nothing useful in
+    # the top four.
+    expect_rank1: CreatePassword

@@ -248,3 +248,19 @@ cases:
       - generate_invoice
     must_not_miss:
       - generate_invoice
+
+  # --- C.6 rank-1 identity -------------------------------------------------
+
+  - id: rank1-generate-invoice
+    kind: rank1
+    query: "generate_invoice billing"
+    section: nodes
+    # worker/tasks.py:generate_invoice.
+    #
+    # RECORDED DEFECT, red at baseline, and a distinct cause from the others.
+    # Measured 2026-08-09: ranks 1 and 2 are the pattern-derived
+    # `celery_apply_async` and `celery_task_decorator` nodes (0.0320 / 0.0300)
+    # and the function itself is rank 3 at 0.0290 — sharing worker/tasks.py:20
+    # with the decorator node that outranks it. A synthetic node minted *at* a
+    # declaration outranks the declaration it describes.
+    expect_rank1: generate_invoice

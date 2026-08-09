@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T11:38:18.341651Z",
+  "generated_at": "2026-08-09T15:01:05.4254Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -123,10 +123,51 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-propose-draw",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "ProposeDraw",
+          "rank1_score": 0.016,
+          "rank2": "file",
+          "rank2_score": 0.019
+        },
+        {
+          "case_id": "rank1-hub-broadcast-board",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "hubBroadcastBoard",
+          "rank1_score": 0.016,
+          "rank2": "hub_broadcast_call",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-apply-move-checked",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "Move",
+          "rank1_score": 0.029,
+          "rank2": "Validate",
+          "rank2_score": 0.015
         }
       ],
-      "recall": 1,
-      "precision": 0.14047881175801083
+      "recall": 0.9444444444444444,
+      "precision": 0.22817678757612014,
+      "rank1_accuracy": 0.6666666666666666,
+      "rank1_min_gap": -0.002999999999999999
     },
     {
       "repo": "fleet",
@@ -178,10 +219,25 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-lros-update",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "update",
+          "rank1_score": 0.016,
+          "rank2": "update",
+          "rank2_score": 0.009
         }
       ],
-      "recall": 0.8333333333333334,
-      "precision": 0.28535353535353536
+      "recall": 0.8571428571428571,
+      "precision": 0.3874458874458874,
+      "rank1_accuracy": 1,
+      "rank1_min_gap": 0.007000000000000001
     },
     {
       "repo": "willow",
@@ -281,10 +337,23 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-grant-access",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "Permission",
+          "rank1_score": 0.016,
+          "rank2": "GrantAccess",
+          "rank2_score": 0.015
         }
       ],
-      "recall": 1,
-      "precision": 0.26620370370370366
+      "recall": 0.9230769230769231,
+      "precision": 0.2457264957264957
     },
     {
       "repo": "juniper",
@@ -416,10 +485,23 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-build-job-channel",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "job",
+          "rank1_score": 0.014,
+          "rank2": "job",
+          "rank2_score": 0.013
         }
       ],
-      "recall": 1,
-      "precision": 0.4407661782661783
+      "recall": 0.9411764705882353,
+      "precision": 0.41483875601522663
     },
     {
       "repo": "gotify",
@@ -543,10 +625,76 @@
           "honest_misses": 1,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-create-application",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "CreateApplication",
+          "rank1_score": 0.016,
+          "rank2": "CreateApplication",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-create-application-descriptive",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "Handler",
+          "rank1_score": 0.016,
+          "rank2": "CreateApplication",
+          "rank2_score": 0.013
+        },
+        {
+          "case_id": "rank1-delete-message",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "DeleteMessage",
+          "rank1_score": 0.015,
+          "rank2": "Handler",
+          "rank2_score": 0.015
+        },
+        {
+          "case_id": "rank1-create-password",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "CreatePassword",
+          "rank1_score": 0.016,
+          "rank2": "extraGoBuildFlags",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-password-hashing-nl",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "User",
+          "rank1_score": 0.024,
+          "rank2": "password",
+          "rank2_score": 0.014
         }
       ],
-      "recall": 0.9666666666666667,
-      "precision": 0.17070453912559178
+      "recall": 0.875,
+      "precision": 0.2780284043441938,
+      "rank1_accuracy": 0.6
     },
     {
       "repo": "lobsters",
@@ -670,10 +818,50 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-bust-comment-redirect-cache",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "bust_comment_redirect_cache",
+          "rank1_score": 0.016,
+          "rank2": "AddIndexBannedByUserIdForeignKeyInOrigins",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-find-similar-by-url",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "find_similar_by_url",
+          "rank1_score": 0.016,
+          "rank2": "Story",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-already-posted-recently",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "Story",
+          "rank1_score": 0.014,
+          "rank2": "ActiveRecordDoctorIncorrectLengthValidation",
+          "rank2_score": 0.03
         }
       ],
-      "recall": 1,
-      "precision": 0.6944444444444444
+      "recall": 0.9444444444444444,
+      "precision": 0.6898148148148148,
+      "rank1_accuracy": 0.6666666666666666
     },
     {
       "repo": "polyflow",
@@ -746,11 +934,65 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-unresolved-note",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "UnresolvedNote",
+          "rank1_score": 0.016,
+          "rank2": "ledger",
+          "rank2_score": 0.013
+        },
+        {
+          "case_id": "rank1-adjacency-index",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "AdjacencyIndex",
+          "rank1_score": 0.016,
+          "rank2": "buildErr",
+          "rank2_score": 0.026
+        },
+        {
+          "case_id": "rank1-link-route-handlers",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "LinkRouteHandlers",
+          "rank1_score": 0.016,
+          "rank2": "pythonCeleryFixtureWS",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-confidence-filter",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "edges",
+          "rank1_score": 0.012,
+          "rank2": "edges",
+          "rank2_score": 0.009
         }
       ],
-      "recall": 1,
-      "precision": 0.2069760101010101,
-      "semantic_recall": 1
+      "recall": 0.9166666666666666,
+      "precision": 0.38798400673400674,
+      "semantic_recall": 1,
+      "rank1_accuracy": 0.75,
+      "rank1_min_gap": -0.009999999999999998
     },
     {
       "repo": "pyflask",
@@ -927,10 +1169,23 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-generate-invoice",
+          "kind": "rank1",
+          "recall": 0,
+          "precision": 0,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "rank1": "celery_apply_async",
+          "rank1_score": 0.032,
+          "rank2": "celery_task_decorator",
+          "rank2_score": 0.03
         }
       ],
-      "recall": 1,
-      "precision": 0.7984693877551022,
+      "recall": 0.9545454545454546,
+      "precision": 0.7621753246753248,
       "semantic_recall": 1
     },
     {
@@ -1325,10 +1580,37 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-update-file-paths-on-rename",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "update_file_paths_on_rename",
+          "rank1_score": 0.016,
+          "rank2": "file_manually_created_and_updated_in_workspace_after_study_file_created?",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-user-license-classifier",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "UserLicenseClassifier",
+          "rank1_score": 0.016,
+          "rank2": "SLEEP_BETWEEN_BATCHES",
+          "rank2_score": 0.016
         }
       ],
       "recall": 1,
-      "precision": 0.31279818486463573
+      "precision": 0.3601914134946609,
+      "rank1_accuracy": 1
     },
     {
       "repo": "synergy",
@@ -1428,10 +1710,24 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-get-battery",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "getBattery",
+          "rank1_score": 0.016,
+          "rank2": "postgres",
+          "rank2_score": 0.016
         }
       ],
       "recall": 1,
-      "precision": 0.8055555555555555
+      "precision": 0.8205128205128205,
+      "rank1_accuracy": 1
     },
     {
       "repo": "writefreely",
@@ -1555,10 +1851,38 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "rank1-handle-api-logout",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "handleAPILogout",
+          "rank1_score": 0.016,
+          "rank2": "remote_likes",
+          "rank2_score": 0.016
+        },
+        {
+          "case_id": "rank1-handle-reset-password",
+          "kind": "rank1",
+          "recall": 1,
+          "precision": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false,
+          "rank1": "handleResetPasswordInit",
+          "rank1_score": 0.016,
+          "rank2": "password_resets",
+          "rank2_score": 0.033
         }
       ],
       "recall": 1,
-      "precision": 0.3638888888888889
+      "precision": 0.4387254901960784,
+      "rank1_accuracy": 1,
+      "rank1_min_gap": -0.017
     }
   ]
 }

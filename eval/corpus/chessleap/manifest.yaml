@@ -213,3 +213,37 @@ cases:
       - assets/js/move-sync.test.js
     must_not_miss:
       - assets/js/board.js
+
+  # --- C.6 rank-1 identity -------------------------------------------------
+
+  - id: rank1-propose-draw
+    kind: rank1
+    query: "ProposeDraw handler"
+    section: nodes
+    # server/play_handlers.go:908. Measured 2026-08-09: rank1 0.0160 exact,
+    # rank2 the learn_v2_handlers.go *file* node 0.0190 fused — gap −0.0030.
+    expect_rank1: ProposeDraw
+
+  - id: rank1-hub-broadcast-board
+    kind: rank1
+    query: "hubBroadcastBoard sse broadcast"
+    section: nodes
+    # server/sse.go:81. Measured 2026-08-09: rank1 0.0160 exact, rank2 a
+    # hub_broadcast_call site in the same file 0.0160 — gap 0.0000.
+    expect_rank1: hubBroadcastBoard
+
+  - id: rank1-apply-move-checked
+    kind: rank1
+    query: "ApplyMoveChecked validate move"
+    section: nodes
+    # engine/ApplyMoveChecked is the move-legality entry point.
+    #
+    # RECORDED DEFECT, and the worst one in the corpus — red at baseline, and it
+    # would be red as a *semantic* (top-10) case too. Measured 2026-08-09: rank1
+    # is the `Move` struct (0.0290) and ranks 2–10 are ten different `Validate`
+    # methods from unrelated activity kinds (anagram, echo, hangman…).
+    # ApplyMoveChecked is nowhere in the top ten. One common token with many
+    # exact matches evicts the rare identifier that pins the query — the same
+    # crowding shape as the pooled-retrieval starvation fixed in 207c8a7, but
+    # between query terms inside one section rather than between sections.
+    expect_rank1: ApplyMoveChecked

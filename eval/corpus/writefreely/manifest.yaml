@@ -183,3 +183,23 @@ cases:
       - cmd/writefreely/main.go
     must_not_miss:
       - cmd/writefreely/main.go
+
+  # --- C.6 rank-1 identity -------------------------------------------------
+
+  - id: rank1-handle-api-logout
+    kind: rank1
+    query: "handleAPILogout"
+    section: nodes
+    # account.go:288. Measured 2026-08-09: rank1 0.0160 exact, rank2 the
+    # synthetic `app:table:remote_likes` datastore node 0.0160 — gap 0.0000.
+    expect_rank1: handleAPILogout
+
+  - id: rank1-handle-reset-password
+    kind: rank1
+    query: "handleResetPasswordInit password reset"
+    section: nodes
+    # account.go:1321. Measured 2026-08-09: rank1 0.0160 exact, rank2 the
+    # `app:table:password_resets` datastore node 0.0330 fused — gap −0.0170,
+    # the widest inversion in the corpus. Tier ordering alone keeps the function
+    # above a table node that scores twice as high.
+    expect_rank1: handleResetPasswordInit
