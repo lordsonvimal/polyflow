@@ -14,7 +14,7 @@ import (
 
 func TestSummarize_GroupsCallersByFile(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	s := out.Summarize()
 
 	assert.True(t, s.Summary)
@@ -38,7 +38,7 @@ func TestSummarize_GroupsCallersByFile(t *testing.T) {
 
 func TestApplyBudget_DetailWhenItFits(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	out.AttachUnresolved(nil)
 
 	res := out.ApplyBudget(100000, false)
@@ -58,7 +58,7 @@ func TestApplyBudget_SummaryWhenOverBudgetKeepsUnresolvedWhole(t *testing.T) {
 		idx.AddNode(&graph.Node{ID: id, Type: graph.NodeTypeFunction, Label: "caller", Service: "backend", File: fmt.Sprintf("pkg/caller_%02d.go", i), Line: 1})
 		idx.AddEdge(&graph.Edge{ID: "fan" + id, From: id, To: "be:queryDB", Type: graph.EdgeTypeCalls})
 	}
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "db.go", Line: 41, Name: "dyn", Kind: "call_ref"},
 	})
@@ -76,7 +76,7 @@ func TestApplyBudget_SummaryWhenOverBudgetKeepsUnresolvedWhole(t *testing.T) {
 
 func TestApplyBudget_ForceSummary(t *testing.T) {
 	idx := fixtureIndex()
-	out := impact.Build(idx, idx.Nodes["be:queryDB"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
 	out.AttachUnresolved(nil)
 
 	s, ok := out.ApplyBudget(0, true).(*impact.Summary)
@@ -88,7 +88,7 @@ func TestInlineSnippets_CopiesSharedNodes(t *testing.T) {
 	idx := fixtureIndex()
 	sharedTarget := idx.Nodes["be:queryDB"]
 	sharedEntry := idx.Nodes["fe:fetchUser"]
-	out := impact.Build(idx, sharedTarget, 10, "", false, 0)
+	out := impact.Build(idx, sharedTarget, impact.Options{Depth: 10})
 
 	out.InlineSnippets(t.TempDir(), 3) // no files there → best-effort empty
 
@@ -107,7 +107,7 @@ func TestBuildFile_ApplyBudgetTrimsImpactedList(t *testing.T) {
 		idx.AddEdge(&graph.Edge{ID: "fan" + id, From: id, To: "be:queryDB", Type: graph.EdgeTypeCalls})
 	}
 
-	out, err := impact.BuildFile(idx, "", "db.go", "backward", 10)
+	out, err := impact.BuildFile(idx, "db.go", impact.Options{Depth: 10, Direction: "backward"})
 	require.NoError(t, err)
 	out.AttachUnresolved(nil)
 	require.Greater(t, len(out.Impacted), 5)
@@ -123,7 +123,7 @@ func TestBuildFile_ApplyBudgetTrimsImpactedList(t *testing.T) {
 
 func TestBuildFile_UnbudgetedIsUntouched(t *testing.T) {
 	idx := fixtureIndex()
-	out, err := impact.BuildFile(idx, "", "db.go", "backward", 10)
+	out, err := impact.BuildFile(idx, "db.go", impact.Options{Depth: 10, Direction: "backward"})
 	require.NoError(t, err)
 	out.AttachUnresolved(nil)
 
@@ -135,7 +135,7 @@ func TestBuildFile_UnbudgetedIsUntouched(t *testing.T) {
 
 func TestBuildFile_MissingFileErrors(t *testing.T) {
 	idx := fixtureIndex()
-	_, err := impact.BuildFile(idx, "", "nope.go", "backward", 10)
+	_, err := impact.BuildFile(idx, "nope.go", impact.Options{Depth: 10, Direction: "backward"})
 	assert.Error(t, err)
 }
 
@@ -149,7 +149,7 @@ func TestSummarize_VerificationTieBreaker(t *testing.T) {
 	idx.AddEdge(&graph.Edge{ID: "eca", From: "ca", To: "tgt", Type: graph.EdgeTypeCalls, VerificationState: graph.StateCandidate})
 	idx.AddEdge(&graph.Edge{ID: "evr", From: "vr", To: "tgt", Type: graph.EdgeTypeCalls, VerificationState: graph.StateVerified})
 
-	out := impact.Build(idx, idx.Nodes["tgt"], 10, "", false, 0)
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
 	s := out.Summarize()
 
 	require.Len(t, s.Files, 2, "tie-breaker must not drop any file")

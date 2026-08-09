@@ -273,7 +273,7 @@ func effectiveDepth(depth, def int) int {
 // the default is a compact budget: small blast radii still return full per-node
 // detail (they fit the budget), while large ones auto-roll-up to the per-file
 // summary instead of dumping the verbose form into the agent's context.
-const defaultImpactBudget = 2000
+const defaultImpactBudget = impact.DefaultBudget
 
 // effectiveBudget maps an MCP max_tokens input to an impact.ApplyBudget budget.
 // 0 (unset) → the compact default; a negative value → 0 (unlimited, opt-in);
@@ -470,7 +470,7 @@ type impactInput struct {
 	TargetService   string `json:"target_service,omitempty" jsonschema:"restrict target resolution to this service (resolves cross-service ambiguity; use when target_candidates is non-empty)"`
 	TargetType      string `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
 	File            string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
-	Direction       string `json:"direction,omitempty" jsonschema:"with file: forward, backward, or both (default backward)"`
+	Direction       string `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail"`
@@ -494,11 +494,12 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 
 	if in.File != "" {
-		direction := in.Direction
-		if direction == "" {
-			direction = "backward"
-		}
-		out, err := impact.BuildFile(idx, in.Service, in.File, direction, depth)
+		out, err := impact.BuildFile(idx, in.File, impact.Options{
+			Depth:     depth,
+			Service:   in.Service,
+			Direction: in.Direction,
+			Policy:    graph.BlastRadiusPolicy(),
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -511,7 +512,14 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	if err != nil {
 		return nil, nil, err
 	}
-	out := impact.Build(idx, root, depth, in.Service, in.VerboseSources, s.staleAfter)
+	out := impact.Build(idx, root, impact.Options{
+		Depth:          depth,
+		Service:        in.Service,
+		Direction:      in.Direction,
+		Policy:         graph.BlastRadiusPolicy(),
+		VerboseSources: in.VerboseSources,
+		StaleAfter:     s.staleAfter,
+	})
 	out.TargetCandidates = candidates
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	out.AttachUnresolved(unresolved)

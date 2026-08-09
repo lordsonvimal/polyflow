@@ -36,7 +36,7 @@ func TestBuildDiff_BodyChangeSeedsEnclosingFunction(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 16}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	require.Len(t, out.Targets, 1)
 	assert.Equal(t, "be:handleUser", out.Targets[0].Node.ID)
@@ -55,7 +55,7 @@ func TestBuildDiff_DeclarationLineSeedsPointNode(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 5, End: 5}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	require.Len(t, out.Targets, 1)
 	assert.Equal(t, "be:cfg", out.Targets[0].Node.ID)
@@ -71,7 +71,7 @@ func TestBuildDiff_OpenEndedEnclosingFallback(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 45, End: 46}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	require.Len(t, out.Targets, 1)
 	assert.Equal(t, "be:helper", out.Targets[0].Node.ID)
@@ -88,7 +88,7 @@ func TestBuildDiff_UnmappedHunksAreReported(t *testing.T) {
 		// Deleted file.
 		{Path: "gone.go", Deleted: true},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	assert.Empty(t, out.Targets)
 	require.Len(t, out.Unmapped, 3)
@@ -108,7 +108,7 @@ func TestBuildDiff_UnionKeepsMinDepthAndDeduplicates(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 12, End: 12}, {Start: 45, End: 45}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	require.Len(t, out.Targets, 2)
 	seen := map[string]int{}
@@ -127,7 +127,7 @@ func TestBuildDiff_SeedsExcludedFromCallers(t *testing.T) {
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 12, End: 12}}},
 		{Path: "main.go", Spans: []gitdiff.Span{{Start: 4, End: 4}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	require.Len(t, out.Targets, 2)
 	for _, c := range out.Callers {
@@ -142,7 +142,7 @@ func TestBuildDiff_ServiceFilter(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "backend", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10, Service: "backend"})
 
 	require.Equal(t, 1, out.TotalCallers)
 	assert.Equal(t, "be:main", out.Callers[0].ID)
@@ -150,7 +150,7 @@ func TestBuildDiff_ServiceFilter(t *testing.T) {
 
 func TestBuildDiff_UnresolvedAndUnmappedDefaultToEmptyNotNull(t *testing.T) {
 	idx := diffFixtureIndex()
-	out := impact.BuildDiff(idx, nil, 10, "", false, 0)
+	out := impact.BuildDiff(idx, nil, impact.Options{Depth: 10})
 
 	data, err := json.Marshal(out)
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestDiffResult_AttachUnresolvedScopedToChangedAndCallerFiles(t *testing.T) 
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 		{Path: "README.md", Spans: []gitdiff.Span{{Start: 1, End: 1}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 		{Service: "backend", File: "README.md", Line: 1, Name: "docRef", Kind: "call_ref"},
@@ -178,7 +178,7 @@ func TestDiffResult_AttachUnresolvedScopedToChangedAndCallerFiles(t *testing.T) 
 
 func TestDiffResult_AppendNoGitRepoSurfacesEachMissingService(t *testing.T) {
 	idx := diffFixtureIndex()
-	out := impact.BuildDiff(idx, nil, 10, "", false, 0)
+	out := impact.BuildDiff(idx, nil, impact.Options{Depth: 10})
 	out.AppendNoGitRepo([]gitdiff.ServiceRoot{
 		{Service: "backend", NoGitRepo: false, Root: "/repo"},
 		{Service: "legacy-vendor-drop", NoGitRepo: true},
@@ -193,7 +193,7 @@ func TestDiffResult_AppendNoGitRepoSurfacesEachMissingService(t *testing.T) {
 
 func TestDiffResult_AppendNoGitRepoNoOpWhenAllResolved(t *testing.T) {
 	idx := diffFixtureIndex()
-	out := impact.BuildDiff(idx, nil, 10, "", false, 0)
+	out := impact.BuildDiff(idx, nil, impact.Options{Depth: 10})
 	out.AppendNoGitRepo([]gitdiff.ServiceRoot{{Service: "backend", Root: "/repo"}})
 	assert.Empty(t, out.Unmapped)
 }
@@ -204,7 +204,7 @@ func TestDiffResult_ApplyBudgetRollsUpAndKeepsBlindSpots(t *testing.T) {
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 		{Path: "README.md", Spans: []gitdiff.Span{{Start: 1, End: 1}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 	out.AttachUnresolved([]graph.UnresolvedRef{
 		{Service: "backend", File: "handler.go", Line: 20, Name: "dynCall", Kind: "call_ref"},
 	})
@@ -213,8 +213,14 @@ func TestDiffResult_ApplyBudgetRollsUpAndKeepsBlindSpots(t *testing.T) {
 	s, ok := budgeted.(*impact.DiffSummary)
 	require.True(t, ok)
 	assert.True(t, s.Summary)
-	// Blind spots survive any budget.
-	assert.Len(t, s.Unresolved, 1)
+	// The blind-spot SIGNAL survives any budget; the per-ref detail does not.
+	// A budget this small leaves the unresolved list no room at all, but the
+	// note still says one reference exists and the note about the omission
+	// says the printed list is incomplete — an agent must never read an empty
+	// list here as "nothing unresolved".
+	assert.Empty(t, s.Unresolved)
+	assert.Contains(t, s.UnresolvedNote, "1 unresolved reference")
+	assert.Contains(t, s.Budget.Note, "1 of 1 unresolved references omitted")
 	assert.Len(t, s.Unmapped, 1)
 	assert.NotEmpty(t, s.Targets)
 	assert.Equal(t, "summary", s.Budget.Level)
@@ -225,7 +231,7 @@ func TestDiffResult_ApplyBudgetKeepsDetailWhenItFits(t *testing.T) {
 	changes := []gitdiff.FileChange{
 		{Path: "handler.go", Spans: []gitdiff.Span{{Start: 15, End: 15}}},
 	}
-	out := impact.BuildDiff(idx, changes, 10, "", false, 0)
+	out := impact.BuildDiff(idx, changes, impact.Options{Depth: 10})
 
 	budgeted := out.ApplyBudget(100000, false)
 	r, ok := budgeted.(*impact.DiffResult)

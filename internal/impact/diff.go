@@ -48,12 +48,14 @@ type DiffResult struct {
 }
 
 // BuildDiff maps changed spans to graph nodes and computes their union blast
-// radius: ancestors of every changed node merged at minimum depth (<= 0 depth
-// means unlimited), optionally filtered to one service. Spans that map to no
-// node are recorded in Unmapped — never silently dropped. verboseSources
-// controls whether per-caller Sources uses compact or full SourceRef structs.
-// staleAfter is the workspace-configured freshness threshold (0 = no stale check).
-func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth int, service string, verboseSources bool, staleAfter time.Duration) *DiffResult {
+// radius under opts: ancestors of every changed node merged at minimum depth
+// (<= 0 depth means unlimited), optionally filtered to one service. Spans that
+// map to no node are recorded in Unmapped — never silently dropped.
+//
+// A diff blast radius is always backward — "I changed these lines, what breaks"
+// — so opts.Direction is not consulted.
+func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, opts Options) *DiffResult {
+	depth, service, verboseSources, staleAfter := opts.Depth, opts.Service, opts.VerboseSources, opts.StaleAfter
 	r := &DiffResult{
 		Mode:         "worktree",
 		Depth:        depth,
@@ -101,7 +103,7 @@ func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, depth in
 	// already listed as a target.
 	best := make(map[string]graph.TraversalResult)
 	for _, t := range r.Targets {
-		for _, a := range graph.Ancestors(idx, t.Node.ID, depth) {
+		for _, a := range graph.AncestorsWithPolicy(idx, t.Node.ID, depth, opts.Policy) {
 			if _, isSeed := seedIdx[a.Node.ID]; isSeed {
 				continue
 			}
@@ -332,6 +334,9 @@ func (r *DiffResult) ApplyBudget(maxTokens int, forceSummary bool) any {
 		s.Budget.AppendNote("full per-node detail exceeds the token budget; rolled up per file")
 	}
 	if maxTokens > 0 {
+		// The caveat yields to the answer; see Result.ApplyBudget.
+		s.Unresolved = trimUnresolved(s.Unresolved, maxTokens, s.Budget)
+
 		all := s.Files
 		keep := budget.TrimToFit(len(all), maxTokens, func(n int) int {
 			s.Files = all[:n]

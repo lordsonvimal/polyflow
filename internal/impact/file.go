@@ -22,19 +22,21 @@ type FileResult struct {
 	Budget         *budget.Info          `json:"budget,omitempty"`
 }
 
-// BuildFile computes the file-granularity blast radius of path. It errors
-// when the file has no nodes in the index.
-func BuildFile(idx *graph.AdjacencyIndex, service, path, direction string, depth int) (*FileResult, error) {
-	seeds := graph.NodesInFile(idx, service, path)
+// BuildFile computes the file-granularity blast radius of path under opts
+// (Depth, Service, Direction and Policy; the rest do not apply at file
+// granularity). It errors when the file has no nodes in the index.
+func BuildFile(idx *graph.AdjacencyIndex, path string, opts Options) (*FileResult, error) {
+	seeds := graph.NodesInFile(idx, opts.Service, path)
 	if len(seeds) == 0 {
 		return nil, fmt.Errorf("file not found in index: %s", path)
 	}
+	dir := direction(opts.Direction)
 	return &FileResult{
 		File:       seeds[0].File,
 		Service:    seeds[0].Service,
-		Direction:  direction,
-		Depth:      depth,
-		Impacted:   graph.FileImpact(idx, service, path, direction, depth),
+		Direction:  dir,
+		Depth:      opts.Depth,
+		Impacted:   graph.FileImpactWithPolicy(idx, opts.Service, path, dir, opts.Depth, opts.Policy),
 		Unresolved: []graph.UnresolvedRef{},
 	}, nil
 }
@@ -52,8 +54,9 @@ func (r *FileResult) AttachUnresolved(refs []graph.UnresolvedRef) {
 }
 
 // ApplyBudget trims the impacted list to fit maxTokens (<= 0 means
-// unlimited: no-op). The unresolved section is carried whole — blind spots
-// are never trimmed to save tokens.
+// unlimited: no-op). The unresolved list is trimmed first — see
+// Summary.trimUnresolvedToFit for why the caveat yields to the answer — but
+// the blind-spot count in UnresolvedNote always survives.
 func (r *FileResult) ApplyBudget(maxTokens int) {
 	if maxTokens <= 0 {
 		return
@@ -62,13 +65,14 @@ func (r *FileResult) ApplyBudget(maxTokens int) {
 		r.Budget = &budget.Info{MaxTokens: maxTokens, EstimatedTokens: est, Level: budget.LevelSummary}
 		return
 	}
+	r.Budget = &budget.Info{MaxTokens: maxTokens, Level: budget.LevelSummary}
+	r.Unresolved = trimUnresolved(r.Unresolved, maxTokens, r.Budget)
 	all := r.Impacted
 	keep := budget.TrimToFit(len(all), maxTokens, func(n int) int {
 		r.Impacted = all[:n]
 		return budget.Estimate(r)
 	})
 	r.Impacted = all[:keep]
-	r.Budget = &budget.Info{MaxTokens: maxTokens, Level: budget.LevelSummary}
 	if omitted := len(all) - keep; omitted > 0 {
 		r.Budget.OmittedFiles = omitted
 		r.Budget.AppendNote(fmt.Sprintf("%d more files omitted to fit the budget", omitted))

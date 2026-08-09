@@ -1461,21 +1461,37 @@ var (
 	impactSummary        bool
 	impactSnippetLines   int
 	impactVerboseSources bool
+	impactIncludeLocals  bool
+	impactStopContainers bool
 )
+
+// impactPolicy turns the shape flags into a traversal policy.
+func impactPolicy() graph.TraversalPolicy {
+	p := graph.BlastRadiusPolicy()
+	if impactStopContainers {
+		p = graph.ContainmentTerminal()
+	}
+	if impactIncludeLocals {
+		p.DropLocals = false
+	}
+	return p
+}
 
 func initImpactFlags() {
 	impactCmd.Flags().StringVar(&impactTarget, "target", "", "search query for the target node")
 	impactCmd.Flags().StringVar(&impactTargetService, "target-service", "", "restrict target resolution to this service (resolves cross-service ambiguity)")
 	impactCmd.Flags().StringVar(&impactTargetType, "target-type", "", "restrict target resolution to this node type (function, component, …)")
 	impactCmd.Flags().StringVar(&impactFile, "file", "", "file path: report impact at file granularity")
-	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "with --file: forward, backward or both")
+	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "forward, backward or both; backward is \"what breaks if I change this\", forward is \"what does this reach\"")
 	impactCmd.Flags().BoolVar(&impactDiff, "diff", false, "union blast radius of uncommitted changes (git diff against HEAD)")
 	impactCmd.Flags().BoolVar(&impactStaged, "staged", false, "with --diff: staged changes only (git diff --cached)")
 	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	impactCmd.Flags().StringVar(&impactService, "service", "", "filter results to a specific service")
 	impactCmd.Flags().StringVar(&impactFormat, "format", "text", "output format: text, json, or github-comment")
-	impactCmd.Flags().IntVar(&impactMaxTokens, "max-tokens", 0, "approximate token budget for output (0 = unlimited); over budget, per-node detail rolls up per file")
+	impactCmd.Flags().IntVar(&impactMaxTokens, "max-tokens", impact.DefaultBudget, "approximate token budget for output; over budget, per-node detail rolls up per file (negative = unlimited)")
 	impactCmd.Flags().BoolVar(&impactSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
+	impactCmd.Flags().BoolVar(&impactIncludeLocals, "include-locals", false, "keep closure-captured local variables in the blast radius (correct edges, rarely useful answers)")
+	impactCmd.Flags().BoolVar(&impactStopContainers, "stop-at-containers", false, "stop at containment edges (contains, declares) instead of expanding the file/type — much tighter, but loses recall where call resolution is weak")
 	impactCmd.Flags().IntVar(&impactSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
 	impactCmd.Flags().BoolVar(&impactVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
 	impactCmd.MarkFlagsOneRequired("target", "file", "diff")
@@ -1509,7 +1525,12 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		out, err := impact.BuildFile(idx, impactService, impactFile, impactDirection, impactDepth)
+		out, err := impact.BuildFile(idx, impactFile, impact.Options{
+			Depth:     impactDepth,
+			Service:   impactService,
+			Direction: impactDirection,
+			Policy:    impactPolicy(),
+		})
 		if err != nil {
 			return err
 		}
@@ -1548,7 +1569,14 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	out := impact.Build(idx, root, impactDepth, impactService, impactVerboseSources, loadStaleAfter(meta.ConfigFile))
+	out := impact.Build(idx, root, impact.Options{
+		Depth:          impactDepth,
+		Service:        impactService,
+		Direction:      impactDirection,
+		Policy:         impactPolicy(),
+		VerboseSources: impactVerboseSources,
+		StaleAfter:     loadStaleAfter(meta.ConfigFile),
+	})
 	out.TargetCandidates = candidates
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
@@ -1574,7 +1602,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 func printImpactSummaryText(s *impact.Summary) error {
 	t := s.Target
-	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d\n\n", t.Label, t.Type, t.File, t.Line)
+	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d (direction=%s)\n\n", t.Label, t.Type, t.File, t.Line, s.Direction)
 
 	if len(s.Files) > 0 {
 		fmt.Fprintln(os.Stdout, "Files in blast radius:")
@@ -1614,11 +1642,25 @@ func printImpactSummaryText(s *impact.Summary) error {
 	return nil
 }
 
+// impactNoun names the blast-radius rows for the direction actually walked.
+// Calling a callee a "caller" is not a cosmetic slip: it inverts the causal
+// claim the output is making.
+func impactNoun(direction string) string {
+	switch direction {
+	case "forward":
+		return "callees"
+	case "both":
+		return "related nodes"
+	}
+	return "callers"
+}
+
 func printImpactText(out *impact.Result) error {
 	t := out.Target
-	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d\n\n", t.Label, t.Type, t.File, t.Line)
+	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d (direction=%s)\n\n", t.Label, t.Type, t.File, t.Line, out.Direction)
+	noun := impactNoun(out.Direction)
 
-	// Split callers into direct (depth 1) and indirect (depth > 1).
+	// Split into direct (depth 1) and indirect (depth > 1).
 	var direct, indirect []impact.Caller
 	for _, c := range out.Callers {
 		if c.Depth == 1 {
@@ -1629,7 +1671,7 @@ func printImpactText(out *impact.Result) error {
 	}
 
 	if len(direct) > 0 {
-		fmt.Fprintln(os.Stdout, "Direct callers (depth 1):")
+		fmt.Fprintf(os.Stdout, "Direct %s (depth 1):\n", noun)
 		for _, c := range direct {
 			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
 				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
@@ -1638,7 +1680,7 @@ func printImpactText(out *impact.Result) error {
 	}
 
 	if len(indirect) > 0 {
-		fmt.Fprintf(os.Stdout, "Indirect callers (depth 2-%d):\n", out.Depth)
+		fmt.Fprintf(os.Stdout, "Indirect %s (depth 2-%d):\n", noun, out.Depth)
 		for _, c := range indirect {
 			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
 				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
@@ -1710,7 +1752,13 @@ func runImpactDiff() error {
 		return err
 	}
 
-	out := impact.BuildDiff(idx, changes, impactDepth, impactService, impactVerboseSources, cfg.Evidence.StaleAfterDuration())
+	out := impact.BuildDiff(idx, changes, impact.Options{
+		Depth:          impactDepth,
+		Service:        impactService,
+		Policy:         impactPolicy(),
+		VerboseSources: impactVerboseSources,
+		StaleAfter:     cfg.Evidence.StaleAfterDuration(),
+	})
 	out.AppendNoGitRepo(roots)
 	if impactStaged {
 		out.Mode = "staged"
@@ -2350,6 +2398,9 @@ func runEval(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  corpus_error  (present but failed to run — it measured nothing)\n", r.Repo)
 				case "forbidden_hit":
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  forbidden_hit  (blast radius newly includes: %s)\n", r.Repo, r.CaseID, strings.Join(r.ForbiddenHits, ", "))
+				case "precision_drop":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  precision_drop  baseline=%.3f  current=%.3f  (exhaustive case: it now returns files its complete truth set does not contain)\n",
+						r.Repo, r.CaseID, deref(r.BaselinePrecision), deref(r.CurrentPrecision))
 				}
 			}
 			fmt.Fprintln(os.Stderr, "Update eval/baseline.json when recall improves: polyflow eval --output eval/baseline.json")
@@ -2380,6 +2431,17 @@ func evalRepoPrecision(r eval.Report) string {
 		return "n/a (0 exhaustive cases)"
 	}
 	return fmt.Sprintf("%.3f (%d exhaustive)", *r.Precision, r.ExhaustiveCases)
+}
+
+// deref renders an optional score for a gate message. A nil precision reaches
+// here only if condition 7 emitted a regression without both numbers, which it
+// does not — printing 0 rather than panicking keeps a reporting bug from
+// masking the regression it is reporting.
+func deref(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
 }
 
 // evalForbidden appends the must_not_include files a case actually returned, so

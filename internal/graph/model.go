@@ -101,6 +101,51 @@ const (
 // contract engine and coverage denominators are not.
 const MetaIsTest = "is_test"
 
+// MetaChannelRole records which side(s) of a broker channel a service was
+// observed on: ChannelRoleProducer if it publishes to the exchange,
+// ChannelRoleConsumer if it only binds a queue to it, or ChannelRoleBoth.
+//
+// A channel node is otherwise role-blind — `exchange` and `routing_key` read
+// identically whether the site was a `Publish` or a `QueueBind` — and the
+// cross-service amqp contract joins channel to channel, so without this it
+// emits an edge in BOTH directions for every shared exchange. Measured on the
+// datascience fleet 2026-08-09: 8 of 30 cross-service `publishes` edges ran
+// backwards along the message flow, claiming dsw-manager published the runner
+// heartbeats it consumes and dsw-agent published the build jobs it binds.
+//
+// Absent means unknown, not "producer": only a site we positively identified as
+// bind-only is marked ChannelRoleConsumer, so a channel whose role we cannot
+// determine keeps its current behaviour rather than losing its edges.
+const MetaChannelRole = "channel_role"
+
+// Channel role values for MetaChannelRole. ChannelRoleBoth is a real state, not
+// a fallback: a service that publishes to an exchange and also binds a queue to
+// it legitimately sits on both sides, and must stay eligible as a producer.
+const (
+	ChannelRoleProducer = "producer"
+	ChannelRoleConsumer = "consumer"
+	ChannelRoleBoth     = "producer,consumer"
+)
+
+// MergeChannelRole combines an existing MetaChannelRole value with a newly
+// observed one. Roles accumulate: once a service is seen publishing to an
+// exchange, a later bind site cannot demote it to consumer-only.
+func MergeChannelRole(existing, observed string) string {
+	// An unobserved role is not evidence of anything. Merging "" in must leave
+	// the value alone, or a site we could not classify would silently promote a
+	// consumer-only channel to "both" and undo the suppression.
+	if observed == "" {
+		return existing
+	}
+	if existing == "" || existing == observed {
+		return observed
+	}
+	if existing == ChannelRoleBoth {
+		return existing
+	}
+	return ChannelRoleBoth
+}
+
 // EdgeType classifies the relationship between two nodes.
 type EdgeType string
 

@@ -10,11 +10,17 @@ import (
 type Regression struct {
 	Repo           string  `json:"repo"`
 	CaseID         string  `json:"case_id"`
-	Reason         string  `json:"reason"` // "hard_fail" | "recall_drop" | "silent_miss_rise" | "missing_repo" | "corpus_error" | "forbidden_hit"
+	Reason         string  `json:"reason"` // "hard_fail" | "recall_drop" | "silent_miss_rise" | "missing_repo" | "corpus_error" | "forbidden_hit" | "precision_drop"
 	BaselineRecall float64 `json:"baseline_recall,omitempty"`
 	CurrentRecall  float64 `json:"current_recall,omitempty"`
 	BaselineSilent int     `json:"baseline_silent,omitempty"`
 	CurrentSilent  int     `json:"current_silent,omitempty"`
+	// BaselinePrecision/CurrentPrecision carry condition 7's numbers. Pointers
+	// for the same reason CaseResult.Precision is one: a case that is not
+	// exhaustive has no precision, and 0.0 is a very different claim from
+	// "not measured".
+	BaselinePrecision *float64 `json:"baseline_precision,omitempty"`
+	CurrentPrecision  *float64 `json:"current_precision,omitempty"`
 	// ForbiddenHits names the must_not_include files that are newly returned
 	// (D.1) — the point of the condition is which phantom appeared, not that
 	// one did.
@@ -44,6 +50,13 @@ type GateResult struct {
 //  6. a case returns a must_not_include file it did not return in the baseline
 //     (D.1) — the false-positive condition, and the only one that can fail a
 //     case for being too broad rather than too narrow.
+//  7. an `exhaustive` case's precision falls below its baseline (D.4). Without
+//     this, condition 6 is the only precision gate there is, and it can only
+//     catch a phantom somebody predicted by name. An exhaustive case declares
+//     its expected_impacted to be the COMPLETE truth set, so any file it
+//     returns beyond that set is by definition a false positive — this
+//     condition is what turns that declaration into an assertion, and it
+//     catches the phantom nobody thought to forbid.
 func CheckGate(current, baseline *MultiReport) *GateResult {
 	// Index baseline by repo → caseID.
 	type baselineKey struct{ repo, caseID string }
@@ -91,6 +104,37 @@ func CheckGate(current, baseline *MultiReport) *GateResult {
 					CaseID:        cr.CaseID,
 					Reason:        "forbidden_hit",
 					ForbiddenHits: fresh,
+				})
+			}
+		}
+
+		// Condition 7: an exhaustive case's precision fell (D.4).
+		//
+		// Skipped when condition 6 already fired on the case: a forbidden hit
+		// is a returned file that expected_impacted cannot contain (the
+		// manifest lint forbids the overlap), so it necessarily drags precision
+		// down too. Reporting both would name one defect twice, the same
+		// reasoning that puts condition 6 ahead of condition 1.
+		//
+		// A case with no baseline entry is skipped rather than treated as a
+		// drop — newly authored exhaustive cases establish a baseline, they do
+		// not regress against one.
+		for _, cr := range rep.Results {
+			if !cr.Exhaustive || cr.Precision == nil || freshForbidden[cr.CaseID] {
+				continue
+			}
+			base, found := baselineCases[baselineKey{rep.Repo, cr.CaseID}]
+			if !found || base.Precision == nil {
+				continue
+			}
+			if *cr.Precision < *base.Precision-1e-9 {
+				basePrec, curPrec := *base.Precision, *cr.Precision
+				regressions = append(regressions, Regression{
+					Repo:              rep.Repo,
+					CaseID:            cr.CaseID,
+					Reason:            "precision_drop",
+					BaselinePrecision: &basePrec,
+					CurrentPrecision:  &curPrec,
 				})
 			}
 		}
