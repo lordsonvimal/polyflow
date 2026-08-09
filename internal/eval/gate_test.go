@@ -301,3 +301,95 @@ func TestCheckGate_BrokenCorpusFailsEvenWhenNotInBaseline(t *testing.T) {
 
 	assert.False(t, gate.OK)
 }
+
+// ptr returns a pointer to f, for building CaseResult.Precision in the
+// condition-7 tests below.
+func ptr(f float64) *float64 { return &f }
+
+// TestCheckGate_PrecisionDrop: an exhaustive case that gets less precise is a
+// regression (D.4 condition 7), even though its recall is untouched and no
+// must_not_include entry named the new file. This is the whole point of the
+// condition — condition 6 can only catch a phantom somebody predicted.
+func TestCheckGate_PrecisionDrop(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: true, Precision: ptr(1.0)},
+	)
+	current := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: true, Precision: ptr(0.75)},
+	)
+	gate := eval.CheckGate(current, baseline)
+	assert.False(t, gate.OK, "a less precise exhaustive case must fail the gate")
+	require.Len(t, gate.Regressions, 1)
+	r := gate.Regressions[0]
+	assert.Equal(t, "precision_drop", r.Reason)
+	assert.Equal(t, "c1", r.CaseID)
+	require.NotNil(t, r.BaselinePrecision)
+	require.NotNil(t, r.CurrentPrecision)
+	assert.InDelta(t, 1.0, *r.BaselinePrecision, 1e-9)
+	assert.InDelta(t, 0.75, *r.CurrentPrecision, 1e-9)
+}
+
+// TestCheckGate_PrecisionRiseIsNotRegression: getting MORE precise passes, and
+// does not silently ratchet the baseline either way.
+func TestCheckGate_PrecisionRiseIsNotRegression(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: true, Precision: ptr(0.5)},
+	)
+	current := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: true, Precision: ptr(1.0)},
+	)
+	gate := eval.CheckGate(current, baseline)
+	assert.True(t, gate.OK)
+	assert.Empty(t, gate.Regressions)
+}
+
+// TestCheckGate_PrecisionDropOnlyForExhaustive: a non-exhaustive case has no
+// precision to regress. Score() leaves Precision nil for those (D.1), and the
+// condition must not invent one — hits/returned against a SAMPLED truth set
+// measures how short the sample is, which is exactly the artifact D.1 removed.
+func TestCheckGate_PrecisionDropOnlyForExhaustive(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: false, Precision: ptr(1.0)},
+	)
+	current := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: false, Precision: ptr(0.1)},
+	)
+	gate := eval.CheckGate(current, baseline)
+	assert.True(t, gate.OK, "precision on a non-exhaustive case is not a measurement and must not gate")
+	assert.Empty(t, gate.Regressions)
+}
+
+// TestCheckGate_NewExhaustiveCaseEstablishesBaseline: a freshly authored
+// exhaustive case with no baseline entry is not a drop from nothing.
+func TestCheckGate_NewExhaustiveCaseEstablishesBaseline(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0},
+	)
+	current := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0},
+		eval.CaseResult{CaseID: "c2", Recall: 1.0, Exhaustive: true, Precision: ptr(0.4)},
+	)
+	gate := eval.CheckGate(current, baseline)
+	assert.True(t, gate.OK)
+	assert.Empty(t, gate.Regressions)
+}
+
+// TestCheckGate_ForbiddenHitSuppressesPrecisionDrop: one defect, reported once.
+// A forbidden hit is a returned file the truth set cannot contain, so it always
+// drags precision down as well; both conditions firing would double-count it.
+func TestCheckGate_ForbiddenHitSuppressesPrecisionDrop(t *testing.T) {
+	baseline := makeReport(
+		eval.CaseResult{CaseID: "c1", Recall: 1.0, Exhaustive: true, Precision: ptr(1.0)},
+	)
+	current := makeReport(
+		eval.CaseResult{
+			CaseID: "c1", Recall: 1.0, HardFail: true,
+			Exhaustive: true, Precision: ptr(0.5),
+			ForbiddenHits: []string{"phantom.go"},
+		},
+	)
+	gate := eval.CheckGate(current, baseline)
+	assert.False(t, gate.OK)
+	require.Len(t, gate.Regressions, 1, "one defect must be reported once")
+	assert.Equal(t, "forbidden_hit", gate.Regressions[0].Reason)
+}

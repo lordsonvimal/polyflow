@@ -127,6 +127,11 @@ cases:
     node_type: function
     # def apps/tether/server/src/battery.ts:8; called from sendBattery()
     # inside wss.on("connection", ...), index.ts:109-112.
+    #
+    # D.4 exhaustive: `grep -rln getBattery --include='*.ts'` over the whole
+    # monorepo returns exactly these two files, so the pair is the complete
+    # closure rather than a sample.
+    exhaustive: true
     expected_impacted:
       - /Users/lordson/Projects/synergy/apps/tether/server/src/battery.ts
       - /Users/lordson/Projects/synergy/apps/tether/server/src/index.ts
@@ -144,11 +149,24 @@ cases:
     node_type: function
     # def apps/core/handlers/user_handlers.go:11; registered
     # apps/core/routes/user_routes.go:13 (userGroup.GET("/:id", ...)).
+    #
+    # D.4: pinned and exhaustive. `GetUserByID` names TWO functions in service
+    # core — this gin handler and the data-access function at
+    # apps/core/src/user/user_db.go:120 — and neither `service` nor `node_type`
+    # separates them, so the qualifiers above were not actually disambiguating
+    # anything. The handler CALLS the DB one (user_handlers.go:21,
+    # `user.GetUserByID(c.Request.Context(), userID)`), which makes user_db.go
+    # a FORWARD neighbour and therefore exactly the file a direction-confused
+    # backward walk would wrongly return. Hence it is forbidden here.
+    target_file: apps/core/handlers/user_handlers.go
+    exhaustive: true
     expected_impacted:
       - /Users/lordson/Projects/synergy/apps/core/handlers/user_handlers.go
       - /Users/lordson/Projects/synergy/apps/core/routes/user_routes.go
     must_not_miss:
       - /Users/lordson/Projects/synergy/apps/core/routes/user_routes.go
+    must_not_include:
+      - /Users/lordson/Projects/synergy/apps/core/src/user/user_db.go
 
   - id: gin-core-auth-redirect
     kind: node
@@ -157,6 +175,9 @@ cases:
     node_type: function
     # def apps/core/handlers/auth_handlers.go:16; registered
     # apps/core/routes/auth_routes.go:19 (authGroup.GET("/redirect", ...)).
+    # D.4 exhaustive: a whole-monorepo grep for the name returns these two
+    # files and nothing else.
+    exhaustive: true
     expected_impacted:
       - /Users/lordson/Projects/synergy/apps/core/handlers/auth_handlers.go
       - /Users/lordson/Projects/synergy/apps/core/routes/auth_routes.go
@@ -171,11 +192,19 @@ cases:
     # def apps/sis/modules/academics/course/handler.go:17; registered
     # apps/sis/modules/academics/course/routes.go:10
     # (courseGroup.GET("/:id", ...)).
+    # D.4 exhaustive: whole-monorepo grep returns these two files only. Note
+    # the sibling module handlers (identity, payment) are same-shaped and
+    # same-service — the forbidden entries below are the cross-module leak a
+    # route-group prefix mix-up would produce.
+    exhaustive: true
     expected_impacted:
       - /Users/lordson/Projects/synergy/apps/sis/modules/academics/course/handler.go
       - /Users/lordson/Projects/synergy/apps/sis/modules/academics/course/routes.go
     must_not_miss:
       - /Users/lordson/Projects/synergy/apps/sis/modules/academics/course/routes.go
+    must_not_include:
+      - /Users/lordson/Projects/synergy/apps/sis/modules/administration/identity/routes.go
+      - /Users/lordson/Projects/synergy/apps/sis/modules/finance/payment/routes.go
 
   - id: gin-sis-get-user
     kind: node
@@ -185,6 +214,8 @@ cases:
     # def apps/sis/modules/administration/identity/handler.go:95; registered
     # apps/sis/modules/administration/identity/routes.go:11
     # (identityGroup.GET("/:id", ...)).
+    # D.4 exhaustive: whole-monorepo grep returns these two files only.
+    exhaustive: true
     expected_impacted:
       - /Users/lordson/Projects/synergy/apps/sis/modules/administration/identity/handler.go
       - /Users/lordson/Projects/synergy/apps/sis/modules/administration/identity/routes.go
@@ -200,12 +231,28 @@ cases:
     # apps/sis/modules/finance/payment/routes.go:7 (paymentGroup.GET("/", ...));
     # handler also navigates_to the shared templ layout (layout.templ),
     # exercising the templ nav-link pattern alongside the gin route link.
+    #
+    # D.4 exhaustive, and this is the one case here that gates a full
+    # frontend→backend chain as a COMPLETE truth set: the layout's sidebar has
+    # `href="/fees"` (layout.templ:80) and the route group is `r.Group("/fees")`
+    # with `paymentGroup.GET("/", handleGetFees)` (routes.go:6-8), so a user
+    # clicking that link reaches this handler and the nav_link edge is a true
+    # positive, not a phantom. layout_templ.go is the generated component impl
+    # of the same layout and was missing from the sampled list below.
+    exhaustive: true
     expected_impacted:
       - /Users/lordson/Projects/synergy/apps/sis/modules/finance/payment/handler.go
       - /Users/lordson/Projects/synergy/apps/sis/modules/finance/payment/routes.go
       - /Users/lordson/Projects/synergy/apps/sis/modules/shared/ui/layouts/layout.templ
+      - /Users/lordson/Projects/synergy/apps/sis/modules/shared/ui/layouts/layout_templ.go
     must_not_miss:
       - /Users/lordson/Projects/synergy/apps/sis/modules/finance/payment/routes.go
+    # The same layout links to every other module too. If those sibling routes
+    # start appearing here, the nav_link resolver has stopped distinguishing
+    # WHICH href it followed and the layout has become an all-pairs connector.
+    must_not_include:
+      - /Users/lordson/Projects/synergy/apps/sis/modules/academics/course/handler.go
+      - /Users/lordson/Projects/synergy/apps/sis/modules/administration/identity/handler.go
 
   # ── JS/TS ESM import chains (Tier I.3), the two remaining slots covering
   # the express/cross-service gap recorded above with real, verified links.

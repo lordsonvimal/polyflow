@@ -27,6 +27,20 @@ repo:
 # Cases 14–16: Flask HTTP handler nodes — same rationale as FastAPI cases.
 cases:
   # ── Celery task consumers (cross-service job_enqueue impact) ────────────────
+  #
+  # D.4: all five are `exhaustive`. This fixture is 152 lines across 5 files and
+  # was read end to end to establish it: the only `.delay`/`.apply_async` call
+  # sites in the whole tree are api/main.py:22,28,34,40,46, nothing imports
+  # worker/tasks.py besides api/main.py, and no task calls another task. So
+  # {worker/tasks.py, api/main.py} is the complete blast radius of any one of
+  # them, not a sample — which is the only claim `exhaustive` makes.
+  #
+  # gateway/app.py is deliberately NOT forbidden on these cases even though it
+  # is absent today. The gateway POSTs to /notify/{user_id}, whose handler
+  # dispatches send_notification, so once the gateway→api HTTP link resolves
+  # (it does not today: the only cross-service edges in this fixture are the
+  # five job_enqueue ones) gateway/app.py becomes a CORRECT depth-3 member of
+  # that closure. Forbidding it would point the gate at a recall fix.
 
   - id: celery-send-notification
     kind: node
@@ -35,17 +49,25 @@ cases:
     # Dispatched via send_notification.delay(user_id, message) in api/main.py.
     # The job_enqueue edge links the Publisher (api/main.py) to the Subscriber
     # (worker/tasks.py), so impact of the consumer includes both files.
+    exhaustive: true
     expected_impacted:
       - worker/tasks.py
       - api/main.py
     must_not_miss:
       - worker/tasks.py
+    # The routers are included by api/main.py but never dispatch a task, so no
+    # route module can reach a worker task. These are the nearest files a
+    # containment fan-out through main.py would drag in.
+    must_not_include:
+      - api/routes/users.py
+      - api/routes/orders.py
 
   - id: celery-process-payment
     kind: node
     target: process_payment
     # @app.task(bind=True) def process_payment(...) in worker/tasks.py (line 13).
     # Dispatched via process_payment.delay(order_id, amount) in api/main.py.
+    exhaustive: true
     expected_impacted:
       - worker/tasks.py
       - api/main.py
@@ -57,17 +79,28 @@ cases:
     target: generate_invoice
     # @shared_task def generate_invoice(...) in worker/tasks.py (line 18).
     # Dispatched via generate_invoice.apply_async(args=[order_id]) in api/main.py.
+    exhaustive: true
     expected_impacted:
       - worker/tasks.py
       - api/main.py
     must_not_miss:
       - worker/tasks.py
+    # gateway/app.py IS forbidden here, unlike on send-notification: the
+    # gateway's only two outbound calls are POST /notify/{user_id} and
+    # GET /users/, neither of which reaches POST /invoices/{order_id}. So no
+    # correct resolution of the gateway→api link can ever put it in this
+    # closure, and its appearance would be precisely the "client of the service
+    # lands in every one of that service's blast radii" fan-out phantom.
+    must_not_include:
+      - api/routes/orders.py
+      - gateway/app.py
 
   - id: celery-send-verification-email
     kind: node
     target: send_verification_email
     # @shared_task(bind=True) def send_verification_email(...) in worker/tasks.py.
     # Dispatched via send_verification_email.delay(user_id, email) in api/main.py.
+    exhaustive: true
     expected_impacted:
       - worker/tasks.py
       - api/main.py
@@ -79,11 +112,17 @@ cases:
     target: cleanup_expired_sessions
     # @app.task def cleanup_expired_sessions() in worker/tasks.py (line 28).
     # Dispatched via cleanup_expired_sessions.delay() in api/main.py.
+    exhaustive: true
     expected_impacted:
       - worker/tasks.py
       - api/main.py
     must_not_miss:
       - worker/tasks.py
+    # POST /cleanup takes no arguments and is called by nobody; the gateway
+    # cannot reach it. Same fan-out assertion as celery-generate-invoice.
+    must_not_include:
+      - gateway/app.py
+      - api/routes/users.py
 
   # ── FastAPI HTTP handler nodes (L.P2 pattern detection) ────────────────────
 

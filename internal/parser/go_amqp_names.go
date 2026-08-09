@@ -96,6 +96,9 @@ func extractAMQPNames(
 	var edges []graph.Edge
 	seenNodes := map[string]bool{}
 	seenEdges := map[string]bool{}
+	// nodeIdx locates an already-minted channel node so a second site for the
+	// same exchange can merge its role into it (see graph.MergeChannelRole).
+	nodeIdx := map[string]int{}
 	// queueChannels indexes table-resolved channels by the queue name they bind,
 	// so a `Consume(QueueBuildLogs, …)` call site — which names only its queue —
 	// can subscribe to the exchange/routing-key channels that queue receives on.
@@ -113,15 +116,29 @@ func extractAMQPNames(
 		}
 		channelKey := exchange + "/" + routingKey
 		channelID := fmt.Sprintf("%s:channel:%s", service, channelKey)
+		channelRole := graph.ChannelRoleProducer
+		if role == "consumer" {
+			channelRole = graph.ChannelRoleConsumer
+		}
 		if !seenNodes[channelID] {
 			seenNodes[channelID] = true
+			nodeIdx[channelID] = len(nodes)
 			nodes = append(nodes, graph.Node{
 				ID:      channelID,
 				Type:    graph.NodeTypeChannel,
 				Label:   channelKey,
 				Service: service,
-				Meta:    map[string]string{"exchange": exchange, "routing_key": routingKey, "synthesized": "amqp_wrapper"},
+				Meta: map[string]string{
+					"exchange": exchange, "routing_key": routingKey, "synthesized": "amqp_wrapper",
+					graph.MetaChannelRole: channelRole,
+				},
 			})
+		} else if i, ok := nodeIdx[channelID]; ok {
+			// Same service, same exchange, second site: a publisher that also
+			// binds a queue is on both sides and must stay eligible as a
+			// producer, so roles accumulate rather than overwrite.
+			m := nodes[i].Meta
+			m[graph.MetaChannelRole] = graph.MergeChannelRole(m[graph.MetaChannelRole], channelRole)
 		}
 		var edgeID string
 		var edge graph.Edge
@@ -159,11 +176,15 @@ func extractAMQPNames(
 				"resolved_via": "static_table",
 				"table_type":   tableType,
 				"synthesized":  "amqp_wrapper",
+				// A static binding table declares which queue receives from
+				// which exchange — unambiguously the consuming side.
+				graph.MetaChannelRole: graph.ChannelRoleConsumer,
 			}
 			if queueName != "" {
 				meta["queue_name"] = queueName
 				queueChannels[queueName] = append(queueChannels[queueName], channelID)
 			}
+			nodeIdx[channelID] = len(nodes)
 			nodes = append(nodes, graph.Node{
 				ID:      channelID,
 				Type:    graph.NodeTypeChannel,
@@ -173,6 +194,9 @@ func extractAMQPNames(
 				Line:    line,
 				Meta:    meta,
 			})
+		} else if i, ok := nodeIdx[channelID]; ok {
+			m := nodes[i].Meta
+			m[graph.MetaChannelRole] = graph.MergeChannelRole(m[graph.MetaChannelRole], graph.ChannelRoleConsumer)
 		}
 		edgeID := fmt.Sprintf("amqpsub:%s->%s", channelID, callerID)
 		if !seenEdges[edgeID] {

@@ -538,3 +538,107 @@ func TestWebSocketRule_WrongProducerPattern_NoEdge(t *testing.T) {
 	res := runKind(t, contract.KindWebSocket, nodes)
 	assert.Empty(t, res.Edges)
 }
+
+// ── D.4: channel role suppresses backwards publishes edges ──────────────────
+
+// A channel node whose only evidence is a QueueBind is the consuming side, so
+// the exchange contract must not treat it as a producer. Both endpoints of that
+// rule are `channel`, so before the channel_role gate the join was symmetric
+// and emitted an edge in each direction for every shared exchange — half of
+// them pointing backwards along the message flow.
+func TestAMQPRule_ConsumerOnlyChannelIsNotAProducer(t *testing.T) {
+	nodes := []graph.Node{
+		// svc-a publishes.
+		{ID: "svc-a:channel:runner_heartbeat/heartbeat", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{
+				"exchange": "runner_heartbeat", "routing_key": "heartbeat",
+				graph.MetaChannelRole: graph.ChannelRoleProducer,
+			}},
+		// svc-b only binds a queue to it.
+		{ID: "svc-b:channel:runner_heartbeat/heartbeat", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{
+				"exchange": "runner_heartbeat", "routing_key": "heartbeat",
+				graph.MetaChannelRole: graph.ChannelRoleConsumer,
+			}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	var got []string
+	for _, e := range res.Edges {
+		if e.Type == graph.EdgeTypePublishes {
+			got = append(got, e.From+"->"+e.To)
+		}
+	}
+	require.Len(t, got, 1, "exactly one direction may be emitted, got %v", got)
+	assert.Equal(t,
+		"svc-a:channel:runner_heartbeat/heartbeat->svc-b:channel:runner_heartbeat/heartbeat",
+		got[0], "the edge must run publisher → binder")
+}
+
+// A service that publishes to an exchange AND binds a queue to it is genuinely
+// on both sides, and must stay eligible as a producer. The exclusion is an
+// exact-value match on "consumer" precisely so that "producer,consumer" passes.
+func TestAMQPRule_BothRolesStillProduces(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "svc-a:channel:events/x", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{
+				"exchange": "events", "routing_key": "x",
+				graph.MetaChannelRole: graph.ChannelRoleBoth,
+			}},
+		{ID: "svc-b:channel:events/x", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{
+				"exchange": "events", "routing_key": "x",
+				graph.MetaChannelRole: graph.ChannelRoleConsumer,
+			}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	var got []string
+	for _, e := range res.Edges {
+		if e.Type == graph.EdgeTypePublishes {
+			got = append(got, e.From+"->"+e.To)
+		}
+	}
+	require.Len(t, got, 1)
+	assert.Equal(t, "svc-a:channel:events/x->svc-b:channel:events/x", got[0])
+}
+
+// An unclassified channel keeps its old behaviour. Absent means "we could not
+// tell", not "consumer" — a language whose patterns do not yet record the role
+// must not lose its cross-service edges to this gate.
+func TestAMQPRule_UnclassifiedChannelStillLinks(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "svc-a:channel:orders/placed", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{"exchange": "orders", "routing_key": "placed"}},
+		{ID: "svc-b:channel:orders/placed", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{"exchange": "orders", "routing_key": "placed"}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	var n int
+	for _, e := range res.Edges {
+		if e.Type == graph.EdgeTypePublishes {
+			n++
+		}
+	}
+	assert.Greater(t, n, 0, "a role-less channel pair must still link")
+}
+
+// Two pure consumers of the same exchange are two subscribers to one publisher
+// elsewhere, not a link between each other.
+func TestAMQPRule_TwoConsumersDoNotLink(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "svc-a:channel:events/x", Type: graph.NodeTypeChannel, Service: "svc-a",
+			Meta: map[string]string{
+				"exchange": "events", "routing_key": "x",
+				graph.MetaChannelRole: graph.ChannelRoleConsumer,
+			}},
+		{ID: "svc-b:channel:events/x", Type: graph.NodeTypeChannel, Service: "svc-b",
+			Meta: map[string]string{
+				"exchange": "events", "routing_key": "x",
+				graph.MetaChannelRole: graph.ChannelRoleConsumer,
+			}},
+	}
+	res := runKind(t, contract.KindAMQP, nodes)
+	for _, e := range res.Edges {
+		assert.NotEqual(t, graph.EdgeTypePublishes, e.Type,
+			"two binders of one exchange must not publish to each other")
+	}
+}

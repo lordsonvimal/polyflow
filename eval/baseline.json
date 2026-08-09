@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T15:47:29.440835Z",
+  "generated_at": "2026-08-09T18:01:35.157347Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -286,6 +286,24 @@
           "hard_fail": false
         },
         {
+          "case_id": "heartbeat-flows-agent-to-manager",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "agent-heartbeat-not-published-by-manager",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
           "case_id": "lyra-job-start-reaches-orion",
           "recall": 1,
           "honest_misses": 0,
@@ -316,7 +334,7 @@
       ],
       "recall": 1,
       "precision": 1,
-      "exhaustive_cases": 3,
+      "exhaustive_cases": 5,
       "forbidden_hits": 7
     },
     {
@@ -596,6 +614,8 @@
         {
           "case_id": "get-applications-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -603,6 +623,8 @@
         {
           "case_id": "create-application-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -617,6 +639,8 @@
         {
           "case_id": "get-clients-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -624,6 +648,8 @@
         {
           "case_id": "get-current-user-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -631,6 +657,8 @@
         {
           "case_id": "get-users-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -638,6 +666,8 @@
         {
           "case_id": "create-user-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -645,6 +675,8 @@
         {
           "case_id": "get-plugins-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -726,7 +758,7 @@
       ],
       "recall": 0.875,
       "precision": 1,
-      "exhaustive_cases": 2,
+      "exhaustive_cases": 9,
       "rank1_accuracy": 0.6
     },
     {
@@ -962,8 +994,8 @@
           "hard_fail": false,
           "rank1": "AdjacencyIndex",
           "rank1_score": 0.016,
-          "rank2": "buildErr",
-          "rank2_score": 0.026
+          "rank2": "file",
+          "rank2_score": 0.016
         },
         {
           "case_id": "rank1-link-route-handlers",
@@ -974,7 +1006,7 @@
           "hard_fail": false,
           "rank1": "LinkRouteHandlers",
           "rank1_score": 0.016,
-          "rank2": "pythonCeleryFixtureWS",
+          "rank2": "navHelperPatterns",
           "rank2_score": 0.016
         },
         {
@@ -985,15 +1017,14 @@
           "silent_misses": 0,
           "hard_fail": true,
           "rank1": "edges",
-          "rank1_score": 0.012,
-          "rank2": "edges",
-          "rank2_score": 0.009
+          "rank1_score": 0.032,
+          "rank2": "filterFixtureFiles",
+          "rank2_score": 0.03
         }
       ],
       "recall": 0.9166666666666666,
       "semantic_recall": 1,
-      "rank1_accuracy": 0.75,
-      "rank1_min_gap": -0.009999999999999998
+      "rank1_accuracy": 0.75
     },
     {
       "repo": "pyflask",
@@ -1001,6 +1032,8 @@
         {
           "case_id": "celery-send-notification",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1008,6 +1041,8 @@
         {
           "case_id": "celery-process-payment",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1015,6 +1050,8 @@
         {
           "case_id": "celery-generate-invoice",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1022,6 +1059,8 @@
         {
           "case_id": "celery-send-verification-email",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1029,6 +1068,8 @@
         {
           "case_id": "celery-cleanup-expired-sessions",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1164,7 +1205,9 @@
         }
       ],
       "recall": 0.9545454545454546,
-      "semantic_recall": 1
+      "semantic_recall": 1,
+      "precision": 1,
+      "exhaustive_cases": 5
     },
     {
       "repo": "orion-vega",
@@ -1572,6 +1615,8 @@
         {
           "case_id": "ws-connection-get-battery",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1579,6 +1624,8 @@
         {
           "case_id": "gin-core-get-user-by-id",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1586,6 +1633,8 @@
         {
           "case_id": "gin-core-auth-redirect",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1593,6 +1642,8 @@
         {
           "case_id": "gin-sis-get-course",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1600,6 +1651,8 @@
         {
           "case_id": "gin-sis-get-user",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1607,6 +1660,8 @@
         {
           "case_id": "gin-sis-get-fees",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1639,6 +1694,8 @@
         }
       ],
       "recall": 1,
+      "precision": 1,
+      "exhaustive_cases": 6,
       "rank1_accuracy": 1
     },
     {
@@ -1647,6 +1704,8 @@
         {
           "case_id": "handle-view-home-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1654,6 +1713,8 @@
         {
           "case_id": "handle-view-landing-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1661,6 +1722,8 @@
         {
           "case_id": "view-collections-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1668,6 +1731,8 @@
         {
           "case_id": "view-edit-collection-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1675,6 +1740,8 @@
         {
           "case_id": "view-articles-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1682,6 +1749,8 @@
         {
           "case_id": "handle-user-delete-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1689,6 +1758,8 @@
         {
           "case_id": "view-stats-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1696,6 +1767,8 @@
         {
           "case_id": "handle-view-subscribers-callers",
           "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1785,7 +1858,7 @@
       ],
       "recall": 1,
       "precision": 1,
-      "exhaustive_cases": 1,
+      "exhaustive_cases": 9,
       "rank1_accuracy": 1,
       "rank1_min_gap": -0.017
     }
