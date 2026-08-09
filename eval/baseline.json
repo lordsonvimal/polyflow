@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T15:01:05.4254Z",
+  "generated_at": "2026-08-09T15:24:34.916865Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -7,7 +7,6 @@
         {
           "case_id": "propose-draw-datastar",
           "recall": 1,
-          "precision": 0.1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -15,7 +14,6 @@
         {
           "case_id": "resign-game-datastar",
           "recall": 1,
-          "precision": 0.10714285714285714,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -23,7 +21,6 @@
         {
           "case_id": "accept-draw-datastar",
           "recall": 1,
-          "precision": 0.10714285714285714,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -31,7 +28,6 @@
         {
           "case_id": "propose-takeback-datastar",
           "recall": 1,
-          "precision": 0.1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -39,7 +35,6 @@
         {
           "case_id": "claim-draw-datastar",
           "recall": 1,
-          "precision": 0.1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -47,7 +42,6 @@
         {
           "case_id": "decline-rematch-datastar",
           "recall": 1,
-          "precision": 0.10714285714285714,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -55,7 +49,6 @@
         {
           "case_id": "play-events-sse",
           "recall": 1,
-          "precision": 0.1111111111111111,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -63,7 +56,6 @@
         {
           "case_id": "apply-move-checked-callers",
           "recall": 1,
-          "precision": 0.10344827586206896,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -71,7 +63,6 @@
         {
           "case_id": "hub-broadcast-board-callers",
           "recall": 1,
-          "precision": 0.06666666666666667,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -79,7 +70,6 @@
         {
           "case_id": "broadcast-signals-callers",
           "recall": 1,
-          "precision": 0.07142857142857142,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -87,7 +77,6 @@
         {
           "case_id": "new-game-store-callers",
           "recall": 1,
-          "precision": 0.08333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -95,7 +84,6 @@
         {
           "case_id": "new-dispatcher-callers",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -103,7 +91,6 @@
         {
           "case_id": "post-move-queue-js",
           "recall": 1,
-          "precision": 0.23076923076923078,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -111,7 +98,6 @@
         {
           "case_id": "arrow-layer-js",
           "recall": 1,
-          "precision": 0.0967741935483871,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -119,7 +105,6 @@
         {
           "case_id": "move-sync-file-imports",
           "recall": 1,
-          "precision": 0.05555555555555555,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -128,7 +113,6 @@
           "case_id": "rank1-propose-draw",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -141,7 +125,6 @@
           "case_id": "rank1-hub-broadcast-board",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -154,7 +137,6 @@
           "case_id": "rank1-apply-move-checked",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -165,7 +147,6 @@
         }
       ],
       "recall": 0.9444444444444444,
-      "precision": 0.22817678757612014,
       "rank1_accuracy": 0.6666666666666666,
       "rank1_min_gap": -0.002999999999999999
     },
@@ -175,7 +156,6 @@
         {
           "case_id": "rest-register-rails-consumer1",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -183,7 +163,6 @@
         {
           "case_id": "rest-register-rails-consumer2",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 1,
           "silent_misses": 0,
           "hard_fail": false
@@ -191,7 +170,6 @@
         {
           "case_id": "rest-update-job-status-rails-consumer2",
           "recall": 1,
-          "precision": 0.045454545454545456,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -199,7 +177,6 @@
         {
           "case_id": "rabbitmq-progress-events",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -207,7 +184,6 @@
         {
           "case_id": "rabbitmq-audit-events",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -215,7 +191,6 @@
         {
           "case_id": "rabbitmq-workspace-compare-ack",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -224,7 +199,6 @@
           "case_id": "rank1-lros-update",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -235,7 +209,6 @@
         }
       ],
       "recall": 0.8571428571428571,
-      "precision": 0.3874458874458874,
       "rank1_accuracy": 1,
       "rank1_min_gap": 0.007000000000000001
     },
@@ -245,7 +218,6 @@
         {
           "case_id": "gin-admin-pagination-helper",
           "recall": 1,
-          "precision": 0.2222222222222222,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -253,7 +225,6 @@
         {
           "case_id": "gin-userapp-index",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -261,7 +232,6 @@
         {
           "case_id": "gin-userapp-show",
           "recall": 1,
-          "precision": 0.375,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -269,7 +239,6 @@
         {
           "case_id": "gin-userapp-favorite",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -277,7 +246,6 @@
         {
           "case_id": "gin-userapp-launch",
           "recall": 1,
-          "precision": 0.375,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -285,7 +253,6 @@
         {
           "case_id": "gin-userapp-get-access",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -293,7 +260,6 @@
         {
           "case_id": "gin-userapp-grant-access",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -301,7 +267,6 @@
         {
           "case_id": "gin-auth-get-current-user",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -309,7 +274,6 @@
         {
           "case_id": "gin-service-key-generate",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -317,7 +281,6 @@
         {
           "case_id": "gin-service-key-deactivate",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -325,7 +288,6 @@
         {
           "case_id": "templ-home-page",
           "recall": 1,
-          "precision": 0.1111111111111111,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -333,7 +295,6 @@
         {
           "case_id": "templ-login-page",
           "recall": 1,
-          "precision": 0.1111111111111111,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -342,7 +303,6 @@
           "case_id": "rank1-grant-access",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -352,8 +312,7 @@
           "rank2_score": 0.015
         }
       ],
-      "recall": 0.9230769230769231,
-      "precision": 0.2457264957264957
+      "recall": 0.9230769230769231
     },
     {
       "repo": "juniper",
@@ -361,7 +320,6 @@
         {
           "case_id": "cross-service-remove-config",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -369,7 +327,6 @@
         {
           "case_id": "cross-service-update-config-status",
           "recall": 1,
-          "precision": 0.2,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -377,7 +334,6 @@
         {
           "case_id": "cross-service-restore-config",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -385,7 +341,6 @@
         {
           "case_id": "gin-agent-stream-build-logs",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -393,7 +348,6 @@
         {
           "case_id": "grpc-otel-trace-exporter",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -401,7 +355,6 @@
         {
           "case_id": "amqp-publish-container-event",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -409,7 +362,6 @@
         {
           "case_id": "amqp-consume-container-events",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -417,7 +369,6 @@
         {
           "case_id": "gin-manager-app-config-latest",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -425,7 +376,6 @@
         {
           "case_id": "gin-manager-exec-config-dependent-apps",
           "recall": 1,
-          "precision": 0.14285714285714285,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -433,7 +383,6 @@
         {
           "case_id": "gin-manager-exec-config-current-version",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -441,7 +390,6 @@
         {
           "case_id": "gin-manager-exec-config-mark-inactive",
           "recall": 1,
-          "precision": 0.15384615384615385,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -449,7 +397,6 @@
         {
           "case_id": "gin-manager-exec-config-validate-packages",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -457,7 +404,6 @@
         {
           "case_id": "gin-agent-create-build",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -465,7 +411,6 @@
         {
           "case_id": "gin-agent-cancel-build",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -473,7 +418,6 @@
         {
           "case_id": "gin-agent-list-images",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -481,7 +425,6 @@
         {
           "case_id": "route-handler-receiver-disambiguation",
           "recall": 1,
-          "precision": 0.2222222222222222,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -490,7 +433,6 @@
           "case_id": "rank1-build-job-channel",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -500,8 +442,7 @@
           "rank2_score": 0.013
         }
       ],
-      "recall": 0.9411764705882353,
-      "precision": 0.41483875601522663
+      "recall": 0.9411764705882353
     },
     {
       "repo": "gotify",
@@ -509,7 +450,6 @@
         {
           "case_id": "router-create-callers",
           "recall": 1,
-          "precision": 0.05263157894736842,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -517,7 +457,8 @@
         {
           "case_id": "get-messages-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -525,7 +466,6 @@
         {
           "case_id": "create-message-callers",
           "recall": 1,
-          "precision": 0.14285714285714285,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -533,7 +473,8 @@
         {
           "case_id": "delete-message-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -541,7 +482,6 @@
         {
           "case_id": "health-handler-callers",
           "recall": 1,
-          "precision": 0.14285714285714285,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -549,7 +489,6 @@
         {
           "case_id": "get-applications-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -557,7 +496,6 @@
         {
           "case_id": "create-application-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -565,7 +503,6 @@
         {
           "case_id": "login-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -573,7 +510,6 @@
         {
           "case_id": "get-clients-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -581,7 +517,6 @@
         {
           "case_id": "get-current-user-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -589,7 +524,6 @@
         {
           "case_id": "get-users-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -597,7 +531,6 @@
         {
           "case_id": "create-user-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -605,7 +538,6 @@
         {
           "case_id": "get-plugins-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -613,7 +545,6 @@
         {
           "case_id": "init-axios-callers",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -621,7 +552,6 @@
         {
           "case_id": "use-stores-callers",
           "recall": 0.5,
-          "precision": 0.05555555555555555,
           "honest_misses": 1,
           "silent_misses": 0,
           "hard_fail": false
@@ -630,7 +560,6 @@
           "case_id": "rank1-create-application",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -643,7 +572,6 @@
           "case_id": "rank1-create-application-descriptive",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -656,7 +584,6 @@
           "case_id": "rank1-delete-message",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -669,7 +596,6 @@
           "case_id": "rank1-create-password",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -682,7 +608,6 @@
           "case_id": "rank1-password-hashing-nl",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -693,7 +618,8 @@
         }
       ],
       "recall": 0.875,
-      "precision": 0.2780284043441938,
+      "precision": 1,
+      "exhaustive_cases": 2,
       "rank1_accuracy": 0.6
     },
     {
@@ -702,7 +628,6 @@
         {
           "case_id": "stories-create-action",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -710,7 +635,6 @@
         {
           "case_id": "stories-show-action",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -718,7 +642,6 @@
         {
           "case_id": "stories-upvote-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -726,7 +649,6 @@
         {
           "case_id": "stories-new-action",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -734,7 +656,6 @@
         {
           "case_id": "stories-check-url-dupe",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -742,7 +663,6 @@
         {
           "case_id": "comments-create-action",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -750,7 +670,6 @@
         {
           "case_id": "comments-upvote-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -758,7 +677,6 @@
         {
           "case_id": "story-already-posted-recently",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -766,7 +684,6 @@
         {
           "case_id": "story-is-resubmit",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -774,7 +691,6 @@
         {
           "case_id": "story-comments-closing-soon",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -782,7 +698,6 @@
         {
           "case_id": "home-index-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -790,7 +705,6 @@
         {
           "case_id": "home-newest-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -798,7 +712,6 @@
         {
           "case_id": "home-active-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -806,7 +719,6 @@
         {
           "case_id": "search-index-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -814,7 +726,6 @@
         {
           "case_id": "login-action",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -823,7 +734,6 @@
           "case_id": "rank1-bust-comment-redirect-cache",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -836,7 +746,6 @@
           "case_id": "rank1-find-similar-by-url",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -849,7 +758,6 @@
           "case_id": "rank1-already-posted-recently",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -860,7 +768,6 @@
         }
       ],
       "recall": 0.9444444444444444,
-      "precision": 0.6898148148148148,
       "rank1_accuracy": 0.6666666666666666
     },
     {
@@ -869,7 +776,6 @@
         {
           "case_id": "unresolved-note-callers",
           "recall": 1,
-          "precision": 0.5454545454545454,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -877,7 +783,6 @@
         {
           "case_id": "linker-route-indexer",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -885,7 +790,6 @@
         {
           "case_id": "filter-edges-confidence-js",
           "recall": 1,
-          "precision": 0.09090909090909091,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -894,7 +798,6 @@
           "case_id": "nl-unresolved-note",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.125,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -903,7 +806,6 @@
           "case_id": "nl-link-route-handlers",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.125,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -912,7 +814,6 @@
           "case_id": "nl-search-nodes-store",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.1111111111111111,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -921,7 +822,6 @@
           "case_id": "nl-confidence-filter-js",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.2,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -930,7 +830,6 @@
           "case_id": "nl-adjacency-index",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.125,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -939,7 +838,6 @@
           "case_id": "rank1-unresolved-note",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -952,7 +850,6 @@
           "case_id": "rank1-adjacency-index",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -965,7 +862,6 @@
           "case_id": "rank1-link-route-handlers",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -978,7 +874,6 @@
           "case_id": "rank1-confidence-filter",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -989,7 +884,6 @@
         }
       ],
       "recall": 0.9166666666666666,
-      "precision": 0.38798400673400674,
       "semantic_recall": 1,
       "rank1_accuracy": 0.75,
       "rank1_min_gap": -0.009999999999999998
@@ -1000,7 +894,6 @@
         {
           "case_id": "celery-send-notification",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1008,7 +901,6 @@
         {
           "case_id": "celery-process-payment",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1016,7 +908,6 @@
         {
           "case_id": "celery-generate-invoice",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1024,7 +915,6 @@
         {
           "case_id": "celery-send-verification-email",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1032,7 +922,6 @@
         {
           "case_id": "celery-cleanup-expired-sessions",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1040,7 +929,6 @@
         {
           "case_id": "fastapi-create-user",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1048,7 +936,6 @@
         {
           "case_id": "fastapi-get-user",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1056,7 +943,6 @@
         {
           "case_id": "fastapi-update-user",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1064,7 +950,6 @@
         {
           "case_id": "fastapi-list-users",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1072,7 +957,6 @@
         {
           "case_id": "fastapi-delete-user",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1080,7 +964,6 @@
         {
           "case_id": "fastapi-create-order",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1088,7 +971,6 @@
         {
           "case_id": "fastapi-get-order",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1096,7 +978,6 @@
         {
           "case_id": "fastapi-update-order",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1104,7 +985,6 @@
         {
           "case_id": "flask-health-check",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1112,7 +992,6 @@
         {
           "case_id": "flask-process-webhook",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1120,7 +999,6 @@
         {
           "case_id": "flask-status-page",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1129,7 +1007,6 @@
           "case_id": "nl-send-email-notification",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1138,7 +1015,6 @@
           "case_id": "nl-payment-processing",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.14285714285714285,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1147,7 +1023,6 @@
           "case_id": "nl-create-user-endpoint",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1156,7 +1031,6 @@
           "case_id": "nl-health-check-status",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.125,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1165,7 +1039,6 @@
           "case_id": "nl-generate-invoice",
           "kind": "semantic",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1174,7 +1047,6 @@
           "case_id": "rank1-generate-invoice",
           "kind": "rank1",
           "recall": 0,
-          "precision": 0,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
@@ -1185,7 +1057,6 @@
         }
       ],
       "recall": 0.9545454545454546,
-      "precision": 0.7621753246753248,
       "semantic_recall": 1
     },
     {
@@ -1194,7 +1065,6 @@
         {
           "case_id": "inherits-api-base-controller",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1202,7 +1072,6 @@
         {
           "case_id": "instantiates-user-manager",
           "recall": 1,
-          "precision": 0.6,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1210,7 +1079,6 @@
         {
           "case_id": "instantiates-folder-manager",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1218,7 +1086,6 @@
         {
           "case_id": "bunny-message-handler-base",
           "recall": 1,
-          "precision": 0.09090909090909091,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1226,7 +1093,6 @@
         {
           "case_id": "message-handler-base-deliver-ack",
           "recall": 1,
-          "precision": 0.045454545454545456,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1234,7 +1100,6 @@
         {
           "case_id": "rest-client-storage-manager",
           "recall": 1,
-          "precision": 0.2222222222222222,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1242,7 +1107,6 @@
         {
           "case_id": "rest-client-ldap-wrapper",
           "recall": 1,
-          "precision": 0.15384615384615385,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1250,7 +1114,6 @@
         {
           "case_id": "rest-client-study-manager",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1258,7 +1121,6 @@
         {
           "case_id": "instantiates-dss-org-info-wrapper",
           "recall": 1,
-          "precision": 0.0625,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1266,14 +1128,12 @@
         {
           "case_id": "instantiates-snapshot-cleaner",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         }
       ],
-      "recall": 1,
-      "precision": 0.26273129648129645
+      "recall": 1
     },
     {
       "repo": "orion-lyra",
@@ -1281,7 +1141,6 @@
         {
           "case_id": "rest-helper-callers",
           "recall": 1,
-          "precision": 0.04878048780487805,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1289,7 +1148,6 @@
         {
           "case_id": "remote-executor-callers",
           "recall": 1,
-          "precision": 0.06060606060606061,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1297,7 +1155,6 @@
         {
           "case_id": "snapshot-based-executor-spec-callers",
           "recall": 1,
-          "precision": 0.18181818181818182,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1305,7 +1162,6 @@
         {
           "case_id": "sas-base-adapter-subclasses",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1313,7 +1169,6 @@
         {
           "case_id": "base-execution-service-subclasses",
           "recall": 1,
-          "precision": 0.4,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1321,7 +1176,6 @@
         {
           "case_id": "remote-exec-adapter-subclasses",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1329,7 +1183,6 @@
         {
           "case_id": "trace-parser-subclasses",
           "recall": 1,
-          "precision": 0.2857142857142857,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1337,7 +1190,6 @@
         {
           "case_id": "log-buffer-callers",
           "recall": 1,
-          "precision": 0.05555555555555555,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1345,7 +1197,6 @@
         {
           "case_id": "job-item-files-downloader-callers",
           "recall": 1,
-          "precision": 0.13333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1353,14 +1204,12 @@
         {
           "case_id": "file-uploader-callers",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         }
       ],
-      "recall": 1,
-      "precision": 0.21181888572132473
+      "recall": 1
     },
     {
       "repo": "orion",
@@ -1368,7 +1217,6 @@
         {
           "case_id": "dj-application-group-promise-ok",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1376,7 +1224,6 @@
         {
           "case_id": "dj-folder-update-file-paths-on-rename",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1384,7 +1231,6 @@
         {
           "case_id": "bunny-publisher-class-callers",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1392,7 +1238,6 @@
         {
           "case_id": "bunny-agent-message-class-callers",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1400,7 +1245,6 @@
         {
           "case_id": "inherits-application-controller",
           "recall": 1,
-          "precision": 0.02247191011235955,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1408,7 +1252,6 @@
         {
           "case_id": "inherits-secured-controller",
           "recall": 1,
-          "precision": 0.012195121951219513,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1416,7 +1259,6 @@
         {
           "case_id": "inherits-application-record",
           "recall": 1,
-          "precision": 0.004761904761904762,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1424,7 +1266,6 @@
         {
           "case_id": "react-icon-get-custom-svg-icon",
           "recall": 1,
-          "precision": 0.01639344262295082,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1432,7 +1273,6 @@
         {
           "case_id": "react-icon-render-file-icon",
           "recall": 1,
-          "precision": 0.03333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1440,7 +1280,6 @@
         {
           "case_id": "test-caller-version-header",
           "recall": 1,
-          "precision": 0.5,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1448,7 +1287,6 @@
         {
           "case_id": "fill-clipboard-view-spec",
           "recall": 1,
-          "precision": 0.06451612903225806,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1456,7 +1294,6 @@
         {
           "case_id": "fill-file-display-category-helper",
           "recall": 1,
-          "precision": 0.012195121951219513,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1464,7 +1301,6 @@
         {
           "case_id": "fill-user-file-model",
           "recall": 1,
-          "precision": 0.01834862385321101,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1472,7 +1308,6 @@
         {
           "case_id": "fill-user-license-classifier",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1480,7 +1315,6 @@
         {
           "case_id": "fill-user-file-copier",
           "recall": 1,
-          "precision": 0.043478260869565216,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1488,7 +1322,6 @@
         {
           "case_id": "frontend-deliverables-show",
           "recall": 1,
-          "precision": 0.13333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1496,7 +1329,6 @@
         {
           "case_id": "frontend-deliverables-audit-logs",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1504,7 +1336,6 @@
         {
           "case_id": "frontend-issues-show",
           "recall": 1,
-          "precision": 0.125,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1512,7 +1343,6 @@
         {
           "case_id": "frontend-task-module-checks-tasks-tracks",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1520,7 +1350,6 @@
         {
           "case_id": "frontend-task-module-checks-track-users",
           "recall": 1,
-          "precision": 0.16666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1528,7 +1357,6 @@
         {
           "case_id": "nav-folders-show-file-content",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1536,7 +1364,6 @@
         {
           "case_id": "nav-users-generate-token",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1544,7 +1371,6 @@
         {
           "case_id": "nav-agents-edit",
           "recall": 1,
-          "precision": 0.75,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1552,7 +1378,6 @@
         {
           "case_id": "nav-categories-new",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1560,7 +1385,6 @@
         {
           "case_id": "nav-files-restore",
           "recall": 1,
-          "precision": 0.75,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1568,7 +1392,6 @@
         {
           "case_id": "redirect-imports-index",
           "recall": 1,
-          "precision": 0.4,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1576,7 +1399,6 @@
         {
           "case_id": "agent-message-delete-handler-page",
           "recall": 1,
-          "precision": 0.14285714285714285,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1585,7 +1407,6 @@
           "case_id": "rank1-update-file-paths-on-rename",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -1598,7 +1419,6 @@
           "case_id": "rank1-user-license-classifier",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -1609,7 +1429,6 @@
         }
       ],
       "recall": 1,
-      "precision": 0.3601914134946609,
       "rank1_accuracy": 1
     },
     {
@@ -1618,7 +1437,6 @@
         {
           "case_id": "solid-route-home",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1626,7 +1444,6 @@
         {
           "case_id": "solid-route-authcallback",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1634,7 +1451,6 @@
         {
           "case_id": "solid-route-dashboard",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1642,7 +1458,6 @@
         {
           "case_id": "ws-connection-handle-message",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1650,7 +1465,6 @@
         {
           "case_id": "ws-connection-get-battery",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1658,7 +1472,6 @@
         {
           "case_id": "gin-core-get-user-by-id",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1666,7 +1479,6 @@
         {
           "case_id": "gin-core-auth-redirect",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1674,7 +1486,6 @@
         {
           "case_id": "gin-sis-get-course",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1682,7 +1493,6 @@
         {
           "case_id": "gin-sis-get-user",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1690,7 +1500,6 @@
         {
           "case_id": "gin-sis-get-fees",
           "recall": 1,
-          "precision": 0.75,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1698,7 +1507,6 @@
         {
           "case_id": "calendar-ui-httpservice-imports",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1706,7 +1514,6 @@
         {
           "case_id": "tether-terminal-imports",
           "recall": 1,
-          "precision": 0.6666666666666666,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1715,7 +1522,6 @@
           "case_id": "rank1-get-battery",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -1726,7 +1532,6 @@
         }
       ],
       "recall": 1,
-      "precision": 0.8205128205128205,
       "rank1_accuracy": 1
     },
     {
@@ -1735,7 +1540,6 @@
         {
           "case_id": "handle-view-home-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1743,7 +1547,6 @@
         {
           "case_id": "handle-view-landing-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1751,7 +1554,6 @@
         {
           "case_id": "view-collections-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1759,7 +1561,6 @@
         {
           "case_id": "view-edit-collection-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1767,7 +1568,6 @@
         {
           "case_id": "view-articles-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1775,7 +1575,6 @@
         {
           "case_id": "handle-user-delete-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1783,7 +1582,6 @@
         {
           "case_id": "view-stats-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1791,7 +1589,6 @@
         {
           "case_id": "handle-view-subscribers-callers",
           "recall": 1,
-          "precision": 0.25,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1799,7 +1596,6 @@
         {
           "case_id": "serve-callers",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1807,7 +1603,6 @@
         {
           "case_id": "init-routes-callers",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1815,7 +1610,6 @@
         {
           "case_id": "connect-database-callers",
           "recall": 1,
-          "precision": 0.3333333333333333,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1823,7 +1617,6 @@
         {
           "case_id": "new-app-callers",
           "recall": 1,
-          "precision": 0.125,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1831,7 +1624,6 @@
         {
           "case_id": "toggle-theme-callers",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1839,7 +1631,6 @@
         {
           "case_id": "del-post-callers",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1847,7 +1638,15 @@
         {
           "case_id": "format-version-callers",
           "recall": 1,
-          "precision": 0.3333333333333333,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "api-logout-blast-exhaustive",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
@@ -1856,7 +1655,6 @@
           "case_id": "rank1-handle-api-logout",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -1869,7 +1667,6 @@
           "case_id": "rank1-handle-reset-password",
           "kind": "rank1",
           "recall": 1,
-          "precision": 1,
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false,
@@ -1880,7 +1677,8 @@
         }
       ],
       "recall": 1,
-      "precision": 0.4387254901960784,
+      "precision": 1,
+      "exhaustive_cases": 1,
       "rank1_accuracy": 1,
       "rank1_min_gap": -0.017
     }

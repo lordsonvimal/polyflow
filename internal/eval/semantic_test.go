@@ -188,9 +188,9 @@ func TestNodeIDLabel(t *testing.T) {
 // (overall recall is macro-average over ALL cases).
 func TestAggregateReport_SemanticRecall(t *testing.T) {
 	results := []CaseResult{
-		{CaseID: "impact-a", Kind: "", Recall: 1.0, Precision: 1.0},
-		{CaseID: "sem-b", Kind: "semantic", Recall: 0.5, Precision: 1.0},
-		{CaseID: "sem-c", Kind: "semantic", Recall: 1.0, Precision: 1.0},
+		{CaseID: "impact-a", Kind: "", Recall: 1.0},
+		{CaseID: "sem-b", Kind: "semantic", Recall: 0.5},
+		{CaseID: "sem-c", Kind: "semantic", Recall: 1.0},
 	}
 	r := AggregateReport("repo", results)
 
@@ -204,7 +204,7 @@ func TestAggregateReport_SemanticRecall(t *testing.T) {
 // when no semantic cases exist.
 func TestAggregateReport_NoSemanticCases(t *testing.T) {
 	results := []CaseResult{
-		{CaseID: "impact-a", Kind: "", Recall: 0.8, Precision: 1.0},
+		{CaseID: "impact-a", Kind: "", Recall: 0.8},
 	}
 	r := AggregateReport("repo", results)
 	assert.InDelta(t, 0.0, r.SemanticRecall, 1e-9)
