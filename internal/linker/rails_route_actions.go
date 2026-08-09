@@ -119,6 +119,13 @@ func railsRouteTarget(n *graph.Node) (action, resource, namespace string, ok boo
 	}
 	segs := pathSegments(routePath)
 
+	// The route walker records the controller module it composed the route
+	// under. Prefer it over re-deriving one from the URL: since C.1b the URL
+	// also carries `scope` path prefixes, which contribute no module at all, so
+	// `scope "app" { resources :studies }` reads as app/studies_controller.rb
+	// to a path-derived guess and StudiesController to Rails.
+	explicitModule, moduleKnown := n.Meta["controller_module"]
+
 	if resource = n.Meta["resource"]; resource != "" {
 		// The resource segment can repeat (/files/:id/files); the route's own
 		// resource is the last one, everything before it is context.
@@ -131,6 +138,9 @@ func railsRouteTarget(n *graph.Node) (action, resource, namespace string, ok boo
 		}
 		if cut < 0 {
 			return "", "", "", false
+		}
+		if moduleKnown {
+			return action, resource, explicitModule, true
 		}
 		return action, resource, railsNamespace(segs[:cut]), true
 	}
@@ -149,6 +159,9 @@ func railsRouteTarget(n *graph.Node) (action, resource, namespace string, ok boo
 	resource = segs[len(segs)-1]
 	if strings.HasPrefix(resource, ":") {
 		return "", "", "", false
+	}
+	if moduleKnown {
+		return action, resource, explicitModule, true
 	}
 	return action, resource, railsNamespace(segs[:len(segs)-1]), true
 }

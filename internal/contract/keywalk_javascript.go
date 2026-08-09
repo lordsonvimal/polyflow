@@ -40,7 +40,7 @@ func walkJSExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int) 
 		return []string{tmpl}, false
 
 	case "binary_expression":
-		if tmpl, ok := jsReconstructConcat(node, src, depth); ok && hasConcreteTemplateContent(tmpl) {
+		if tmpl, ok := jsReconstructConcat(node, src); ok && hasConcreteTemplateContent(tmpl) {
 			return []string{tmpl}, false
 		}
 		return nil, true
@@ -65,11 +65,24 @@ func walkJSExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int) 
 		}
 		return combined, false
 
+	case "object":
+		// C.1: the URL capture bound a whole options object rather than a
+		// path — `$.ajax({url: …, type: "GET"})`. Read the url field.
+		if v := jsObjectURLValue(node, src); v != nil {
+			return walkJSExpr(v, src, consts, depth+1)
+		}
+		return nil, true
+
 	case "identifier":
 		// Shape (b): constant reference — resolve via ConstResolver
 		name := string(src[node.StartByte():node.EndByte()])
 		if v, ok := consts(name); ok {
 			return []string{v}, false
+		}
+		// C.1: the dominant real shape is not a file constant but a
+		// function-local `var url = "/app/…" + id` a few lines up.
+		if v := jsResolveLocalBinding(node, src, name); v != nil {
+			return walkJSExpr(v, src, consts, depth+1)
 		}
 		return nil, true
 
@@ -119,31 +132,68 @@ func jsReconstructTemplateString(node *sitter.Node, src []byte) string {
 	return out.String()
 }
 
+// jsConcatMaxOperands bounds a `+` chain by the number of operands rather
+// than by keyWalkerMaxDepth. A concatenation is linear, not branching: its
+// tree depth is simply how many `+` it has, and `"/app/studies/" + studyId +
+// "/deliverables/" + id + ".js"` nests four deep. Charging that against the
+// depth-2 ceiling — which exists to stop ternary branch explosion — truncated
+// exactly the longest, most specific URLs into a wildcard soup.
+const jsConcatMaxOperands = 24
+
 // jsReconstructConcat reconstructs a `+`-chained string concatenation into a
 // single wildcarded template: literal operands contribute their text
-// verbatim, any other operand becomes a "*" hole. Depth-bounded like the
-// ternary walker to avoid pathological trees.
-func jsReconstructConcat(node *sitter.Node, src []byte, depth int) (string, bool) {
-	if depth > keyWalkerMaxDepth {
+// verbatim, any other operand becomes a "*" hole. The root must be a `+`, so
+// an unrelated binary expression stays dynamic instead of collapsing to "*".
+func jsReconstructConcat(node *sitter.Node, src []byte) (string, bool) {
+	if !jsIsPlusExpr(node, src) {
 		return "", false
 	}
-	op := node.ChildByFieldName("operator")
-	if op == nil || string(src[op.StartByte():op.EndByte()]) != "+" {
+	var (
+		out      []byte
+		operands int
+		ok       = true
+	)
+	var flatten func(n *sitter.Node)
+	flatten = func(n *sitter.Node) {
+		if !ok {
+			return
+		}
+		if n != nil && jsIsPlusExpr(n, src) {
+			left, right := n.ChildByFieldName("left"), n.ChildByFieldName("right")
+			if left == nil || right == nil {
+				ok = false
+				return
+			}
+			flatten(left)
+			flatten(right)
+			return
+		}
+		operands++
+		if operands > jsConcatMaxOperands {
+			ok = false
+			return
+		}
+		out = append(out, jsConcatSegment(n, src)...)
+	}
+	flatten(node)
+	if !ok {
 		return "", false
 	}
-	left := node.ChildByFieldName("left")
-	right := node.ChildByFieldName("right")
-	if left == nil || right == nil {
-		return "", false
-	}
-	return jsConcatSegment(left, src, depth+1) + jsConcatSegment(right, src, depth+1), true
+	return string(out), true
 }
 
-// jsConcatSegment reconstructs one operand of a concatenation chain: a
-// string literal or template literal verbatim, a nested `+` chain
-// recursively, anything else "*".
-func jsConcatSegment(node *sitter.Node, src []byte, depth int) string {
-	if node == nil || depth > keyWalkerMaxDepth {
+func jsIsPlusExpr(n *sitter.Node, src []byte) bool {
+	if n == nil || n.Type() != "binary_expression" {
+		return false
+	}
+	op := n.ChildByFieldName("operator")
+	return op != nil && string(src[op.StartByte():op.EndByte()]) == "+"
+}
+
+// jsConcatSegment reconstructs one non-`+` operand of a concatenation chain:
+// a string or template literal verbatim, anything else a "*" hole.
+func jsConcatSegment(node *sitter.Node, src []byte) string {
+	if node == nil {
 		return "*"
 	}
 	switch node.Type() {
@@ -151,10 +201,6 @@ func jsConcatSegment(node *sitter.Node, src []byte, depth int) string {
 		return stripKeyLiteral(string(src[node.StartByte():node.EndByte()]))
 	case "template_string":
 		return jsReconstructTemplateString(node, src)
-	case "binary_expression":
-		if tmpl, ok := jsReconstructConcat(node, src, depth); ok {
-			return tmpl
-		}
 	}
 	return "*"
 }

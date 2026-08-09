@@ -137,14 +137,6 @@
     "confidence": "unknown"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/datastar.js:http_client:producer_alias_url_call:2-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/datastar.js:http_client:producer_alias_url_call:2",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1001-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:150",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/board.js:http_client:fetch_call:1001",
     "to": "chessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:150",
@@ -209,54 +201,6 @@
     "confidence": "inferred"
   },
   {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:165-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:165",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:169-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:169",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:175-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:175",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:176-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:176",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:177-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:177",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:258-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/hangman-game.js:http_client:producer_alias_url_call:258",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
-  },
-  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:fetch_call:1360-\u003echessleap:/Users/lordson/projects/chessleap/liveclass/module.go:http_handler:gin_route:210",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:fetch_call:1360",
     "to": "chessleap:/Users/lordson/projects/chessleap/liveclass/module.go:http_handler:gin_route:210",
@@ -271,14 +215,6 @@
     "type": "http_call",
     "label": "post /liveclass/sessions/*/stage/pdf",
     "confidence": "inferred"
-  },
-  {
-    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/stage-controller.js:http_client:producer_alias_obj_call:652-\u003eunresolved",
-    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/stage-controller.js:http_client:producer_alias_obj_call:652",
-    "to": "unresolved",
-    "type": "http_call",
-    "label": " ",
-    "confidence": "unknown"
   },
   {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/sync.js:http_client:fetch_call:21-\u003echessleap:/Users/lordson/projects/chessleap/server/routes.go:http_handler:gin_route:37",
