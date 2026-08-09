@@ -87,3 +87,52 @@ patterns:
     captures:
       - name: helper
         role: rails_nav_helper
+
+  # ── redirect_to: server-side navigation (C.3) ──────────────────────────────
+  # A redirect is a page-to-page transition just like an anchor: the response
+  # tells the browser which URL to request next, and it requests it with GET
+  # against the same origin. So these are nav_link producers, not http_call
+  # ones, and they answer "what page leads here" for the half of the flow a
+  # view never spells out — after a successful create, where do you land.
+  #
+  # Only the first positional argument is targeted. `redirect_to x, notice: y`
+  # keeps the flash value inside a `pair`, so a direct-child match on
+  # argument_list cannot mistake it for the destination.
+
+  # redirect_to "/literal-path"
+  - name: nav_link_rails_redirect_literal
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#eq? @_fn "redirect_to")
+        arguments: (argument_list
+          (string) @path))
+    captures:
+      - name: path
+        role: http_path
+
+  # redirect_to folder_path  (bare helper, no arguments)
+  - name: nav_link_rails_redirect_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#eq? @_fn "redirect_to")
+        arguments: (argument_list
+          (identifier) @helper))
+    captures:
+      - name: helper
+        role: rails_nav_helper
+
+  # redirect_to folder_path(@folder)  (helper called with arguments)
+  - name: nav_link_rails_redirect_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#eq? @_fn "redirect_to")
+        arguments: (argument_list
+          (call
+            !receiver
+            method: (identifier) @helper)))
+    captures:
+      - name: helper
+        role: rails_nav_helper

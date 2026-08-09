@@ -25,11 +25,11 @@ func TestIsRubyBuiltinCall(t *testing.T) {
 		}
 	})
 
-	// `redirect_to` is as much a builtin as `render`, but phase C.3 mines
-	// redirect call sites to build the navigates_to graph and the ledger is
-	// currently the only inventory of where they are.
-	t.Run("redirect_to is deliberately still ledgered until C.3", func(t *testing.T) {
-		assert.False(t, isRubyBuiltinCall("redirect_to", app))
+	// C.3 shipped: rails_nav.yaml now emits a nav_link producer per redirect
+	// with a resolved destination, so the call sites are recorded as nodes and
+	// the ledger entries are redundant noise.
+	t.Run("redirect_to is a builtin now that C.3 reads its targets", func(t *testing.T) {
+		assert.True(t, isRubyBuiltinCall("redirect_to", app))
 	})
 
 	// Migration DSL is scoped: a service object that defines its own `execute`

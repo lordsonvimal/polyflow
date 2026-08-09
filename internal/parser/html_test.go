@@ -128,3 +128,32 @@ func TestTemplParser_NativeEventAttr(t *testing.T) {
 	}
 	assert.True(t, hasListen, "expected dom_listen edge component → onclick node")
 }
+
+// TestHTMLParser_ProtocolRelativeIsNotNavigation. A leading `//` is a URL to
+// another host, not a root-relative path, so it can never name a route in this
+// graph — three of orion's four html nav nodes were CDN stylesheet links
+// matched by an over-broad `^/`. The bare root link stays: it is a real target.
+func TestHTMLParser_ProtocolRelativeIsNotNavigation(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "head.html")
+	src := `<html>
+  <head>
+    <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato">
+    <link rel="stylesheet" href="//stackpath.bootstrapcdn.com/font-awesome.min.css">
+  </head>
+  <body><a href="/">Home</a></body>
+</html>`
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
+
+	m := mustMatcher(t)
+	nodes, _, _, err := parser.ForFile(file).Parse(file, "site", m)
+	require.NoError(t, err)
+
+	navPaths := []string{}
+	for _, n := range nodes {
+		if n.Meta["nav_link"] == "true" {
+			navPaths = append(navPaths, n.Meta["path"])
+		}
+	}
+	assert.Equal(t, []string{"/"}, navPaths)
+}

@@ -13,7 +13,7 @@ patterns:
           (#eq? @prop "action")
           (quoted_attribute_value
             (attribute_value) @path
-            (#match? @path "^/")))
+            (#match? @path "^/($|[^/])")))
         (attribute
           (attribute_name) @mprop
           (#eq? @mprop "method")
@@ -37,7 +37,7 @@ patterns:
           (#eq? @prop "action")
           (quoted_attribute_value
             (attribute_value) @path
-            (#match? @path "^/"))))
+            (#match? @path "^/($|[^/])"))))
     captures:
       - name: path
         role: http_path
@@ -52,7 +52,7 @@ patterns:
           (#eq? @prop "href")
           (quoted_attribute_value
             (attribute_value) @path
-            (#match? @path "^/")))
+            (#match? @path "^/($|[^/])")))
         (attribute
           (attribute_name) @mprop
           (#eq? @mprop "data-method")
@@ -76,7 +76,7 @@ patterns:
           (#eq? @prop "href")
           (quoted_attribute_value
             (attribute_value) @path
-            (#match? @path "^/"))))
+            (#match? @path "^/($|[^/])"))))
     captures:
       - name: path
         role: http_path
@@ -85,6 +85,12 @@ patterns:
   # Navigation links in static HTML: <a href="/reports">, <form action="/save">.
   # Only root-relative paths; the linker emits navigates_to edges to the
   # matching route handler.
+  #
+  # `^/($|[^/])` rather than `^/`: a leading `//` is a protocol-relative URL to
+  # another host (`//fonts.googleapis.com/css`), which is the opposite of a
+  # same-origin path and can never name a route in this graph. Three of
+  # orion's four html nav nodes were CDN stylesheet links matched this way.
+  # The `$` keeps the bare `href="/"` root link, which is a real target.
   - name: nav_link_href
     query: |
       (attribute
@@ -92,7 +98,7 @@ patterns:
         (#match? @prop "^(href|action)$")
         (quoted_attribute_value
           (attribute_value) @path
-          (#match? @path "^/")))
+          (#match? @path "^/($|[^/])")))
     captures:
       - name: prop
         role: nav_attr

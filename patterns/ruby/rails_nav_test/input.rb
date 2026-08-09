@@ -12,3 +12,9 @@ form_with url: reports_path do
 end
 form_for @user, url: users_path do
 end
+
+# C.3: redirect_to is a nav producer — a 302 is a page-to-page transition, and
+# the browser follows it with GET against the same origin.
+redirect_to dashboard_path
+redirect_to folder_path(@folder), notice: t("folders.created")
+redirect_to "/saml/login"

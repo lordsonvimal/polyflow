@@ -691,6 +691,25 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, filterUnresolved...)
 	}
+	// C.4: a bare Ruby call the parser could not bind in its own file, resolved
+	// against the methods the calling class inherits or mixes in. Must run after
+	// LinkRubyTypeRelations, whose `inherits` edges are the ancestor chain this
+	// walks — and which is also what keeps it from binding a call to the copy of
+	// lib/dx.rb another service vendors.
+	{
+		mixinEdges, mixinResolved, mixinCollisions := linker.LinkRubyMixinMethods(allNodes, allEdges, allUnresolved)
+		filtered := allUnresolved[:0]
+		for _, u := range allUnresolved {
+			if u.Kind == "call_ref" && mixinResolved[linker.RubyCallRefKey(u.File, u.Line, u.Name)] {
+				continue
+			}
+			filtered = append(filtered, u)
+		}
+		allUnresolved = append(filtered, mixinCollisions...)
+		if err := writeEdges(mixinEdges); err != nil {
+			return nil, err
+		}
+	}
 
 	// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
 	// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
