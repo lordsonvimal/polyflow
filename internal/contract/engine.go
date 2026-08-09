@@ -666,12 +666,25 @@ var browserLanguages = map[string]bool{
 }
 
 // isBrowserExecuted reports whether a producer node describes a request issued
-// by a browser. Two signals: the node's language is a browser bundle language,
-// or the call is a datastar action attribute — `data-on:input="@get('/x')"` in
-// a templ/ERB template is rendered into HTML and fired by datastar in the page,
-// however server-side the file around it looks.
+// by a browser. Three signals: the node's language is a browser bundle
+// language; the call is a datastar action attribute — `data-on:input="@get('/x')"`
+// in a templ/ERB template is rendered into HTML and fired by datastar in the
+// page, however server-side the file around it looks; or the node is a
+// navigation link.
+//
+// A nav link is browser-executed by construction, whatever emitted it. The
+// language exclusion exists because a server-side *client's* "/api/v1/x" is a
+// fragment waiting to be joined to a configured base URL, so it may well name
+// another service. An `href` has no base URL to be joined to: the browser
+// resolves it against the origin that served the page. Rails' `link_to
+// admin_users_path` in a nextGen view produced five cross-service edges into
+// mysycamore, which serves a route of the same name — every one of them a page
+// linking to its own app.
 func isBrowserExecuted(prod *graph.Node) bool {
 	if browserLanguages[strings.ToLower(prod.Language)] {
+		return true
+	}
+	if prod.Meta["nav_link"] == "true" {
 		return true
 	}
 	return prod.Meta["datastar"] != ""

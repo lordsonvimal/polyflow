@@ -14,221 +14,55 @@ type railsRoute struct {
 	Path   string
 }
 
-// resourcesEntry holds a resources/resource route with its line for parent lookup.
-type resourcesEntry struct {
-	service  string
-	file     string
-	line     int
-	plural   string // e.g. "reports" (stripped of ":")
-	singular string // derived by singularize()
-	isSingle bool   // true for "resource" (singular resource route)
-}
-
-// memberEntry holds a member/collection verb route with its line for association.
-type memberEntry struct {
-	service  string
-	file     string
-	line     int
-	verb     string // HTTP method, uppercased
-	action   string // e.g. "archive" (stripped of ":")
-	isMember bool   // false = collection
-}
-
-// BuildRailsHelperMap builds per-service helper→routes from route nodes.
+// BuildRailsHelperMap builds per-service helper→routes from the route names the
+// walker stamped on each http_handler.
 // Returns: svc → helper_name → []railsRoute, iteration order sorted for rule 2.
+//
+// This used to *reconstruct* a path from the resource name — `resources
+// :folders` became `/folders/:id` for `folder_path` — and every reconstruction
+// was wrong for the one app that has real views. Rails' three grouping
+// constructs contribute to the URL, the controller module and the route name in
+// three different combinations (see parser.nameScope), so a path derived from a
+// name and a name derived from a path are both lossy. nextGen puts ~400 routes
+// under a single `scope "app"`, which contributes to the URL and to nothing
+// else: every helper in every view resolved to a path that was missing its
+// prefix, and 228 nav links with a fully "resolved" path matched no handler.
+//
+// The walker already composes the exact path and now records the exact name
+// alongside it, so this is a lookup rather than a derivation. A route the
+// walker could not name (a dynamic literal path, a member route with no
+// enclosing resource) contributes nothing here and its helper lands in the
+// ledger — an absent entry is recoverable, a confidently wrong one is not.
 func BuildRailsHelperMap(nodes []graph.Node) map[string]map[string][]railsRoute {
 	result := make(map[string]map[string][]railsRoute)
 
-	ensure := func(svc string) {
+	seen := map[string]bool{}
+	add := func(svc, helper string, r railsRoute) {
+		key := svc + "\x00" + helper + "\x00" + r.Method + "\x00" + r.Path
+		if seen[key] {
+			return
+		}
+		seen[key] = true
 		if result[svc] == nil {
 			result[svc] = make(map[string][]railsRoute)
 		}
-	}
-	add := func(svc, helper string, r railsRoute) {
-		ensure(svc)
 		result[svc][helper] = append(result[svc][helper], r)
 	}
 
-	// Collect resources and member/collection entries.
-	var resList []resourcesEntry
-	var memberList []memberEntry
-	var verbList []struct {
-		service string
-		file    string
-		line    int
-		method  string
-		path    string
-	}
-
 	for _, n := range nodes {
-		if n.Language != "ruby" {
+		if n.Language != "ruby" || n.Type != graph.NodeTypeHTTPHandler {
 			continue
 		}
-		pat := n.Meta["pattern"]
-		switch pat {
-		case "resources_route":
-			resource := strings.TrimPrefix(n.Meta["resource"], ":")
-			if resource == "" {
-				continue
-			}
-			resList = append(resList, resourcesEntry{
-				service:  n.Service,
-				file:     n.File,
-				line:     n.Line,
-				plural:   resource,
-				singular: singularize(resource),
-				isSingle: false,
-			})
-		case "resource_route":
-			resource := strings.TrimPrefix(n.Meta["resource"], ":")
-			if resource == "" {
-				continue
-			}
-			resList = append(resList, resourcesEntry{
-				service:  n.Service,
-				file:     n.File,
-				line:     n.Line,
-				plural:   resource + "s", // plural for path consistency
-				singular: resource,
-				isSingle: true,
-			})
-		case "member_verb_route":
-			action := strings.TrimPrefix(n.Meta["action"], ":")
-			verb := strings.ToUpper(n.Meta["verb"])
-			if action == "" || verb == "" {
-				continue
-			}
-			memberList = append(memberList, memberEntry{
-				service:  n.Service,
-				file:     n.File,
-				line:     n.Line,
-				verb:     verb,
-				action:   action,
-				isMember: true,
-			})
-		case "collection_verb_route":
-			action := strings.TrimPrefix(n.Meta["action"], ":")
-			verb := strings.ToUpper(n.Meta["verb"])
-			if action == "" || verb == "" {
-				continue
-			}
-			memberList = append(memberList, memberEntry{
-				service:  n.Service,
-				file:     n.File,
-				line:     n.Line,
-				verb:     verb,
-				action:   action,
-				isMember: false,
-			})
-		case "http_verb_route":
-			method := strings.ToUpper(n.Meta["method"])
-			path := n.Meta["path"]
-			if method != "" && path != "" {
-				verbList = append(verbList, struct {
-					service string
-					file    string
-					line    int
-					method  string
-					path    string
-				}{n.Service, n.File, n.Line, method, path})
-			}
+		name := n.Meta["route_helper"]
+		method := strings.ToUpper(n.Meta["method"])
+		path := n.Meta["path"]
+		if name == "" || method == "" || path == "" {
+			continue
 		}
-	}
-
-	// Sort for determinism (rule 2) — stable ordering matters for fan-out output.
-	sort.Slice(resList, func(i, j int) bool {
-		a, b := resList[i], resList[j]
-		if a.service != b.service {
-			return a.service < b.service
-		}
-		if a.file != b.file {
-			return a.file < b.file
-		}
-		return a.line < b.line
-	})
-	sort.Slice(memberList, func(i, j int) bool {
-		a, b := memberList[i], memberList[j]
-		if a.service != b.service {
-			return a.service < b.service
-		}
-		if a.file != b.file {
-			return a.file < b.file
-		}
-		return a.line < b.line
-	})
-
-	// Add RESTful helpers for each resources/resource entry.
-	for _, r := range resList {
-		basePath := "/" + r.plural
-		if r.isSingle {
-			basePath = "/" + r.singular
-		}
-		p := r.plural
-		s := r.singular
-
-		if r.isSingle {
-			// Singular resource: no :id in paths.
-			add(r.service, s+"_path", railsRoute{"GET", basePath})
-			add(r.service, s+"_path", railsRoute{"PATCH", basePath})
-			add(r.service, s+"_path", railsRoute{"PUT", basePath})
-			add(r.service, s+"_path", railsRoute{"DELETE", basePath})
-			add(r.service, "new_"+s+"_path", railsRoute{"GET", basePath + "/new"})
-			add(r.service, "edit_"+s+"_path", railsRoute{"GET", basePath + "/edit"})
-		} else {
-			// Plural resource: standard 7 RESTful actions.
-			add(r.service, p+"_path", railsRoute{"GET", basePath})           // index
-			add(r.service, p+"_path", railsRoute{"POST", basePath})           // create
-			add(r.service, "new_"+s+"_path", railsRoute{"GET", basePath + "/new"})
-			add(r.service, "edit_"+s+"_path", railsRoute{"GET", basePath + "/:id/edit"})
-			add(r.service, s+"_path", railsRoute{"GET", basePath + "/:id"})  // show
-			add(r.service, s+"_path", railsRoute{"PATCH", basePath + "/:id"}) // update
-			add(r.service, s+"_path", railsRoute{"PUT", basePath + "/:id"})   // update
-			add(r.service, s+"_path", railsRoute{"DELETE", basePath + "/:id"}) // destroy
-		}
-
-		// _url aliases map to the same routes.
-		for _, helper := range []string{p + "_path", "new_" + s + "_path", "edit_" + s + "_path", s + "_path"} {
-			urlHelper := strings.TrimSuffix(helper, "_path") + "_url"
-			if routes, ok := result[r.service][helper]; ok {
-				result[r.service][urlHelper] = append(result[r.service][urlHelper], routes...)
-			}
-		}
-	}
-
-	// Add member/collection helpers by finding the enclosing resources entry
-	// (nearest preceding resources entry in the same file, by line).
-	for _, m := range memberList {
-		parent := nearestResource(resList, m.service, m.file, m.line)
-		if parent == nil {
-			continue // no enclosing resources found; ledger is handled in ResolveRailsNavHelpers
-		}
-		basePath := "/" + parent.plural
-		if parent.isSingle {
-			basePath = "/" + parent.singular
-		}
-		var helper, path string
-		if m.isMember {
-			// member action: {action}_{singular}_path → VERB /resource/:id/{action}
-			helper = m.action + "_" + parent.singular + "_path"
-			path = basePath + "/:id/" + m.action
-		} else {
-			// collection action: {action}_{plural}_path → VERB /resources/{action}
-			helper = m.action + "_" + parent.plural + "_path"
-			path = basePath + "/" + m.action
-		}
-		add(m.service, helper, railsRoute{m.verb, path})
-		// _url alias
-		urlHelper := strings.TrimSuffix(helper, "_path") + "_url"
-		add(m.service, urlHelper, railsRoute{m.verb, path})
-	}
-
-	// Add explicit verb routes with helper names derived from the path.
-	// e.g. GET /reports → reports_path (heuristic; used only when no resources entry covers it)
-	for _, v := range verbList {
-		helper := pathToHelper(v.path)
-		if helper != "" {
-			add(v.service, helper, railsRoute{v.method, v.path})
-		}
+		// `_path` and `_url` name the same route; Rails generates both and views
+		// use them interchangeably (a mailer reaches for `_url`).
+		add(n.Service, name+"_path", railsRoute{method, path})
+		add(n.Service, name+"_url", railsRoute{method, path})
 	}
 
 	// Sort each route list for determinism (rule 2).
@@ -344,6 +178,14 @@ func ResolveRailsNavHelpers(nodes []graph.Node) (updatedNodes []graph.Node, unre
 			updated.Meta["path"] = r.Path
 			updated.Meta["method"] = r.Method
 			delete(updated.Meta, "helper")
+			// The key was dynamic because the helper call was unreadable; it has
+			// just been read. Leaving the marker behind sends the node to the
+			// honest-gap ledger instead of the matcher, which is why 148 of the
+			// fleet's 175 path-resolved nav links emitted no navigates_to edge
+			// even once their path was correct. Same shape as the Phase B ledger
+			// fix: a resolved reference is not a blind spot.
+			delete(updated.Meta, "key_dynamic")
+			delete(updated.Meta, "key_dynamic_raw")
 			label := r.Method + " " + r.Path
 			updated.Label = label
 
@@ -371,76 +213,6 @@ func ResolveRailsNavHelpers(nodes []graph.Node) (updatedNodes []graph.Node, unre
 	})
 
 	return updatedNodes, unresolved
-}
-
-// nearestResource returns the resources/resource entry in the same service+file
-// with the highest line number that is still below targetLine.
-func nearestResource(entries []resourcesEntry, service, file string, targetLine int) *resourcesEntry {
-	var best *resourcesEntry
-	for i := range entries {
-		e := &entries[i]
-		if e.service != service || e.file != file {
-			continue
-		}
-		if e.line >= targetLine {
-			continue
-		}
-		if best == nil || e.line > best.line {
-			best = e
-		}
-	}
-	return best
-}
-
-// singularize converts a common English plural resource name to singular.
-// Covers the most common Rails resource naming conventions.
-func singularize(plural string) string {
-	// Irregular cases first.
-	irregulars := map[string]string{
-		"people":   "person",
-		"men":      "man",
-		"women":    "woman",
-		"children": "child",
-		"mice":     "mouse",
-		"oxen":     "ox",
-		"teeth":    "tooth",
-		"feet":     "foot",
-		"geese":    "goose",
-		"data":     "datum",
-		"criteria": "criterion",
-		"media":    "medium",
-	}
-	if s, ok := irregulars[plural]; ok {
-		return s
-	}
-
-	switch {
-	case strings.HasSuffix(plural, "ies"):
-		return plural[:len(plural)-3] + "y" // categories → category
-	case strings.HasSuffix(plural, "ses") || strings.HasSuffix(plural, "xes") ||
-		strings.HasSuffix(plural, "ches") || strings.HasSuffix(plural, "shes"):
-		return plural[:len(plural)-2] // buses→bus, boxes→box, branches→branch
-	case strings.HasSuffix(plural, "ves"):
-		return plural[:len(plural)-3] + "f" // leaves→leaf (approximate)
-	case strings.HasSuffix(plural, "s") && !strings.HasSuffix(plural, "ss"):
-		return plural[:len(plural)-1] // reports → report
-	}
-	return plural
-}
-
-// pathToHelper derives a Rails-style helper name from a literal path.
-// e.g. "/reports" → "reports_path", "/admin/users" → "admin_users_path".
-// Returns "" for dynamic paths (containing :param segments).
-func pathToHelper(path string) string {
-	if strings.Contains(path, ":") {
-		return "" // dynamic parameter segments → cannot derive stable helper
-	}
-	path = strings.Trim(path, "/")
-	if path == "" {
-		return "root_path"
-	}
-	parts := strings.Split(path, "/")
-	return strings.Join(parts, "_") + "_path"
 }
 
 // copyNode returns a shallow copy of n with a new meta map.

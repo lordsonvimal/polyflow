@@ -44,6 +44,10 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 	// Ruby pass: link_to / button_to / form_with helpers plus any other
 	// Ruby patterns (route captures in partials, etc.).
 	rubyResults, _ := matcher.Match("ruby", file, virtualRuby)
+	// Same gate as RubyParser: views are where the nav patterns' `_` wildcard
+	// binds @helper to `t` or `image_tag` most often, so this is the pass that
+	// needs it most.
+	rubyResults = dropNonRouteHelperNavMatches(rubyResults)
 	rubyNodes, rubyEdges, rubyUnresolved := patterns.MatchToGraph(service, rubyResults)
 	setLanguage(rubyNodes, "ruby")
 
