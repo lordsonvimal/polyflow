@@ -2318,7 +2318,7 @@ func runEval(cmd *cobra.Command, args []string) error {
 	// gate decides: pre-existing baseline hard-fails must not fail CI forever —
 	// only NEW hard-fails, recall drops, silent-miss rises, or missing repos do.
 	if hardFailed && evalGate == "" {
-		fmt.Fprintln(os.Stderr, "Failed: one or more cases hard-failed (must_not_miss file silently missed)")
+		fmt.Fprintf(os.Stderr, "Failed: one or more cases hard-failed (%s)\n", evalHardFailReason(multi.Reports))
 		os.Exit(1)
 	}
 	// A corpus that could not run measured nothing; that is a failure whether
@@ -2384,6 +2384,37 @@ func evalRepoPrecision(r eval.Report) string {
 
 // evalForbidden appends the must_not_include files a case actually returned, so
 // a precision failure names the phantom on the line that reports it.
+// evalHardFailReason names the causes actually present rather than asserting
+// one. A hard fail used to be a silent must_not_miss only; since D.1 a
+// must_not_include hit is also one, and telling someone their blast radius is
+// too NARROW when the corpus just caught it being too WIDE sends them to the
+// opposite end of the resolver from the defect.
+func evalHardFailReason(reports []eval.Report) string {
+	var silent, forbidden bool
+	for _, rep := range reports {
+		for _, r := range rep.Results {
+			if !r.HardFail {
+				continue
+			}
+			if len(r.ForbiddenHits) > 0 {
+				forbidden = true
+			}
+			if r.SilentMisses > 0 {
+				silent = true
+			}
+		}
+	}
+	switch {
+	case silent && forbidden:
+		return "must_not_miss file silently missed, and must_not_include file returned"
+	case forbidden:
+		return "must_not_include file returned — a hand-verified false positive"
+	case silent:
+		return "must_not_miss file silently missed"
+	}
+	return "see the case lines above"
+}
+
 func evalForbidden(r eval.CaseResult) string {
 	if len(r.ForbiddenHits) == 0 {
 		return ""
@@ -2458,7 +2489,8 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 	}
 
 	if hardFailed {
-		fmt.Fprintln(os.Stderr, "\nFailed: one or more cases hard-failed (must_not_miss file silently missed)")
+		fmt.Fprintf(os.Stderr, "\nFailed: one or more cases hard-failed (%s)\n",
+			evalHardFailReason([]eval.Report{*report}))
 		os.Exit(1)
 	}
 	return nil

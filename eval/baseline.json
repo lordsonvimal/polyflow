@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-09T15:24:34.916865Z",
+  "generated_at": "2026-08-09T15:47:29.440835Z",
   "repos": [
     {
       "repo": "chessleap",
@@ -211,6 +211,113 @@
       "recall": 0.8571428571428571,
       "rank1_accuracy": 1,
       "rank1_min_gap": 0.007000000000000001
+    },
+    {
+      "repo": "fleet-juniper",
+      "results": [
+        {
+          "case_id": "health-no-foreign-healthcheck-clients",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/juniper/maple-manager/internal/clients/cam_client.go",
+            "/Users/lordson/Projects/juniper/maple-manager/internal/clients/willow_client.go",
+            "/Users/lordson/Projects/willow/internal/clients/cam_client.go"
+          ]
+        },
+        {
+          "case_id": "willow-create-user-not-atlas-clients",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/juniper/maple-manager/internal/clients/cam_client.go",
+            "/Users/lordson/Projects/willow/internal/clients/cam_client.go"
+          ]
+        },
+        {
+          "case_id": "atlas-users-not-willow-client",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/juniper/maple-manager/internal/clients/willow_client.go"
+          ]
+        },
+        {
+          "case_id": "willow-settings-not-maple-manager-client",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": true,
+          "forbidden_hits": [
+            "/Users/lordson/Projects/juniper/migrate-from-legacy/26.1.0_to_26.2.0/maple_manager_client.go"
+          ]
+        },
+        {
+          "case_id": "agent-config-remove-blast",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "agent-configs-fetch-blast",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "container-stats-heartbeat-blast",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "lyra-job-start-reaches-orion",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "vega-lros-update-reaches-orion",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "vega-agent-register-reaches-orion",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "maple-manager-user-sync-reaches-orion",
+          "recall": 1,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        }
+      ],
+      "recall": 1,
+      "precision": 1,
+      "exhaustive_cases": 3,
+      "forbidden_hits": 7
     },
     {
       "repo": "willow",
