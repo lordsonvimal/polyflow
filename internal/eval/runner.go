@@ -246,6 +246,8 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 		// Semantic cases score entity labels, not file paths — canonicalising
 		// them would be meaningless.
 		return runSemanticCase(ctx, store, c)
+	case "rank1":
+		return runRank1Case(ctx, store, c)
 	default:
 		return CaseResult{}, fmt.Errorf("unknown case kind %q", c.Kind)
 	}
@@ -277,16 +279,9 @@ func runSemanticCase(ctx context.Context, store *graph.SQLiteStore, c Case) (Cas
 		return cr, nil
 	}
 
-	var hits []semantic.Hit
-	switch c.Section {
-	case "nodes":
-		hits = resp.Nodes
-	case "flows":
-		hits = resp.Flows
-	case "docs":
-		hits = resp.Docs
-	default:
-		return CaseResult{}, fmt.Errorf("unknown section %q in semantic case %s", c.Section, c.ID)
+	hits, err := sectionHits(resp, c.Section)
+	if err != nil {
+		return CaseResult{}, fmt.Errorf("semantic case %s: %w", c.ID, err)
 	}
 
 	returned := make([]string, 0, len(hits))
@@ -296,6 +291,90 @@ func runSemanticCase(ctx context.Context, store *graph.SQLiteStore, c Case) (Cas
 	cr := Score(c.ID, returned, c.ExpectAnyOf, c.MustNotMiss, nil)
 	cr.Kind = "semantic"
 	return cr, nil
+}
+
+// sectionHits picks the requested typed section out of a search response.
+func sectionHits(resp semantic.Response, section string) ([]semantic.Hit, error) {
+	switch section {
+	case "nodes":
+		return resp.Nodes, nil
+	case "flows":
+		return resp.Flows, nil
+	case "docs":
+		return resp.Docs, nil
+	}
+	return nil, fmt.Errorf("unknown section %q", section)
+}
+
+// runRank1Case executes a kind=rank1 eval case (C.6): the expected entity must
+// come back FIRST for the query, not merely inside the top 10.
+//
+// The distinction is the whole point. Search discrimination on this index is
+// flat — the plan recorded a correct `[exact]` hit at 0.0160 ranking below an
+// unrelated `[fused]` hit at 0.0230 — so tier ordering, not score, is what
+// rescues the answer. A top-10 assertion cannot see that, and an agent reading
+// the first result cannot see past it. Both scores are recorded so a case that
+// passes by a hair is legible as such before it flips.
+//
+// A search that errors is a hard failure, not an honest miss: unlike an impact
+// case, there is no unresolved ledger that could make the absence honest, and
+// the search surface is the thing under test.
+func runRank1Case(ctx context.Context, store *graph.SQLiteStore, c Case) (CaseResult, error) {
+	cr := CaseResult{CaseID: c.ID, Kind: "rank1", HardFail: true}
+
+	semStore := semantic.NewStore(store.DB())
+	embedder, _ := semantic.DefaultStaticEmbedder()
+	searcher := semantic.NewSearcher(semStore, embedder, nil)
+
+	resp, err := searcher.Search(ctx, c.Query, 10)
+	if err != nil {
+		return cr, nil
+	}
+	hits, err := sectionHits(resp, c.Section)
+	if err != nil {
+		return CaseResult{}, fmt.Errorf("rank1 case %s: %w", c.ID, err)
+	}
+	if len(hits) == 0 {
+		return cr, nil
+	}
+
+	cr.Rank1 = semanticHitLabel(hits[0], c.Section)
+	cr.Rank1Score = hits[0].Score
+	if len(hits) > 1 {
+		cr.Rank2 = semanticHitLabel(hits[1], c.Section)
+		cr.Rank2Score = hits[1].Score
+	}
+
+	if cr.Rank1 == c.ExpectRank1 && rank1FileMatches(hits[0], c.TargetFile) {
+		cr.Recall = 1
+		cr.Precision = 1
+		cr.HardFail = false
+	}
+	return cr, nil
+}
+
+// rank1FileMatches applies the optional target_file pin to the winning hit, so
+// a case can name one declaration among same-labelled siblings (orion has
+// 2933 element nodes over 1955 distinct file+label pairs).
+func rank1FileMatches(hit semantic.Hit, targetFile string) bool {
+	if targetFile == "" {
+		return true
+	}
+	return strings.HasSuffix(filepath.ToSlash(entityFile(hit.Entity)), targetFile)
+}
+
+// entityFile is the hit's file path, falling back to the file component of the
+// entity ID (service:file:type:name:line). The File field is enriched from the
+// nodes table at load time and is empty whenever that join finds nothing, which
+// would silently turn a target_file pin into an unconditional failure.
+func entityFile(e semantic.Entity) string {
+	if e.File != "" {
+		return e.File
+	}
+	if parts := strings.SplitN(e.ID, ":", 5); len(parts) >= 5 {
+		return parts[1]
+	}
+	return ""
 }
 
 // semanticHitLabel extracts a stable, line-number-free identifier from a

@@ -2292,8 +2292,17 @@ func runEval(cmd *cobra.Command, args []string) error {
 				status = "HARD_FAIL"
 				hardFailed = true
 			}
+			if r.Kind == "rank1" {
+				fmt.Printf("  %-44s rank1=%-28s gap=%+.4f  %s\n",
+					r.CaseID, evalRank1Label(r), r.ScoreGap(), status)
+				continue
+			}
 			fmt.Printf("  %-44s recall=%.3f precision=%.3f honest=%d silent=%d  %s\n",
 				r.CaseID, r.Recall, r.Precision, r.HonestMisses, r.SilentMisses, status)
+		}
+		if report.Rank1Accuracy > 0 || rank1Cases(report.Results) > 0 {
+			fmt.Printf("  %-44s rank1_accuracy=%.3f  min_gap=%s\n",
+				"(rank-1 identity)", report.Rank1Accuracy, evalMinGap(report))
 		}
 		fmt.Println()
 	}
@@ -2350,6 +2359,40 @@ func runEval(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// evalMinGap renders the thinnest passing rank-1 margin, or n/a when no rank1
+// case in the repo passed — a repo with no winner has no margin, and printing
+// 0.0000 there reads like a knife-edge pass rather than a clean sweep of misses.
+func evalMinGap(r eval.Report) string {
+	for _, c := range r.Results {
+		if c.Kind == "rank1" && !c.HardFail {
+			return fmt.Sprintf("%+.4f", r.Rank1MinGap)
+		}
+	}
+	return "n/a"
+}
+
+// evalRank1Label renders what actually came back first, so a failing rank1 case
+// names its own usurper on the same line rather than requiring a re-run.
+func evalRank1Label(r eval.CaseResult) string {
+	if r.Rank1 == "" {
+		return "<no hits>"
+	}
+	if r.HardFail && r.Rank2 != "" {
+		return r.Rank1 + " (2:" + r.Rank2 + ")"
+	}
+	return r.Rank1
+}
+
+func rank1Cases(results []eval.CaseResult) int {
+	n := 0
+	for _, r := range results {
+		if r.Kind == "rank1" {
+			n++
+		}
+	}
+	return n
+}
+
 func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 	report, err := eval.Run(ctx, eval.RunOptions{
 		CorpusDir: corpusDir,
@@ -2369,8 +2412,17 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 			status = "HARD_FAIL"
 			hardFailed = true
 		}
+		if r.Kind == "rank1" {
+			fmt.Printf("  %-40s rank1=%-28s gap=%+.4f  %s\n",
+				r.CaseID, evalRank1Label(r), r.ScoreGap(), status)
+			continue
+		}
 		fmt.Printf("  %-40s recall=%.3f precision=%.3f honest=%d silent=%d  %s\n",
 			r.CaseID, r.Recall, r.Precision, r.HonestMisses, r.SilentMisses, status)
+	}
+	if rank1Cases(report.Results) > 0 {
+		fmt.Printf("  %-40s rank1_accuracy=%.3f  min_gap=%+.4f\n",
+			"(rank-1 identity)", report.Rank1Accuracy, report.Rank1MinGap)
 	}
 
 	if hardFailed {

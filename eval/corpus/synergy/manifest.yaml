@@ -231,3 +231,14 @@ cases:
       - /Users/lordson/Projects/synergy/apps/tether/server/src/index.ts
     must_not_miss:
       - /Users/lordson/Projects/synergy/apps/tether/server/src/index.ts
+
+  # --- C.6 rank-1 identity -------------------------------------------------
+
+  - id: rank1-get-battery
+    kind: rank1
+    query: "getBattery device status"
+    section: nodes
+    # apps/tether/server/src/battery.ts:8. Measured 2026-08-09: rank1 0.0160
+    # exact, rank2 the `core:datastore:postgres` synthetic node 0.0160 — gap
+    # 0.0000.
+    expect_rank1: getBattery

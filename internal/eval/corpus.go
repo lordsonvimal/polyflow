@@ -50,6 +50,11 @@ type Case struct {
 	Query       string   `yaml:"query,omitempty"`         // natural-language query
 	Section     string   `yaml:"section,omitempty"`       // nodes | flows | docs
 	ExpectAnyOf []string `yaml:"expect_any_of,omitempty"` // entity labels; a hit in top-10 of Section counts as recall=1
+	// ExpectRank1 (kind=rank1, C.6) is the entity label that must come back
+	// FIRST for Query — not merely somewhere in the top 10, which is all a
+	// semantic case asserts. Pin it to a declaration with TargetFile when the
+	// label is shared (`.cell` occurs 30× in one orion view alone).
+	ExpectRank1 string `yaml:"expect_rank1,omitempty"`
 }
 
 // AgentCase (T.2) poses a natural-language question to an agent restricted
@@ -140,10 +145,34 @@ func ValidateManifest(m *Manifest) []ValidationError {
 			if len(c.ExpectAnyOf) == 0 {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "semantic cases require expect_any_of"})
 			}
+		case "rank1":
+			if c.Query == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "rank1 cases require query"})
+			}
+			switch c.Section {
+			case "nodes", "flows", "docs":
+			default:
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("rank1 cases require section (nodes|flows|docs), got %q", c.Section)})
+			}
+			if c.ExpectRank1 == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "rank1 cases require expect_rank1"})
+			}
+			if len(c.ExpectAnyOf) > 0 {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "rank1 cases use expect_rank1, not expect_any_of (top-10 presence is a semantic case)"})
+			}
 		default:
 			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic|feature_add|test_impact)", c.Kind)})
 		}
 		// Lint rule: every case must have at least one must_not_miss entry.
+		// rank1 is exempt: its single assertion IS the hard failure, so a
+		// must_not_miss list would only restate expect_rank1, and a list that
+		// can disagree with the assertion beside it is worse than no list.
+		if c.Kind == "rank1" {
+			if len(c.MustNotMiss) > 0 {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "rank1 cases must not set must_not_miss (expect_rank1 is already the hard failure)"})
+			}
+			continue
+		}
 		if len(c.MustNotMiss) == 0 {
 			errs = append(errs, ValidationError{CaseID: c.ID, Message: "must_not_miss is required (every case needs ≥1 hard-failure entry)"})
 		}
