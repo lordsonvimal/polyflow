@@ -13,10 +13,36 @@ import (
 // these manifests would hard-fail `polyflow eval --gate` if they were there.
 const e1CorpusDir = "../../eval/agent-bench/live-e1"
 
+// e1Dirs returns the E.1 manifest directories, skipping the test when the task
+// set is not on this machine.
+//
+// .gitignore excludes eval/agent-bench/ and eval/corpus/ wholesale, so the
+// manifests are never in a clone — they describe the internal structure of five
+// private repos. These guards are worth having where the data exists and must
+// not turn a clean checkout red where it doesn't.
+//
+// An empty corpus is "absent" and skips; a corpus that is present but
+// unreadable is a real failure and does not.
+func e1Dirs(t *testing.T) []string {
+	t.Helper()
+	if _, err := os.Stat(e1CorpusDir); err != nil {
+		t.Skipf("E.1 task set not present (%s); it is gitignored, see eval/agent-bench/live-e1/README.md", e1CorpusDir)
+	}
+	dirs, err := eval.FindCorpusDirs(e1CorpusDir)
+	if err != nil {
+		t.Fatalf("find E.1 corpus dirs: %v", err)
+	}
+	if len(dirs) == 0 {
+		t.Skipf("E.1 task set directory %s holds no manifests", e1CorpusDir)
+	}
+	return dirs
+}
+
 // TestE1TaskSet_MeetsCategoryQuotas keeps E.1's five quotas honest. A README
 // table saying "6 Rails cases" is a claim; this is the check. Categories are
 // identified by id prefix, which is why the ids are named the way they are.
 func TestE1TaskSet_MeetsCategoryQuotas(t *testing.T) {
+	dirs := e1Dirs(t)
 	tasks, err := collectBenchTasks(e1CorpusDir)
 	if err != nil {
 		t.Fatalf("collect E.1 tasks: %v", err)
@@ -53,10 +79,6 @@ func TestE1TaskSet_MeetsCategoryQuotas(t *testing.T) {
 
 	// Category 4 is defined by the truth set being complete, not by a name.
 	exhaustive := 0
-	dirs, err := eval.FindCorpusDirs(e1CorpusDir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, dir := range dirs {
 		m, err := eval.LoadManifest(dir)
 		if err != nil {
@@ -77,14 +99,7 @@ func TestE1TaskSet_MeetsCategoryQuotas(t *testing.T) {
 // manifest. ValidateManifest had no production caller before D.1; a bench
 // corpus that only fails at spend time is not worth having.
 func TestE1TaskSet_ManifestsAreValid(t *testing.T) {
-	dirs, err := eval.FindCorpusDirs(e1CorpusDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(dirs) == 0 {
-		t.Fatal("no E.1 corpus dirs found")
-	}
-	for _, dir := range dirs {
+	for _, dir := range e1Dirs(t) {
 		m, err := eval.LoadManifest(dir)
 		if err != nil {
 			t.Fatalf("load %s: %v", dir, err)
@@ -113,12 +128,8 @@ var e1RepoRoots = map[string]string{
 // that matches no file can never be hit, so the precision assertion silently
 // does nothing. Skipped per repo when the checkout is not on this machine.
 func TestE1TaskSet_TruthSetPathsExist(t *testing.T) {
-	dirs, err := eval.FindCorpusDirs(e1CorpusDir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	checked := 0
-	for _, dir := range dirs {
+	for _, dir := range e1Dirs(t) {
 		m, err := eval.LoadManifest(dir)
 		if err != nil {
 			t.Fatalf("load %s: %v", dir, err)
@@ -151,11 +162,7 @@ func TestE1TaskSet_TruthSetPathsExist(t *testing.T) {
 // by an agent that names nothing in particular, and a regression case with
 // neither must_not_miss nor must_not_include asserts nothing at all.
 func TestE1TaskSet_EveryCaseHasADecisiveAssertion(t *testing.T) {
-	dirs, err := eval.FindCorpusDirs(e1CorpusDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, dir := range dirs {
+	for _, dir := range e1Dirs(t) {
 		m, err := eval.LoadManifest(dir)
 		if err != nil {
 			t.Fatalf("load %s: %v", dir, err)
