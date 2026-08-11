@@ -409,6 +409,19 @@ func writeMCPConfig(polyflowBin string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
+// polyflowNudge tells the with_polyflow_semantic arm to reach for the MCP
+// server directly. On its own this did not stop the agent from delegating to
+// an Explore subagent — the system prompt does not propagate to a spawned
+// subagent's own instructions, so the subagent still defaulted to Bash/Read
+// and never called mcp__polyflow__*. --disallowedTools Agent (below) is what
+// actually forces the top-level agent to use its own tools; this nudge just
+// steers which ones it reaches for once it can't delegate.
+const polyflowNudge = "A `polyflow` MCP server is registered for this session. " +
+	"For questions about code structure, call graph, or blast radius " +
+	"(\"what would need to change\", \"trace this flow\", \"what calls this\"), " +
+	"call the polyflow MCP tools (search, node lookup, flows, impact) directly " +
+	"instead of searching with Bash/Grep/Read."
+
 // callClaude invokes `claude -p --output-format json` and returns the parsed
 // transcript, or the class and detail of the failure.
 //
@@ -420,10 +433,19 @@ func callClaude(_ context.Context, prompt, arm, mcpCfgPath, model string) (agent
 		"-p", prompt,
 		"--output-format", "json",
 		"--model", model,
+		"--disallowedTools", "Agent",
+		// Headless -p mode has no one to answer a permission prompt: without
+		// this, mcp__polyflow__* and even Bash return "requires approval" and
+		// the agent gives up with an empty answer (recall 0, hard_fail true)
+		// instead of ever running the query. Scoped to this benchmark's own
+		// calls only, and already narrowed by --strict-mcp-config (polyflow
+		// only) and --disallowedTools Agent above.
+		"--dangerously-skip-permissions",
 	}
 	switch arm {
 	case agentbench.ArmWithSemantics:
-		claudeArgs = append(claudeArgs, "--mcp-config", mcpCfgPath, "--strict-mcp-config")
+		claudeArgs = append(claudeArgs, "--mcp-config", mcpCfgPath, "--strict-mcp-config",
+			"--append-system-prompt", polyflowNudge)
 	case agentbench.ArmNoPolyflow:
 		claudeArgs = append(claudeArgs, "--strict-mcp-config")
 	}
