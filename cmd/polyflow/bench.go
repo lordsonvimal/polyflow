@@ -55,13 +55,14 @@ func init() {
 
 // benchTask is one task in the benchmark, derived from an eval corpus case.
 type benchTask struct {
-	TaskID      string
-	Repo        string
-	CaseID      string
-	Kind        string
-	Prompt      string
-	Expected    []string
-	MustNotMiss []string
+	TaskID         string
+	Repo           string
+	CaseID         string
+	Kind           string
+	Prompt         string
+	Expected       []string
+	MustNotMiss    []string
+	MustNotInclude []string
 }
 
 func runBench(cmd *cobra.Command, args []string) error {
@@ -229,7 +230,7 @@ func runTrial(ctx context.Context, task benchTask, arm, mcpCfgPath string, trial
 	r.ContextTokens = tr.ContextTokens
 	r.NumTurns = tr.NumTurns
 	r.TotalCostUSD = tr.TotalCostUSD
-	cr := agentbench.ScoreTranscript(task.CaseID, tr, task.Expected, task.MustNotMiss)
+	cr := agentbench.ScoreTranscript(task.CaseID, tr, task.Expected, task.MustNotMiss, task.MustNotInclude)
 	r.Recall = cr.Recall
 	r.Precision = agentbench.TranscriptPrecision(tr, task.Expected)
 	r.SilentMisses = cr.SilentMisses
@@ -255,17 +256,18 @@ func collectBenchTasks(corpusRoot string) ([]benchTask, error) {
 		}
 		for _, c := range m.Cases {
 			switch c.Kind {
-			case "node", "file", "flow", "feature_add", "test_impact":
+			case "node", "file", "flow", "feature_add", "test_impact", "regression":
 			default:
 				continue // skip semantic/diff cases — they use a different prompt pattern
 			}
 			t := benchTask{
-				TaskID:      m.Repo.Name + "/" + c.ID,
-				Repo:        m.Repo.Name,
-				CaseID:      c.ID,
-				Kind:        c.Kind,
-				Expected:    c.ExpectedImpacted,
-				MustNotMiss: c.MustNotMiss,
+				TaskID:         m.Repo.Name + "/" + c.ID,
+				Repo:           m.Repo.Name,
+				CaseID:         c.ID,
+				Kind:           c.Kind,
+				Expected:       c.ExpectedImpacted,
+				MustNotMiss:    c.MustNotMiss,
+				MustNotInclude: c.MustNotInclude,
 			}
 			switch c.Kind {
 			case "node":
@@ -295,6 +297,12 @@ func collectBenchTasks(corpusRoot string) ([]benchTask, error) {
 					"I changed %s in the %s codebase. Which test files should CI run to "+
 						"cover this change? List each test file path on its own line.",
 					c.Target, m.Repo.Name)
+			case "regression":
+				t.Prompt = fmt.Sprintf(
+					"I'm about to change %s in the %s codebase. Does that risk breaking "+
+						"%s? Answer yes or no, then list the file paths that justify your "+
+						"answer, one per line.",
+					c.Target, m.Repo.Name, c.RegressionSubject)
 			}
 			tasks = append(tasks, t)
 		}
