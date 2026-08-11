@@ -12,7 +12,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-exec polyflow bench \
+# Build from source before measuring. A stale binary on $PATH has previously
+# invented a regression that was already fixed in the tree, and each bench run
+# costs real tokens — too expensive to spend on the wrong build.
+BIN="$(mktemp -d)/polyflow"
+go build -o "$BIN" ./cmd/polyflow
+trap 'rm -rf "$(dirname "$BIN")"' EXIT
+
+# Not exec'd: the trap has to survive to clean up, and the MCP config the bench
+# writes points at $BIN for the duration of the run.
+"$BIN" bench \
   --corpus eval/corpus \
   --output eval/agent-bench/results \
   "$@"
