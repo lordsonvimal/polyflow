@@ -65,6 +65,43 @@ applied so the recall numbers are directly comparable.
 to keep token cost low; subsequent runs should increase to 3. All deviations are recorded in the run's
 `note` field.
 
+## Failed trials (E.0)
+
+A trial that never produced a transcript **is not a measurement**. It is excluded from every average and
+counted separately under `Errors`; `Trials` counts measurements only.
+
+The 2026-07-30 datascience run is why this rule is written down. Five of seven `without_polyflow` trials
+came back with a 429 session limit and were recorded as `recall 0`, `context_tokens 0`, then averaged in.
+That manufactured a control-arm recall of **0.286** out of two real measurements that both scored **1.000**,
+and the resulting "polyflow recall win" was entirely an artifact of the crashes.
+
+Failures are classified from the `claude -p` result envelope, which is well-formed on stdout even when the
+CLI exits non-zero (its `subtype` reads `"success"` on a 429, so only `is_error` / `api_error_status` /
+`terminal_reason` can be trusted):
+
+| Class | Trigger | Handling |
+|-------|---------|----------|
+| `quota` | `api_error_status: 429`, or a session/usage/rate-limit message | **Abort the run.** The reset is hours away, so retrying is futile and continuing only converts the remaining tasks into more fake zeros. A partial report is written, marked `aborted`, and the command exits non-zero. |
+| `transient` | 5xx, 408, network error, unparsable output | Up to 2 retries with 5s/10s backoff |
+| `fatal` | any other `is_error`, missing `claude` binary | Recorded, not retried, run continues |
+
+An envelope with `is_error: true` is a failure even when the CLI exits 0 — otherwise the error message
+itself gets scored as though it were the agent's answer.
+
+### Arm ordering
+
+Arms are run **task-outer, arm-inner**: both arms of one task run back to back. Running arm-outer spends
+the whole account budget on arm 1 before arm 2 begins, so a quota stop deletes the *control arm* — exactly
+what happened on 2026-07-30. Interleaving makes an early stop drop whole tasks and leave complete A/B
+pairs behind.
+
+## A/B pairing
+
+The report carries a `Pairing` block: how many `(task, trial)` keys were attempted in both arms, how many
+produced a measurement on **both** sides, and the median token reduction over those valid pairs only.
+Validity below 1.0 prints an explicit warning, because arm averages taken over different task subsets are
+not comparable. E.2's bar requires validity **1.0**.
+
 ## Output
 
 - `eval/agent-bench/results/<date>.json` — machine-readable full results
