@@ -1,5 +1,7 @@
 .polyflow/
 /dist/
+.DS_Store
+**/.DS_Store
 web/dist/*
 !web/dist/.gitkeep
 web/node_modules/
