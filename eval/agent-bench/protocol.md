@@ -102,6 +102,27 @@ produced a measurement on **both** sides, and the median token reduction over th
 Validity below 1.0 prints an explicit warning, because arm averages taken over different task subsets are
 not comparable. E.2's bar requires validity **1.0**.
 
+## Checkpoint and resume
+
+Every trial is appended to `<output>/.checkpoint-<repo|all>.jsonl` as soon as it returns, before the run
+continues. Until E.2 the results only reached disk after the *last* call returned, so a quota abort kept
+its partial report but a Ctrl-C or a dropped connection threw away everything already paid for — and a
+re-run re-bought every task that had already succeeded.
+
+Re-running the identical command resumes: bought trials are replayed from the checkpoint and reported as
+`cached`. Because arms are interleaved per task (above), a checkpoint always holds whole A/B pairs.
+
+| Situation | Behaviour |
+|---|---|
+| Trial succeeded | Cached; not re-bought on resume |
+| Trial failed (any class) | Recorded for the reader, but **replayed** — a quota stop is what you are re-running to get past |
+| Repo finished in full | Checkpoint deleted, so the next run measures rather than reprinting the last one |
+| `--model`/`--corpus`/`--trials`/`--arm` changed | Run refuses to start rather than blend two measurements into one report |
+| `--fresh` | Checkpoint discarded deliberately; everything is re-bought |
+
+A checkpoint *write* failure warns but does not abort: the call is already paid for and the in-memory
+report still holds it.
+
 ## Output
 
 - `eval/agent-bench/results/<date>.json` — machine-readable full results

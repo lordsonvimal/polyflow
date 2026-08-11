@@ -25,6 +25,7 @@ var (
 	benchOutput     string
 	benchDryRun     bool
 	benchMaxPerRepo int
+	benchFresh      bool
 )
 
 var benchCmd = &cobra.Command{
@@ -51,6 +52,8 @@ func init() {
 	benchCmd.Flags().BoolVar(&benchDryRun, "dry-run", false, "print tasks and prompts without calling claude")
 	benchCmd.Flags().IntVar(&benchMaxPerRepo, "max-per-repo", 10,
 		"cap tasks taken from each corpus repo (0 = no cap); the whole corpus is 186 tasks, which no single session's budget survives")
+	benchCmd.Flags().BoolVar(&benchFresh, "fresh", false,
+		"discard any checkpoint and re-run every task from scratch (re-pays for trials already bought)")
 }
 
 // benchTask is one task in the benchmark, derived from an eval corpus case.
@@ -106,11 +109,34 @@ func runBench(cmd *cobra.Command, args []string) error {
 		arms = []string{benchArm}
 	}
 
+	// ── Resume anything already bought ────────────────────────────────────────
+	//
+	// Every trial is appended to a checkpoint the moment it returns, so an
+	// interruption of any kind — quota, Ctrl-C, a dropped connection — costs at
+	// most the one call in flight. Re-running the same command picks up where it
+	// stopped rather than re-paying for the tasks that already succeeded.
+	ckpt, err := loadCheckpoint(benchOutput, benchRepo, checkpointHeader{
+		Model:  benchModel,
+		Corpus: benchCorpus,
+		Repo:   benchRepo,
+		Arms:   arms,
+		Trials: benchTrials,
+	}, benchFresh)
+	if err != nil {
+		return err
+	}
+
 	// Say what this run will spend before it spends it. Every invocation is a
 	// real paid `claude -p` call, and a run that outlives the session budget
 	// aborts partway through with nothing but a partial report to show for it.
-	fmt.Printf("Plan: %d tasks × %d arms × %d trial(s) = %d claude invocations\n",
-		len(tasks), len(arms), benchTrials, len(tasks)*len(arms)*benchTrials)
+	total := len(tasks) * len(arms) * benchTrials
+	if resumed := ckpt.count(); resumed > 0 {
+		fmt.Printf("Resuming %s: %d of %d trials already recorded, %d left to buy\n",
+			ckpt.path, resumed, total, total-resumed)
+	} else {
+		fmt.Printf("Plan: %d tasks × %d arms × %d trial(s) = %d claude invocations\n",
+			len(tasks), len(arms), benchTrials, total)
+	}
 
 	// ── Write MCP config for arm 1 ────────────────────────────────────────────
 	polyflowBin, err := os.Executable()
@@ -142,9 +168,16 @@ func runBench(cmd *cobra.Command, args []string) error {
 		attempted++
 		for trial := 1; trial <= benchTrials && aborted == ""; trial++ {
 			for _, arm := range arms {
+				if prev, ok := ckpt.completed(task.TaskID, arm, trial); ok {
+					fmt.Printf("  %s [%s] trial %d ... cached (recall=%.3f)\n",
+						task.TaskID, arm, trial, prev.Recall)
+					results = append(results, prev)
+					continue
+				}
 				fmt.Printf("  %s [%s] trial %d ... ", task.TaskID, arm, trial)
 				r, class := runTrial(ctx, task, arm, mcpCfgPath, trial)
 				results = append(results, r)
+				ckpt.record(r)
 				if class == agentbench.FailureQuota {
 					aborted = "stopped on an API quota/session limit"
 					break
@@ -177,9 +210,14 @@ func runBench(cmd *cobra.Command, args []string) error {
 	// reader cannot mistake a partial report for the benchmark having run.
 	if aborted != "" {
 		return fmt.Errorf("benchmark incomplete: %s — %d of %d tasks attempted; "+
-			"the partial report is written but is not a measurement",
-			aborted, attempted, len(tasks))
+			"the partial report is written but is not a measurement. "+
+			"Re-run the same command to resume from %s; completed trials will not be re-bought",
+			aborted, attempted, len(tasks), ckpt.path)
 	}
+
+	// A finished run's checkpoint would otherwise replay itself forever, so the
+	// next run of this repo measures rather than reprinting this one.
+	ckpt.clear()
 	return nil
 }
 
