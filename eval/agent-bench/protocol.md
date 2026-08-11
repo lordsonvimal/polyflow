@@ -23,6 +23,21 @@ instead of shipping overconfidence.
 `Search` reads this via `GetEmbedStatus` and degrades to FTS-only automatically. No config change or
 binary rebuild needed. The bench command temporarily sets this flag in the live DB and restores it.
 
+### System-prompt nudge (arm 1, since 2026-08-11)
+
+Session transcripts from the first `nextgen` E.2 run showed the agent defaulting to spawning its own
+`Explore` subagent and searching with Bash/Read/Grep, never calling `mcp__polyflow__*` — 22 of 23
+`with_polyflow_semantic` sessions made zero polyflow tool calls. Nothing told the agent polyflow was
+worth preferring over its own instinct to grep, so the run was silently measuring grep against grep.
+
+`with_polyflow_semantic` now passes `--append-system-prompt` naming the MCP tools and telling the agent
+to call them directly instead of delegating to a subagent or Bash/Grep/Read. `without_polyflow` and
+`with_polyflow_fts_only` are unaffected — the nudge only fires when the MCP server is actually registered.
+
+**The `nextgen` result predates this change and is kept as an un-nudged baseline** — it measures the
+graph's contribution under the agent's unprompted default behavior, not its ceiling. Every other E.2 repo
+runs with the nudge; don't average nextgen's numbers into the others without noting the methodology split.
+
 ## Tasks
 
 - **Source:** impact cases (`kind: node`, `kind: file`, or `kind: flow`) from every corpus manifest under
