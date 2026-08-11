@@ -57,6 +57,9 @@ func BuildNodeCard(n *graph.Node) Entity {
 // nodeCardText returns the one-line card string for a node.
 func nodeCardText(n *graph.Node) string {
 	parts := []string{n.Label, string(n.Type), n.Service, n.File}
+	if ql := n.QualifiedLabel(); ql != "" {
+		parts = append(parts, ql)
+	}
 	if m := n.Meta; m != nil {
 		switch n.Type {
 		case graph.NodeTypeHTTPHandler, graph.NodeTypeRoute, graph.NodeTypeHTTPClient:

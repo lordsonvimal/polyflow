@@ -287,6 +287,25 @@ type Node struct {
 	Snippet string `json:"snippet,omitempty"`
 }
 
+// QualifiedLabel returns the class-scoped form of a method/function's name
+// ("LicenseReportJobsController#create") when the parser recorded one, falling
+// back to just the containing class/type name, or "" when neither is set.
+//
+// A bare method label like "create" is indistinguishable from every other
+// same-named method in the repo to both FTS indexes (nodes_fts and the
+// semantic corpus) — the containing class only otherwise appears in the file
+// path, snake_cased, which can't prefix-match a query written in PascalCase
+// (a case/punctuation-convention gap FTS5 prefix matching can't bridge).
+func (n *Node) QualifiedLabel() string {
+	if n.Meta == nil {
+		return ""
+	}
+	if qn := n.Meta["qualified_name"]; qn != "" {
+		return qn
+	}
+	return n.Meta["class"]
+}
+
 // Confidence levels for edges — how certain the linker is about a match.
 const (
 	ConfidenceStatic   = "static"   // literal string match

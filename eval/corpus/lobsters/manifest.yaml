@@ -246,3 +246,19 @@ cases:
     # bare identifier returns it at rank 1, so the two context words — both
     # accurate — are what lose it.
     expect_rank1: check_already_posted_recently?
+
+  - id: rank1-controller-scoped-create
+    kind: rank1
+    query: "StoriesController create"
+    section: nodes
+    # app/controllers/stories_controller.rb:21. FIXED 2026-08-11: a
+    # "ClassName method" query used to rank the bare-labelled `create` behind
+    # every other same-named `create` in the repo (categories_controller.rb,
+    # comments_controller.rb, ...) and behind the StoriesController class node
+    # itself, because a method's card text only ever carried its bare label —
+    # the containing class appeared nowhere but the file path, snake_cased,
+    # which can't prefix-match a PascalCase query term. Fixed by indexing
+    # Meta["qualified_name"] ("StoriesController#create") into both nodes_fts
+    # and the semantic corpus (graph.Node.QualifiedLabel). Guards against a
+    # regression of the shape found via the nextGen-CAM agent-bench run.
+    expect_rank1: create
