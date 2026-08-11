@@ -319,31 +319,53 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			}
 		default:
 			// Bare/implicit-self method calls: helper(x), save, self.foo.
-			// Receiver-typed calls (article.save) need static type inference
-			// Ruby's dynamism rules out here, so they are left alone — same
-			// scope restriction as the other patterns in this file (rule 9:
-			// only attribute a call when the target is unambiguous).
+			// A `ClassName.method` receiver is also resolvable when the class
+			// is declared in this file — unambiguous the same way `Foo.new`
+			// is above, just against methodsByClassName instead of
+			// classTable. Any other receiver-typed call (article.save) needs
+			// static type inference Ruby's dynamism rules out, so it is left
+			// alone (rule 9: only attribute a call when the target is
+			// unambiguous).
 			if methodID == "" {
 				break
 			}
-			if receiver := node.ChildByFieldName("receiver"); receiver != nil && receiver.Content(ex.src) != "self" {
-				break
+			lookupClass := class
+			if receiver := node.ChildByFieldName("receiver"); receiver != nil {
+				switch {
+				case receiver.Content(ex.src) == "self":
+					// implicit self; lookupClass stays the enclosing class
+				case receiver.Type() == "constant":
+					lookupClass = receiver.Content(ex.src)
+				default:
+					// Any other receiver (article.save) needs static type
+					// inference Ruby's dynamism rules out; a plain `break`
+					// here would only exit this inner switch and fall through
+					// to a resolution attempt, so bail out of the call
+					// handling entirely instead.
+					goto next
+				}
 			}
 			targetID := ""
-			if class != "" {
-				targetID = ex.methodsByClassName[class+"\x00"+mname]
+			if lookupClass != "" {
+				targetID = ex.methodsByClassName[lookupClass+"\x00"+mname]
 			}
-			if targetID == "" {
+			selfScoped := lookupClass == class
+			if targetID == "" && selfScoped {
 				if ids := ex.methodsByName[mname]; len(ids) == 1 {
 					targetID = ids[0]
 				}
 			}
 			if targetID != "" {
 				ex.addEdge(graph.EdgeTypeCalls, methodID, targetID, nil)
-			} else if !isRubyBuiltinCall(mname, ex.file) {
+			} else if !isRubyBuiltinCall(mname, ex.file) && selfScoped {
 				// A framework or language builtin is not a blind spot: no pass
 				// can ever resolve it, so ledgering it only inflates the
-				// "verify N manually" footer agents are told to act on.
+				// "verify N manually" footer agents are told to act on. An
+				// unresolved ClassName.method miss isn't ledgered here either:
+				// the class is very often a cross-file model (ActiveRecord
+				// finders, etc.) that this same-file pass has no way to see,
+				// so it is left for a future cross-file linker pass rather
+				// than reported as a same-file miss it never was.
 				ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
 					Service: ex.service, File: ex.file,
 					Line: rbLine(node), Name: mname, Kind: "call_ref",
@@ -352,6 +374,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 		}
 	}
 
+next:
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		ex.walk(node.NamedChild(i), class, classID, methodID)
 	}

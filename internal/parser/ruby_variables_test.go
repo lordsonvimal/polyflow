@@ -198,6 +198,70 @@ end
 	}
 }
 
+func TestRubyVariables_ConstantReceiverCallResolvesSelfMethod(t *testing.T) {
+	// UserCategoryRuleSet.latest_for is a `ClassName.method` call whose
+	// receiver is a same-file constant — unambiguous the same way `Foo.new`
+	// already is, since the class it names declares exactly one `self.`
+	// method with that name.
+	src := `class LicenseReportJobsController
+  def create
+    UserCategoryRuleSet.latest_for(1, 2)
+  end
+end
+
+class UserCategoryRuleSet
+  def self.latest_for(org_id, product_id)
+    true
+  end
+end
+`
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/license_report_jobs_controller.rb", "shop", []byte(src))
+
+	var latestFor *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "latest_for" {
+			latestFor = &nodes[i]
+		}
+	}
+	if latestFor == nil {
+		t.Fatalf("expected UserCategoryRuleSet.latest_for node; nodes: %+v", nodes)
+	}
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:latest_for") == nil {
+		t.Errorf("missing calls edge create -> ClassName.latest_for; edges: %+v", edges)
+	}
+	for _, u := range unresolved {
+		if u.Name == "latest_for" {
+			t.Errorf("resolved constant-receiver call must not also be ledgered: %+v", u)
+		}
+	}
+}
+
+func TestRubyVariables_ConstantReceiverFrameworkCallNotLedgered(t *testing.T) {
+	// Product.find_by is a `ClassName.method` call to an ActiveRecord finder
+	// no repository ever defines. It cannot resolve — Product may not even be
+	// declared in this file — and ledgering every such miss would just be
+	// noise a same-file pass can never clear (a future cross-file linker
+	// pass is the right place for this, not this ledger).
+	src := `class LicenseReportJobsController
+  def create
+    Product.find_by(slug: "vega-lyra")
+  end
+end
+`
+	_, edges, unresolved := extractRubyVariables("app/controllers/license_report_jobs_controller.rb", "shop", []byte(src))
+
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.From == "shop:app/controllers/license_report_jobs_controller.rb:function:create:2" {
+			t.Errorf("unresolvable constant-receiver call must not be attributed: %+v", e)
+		}
+	}
+	for _, u := range unresolved {
+		if u.Name == "find_by" {
+			t.Errorf("constant-receiver miss must not be ledgered by the same-file pass: %+v", u)
+		}
+	}
+}
+
 func TestRubyVariables_ReceiverTypedCallNotAttributed(t *testing.T) {
 	// article.save has an explicit non-self receiver — Ruby's dynamism rules
 	// out static type inference, so this must not be attributed to any
