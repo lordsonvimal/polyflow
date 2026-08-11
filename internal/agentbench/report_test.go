@@ -18,7 +18,7 @@ func TestScoreTranscript(t *testing.T) {
 		"internal/trace/trace.go",
 	}
 	mustNotMiss := []string{"internal/impact/impact.go"}
-	cr := agentbench.ScoreTranscript("test-case", tr, expected, mustNotMiss)
+	cr := agentbench.ScoreTranscript("test-case", tr, expected, mustNotMiss, nil)
 
 	if cr.HardFail {
 		t.Error("HardFail should be false (must_not_miss was found)")
@@ -36,6 +36,7 @@ func TestScoreTranscript_MustNotMiss_HardFail(t *testing.T) {
 	cr := agentbench.ScoreTranscript("x", tr,
 		[]string{"internal/impact/impact.go", "internal/trace/trace.go"},
 		[]string{"internal/impact/impact.go"},
+		nil,
 	)
 	if !cr.HardFail {
 		t.Error("HardFail should be true: must_not_miss file was not mentioned")
@@ -206,6 +207,7 @@ func TestScoreTranscript_ReusesEvalScorer(t *testing.T) {
 		tr,
 		[]string{"internal/a/b.go"},
 		[]string{"internal/a/b.go"},
+		nil,
 	)
 	// Expect eval.CaseResult with HardFail=true (silent miss of must_not_miss)
 	var _ eval.CaseResult = cr // compile-time type check

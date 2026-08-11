@@ -31,8 +31,8 @@ type RepoRef struct {
 // Case is one eval test case.
 type Case struct {
 	ID               string   `yaml:"id"`
-	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic | rank1 | feature_add | test_impact
-	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff|feature_add|test_impact)
+	Kind             string   `yaml:"kind"`              // node | file | diff | flow | semantic | rank1 | feature_add | test_impact | regression
+	Target           string   `yaml:"target,omitempty"`  // node search query or file path (node|file|diff|feature_add|test_impact|regression)
 	Service          string   `yaml:"service,omitempty"` // pre-filter target resolution to this service (B.3)
 	NodeType         string   `yaml:"node_type,omitempty"` // pre-filter target resolution to this node type (B.3)
 	// TargetFile pins a node case to one declaration when the label is shared.
@@ -57,6 +57,13 @@ type Case struct {
 	Exhaustive bool `yaml:"exhaustive,omitempty"`
 	// feature_add cases: the new capability to add, anchored to Target (the existing related feature).
 	NewCapability string `yaml:"new_capability,omitempty"`
+	// RegressionSubject (kind=regression, E.1) is the *other* thing the
+	// question asks about: "I'm changing Target — does that break
+	// RegressionSubject?" The known answer lives in the truth set, not here.
+	// A yes-case names the connecting files in ExpectedImpacted; a no-case
+	// puts RegressionSubject's files in MustNotInclude, so an agent that
+	// hedges "everything is connected" fails rather than scores.
+	RegressionSubject string `yaml:"regression_subject,omitempty"`
 	// Semantic search cases (kind=semantic, S.4):
 	Query       string   `yaml:"query,omitempty"`         // natural-language query
 	Section     string   `yaml:"section,omitempty"`       // nodes | flows | docs
@@ -131,7 +138,7 @@ func ValidateManifest(m *Manifest) []ValidationError {
 		}
 		seen[c.ID] = true
 		switch c.Kind {
-		case "node", "file", "diff", "flow", "feature_add", "test_impact":
+		case "node", "file", "diff", "flow", "feature_add", "test_impact", "regression":
 			if len(c.ExpectedImpacted) == 0 {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "expected_impacted must not be empty"})
 			}
@@ -143,6 +150,9 @@ func ValidateManifest(m *Manifest) []ValidationError {
 			}
 			if c.Kind == "feature_add" && c.NewCapability == "" {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "feature_add cases require new_capability"})
+			}
+			if c.Kind == "regression" && c.RegressionSubject == "" {
+				errs = append(errs, ValidationError{CaseID: c.ID, Message: "regression cases require regression_subject"})
 			}
 		case "semantic":
 			if c.Query == "" {
@@ -172,7 +182,7 @@ func ValidateManifest(m *Manifest) []ValidationError {
 				errs = append(errs, ValidationError{CaseID: c.ID, Message: "rank1 cases use expect_rank1, not expect_any_of (top-10 presence is a semantic case)"})
 			}
 		default:
-			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic|rank1|feature_add|test_impact)", c.Kind)})
+			errs = append(errs, ValidationError{CaseID: c.ID, Message: fmt.Sprintf("unknown kind %q (must be node|file|diff|flow|semantic|rank1|feature_add|test_impact|regression)", c.Kind)})
 		}
 		// D.1 precision keys assert about file paths, so they are meaningful
 		// only for the impact kinds. A semantic or rank1 case scores entity
