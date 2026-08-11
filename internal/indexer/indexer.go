@@ -676,6 +676,21 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, rubyTypeUnresolved...)
 	}
+	// Cross-file `ClassName.method_name` calls (Product.find_by,
+	// UserCategoryRuleSet.latest_for, LicenseReportJob.create!) — the
+	// same-file case is extractRubyVariables' job; this is the cross-file
+	// half, same split as the type-relations pass above.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		classCallEdges, classCallUnresolved := linker.LinkRubyClassMethodCalls(allNodes, svcFiles)
+		if err := writeEdges(classCallEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, classCallUnresolved...)
+	}
 	// Rails filter chain: before_action/around_action/after_action → the method
 	// the callback names, from the declaring class and from each action it
 	// guards. Needs the Ruby method nodes' qualified_name, so it runs after the
