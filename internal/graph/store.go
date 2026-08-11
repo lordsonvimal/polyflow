@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence);
 CREATE INDEX IF NOT EXISTS idx_edges_method     ON edges(method);
 CREATE INDEX IF NOT EXISTS idx_edges_path       ON edges(path);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, label, file, service);
+CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, label, file, service, qualified);
 
 CREATE TABLE IF NOT EXISTS parse_errors (
 	file_path        TEXT PRIMARY KEY,
@@ -202,10 +202,11 @@ type SQLiteStore struct {
 }
 
 // ftsRowKey is the nodes_fts row content for a node: the FTS row is a pure
-// function of these three fields, so an upsert that leaves all three unchanged
-// (a meta-only rewrite, e.g. root classification) needs no FTS write at all.
+// function of these fields, so an upsert that leaves all of them unchanged
+// (e.g. a meta-only rewrite that doesn't touch qualified_name/class, such as
+// root classification) needs no FTS write at all.
 func ftsRowKey(n *Node) string {
-	return n.Label + "\x00" + n.File + "\x00" + n.Service
+	return n.Label + "\x00" + n.File + "\x00" + n.Service + "\x00" + n.QualifiedLabel()
 }
 
 // ftsPlan reports what nodes_fts work a node upsert needs: whether to delete
@@ -326,8 +327,8 @@ func (s *SQLiteStore) upsertFTS(ctx context.Context, n *Node) error {
 		return fmt.Errorf("fts delete %s: %w", n.ID, err)
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO nodes_fts (id, label, file, service) VALUES (?, ?, ?, ?)`,
-		n.ID, n.Label, n.File, n.Service); err != nil {
+		`INSERT INTO nodes_fts (id, label, file, service, qualified) VALUES (?, ?, ?, ?, ?)`,
+		n.ID, n.Label, n.File, n.Service, n.QualifiedLabel()); err != nil {
 		return fmt.Errorf("fts insert %s: %w", n.ID, err)
 	}
 	return nil

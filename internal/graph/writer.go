@@ -92,7 +92,7 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 		}
 		defer ftsDelete.Close()
 		ftsInsert, err := tx.PrepareContext(ctx,
-			`INSERT INTO nodes_fts (id, label, file, service) VALUES (?, ?, ?, ?)`)
+			`INSERT INTO nodes_fts (id, label, file, service, qualified) VALUES (?, ?, ?, ?, ?)`)
 		if err != nil {
 			return fmt.Errorf("prepare fts insert: %w", err)
 		}
@@ -118,7 +118,7 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 				}
 			}
 			if ins {
-				if _, err = ftsInsert.ExecContext(ctx, n.ID, n.Label, n.File, n.Service); err != nil {
+				if _, err = ftsInsert.ExecContext(ctx, n.ID, n.Label, n.File, n.Service, n.QualifiedLabel()); err != nil {
 					return fmt.Errorf("fts insert %s: %w", n.ID, err)
 				}
 			}

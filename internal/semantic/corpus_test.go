@@ -103,6 +103,34 @@ func TestBuildNodeCard_Golden(t *testing.T) {
 			},
 			want: "deleteUser http_handler api handlers/user.go DELETE",
 		},
+		{
+			// A bare method label ("create") ties with every other same-named
+			// method in the repo; qualified_name gives it a class-scoped token
+			// that a "ControllerName method" query can actually prefix-match.
+			name: "ruby method with qualified_name",
+			node: graph.Node{
+				ID: "fn:create", Label: "create",
+				Type: graph.NodeTypeFunction, Service: "orion-atlas",
+				File: "app/controllers/api/v1/license_report_jobs_controller.rb",
+				Meta: map[string]string{
+					"class":          "LicenseReportJobsController",
+					"qualified_name": "LicenseReportJobsController#create",
+				},
+			},
+			want: "create function orion-atlas app/controllers/api/v1/license_report_jobs_controller.rb LicenseReportJobsController#create",
+		},
+		{
+			// class present without qualified_name (non-Ruby parsers, or older
+			// index rows) still gets the class name as a fallback signal.
+			name: "method with class but no qualified_name",
+			node: graph.Node{
+				ID: "fn:save", Label: "save",
+				Type: graph.NodeTypeMethod, Service: "api",
+				File: "models/user.rb",
+				Meta: map[string]string{"class": "User"},
+			},
+			want: "save method api models/user.rb User",
+		},
 	}
 
 	for _, tc := range cases {
