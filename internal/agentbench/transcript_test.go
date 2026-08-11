@@ -92,10 +92,10 @@ func TestExtractFiles_FromFixtureResult(t *testing.T) {
 	files := agentbench.ExtractFiles(tr.Result)
 	// The fixture result mentions 4 files with path separators.
 	want := map[string]bool{
-		"internal/impact/impact.go":    true,
-		"internal/impact/file.go":      true,
-		"internal/trace/trace.go":      true,
-		"internal/context/builder.go":  true,
+		"internal/impact/impact.go":   true,
+		"internal/impact/file.go":     true,
+		"internal/trace/trace.go":     true,
+		"internal/context/builder.go": true,
 	}
 	if len(files) != len(want) {
 		t.Errorf("ExtractFiles returned %d files, want %d: %v", len(files), len(want), files)

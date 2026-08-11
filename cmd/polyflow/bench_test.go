@@ -49,6 +49,36 @@ cases:
 	}
 }
 
+// The protocol has documented a 10-per-repo cap since P.1 but nothing enforced
+// it, so the default run was the whole 186-task corpus — 372 paid invocations,
+// past any session budget and therefore certain to abort partway through.
+func TestCapPerRepo(t *testing.T) {
+	tasks := []benchTask{
+		{TaskID: "a/1", Repo: "a"}, {TaskID: "a/2", Repo: "a"}, {TaskID: "a/3", Repo: "a"},
+		{TaskID: "b/1", Repo: "b"}, {TaskID: "b/2", Repo: "b"},
+	}
+	got := capPerRepo(tasks, 2)
+	want := []string{"a/1", "a/2", "b/1", "b/2"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d: %v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].TaskID != w {
+			t.Errorf("task[%d] = %q, want %q (the cap must preserve corpus order)", i, got[i].TaskID, w)
+		}
+	}
+
+	if n := len(capPerRepo(tasks, 0)); n != len(tasks) {
+		t.Errorf("cap 0 kept %d tasks, want all %d", n, len(tasks))
+	}
+	if n := len(capPerRepo(tasks, 99)); n != len(tasks) {
+		t.Errorf("cap above the count kept %d tasks, want all %d", n, len(tasks))
+	}
+	if tasks[3].TaskID != "b/1" {
+		t.Error("capPerRepo must not scribble on its input slice")
+	}
+}
+
 func TestHasFlowTask(t *testing.T) {
 	if hasFlowTask([]benchTask{{Kind: "node"}, {Kind: "file"}}) {
 		t.Error("expected false when no flow task present")
