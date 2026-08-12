@@ -308,6 +308,41 @@ func resolveNode(ctx context.Context, store Store, query, targetService, targetT
 	return graph.ResolveTarget(ctx, store, query, targetService, targetType)
 }
 
+// resolveAllServiceRoots detects the case an exact-label query resolved
+// ambiguously across >1 service (e.g. a client-side call and its
+// server-side handler sharing a name across an HTTP contract, like
+// "RemoveConfig" existing in both maple-agent and maple-manager) and, only when
+// the caller did NOT pin target_service, resolves one root per distinct
+// service so impact.BuildMulti can union their blast radii into a single
+// response.
+//
+// Previously an agent had to make one impact call per service — each paying
+// the full MCP round-trip and JSON envelope — to reconstruct what is really
+// one blast radius spanning a contract boundary. Pinning target_service
+// still returns exactly the single-service answer it always did: this only
+// changes the unqualified-query default, so no existing capability is lost.
+// Within-service ambiguity (candidates all in one service — a genuinely
+// different symbol, not a shared contract name) is left untouched; only
+// cross-service duplication is auto-merged.
+func resolveAllServiceRoots(ctx context.Context, store Store, query, targetType, targetService string, root *graph.Node, candidates []graph.TargetCandidate) []*graph.Node {
+	if targetService != "" || len(candidates) <= 1 {
+		return []*graph.Node{root}
+	}
+	seenService := map[string]bool{root.Service: true}
+	roots := []*graph.Node{root}
+	for _, c := range candidates {
+		if seenService[c.Service] {
+			continue
+		}
+		seenService[c.Service] = true
+		r, _, err := resolveNode(ctx, store, query, c.Service, targetType)
+		if err == nil && r != nil {
+			roots = append(roots, r)
+		}
+	}
+	return roots
+}
+
 // ─── search ──────────────────────────────────────────────────────────────────
 
 type searchInput struct {
@@ -481,13 +516,13 @@ func defaultSnippetLines(n int) int {
 
 type impactInput struct {
 	Target          string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
-	TargetService   string `json:"target_service,omitempty" jsonschema:"restrict target resolution to this service (resolves cross-service ambiguity; use when target_candidates is non-empty)"`
+	TargetService   string `json:"target_service,omitempty" jsonschema:"narrow to ONE service's blast radius. Leave unset even when target_candidates is non-empty: an unqualified query already unions the blast radius across every service where the symbol matches exactly (e.g. a shared HTTP-contract name on both the client and server side) in this single call — do not re-call once per candidate service, it is redundant. Only set this when you specifically want just one service's slice"`
 	TargetType      string `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
 	File            string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
 	Direction       string `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read. Use both for a 'what else do I need to touch/change' question — backward alone will not surface things the target itself depends on"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
-	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail"`
+	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail (capped to the compact default anyway when the query auto-merges >1 service's blast radius, to keep the merged answer from exceeding your own tool-output size limit — set target_service if you need unlimited detail for just one service)"`
 	Summary         bool   `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
 	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
@@ -526,14 +561,21 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	if err != nil {
 		return nil, nil, err
 	}
-	out := impact.Build(idx, root, impact.Options{
+	roots := resolveAllServiceRoots(ctx, store, in.Target, in.TargetType, in.TargetService, root, candidates)
+	opts := impact.Options{
 		Depth:          depth,
 		Service:        in.Service,
 		Direction:      in.Direction,
 		Policy:         graph.BlastRadiusPolicy(),
 		VerboseSources: in.VerboseSources,
 		StaleAfter:     s.staleAfter,
-	})
+	}
+	var out *impact.Result
+	if len(roots) > 1 {
+		out = impact.BuildMulti(idx, roots, opts)
+	} else {
+		out = impact.Build(idx, root, opts)
+	}
 	out.TargetCandidates = candidates
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	out.AttachUnresolved(unresolved)
@@ -542,7 +584,21 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		out.TotalCallers = len(out.Callers)
 	}
 	out.InlineSnippets(".", defaultSnippetLines(in.SnippetLines))
-	return jsonResult(out.ApplyBudget(effectiveBudget(in.MaxTokens), in.Summary))
+	budget := effectiveBudget(in.MaxTokens)
+	if len(roots) > 1 && (budget == 0 || budget > defaultImpactBudget) {
+		// A merged multi-service result is roughly Nx one service's size by
+		// construction (BuildMulti unions N full blast radii). An explicit
+		// max_tokens<=0 (unlimited) or an oversized positive budget, honoured
+		// as-is here, produced a measured 71.8KB payload on a 2-service merge
+		// — over Claude Code's own tool-output threshold, which silently
+		// truncated it to a 2KB preview + on-disk pointer and forced 4 extra
+		// Bash round-trips to recover the data. Capping the merged path to
+		// the compact default keeps the single-call win intact without ever
+		// reproducing that regression; --target-service still gets the
+		// caller's requested budget verbatim on the single-root path above.
+		budget = defaultImpactBudget
+	}
+	return jsonResult(out.ApplyBudget(budget, in.Summary))
 }
 
 // ─── trace ───────────────────────────────────────────────────────────────────
@@ -555,6 +611,7 @@ type traceInput struct {
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
+	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that trims chains then nodes to fit. direction=both with a deep depth on a busy hub node (e.g. a shared queue/exchange) can otherwise produce a result too large for your own tool-output limit to even return. Pass a negative value for unlimited detail"`
 }
 
 func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceInput) (*mcp.CallToolResult, any, error) {
@@ -589,7 +646,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		result.Nodes = filterHops(result.Nodes, in.MinVerification)
 		result.Chains = filterChains(result.Chains, in.MinVerification)
 	}
-	return jsonResult(result)
+	return jsonResult(result.ApplyBudget(effectiveBudget(in.MaxTokens)))
 }
 
 // ─── min_verification filter helpers ─────────────────────────────────────────
