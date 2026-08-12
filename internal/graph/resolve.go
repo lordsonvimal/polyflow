@@ -17,6 +17,29 @@ type TargetCandidate struct {
 	Type    string `json:"type"`
 }
 
+// ResolutionNote returns a caller-facing warning when a ResolveTarget call's
+// exactMatch return was false: root was a full-text-search guess, not a
+// confirmed exact-label match, and the query may name nothing that exists at
+// all (e.g. a misremembered function name silently resolving to its
+// containing file). Empty when exactMatch is true, so callers can attach it
+// unconditionally to a `json:"...,omitempty"` field without an extra branch.
+//
+// Exists because a fuzzy-fallback result and a real match were previously
+// indistinguishable in every tool's JSON output — both looked like an
+// ordinary successful lookup, so an agent that guessed a wrong symbol name
+// had no signal telling it to stop trusting the answer and call search or
+// resolve instead. It would proceed on the wrong root, then fall back to
+// manual grep once the trace/impact result turned out irrelevant.
+func ResolutionNote(query string, exactMatch bool) string {
+	if exactMatch {
+		return ""
+	}
+	return fmt.Sprintf(
+		"no exact match for %q — this result is the nearest full-text search hit, not a confirmed symbol. "+
+			"Call search or resolve first to verify the target's real name before trusting this answer.",
+		query)
+}
+
 // NodeSearcher is the subset of Store required by ResolveTarget.
 type NodeSearcher interface {
 	SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error)
@@ -43,8 +66,15 @@ type nodeByID interface {
 //   - candidates: every exact-label match sorted by (service, file); always non-nil;
 //     [] when unambiguous (≤1 exact-label match in the result set). When >1 match
 //     exists the list includes the chosen root so agents see the full picture.
+//   - exact: true when root came from a literal node-ID match or at least one
+//     exact case-insensitive label match. False means query matched nothing
+//     by name at all and root is a full-text-search guess (nodes[0]) — e.g. a
+//     misremembered function name silently resolving to its containing file.
+//     Callers that surface this to an agent should say so plainly: an exact
+//     miss deserves a "try search/resolve first" nudge, not a result that
+//     reads like any other successful lookup.
 //   - err: non-nil only on store error or when no node is found at all.
-func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService, targetType string) (*Node, []TargetCandidate, error) {
+func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService, targetType string) (*Node, []TargetCandidate, bool, error) {
 	// A query that is already a literal node ID (agents commonly pass one
 	// straight back from a prior search/trace/impact result — IDs are
 	// service:file:type:label:line, never equal to the bare Label a
@@ -55,17 +85,17 @@ func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService
 	// service — with no error and no target_candidates to reveal the swap.
 	if getter, ok := store.(nodeByID); ok {
 		if n, err := getter.GetNode(ctx, query); err == nil && n != nil {
-			return n, []TargetCandidate{}, nil
+			return n, []TargetCandidate{}, true, nil
 		}
 	}
 
 	// Fetch more than the usual 5 to catch all exact-label matches.
 	nodes, err := store.SearchNodes(ctx, query, 20)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if len(nodes) == 0 {
-		return nil, nil, fmt.Errorf("node not found for query: %s", query)
+		return nil, nil, false, fmt.Errorf("node not found for query: %s", query)
 	}
 
 	// Partition into exact-label matches (case-insensitive) and prefix-only.
@@ -110,6 +140,7 @@ func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService
 	// way, so this only changes which one is picked by default — it never
 	// hides the ambiguity.
 	var root *Node
+	exactMatch := len(filtered) > 0 || len(exact) > 0
 	switch {
 	case len(filtered) > 0:
 		root = preferNonTestFile(filtered)
@@ -119,7 +150,7 @@ func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService
 		root = nodes[0]
 	}
 
-	return root, candidates, nil
+	return root, candidates, exactMatch, nil
 }
 
 // preferNonTestFile returns the first node in nodes whose file does not look

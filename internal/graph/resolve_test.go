@@ -51,7 +51,7 @@ func TestResolveTarget_NoFilters(t *testing.T) {
 	// Without filters: returns nodes[0] (backward-compat) and empty candidates.
 	n := node("id1", "Login", "server", "api/session.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "Login", "", "")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "Login", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestResolveTarget_ServiceFilter(t *testing.T) {
 	n2 := node("srv-login", "Login", "server", "api/session.go", "function")
 	// SearchNodes ranks ui first (simulating the ambiguous case).
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "Login", "server", "")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "Login", "server", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestResolveTarget_TypeFilter(t *testing.T) {
 	n1 := node("comp", "Login", "ui", "ui/src/Login.tsx", "component")
 	n2 := node("fn", "Login", "server", "api/session.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "Login", "", "function")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "Login", "", "function")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestResolveTarget_BothFilters(t *testing.T) {
 	n2 := node("fn", "server", "server", "api/session.go", "function")
 	n3 := node("fn2", "Login", "server", "api/other.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2, n3}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "Login", "server", "function")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "Login", "server", "function")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestResolveTarget_Unambiguous(t *testing.T) {
 	// Single exact-label match → candidates empty.
 	n := node("only", "UniqFunc", "svc", "pkg/foo.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "UniqFunc", "", "")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "UniqFunc", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestResolveTarget_Ambiguity(t *testing.T) {
 	n2 := node("a-pkg2", "Foo", "alpha", "b/foo.go", "function")
 	n3 := node("a-pkg1", "Foo", "alpha", "a/foo.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2, n3}}
-	_, cands, err := graph.ResolveTarget(context.Background(), s, "Foo", "", "")
+	_, cands, _, err := graph.ResolveTarget(context.Background(), s, "Foo", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestResolveTarget_PrefersNonTestFileOnTie(t *testing.T) {
 	mock := node("mock", "renderFileIcon", "ui", "src/Icon.test.jsx", "function")
 	prod := node("prod", "renderFileIcon", "ui", "src/Icon.jsx", "function")
 	s := &stubSearcher{nodes: []*graph.Node{mock, prod}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "renderFileIcon", "", "")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "renderFileIcon", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestResolveTarget_AllTestFileMatchesFallsBackToFirst(t *testing.T) {
 	n1 := node("t1", "helper", "svc", "a_test.go", "function")
 	n2 := node("t2", "helper", "svc", "b_test.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
-	root, _, err := graph.ResolveTarget(context.Background(), s, "helper", "", "")
+	root, _, _, err := graph.ResolveTarget(context.Background(), s, "helper", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -195,10 +195,12 @@ func TestResolveTarget_AllTestFileMatchesFallsBackToFirst(t *testing.T) {
 }
 
 func TestResolveTarget_PrefixMatchFallback(t *testing.T) {
-	// No exact-label match (prefix-only) → root = nodes[0], candidates empty.
+	// No exact-label match (prefix-only) → root = nodes[0], candidates empty,
+	// and exactMatch = false: this is the fuzzy-guess path a caller must be
+	// able to tell apart from a confirmed hit (see TestResolveTarget_ExactMatchFlag).
 	n := node("id1", "LoginPage", "ui", "pages/login.go", "component")
 	s := &stubSearcher{nodes: []*graph.Node{n}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "Login", "", "")
+	root, cands, exactMatch, err := graph.ResolveTarget(context.Background(), s, "Login", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -208,11 +210,72 @@ func TestResolveTarget_PrefixMatchFallback(t *testing.T) {
 	if len(cands) != 0 {
 		t.Fatalf("want 0 candidates, got %d", len(cands))
 	}
+	if exactMatch {
+		t.Fatal("want exactMatch=false for a prefix-only match")
+	}
+}
+
+// TestResolveTarget_ExactMatchFlag pins the exactMatch return across the
+// three cases that must be told apart: a real exact-label hit, a fuzzy
+// fallback with nothing named the query at all, and the ID short-circuit.
+// Added after a live bench trial guessed a nonexistent function name
+// ("PublishDockerBuild") and silently got back the containing file — with no
+// signal distinguishing that from a genuine match, the agent trusted the
+// wrong result for several tool calls before falling back to manual grep.
+func TestResolveTarget_ExactMatchFlag(t *testing.T) {
+	t.Run("exact label match", func(t *testing.T) {
+		n := node("id1", "PublishBuildJob", "svc", "publishers.go", "function")
+		s := &stubSearcher{nodes: []*graph.Node{n}}
+		_, _, exactMatch, err := graph.ResolveTarget(context.Background(), s, "PublishBuildJob", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !exactMatch {
+			t.Fatal("want exactMatch=true for a real exact-label hit")
+		}
+		if note := graph.ResolutionNote("PublishBuildJob", exactMatch); note != "" {
+			t.Fatalf("want no resolution note on an exact match, got %q", note)
+		}
+	})
+
+	t.Run("fuzzy fallback, nothing named the query", func(t *testing.T) {
+		n := node("id1", "publishBuildJobToAMQP", "svc", "docker_build_service.go", "function")
+		s := &stubSearcher{nodes: []*graph.Node{n}} // ranks first as free text, but not an exact label match
+		root, _, exactMatch, err := graph.ResolveTarget(context.Background(), s, "PublishDockerBuild", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if root.ID != "id1" {
+			t.Fatalf("want the fuzzy fallback to still return the top FTS hit, got %s", root.ID)
+		}
+		if exactMatch {
+			t.Fatal("want exactMatch=false: nothing in the index is labeled PublishDockerBuild")
+		}
+		note := graph.ResolutionNote("PublishDockerBuild", exactMatch)
+		if note == "" {
+			t.Fatal("want a non-empty resolution note when exactMatch=false")
+		}
+	})
+
+	t.Run("literal ID short-circuit counts as exact", func(t *testing.T) {
+		wanted := node("svc:file.go:function:Foo:1", "Foo", "svc", "file.go", "function")
+		s := &stubSearcherWithGetNode{
+			stubSearcher: stubSearcher{nodes: []*graph.Node{}},
+			byID:         map[string]*graph.Node{wanted.ID: wanted},
+		}
+		_, _, exactMatch, err := graph.ResolveTarget(context.Background(), s, wanted.ID, "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !exactMatch {
+			t.Fatal("want exactMatch=true for a literal node-ID hit")
+		}
+	})
 }
 
 func TestResolveTarget_NotFound(t *testing.T) {
 	s := &stubSearcher{nodes: nil}
-	_, _, err := graph.ResolveTarget(context.Background(), s, "Missing", "", "")
+	_, _, _, err := graph.ResolveTarget(context.Background(), s, "Missing", "", "")
 	if err == nil {
 		t.Fatal("want error for missing node")
 	}
@@ -220,7 +283,7 @@ func TestResolveTarget_NotFound(t *testing.T) {
 
 func TestResolveTarget_StoreError(t *testing.T) {
 	s := &stubSearcher{err: fmt.Errorf("db fail")}
-	_, _, err := graph.ResolveTarget(context.Background(), s, "Any", "", "")
+	_, _, _, err := graph.ResolveTarget(context.Background(), s, "Any", "", "")
 	if err == nil {
 		t.Fatal("want error on store failure")
 	}
@@ -240,7 +303,7 @@ func TestResolveTarget_ExactIDShortCircuit(t *testing.T) {
 		stubSearcher: stubSearcher{nodes: []*graph.Node{wrong}}, // what label search would (wrongly) rank first
 		byID:         map[string]*graph.Node{wanted.ID: wanted},
 	}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, wanted.ID, "", "")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, wanted.ID, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +324,7 @@ func TestResolveTarget_IDMissFallsBackToLabelSearch(t *testing.T) {
 		stubSearcher: stubSearcher{nodes: []*graph.Node{n}},
 		byID:         map[string]*graph.Node{}, // GetNode always misses
 	}
-	root, _, err := graph.ResolveTarget(context.Background(), s, "svc:file.go:function:Login:10", "", "")
+	root, _, _, err := graph.ResolveTarget(context.Background(), s, "svc:file.go:function:Login:10", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,11 +342,11 @@ func TestResolveTarget_Determinism(t *testing.T) {
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
 	ctx := context.Background()
 
-	_, c1, err := graph.ResolveTarget(ctx, s, "Login", "", "")
+	_, c1, _, err := graph.ResolveTarget(ctx, s, "Login", "", "")
 	if err != nil {
 		t.Fatalf("first call error: %v", err)
 	}
-	_, c2, err := graph.ResolveTarget(ctx, s, "Login", "", "")
+	_, c2, _, err := graph.ResolveTarget(ctx, s, "Login", "", "")
 	if err != nil {
 		t.Fatalf("second call error: %v", err)
 	}
@@ -302,7 +365,7 @@ func TestResolveTarget_BackCompat(t *testing.T) {
 	n1 := node("first", "Foo", "svc", "a.go", "function")
 	n2 := node("second", "FooBar", "svc", "b.go", "function")
 	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
-	root, cands, err := graph.ResolveTarget(context.Background(), s, "Foo", "", "")
+	root, cands, _, err := graph.ResolveTarget(context.Background(), s, "Foo", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -330,7 +393,7 @@ func TestResolveTarget_FanOut(t *testing.T) {
 		))
 	}
 	s := &stubSearcher{nodes: nodes}
-	_, cands, err := graph.ResolveTarget(context.Background(), s, "Save", "", "")
+	_, cands, _, err := graph.ResolveTarget(context.Background(), s, "Save", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

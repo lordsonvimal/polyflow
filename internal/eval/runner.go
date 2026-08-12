@@ -221,7 +221,7 @@ func runCase(ctx context.Context, store *graph.SQLiteStore, idx *graph.Adjacency
 	var returned []string
 	switch c.Kind {
 	case "node":
-		root, candidates, err := graph.ResolveTarget(ctx, store, c.Target, c.Service, c.NodeType)
+		root, candidates, _, err := graph.ResolveTarget(ctx, store, c.Target, c.Service, c.NodeType)
 		if err != nil {
 			return CaseResult{}, fmt.Errorf("node not found for target %q: %w", c.Target, err)
 		}

@@ -304,7 +304,10 @@ func effectiveBudget(maxTokens int) int {
 
 // resolveNode finds the best node match for a search query with optional
 // pre-filters, mirroring the CLI's target resolution (graph.ResolveTarget).
-func resolveNode(ctx context.Context, store Store, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, error) {
+// The bool return is exactMatch — false means query matched nothing by name
+// and the returned node is a full-text-search guess; see
+// graph.ResolutionNote for the caller-facing warning built from it.
+func resolveNode(ctx context.Context, store Store, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, bool, error) {
 	return graph.ResolveTarget(ctx, store, query, targetService, targetType)
 }
 
@@ -335,7 +338,7 @@ func resolveAllServiceRoots(ctx context.Context, store Store, query, targetType,
 			continue
 		}
 		seenService[c.Service] = true
-		r, _, err := resolveNode(ctx, store, query, c.Service, targetType)
+		r, _, _, err := resolveNode(ctx, store, query, c.Service, targetType)
 		if err == nil && r != nil {
 			roots = append(roots, r)
 		}
@@ -475,13 +478,14 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 	}
 	depth := effectiveDepth(in.Depth, 5)
 
-	root, candidates, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter)
 	result.TargetCandidates = candidates
+	result.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
@@ -557,7 +561,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		return jsonResult(out)
 	}
 
-	root, candidates, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -577,6 +581,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		out = impact.Build(idx, root, opts)
 	}
 	out.TargetCandidates = candidates
+	out.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	out.AttachUnresolved(unresolved)
 	if in.MinVerification != "" && in.MinVerification != "any" {
@@ -626,7 +631,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 
 	store, idx, searcher := s.snapshot()
 	_ = searcher
-	root, candidates, err := resolveNode(ctx, store, in.Root, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Root, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -636,6 +641,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}
 	result.TargetCandidates = candidates
+	result.ResolutionNote = graph.ResolutionNote(in.Root, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {

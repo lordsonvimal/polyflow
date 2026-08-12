@@ -69,7 +69,7 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 	}
 	store, idx, searcher := s.snapshot()
 
-	root, targetCandidates, err := resolveNode(ctx, store, in.Query, in.TargetService, in.TargetType)
+	root, targetCandidates, exactMatch, err := resolveNode(ctx, store, in.Query, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,7 +102,10 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 		Flows:      collapseFlows(idx, flowPaths, investigateMaxFlows),
 		Unresolved: ctxRes.Unresolved,
 	}
-	if len(targetCandidates) > 0 {
+	switch {
+	case !exactMatch:
+		out.Note = graph.ResolutionNote(in.Query, exactMatch)
+	case len(targetCandidates) > 0:
 		out.Note = "ambiguous match: re-call with target_service/target_type to pin the intended node (see target_candidates)"
 	}
 	if searcher != nil {

@@ -40,6 +40,11 @@ type Result struct {
 	// should re-query with target_service/--target-service when non-empty.
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 
+	// ResolutionNote is set when the root came from a full-text-search guess
+	// rather than a confirmed exact-label match — see graph.ResolutionNote.
+	// Empty (omitted) on an ordinary exact resolution.
+	ResolutionNote string `json:"resolution_note,omitempty"`
+
 	// Budget records the token-budgeting decision when --max-tokens was set
 	// and the detail shape was emitted.
 	Budget *budget.Info `json:"budget,omitempty"`

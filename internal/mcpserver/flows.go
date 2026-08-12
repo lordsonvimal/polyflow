@@ -55,12 +55,15 @@ type flowHop struct {
 // additively carrying TargetCandidates/Truncated/Budget for parity with the
 // other query tools' disambiguation and budgeting contracts.
 type flowsOutput struct {
-	Flows            [][]flowHop            `json:"flows"`
-	Coverage         yield.CoverageBlock    `json:"coverage"`
-	Unresolved       []graph.UnresolvedRef  `json:"unresolved"`
-	Truncated        bool                   `json:"truncated,omitempty"`
+	Flows            [][]flowHop             `json:"flows"`
+	Coverage         yield.CoverageBlock     `json:"coverage"`
+	Unresolved       []graph.UnresolvedRef   `json:"unresolved"`
+	Truncated        bool                    `json:"truncated,omitempty"`
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
-	Budget           *budget.Info           `json:"budget,omitempty"`
+	// ResolutionNote is set when Target came from a full-text-search guess
+	// rather than a confirmed exact-label match — see graph.ResolutionNote.
+	ResolutionNote string       `json:"resolution_note,omitempty"`
+	Budget         *budget.Info `json:"budget,omitempty"`
 }
 
 // flowsSummary is the token-budgeted rollup emitted when the full flow set
@@ -74,6 +77,7 @@ type flowsSummary struct {
 	Unresolved       []graph.UnresolvedRef   `json:"unresolved"`
 	Truncated        bool                    `json:"truncated,omitempty"`
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	ResolutionNote   string                  `json:"resolution_note,omitempty"`
 	Budget           *budget.Info            `json:"budget,omitempty"`
 }
 
@@ -89,7 +93,7 @@ func (s *Server) flows(ctx context.Context, req *mcp.CallToolRequest, in flowsIn
 	maxHops := effectiveDepth(in.MaxHops, defaultFlowMaxHops)
 
 	store, idx, searcher := s.snapshot()
-	root, candidates, err := resolveFlowTarget(ctx, store, idx, searcher, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveFlowTarget(ctx, store, idx, searcher, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -141,6 +145,7 @@ func (s *Server) flows(ctx context.Context, req *mcp.CallToolRequest, in flowsIn
 		Unresolved:       unresolved,
 		Truncated:        truncated,
 		TargetCandidates: candidates,
+		ResolutionNote:   graph.ResolutionNote(in.Target, exactMatch),
 	}
 	return jsonResult(applyFlowsBudget(out, effectiveBudget(in.MaxTokens)))
 }
@@ -165,6 +170,7 @@ func applyFlowsBudget(out *flowsOutput, maxTokens int) any {
 		Unresolved:       out.Unresolved,
 		Truncated:        out.Truncated,
 		TargetCandidates: out.TargetCandidates,
+		ResolutionNote:   out.ResolutionNote,
 		Budget:           &budget.Info{MaxTokens: maxTokens, Level: budget.LevelSummary},
 	}
 	s.Budget.AppendNote("full flow set exceeds the token budget; showing a sample plus the coverage tally")
@@ -388,9 +394,17 @@ var entrypointNodeTypes = map[graph.NodeType]bool{
 // that file, by line) → natural-language search (hybrid Searcher when wired)
 // → the same FTS/ResolveTarget fallback context/impact/trace use, so
 // target_candidates disambiguation is identical across tools.
-func resolveFlowTarget(ctx context.Context, store Store, idx *graph.AdjacencyIndex, searcher *semantic.Searcher, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, error) {
+//
+// The bool return is exactMatch: true for every branch above except the
+// final ResolveTarget fallback, where it passes through that call's own
+// exactMatch — the only branch capable of the "matched nothing, silently
+// substituted a full-text-search guess" failure graph.ResolutionNote warns
+// about. The other branches (literal ID, file path, semantic search hit) are
+// each an intentional, confident resolution strategy in their own right, not
+// a last-resort guess.
+func resolveFlowTarget(ctx context.Context, store Store, idx *graph.AdjacencyIndex, searcher *semantic.Searcher, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, bool, error) {
 	if n, ok := idx.Nodes[query]; ok {
-		return n, []graph.TargetCandidate{}, nil
+		return n, []graph.TargetCandidate{}, true, nil
 	}
 
 	if httpMethodRe.MatchString(query) {
@@ -403,7 +417,7 @@ func resolveFlowTarget(ctx context.Context, store Store, idx *graph.AdjacencyInd
 
 	if looksLikeFilePath(query) {
 		if eps := entrypointsInFile(idx, query, targetService); len(eps) > 0 {
-			return eps[0], []graph.TargetCandidate{}, nil
+			return eps[0], []graph.TargetCandidate{}, true, nil
 		}
 	}
 
@@ -416,10 +430,10 @@ func resolveFlowTarget(ctx context.Context, store Store, idx *graph.AdjacencyInd
 			}
 			if len(hits) > 0 {
 				if n := idx.Nodes[hits[0].Entity.NodeID]; n != nil {
-					return n, []graph.TargetCandidate{}, nil
+					return n, []graph.TargetCandidate{}, true, nil
 				}
 				if n := idx.Nodes[hits[0].Entity.ID]; n != nil {
-					return n, []graph.TargetCandidate{}, nil
+					return n, []graph.TargetCandidate{}, true, nil
 				}
 			}
 		}
