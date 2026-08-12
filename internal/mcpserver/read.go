@@ -30,6 +30,10 @@ type readOutput struct {
 	SpanKnown        bool                    `json:"span_known"`
 	Truncated        bool                    `json:"truncated,omitempty"`
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates,omitempty"`
+	// ResolutionNote is set when Target came from a full-text-search guess
+	// rather than a confirmed exact-label match — see graph.ResolutionNote.
+	// The source below may not be the symbol the caller meant.
+	ResolutionNote string `json:"resolution_note,omitempty"`
 }
 
 // read returns the EXACT source span of a symbol by node id (or a resolved
@@ -49,14 +53,16 @@ func (s *Server) read(ctx context.Context, req *mcp.CallToolRequest, in readInpu
 	// Direct id hit first (the common case: search/hierarchy handed us an id);
 	// otherwise fall back to the same name-resolution the other tools use.
 	n := idx.Nodes[in.Target]
+	resolutionNote := ""
 	if n == nil {
-		resolved, candidates, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
+		resolved, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
 		if err != nil {
 			return nil, nil, err
 		}
 		if resolved == nil {
 			return jsonResult(readOutput{TargetCandidates: candidates})
 		}
+		resolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 		n = resolved
 		// Prefer the indexed copy (carries Meta) when the resolver returned a
 		// store row.
@@ -86,16 +92,17 @@ func (s *Server) read(ctx context.Context, req *mcp.CallToolRequest, in readInpu
 	}
 
 	return jsonResult(readOutput{
-		ID:        n.ID,
-		Type:      string(n.Type),
-		Label:     n.Label,
-		Service:   n.Service,
-		File:      n.File,
-		StartLine: n.Line,
-		EndLine:   resolvedEnd,
-		Source:    src,
-		SpanKnown: spanKnown,
-		Truncated: truncated,
+		ID:             n.ID,
+		Type:           string(n.Type),
+		Label:          n.Label,
+		Service:        n.Service,
+		File:           n.File,
+		StartLine:      n.Line,
+		EndLine:        resolvedEnd,
+		Source:         src,
+		SpanKnown:      spanKnown,
+		Truncated:      truncated,
+		ResolutionNote: resolutionNote,
 	})
 }
 

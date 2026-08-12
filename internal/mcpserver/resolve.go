@@ -41,6 +41,11 @@ type resolveOutput struct {
 	Root             *graph.Node             `json:"root"`
 	Candidates       []resolveCandidate      `json:"candidates"`
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	// ResolutionNote is set when Root came from a full-text-search guess
+	// rather than a confirmed exact-label match — see graph.ResolutionNote.
+	// Candidates below is what to look at instead: it lists every fuzzy hit,
+	// not just Root.
+	ResolutionNote string `json:"resolution_note,omitempty"`
 }
 
 // resolve ranks candidate nodes for a query, reusing the hybrid Searcher when
@@ -58,7 +63,7 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest, in resol
 
 	store, idx, searcher := s.snapshot()
 
-	root, targetCandidates, err := resolveNode(ctx, store, in.Query, in.TargetService, in.TargetType)
+	root, targetCandidates, exactMatch, err := resolveNode(ctx, store, in.Query, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -112,5 +117,10 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest, in resol
 		candidates = []resolveCandidate{}
 	}
 
-	return jsonResult(resolveOutput{Root: root, Candidates: candidates, TargetCandidates: targetCandidates})
+	return jsonResult(resolveOutput{
+		Root:             root,
+		Candidates:       candidates,
+		TargetCandidates: targetCandidates,
+		ResolutionNote:   graph.ResolutionNote(in.Query, exactMatch),
+	})
 }
