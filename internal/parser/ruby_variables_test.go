@@ -302,3 +302,331 @@ end
 		}
 	}
 }
+
+// Tier BC: bare, zero-arg, receiver-less, paren-less identifiers are
+// syntactically identical to a local-variable read in tree-sitter-ruby.
+
+func TestRubyVariables_BareIdentifierMemoizationCallResolves(t *testing.T) {
+	// The exact live shape from the E.2 orion recall miss:
+	// `@category = category` — RHS is a bare call to a private helper, not a
+	// local-variable read (there is no local named `category` in `destroy`).
+	src := `class CategoriesController
+  def destroy
+    @category = category
+    @category.destroy
+  end
+
+  private
+
+  def category
+    @_category ||= Category.find_by(id: params[:id])
+  end
+end
+`
+	_, edges, unresolved := extractRubyVariables("app/controllers/categories_controller.rb", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:destroy", "function:category") == nil {
+		t.Errorf("missing calls edge destroy -> category; edges: %+v", edges)
+	}
+	for _, u := range unresolved {
+		if u.Name == "category" {
+			t.Errorf("resolved bare-identifier call must not also be ledgered: %+v", u)
+		}
+	}
+}
+
+func TestRubyVariables_BareIdentifierStatementCallResolves(t *testing.T) {
+	// A bare statement call (no assignment at all) — as idiomatic as the
+	// memoization shape, e.g. a guard/callback: `authorize!`, `validate`.
+	src := `class UserManager
+  def create
+    validate
+  end
+
+  def validate
+    true
+  end
+end
+`
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
+		t.Errorf("missing calls edge create -> bare statement call validate; edges: %+v", edges)
+	}
+}
+
+func TestRubyVariables_LocalVariableReadNotAttributedAsCall(t *testing.T) {
+	// `x` is assigned locally, then read bare later in the same method. Even
+	// though a same-named method `x` exists elsewhere in the file, the local
+	// read must never be misattributed as a call to it (gate #3).
+	src := `class Calculator
+  def compute
+    x = 1
+    foo(x)
+    x
+  end
+
+  def x
+    99
+  end
+end
+`
+	nodes, edges, unresolved := extractRubyVariables("app/services/calculator.rb", "shop", []byte(src))
+
+	var xMethod *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "x" && nodes[i].Type == graph.NodeTypeFunction {
+			xMethod = &nodes[i]
+		}
+	}
+	if xMethod == nil {
+		t.Fatalf("expected Calculator#x method node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == xMethod.ID {
+			t.Errorf("local-variable read must never be attributed as a call: %+v", e)
+		}
+	}
+	for _, u := range unresolved {
+		if u.Name == "x" {
+			t.Errorf("a local-variable read must not be ledgered either: %+v", u)
+		}
+	}
+}
+
+func TestRubyVariables_LocalAssignedAfterUseStillNotACall(t *testing.T) {
+	// Conservative-in-the-false-negative-direction: `y` is assigned AFTER its
+	// bare read in source order. Real Ruby would treat the early read as
+	// calling method `y` (lexical-position semantics), but this pass
+	// deliberately treats a name as local for the WHOLE method if assigned
+	// anywhere in it — so this must NOT produce a calls edge (a safe miss,
+	// not a false positive).
+	src := `class Widget
+  def run
+    foo(y)
+    y = 2
+  end
+
+  def y
+    99
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/services/widget.rb", "shop", []byte(src))
+
+	var yMethod *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "y" && nodes[i].Type == graph.NodeTypeFunction {
+			yMethod = &nodes[i]
+		}
+	}
+	if yMethod == nil {
+		t.Fatalf("expected Widget#y method node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == yMethod.ID {
+			t.Errorf("name assigned later in the method must still be treated as local: %+v", e)
+		}
+	}
+}
+
+func TestRubyVariables_ParameterNameNotAttributedAsCall(t *testing.T) {
+	// Every parameter shape (positional, optional, splat, keyword,
+	// hash-splat, block) must be excluded from bare-call resolution, but a
+	// default-value expression on an optional/keyword parameter is itself a
+	// real call site and must still resolve.
+	src := `class Widget
+  def run(a, b = fallback, *c, d:, e: fallback, **f, &g)
+    a
+  end
+
+  def fallback
+    1
+  end
+end
+`
+	nodes, edges, unresolved := extractRubyVariables("app/services/widget.rb", "shop", []byte(src))
+
+	var fallback *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "fallback" && nodes[i].Type == graph.NodeTypeFunction {
+			fallback = &nodes[i]
+		}
+	}
+	if fallback == nil {
+		t.Fatalf("expected Widget#fallback method node; nodes: %+v", nodes)
+	}
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:run", "function:fallback") == nil {
+		t.Errorf("missing calls edge run -> fallback (default-value expression); edges: %+v", edges)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.From == "shop:app/services/widget.rb:function:run:2" && e.To != fallback.ID {
+			t.Errorf("a parameter name must never be attributed as a call: %+v", e)
+		}
+	}
+	for _, u := range unresolved {
+		switch u.Name {
+		case "a", "b", "c", "d", "e", "f", "g":
+			t.Errorf("a parameter name must not be ledgered as an unresolved call either: %+v", u)
+		}
+	}
+}
+
+func TestRubyVariables_ForLoopVariableNotAttributedAsCall(t *testing.T) {
+	src := `class Report
+  def run
+    for row in rows
+      foo(row)
+    end
+  end
+
+  def row
+    99
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+
+	var rowMethod *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "row" && nodes[i].Type == graph.NodeTypeFunction {
+			rowMethod = &nodes[i]
+		}
+	}
+	if rowMethod == nil {
+		t.Fatalf("expected Report#row method node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == rowMethod.ID {
+			t.Errorf("a for-loop variable must never be attributed as a call: %+v", e)
+		}
+	}
+}
+
+func TestRubyVariables_PatternMatchBindingNotAttributedAsCall(t *testing.T) {
+	src := `class Report
+  def run
+    case pair
+    in [a, b]
+      foo(a, b)
+    end
+  end
+
+  def a
+    99
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+
+	var aMethod *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "a" && nodes[i].Type == graph.NodeTypeFunction {
+			aMethod = &nodes[i]
+		}
+	}
+	if aMethod == nil {
+		t.Fatalf("expected Report#a method node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == aMethod.ID {
+			t.Errorf("a case/in pattern binding must never be attributed as a call: %+v", e)
+		}
+	}
+}
+
+func TestRubyVariables_RescueVariableNotAttributedAsCall(t *testing.T) {
+	src := `class Report
+  def run
+    begin
+      risky
+    rescue StandardError => e
+      foo(e)
+    end
+  end
+
+  def e
+    99
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+
+	var eMethod *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "e" && nodes[i].Type == graph.NodeTypeFunction {
+			eMethod = &nodes[i]
+		}
+	}
+	if eMethod == nil {
+		t.Fatalf("expected Report#e method node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == eMethod.ID {
+			t.Errorf("a rescue exception variable must never be attributed as a call: %+v", e)
+		}
+	}
+}
+
+func TestRubyVariables_MultiAssignTargetsNotAttributedAsCalls(t *testing.T) {
+	// `y, z = pair` and a splat target `a, *b = arr` — multi-assign targets
+	// must never be misread as calls even when same-named methods exist.
+	src := `class Report
+  def run
+    y, z = pair
+    a, *b = arr
+    foo(y, z, a, b)
+  end
+
+  def y
+    1
+  end
+
+  def b
+    2
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+
+	for _, name := range []string{"y", "b"} {
+		var m *graph.Node
+		for i := range nodes {
+			if nodes[i].Label == name && nodes[i].Type == graph.NodeTypeFunction {
+				m = &nodes[i]
+			}
+		}
+		if m == nil {
+			t.Fatalf("expected Report#%s method node; nodes: %+v", name, nodes)
+		}
+		for _, e := range edges {
+			if e.Type == graph.EdgeTypeCalls && e.To == m.ID {
+				t.Errorf("multi-assign target %q must never be attributed as a call: %+v", name, e)
+			}
+		}
+	}
+}
+
+func TestRubyVariables_UnresolvedBareIdentifierNotLedgered(t *testing.T) {
+	// Ledger policy: an unresolved bare identifier is NOT reported, unlike an
+	// unresolved case "call" (TestRubyVariables_UnresolvableBareCallGoesToLedger)
+	// — the parser has no guarantee this was ever a call at all.
+	src := `class Report
+  def run
+    mystery_thing
+  end
+end
+`
+	_, edges, unresolved := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls {
+			t.Errorf("no method named mystery_thing exists anywhere; must not resolve: %+v", e)
+		}
+	}
+	for _, u := range unresolved {
+		if u.Name == "mystery_thing" {
+			t.Errorf("unresolved bare identifiers must not be ledgered: %+v", u)
+		}
+	}
+}

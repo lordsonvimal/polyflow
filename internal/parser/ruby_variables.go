@@ -35,12 +35,16 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 		edgeSeen:           map[string]bool{},
 		methodsByClassName: map[string]string{},
 		methodsByName:      map[string][]string{},
+		locals:             map[string]map[string]bool{},
 	}
-	// Pre-collect class names for same-file constant resolution, and method
+	// Pre-collect class names for same-file constant resolution, method
 	// definitions (class-scoped and flat) so calls to a method defined later
-	// in the file still resolve (forward references).
+	// in the file still resolve (forward references), and local-variable
+	// names per method so a bare identifier read of a local isn't
+	// misattributed as a call to a same-named method (Tier BC).
 	ex.preCollectRubyClasses(tree.RootNode())
 	ex.preCollectRubyMethods(tree.RootNode(), "")
+	ex.preCollectRubyLocals(tree.RootNode(), "")
 	ex.walk(tree.RootNode(), "", "", "")
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
@@ -62,6 +66,12 @@ type rubyExtractor struct {
 	// candidate, so an ambiguous name never misattributes a call).
 	methodsByClassName map[string]string
 	methodsByName      map[string][]string
+
+	// locals maps methodID → set of names that are local variables (assigned,
+	// a parameter, or bound by a for/pattern-match/rescue) anywhere in that
+	// method. A bare identifier read whose name is in this set is a variable
+	// read, never a call — see resolveBareCall / preCollectRubyLocals.
+	locals map[string]map[string]bool
 
 	nodes      []graph.Node
 	edges      []graph.Edge
@@ -159,6 +169,177 @@ func (ex *rubyExtractor) preCollectRubyMethods(node *sitter.Node, class string) 
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		ex.preCollectRubyMethods(node.NamedChild(i), class)
+	}
+}
+
+// addLocal records name as a local variable of methodID. A no-op for
+// methodID == "" (top-level/class-body code, where bare identifiers are
+// never attributed as calls either — see walk's case "identifier").
+func (ex *rubyExtractor) addLocal(methodID, name string) {
+	if methodID == "" {
+		return
+	}
+	if ex.locals[methodID] == nil {
+		ex.locals[methodID] = map[string]bool{}
+	}
+	ex.locals[methodID][name] = true
+}
+
+// collectParamNames records every parameter name in a method_parameters or
+// block_parameters list. A plain positional param is a bare `identifier`
+// child; every other shape (optional/splat/keyword/hash-splat/block param)
+// wraps its name in a `name`-field child — confirmed against the grammar,
+// see docs/ruby-bare-identifier-call-plan.md. A default-value expression on
+// an optional/keyword parameter is deliberately NOT excluded here (only the
+// `name` field is), so `def foo(x = default_val)` still lets `default_val`
+// resolve as a bare call.
+func (ex *rubyExtractor) collectParamNames(params *sitter.Node, methodID string) {
+	for i := 0; i < int(params.NamedChildCount()); i++ {
+		c := params.NamedChild(i)
+		if c.Type() == "identifier" {
+			ex.addLocal(methodID, c.Content(ex.src))
+			continue
+		}
+		if nameNode := c.ChildByFieldName("name"); nameNode != nil && nameNode.Type() == "identifier" {
+			ex.addLocal(methodID, nameNode.Content(ex.src))
+		}
+	}
+}
+
+// collectAssignTargets records the plain-identifier target(s) of an
+// assignment's left-hand side: a single `identifier`, or a multi-assign
+// `left_assignment_list` (possibly containing a `rest_assignment` for a
+// splat target, e.g. `a, *b = arr`) — recursed into. Non-identifier targets
+// (instance/class variable, constant) aren't ambiguous with a call and are
+// left alone.
+func (ex *rubyExtractor) collectAssignTargets(node *sitter.Node, methodID string) {
+	switch node.Type() {
+	case "identifier":
+		ex.addLocal(methodID, node.Content(ex.src))
+	case "left_assignment_list", "rest_assignment":
+		for i := 0; i < int(node.NamedChildCount()); i++ {
+			ex.collectAssignTargets(node.NamedChild(i), methodID)
+		}
+	}
+}
+
+// collectPatternIdentifiers records every identifier found anywhere inside a
+// pattern-match (`case/in`) pattern or a `rescue => e` exception variable.
+// Both bind local names but nest arbitrarily (array/hash/find patterns, an
+// `as_pattern`'s `=> name`), so this walks the whole subtree rather than
+// enumerating shapes — any identifier reachable from a pattern node is a
+// binding, never a call.
+func (ex *rubyExtractor) collectPatternIdentifiers(node *sitter.Node, methodID string) {
+	if node.Type() == "identifier" {
+		ex.addLocal(methodID, node.Content(ex.src))
+		return
+	}
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		ex.collectPatternIdentifiers(node.NamedChild(i), methodID)
+	}
+}
+
+// preCollectRubyLocals walks the whole tree recording, per method, every
+// name that is a local variable somewhere in that method — conservative in
+// the false-negative direction: a name assigned/bound anywhere in the method
+// (even after a later bare-identifier use) shadows a same-named method for
+// the entire method body, matching preCollectRubyMethods's forward-reference
+// pre-pass shape. Blocks (do...end, {}) are NOT scope boundaries: Ruby
+// blocks read/write the enclosing method's locals, so methodID is carried
+// through unchanged into block_parameters. `for`, `case/in`, and
+// `rescue => e` bindings are covered explicitly (see Risks in the plan doc)
+// since they are also local-variable sites a bare later use must not
+// misattribute as a call.
+func (ex *rubyExtractor) preCollectRubyLocals(node *sitter.Node, methodID string) {
+	switch node.Type() {
+	case "method", "singleton_method":
+		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+			methodID = ex.methodNodeID(nameNode.Content(ex.src), rbLine(node))
+		}
+		if params := node.ChildByFieldName("parameters"); params != nil {
+			ex.collectParamNames(params, methodID)
+		}
+	case "assignment", "operator_assignment":
+		if methodID != "" {
+			if left := node.ChildByFieldName("left"); left != nil {
+				ex.collectAssignTargets(left, methodID)
+			}
+		}
+	case "block_parameters":
+		ex.collectParamNames(node, methodID)
+	case "for":
+		if pattern := node.ChildByFieldName("pattern"); pattern != nil {
+			ex.collectAssignTargets(pattern, methodID)
+		}
+	case "in_clause":
+		if pattern := node.ChildByFieldName("pattern"); pattern != nil {
+			ex.collectPatternIdentifiers(pattern, methodID)
+		}
+	case "rescue":
+		if v := node.ChildByFieldName("variable"); v != nil {
+			ex.collectPatternIdentifiers(v, methodID)
+		}
+	}
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		ex.preCollectRubyLocals(node.NamedChild(i), methodID)
+	}
+}
+
+// isRubyBareCallExcluded reports whether an `identifier` node is structurally
+// something other than a bare/implicit-self call read: a definition name, a
+// parameter name, a `call` node's method/receiver field (already handled by
+// case "call"), or an assignment target. See Recognition in
+// docs/ruby-bare-identifier-call-plan.md for the grammar verification behind
+// each branch.
+func isRubyBareCallExcluded(node *sitter.Node) bool {
+	parent := node.Parent()
+	if parent == nil {
+		return true
+	}
+	switch parent.Type() {
+	case "method", "singleton_method":
+		return parent.ChildByFieldName("name") == node
+	case "method_parameters", "block_parameters":
+		return true
+	case "optional_parameter", "splat_parameter", "keyword_parameter", "hash_splat_parameter", "block_parameter":
+		return parent.ChildByFieldName("name") == node
+	case "call":
+		return parent.ChildByFieldName("method") == node || parent.ChildByFieldName("receiver") == node
+	case "assignment", "operator_assignment":
+		return parent.ChildByFieldName("left") == node
+	case "left_assignment_list":
+		return true
+	}
+	return false
+}
+
+// resolveBareCall is the shared bare/implicit-self call resolution logic
+// used by both case "call" (a `helper(x)`/`self.foo` shape, which already
+// has a receiver-derived lookupClass) and case "identifier" (a fully bare
+// `category` shape, which always looks up against the enclosing class since
+// there is no receiver by construction). ledgerUnresolved is false for the
+// identifier path: see Ledger policy in the plan doc — an unresolved bare
+// identifier has no guarantee it was ever a call at all (it may be a local
+// this pass's conservative scope tracking missed), unlike an unresolved
+// case "call", which the parser structurally knows is a real call.
+func (ex *rubyExtractor) resolveBareCall(mname, lookupClass, class, methodID string, srcLine int, ledgerUnresolved bool) {
+	targetID := ""
+	if lookupClass != "" {
+		targetID = ex.methodsByClassName[lookupClass+"\x00"+mname]
+	}
+	selfScoped := lookupClass == class
+	if targetID == "" && selfScoped {
+		if ids := ex.methodsByName[mname]; len(ids) == 1 {
+			targetID = ids[0]
+		}
+	}
+	if targetID != "" {
+		ex.addEdge(graph.EdgeTypeCalls, methodID, targetID, nil)
+	} else if ledgerUnresolved && !isRubyBuiltinCall(mname, ex.file) && selfScoped {
+		ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+			Service: ex.service, File: ex.file,
+			Line: srcLine, Name: mname, Kind: "call_ref",
+		})
 	}
 }
 
@@ -345,33 +526,32 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					goto next
 				}
 			}
-			targetID := ""
-			if lookupClass != "" {
-				targetID = ex.methodsByClassName[lookupClass+"\x00"+mname]
-			}
-			selfScoped := lookupClass == class
-			if targetID == "" && selfScoped {
-				if ids := ex.methodsByName[mname]; len(ids) == 1 {
-					targetID = ids[0]
-				}
-			}
-			if targetID != "" {
-				ex.addEdge(graph.EdgeTypeCalls, methodID, targetID, nil)
-			} else if !isRubyBuiltinCall(mname, ex.file) && selfScoped {
-				// A framework or language builtin is not a blind spot: no pass
-				// can ever resolve it, so ledgering it only inflates the
-				// "verify N manually" footer agents are told to act on. An
-				// unresolved ClassName.method miss isn't ledgered here either:
-				// the class is very often a cross-file model (ActiveRecord
-				// finders, etc.) that this same-file pass has no way to see,
-				// so it is left for a future cross-file linker pass rather
-				// than reported as a same-file miss it never was.
-				ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
-					Service: ex.service, File: ex.file,
-					Line: rbLine(node), Name: mname, Kind: "call_ref",
-				})
-			}
+			// A framework or language builtin is not a blind spot: no pass
+			// can ever resolve it, so ledgering it only inflates the
+			// "verify N manually" footer agents are told to act on. An
+			// unresolved ClassName.method miss isn't ledgered here either:
+			// the class is very often a cross-file model (ActiveRecord
+			// finders, etc.) that this same-file pass has no way to see,
+			// so it is left for a future cross-file linker pass rather
+			// than reported as a same-file miss it never was.
+			ex.resolveBareCall(mname, lookupClass, class, methodID, rbLine(node), true)
 		}
+	case "identifier":
+		// Bare, zero-arg, receiver-less, paren-less call/local-read ambiguity
+		// (Tier BC): tree-sitter-ruby emits the same "identifier" node type
+		// for `category` in both `@category = category` (a call to a private
+		// helper) and `x` in `foo(x)` (a local-variable read). Resolve only
+		// from within a method body, exactly like case "call" above; never
+		// attribute a bare identifier as a call to a name preCollectRubyLocals
+		// found assigned/bound anywhere in this method.
+		if methodID == "" || isRubyBareCallExcluded(node) {
+			break
+		}
+		mname := node.Content(ex.src)
+		if ex.locals[methodID][mname] {
+			break
+		}
+		ex.resolveBareCall(mname, class, class, methodID, rbLine(node), false)
 	}
 
 next:
