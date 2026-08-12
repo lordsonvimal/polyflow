@@ -39,6 +39,38 @@ type Summary struct {
 	Budget              *budget.Info              `json:"budget,omitempty"`
 }
 
+// fileBackfillReserve is the share of a token budget set aside so the
+// backfill pass in ApplyBudget has room to admit a cheap, deeper file
+// instead of starving on whatever incidental slack the prefix cut left
+// behind. Mirrors impact.fileBackfillReserve.
+const fileBackfillReserve = 0.10
+
+// sortFileRollups orders a rollup by relevance: a real file path before a
+// pathless synthetic entry (a channel/topic node — an agent has nowhere to
+// Read it), then shallowest reach, then name. The path check sits above
+// depth: a pathless entry one hop away is still not something an agent can
+// open, so it must not out-rank an actual file merely for being closer.
+// Shared by Summarize (so the initial cut already prefers real files) and by
+// ApplyBudget's backfill pass, which must restore this order after splicing
+// out-of-order tail entries back in. Mirrors impact.sortFileRollups — see
+// its comment for why the path check exists at all (the same duplicated
+// truncation logic, and the same bug, lived in both packages independently).
+func sortFileRollups(files []FileRollup) {
+	sort.Slice(files, func(i, j int) bool {
+		pi, pj := files[i].File == "", files[j].File == ""
+		if pi != pj {
+			return !pi
+		}
+		if files[i].MinDepth != files[j].MinDepth {
+			return files[i].MinDepth < files[j].MinDepth
+		}
+		if files[i].File != files[j].File {
+			return files[i].File < files[j].File
+		}
+		return files[i].Service < files[j].Service
+	})
+}
+
 // Summarize rolls the per-node traversal detail up into per-file entries.
 func (r *Result) Summarize() *Summary {
 	type key struct{ service, file string }
@@ -77,15 +109,7 @@ func (r *Result) Summarize() *Summary {
 		sort.Strings(e.EdgeTypes)
 		files = append(files, *e)
 	}
-	sort.Slice(files, func(i, j int) bool {
-		if files[i].MinDepth != files[j].MinDepth {
-			return files[i].MinDepth < files[j].MinDepth
-		}
-		if files[i].File != files[j].File {
-			return files[i].File < files[j].File
-		}
-		return files[i].Service < files[j].Service
-	})
+	sortFileRollups(files)
 
 	return &Summary{
 		Target:              r.Target,
@@ -124,14 +148,36 @@ func (r *Result) ApplyBudget(maxTokens int, forceSummary bool) any {
 	}
 	if maxTokens > 0 {
 		all := s.Files
-		keep := budget.TrimToFit(len(all), maxTokens, func(n int) int {
+		// Reserve headroom for the backfill pass before the prefix cut runs
+		// — TrimToFit's binary search picks the largest prefix that fits,
+		// which by construction leaves only incidental slack. See
+		// impact.fileBackfillReserve for the full rationale (same bug, same
+		// fix, independently duplicated code).
+		cutBudget := int(float64(maxTokens) * (1 - fileBackfillReserve))
+		keep := budget.TrimToFit(len(all), cutBudget, func(n int) int {
 			s.Files = all[:n]
 			return budget.Estimate(s)
 		})
 		s.Files = all[:keep]
-		if omitted := len(all) - keep; omitted > 0 {
+		used := budget.Estimate(s)
+
+		admitted := budget.Backfill(len(all), keep, maxTokens, used, func(i int) int {
+			return budget.Estimate(all[i])
+		})
+		for _, i := range admitted {
+			s.Files = append(s.Files, all[i])
+		}
+		if len(admitted) > 0 {
+			sortFileRollups(s.Files)
+		}
+
+		if omitted := len(all) - len(s.Files); omitted > 0 {
 			s.Budget.OmittedFiles = omitted
-			s.Budget.AppendNote(fmt.Sprintf("%d more files omitted to fit the budget", omitted))
+			note := fmt.Sprintf("%d more files omitted to fit the budget", omitted)
+			if len(admitted) > 0 {
+				note = fmt.Sprintf("%s (%d cheap file(s) admitted out of depth order to use leftover budget)", note, len(admitted))
+			}
+			s.Budget.AppendNote(note)
 		}
 	}
 	s.Budget.EstimatedTokens = budget.Estimate(s)
