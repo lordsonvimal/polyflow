@@ -157,5 +157,69 @@ func TestSummarize_VerificationTieBreaker(t *testing.T) {
 	assert.Equal(t, graph.StateVerified, s.Files[0].BestVerificationState)
 	assert.Equal(t, "svc/candidate.go", s.Files[1].File)
 	assert.Equal(t, graph.StateCandidate, s.Files[1].BestVerificationState)
-	assert.Equal(t, "depth,verification", s.Ranking)
+	assert.Equal(t, "structural,depth,verification", s.Ranking)
+}
+
+// TestSummarize_StructuralOnlyRanksAfterRealFilesRegardlessOfDepth is the
+// Tier IR regression: a shallow rails_filter-only file must not outrank a
+// deeper file with a genuine caller edge.
+func TestSummarize_StructuralOnlyRanksAfterRealFilesRegardlessOfDepth(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "filter", Type: graph.NodeTypeFunction, Label: "beforeAction", Service: "svc", File: "svc/concerns/security_checks.rb", Line: 5})
+	idx.AddNode(&graph.Node{ID: "mid", Type: graph.NodeTypeFunction, Label: "mid", Service: "svc", File: "svc/mid.go", Line: 5})
+	idx.AddNode(&graph.Node{ID: "deep", Type: graph.NodeTypeFunction, Label: "deep", Service: "svc", File: "svc/model.go", Line: 5})
+
+	// Structural-only file at depth 1.
+	idx.AddEdge(&graph.Edge{ID: "efilter", From: "filter", To: "tgt", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}})
+	// Real file at depth 1, with a real caller of its own at depth 2.
+	idx.AddEdge(&graph.Edge{ID: "emid", From: "mid", To: "tgt", Type: graph.EdgeTypeCalls})
+	idx.AddEdge(&graph.Edge{ID: "edeep", From: "deep", To: "mid", Type: graph.EdgeTypeCalls})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 3)
+	assert.Equal(t, "svc/mid.go", s.Files[0].File, "depth-1 real file ranks first")
+	assert.False(t, s.Files[0].StructuralOnly)
+	assert.Equal(t, "svc/model.go", s.Files[1].File, "depth-2 real file ranks before shallower structural-only noise")
+	assert.False(t, s.Files[1].StructuralOnly)
+	assert.Equal(t, "svc/concerns/security_checks.rb", s.Files[2].File, "structural-only file, though shallowest, ranks last")
+	assert.True(t, s.Files[2].StructuralOnly)
+}
+
+// TestSummarize_MixedEdgeFileNotMarkedStructuralOnly covers gate 2: a file
+// reached by one structural and one non-structural caller must stay in the
+// "real" group.
+func TestSummarize_MixedEdgeFileNotMarkedStructuralOnly(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "a", Type: graph.NodeTypeFunction, Label: "a", Service: "svc", File: "svc/mixed.go", Line: 5})
+	idx.AddNode(&graph.Node{ID: "b", Type: graph.NodeTypeFunction, Label: "b", Service: "svc", File: "svc/mixed.go", Line: 9})
+
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "a", To: "tgt", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}})
+	idx.AddEdge(&graph.Edge{ID: "e2", From: "b", To: "tgt", Type: graph.EdgeTypeCalls})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 1)
+	assert.False(t, s.Files[0].StructuralOnly)
+}
+
+// TestSummarize_InheritsEdgeIsStructural covers the EdgeTypeInherits half of
+// isStructuralEdge (mixin include/extend/prepend), the other structural
+// signal alongside rails_filter.
+func TestSummarize_InheritsEdgeIsStructural(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "mixin", Type: graph.NodeTypeClass, Label: "Mixin", Service: "svc", File: "svc/mixin.rb", Line: 1})
+
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "mixin", To: "tgt", Type: graph.EdgeTypeInherits})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 1)
+	assert.True(t, s.Files[0].StructuralOnly)
 }
