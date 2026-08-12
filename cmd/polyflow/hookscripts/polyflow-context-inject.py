@@ -34,8 +34,39 @@ SEEN_DIR = "/tmp/polyflow-context-injected"
 
 FILE_VIEW_CMDS = {"cat", "sed", "head", "tail"}
 GREP_CMDS = {"grep"}
-SEGMENT_SPLIT_RE = re.compile(r"\||;|&&|\|\|")
+SHELL_OPERATORS = {"|", "||", ";", "&&", "&"}
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def command_segments(command: str):
+    """Splits a shell command into simple-command token lists, breaking only
+    on unquoted |/||/;/&&/& operators. A naive regex split on those
+    characters (an earlier version of this hook did exactly that) corrupts
+    any segment whose quoted argument itself contains one of them — verified
+    live: `grep "heartbeat\\|Heartbeat" file.go`, an extremely common
+    alternation-pattern grep, split apart at the quoted `\\|` and both
+    resulting halves failed to parse as anything. shlex's punctuation_chars
+    mode tokenizes operators only outside quotes, so a quoted `|` stays part
+    of its argument token instead of being treated as a pipe.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []  # unbalanced quotes etc. — don't guess
+
+    segments, current = [], []
+    for tok in tokens:
+        if tok in SHELL_OPERATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+    return segments
 
 MAX_CONTEXT_CHARS = 600
 CALLS_EDGE = "calls"
@@ -55,9 +86,10 @@ def find_polyflow_db(start_dir: str, max_levels: int = 6):
 
 
 def extract_target(payload):
-    """Returns (mode, value) where mode is "symbol" (a grepped identifier) or
-    "file" (a cat/sed/head/tail/Read target), or (None, None) if this call
-    isn't one we care about."""
+    """Returns (mode, value) where mode is "file" (value: a single
+    cat/sed/head/tail/Read target path) or "symbol" (value: a list of
+    candidate identifiers, tried in order — see the alternation-splitting
+    note below), or (None, None) if this call isn't one we care about."""
     tool_input = payload.get("tool_input", {})
 
     if "file_path" in tool_input:
@@ -68,11 +100,7 @@ def extract_target(payload):
     if not command:
         return None, None
 
-    for segment in SEGMENT_SPLIT_RE.split(command):
-        try:
-            tokens = shlex.split(segment)
-        except ValueError:
-            continue
+    for tokens in command_segments(command):
         if not tokens:
             continue
         cmd_name = os.path.basename(tokens[0])
@@ -81,7 +109,16 @@ def extract_target(payload):
         if cmd_name in GREP_CMDS and rest:
             pattern = rest[0]
             if IDENTIFIER_RE.match(pattern):
-                return "symbol", pattern
+                return "symbol", [pattern]
+            # Real usage skews heavily toward alternation ("heartbeat\|Heartbeat\|
+            # RunnerHeartbeat") rather than a bare identifier — verified from an
+            # actual bench transcript where every grep used this shape and the
+            # bare-identifier check alone matched almost nothing. Split on \| or
+            # | and keep whichever alternatives are themselves clean identifiers;
+            # main() tries them in order and stops at the first with graph hits.
+            candidates = [c for c in re.split(r"\\\||\|", pattern) if IDENTIFIER_RE.match(c)]
+            if candidates:
+                return "symbol", candidates
             continue
 
         if cmd_name in FILE_VIEW_CMDS:
@@ -121,6 +158,18 @@ def symbol_context(cur, term):
     )
     rows = cur.fetchall()
     if not rows:
+        # A grepped term is very often a substring of the real symbol
+        # (searching "heartbeat" to find sendHeartbeat/PublishHeartbeat),
+        # not the symbol itself — verified from a real bench trial where
+        # this was the majority case and an exact-only match found nothing.
+        # Capped tighter (2, not 3) since a substring match is less precise.
+        cur.execute(
+            "SELECT id, type, label, file, line FROM nodes WHERE label LIKE ? "
+            "COLLATE NOCASE LIMIT 2",
+            (f"%{term}%",),
+        )
+        rows = cur.fetchall()
+    if not rows:
         return None
     parts = []
     for node_id, ntype, label, file, line in rows:
@@ -137,11 +186,16 @@ def symbol_context(cur, term):
 
 
 def file_context(cur, file_path, cwd):
+    """Every node declared in the file except the file node itself. An
+    earlier version filtered to function/method/http_handler/subscriber/
+    worker only, which missed any file whose top-level declarations are
+    struct/variable/http_client/etc — verified against real data (5 of 6
+    files inspected in one bench trial were struct-only Go files and got
+    zero context under the narrow filter)."""
     rel = rel_path(file_path, cwd)
     cur.execute(
         "SELECT id, type, label, line FROM nodes WHERE file = ? "
-        "AND type IN ('function','method','http_handler','subscriber','worker') "
-        "ORDER BY line LIMIT 6",
+        "AND type != 'file' ORDER BY line LIMIT 8",
         (rel,),
     )
     rows = cur.fetchall()
@@ -192,19 +246,31 @@ def main() -> None:
     if not db_path:
         return
 
-    if already_seen(payload.get("session_id"), f"{mode}:{value}"):
+    # Normalize file-mode keys to a repo-relative path so `cat foo/bar.go`
+    # and a later `Read /abs/path/foo/bar.go` dedupe against each other
+    # instead of each paying the injection cost once. Symbol-mode keys use
+    # the full candidate list so distinct alternation patterns don't
+    # collide on a shared substring.
+    dedupe_key = (
+        f"file:{rel_path(value, cwd)}" if mode == "file" else f"symbol:{'|'.join(value)}"
+    )
+    if already_seen(payload.get("session_id"), dedupe_key):
         return
 
     try:
         conn = sqlite3.connect(db_path, timeout=2)
         conn.execute("PRAGMA query_only = 1")
         cur = conn.cursor()
+        parts, label = None, None
         if mode == "symbol":
-            parts = symbol_context(cur, value)
-            label = "symbol"
+            for candidate in value:
+                parts = symbol_context(cur, candidate)
+                if parts:
+                    label = f"symbol '{candidate}'"
+                    break
         else:
             parts = file_context(cur, value, cwd)
-            label = "file"
+            label = f"file '{value}'"
         conn.close()
     except sqlite3.Error:
         return  # db locked mid-index, corrupt, or schema mismatch — fail open
@@ -212,7 +278,7 @@ def main() -> None:
     if not parts:
         return
 
-    block = f"[polyflow graph — {label} '{value}'] " + "; ".join(parts)
+    block = f"[polyflow graph — {label}] " + "; ".join(parts)
     if len(block) > MAX_CONTEXT_CHARS:
         block = block[:MAX_CONTEXT_CHARS] + "…"
 
