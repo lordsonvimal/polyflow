@@ -84,6 +84,11 @@ type Result struct {
 	// in the single-root case.
 	Targets []*graph.Node `json:"targets,omitempty"`
 
+	// ResolutionNote is set when Target came from a full-text-search guess
+	// rather than a confirmed exact-label match — see graph.ResolutionNote.
+	// Empty (omitted) on an ordinary exact resolution.
+	ResolutionNote string `json:"resolution_note,omitempty"`
+
 	// Budget records the token-budgeting decision when a budget was set and
 	// the detail shape was emitted.
 	Budget *budget.Info `json:"budget,omitempty"`

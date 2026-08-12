@@ -1130,7 +1130,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
-	root, candidates, err := graph.ResolveTarget(ctx, store, contextTarget, contextTargetService, contextTargetType)
+	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, store, contextTarget, contextTargetService, contextTargetType)
 	if err != nil {
 		return err
 	}
@@ -1142,6 +1142,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile))
 	result.TargetCandidates = candidates
+	result.ResolutionNote = graph.ResolutionNote(contextTarget, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
@@ -1153,6 +1154,9 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	out := result.ApplyBudget(contextMaxTokens, contextSummary)
 	if contextFormat == "text" {
+		if result.ResolutionNote != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
+		}
 		if len(candidates) > 0 {
 			fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, contextTarget)
 		}
@@ -1358,7 +1362,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
-	root, candidates, err := graph.ResolveTarget(ctx, store, traceRoot, traceTargetService, traceTargetType)
+	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, store, traceRoot, traceTargetService, traceTargetType)
 	if err != nil {
 		return err
 	}
@@ -1373,6 +1377,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
 	result.TargetCandidates = candidates
+	result.ResolutionNote = graph.ResolutionNote(traceRoot, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
@@ -1381,6 +1386,9 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	}
 	result.AttachUnresolved(unresolved)
 
+	if result.ResolutionNote != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
+	}
 	if len(candidates) > 0 {
 		fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, traceRoot)
 	}
@@ -1559,7 +1567,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	root, candidates, err := graph.ResolveTarget(ctx, store, impactTarget, impactTargetService, impactTargetType)
+	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, store, impactTarget, impactTargetService, impactTargetType)
 	if err != nil {
 		return err
 	}
@@ -1578,6 +1586,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		StaleAfter:     loadStaleAfter(meta.ConfigFile),
 	})
 	out.TargetCandidates = candidates
+	out.ResolutionNote = graph.ResolutionNote(impactTarget, exactMatch)
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
 	unresolved, err := store.ListUnresolvedRefs(ctx)
@@ -1590,6 +1599,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	budgeted := out.ApplyBudget(impactMaxTokens, impactSummary)
 	if impactFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(budgeted)
+	}
+	if out.ResolutionNote != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", out.ResolutionNote)
 	}
 	if len(candidates) > 0 {
 		fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, impactTarget)
