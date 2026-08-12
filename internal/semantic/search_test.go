@@ -322,6 +322,83 @@ func TestSearch_ExactMatchFloor(t *testing.T) {
 	}
 }
 
+// TestSearch_ExactMatchTightensResponse reproduces the datascience bench
+// finding: querying the exact symbol name "RemoveConfig" returned an
+// 18KB, 20-deep ranked node list plus flow/doc sections for a query that
+// only needed the 1-2 nodes actually named RemoveConfig. When the top hit
+// is an exact-label match, the response should collapse to a handful of
+// nodes and drop flows/docs — the caller already has the target's exact
+// name and would call flows/trace next for chain context, not this call.
+func TestSearch_ExactMatchTightensResponse(t *testing.T) {
+	db := openTestDB(t)
+	sem := NewStore(db)
+
+	// The exact target, plus enough loosely-related lexical noise to fill a
+	// limit=20 window if the tightening didn't kick in.
+	seedNode(t, db, &graph.Node{
+		ID: "fn:RemoveConfig", Type: graph.NodeTypeFunction,
+		Label: "RemoveConfig", Service: "dsw-agent", File: "config_handlers.go", Line: 1,
+	}, []float32{0.9, 0, 0, 0})
+	for i := 0; i < 15; i++ {
+		seedNode(t, db, &graph.Node{
+			ID: fmt.Sprintf("fn:RemoveConfigVariant%d", i), Type: graph.NodeTypeFunction,
+			Label: fmt.Sprintf("RemoveConfigVariant%d", i), Service: "dsw-agent",
+			File: "other.go", Line: i + 2,
+		}, []float32{0.1, 0, 0, 0})
+	}
+	seedEntity(t, db, Entity{
+		ID: "chain:RemoveConfig:flow", Type: "flow",
+		Text: "RemoveConfig flow chain", NodeID: "fn:RemoveConfig",
+	}, nil)
+
+	sr := NewSearcher(sem, &stubEmbedder{dims: 4, vec: []float32{1, 0, 0, 0}}, nil)
+	ctx := context.Background()
+
+	resp, err := sr.Search(ctx, "RemoveConfig", 20)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if resp.Nodes[0].Entity.ID != "fn:RemoveConfig" || resp.Nodes[0].Retrieval != "exact" {
+		t.Fatalf("expected exact match first, got %+v", resp.Nodes[0])
+	}
+	if len(resp.Nodes) > exactMatchNodeCap {
+		t.Errorf("exact match should cap nodes at %d, got %d", exactMatchNodeCap, len(resp.Nodes))
+	}
+	if len(resp.Flows) != 0 {
+		t.Errorf("exact match should drop flows, got %d", len(resp.Flows))
+	}
+}
+
+// TestSearch_NoExactMatchKeepsFullLimit confirms the tightening in
+// TestSearch_ExactMatchTightensResponse is conditional on an exact hit, not
+// a general cap: an ambiguous/semantic query still gets the full requested
+// window so recall on genuinely fuzzy queries doesn't regress.
+func TestSearch_NoExactMatchKeepsFullLimit(t *testing.T) {
+	db := openTestDB(t)
+	sem := NewStore(db)
+
+	for i := 0; i < 8; i++ {
+		seedNode(t, db, &graph.Node{
+			ID: fmt.Sprintf("fn:HandleThing%d", i), Type: graph.NodeTypeFunction,
+			Label: fmt.Sprintf("HandleThing%d", i), Service: "svc", File: "a.go", Line: i + 1,
+		}, []float32{0.5, 0, 0, 0})
+	}
+
+	sr := NewSearcher(sem, &stubEmbedder{dims: 4, vec: []float32{0.5, 0, 0, 0}}, nil)
+	ctx := context.Background()
+
+	resp, err := sr.Search(ctx, "handle thing broadly", 20)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(resp.Nodes) > 0 && resp.Nodes[0].Retrieval == "exact" {
+		t.Fatalf("test setup invalid: got an exact match, want a fuzzy query")
+	}
+	if len(resp.Nodes) != 8 {
+		t.Errorf("non-exact query should return the full corpus within limit, got %d", len(resp.Nodes))
+	}
+}
+
 // ── Degradation (--no-embed) ──────────────────────────────────────────────────
 
 func TestSearch_NilEmbedder_FTSOnly(t *testing.T) {

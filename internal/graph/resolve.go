@@ -22,6 +22,15 @@ type NodeSearcher interface {
 	SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error)
 }
 
+// nodeByID is an optional capability: when store also implements it,
+// ResolveTarget short-circuits on a literal node-ID match before falling
+// back to label-based search. Implemented by *SQLiteStore; unit-test stubs
+// that only implement NodeSearcher skip this path silently (Go's interface
+// assertion on the dynamic type just fails, ok=false).
+type nodeByID interface {
+	GetNode(ctx context.Context, id string) (*Node, error)
+}
+
 // ResolveTarget finds the best node for a search query with optional pre-filters
 // applied BEFORE ranking so service-level ambiguity is resolved intentionally.
 //
@@ -36,6 +45,20 @@ type NodeSearcher interface {
 //     exists the list includes the chosen root so agents see the full picture.
 //   - err: non-nil only on store error or when no node is found at all.
 func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService, targetType string) (*Node, []TargetCandidate, error) {
+	// A query that is already a literal node ID (agents commonly pass one
+	// straight back from a prior search/trace/impact result — IDs are
+	// service:file:type:label:line, never equal to the bare Label a
+	// label-based search matches against) must resolve to exactly that node.
+	// Without this, ResolveTarget fell through to SearchNodes(query) and
+	// could silently return an unrelated node that happens to rank first for
+	// the ID string as free text — e.g. an AMQP channel ID for the wrong
+	// service — with no error and no target_candidates to reveal the swap.
+	if getter, ok := store.(nodeByID); ok {
+		if n, err := getter.GetNode(ctx, query); err == nil && n != nil {
+			return n, []TargetCandidate{}, nil
+		}
+	}
+
 	// Fetch more than the usual 5 to catch all exact-label matches.
 	nodes, err := store.SearchNodes(ctx, query, 20)
 	if err != nil {
