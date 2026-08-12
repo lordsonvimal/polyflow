@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: nudge file Reads toward files polyflow has already named.
+"""PreToolUse hook: nudge file inspection toward files polyflow already named.
 
 Companion to polyflow-first.py, which nudges Bash grep/find toward the
 polyflow MCP tools. That alone doesn't stop the drift this hook targets: an
@@ -8,24 +8,40 @@ opens extra files "just to verify" — files polyflow never mentioned. The
 2026-08-12 datascience AMQP bench trial did exactly this: recall was already
 1.0 after a handful of polyflow calls, then ~30 more Bash/Read round-trips
 followed anyway, hunting for a consumer function that doesn't exist in the
-codebase.
+codebase. A first version of this hook only matched the Read tool; the same
+trial pattern re-ran and the agent dodged it entirely by using `grep`/`sed -n`
+through Bash instead of Read — so this hook is now registered on BOTH the
+Read and Bash matchers, and inspects `cat`/`sed`/`head`/`tail`/single-file
+`grep` commands the same way it inspects a Read call.
 
-This denies the FIRST Read of a file whose path has never appeared anywhere
+Denies the FIRST inspection of a file whose path has never appeared anywhere
 in this session's transcript (i.e. polyflow — or anything else — never
 surfaced it), with a reason pointing back at search/impact/trace. One-time
 nudge per session, not a wall: a real answer sometimes genuinely requires
 opening a file polyflow didn't name (a config file with no graph node, e.g.),
-so every later unlisted-file Read in the same session is let through.
+so every later unlisted-file inspection in the same session is let through.
+Recursive/multi-file search (`grep -r`, `find -name`, ...) is deliberately
+NOT matched here — that's polyflow-first.py's territory, and treating a
+search's directory argument as an unsurfaced "file" would wrongly block
+exactly the fallback search that hook is designed to allow once polyflow has
+already been tried.
 
 Fails open everywhere: any parse error, missing field, or unexpected
 exception exits 0 with no output, which Claude Code treats as "no opinion" —
-a broken hook must never be able to block Read outright.
+a broken hook must never be able to block a tool call outright.
 """
 import json
 import os
+import re
+import shlex
 import sys
 
 MARKER_DIR = "/tmp/polyflow-read-gate-nudged"
+
+# Bash commands treated as "inspect a specific file's content" rather than a
+# repo-wide search. Matched as a whole word so `catch_up.sh` etc. don't count.
+FILE_VIEW_CMD_RE = re.compile(r"\b(cat|sed|head|tail|grep)\b")
+RECURSIVE_FLAG_RE = re.compile(r"(?<!\S)-\w*[rR]\w*\b|--recursive\b")
 
 
 def find_polyflow_db(start_dir: str, max_levels: int = 6) -> bool:
@@ -61,6 +77,40 @@ def file_already_surfaced(transcript_path, file_path, cwd) -> bool:
     return False
 
 
+def extract_bash_view_target(command: str):
+    """Returns the first file-path-looking argument of a cat/sed/head/tail/
+    grep command, or None if command isn't a single-file view (recursive
+    grep, no recognizable command, or no path-shaped argument)."""
+    if not command or not FILE_VIEW_CMD_RE.search(command):
+        return None
+    if re.search(r"\bgrep\b", command) and RECURSIVE_FLAG_RE.search(command):
+        return None  # a recursive grep is a search, not a file view
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None  # unbalanced quotes etc. — don't guess
+
+    for tok in tokens:
+        if tok.startswith("-"):
+            continue
+        if "/" not in tok:
+            continue  # skip sed range specs, bare filenames, regex patterns
+        return tok
+    return None
+
+
+def target_from_payload(payload):
+    """Returns the file path to gate, or None if this call isn't one we care
+    about (neither a Read nor a recognized single-file Bash view)."""
+    tool_input = payload.get("tool_input", {})
+    if "file_path" in tool_input:
+        return tool_input.get("file_path") or None
+    if "command" in tool_input:
+        return extract_bash_view_target(tool_input.get("command", ""))
+    return None
+
+
 def already_nudged(session_id) -> bool:
     if not session_id:
         return False
@@ -78,7 +128,7 @@ def already_nudged(session_id) -> bool:
 def main() -> None:
     payload = json.load(sys.stdin)
 
-    file_path = payload.get("tool_input", {}).get("file_path", "")
+    file_path = target_from_payload(payload)
     if not file_path:
         return
 
@@ -94,13 +144,13 @@ def main() -> None:
 
     reason = (
         f"'{file_path}' hasn't been named by any tool result yet this "
-        "session — reading it now looks like manual verification rather "
+        "session — inspecting it now looks like manual verification rather "
         "than following up on a polyflow answer. If you already have what "
         "you need from mcp__polyflow__search/impact/trace/flows, trust it "
         "instead of re-reading files to double check (their coverage/"
         "unresolved fields tell you what's incomplete, if anything). If you "
         "genuinely need this file, proceed — this is a one-time nudge for "
-        "this session; Read will not be intercepted again."
+        "this session; file inspection will not be intercepted again."
     )
     print(json.dumps({
         "hookSpecificOutput": {
@@ -115,4 +165,4 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        pass  # fail open: a broken hook must never block Read outright
+        pass  # fail open: a broken hook must never block a tool call outright
