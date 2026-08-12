@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,12 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/agentbench"
 	"github.com/lordsonvimal/polyflow/internal/eval"
 )
+
+//go:embed hookscripts/polyflow-first.py
+var hookScriptGrepNudge []byte
+
+//go:embed hookscripts/polyflow-read-gate.py
+var hookScriptReadGate []byte
 
 var (
 	benchCorpus     string
@@ -149,6 +156,20 @@ func runBench(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 
+	// polyflow-first.py / polyflow-read-gate.py (embedded from
+	// cmd/polyflow/hookscripts, the same source this repo's own
+	// .claude/settings.json wires for interactive sessions) only fire when
+	// the *target* repo's own settings wire them — which none of
+	// orion/juniper/etc. do. --settings injects them by absolute path
+	// regardless of which repo `claude -p` runs in, so the
+	// with_polyflow_semantic arm gets the same grep/Read nudges a local
+	// polyflow-repo session already gets for free.
+	hookSettingsJSON, hookCleanup, err := writeHookScripts()
+	if err != nil {
+		return err
+	}
+	defer hookCleanup()
+
 	// ── Run benchmark ──────────────────────────────────────────────────────────
 	//
 	// Task-outer, arm-inner. Running arm-outer means the account's budget is
@@ -175,7 +196,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 					continue
 				}
 				fmt.Printf("  %s [%s] trial %d ... ", task.TaskID, arm, trial)
-				r, class := runTrial(ctx, task, arm, mcpCfgPath, trial)
+				r, class := runTrial(ctx, task, arm, mcpCfgPath, hookSettingsJSON, trial)
 				results = append(results, r)
 				ckpt.record(r)
 				if class == agentbench.FailureQuota {
@@ -228,14 +249,14 @@ const benchRetries = 2
 
 // runTrial performs one (task, arm, trial) invocation with classified retries
 // and returns the scored result plus the failure class, if any.
-func runTrial(ctx context.Context, task benchTask, arm, mcpCfgPath string, trial int) (agentbench.TaskResult, agentbench.FailureClass) {
+func runTrial(ctx context.Context, task benchTask, arm, mcpCfgPath, hookSettingsJSON string, trial int) (agentbench.TaskResult, agentbench.FailureClass) {
 	start := time.Now()
 
 	var tr agentbench.Transcript
 	var class agentbench.FailureClass
 	var detail string
 	for attempt := 0; ; attempt++ {
-		tr, class, detail = callClaude(ctx, task.Prompt, arm, mcpCfgPath, benchModel)
+		tr, class, detail = callClaude(ctx, task.Prompt, arm, mcpCfgPath, hookSettingsJSON, benchModel)
 		if class == agentbench.FailureNone || !class.Retryable() || attempt >= benchRetries {
 			break
 		}
@@ -409,6 +430,70 @@ func writeMCPConfig(polyflowBin string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
+// writeHookScripts stages the embedded polyflow-first.py / polyflow-read-gate.py
+// hooks to temp files and returns a --settings JSON blob wiring them as
+// PreToolUse hooks for Bash and Read — the same pair this repo's own
+// .claude/settings.json wires for interactive sessions, but portable to
+// whatever repo the with_polyflow_semantic arm's `claude -p` runs in. Without
+// this, the hooks are dead weight outside this checkout: Claude Code loads
+// PreToolUse hooks from the *target* repo's own settings, and orion/
+// juniper/etc. don't carry a copy.
+func writeHookScripts() (string, func(), error) {
+	grepHook, err := os.CreateTemp("", "polyflow-hook-grep-*.py")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("write grep-nudge hook: %w", err)
+	}
+	if _, err := grepHook.Write(hookScriptGrepNudge); err != nil {
+		grepHook.Close()
+		os.Remove(grepHook.Name())
+		return "", func() {}, err
+	}
+	grepHook.Close()
+
+	readHook, err := os.CreateTemp("", "polyflow-hook-read-*.py")
+	if err != nil {
+		os.Remove(grepHook.Name())
+		return "", func() {}, fmt.Errorf("write read-gate hook: %w", err)
+	}
+	if _, err := readHook.Write(hookScriptReadGate); err != nil {
+		readHook.Close()
+		os.Remove(grepHook.Name())
+		os.Remove(readHook.Name())
+		return "", func() {}, err
+	}
+	readHook.Close()
+
+	cleanup := func() {
+		os.Remove(grepHook.Name())
+		os.Remove(readHook.Name())
+	}
+
+	settings := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"PreToolUse": []map[string]interface{}{
+				{
+					"matcher": "Bash",
+					"hooks": []map[string]interface{}{
+						{"type": "command", "command": "python3 " + grepHook.Name()},
+					},
+				},
+				{
+					"matcher": "Read",
+					"hooks": []map[string]interface{}{
+						{"type": "command", "command": "python3 " + readHook.Name()},
+					},
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("marshal hook settings: %w", err)
+	}
+	return string(data), cleanup, nil
+}
+
 // polyflowNudge tells the with_polyflow_semantic arm to reach for the MCP
 // server directly. On its own this did not stop the agent from delegating to
 // an Explore subagent — the system prompt does not propagate to a spawned
@@ -428,7 +513,7 @@ const polyflowNudge = "A `polyflow` MCP server is registered for this session. "
 // The CLI writes a well-formed result envelope to stdout even when it exits 1,
 // so the reason for a failure is read structurally out of that envelope rather
 // than scraped from an error string.
-func callClaude(_ context.Context, prompt, arm, mcpCfgPath, model string) (agentbench.Transcript, agentbench.FailureClass, string) {
+func callClaude(_ context.Context, prompt, arm, mcpCfgPath, hookSettingsJSON, model string) (agentbench.Transcript, agentbench.FailureClass, string) {
 	claudeArgs := []string{
 		"-p", prompt,
 		"--output-format", "json",
@@ -439,13 +524,16 @@ func callClaude(_ context.Context, prompt, arm, mcpCfgPath, model string) (agent
 		// the agent gives up with an empty answer (recall 0, hard_fail true)
 		// instead of ever running the query. Scoped to this benchmark's own
 		// calls only, and already narrowed by --strict-mcp-config (polyflow
-		// only) and --disallowedTools Agent above.
+		// only) and --disallowedTools Agent above. PreToolUse hooks (below)
+		// run independently of this flag — it only skips the interactive
+		// approval prompt, not hook evaluation.
 		"--dangerously-skip-permissions",
 	}
 	switch arm {
 	case agentbench.ArmWithSemantics:
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpCfgPath, "--strict-mcp-config",
-			"--append-system-prompt", polyflowNudge)
+			"--append-system-prompt", polyflowNudge,
+			"--settings", hookSettingsJSON)
 	case agentbench.ArmNoPolyflow:
 		claudeArgs = append(claudeArgs, "--strict-mcp-config")
 	}

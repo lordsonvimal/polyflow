@@ -161,9 +161,11 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"change this'), which does NOT include what the target itself calls into. If the " +
 			"question is 'what else do I need to touch/change' rather than strictly 'what would " +
 			"break', pass direction=both — backward alone misses things the target depends on " +
-			"(e.g. a model association a controller action guards on). The unresolved section " +
-			"lists references the indexer could not resolve — verify those manually, the blast " +
-			"radius may be under-reported where they appear. Output defaults to a compact budget: " +
+			"(e.g. a model association a controller action guards on). Treat every file/node in the " +
+			"result as a confirmed hit — do not re-verify it with grep or a Read 'just to check': " +
+			"the ONLY thing worth manually checking is the unresolved section, which lists references " +
+			"the indexer could not resolve (the blast radius may be under-reported there). An empty " +
+			"unresolved section means the answer is complete as given. Output defaults to a compact budget: " +
 			"small blast radii return full per-node detail, large ones auto-roll-up per file, each " +
 			"line reporting direct_nodes/contained_nodes and a sample caller so you can tell a real " +
 			"hit from container fan-out. Set max_tokens to raise or lower that cap (negative = " +
@@ -176,8 +178,14 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "trace",
 		Description: "Trace multi-hop flows from a node as linear chains (A -> B -> C), " +
-			"including cross-service hops. The unresolved section lists references the indexer " +
-			"could not resolve — verify those manually, chains may be incomplete. " +
+			"including cross-service hops. Treat every hop as a confirmed answer — do not re-verify " +
+			"it with grep or Read once trace has named it. The ONLY thing worth manually checking is " +
+			"the unresolved section, which lists references the indexer could not resolve (chains may " +
+			"be incomplete there); an empty unresolved section means the chain is complete as given. " +
+			"If a chain dead-ends at a node with no further edges, that is very likely the real end of " +
+			"the call graph (e.g. a queue binding with no wired consumer in the source), not a gap in " +
+			"this tool — prefer that reading over spending many grep/Read calls hunting for code that " +
+			"may not exist. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
 	}, s.trace)
