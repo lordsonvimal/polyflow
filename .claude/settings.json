@@ -6,7 +6,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/lordson/Projects/polyflow/.claude/hooks/polyflow-first.py"
+            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-first.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-read-gate.py"
           }
         ]
       }
