@@ -157,12 +157,18 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 		Name: "impact",
 		Description: "Show the blast radius of changing a node or a file: everything that " +
 			"transitively depends on it, entry points, and affected services. Directly answers " +
-			"'what is impacted if I change X'. The unresolved section lists references the " +
-			"indexer could not resolve — verify those manually, the blast radius may be " +
-			"under-reported where they appear. Output defaults to a compact budget: small blast " +
-			"radii return full per-node detail, large ones auto-roll-up per file. Set max_tokens " +
-			"to raise or lower that cap (negative = unlimited), summary to force the rollup, " +
-			"snippet_lines to inline source snippets per node. " +
+			"'what is impacted if I change X'. Defaults to direction=backward ('what breaks if I " +
+			"change this'), which does NOT include what the target itself calls into. If the " +
+			"question is 'what else do I need to touch/change' rather than strictly 'what would " +
+			"break', pass direction=both — backward alone misses things the target depends on " +
+			"(e.g. a model association a controller action guards on). The unresolved section " +
+			"lists references the indexer could not resolve — verify those manually, the blast " +
+			"radius may be under-reported where they appear. Output defaults to a compact budget: " +
+			"small blast radii return full per-node detail, large ones auto-roll-up per file, each " +
+			"line reporting direct_nodes/contained_nodes and a sample caller so you can tell a real " +
+			"hit from container fan-out. Set max_tokens to raise or lower that cap (negative = " +
+			"unlimited), summary to force the rollup, snippet_lines to inline source snippets per " +
+			"node. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
 	}, s.impact)
@@ -470,7 +476,7 @@ type impactInput struct {
 	TargetService   string `json:"target_service,omitempty" jsonschema:"restrict target resolution to this service (resolves cross-service ambiguity; use when target_candidates is non-empty)"`
 	TargetType      string `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
 	File            string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
-	Direction       string `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read"`
+	Direction       string `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read. Use both for a 'what else do I need to touch/change' question — backward alone will not surface things the target itself depends on"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail"`
