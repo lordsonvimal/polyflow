@@ -39,9 +39,15 @@ import sys
 MARKER_DIR = "/tmp/polyflow-read-gate-nudged"
 
 # Bash commands treated as "inspect a specific file's content" rather than a
-# repo-wide search. Matched as a whole word so `catch_up.sh` etc. don't count.
-FILE_VIEW_CMD_RE = re.compile(r"\b(cat|sed|head|tail|grep)\b")
+# repo-wide search.
+FILE_VIEW_CMDS = {"cat", "sed", "head", "tail", "grep"}
 RECURSIVE_FLAG_RE = re.compile(r"(?<!\S)-\w*[rR]\w*\b|--recursive\b")
+# Splits a command string into separate simple-command segments on shell
+# sequencing/piping operators, so a segment is only "the command that runs
+# grep" when grep is its own invocation — not a substring living inside a
+# quoted argument to something else (e.g. `python3 -c "print('grep')"`,
+# which a plain `\bgrep\b` search over the raw string would wrongly match).
+SEGMENT_SPLIT_RE = re.compile(r"\||;|&&|\|\|")
 
 
 def find_polyflow_db(start_dir: str, max_levels: int = 6) -> bool:
@@ -80,23 +86,36 @@ def file_already_surfaced(transcript_path, file_path, cwd) -> bool:
 def extract_bash_view_target(command: str):
     """Returns the first file-path-looking argument of a cat/sed/head/tail/
     grep command, or None if command isn't a single-file view (recursive
-    grep, no recognizable command, or no path-shaped argument)."""
-    if not command or not FILE_VIEW_CMD_RE.search(command):
+    grep, no recognizable command, or no path-shaped argument).
+
+    Only treats cat/sed/head/tail/grep as a match when one of them is the
+    actual invoked command of a shell segment (post shlex.split, token 0's
+    basename) — not merely a substring anywhere in the raw command text,
+    which would also match e.g. the word "grep" inside a quoted argument to
+    an unrelated command like `python3 -c "print('grep')"`.
+    """
+    if not command:
         return None
-    if re.search(r"\bgrep\b", command) and RECURSIVE_FLAG_RE.search(command):
-        return None  # a recursive grep is a search, not a file view
 
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return None  # unbalanced quotes etc. — don't guess
-
-    for tok in tokens:
-        if tok.startswith("-"):
+    for segment in SEGMENT_SPLIT_RE.split(command):
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue  # unbalanced quotes in this segment — don't guess
+        if not tokens:
             continue
-        if "/" not in tok:
-            continue  # skip sed range specs, bare filenames, regex patterns
-        return tok
+        cmd_name = os.path.basename(tokens[0])
+        if cmd_name not in FILE_VIEW_CMDS:
+            continue
+        if cmd_name == "grep" and RECURSIVE_FLAG_RE.search(segment):
+            continue  # a recursive grep is a search, not a file view
+
+        for tok in tokens[1:]:
+            if tok.startswith("-"):
+                continue
+            if "/" not in tok:
+                continue  # skip sed range specs, bare filenames, regex patterns
+            return tok
     return None
 
 
