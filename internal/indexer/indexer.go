@@ -691,6 +691,21 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, classCallUnresolved...)
 	}
+	// ActiveRecord has_many/belongs_to/has_one associations — a
+	// class-granularity `calls` edge to the associated model, the same
+	// shape emitClassMethodCall uses for a call that lands on no method
+	// node (an ActiveRecord finder, a `scope` macro).
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		assocEdges, assocUnresolved := linker.LinkRubyAssociations(allNodes, svcFiles)
+		if err := writeEdges(assocEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, assocUnresolved...)
+	}
 	// Rails filter chain: before_action/around_action/after_action → the method
 	// the callback names, from the declaring class and from each action it
 	// guards. Needs the Ruby method nodes' qualified_name, so it runs after the
