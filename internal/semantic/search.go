@@ -20,6 +20,14 @@ const (
 	SearchDocCap       = 3 // doc chunks kept in a search response
 )
 
+// exactMatchNodeCap bounds the node section when the query already landed an
+// exact-label hit (see Search's hasExactNode). A caller who typed (or, more
+// commonly, copied from a prior tool result) the precise symbol name doesn't
+// need a 20-deep ranked list to find it — the exact hit(s) plus a couple of
+// close neighbors (same name in a sibling service, an overload) cover
+// disambiguation without paying for the long tail.
+const exactMatchNodeCap = 5
+
 // ShapeSearchResponse applies the shared search-surface ergonomics used by both
 // the CLI and the MCP tool (IA §2/§3): cap the flow/doc sections so nodes stay
 // visible, and inline a few source lines per node so the first call shows code.
@@ -171,10 +179,25 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 	}
 
 	// ── Build typed sections ─────────────────────────────────────────────────
+	// rrfFuse already sorts exact-label hits first (bug-class rule 9), so a
+	// hit at rank 0 with Retrieval=="exact" means the caller's query already
+	// pinpointed a real symbol. In that case the long ranked tail behind it is
+	// noise the caller pays tokens for and doesn't need: cap nodes tightly and
+	// drop flows/docs, since flows/trace is the tool for chasing call chains
+	// once the target node is known.
+	nodeCap, flowCap, docCap := limit, limit, limit
+	if len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact" {
+		nodeCap = exactMatchNodeCap
+		if nodeCap > limit {
+			nodeCap = limit
+		}
+		flowCap, docCap = 0, 0
+	}
+
 	resp := Response{Semantic: semanticNote}
 	nodeLim, flowLim, docLim := 0, 0, 0
 	for _, e := range fused {
-		if nodeLim >= limit && flowLim >= limit && docLim >= limit {
+		if nodeLim >= nodeCap && flowLim >= flowCap && docLim >= docCap {
 			break
 		}
 		ent := entityMap[e.entityID]
@@ -183,17 +206,17 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 		hit := Hit{Entity: ent, Score: roundScore(e.score), Retrieval: e.retrieval}
 		switch e.entityType {
 		case "node":
-			if nodeLim < limit {
+			if nodeLim < nodeCap {
 				resp.Nodes = append(resp.Nodes, hit)
 				nodeLim++
 			}
 		case "flow":
-			if flowLim < limit {
+			if flowLim < flowCap {
 				resp.Flows = append(resp.Flows, hit)
 				flowLim++
 			}
 		case "doc":
-			if docLim < limit {
+			if docLim < docCap {
 				resp.Docs = append(resp.Docs, hit)
 				docLim++
 			}

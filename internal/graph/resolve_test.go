@@ -30,6 +30,21 @@ func node(id, label, service, file, typ string) *graph.Node {
 	return &graph.Node{ID: id, Label: label, Service: service, File: file, Type: graph.NodeType(typ)}
 }
 
+// stubSearcherWithGetNode adds the optional GetNode capability on top of
+// stubSearcher, so tests can exercise ResolveTarget's ID short-circuit the
+// same way *SQLiteStore does in production.
+type stubSearcherWithGetNode struct {
+	stubSearcher
+	byID map[string]*graph.Node
+}
+
+func (s *stubSearcherWithGetNode) GetNode(_ context.Context, id string) (*graph.Node, error) {
+	if n, ok := s.byID[id]; ok {
+		return n, nil
+	}
+	return nil, fmt.Errorf("not found: %s", id)
+}
+
 // ── filter unit tests ─────────────────────────────────────────────────────────
 
 func TestResolveTarget_NoFilters(t *testing.T) {
@@ -208,6 +223,50 @@ func TestResolveTarget_StoreError(t *testing.T) {
 	_, _, err := graph.ResolveTarget(context.Background(), s, "Any", "", "")
 	if err == nil {
 		t.Fatal("want error on store failure")
+	}
+}
+
+// TestResolveTarget_ExactIDShortCircuit reproduces the juniper AMQP bench
+// finding: querying trace with the literal node ID of the manager-side
+// "runner_heartbeat/heartbeat" consumer channel returned the unrelated
+// maple-agent producer channel instead, because ResolveTarget only ever matched
+// on Label and the ID never equals the bare label. With GetNode wired, an
+// ID-shaped query must resolve to exactly that node, not to whatever
+// SearchNodes(query) ranks first as free text.
+func TestResolveTarget_ExactIDShortCircuit(t *testing.T) {
+	wanted := node("maple-manager:channel:runner_heartbeat/heartbeat", "runner_heartbeat/heartbeat", "maple-manager", "exchanges.go", "channel")
+	wrong := node("maple-agent:channel:runner_heartbeat/", "runner_heartbeat/", "maple-agent", "", "channel")
+	s := &stubSearcherWithGetNode{
+		stubSearcher: stubSearcher{nodes: []*graph.Node{wrong}}, // what label search would (wrongly) rank first
+		byID:         map[string]*graph.Node{wanted.ID: wanted},
+	}
+	root, cands, err := graph.ResolveTarget(context.Background(), s, wanted.ID, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if root.ID != wanted.ID {
+		t.Fatalf("want root %s, got %s", wanted.ID, root.ID)
+	}
+	if len(cands) != 0 {
+		t.Fatalf("want no candidates for an unambiguous ID match, got %v", cands)
+	}
+}
+
+// TestResolveTarget_IDMissFallsBackToLabelSearch confirms a query shaped like
+// an ID but not present in the graph still falls through to the normal
+// label-based path instead of erroring out on the GetNode miss.
+func TestResolveTarget_IDMissFallsBackToLabelSearch(t *testing.T) {
+	n := node("svc:file.go:function:Login:10", "Login", "server", "file.go", "function")
+	s := &stubSearcherWithGetNode{
+		stubSearcher: stubSearcher{nodes: []*graph.Node{n}},
+		byID:         map[string]*graph.Node{}, // GetNode always misses
+	}
+	root, _, err := graph.ResolveTarget(context.Background(), s, "svc:file.go:function:Login:10", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if root.ID != n.ID {
+		t.Fatalf("want fallback to label search result %s, got %s", n.ID, root.ID)
 	}
 }
 
