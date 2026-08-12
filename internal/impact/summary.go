@@ -21,11 +21,28 @@ const DefaultBudget = 2000
 // FileRollup aggregates the blast-radius callers that landed in one file —
 // the low-token-budget representation of an impact answer.
 type FileRollup struct {
-	File      string   `json:"file"`
-	Service   string   `json:"service"`
-	Nodes     int      `json:"nodes"`
-	MinDepth  int      `json:"min_depth"`
-	EdgeTypes []string `json:"edge_types"`
+	File     string `json:"file"`
+	Service  string `json:"service"`
+	Nodes    int    `json:"nodes"`
+	MinDepth int    `json:"min_depth"`
+	// DirectNodes counts callers reached by a real edge (calls, writes,
+	// reads, renders, inherits, ...) — evidence something in the walk
+	// actually touches this node. ContainedNodes counts the rest: callers
+	// reached only because the walk continued via `contains`/`declares`
+	// after landing on a class or scope in this file (every other method the
+	// class happens to have). A file can carry both — e.g. one `writes` hit
+	// plus 50 sibling methods pulled in by expanding that class — in which
+	// case DirectNodes is what should drive attention, not Nodes.
+	DirectNodes    int      `json:"direct_nodes"`
+	ContainedNodes int      `json:"contained_nodes,omitempty"`
+	EdgeTypes      []string `json:"edge_types"`
+	// Sample names the single most relevant node this file was reached
+	// through — the shallowest caller with the most direct edge (real edge
+	// beats contains/declares fan-out beats a structural inherits/rails_filter
+	// edge) — so a rollup line reads as "why this file matters" instead of
+	// only a count. Empty only if the file has no callers, which cannot
+	// happen for an entry rollupCallers produces.
+	Sample string `json:"sample,omitempty"`
 	// BestVerificationState is the highest-confidence verification state among
 	// the callers in this file — used as a sort tie-breaker within equal depth.
 	BestVerificationState string `json:"best_verification_state,omitempty"`
@@ -35,6 +52,20 @@ type FileRollup struct {
 	// target's own body. Ranked after real files regardless of depth — see
 	// the sort in rollupCallers.
 	StructuralOnly bool `json:"structural_only,omitempty"`
+	// ContainmentOnly is true when every caller in this file arrived via
+	// contains/declares fan-out (DirectNodes == 0) — the walk continued into
+	// this file's declarations, but nothing in it was individually called,
+	// written, read, rendered, etc. Ranked alongside StructuralOnly, after
+	// files with real content.
+	ContainmentOnly bool `json:"containment_only,omitempty"`
+
+	// sample tracking — not serialised, cleared once Sample is set.
+	sampleTier    int
+	sampleDepth   int
+	sampleVerRank int
+	sampleLabel   string
+	sampleLine    int
+	hasSample     bool
 }
 
 // isStructuralEdge reports whether a caller arrived via a class-wide,
@@ -44,6 +75,31 @@ type FileRollup struct {
 // the file — see docs/ruby-activerecord-association-plan.md Tier IR.
 func isStructuralEdge(c Caller) bool {
 	return c.EdgeType == string(graph.EdgeTypeInherits) || c.EdgeMeta["via"] == "rails_filter"
+}
+
+// isContainmentEdge reports whether a caller was reached by the walk
+// continuing along `contains`/`declares` after landing on a container (class,
+// scope) — as opposed to a real edge (calls, writes, reads, renders, ...)
+// originating from something the walk actually does.
+func isContainmentEdge(c Caller) bool {
+	return c.EdgeType == string(graph.EdgeTypeContains) || c.EdgeType == string(graph.EdgeTypeDeclares)
+}
+
+// edgeTier ranks how directly a caller's edge evidences that a file matters,
+// lowest is best. It picks each file's Sample and, combined with
+// isContainmentEdge's direct/contained split, orders files in rollupCallers.
+//   0: a real edge (calls, writes, reads, renders, http_call, ...)
+//   1: contains/declares fan-out — reached only by walking into a container
+//   2: structural (inherits, rails_filter) — a class-wide edge, see isStructuralEdge
+func edgeTier(c Caller) int {
+	switch {
+	case isStructuralEdge(c):
+		return 2
+	case isContainmentEdge(c):
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Summary is the file-grouped rollup of an impact result, emitted when the
@@ -86,14 +142,34 @@ func rollupCallers(callers []Caller) []FileRollup {
 			allStructural[k] = true
 		}
 		e.Nodes++
+		if isContainmentEdge(c) {
+			e.ContainedNodes++
+		} else {
+			e.DirectNodes++
+		}
 		if c.Depth < e.MinDepth {
 			e.MinDepth = c.Depth
 		}
 		if c.EdgeType != "" {
 			e.EdgeTypes = appendUnique(e.EdgeTypes, c.EdgeType)
 		}
-		if graph.VerificationRank(c.VerificationState) < graph.VerificationRank(e.BestVerificationState) {
+		verRank := graph.VerificationRank(c.VerificationState)
+		if verRank < graph.VerificationRank(e.BestVerificationState) {
 			e.BestVerificationState = c.VerificationState
+		}
+		tier := edgeTier(c)
+		better := !e.hasSample ||
+			tier < e.sampleTier ||
+			(tier == e.sampleTier && c.Depth < e.sampleDepth) ||
+			(tier == e.sampleTier && c.Depth == e.sampleDepth && verRank < e.sampleVerRank) ||
+			(tier == e.sampleTier && c.Depth == e.sampleDepth && verRank == e.sampleVerRank && c.Label < e.sampleLabel)
+		if better {
+			e.hasSample = true
+			e.sampleTier = tier
+			e.sampleDepth = c.Depth
+			e.sampleVerRank = verRank
+			e.sampleLabel = c.Label
+			e.sampleLine = c.Line
 		}
 		if !isStructuralEdge(c) {
 			allStructural[k] = false
@@ -104,11 +180,20 @@ func rollupCallers(callers []Caller) []FileRollup {
 	for k, e := range entries {
 		sort.Strings(e.EdgeTypes)
 		e.StructuralOnly = allStructural[k]
+		e.ContainmentOnly = e.DirectNodes == 0
+		if e.hasSample {
+			if e.sampleLine > 0 {
+				e.Sample = fmt.Sprintf("%s — %s:%d", e.sampleLabel, e.File, e.sampleLine)
+			} else {
+				e.Sample = e.sampleLabel
+			}
+		}
 		files = append(files, *e)
 	}
 	sort.Slice(files, func(i, j int) bool {
-		if files[i].StructuralOnly != files[j].StructuralOnly {
-			return !files[i].StructuralOnly
+		li, lj := files[i].StructuralOnly || files[i].ContainmentOnly, files[j].StructuralOnly || files[j].ContainmentOnly
+		if li != lj {
+			return !li
 		}
 		if files[i].MinDepth != files[j].MinDepth {
 			return files[i].MinDepth < files[j].MinDepth
