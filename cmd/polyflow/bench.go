@@ -17,11 +17,8 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/eval"
 )
 
-//go:embed hookscripts/polyflow-first.py
-var hookScriptGrepNudge []byte
-
-//go:embed hookscripts/polyflow-read-gate.py
-var hookScriptReadGate []byte
+//go:embed hookscripts/polyflow-context-inject.py
+var hookScriptContextInject []byte
 
 var (
 	benchCorpus     string
@@ -156,14 +153,13 @@ func runBench(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 
-	// polyflow-first.py / polyflow-read-gate.py (embedded from
-	// cmd/polyflow/hookscripts, the same source this repo's own
-	// .claude/settings.json wires for interactive sessions) only fire when
-	// the *target* repo's own settings wire them — which none of
-	// orion/juniper/etc. do. --settings injects them by absolute path
-	// regardless of which repo `claude -p` runs in, so the
-	// with_polyflow_semantic arm gets the same grep/Read nudges a local
-	// polyflow-repo session already gets for free.
+	// polyflow-context-inject.py (embedded from cmd/polyflow/hookscripts, the
+	// same source this repo's own .claude/settings.json wires for
+	// interactive sessions) only fires when the *target* repo's own settings
+	// wire it — which none of orion/juniper/etc. do. --settings
+	// injects it by absolute path regardless of which repo `claude -p` runs
+	// in, so the with_polyflow_semantic arm gets the same grep/cat/Read
+	// auto-augmentation a local polyflow-repo session already gets for free.
 	hookSettingsJSON, hookCleanup, err := writeHookScripts()
 	if err != nil {
 		return err
@@ -430,62 +426,52 @@ func writeMCPConfig(polyflowBin string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
-// writeHookScripts stages the embedded polyflow-first.py / polyflow-read-gate.py
-// hooks to temp files and returns a --settings JSON blob wiring them as
-// PreToolUse hooks for Bash and Read — the same pair this repo's own
+// writeHookScripts stages the embedded polyflow-context-inject.py hook to a
+// temp file and returns a --settings JSON blob wiring it as a PostToolUse
+// hook for Bash and Read — the same hook this repo's own
 // .claude/settings.json wires for interactive sessions, but portable to
 // whatever repo the with_polyflow_semantic arm's `claude -p` runs in. Without
-// this, the hooks are dead weight outside this checkout: Claude Code loads
-// PreToolUse hooks from the *target* repo's own settings, and orion/
-// juniper/etc. don't carry a copy.
+// this, the hook is dead weight outside this checkout: Claude Code loads
+// hooks from the *target* repo's own settings, and orion/juniper/etc.
+// don't carry a copy.
+//
+// This replaced an earlier pair of PreToolUse hooks (polyflow-first.py,
+// polyflow-read-gate.py) that denied the first grep/cat/Read of a session
+// with a suggestion to try polyflow instead. Tracing real bench transcripts
+// showed that bet paid off inconsistently: the nudge fires once, the agent
+// has to independently guess the right polyflow tool + query, and every
+// later grep/cat/Read in the same session sails through unenriched. A
+// PostToolUse hook never blocks — it lets grep/cat/Read run exactly as
+// intended and appends a compact graph-context block to the output, so the
+// payoff lands on the first matching call regardless of what the agent does
+// next.
 func writeHookScripts() (string, func(), error) {
-	grepHook, err := os.CreateTemp("", "polyflow-hook-grep-*.py")
+	f, err := os.CreateTemp("", "polyflow-hook-context-*.py")
 	if err != nil {
-		return "", func() {}, fmt.Errorf("write grep-nudge hook: %w", err)
+		return "", func() {}, fmt.Errorf("write context-inject hook: %w", err)
 	}
-	if _, err := grepHook.Write(hookScriptGrepNudge); err != nil {
-		grepHook.Close()
-		os.Remove(grepHook.Name())
+	if _, err := f.Write(hookScriptContextInject); err != nil {
+		f.Close()
+		os.Remove(f.Name())
 		return "", func() {}, err
 	}
-	grepHook.Close()
+	f.Close()
 
-	readHook, err := os.CreateTemp("", "polyflow-hook-read-*.py")
-	if err != nil {
-		os.Remove(grepHook.Name())
-		return "", func() {}, fmt.Errorf("write read-gate hook: %w", err)
-	}
-	if _, err := readHook.Write(hookScriptReadGate); err != nil {
-		readHook.Close()
-		os.Remove(grepHook.Name())
-		os.Remove(readHook.Name())
-		return "", func() {}, err
-	}
-	readHook.Close()
+	cleanup := func() { os.Remove(f.Name()) }
 
-	cleanup := func() {
-		os.Remove(grepHook.Name())
-		os.Remove(readHook.Name())
-	}
-
-	// polyflow-read-gate.py is registered on BOTH matchers: Read (the file_path
-	// case) and Bash (the cat/sed/head/tail/single-file-grep case) — an agent
-	// that dodges Read by peeking at a file via `grep`/`sed -n` through Bash
-	// must not bypass the same nudge.
 	settings := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			"PreToolUse": []map[string]interface{}{
+			"PostToolUse": []map[string]interface{}{
 				{
 					"matcher": "Bash",
 					"hooks": []map[string]interface{}{
-						{"type": "command", "command": "python3 " + grepHook.Name()},
-						{"type": "command", "command": "python3 " + readHook.Name()},
+						{"type": "command", "command": "python3 " + f.Name()},
 					},
 				},
 				{
 					"matcher": "Read",
 					"hooks": []map[string]interface{}{
-						{"type": "command", "command": "python3 " + readHook.Name()},
+						{"type": "command", "command": "python3 " + f.Name()},
 					},
 				},
 			},
