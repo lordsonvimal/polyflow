@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lordsonvimal/polyflow/internal/budget"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -81,6 +82,11 @@ type Result struct {
 	// sorted by (service, file). Always present ([] when unambiguous). Agents
 	// should re-query with target_service/--target-service when non-empty.
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+
+	// Budget records the token-budgeting decision when ApplyBudget trimmed
+	// Nodes/Chains to fit. Omitted when no budget was applied or the result
+	// already fit.
+	Budget *budget.Info `json:"budget,omitempty"`
 }
 
 // Run traces from rootID in the given direction ("forward", "backward",
@@ -382,6 +388,64 @@ func sortedEdges(idx *graph.AdjacencyIndex, nodeID, direction string) []*graph.E
 		return ni < nj
 	})
 	return sorted
+}
+
+// ApplyBudget trims Chains then Nodes to fit maxTokens (<=0 = unlimited,
+// left untouched). Chains go first: MaxChains already caps chain count, but
+// each hop carries full node+edge metadata and is duplicated across every
+// chain it appears in, so Chains is the more expensive of the two lists per
+// item and also the more skippable — Nodes plus EdgeTypes/Services already
+// answers "what's involved" once Chains is gone, just without path
+// ordering. Both lists always keep at least 1 entry so the answer never
+// goes empty.
+//
+// Added after a live bench trial measured a depth-10 "both"-direction trace
+// on a busy AMQP channel hub producing 346K–471K characters — over Claude
+// Code's own tool-output limit, which hard-rejected the call outright (no
+// truncated preview, unlike a merely oversized-but-under-limit result) and
+// forced the agent to abandon polyflow for ~20 manual grep/Read calls to
+// reconstruct by hand what one trace call was supposed to answer.
+func (r *Result) ApplyBudget(maxTokens int) *Result {
+	if maxTokens <= 0 {
+		return r
+	}
+	if budget.Estimate(r) <= maxTokens {
+		r.Budget = &budget.Info{MaxTokens: maxTokens, EstimatedTokens: budget.Estimate(r), Level: budget.LevelDetail}
+		return r
+	}
+
+	allChains := r.Chains
+	n := budget.TrimToFit(len(allChains), maxTokens, func(n int) int {
+		r.Chains = allChains[:n]
+		return budget.Estimate(r)
+	})
+	r.Chains = allChains[:n]
+	if n < len(allChains) {
+		r.Truncated = true
+	}
+	if budget.Estimate(r) <= maxTokens {
+		r.Budget = &budget.Info{
+			MaxTokens: maxTokens, EstimatedTokens: budget.Estimate(r), Level: budget.LevelDetail,
+			Note: fmt.Sprintf("chains trimmed to %d of %d to fit max_tokens", n, len(allChains)),
+		}
+		return r
+	}
+
+	allNodes := r.Nodes
+	m := budget.TrimToFit(len(allNodes), maxTokens, func(m int) int {
+		r.Nodes = allNodes[:m]
+		return budget.Estimate(r)
+	})
+	r.Nodes = allNodes[:m]
+	if m < len(allNodes) {
+		r.Truncated = true
+	}
+	r.Budget = &budget.Info{
+		MaxTokens: maxTokens, EstimatedTokens: budget.Estimate(r), Level: budget.LevelSummary,
+		Note: fmt.Sprintf("chains trimmed to %d of %d, nodes trimmed to %d of %d to fit max_tokens",
+			n, len(allChains), m, len(allNodes)),
+	}
+	return r
 }
 
 func sortedKeys(m map[string]bool) []string {

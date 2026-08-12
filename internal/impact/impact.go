@@ -75,6 +75,15 @@ type Result struct {
 	// should re-query with target_service/--target-service when non-empty.
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 
+	// Targets is set instead of a single Target when the query matched the
+	// same label in >1 service and target_service was left unspecified (e.g.
+	// a client-side call and its server-side handler sharing a name across an
+	// HTTP contract). Target still holds the first resolved root for
+	// backward-compat with callers that only read Target; Targets lists every
+	// root whose blast radius was unioned into Callers below. Omitted (nil)
+	// in the single-root case.
+	Targets []*graph.Node `json:"targets,omitempty"`
+
 	// Budget records the token-budgeting decision when a budget was set and
 	// the detail shape was emitted.
 	Budget *budget.Info `json:"budget,omitempty"`
@@ -106,36 +115,7 @@ type Options struct {
 // The result field is still called Callers for compatibility with the output
 // contract; under Direction "forward" they are callees.
 func Build(idx *graph.AdjacencyIndex, root *graph.Node, opts Options) *Result {
-	var ancestors []graph.TraversalResult
-	switch opts.Direction {
-	case "forward":
-		ancestors = graph.TraverseWithPolicy(idx, root.ID, "out", graph.BFS, opts.Depth, opts.Policy)
-	case "both":
-		ancestors = graph.TraverseWithPolicy(idx, root.ID, "in", graph.BFS, opts.Depth, opts.Policy)
-		seen := make(map[string]bool, len(ancestors))
-		for _, a := range ancestors {
-			seen[a.Node.ID] = true
-		}
-		// A node reachable both ways keeps its backward hit: "it breaks" is
-		// the stronger claim and the one the depth was measured for.
-		for _, d := range graph.TraverseWithPolicy(idx, root.ID, "out", graph.BFS, opts.Depth, opts.Policy) {
-			if !seen[d.Node.ID] {
-				ancestors = append(ancestors, d)
-			}
-		}
-	default:
-		ancestors = graph.TraverseWithPolicy(idx, root.ID, "in", graph.BFS, opts.Depth, opts.Policy)
-	}
-
-	if opts.Service != "" {
-		filtered := ancestors[:0]
-		for _, a := range ancestors {
-			if a.Node.Service == opts.Service {
-				filtered = append(filtered, a)
-			}
-		}
-		ancestors = filtered
-	}
+	ancestors := traverseFrom(idx, root.ID, opts)
 	verboseSources := opts.VerboseSources
 
 	callers, entryPoints, servicesAffected, triggers, edges := assemble(idx, ancestors, verboseSources)
@@ -152,6 +132,97 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, opts Options) *Result {
 		Unresolved:           []graph.UnresolvedRef{},
 		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, opts.StaleAfter, time.Now()),
 	}
+}
+
+// BuildMulti computes and unions the blast radius of every node in roots —
+// one traversal per root, merged before assembly. Built for the case an
+// exact-label query matches the same symbol in >1 service (a client call and
+// its server-side handler sharing a name across an HTTP contract): rather
+// than making the agent call Build once per service with target_service
+// pinned, the MCP impact handler resolves every service's root up front and
+// calls this once so the blast radii come back merged in a single response.
+//
+// A node reachable from more than one root keeps its lowest-depth hit — the
+// same rule Build's own "both"-direction merge uses — so a symbol close to
+// one root and distant from another reports the closer, stronger claim.
+func BuildMulti(idx *graph.AdjacencyIndex, roots []*graph.Node, opts Options) *Result {
+	if len(roots) == 1 {
+		r := Build(idx, roots[0], opts)
+		return r
+	}
+
+	merged := make(map[string]graph.TraversalResult)
+	for _, root := range roots {
+		for _, a := range traverseFrom(idx, root.ID, opts) {
+			if existing, ok := merged[a.Node.ID]; !ok || a.Depth < existing.Depth {
+				merged[a.Node.ID] = a
+			}
+		}
+	}
+	ancestors := make([]graph.TraversalResult, 0, len(merged))
+	for _, a := range merged {
+		ancestors = append(ancestors, a)
+	}
+	// Map iteration must never reach output (bug-class rule 2): order by
+	// (depth, node ID) for a deterministic result independent of map order.
+	sort.Slice(ancestors, func(i, j int) bool {
+		if ancestors[i].Depth != ancestors[j].Depth {
+			return ancestors[i].Depth < ancestors[j].Depth
+		}
+		return ancestors[i].Node.ID < ancestors[j].Node.ID
+	})
+
+	callers, entryPoints, servicesAffected, triggers, edges := assemble(idx, ancestors, opts.VerboseSources)
+
+	return &Result{
+		Target:               roots[0],
+		Targets:              roots,
+		Callers:              callers,
+		EntryPoints:          entryPoints,
+		ServicesAffected:     servicesAffected,
+		CrossServiceTriggers: triggers,
+		Depth:                opts.Depth,
+		Direction:            direction(opts.Direction),
+		TotalCallers:         len(callers),
+		Unresolved:           []graph.UnresolvedRef{},
+		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, opts.StaleAfter, time.Now()),
+	}
+}
+
+// traverseFrom runs the direction/service-filter logic shared by Build and
+// BuildMulti for a single root ID.
+func traverseFrom(idx *graph.AdjacencyIndex, rootID string, opts Options) []graph.TraversalResult {
+	var ancestors []graph.TraversalResult
+	switch opts.Direction {
+	case "forward":
+		ancestors = graph.TraverseWithPolicy(idx, rootID, "out", graph.BFS, opts.Depth, opts.Policy)
+	case "both":
+		ancestors = graph.TraverseWithPolicy(idx, rootID, "in", graph.BFS, opts.Depth, opts.Policy)
+		seen := make(map[string]bool, len(ancestors))
+		for _, a := range ancestors {
+			seen[a.Node.ID] = true
+		}
+		// A node reachable both ways keeps its backward hit: "it breaks" is
+		// the stronger claim and the one the depth was measured for.
+		for _, d := range graph.TraverseWithPolicy(idx, rootID, "out", graph.BFS, opts.Depth, opts.Policy) {
+			if !seen[d.Node.ID] {
+				ancestors = append(ancestors, d)
+			}
+		}
+	default:
+		ancestors = graph.TraverseWithPolicy(idx, rootID, "in", graph.BFS, opts.Depth, opts.Policy)
+	}
+
+	if opts.Service != "" {
+		filtered := ancestors[:0]
+		for _, a := range ancestors {
+			if a.Node.Service == opts.Service {
+				filtered = append(filtered, a)
+			}
+		}
+		ancestors = filtered
+	}
+	return ancestors
 }
 
 // direction normalises the reported direction so the output never omits it —
