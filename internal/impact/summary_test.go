@@ -223,3 +223,80 @@ func TestSummarize_InheritsEdgeIsStructural(t *testing.T) {
 	require.Len(t, s.Files, 1)
 	assert.True(t, s.Files[0].StructuralOnly)
 }
+
+// TestSummarize_DirectAndContainedSplitInSameFile is the nextgen bench
+// regression: a file reached by one real edge (calls) and one containment
+// fan-out edge (contains, into the same file at the same depth) must report
+// both counts separately and pick the real edge as Sample — the shape that
+// let deliverable.rb's has_many guard get buried under sibling methods that
+// the target never touches. See docs/... blast-radius rollup findings.
+func TestSummarize_DirectAndContainedSplitInSameFile(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "direct", Type: graph.NodeTypeFunction, Label: "present?", Service: "svc", File: "svc/model.rb", Line: 12})
+	idx.AddNode(&graph.Node{ID: "cls", Type: graph.NodeTypeClass, Label: "Model", Service: "svc", File: "svc/model.rb", Line: 1})
+
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "direct", To: "tgt", Type: graph.EdgeTypeCalls})
+	idx.AddEdge(&graph.Edge{ID: "e2", From: "cls", To: "tgt", Type: graph.EdgeTypeContains})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 1)
+	f := s.Files[0]
+	assert.Equal(t, 2, f.Nodes)
+	assert.Equal(t, 1, f.DirectNodes)
+	assert.Equal(t, 1, f.ContainedNodes)
+	assert.False(t, f.ContainmentOnly, "one real edge must keep the file out of the low-signal tier")
+	assert.Equal(t, "present? — svc/model.rb:12", f.Sample, "the real edge, not the containment fan-out, is the sample")
+}
+
+// TestSummarize_ContainmentOnlyRanksAfterRealFiles mirrors the
+// StructuralOnly regression above for the other low-signal shape: a file
+// reached only via contains/declares fan-out, with no real edge of its own.
+func TestSummarize_ContainmentOnlyRanksAfterRealFiles(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "container", Type: graph.NodeTypeClass, Label: "Container", Service: "svc", File: "svc/container.rb", Line: 1})
+	idx.AddNode(&graph.Node{ID: "mid", Type: graph.NodeTypeFunction, Label: "mid", Service: "svc", File: "svc/mid.go", Line: 5})
+	idx.AddNode(&graph.Node{ID: "deep", Type: graph.NodeTypeFunction, Label: "deep", Service: "svc", File: "svc/model.go", Line: 5})
+
+	// Containment-only file at depth 1.
+	idx.AddEdge(&graph.Edge{ID: "econtainer", From: "container", To: "tgt", Type: graph.EdgeTypeContains})
+	// Real file at depth 1, with a real caller of its own at depth 2.
+	idx.AddEdge(&graph.Edge{ID: "emid", From: "mid", To: "tgt", Type: graph.EdgeTypeCalls})
+	idx.AddEdge(&graph.Edge{ID: "edeep", From: "deep", To: "mid", Type: graph.EdgeTypeCalls})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 3)
+	assert.Equal(t, "svc/mid.go", s.Files[0].File, "depth-1 real file ranks first")
+	assert.Equal(t, "svc/model.go", s.Files[1].File, "depth-2 real file ranks before shallower containment-only noise")
+	assert.Equal(t, "svc/container.rb", s.Files[2].File, "containment-only file, though shallowest, ranks last")
+	assert.True(t, s.Files[2].ContainmentOnly)
+	assert.Equal(t, 0, s.Files[2].DirectNodes)
+}
+
+// TestSummarize_SamplePrefersDirectOverContainmentOverStructural exercises
+// edgeTier's three-way ordering directly: at equal depth in one file, the
+// Sample must be the real edge, never the containment or structural one.
+func TestSummarize_SamplePrefersDirectOverContainmentOverStructural(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "a", Type: graph.NodeTypeFunction, Label: "structural", Service: "svc", File: "svc/mixed.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "b", Type: graph.NodeTypeClass, Label: "contained", Service: "svc", File: "svc/mixed.go", Line: 5})
+	idx.AddNode(&graph.Node{ID: "c", Type: graph.NodeTypeFunction, Label: "realCaller", Service: "svc", File: "svc/mixed.go", Line: 9})
+
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "a", To: "tgt", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}})
+	idx.AddEdge(&graph.Edge{ID: "e2", From: "b", To: "tgt", Type: graph.EdgeTypeContains})
+	idx.AddEdge(&graph.Edge{ID: "e3", From: "c", To: "tgt", Type: graph.EdgeTypeCalls})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 1)
+	assert.Equal(t, "realCaller — svc/mixed.go:9", s.Files[0].Sample)
+	assert.Equal(t, 2, s.Files[0].DirectNodes, "the structural edge counts as direct — it is not containment fan-out")
+	assert.Equal(t, 1, s.Files[0].ContainedNodes)
+}

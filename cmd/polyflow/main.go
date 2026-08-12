@@ -1482,7 +1482,7 @@ func initImpactFlags() {
 	impactCmd.Flags().StringVar(&impactTargetService, "target-service", "", "restrict target resolution to this service (resolves cross-service ambiguity)")
 	impactCmd.Flags().StringVar(&impactTargetType, "target-type", "", "restrict target resolution to this node type (function, component, …)")
 	impactCmd.Flags().StringVar(&impactFile, "file", "", "file path: report impact at file granularity")
-	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "forward, backward or both; backward is \"what breaks if I change this\", forward is \"what does this reach\"")
+	impactCmd.Flags().StringVar(&impactDirection, "direction", "backward", "forward, backward or both; backward is \"what breaks if I change this\", forward is \"what does this reach\"; use both for \"what else do I need to touch/change\"")
 	impactCmd.Flags().BoolVar(&impactDiff, "diff", false, "union blast radius of uncommitted changes (git diff against HEAD)")
 	impactCmd.Flags().BoolVar(&impactStaged, "staged", false, "with --diff: staged changes only (git diff --cached)")
 	impactCmd.Flags().IntVar(&impactDepth, "depth", 10, "max traversal depth (0 = unlimited)")
@@ -1600,6 +1600,21 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	return printImpactText(out)
 }
 
+// printFileRollupText renders one impact.FileRollup line, plus the Sample
+// node underneath it when the file carries containment fan-out worth
+// distinguishing from real hits — see internal/impact/summary.go.
+func printFileRollupText(f impact.FileRollup) {
+	nodes := fmt.Sprintf("%d", f.Nodes)
+	if f.ContainedNodes > 0 {
+		nodes = fmt.Sprintf("%dd+%dc", f.DirectNodes, f.ContainedNodes)
+	}
+	fmt.Fprintf(os.Stdout, "  depth %-2d %-60s %8s nodes via %s [%s]\n",
+		f.MinDepth, f.File, nodes, strings.Join(f.EdgeTypes, ","), f.Service)
+	if f.Sample != "" {
+		fmt.Fprintf(os.Stdout, "           ↳ %s\n", f.Sample)
+	}
+}
+
 func printImpactSummaryText(s *impact.Summary) error {
 	t := s.Target
 	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d (direction=%s)\n\n", t.Label, t.Type, t.File, t.Line, s.Direction)
@@ -1607,8 +1622,7 @@ func printImpactSummaryText(s *impact.Summary) error {
 	if len(s.Files) > 0 {
 		fmt.Fprintln(os.Stdout, "Files in blast radius:")
 		for _, f := range s.Files {
-			fmt.Fprintf(os.Stdout, "  depth %-2d %-60s %2d nodes via %s [%s]\n",
-				f.MinDepth, f.File, f.Nodes, strings.Join(f.EdgeTypes, ","), f.Service)
+			printFileRollupText(f)
 		}
 		fmt.Fprintln(os.Stdout)
 	}
@@ -1897,8 +1911,7 @@ func printImpactDiffSummaryText(s *impact.DiffSummary) error {
 	if len(s.Files) > 0 {
 		fmt.Fprintln(os.Stdout, "Files in blast radius:")
 		for _, f := range s.Files {
-			fmt.Fprintf(os.Stdout, "  depth %-2d %-60s %2d nodes via %s [%s]\n",
-				f.MinDepth, f.File, f.Nodes, strings.Join(f.EdgeTypes, ","), f.Service)
+			printFileRollupText(f)
 		}
 		fmt.Fprintln(os.Stdout)
 	}
