@@ -468,6 +468,10 @@ func writeHookScripts() (string, func(), error) {
 		os.Remove(readHook.Name())
 	}
 
+	// polyflow-read-gate.py is registered on BOTH matchers: Read (the file_path
+	// case) and Bash (the cat/sed/head/tail/single-file-grep case) — an agent
+	// that dodges Read by peeking at a file via `grep`/`sed -n` through Bash
+	// must not bypass the same nudge.
 	settings := map[string]interface{}{
 		"hooks": map[string]interface{}{
 			"PreToolUse": []map[string]interface{}{
@@ -475,6 +479,7 @@ func writeHookScripts() (string, func(), error) {
 					"matcher": "Bash",
 					"hooks": []map[string]interface{}{
 						{"type": "command", "command": "python3 " + grepHook.Name()},
+						{"type": "command", "command": "python3 " + readHook.Name()},
 					},
 				},
 				{
