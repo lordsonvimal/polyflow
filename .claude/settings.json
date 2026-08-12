@@ -1,16 +1,12 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-first.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-read-gate.py"
+            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-context-inject.py"
           }
         ]
       },
@@ -19,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-read-gate.py"
+            "command": "python3 /Users/lordson/Projects/polyflow/cmd/polyflow/hookscripts/polyflow-context-inject.py"
           }
         ]
       }
