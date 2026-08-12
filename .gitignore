@@ -2,6 +2,7 @@
 /dist/
 .DS_Store
 **/.DS_Store
+__pycache__/
 web/dist/*
 !web/dist/.gitkeep
 web/node_modules/
