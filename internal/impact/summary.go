@@ -29,6 +29,21 @@ type FileRollup struct {
 	// BestVerificationState is the highest-confidence verification state among
 	// the callers in this file — used as a sort tie-breaker within equal depth.
 	BestVerificationState string `json:"best_verification_state,omitempty"`
+	// StructuralOnly is true when every caller landing in this file arrived
+	// via a class-wide, action-blind edge (a Rails filter chain, an
+	// include/extend/prepend mixin) rather than a genuine call from the
+	// target's own body. Ranked after real files regardless of depth — see
+	// the sort in rollupCallers.
+	StructuralOnly bool `json:"structural_only,omitempty"`
+}
+
+// isStructuralEdge reports whether a caller arrived via a class-wide,
+// action-blind edge: a rails_filter callback (registered once per class,
+// attributed to every action) or an inherits/mixin edge. Both are real
+// relationships, but not evidence that the impact target itself calls into
+// the file — see docs/ruby-activerecord-association-plan.md Tier IR.
+func isStructuralEdge(c Caller) bool {
+	return c.EdgeType == string(graph.EdgeTypeInherits) || c.EdgeMeta["via"] == "rails_filter"
 }
 
 // Summary is the file-grouped rollup of an impact result, emitted when the
@@ -38,7 +53,7 @@ type FileRollup struct {
 type Summary struct {
 	Target               *graph.Node           `json:"target"`
 	Summary              bool                  `json:"summary"` // always true: marks the rollup shape
-	Ranking              string                `json:"ranking"` // "depth,verification"
+	Ranking              string                `json:"ranking"` // "structural,depth,verification"
 	Files                []FileRollup          `json:"files"`
 	EntryPoints          []string              `json:"entry_points"`
 	ServicesAffected     []string              `json:"services_affected"`
@@ -60,12 +75,15 @@ func rollupCallers(callers []Caller) []FileRollup {
 	type key struct{ service, file string }
 	entries := make(map[key]*FileRollup)
 
+	allStructural := make(map[key]bool)
+
 	for _, c := range callers {
 		k := key{c.Service, c.File}
 		e, ok := entries[k]
 		if !ok {
 			e = &FileRollup{File: c.File, Service: c.Service, MinDepth: c.Depth}
 			entries[k] = e
+			allStructural[k] = true
 		}
 		e.Nodes++
 		if c.Depth < e.MinDepth {
@@ -77,14 +95,21 @@ func rollupCallers(callers []Caller) []FileRollup {
 		if graph.VerificationRank(c.VerificationState) < graph.VerificationRank(e.BestVerificationState) {
 			e.BestVerificationState = c.VerificationState
 		}
+		if !isStructuralEdge(c) {
+			allStructural[k] = false
+		}
 	}
 
 	files := make([]FileRollup, 0, len(entries))
-	for _, e := range entries {
+	for k, e := range entries {
 		sort.Strings(e.EdgeTypes)
+		e.StructuralOnly = allStructural[k]
 		files = append(files, *e)
 	}
 	sort.Slice(files, func(i, j int) bool {
+		if files[i].StructuralOnly != files[j].StructuralOnly {
+			return !files[i].StructuralOnly
+		}
 		if files[i].MinDepth != files[j].MinDepth {
 			return files[i].MinDepth < files[j].MinDepth
 		}
@@ -146,7 +171,7 @@ func (r *Result) Summarize() *Summary {
 	return &Summary{
 		Target:               compactTarget(r.Target),
 		Summary:              true,
-		Ranking:              "depth,verification",
+		Ranking:              "structural,depth,verification",
 		Files:                rollupCallers(r.Callers),
 		EntryPoints:          entryPoints,
 		ServicesAffected:     r.ServicesAffected,
