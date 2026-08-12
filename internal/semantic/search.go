@@ -28,6 +28,23 @@ const (
 // disambiguation without paying for the long tail.
 const exactMatchNodeCap = 5
 
+// exactMatchFlowCap and exactMatchDocCap bound (not zero) the flow/doc
+// sections on an exact-label hit. A live bench trial (2026-08-12, the
+// juniper AMQP heartbeat task) showed why zeroing them outright is
+// unsafe: the query "heartbeat" exact-matched an unrelated container-stats
+// HTTP callback method also named Heartbeat, which won rank 0 on the
+// exact-match floor even though the real target — the runner_heartbeat AMQP
+// channel — only qualified as a lexical hit. That silently dropped the
+// precomputed agent-to-manager flow chain that would have answered the
+// query outright, forcing ~15 extra trace/grep round-trips to reconstruct
+// it by hand. A small non-zero cap keeps the common case (the exact match
+// really is what the caller wants) nearly as cheap as zero, while leaving a
+// flow/doc escape hatch for the case it isn't.
+const (
+	exactMatchFlowCap = 2
+	exactMatchDocCap  = 1
+)
+
 // ShapeSearchResponse applies the shared search-surface ergonomics used by both
 // the CLI and the MCP tool (IA §2/§3): cap the flow/doc sections so nodes stay
 // visible, and inline a few source lines per node so the first call shows code.
@@ -182,16 +199,18 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 	// rrfFuse already sorts exact-label hits first (bug-class rule 9), so a
 	// hit at rank 0 with Retrieval=="exact" means the caller's query already
 	// pinpointed a real symbol. In that case the long ranked tail behind it is
-	// noise the caller pays tokens for and doesn't need: cap nodes tightly and
-	// drop flows/docs, since flows/trace is the tool for chasing call chains
-	// once the target node is known.
+	// noise the caller pays tokens for and doesn't need: cap nodes tightly.
+	// Flows/docs are trimmed, not zeroed — see exactMatchFlowCap/DocCap: the
+	// exact match is sometimes a same-named but unrelated symbol (a coincidence
+	// on a common bare word like "heartbeat"), and zeroing flows outright then
+	// silently discards the one answer that would have actually helped.
 	nodeCap, flowCap, docCap := limit, limit, limit
 	if len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact" {
 		nodeCap = exactMatchNodeCap
 		if nodeCap > limit {
 			nodeCap = limit
 		}
-		flowCap, docCap = 0, 0
+		flowCap, docCap = exactMatchFlowCap, exactMatchDocCap
 	}
 
 	resp := Response{Semantic: semanticNote}

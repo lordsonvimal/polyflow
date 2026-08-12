@@ -327,8 +327,10 @@ func TestSearch_ExactMatchFloor(t *testing.T) {
 // 18KB, 20-deep ranked node list plus flow/doc sections for a query that
 // only needed the 1-2 nodes actually named RemoveConfig. When the top hit
 // is an exact-label match, the response should collapse to a handful of
-// nodes and drop flows/docs — the caller already has the target's exact
-// name and would call flows/trace next for chain context, not this call.
+// nodes and trim flows/docs to a small cap (not zero — a later bench trial
+// on "heartbeat" showed the exact match can itself be an unrelated,
+// coincidentally-same-named symbol, and zeroing flows/docs then silently
+// discards the one flow that would have actually answered the query).
 func TestSearch_ExactMatchTightensResponse(t *testing.T) {
 	db := openTestDB(t)
 	sem := NewStore(db)
@@ -364,8 +366,8 @@ func TestSearch_ExactMatchTightensResponse(t *testing.T) {
 	if len(resp.Nodes) > exactMatchNodeCap {
 		t.Errorf("exact match should cap nodes at %d, got %d", exactMatchNodeCap, len(resp.Nodes))
 	}
-	if len(resp.Flows) != 0 {
-		t.Errorf("exact match should drop flows, got %d", len(resp.Flows))
+	if len(resp.Flows) > exactMatchFlowCap {
+		t.Errorf("exact match should cap flows at %d, got %d", exactMatchFlowCap, len(resp.Flows))
 	}
 }
 
