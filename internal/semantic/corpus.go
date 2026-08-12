@@ -102,6 +102,94 @@ var entrypointTypes = map[graph.NodeType]bool{
 	graph.NodeTypeWorker:      true,
 }
 
+// workerLaunchDepth bounds how far workerLaunchHops walks backward from a
+// worker before giving up. A goroutine's spawn site is normally a handful of
+// hops from its service's Start()/main() — capping the walk keeps a
+// pathological deep call graph from producing an unrelated, overlong prefix.
+const workerLaunchDepth = 6
+
+// structuralEdgeTypes are the containment/declaration backbone (service→
+// file→declaration), not a causal "this triggers that" relationship.
+// workerLaunchHops must skip them: a plain lowest-ID tie-break otherwise
+// picks a file's "contains" edge over the real "calls" edge from whatever
+// method actually starts the worker, because ":file" sorts before
+// ":method:Start:..." lexicographically — verified live against the
+// juniper graph, where this initially produced a launch path of
+// [service, file, startHeartbeat] instead of [main, Start, startHeartbeat].
+var structuralEdgeTypes = map[graph.EdgeType]bool{
+	graph.EdgeTypeContains: true,
+	graph.EdgeTypeDeclares: true,
+}
+
+// workerLaunchHops walks backward from workerID via the lowest-ID (bug-class
+// rule 2: deterministic) non-structural incoming edge at each hop, until a
+// node with no further non-structural incoming edges is reached or
+// workerLaunchDepth is exhausted. Returns prefix ordered ancestor-first
+// (furthest ancestor to workerID's immediate caller, EXCLUDING workerID
+// itself) and edgeIntoWorker, the type of the edge connecting the nearest
+// ancestor to workerID — the caller attaches that to the worker's own hop,
+// which this function doesn't own. Both are zero-valued when workerID has
+// no non-structural incoming edges.
+//
+// Route/handler/subscriber entrypoints are already "the start of the
+// story" — an HTTP route has nothing more useful to show upstream. A
+// worker (goroutine) is different: something started it, and that's often
+// the more useful entry point for "walk me through this flow". Without
+// this, BuildFlowChains only walked forward from the goroutine literal — a
+// live AMQP bench trial showed the file that actually wires up a heartbeat
+// worker (main.go, three hops back through Start()/startHeartbeat()) was
+// never discoverable through the precomputed flow chain at all, forcing
+// ~15 extra trace/grep round-trips per trial to reconstruct it by hand.
+func workerLaunchHops(idx *graph.AdjacencyIndex, workerID string, maxDepth int) (prefix []trace.Hop, edgeIntoWorker string) {
+	// visited guards against a cycle in the backward walk (e.g. a goroutine
+	// whose body itself calls back toward an ancestor already on this path)
+	// — verified live: without this, the walk revisited main()/a wrapper
+	// goroutine and produced a launch prefix with duplicated hops.
+	visited := map[string]bool{workerID: true}
+	cur := workerID
+	for i := 0; i < maxDepth; i++ {
+		var best *graph.Edge
+		for _, e := range idx.InEdges[cur] {
+			if structuralEdgeTypes[e.Type] || visited[e.From] {
+				continue
+			}
+			if best == nil || e.From < best.From {
+				best = e
+			}
+		}
+		if best == nil {
+			break
+		}
+		parent := idx.Nodes[best.From]
+		if parent == nil {
+			break
+		}
+		visited[parent.ID] = true
+		if cur == workerID {
+			edgeIntoWorker = string(best.Type)
+		} else {
+			// best is the edge INTO `cur`, whose hop currently sits at
+			// prefix[0] (added on the previous iteration with no edge type
+			// yet, since it wasn't known until now).
+			prefix[0].EdgeType = string(best.Type)
+		}
+		prefix = append([]trace.Hop{{
+			ID: parent.ID, Type: string(parent.Type), Label: labelOrNodeID(parent),
+			Service: parent.Service, File: parent.File, Line: parent.Line,
+			Language: parent.Language, NodeMeta: parent.Meta,
+		}}, prefix...)
+		cur = parent.ID
+	}
+	return prefix, edgeIntoWorker
+}
+
+func labelOrNodeID(n *graph.Node) string {
+	if n.Label != "" {
+		return n.Label
+	}
+	return n.ID
+}
+
 // BuildFlowChains assembles one Entity per distinct forward chain from each
 // entrypoint node in idx.  Chains longer than chainNodeCap hops are trimmed;
 // single-hop paths (entry node only) are skipped.
@@ -125,10 +213,23 @@ func BuildFlowChains(idx *graph.AdjacencyIndex) []Entity {
 		if result == nil {
 			continue
 		}
+
+		var launchPrefix []trace.Hop
+		var edgeIntoRoot string
+		if idx.Nodes[rootID].Type == graph.NodeTypeWorker {
+			launchPrefix, edgeIntoRoot = workerLaunchHops(idx, rootID, workerLaunchDepth)
+		}
+
 		for _, chain := range result.Chains {
 			hops := chain.Hops
 			if len(hops) < 2 {
 				continue // single-hop = just the root; not a useful chain
+			}
+			if len(launchPrefix) > 0 {
+				hops = append(append([]trace.Hop{}, launchPrefix...), hops...)
+				if edgeIntoRoot != "" {
+					hops[len(launchPrefix)].EdgeType = edgeIntoRoot
+				}
 			}
 			if len(hops) > chainNodeCap {
 				hops = hops[:chainNodeCap]

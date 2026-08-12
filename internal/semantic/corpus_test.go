@@ -303,6 +303,160 @@ func TestBuildFlowChains_Determinism(t *testing.T) {
 	}
 }
 
+// TestBuildFlowChains_WorkerPrependsLaunchPath reproduces the juniper
+// AMQP bench finding: a worker (goroutine) flow chain previously started at
+// the goroutine literal and walked only forward, so the file that actually
+// launches the worker (three hops back through a Start() method and its
+// caller) never appeared in the chain at all. The launch path must now be
+// prepended, ancestor-first, ahead of the worker's own forward chain.
+func TestBuildFlowChains_WorkerPrependsLaunchPath(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "fn:main", Label: "main", Type: graph.NodeTypeFunction, Service: "agent", File: "main.go"},
+		{ID: "fn:Start", Label: "Start", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+		{ID: "fn:startHeartbeat", Label: "startHeartbeat", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+		{ID: "worker:goroutine", Label: "goroutine_anon", Type: graph.NodeTypeWorker, Service: "agent", File: "runner.go"},
+		{ID: "fn:sendHeartbeat", Label: "sendHeartbeat", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+		{ID: "fn:PublishHeartbeat", Label: "PublishHeartbeat", Type: graph.NodeTypeFunction, Service: "agent", File: "amqp_client.go"},
+	}
+	edges := []graph.Edge{
+		{ID: "e1", From: "fn:main", To: "fn:Start", Type: graph.EdgeTypeCalls},
+		{ID: "e2", From: "fn:Start", To: "fn:startHeartbeat", Type: graph.EdgeTypeCalls},
+		{ID: "e3", From: "fn:startHeartbeat", To: "worker:goroutine", Type: graph.EdgeTypeCalls},
+		{ID: "e4", From: "worker:goroutine", To: "fn:sendHeartbeat", Type: graph.EdgeTypeCalls},
+		{ID: "e5", From: "fn:sendHeartbeat", To: "fn:PublishHeartbeat", Type: graph.EdgeTypeCalls},
+	}
+	idx := buildTestIdx(nodes, edges)
+	chains := BuildFlowChains(idx)
+
+	var hit *Entity
+	for i := range chains {
+		if chains[i].NodeID == "worker:goroutine" {
+			hit = &chains[i]
+			break
+		}
+	}
+	require.NotNil(t, hit, "expected a chain rooted at worker:goroutine")
+
+	assert.Equal(t, []string{
+		"fn:main", "fn:Start", "fn:startHeartbeat",
+		"worker:goroutine", "fn:sendHeartbeat", "fn:PublishHeartbeat",
+	}, hit.Members, "launch path must be prepended ancestor-first, ahead of the worker's own forward chain")
+	assert.Contains(t, hit.Text, "main")
+	assert.Contains(t, hit.Text, "Start")
+}
+
+// TestBuildFlowChains_WorkerLaunchPathSkipsStructuralEdges reproduces the
+// second live finding: a naive lowest-ID tie-break followed the file's
+// "contains" edge into startHeartbeat instead of the real "calls" edge from
+// Start(), because "...:file" sorts before "...:method:Start:..."
+// lexicographically. The launch path must follow calls, not containment.
+func TestBuildFlowChains_WorkerLaunchPathSkipsStructuralEdges(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "agent:file:runner.go", Label: "runner.go", Type: graph.NodeTypeFile, Service: "agent", File: "runner.go"},
+		{ID: "fn:Start", Label: "Start", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+		{ID: "fn:startHeartbeat", Label: "startHeartbeat", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+		{ID: "worker:goroutine", Label: "goroutine_anon", Type: graph.NodeTypeWorker, Service: "agent", File: "runner.go"},
+		{ID: "fn:sendHeartbeat", Label: "sendHeartbeat", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+	}
+	edges := []graph.Edge{
+		// Structural: the file "contains" startHeartbeat — an ID that sorts
+		// before fn:Start's, and must be skipped in favor of the real caller.
+		{ID: "e0", From: "agent:file:runner.go", To: "fn:startHeartbeat", Type: graph.EdgeTypeContains},
+		{ID: "e1", From: "fn:Start", To: "fn:startHeartbeat", Type: graph.EdgeTypeCalls},
+		{ID: "e2", From: "fn:startHeartbeat", To: "worker:goroutine", Type: graph.EdgeTypeCalls},
+		{ID: "e3", From: "worker:goroutine", To: "fn:sendHeartbeat", Type: graph.EdgeTypeCalls},
+	}
+	idx := buildTestIdx(nodes, edges)
+	chains := BuildFlowChains(idx)
+
+	var hit *Entity
+	for i := range chains {
+		if chains[i].NodeID == "worker:goroutine" {
+			hit = &chains[i]
+			break
+		}
+	}
+	require.NotNil(t, hit, "expected a chain rooted at worker:goroutine")
+	assert.Equal(t, []string{
+		"fn:Start", "fn:startHeartbeat", "worker:goroutine", "fn:sendHeartbeat",
+	}, hit.Members, "launch path must follow the real caller (Start), not the file's structural contains edge")
+}
+
+// TestBuildFlowChains_WorkerLaunchPathBreaksCycles reproduces the third live
+// finding: a juniper reindex produced a launch prefix with a hop
+// (goroutine + its caller) repeated twice, because the backward walk had no
+// cycle guard and revisited an ancestor already on the path. Must stop, not
+// loop, once a node reappears.
+func TestBuildFlowChains_WorkerLaunchPathBreaksCycles(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "fn:main", Label: "main", Type: graph.NodeTypeFunction, Service: "agent", File: "main.go"},
+		{ID: "worker:wrapper", Label: "goroutine_anon", Type: graph.NodeTypeWorker, Service: "agent", File: "main.go"},
+		{ID: "fn:Start", Label: "Start", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+		{ID: "worker:goroutine", Label: "goroutine_anon", Type: graph.NodeTypeWorker, Service: "agent", File: "runner.go"},
+		{ID: "fn:sendHeartbeat", Label: "sendHeartbeat", Type: graph.NodeTypeFunction, Service: "agent", File: "runner.go"},
+	}
+	edges := []graph.Edge{
+		{ID: "e1", From: "fn:main", To: "worker:wrapper", Type: graph.EdgeTypeSpawns},
+		{ID: "e2", From: "worker:wrapper", To: "fn:Start", Type: graph.EdgeTypeCalls},
+		{ID: "e3", From: "fn:Start", To: "worker:goroutine", Type: graph.EdgeTypeSpawns},
+		{ID: "e4", From: "worker:goroutine", To: "fn:sendHeartbeat", Type: graph.EdgeTypeCalls},
+		// Cycle in the BACKWARD direction: main's only other incoming edge
+		// is from Start, an ancestor already on this path by the time the
+		// walk reaches main (goroutine <- Start <- wrapper <- main <- Start).
+		// Without a visited guard this sends the walk back through
+		// Start/wrapper a second time, duplicating both hops.
+		{ID: "e5", From: "fn:Start", To: "fn:main", Type: graph.EdgeTypeCalls},
+	}
+	idx := buildTestIdx(nodes, edges)
+	chains := BuildFlowChains(idx)
+
+	var hit *Entity
+	for i := range chains {
+		if chains[i].NodeID == "worker:goroutine" {
+			hit = &chains[i]
+			break
+		}
+	}
+	require.NotNil(t, hit, "expected a chain rooted at worker:goroutine")
+
+	seen := map[string]bool{}
+	for _, m := range hit.Members {
+		require.False(t, seen[m], "member %s appeared twice — cycle guard failed: %v", m, hit.Members)
+		seen[m] = true
+	}
+	assert.Equal(t, []string{
+		"fn:main", "worker:wrapper", "fn:Start", "worker:goroutine", "fn:sendHeartbeat",
+	}, hit.Members)
+}
+
+// TestBuildFlowChains_NonWorkerEntrypointUnaffected confirms the launch-path
+// prepend only applies to worker roots: a route/handler/subscriber is
+// already "the start of the story" and must not grow a backward prefix.
+func TestBuildFlowChains_NonWorkerEntrypointUnaffected(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "fn:wireRoutes", Label: "wireRoutes", Type: graph.NodeTypeFunction, Service: "api", File: "wire.go"},
+		{ID: "route:GET /x", Label: "GET /x", Type: graph.NodeTypeRoute, Service: "api", File: "router.go"},
+		{ID: "fn:handleX", Label: "handleX", Type: graph.NodeTypeHTTPHandler, Service: "api", File: "handler.go"},
+	}
+	edges := []graph.Edge{
+		{ID: "e1", From: "fn:wireRoutes", To: "route:GET /x", Type: graph.EdgeTypeCalls},
+		{ID: "e2", From: "route:GET /x", To: "fn:handleX", Type: graph.EdgeTypeCalls},
+	}
+	idx := buildTestIdx(nodes, edges)
+	chains := BuildFlowChains(idx)
+
+	var hit *Entity
+	for i := range chains {
+		if chains[i].NodeID == "route:GET /x" {
+			hit = &chains[i]
+			break
+		}
+	}
+	require.NotNil(t, hit, "expected a chain rooted at route:GET /x")
+	assert.Equal(t, []string{"route:GET /x", "fn:handleX"}, hit.Members,
+		"a route entrypoint must not grow a backward-walked prefix")
+}
+
 // ─── doc chunk tests ──────────────────────────────────────────────────────
 
 // TestBuildDocChunks_Jargon is the acceptance fixture from the S.1 spec:
