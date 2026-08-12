@@ -190,7 +190,27 @@ func rollupCallers(callers []Caller) []FileRollup {
 		}
 		files = append(files, *e)
 	}
+	sortFileRollups(files)
+	return files
+}
+
+// sortFileRollups orders a rollup by relevance: a real file path before a
+// pathless synthetic entry (a channel/topic node — an agent has nowhere to
+// Read it), then real evidence before structural/containment-only fan-out,
+// then shallowest reach, then verification confidence, then name — the
+// "structural,depth,verification" contract Summary.Ranking advertises. The
+// path check sits above everything else, including depth: a pathless entry
+// one hop away is still not something an agent can open, so it must not
+// out-rank an actual file merely for being closer. Shared by rollupCallers
+// (so the initial cut already prefers real files) and by ApplyBudget's
+// backfill pass, which must restore this order after splicing cheap
+// out-of-order tail entries back in.
+func sortFileRollups(files []FileRollup) {
 	sort.Slice(files, func(i, j int) bool {
+		pi, pj := files[i].File == "", files[j].File == ""
+		if pi != pj {
+			return !pi
+		}
 		li, lj := files[i].StructuralOnly || files[i].ContainmentOnly, files[j].StructuralOnly || files[j].ContainmentOnly
 		if li != lj {
 			return !li
@@ -207,7 +227,6 @@ func rollupCallers(callers []Caller) []FileRollup {
 		}
 		return files[i].Service < files[j].Service
 	})
-	return files
 }
 
 // maxSummaryMetaValue is the longest meta value the rollup shape carries.
@@ -302,19 +321,63 @@ func (r *Result) ApplyBudget(maxTokens int, forceSummary bool) any {
 		s.Unresolved = trimUnresolved(s.Unresolved, maxTokens, s.Budget)
 
 		all := s.Files
-		keep := budget.TrimToFit(len(all), maxTokens, func(n int) int {
+		// The prefix cut runs against a shrunk budget, reserving
+		// fileBackfillReserve for the pass below. TrimToFit's binary search
+		// picks the *largest* prefix that fits — by construction that
+		// leaves only incidental slack (a handful of tokens) for backfill,
+		// which starves it down to whatever single near-empty entry
+		// happens to be cheapest, rather than a real file like a small
+		// exchange declaration. Reserving headroom up front, the same way
+		// unresolvedReserve does for the unresolved-refs list, guarantees
+		// backfill has room to matter.
+		cutBudget := int(float64(maxTokens) * (1 - fileBackfillReserve))
+		keep := budget.TrimToFit(len(all), cutBudget, func(n int) int {
 			s.Files = all[:n]
 			return budget.Estimate(s)
 		})
 		s.Files = all[:keep]
-		if omitted := len(all) - keep; omitted > 0 {
+		used := budget.Estimate(s)
+
+		// Backfill: the prefix cut above lets survival depend entirely on
+		// sort position (depth), so a one-node file just past the cut is
+		// dropped for free alongside genuinely large ones. Splice back any
+		// omitted file cheap enough to fit the leftover headroom (now the
+		// full maxTokens, not the shrunk cutBudget), then re-sort so the
+		// advertised depth ordering still holds. `all` is already sorted
+		// with real files before pathless synthetic entries (sortFileRollups),
+		// so walking the tail in order and skipping whatever doesn't fit —
+		// rather than re-ranking by cost — keeps that priority: a shallow
+		// real file gets first claim on the headroom, a cheap deep one only
+		// fills what's left over.
+		admitted := budget.Backfill(len(all), keep, maxTokens, used, func(i int) int {
+			return budget.Estimate(all[i])
+		})
+		for _, i := range admitted {
+			s.Files = append(s.Files, all[i])
+		}
+		if len(admitted) > 0 {
+			sortFileRollups(s.Files)
+		}
+
+		if omitted := len(all) - len(s.Files); omitted > 0 {
 			s.Budget.OmittedFiles = omitted
-			s.Budget.AppendNote(fmt.Sprintf("%d more files omitted to fit the budget", omitted))
+			note := fmt.Sprintf("%d more files omitted to fit the budget", omitted)
+			if len(admitted) > 0 {
+				note = fmt.Sprintf("%s (%d cheap file(s) admitted out of depth order to use leftover budget)", note, len(admitted))
+			}
+			s.Budget.AppendNote(note)
 		}
 	}
 	s.Budget.EstimatedTokens = budget.Estimate(s)
 	return s
 }
+
+// fileBackfillReserve is the share of a token budget set aside so the
+// backfill pass in ApplyBudget has room to admit a cheap, deeper file
+// instead of starving on whatever incidental slack the prefix cut left
+// behind. 10%, not unresolvedReserve's 75%: this is padding for one or two
+// extra file entries, not competing for the answer's primary share.
+const fileBackfillReserve = 0.10
 
 // unresolvedReserve is the share of a token budget the answer keeps for
 // itself; the unresolved list may claim at most the remainder. Three quarters,

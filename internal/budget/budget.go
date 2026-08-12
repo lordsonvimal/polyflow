@@ -72,6 +72,54 @@ func TrimToFit(count, maxTokens int, estimate func(n int) int) int {
 	return best
 }
 
+// Backfill extends a TrimToFit prefix cut with a second pass over the
+// omitted tail: items are admitted out of strict-prefix order when they fit
+// the leftover headroom. TrimToFit alone lets survival depend entirely on
+// sort position — a single item one slot past the cut is dropped for free
+// alongside genuinely large ones, even though including it would barely
+// move the token count. total is the full list length, kept is the prefix
+// length TrimToFit already chose, used is that prefix's actual estimated
+// cost, and itemCost estimates a single tail item's marginal cost in
+// isolation (a cheap approximation — see Estimate's own doc comment — good
+// enough to decide backfill candidates without re-marshalling the whole
+// payload per candidate).
+//
+// The tail (items kept..total-1) is walked in the order the caller already
+// sorted it in — Backfill does not re-rank by cost. Earlier callers of this
+// function tried a cheapest-first re-sort and it backfired: with many
+// near-zero-cost items in the tail (e.g. synthetic entries with no real
+// content), cheapest-first let a flood of low-value items win the headroom
+// ahead of a moderately-priced but more relevant one just past the cut,
+// inverting whatever relevance ordering the caller's sort encodes (depth,
+// verification, ...). Skip-continue over the caller's own order respects
+// that ordering — an item too expensive for the current headroom is
+// skipped, not rejected outright, so a cheaper item further down still gets
+// a chance — while never letting a low-priority item preempt a
+// higher-priority one it could have displaced.
+//
+// Returns the admitted indices (a subset of kept..total-1) in ascending
+// index order, so the caller can splice them back into the original slice
+// before re-sorting for display.
+func Backfill(total, kept, maxTokens, used int, itemCost func(i int) int) []int {
+	if kept >= total {
+		return nil
+	}
+	headroom := maxTokens - used
+	if headroom <= 0 {
+		return nil
+	}
+	var admitted []int
+	for i := kept; i < total; i++ {
+		c := itemCost(i)
+		if c > headroom {
+			continue
+		}
+		admitted = append(admitted, i)
+		headroom -= c
+	}
+	return admitted
+}
+
 // Snippet returns up to n source lines of file starting at 1-based line
 // start. file may be workspace-relative (resolved against root) or already
 // absolute (Z.0: node.File is absolute for out-of-tree/multi-repo services,
