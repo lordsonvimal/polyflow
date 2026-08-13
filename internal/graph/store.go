@@ -179,6 +179,9 @@ type Store interface {
 	// PruneUnresolvedHistory removes history rows older than the most recent
 	// keepRuns distinct run timestamps.
 	PruneUnresolvedHistory(ctx context.Context, keepRuns int) error
+	// ListUnresolvedRefs returns the graph's blind-spot ledger, ordered for
+	// determinism (service, file, line, name).
+	ListUnresolvedRefs(ctx context.Context) ([]UnresolvedRef, error)
 	Close() error
 }
 
