@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	webui "github.com/lordsonvimal/polyflow/web"
 )
@@ -22,6 +23,7 @@ type Server struct {
 	broadcast chan string
 	clients   map[chan string]struct{}
 	clientsMu sync.Mutex
+	ops       *ops.Store // nil → tool-call audit logging disabled (UB.2)
 }
 
 // New creates a Server backed by the given store and adjacency index.
@@ -60,6 +62,15 @@ func (s *Server) SetSearcher(sr *semantic.Searcher) {
 	s.idxMu.Unlock()
 }
 
+// SetOps wires the tool-call audit store into the server. Safe to call at
+// any time; nil disables audit logging (handlers behave exactly as before
+// UB.2). Call before serving traffic to avoid a race with in-flight requests.
+func (s *Server) SetOps(o *ops.Store) {
+	s.idxMu.Lock()
+	s.ops = o
+	s.idxMu.Unlock()
+}
+
 // Reload swaps the adjacency index and broadcasts a graph_updated SSE event.
 // Also invalidates the vector matrix cache when a Searcher is wired.
 func (s *Server) Reload(idx *graph.AdjacencyIndex) {
@@ -90,18 +101,25 @@ func (s *Server) fanOut() {
 }
 
 func (s *Server) registerRoutes() {
-	s.mux.HandleFunc("GET /api/graph", s.handleGraph)
-	s.mux.HandleFunc("GET /api/graph/search", s.handleSearch)
-	s.mux.HandleFunc("GET /api/graph/trace", s.handleTrace)
-	s.mux.HandleFunc("GET /api/node/{id}", s.handleNode)
-	s.mux.HandleFunc("GET /api/tree", s.handleTree)
-	s.mux.HandleFunc("GET /api/variable/{id}/flow", s.handleVariableFlow)
-	s.mux.HandleFunc("GET /api/node/{id}/source", s.handleNodeSource)
-	s.mux.HandleFunc("GET /api/files", s.handleFiles)
-	s.mux.HandleFunc("GET /api/file", s.handleFile)
-	s.mux.HandleFunc("GET /api/file/impact", s.handleFileImpact)
-	s.mux.HandleFunc("GET /api/stats", s.handleStats)
-	s.mux.HandleFunc("GET /api/export/mermaid", s.handleExportMermaid)
+	// s.handle wraps every /api/* route (except /api/events and the static
+	// SPA below) with UB.2 tool-call audit recording; /api/events is
+	// excluded per the plan (an SSE stream, not a request/response call).
+	s.handle("GET /api/graph", s.handleGraph)
+	s.handle("GET /api/graph/search", s.handleSearch)
+	s.handle("GET /api/graph/trace", s.handleTrace)
+	s.handle("GET /api/node/{id}", s.handleNode)
+	s.handle("GET /api/tree", s.handleTree)
+	s.handle("GET /api/variable/{id}/flow", s.handleVariableFlow)
+	s.handle("GET /api/node/{id}/source", s.handleNodeSource)
+	s.handle("GET /api/files", s.handleFiles)
+	s.handle("GET /api/file", s.handleFile)
+	s.handle("GET /api/file/impact", s.handleFileImpact)
+	s.handle("GET /api/stats", s.handleStats)
+	s.handle("GET /api/export/mermaid", s.handleExportMermaid)
+	s.handle("GET /api/toolcalls", s.handleListToolCalls)
+	s.handle("DELETE /api/toolcalls", s.handleDeleteToolCalls)
+	s.handle("GET /api/settings", s.handleGetSettings)
+	s.handle("PUT /api/settings", s.handlePutSettings)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend from the embedded FS so `serve` works
 	// from any working directory (not just the source-tree root).

@@ -6,6 +6,7 @@ const (
 	Description = "Cross-service code flow analyzer"
 	DBDir       = "." + Name
 	DBFile      = "graph.db"
+	OpsFile     = "ops.db"
 	ConfigFile  = "polyflow.yml"
 	DefaultPort = 9400
 )

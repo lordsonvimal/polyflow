@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
+	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/trace"
 )
@@ -65,6 +67,7 @@ type Server struct {
 	idx        *graph.AdjacencyIndex
 	searcher   *semantic.Searcher // optional; nil → FTS-only fallback
 	staleAfter time.Duration      // workspace evidence.stale_after (0 = no stale check)
+	ops        *ops.Store         // nil → tool-call audit logging disabled (UB.2)
 }
 
 // SetSearcher wires a hybrid Searcher. Call after New; safe to call while
@@ -73,6 +76,20 @@ func (s *Server) SetSearcher(sr *semantic.Searcher) {
 	s.mu.Lock()
 	s.searcher = sr
 	s.mu.Unlock()
+}
+
+// SetOps wires the tool-call audit store into the server. Safe to call at
+// any time; nil disables audit logging.
+func (s *Server) SetOps(o *ops.Store) {
+	s.mu.Lock()
+	s.ops = o
+	s.mu.Unlock()
+}
+
+func (s *Server) opsStore() *ops.Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ops
 }
 
 // Reload swaps in a freshly built store and index (after `polyflow index`
@@ -114,7 +131,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			Name: "status",
 			Description: "polyflow is DISABLED for this session (run `polyflow mcp on`, then " +
 				"reconnect/restart the session). No code-graph tools are available.",
-		}, s.disabledProbe)
+		}, auditTool(s, "status", s.disabledProbe))
 		return srv, s
 	}
 
@@ -127,7 +144,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"picture so you don't sequence those calls yourself. The returned edges are the resolved " +
 			"set; the only thing to verify by grep is coverage_unresolved. If target_candidates is " +
 			"non-empty, re-query with target_service/target_type to pin the intended node.",
-	}, s.investigate)
+	}, auditTool(s, "investigate", s.investigate))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search",
@@ -137,7 +154,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"snippet — so one call shows you the code, no separate read needed. A flows hit's " +
 			"entry node is the starting point for trace. Use this to find the exact node before " +
 			"calling context, impact, or trace.",
-	}, s.search)
+	}, auditTool(s, "search", s.search))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "context",
@@ -151,7 +168,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"summary to force the rollup, snippet_lines to inline source snippets per node. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
-	}, s.context)
+	}, auditTool(s, "context", s.context))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "impact",
@@ -173,7 +190,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"node. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
-	}, s.impact)
+	}, auditTool(s, "impact", s.impact))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "trace",
@@ -188,7 +205,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"may not exist. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
-	}, s.trace)
+	}, auditTool(s, "trace", s.trace))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "flows",
@@ -204,7 +221,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"output size (over budget, flows collapse to a sample plus the coverage tally, which is " +
 			"never trimmed). If target_candidates is non-empty, re-query with target_service to pin the " +
 			"right node. " + semanticsParagraph,
-	}, s.flows)
+	}, auditTool(s, "flows", s.flows))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "entrypoints",
@@ -213,7 +230,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"feature to a starting node with no grep — use this before `flows` to find where a flow " +
 			"begins. CLI commands and scheduled/cron tasks are not catalogued yet (no such node type " +
 			"exists in the graph).",
-	}, s.entrypoints)
+	}, auditTool(s, "entrypoints", s.entrypoints))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "resolve",
@@ -221,7 +238,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"with the same target_service/target_type disambiguation context/impact/trace/flows use. Call " +
 			"this first when unsure which node a query will land on — it cuts a round-trip versus calling " +
 			"context/impact/trace/flows and re-querying after seeing target_candidates.",
-	}, s.resolve)
+	}, auditTool(s, "resolve", s.resolve))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "read",
@@ -229,7 +246,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"interface) by node id — its true span, not the whole file. Use after search/hierarchy/context/" +
 			"resolve give you an id, instead of opening the file. span_known=false means the exact end was " +
 			"unknown and a bounded window was returned; max_lines caps runaway spans.",
-	}, s.read)
+	}, auditTool(s, "read", s.read))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "hierarchy",
@@ -237,7 +254,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"top-level symbols, with roll-up counts. Use this FIRST to orient in an unfamiliar repo " +
 			"instead of ls/find/grep — one call replaces directory exploration. Scope with service/path; " +
 			"raise depth to 3 for symbols. Symbol-level `id` feeds directly into read, context, or impact.",
-	}, s.hierarchy)
+	}, auditTool(s, "hierarchy", s.hierarchy))
 
 	return srv, s
 }
@@ -254,6 +271,55 @@ func (s *Server) disabledProbe(ctx context.Context, req *mcp.CallToolRequest, in
 		"detail": "polyflow query tools are disabled for this session. Run `polyflow mcp on`, " +
 			"then reconnect/restart the session to re-enable search/context/impact/trace/flows/entrypoints/resolve.",
 	})
+}
+
+// auditTool wraps a tool handler with UB.2 tool-call audit recording
+// (source: "mcp"): params is the input struct as JSON, result is the tool's
+// full response payload as JSON (mirroring jsonResult's TextContent). Every
+// registered tool handler shares this one signature
+// (ctx, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error), which is
+// what makes one generic wrapper cover all of them instead of duplicating
+// recording logic per tool. MCP runs over stdio with no HTTP clients to
+// notify, so unlike the UI's audit middleware this never broadcasts SSE.
+func auditTool[In any](s *Server, name string, fn func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error)) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+		o := s.opsStore()
+		if o == nil {
+			return fn(ctx, req, in)
+		}
+
+		start := time.Now()
+		res, out, err := fn(ctx, req, in)
+		dur := time.Since(start)
+
+		paramsJSON, _ := json.Marshal(in)
+		status, errMsg, result := "ok", "", ""
+		if err != nil {
+			status = "error"
+			errMsg = err.Error()
+		} else if res != nil {
+			for _, c := range res.Content {
+				if tc, ok := c.(*mcp.TextContent); ok {
+					result = tc.Text
+					break
+				}
+			}
+		}
+
+		if _, _, rerr := o.RecordCall(ctx, ops.Call{
+			Source:     "mcp",
+			Tool:       name,
+			Params:     string(paramsJSON),
+			DurationMS: dur.Milliseconds(),
+			Status:     status,
+			Error:      errMsg,
+			Result:     result,
+		}); rerr != nil {
+			fmt.Fprintf(os.Stderr, "polyflow: ops record failed: %v\n", rerr)
+		}
+
+		return res, out, err
+	}
 }
 
 // jsonResult marshals v into a text content block, the same JSON the CLI
