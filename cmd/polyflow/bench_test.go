@@ -16,7 +16,7 @@ repo:
   name: flowrepo
   path: .
   sha: live
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 cases:
   - id: order-flow
     kind: flow

@@ -30,7 +30,7 @@ type PromotionResult struct {
 //  4. On pass: copies rule → <wsDir>/contracts/ and fixture → <wsDir>/testdata/contracts/.
 //  5. On fail: returns a PromotionResult with Diff set (rule 3, no silent drops).
 //
-// wsDir is the workspace root directory (where workspace.yaml lives).
+// wsDir is the workspace root directory (where polyflow.yml lives).
 func RunPromotion(proposalPath, wsDir string) (PromotionResult, error) {
 	// 1. Load and validate the rule YAML.
 	yamlData, err := os.ReadFile(proposalPath)

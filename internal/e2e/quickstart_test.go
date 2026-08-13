@@ -34,8 +34,8 @@ const quickstartPatterns = "../../patterns"
 func indexQuickstart(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(quickstartFixture, "workspace.yaml"))
-	require.NoError(t, err, "step 1 (polyflow init): load workspace.yaml")
+	cfg, err := workspace.Load(filepath.Join(quickstartFixture, "polyflow.yml"))
+	require.NoError(t, err, "step 1 (polyflow init): load polyflow.yml")
 	require.NotEmpty(t, cfg.Services, "workspace must have at least one service")
 
 	reg, err := patterns.DefaultRegistry(quickstartPatterns)

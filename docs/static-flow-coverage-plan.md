@@ -36,7 +36,7 @@ add edge classes; Y.6/Y.7 add node/edge classes).
 
 ## Baseline (measured 2026-07-27, clean reindex)
 
-After excluding swept-in fixtures (`eval/**` added to `workspace.yaml`'s `index.exclude`, stale
+After excluding swept-in fixtures (`eval/**` added to `polyflow.yml`'s `index.exclude`, stale
 `.polyflow/graph.db` removed, `polyflow index --full`):
 
 ```

@@ -2,7 +2,7 @@ repo:
   name: lobsters
   url: https://github.com/lobsters/lobsters
   sha: e72cf85f041cfa82157173e0af82bce693e5c9d0
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Selection rationale: Lobsters is a link-aggregation community site built with
 # Ruby on Rails + JavaScript (jQuery + Stimulus). It satisfies ≥2 languages

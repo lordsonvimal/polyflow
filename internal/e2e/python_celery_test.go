@@ -32,7 +32,7 @@ const pythonCeleryPatternsDir = "../../patterns"
 func indexPythonCelery(t *testing.T) *graph.SQLiteStore {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(pythonCeleryFixtureWS, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(pythonCeleryFixtureWS, "polyflow.yml"))
 	require.NoError(t, err)
 
 	reg, err := patterns.DefaultRegistry(pythonCeleryPatternsDir)

@@ -22,12 +22,12 @@ func writeYAML(t *testing.T, content string) string {
 	return f.Name()
 }
 
-// writeYAMLInDir writes a workspace.yaml (with the given content) into dir
+// writeYAMLInDir writes a polyflow.yml (with the given content) into dir
 // and returns its path, so relative service paths inside content resolve
 // against a known workspace directory.
 func writeYAMLInDir(t *testing.T, dir, content string) string {
 	t.Helper()
-	path := filepath.Join(dir, "workspace.yaml")
+	path := filepath.Join(dir, "polyflow.yml")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
 }
@@ -74,7 +74,7 @@ settings:
 }
 
 // TestLoad_PathResolvesAgainstWorkspaceDirNotCWD proves relative service
-// paths resolve against the directory containing workspace.yaml — not the
+// paths resolve against the directory containing polyflow.yml — not the
 // process's current working directory — per Z.0.
 func TestLoad_PathResolvesAgainstWorkspaceDirNotCWD(t *testing.T) {
 	wsDir := t.TempDir()
@@ -248,15 +248,15 @@ services:
 	assert.True(t, sawMarker, "WalkDir on the resolved path must see files inside the symlink target")
 }
 
-// TestLoad_SingleRepoRegression loads this repo's own workspace.yaml from
+// TestLoad_SingleRepoRegression loads this repo's own polyflow.yml from
 // its own directory (CWD == workspace dir) and asserts resolved service
 // paths equal the pre-Z.0 behavior (filepath.Abs from CWD).
 func TestLoad_SingleRepoRegression(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	require.NoError(t, err)
-	wsPath := filepath.Join(repoRoot, "workspace.yaml")
+	wsPath := filepath.Join(repoRoot, "polyflow.yml")
 	if _, err := os.Stat(wsPath); err != nil {
-		t.Skipf("repo workspace.yaml not found: %v", err)
+		t.Skipf("repo polyflow.yml not found: %v", err)
 	}
 
 	oldWD, err := os.Getwd()
@@ -301,7 +301,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 
 func TestSave_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "workspace.yaml")
+	path := filepath.Join(dir, "polyflow.yml")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "svc"), 0o755))
 
 	cfg := &workspace.WorkspaceConfig{
@@ -323,7 +323,7 @@ func TestSave_RoundTrip(t *testing.T) {
 
 func TestSave_AtomicNoPreviousFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "workspace.yaml")
+	path := filepath.Join(dir, "polyflow.yml")
 	cfg := &workspace.WorkspaceConfig{Name: "ws", Version: "1"}
 	require.NoError(t, workspace.Save(path, cfg))
 	assert.FileExists(t, path)
@@ -413,7 +413,7 @@ func TestDetectFrameworks_Empty(t *testing.T) {
 }
 
 func TestSave_ErrorOnReadonlyDir(t *testing.T) {
-	path := "/dev/null/impossible/workspace.yaml"
+	path := "/dev/null/impossible/polyflow.yml"
 	cfg := &workspace.WorkspaceConfig{Name: "x"}
 	err := workspace.Save(path, cfg)
 	assert.Error(t, err)

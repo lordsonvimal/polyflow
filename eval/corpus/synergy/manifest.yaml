@@ -8,7 +8,7 @@ repo:
   # make eval-corpus skips path-based repos (SkippedCorpus.LocalOnly in CI).
   path: eval/.cache/synergy
   sha: 8f1e97a9ee3b0ec57aeb0cb51b0a27a4850a0fdc
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Selection rationale: synergy is the fleet-audit repo that drove plan-7
 # (Tier H) — Express/ws/Solid Router were all found uncovered here. This

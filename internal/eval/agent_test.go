@@ -70,7 +70,7 @@ func TestScoreAgentCase_CaseInsensitiveAndBackslashNormalized(t *testing.T) {
 
 func TestRunAgentCorpus_NoAgentCasesIsEmptyReport(t *testing.T) {
 	dir := t.TempDir()
-	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\n"
+	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: polyflow.yml\ncases: []\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644))
 
 	report, err := eval.RunAgentCorpus(context.Background(), eval.AgentRunOptions{CorpusDir: dir})
@@ -83,7 +83,7 @@ func TestRunAllAgent_UnavailableAgentCLISkips(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "fixture")
 	require.NoError(t, os.MkdirAll(sub, 0o755))
-	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\nagent_cases:\n  - id: q1\n    question: \"What files?\"\n    required_facts:\n      - a.go\n"
+	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: polyflow.yml\ncases: []\nagent_cases:\n  - id: q1\n    question: \"What files?\"\n    required_facts:\n      - a.go\n"
 	require.NoError(t, os.WriteFile(filepath.Join(sub, "manifest.yaml"), []byte(manifest), 0o644))
 
 	_, err := eval.RunAllAgent(context.Background(), root, eval.AgentRunOptions{
@@ -97,7 +97,7 @@ func TestRunAllAgent_SkipsCorporaWithNoAgentCases(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "fixture")
 	require.NoError(t, os.MkdirAll(sub, 0o755))
-	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\n"
+	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: polyflow.yml\ncases: []\n"
 	require.NoError(t, os.WriteFile(filepath.Join(sub, "manifest.yaml"), []byte(manifest), 0o644))
 
 	report, err := eval.RunAllAgent(context.Background(), root, eval.AgentRunOptions{})
@@ -108,7 +108,7 @@ func TestRunAllAgent_SkipsCorporaWithNoAgentCases(t *testing.T) {
 
 func TestRunAgentCorpus_UnavailableAgentCLISkips(t *testing.T) {
 	dir := t.TempDir()
-	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\ncases: []\nagent_cases:\n  - id: q1\n    question: \"What files?\"\n    required_facts:\n      - a.go\n"
+	manifest := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: polyflow.yml\ncases: []\nagent_cases:\n  - id: q1\n    question: \"What files?\"\n    required_facts:\n      - a.go\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644))
 
 	_, err := eval.RunAgentCorpus(context.Background(), eval.AgentRunOptions{

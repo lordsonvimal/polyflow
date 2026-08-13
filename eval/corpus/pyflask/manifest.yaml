@@ -5,7 +5,7 @@ repo:
   # This is a path-based (LocalOnly) repo; CI skips it without failing the gate.
   path: eval/testdata/pyflask
   sha: "local-fixture-v1"
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Selection rationale: pyflask is a hand-crafted multi-service Python fixture
 # that exercises every L.P0–L.P3 pattern class in a single coherent project:
