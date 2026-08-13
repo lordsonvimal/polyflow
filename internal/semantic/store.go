@@ -180,7 +180,7 @@ func (s *Store) FTSSearch(ctx context.Context, ftsQuery string, limit int) ([]ft
 			SELECT entity_id, entity_type
 			FROM entities_fts
 			WHERE entities_fts MATCH ?
-			ORDER BY rank
+			ORDER BY rank, entity_id
 			LIMIT ?
 		) f
 		LEFT JOIN nodes n ON n.id = f.entity_id AND f.entity_type = 'node'`,
@@ -233,7 +233,7 @@ func (s *Store) FTSSearchPerType(ctx context.Context, ftsQuery string, perType i
 				SELECT entity_id, entity_type
 				FROM entities_fts
 				WHERE entities_fts MATCH ? AND entity_type = ?
-				ORDER BY rank
+				ORDER BY rank, entity_id
 				LIMIT ?
 			) f
 			LEFT JOIN nodes n ON n.id = f.entity_id AND f.entity_type = 'node'`,
