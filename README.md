@@ -20,7 +20,7 @@ ledger anything it cannot resolve, rather than inventing edges.
 - [How it works](#how-it-works)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
-- [Configuration (`polyflow.yml`)](#configuration-workspaceyaml)
+- [Configuration (`polyflow.yml`)](#configuration-polyflowyml)
 - [CLI commands](#cli-commands)
 - [MCP server & tools](#mcp-server--tools)
 - [Supported languages & frameworks](#supported-languages--frameworks)
@@ -89,8 +89,8 @@ polyflow index         # incremental on subsequent runs
 # 3. Sanity-check coverage:
 polyflow doctor        # flags zero-pattern-match services
 
-# 4. Register with an agent (Claude Code shown; any MCP host works):
-claude mcp add polyflow -- polyflow mcp
+# 4. Register with an agent — interactive wizard (MCP server + context hook):
+polyflow setup
 
 # 5. Query:
 polyflow impact --target handleCheckout
@@ -181,6 +181,8 @@ polyflow config link add --from web --to api --via http
 | `polyflow init` | Auto-discover services and write `polyflow.yml`. |
 | `polyflow index` | Parse all services and build/update the graph (incremental). |
 | `polyflow doctor` | Health check; flags zero-match services, can `--propose` contract rules. |
+| `polyflow reconcile` | Evidence-fusion coverage report: % verified edges per kind, candidate/gap/conflicting lists. `--propose-dir` emits candidate contract rule YAML. |
+| `polyflow rules promote` | Test a proposed contract rule against its fixture and promote it into the workspace. |
 | `polyflow status` | Index statistics (node/edge/link counts) and a freshness verdict (STALE when sources changed since the last index). |
 | `polyflow search <query>` | Search the index for matching nodes. |
 | `polyflow context --target <node>` | Callers, callees, and cross-service edges around a node. |
@@ -190,10 +192,13 @@ polyflow config link add --from web --to api --via http
 | `polyflow link --infer` | Propose cross-service links from indexed evidence. |
 | `polyflow deps` | Resolved dependency versions per service. |
 | `polyflow patterns list` / `add <file>` | List loaded pattern packs or register a custom one. |
-| `polyflow config …` | View/edit `polyflow.yml` (`show`, `set`, `service`, `link`). |
+| `polyflow config …` | View/edit `polyflow.yml` (`show`, `set`, `service`, `link`, `exclude`). |
+| `polyflow setup` | Interactive wizard: registers the MCP server (and context hook, where supported) with a coding agent. `--scope`/`--agent` skip the prompts. |
 | `polyflow mcp` | Start the MCP stdio server (used by agents). Subcommands: `on` / `off` / `status` toggle the query tools for the next session (A/B token measurement). |
 | `polyflow serve` | Start the web UI + HTTP API. |
-| `polyflow capture start\|stop\|run\|ingest` | Runtime OTLP trace capture (see below). |
+| `polyflow capture start\|stop\|run` | Runtime OTLP trace capture (see below). |
+| `polyflow ingest <file>` | Import a pre-captured OTLP trace dump into a capture session. |
+| `polyflow models pull` | Download the embedding model (`nomic-embed-text-v1.5` GGUF) used by the sidecar embedder. |
 | `polyflow eval` | Measure recall against ground-truth cases. |
 | `polyflow bench` | Agent-outcome benchmark (manual; spends real tokens). |
 
@@ -201,14 +206,26 @@ polyflow config link add --from web --to api --via http
 
 The server is a spec-compliant MCP implementation built on the official
 `modelcontextprotocol/go-sdk`, speaking **stdio** transport. Any MCP-capable
-client can use it:
+client can use it.
+
+**Easiest path** — run the interactive setup wizard from the workspace root:
+
+```sh
+polyflow setup
+```
+
+It asks two questions (config scope: repo/user/global, and which agent —
+currently `claude`, `cursor`) and registers both the MCP server and, where the
+agent supports it, the context-injection hook. Pass `--scope`/`--agent` to
+skip the prompts (e.g. in a setup script or CI).
+
+**Manual path** — for hosts `polyflow setup` doesn't yet know about (Cline,
+Windsurf, custom agents), point it at the command `polyflow mcp` with stdio
+transport:
 
 ```sh
 # Claude Code
 claude mcp add polyflow -- polyflow mcp
-
-# Any other host (Cursor, Cline, Windsurf, custom agents): point it at the
-# command `polyflow mcp` with stdio transport. Example mcpServers entry:
 ```
 
 ```json
@@ -226,6 +243,7 @@ from the workspace root (one instance per workspace).
 
 | Tool | What it answers |
 |---|---|
+| `investigate` | "Understand X / find why X" in one call: resolves the node, inlines its source, and returns callers, callees, and the flows it sits on. Prefer this over search/context/trace/read for that shape of question — it assembles the whole picture instead of sequencing those calls yourself. |
 | `search` | Find the exact node/flow/doc chunk matching a query (natural language OK). Start here. |
 | `resolve` | Resolve a description or partial name to ranked candidate nodes (disambiguation, saves a round-trip). |
 | `context` | Callers, callees, and cross-service edges around a node — or the ranked files related to given file(s). |
