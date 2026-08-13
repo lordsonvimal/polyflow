@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/spf13/cobra"
 
+	"github.com/lordsonvimal/polyflow/internal/capture"
 	"github.com/lordsonvimal/polyflow/internal/evidence/trace_ingest"
 )
 
@@ -55,8 +55,8 @@ func runFlows(cmd *cobra.Command, args []string) error {
 		}
 	case flowsSession != "":
 		sessionLabel = flowsSession
-		spansFile := filepath.Join(capturesBase(), flowsSession, "spans.otlp.json")
-		spans, err = trace_ingest.ReadSessionSpans(spansFile)
+		mgr := capture.NewManager(capture.BaseDir())
+		spans, err = mgr.Spans(flowsSession)
 		if err != nil {
 			return fmt.Errorf("flows: read session %q: %w", flowsSession, err)
 		}
@@ -186,8 +186,8 @@ func repeatStr(s string, n int) string {
 // flowsOutput is the stable JSON shape for `flows --format json` (used by
 // the two-run determinism tests — byte-identical across runs).
 type flowsOutput struct {
-	Spans   []trace_ingest.Span            `json:"spans"`
-	Records []trace_ingest.FlowRecord      `json:"flow_records"`
+	Spans   []trace_ingest.Span              `json:"spans"`
+	Records []trace_ingest.FlowRecord        `json:"flow_records"`
 	Ledger  []trace_ingest.IngestLedgerEntry `json:"ledger"`
 }
 

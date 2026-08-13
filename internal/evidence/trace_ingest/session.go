@@ -86,6 +86,16 @@ func (s *Session) Dir() string { return s.dir }
 // Name returns the session name.
 func (s *Session) Name() string { return s.meta.Name }
 
+// SpanCount returns the number of spans appended so far (live counter, safe
+// to call while the session is still active). Used by the API's
+// GET /api/capture/status to report spans_received without waiting for
+// Finalize.
+func (s *Session) SpanCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.spanCount
+}
+
 // Append adds an OTLP export request (JSON or protobuf bytes) to the session.
 // Input is normalised to a compact single-line JSON document before writing so
 // the JSONL file remains line-parseable regardless of whether the caller

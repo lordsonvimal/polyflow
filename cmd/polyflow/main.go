@@ -22,6 +22,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 
+	"github.com/lordsonvimal/polyflow/internal/capture"
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/doctor"
@@ -400,6 +401,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		})
 		srv.SetJobs(mgr)
 	}
+
+	// UB.7: the capture manager reads/writes the same on-disk session store
+	// (.polyflow/captures) the CLI's capture/ingest/flows subcommands use,
+	// so a session started via either surface is visible and stoppable from
+	// the other.
+	srv.SetCapture(capture.NewManager(capture.BaseDir()))
 
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
 	// On a Write or Create event, reopen the store, rebuild the index, and push a
