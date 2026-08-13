@@ -45,7 +45,7 @@ bench:
 # Skips offline repos with a warning; never silently passes a missing clone.
 eval-corpus:
 	@mkdir -p eval/.cache
-	@POLYFLOW=./dist/polyflow; \
+	@POLYFLOW=$$(pwd)/dist/polyflow; \
 	if [ ! -x "$$POLYFLOW" ]; then \
 		echo "error: $$POLYFLOW not found — run 'make build' first"; exit 1; \
 	fi; \
