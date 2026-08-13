@@ -16,13 +16,19 @@ import fcose from "cytoscape-fcose";
 import dagreFn from "cytoscape-dagre";
 
 import { scopeStore, Scope } from "../../stores/scope";
-import { GraphNode, GraphEdge } from "../../lib/types";
 import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./budget";
-import { wireCytoscape, handleIntent } from "../../interaction/gestures";
+import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { apiFetch } from "../../lib/apiFetch";
 import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
+import { GraphData, parseCytoGraph, sortGraphData } from "./scopes/common";
+import { resolveOverview } from "./scopes/overview";
+import { resolveService } from "./scopes/service";
+import { resolveFolder } from "./scopes/folder";
+import { resolveFile } from "./scopes/file";
+import { resolveNeighborhood } from "./scopes/neighborhood";
+import { stackKey, getViewport, saveViewport } from "./viewportCache";
 import {
   NODE_TYPE_STYLES,
   CANVAS_BG,
@@ -35,94 +41,32 @@ import {
 cytoscape.use(fcose);
 cytoscape.use(dagreFn);
 
-interface GraphData {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
-
-function parseCytoGraph(raw: unknown): GraphData {
-  const r = raw as { nodes?: unknown[]; edges?: unknown[] };
-  return {
-    nodes: (r.nodes ?? []).map((n: any) => ({
-      id: n.data.id,
-      type: n.data.type,
-      label: n.data.label,
-      service: n.data.service ?? "",
-      file: n.data.file ?? "",
-      line: n.data.line ?? 0,
-      language: n.data.language ?? "",
-      meta: n.data.meta,
-    })),
-    edges: (r.edges ?? []).map((e: any) => ({
-      id: e.data.id,
-      from: e.data.source,
-      to: e.data.target,
-      type: e.data.type,
-      label: e.data.label,
-      confidence: e.data.confidence,
-      meta: e.data.meta,
-    })),
-  };
-}
-
-async function fetchAll(signal?: AbortSignal): Promise<GraphData> {
-  const r = await apiFetch("/api/graph?limit=2000", { signal, silent: true });
-  return parseCytoGraph(await r.json());
-}
-
 // Scopes that have no canvas — show a placeholder instead.
 const NO_CANVAS = new Set(["search", "flow", "group"]);
 
+// UN.1: each drill scope (overview/service/folder/file/neighborhood) has its
+// own resolver module under scopes/ — one module per pinned scope kind, all
+// returning pre-sorted GraphData (rule 2: deterministic element order).
+// Impact stays resolved inline (unchanged from earlier phases; plan-11 does
+// not name it among UN.1's pinned resolver files).
 async function fetchForScope(scope: Scope, signal?: AbortSignal): Promise<GraphData | null> {
   if (NO_CANVAS.has(scope.kind)) return null;
 
   switch (scope.kind) {
     case "overview":
-      return fetchAll(signal);
-
-    case "service": {
-      const all = await fetchAll(signal);
-      const ids = new Set(all.nodes.filter((n) => n.service === scope.service).map((n) => n.id));
-      return {
-        nodes: all.nodes.filter((n) => ids.has(n.id)),
-        edges: all.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
-      };
-    }
-
-    case "folder": {
-      const all = await fetchAll(signal);
-      const ids = new Set(
-        all.nodes.filter((n) => n.service === scope.service && n.file.startsWith(scope.path)).map((n) => n.id),
-      );
-      return {
-        nodes: all.nodes.filter((n) => ids.has(n.id)),
-        edges: all.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
-      };
-    }
-
-    case "file": {
-      const all = await fetchAll(signal);
-      const ids = new Set(
-        all.nodes
-          .filter((n) => n.file === scope.path && (!scope.service || n.service === scope.service))
-          .map((n) => n.id),
-      );
-      return {
-        nodes: all.nodes.filter((n) => ids.has(n.id)),
-        edges: all.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
-      };
-    }
-
-    case "neighborhood": {
-      const p = new URLSearchParams({ root: scope.nodeId, direction: "both", depth: String(scope.depth) });
-      const r = await apiFetch(`/api/graph/trace?${p}`, { signal, silent: true });
-      return parseCytoGraph(await r.json());
-    }
-
+      return resolveOverview(signal);
+    case "service":
+      return resolveService(scope, signal);
+    case "folder":
+      return resolveFolder(scope, signal);
+    case "file":
+      return resolveFile(scope, signal);
+    case "neighborhood":
+      return resolveNeighborhood(scope, signal);
     case "impact": {
       const p = new URLSearchParams({ root: scope.target, direction: scope.direction, depth: String(scope.depth) });
       const r = await apiFetch(`/api/graph/trace?${p}`, { signal, silent: true });
-      return parseCytoGraph(await r.json());
+      return sortGraphData(parseCytoGraph(await r.json()));
     }
   }
 }
@@ -169,6 +113,13 @@ function buildStylesheet(): object[] {
     },
     { selector: "edge[confidence = 'candidate']", style: { "line-style": "dashed" } },
     { selector: "edge[confidence = 'conflicting']", style: { "line-style": "dotted" } },
+    // Boundary connectors: a node standing in for something outside the
+    // current scope (plan-10's stub-connector contract) — dimmed + dashed
+    // border so it reads as "click to expand", not a peer element.
+    {
+      selector: "node[stub = 'true']",
+      style: { "background-opacity": 0.35, "border-width": 1, "border-style": "dashed", "border-color": "#6b7280" },
+    },
     {
       selector: "$node > node",
       style: {
@@ -258,6 +209,54 @@ export default function CanvasHost() {
   let canvasRef!: HTMLDivElement;
   let cy: ReturnType<typeof cytoscape> | undefined;
 
+  // Boundary-stub clicks (plan-10's stub-connector contract): a node with
+  // meta.stub="true" (flattened onto Cytoscape data by toElements) always
+  // resolves to "push the scope that brings it into view" instead of the
+  // generic select/drill behavior — never a silent no-op.
+  function scopeForStub(el: ReturnType<NonNullable<typeof cy>["getElementById"]>): Scope | null {
+    if (el.length === 0 || el.data("stub") !== "true") return null;
+    const kind = el.data("stub_kind") as string | undefined;
+    const service = (el.data("stub_service") as string) ?? "";
+    const path = (el.data("stub_path") as string) ?? "";
+    if (kind === "service") return { kind: "service", service };
+    if (kind === "folder") return { kind: "folder", service, path };
+    if (kind === "file") return { kind: "file", service, path };
+    return null;
+  }
+
+  // Double-click on a real (non-stub) folder/file/service compound drills
+  // into it — the same "expand" action a stub click performs, just for a
+  // node already inside the current scope. Plain symbol nodes (function,
+  // class, ...) fall through to handleIntent's neighborhood drill.
+  function scopeForContainer(el: ReturnType<NonNullable<typeof cy>["getElementById"]>): Scope | null {
+    if (el.length === 0) return null;
+    const type = el.data("type") as string | undefined;
+    const service = (el.data("service") as string) ?? "";
+    if (type === "service") return { kind: "service", service };
+    if (type === "folder") return { kind: "folder", service, path: (el.data("path") as string) ?? "" };
+    if (type === "file") return { kind: "file", service, path: (el.data("file") as string) ?? "" };
+    return null;
+  }
+
+  function onCanvasIntent(intent: Intent) {
+    if ((intent.type === "select" || intent.type === "drill") && intent.target.kind === "node" && cy) {
+      const el = cy.getElementById(intent.target.id);
+      const stubScope = scopeForStub(el);
+      if (stubScope) {
+        scopeStore.push(stubScope);
+        return;
+      }
+      if (intent.type === "drill") {
+        const containerScope = scopeForContainer(el);
+        if (containerScope) {
+          scopeStore.push(containerScope);
+          return;
+        }
+      }
+    }
+    handleIntent(intent);
+  }
+
   onMount(() => {
     try {
       cy = cytoscape({
@@ -268,11 +267,23 @@ export default function CanvasHost() {
         userPanningEnabled: true,
         backgroundColor: CANVAS_BG,
       });
-      const unwire = wireCytoscape(cy, handleIntent);
+      const unwire = wireCytoscape(cy, onCanvasIntent);
       onCleanup(() => { unwire(); cy?.destroy(); cy = undefined; });
     } catch {
       // Canvas renderer unavailable (e.g., jsdom in tests)
     }
+  });
+
+  // Viewport cache: remember the current scope stack's pan/zoom the instant
+  // before the stack changes, so popping back to it restores the view
+  // instead of re-fitting to content.
+  let lastStackKey: string | undefined;
+  createEffect(() => {
+    const key = stackKey(scopeStore.stack());
+    if (lastStackKey !== undefined && lastStackKey !== key && cy) {
+      saveViewport(lastStackKey, { pan: cy.pan(), zoom: cy.zoom() });
+    }
+    lastStackKey = key;
   });
 
   // Publish the active scope's rendered node ids so other views (e.g. the
@@ -306,17 +317,32 @@ export default function CanvasHost() {
     // Morph (animate) for small element counts; fade-swap otherwise.
     const canMorph = opts.animate && prevCount > 0 && (prevCount + elements.length) <= 500;
 
+    // A remembered viewport for this exact scope stack (set when the stack
+    // last left it) skips the fit-to-content layout in favor of restoring
+    // the previous pan/zoom.
+    const cached = getViewport(stackKey(scopeStore.stack()));
+    const restoreViewport = () => {
+      if (cached && cy) {
+        cy.pan(cached.pan);
+        cy.zoom(cached.zoom);
+      }
+    };
+
     if (canMorph) {
       cy.nodes().style("opacity", 0.3);
       cy.elements().remove();
       cy.add(elements);
-      const layout = cy.layout({ name: opts.name, animate: true, animationDuration: opts.animationDuration, fit: true, padding: 30 });
-      layout.on("layoutstop", () => cy?.nodes().animate({ style: { opacity: 1 } }, { duration: 150 }));
+      const layout = cy.layout({ name: opts.name, animate: true, animationDuration: opts.animationDuration, fit: !cached, padding: 30 });
+      layout.on("layoutstop", () => {
+        cy?.nodes().animate({ style: { opacity: 1 } }, { duration: 150 });
+        restoreViewport();
+      });
       layout.run();
     } else {
       cy.elements().remove();
       cy.add(elements);
-      cy.layout({ name: opts.name, animate: false, fit: true, padding: 30 }).run();
+      cy.layout({ name: opts.name, animate: false, fit: !cached, padding: 30 }).run();
+      restoreViewport();
     }
   });
 
@@ -332,6 +358,8 @@ export default function CanvasHost() {
       scopeStore.push({ kind: "service", service: childKey });
     } else if (s.kind === "service") {
       scopeStore.push({ kind: "folder", service: s.service, path: childKey });
+    } else if (s.kind === "folder") {
+      scopeStore.push({ kind: "file", service: s.service, path: childKey });
     }
   };
 

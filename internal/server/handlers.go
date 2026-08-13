@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -450,6 +451,111 @@ func (s *Server) handleFileImpact(w http.ResponseWriter, r *http.Request) {
 		"direction": direction,
 		"depth":     depth,
 		"impacted":  entries,
+	})
+}
+
+// handleScope handles GET /api/scope?kind=file&service=<name>&path=<path> —
+// UN.1's file-scope canvas: the symbols declared in one file plus the
+// intra-file edges between them, mirroring the tree handler's index walk.
+// Only kind=file is implemented (overview/service/folder/neighborhood
+// resolve client-side from /api/graph, /api/tree and /api/graph/trace — see
+// docs/plan-11-ui-navigation.md UN.1). Edges that leave the file are still
+// returned (never silently dropped, bug-class rule 12) with their external
+// endpoint included as a boundary node flagged `meta.stub = "true"` so the
+// canvas can render it as a connector chip instead of expanding the scope.
+func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	if kind != "file" {
+		writeError(w, http.StatusBadRequest, "unsupported 'kind' (only 'file' is implemented)")
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "missing query parameter 'path'")
+		return
+	}
+	service := r.URL.Query().Get("service")
+
+	s.idxMu.RLock()
+	idx := s.idx
+	s.idxMu.RUnlock()
+
+	seeds := graph.NodesInFile(idx, service, path)
+	if len(seeds) == 0 {
+		writeError(w, http.StatusNotFound, "file not found in index")
+		return
+	}
+
+	inFile := make(map[string]bool, len(seeds))
+	for _, n := range seeds {
+		inFile[n.ID] = true
+	}
+
+	var edges []*graph.Edge
+	boundary := make(map[string]*graph.Node)
+	var boundaryIDs []string
+	addBoundary := func(n *graph.Node) {
+		if _, seen := boundary[n.ID]; seen {
+			return
+		}
+		boundary[n.ID] = n
+		boundaryIDs = append(boundaryIDs, n.ID)
+	}
+
+	for id := range inFile {
+		for _, e := range idx.OutEdges[id] {
+			if e.Type == graph.EdgeTypeContains {
+				continue // structural backbone, not a visible canvas edge at file scope
+			}
+			edges = append(edges, e)
+			if !inFile[e.To] {
+				if ext, ok := idx.Nodes[e.To]; ok {
+					addBoundary(ext)
+				}
+			}
+		}
+		for _, e := range idx.InEdges[id] {
+			if e.Type == graph.EdgeTypeContains || inFile[e.From] {
+				continue // intra-file edges already captured via the OutEdges loop above
+			}
+			edges = append(edges, e)
+			if ext, ok := idx.Nodes[e.From]; ok {
+				addBoundary(ext)
+			}
+		}
+	}
+
+	sort.Slice(seeds, func(i, j int) bool { return seeds[i].ID < seeds[j].ID })
+	sort.Strings(boundaryIDs)
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+
+	result := ToCytoscapeJSON(seeds, edges)
+	for _, id := range boundaryIDs {
+		ext := boundary[id]
+		meta := make(map[string]string, len(ext.Meta)+1)
+		for k, v := range ext.Meta {
+			meta[k] = v
+		}
+		meta["stub"] = "true"
+		result.Nodes = append(result.Nodes, CytoscapeNode{Data: CytoscapeNodeData{
+			ID:       ext.ID,
+			Label:    ext.Label,
+			Type:     string(ext.Type),
+			Service:  ext.Service,
+			File:     ext.File,
+			Line:     ext.Line,
+			EndLine:  ext.EndLine,
+			Language: ext.Language,
+			Meta:     meta,
+		}})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kind":    "file",
+		"file":    seeds[0].File,
+		"service": seeds[0].Service,
+		"nodes":   result.Nodes,
+		"edges":   result.Edges,
 	})
 }
 
