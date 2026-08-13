@@ -283,9 +283,21 @@ export default function CanvasHost() {
         userZoomingEnabled: true,
         userPanningEnabled: true,
         backgroundColor: CANVAS_BG,
+        // Unbounded fit-to-content zoom blows sparse scopes (e.g. a 2-node
+        // overview) up to fill the viewport, rendering comically huge nodes.
+        minZoom: 0.05,
+        maxZoom: 2.5,
       });
       const unwire = wireCytoscape(cy, onCanvasIntent);
-      onCleanup(() => { unwire(); cy?.destroy(); cy = undefined; });
+
+      // Cytoscape sizes its internal <canvas> layers once at construction and
+      // never re-reads the container box on its own — without this, resizing
+      // the container (e.g. opening the bottom drawer) leaves stale, oversized
+      // canvas layers painting over whatever is now below the shrunk wrapper.
+      const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => cy?.resize()) : undefined;
+      resizeObserver?.observe(canvasRef);
+
+      onCleanup(() => { resizeObserver?.disconnect(); unwire(); cy?.destroy(); cy = undefined; });
     } catch {
       // Canvas renderer unavailable (e.g., jsdom in tests)
     }
@@ -422,7 +434,7 @@ export default function CanvasHost() {
       <Show when={!isNoCanvas()}>
         <FilterBar />
       </Show>
-      <div data-testid="canvas-host" class="flex-1 relative min-w-0 flex" style={{ background: CANVAS_BG }}>
+      <div data-testid="canvas-host" class="flex-1 relative min-w-0 flex overflow-hidden" style={{ background: CANVAS_BG }}>
       {/* Cytoscape container — always mounted so cy instance survives scope changes */}
       <div
         ref={canvasRef!}

@@ -1,5 +1,19 @@
 import { For } from "solid-js";
-import { scopeStore } from "../stores/scope";
+import { scopeStore, type Scope } from "../stores/scope";
+
+function crumbLabel(scope: Scope): string {
+  switch (scope.kind) {
+    case "overview": return "overview";
+    case "search": return "search";
+    case "service": return scope.service;
+    case "folder": return scope.path;
+    case "file": return scope.path;
+    case "neighborhood": return scope.nodeId;
+    case "impact": return scope.target;
+    case "flow": return scope.flow.label ?? scope.flow.id;
+    case "group": return `${scope.nodeIds.length} nodes`;
+  }
+}
 
 export default function Breadcrumbs() {
   return (
@@ -12,7 +26,7 @@ export default function Breadcrumbs() {
               class="hover:text-white truncate"
               onClick={() => scopeStore.popTo(i())}
             >
-              {i() === 0 ? "◆ polyflow" : scope.kind}
+              {crumbLabel(scope)}
             </button>
           </>
         )}
