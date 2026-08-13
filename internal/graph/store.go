@@ -431,7 +431,7 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 		FROM nodes n
 		JOIN nodes_fts f ON f.id = n.id
 		WHERE nodes_fts MATCH ?
-		ORDER BY (lower(n.label) = lower(?)) DESC, `+testFileRankPenalty+` ASC, rank
+		ORDER BY (lower(n.label) = lower(?)) DESC, `+testFileRankPenalty+` ASC, rank, n.id
 		LIMIT ?`, ftsQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search nodes: %w", err)
