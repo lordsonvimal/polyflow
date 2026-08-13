@@ -150,7 +150,7 @@ func (ex *jsExtractor) handleJQueryListener(call *sitter.Node) {
 		l.bodyStart, l.bodyEnd = hLine, int(handler.EndPoint().Row)+1
 		ex.addNode(graph.Node{
 			ID: l.handlerID, Type: graph.NodeTypeFunction, Label: name,
-			Service: ex.service, File: ex.file, Line: hLine, Language: ex.langTag,
+			Service: ex.service, File: ex.file, Line: hLine, EndLine: tsEndLine(handler), Language: ex.langTag,
 			Meta: map[string]string{
 				"scope": "handler", "handler": "jquery", "event": l.event,
 			},

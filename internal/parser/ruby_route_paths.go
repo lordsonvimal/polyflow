@@ -405,6 +405,7 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 			Service:  w.service,
 			File:     w.file,
 			Line:     line,
+			EndLine:  line,
 			Language: "ruby",
 			Meta: map[string]string{
 				"pattern":           "rest_resource_route",

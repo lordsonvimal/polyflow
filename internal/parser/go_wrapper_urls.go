@@ -208,6 +208,7 @@ func emitResolvedClient(
 		Service:  service,
 		File:     file,
 		Line:     pos.Line,
+		EndLine:  pos.Line,
 		Language: "go",
 		Meta:     meta,
 	}

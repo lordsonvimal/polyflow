@@ -117,6 +117,7 @@ func (v *templVisitor) VisitHTMLTemplate(t *templparser.HTMLTemplate) error {
 		Service:  v.service,
 		File:     v.file,
 		Line:     lineNo,
+		EndLine:  line(t.Range.To),
 		Language: "templ",
 		Meta:     map[string]string{"name": name},
 	})
@@ -234,6 +235,7 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 				Service:  v.service,
 				File:     v.file,
 				Line:     lineNo,
+				EndLine:  lineNo,
 				Language: "templ",
 				Meta:     map[string]string{"path": val, "method": method, "nav_link": "true"},
 			})
@@ -271,6 +273,7 @@ func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
 		Service:  v.service,
 		File:     v.file,
 		Line:     lineNo,
+		EndLine:  lineNo,
 		Language: "templ",
 		Meta:     map[string]string{"prop": key, "event_type": key[2:], "handler": val, "pattern": "dom_event_attr"},
 	})
@@ -362,6 +365,7 @@ func (v *templVisitor) addSignalReads(val string, lineNo int) {
 			Service:  v.service,
 			File:     v.file,
 			Line:     lineNo,
+			EndLine:  lineNo,
 			Language: "templ",
 			Meta:     map[string]string{"signal": sig},
 		})
@@ -406,6 +410,7 @@ func (v *templVisitor) addSignalBind(idKey, label, signal string, lineNo int) {
 		Service:  v.service,
 		File:     v.file,
 		Line:     lineNo,
+		EndLine:  lineNo,
 		Language: "templ",
 		Meta:     map[string]string{"signal": signal},
 	})
@@ -432,6 +437,7 @@ func (v *templVisitor) addDatastarAction(val string, lineNo int) bool {
 		Service:  v.service,
 		File:     v.file,
 		Line:     lineNo,
+		EndLine:  lineNo,
 		Language: "templ",
 		Meta:     map[string]string{"method": method, "path": path, "datastar": "true", "confidence": conf},
 	})

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 	service  TEXT NOT NULL,
 	file     TEXT NOT NULL,
 	line     INTEGER NOT NULL DEFAULT 0,
+	end_line INTEGER NOT NULL DEFAULT 0,
 	language TEXT NOT NULL,
 	meta     TEXT NOT NULL DEFAULT '{}'
 );
@@ -262,6 +263,7 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		{`ALTER TABLE edges ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]'`, "sources_json"},
 		{`ALTER TABLE edges ADD COLUMN verification_state TEXT NOT NULL DEFAULT ''`, "verification_state"},
 		{`ALTER TABLE edges ADD COLUMN verified_granularity TEXT NOT NULL DEFAULT ''`, "verified_granularity"},
+		{`ALTER TABLE nodes ADD COLUMN end_line INTEGER NOT NULL DEFAULT 0`, "end_line"},
 	} {
 		if _, merr := db.Exec(col.stmt); merr != nil {
 			// "duplicate column name" is the expected error when the column
@@ -305,13 +307,13 @@ func (s *SQLiteStore) UpsertNode(ctx context.Context, n *Node) error {
 		return fmt.Errorf("marshal node meta: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO nodes (id, type, label, service, file, line, language, meta)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (id, type, label, service, file, line, end_line, language, meta)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			type=excluded.type, label=excluded.label, service=excluded.service,
-			file=excluded.file, line=excluded.line, language=excluded.language,
-			meta=excluded.meta`,
-		n.ID, string(n.Type), n.Label, n.Service, n.File, n.Line, n.Language, metaJSON)
+			file=excluded.file, line=excluded.line, end_line=excluded.end_line,
+			language=excluded.language, meta=excluded.meta`,
+		n.ID, string(n.Type), n.Label, n.Service, n.File, n.Line, n.EndLine, n.Language, metaJSON)
 	if err != nil {
 		return fmt.Errorf("upsert node %s: %w", n.ID, err)
 	}
@@ -375,7 +377,7 @@ func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
 
 func (s *SQLiteStore) GetNode(ctx context.Context, id string) (*Node, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, type, label, service, file, line, language, meta FROM nodes WHERE id = ?`, id)
+		`SELECT id, type, label, service, file, line, end_line, language, meta FROM nodes WHERE id = ?`, id)
 	return scanNode(row)
 }
 
@@ -422,7 +424,7 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.id, n.type, n.label, n.service, n.file, n.line, n.language, n.meta
+		SELECT n.id, n.type, n.label, n.service, n.file, n.line, n.end_line, n.language, n.meta
 		FROM nodes n
 		JOIN nodes_fts f ON f.id = n.id
 		WHERE nodes_fts MATCH ?
@@ -459,7 +461,7 @@ func (s *SQLiteStore) BuildIndex(ctx context.Context) (*AdjacencyIndex, error) {
 	idx := NewAdjacencyIndex()
 
 	nodeRows, err := s.db.QueryContext(ctx,
-		`SELECT id, type, label, service, file, line, language, meta FROM nodes`)
+		`SELECT id, type, label, service, file, line, end_line, language, meta FROM nodes`)
 	if err != nil {
 		return nil, fmt.Errorf("load nodes: %w", err)
 	}
@@ -907,7 +909,7 @@ type rowScanner interface {
 func scanNode(row rowScanner) (*Node, error) {
 	var n Node
 	var typ, metaJSON string
-	err := row.Scan(&n.ID, &typ, &n.Label, &n.Service, &n.File, &n.Line, &n.Language, &metaJSON)
+	err := row.Scan(&n.ID, &typ, &n.Label, &n.Service, &n.File, &n.Line, &n.EndLine, &n.Language, &metaJSON)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("node not found")
 	}
@@ -927,7 +929,7 @@ func scanNodes(rows *sql.Rows) ([]*Node, error) {
 	for rows.Next() {
 		var n Node
 		var typ, metaJSON string
-		if err := rows.Scan(&n.ID, &typ, &n.Label, &n.Service, &n.File, &n.Line, &n.Language, &metaJSON); err != nil {
+		if err := rows.Scan(&n.ID, &typ, &n.Label, &n.Service, &n.File, &n.Line, &n.EndLine, &n.Language, &metaJSON); err != nil {
 			return nil, fmt.Errorf("scan node row: %w", err)
 		}
 		n.Type = NodeType(typ)

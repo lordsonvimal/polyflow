@@ -269,16 +269,21 @@ const (
 // SchemaVersion identifies the graph data-model generation. Bumped when node
 // or edge semantics change in a way that invalidates cached parse results;
 // the indexer forces a full re-index when the stored version differs.
-const SchemaVersion = "31" // IA.5: dom_contract producer->consumer edge (data-testid/id attribute-selector seam)
+const SchemaVersion = "32" // UB.0: Node.EndLine end to end (line-range source display)
 
 // Node represents a code entity in the graph.
 type Node struct {
-	ID       string            `json:"id"`
-	Type     NodeType          `json:"type"`
-	Label    string            `json:"label"`
-	Service  string            `json:"service"`
-	File     string            `json:"file"`
-	Line     int               `json:"line"`
+	ID      string   `json:"id"`
+	Type    NodeType `json:"type"`
+	Label   string   `json:"label"`
+	Service string   `json:"service"`
+	File    string   `json:"file"`
+	Line    int      `json:"line"`
+	// EndLine is the last line of the node's full extent, 1-based,
+	// inclusive. 0 = unknown (never guessed). For single-point nodes (an
+	// HTTP call site, a variable read) it is the end row of the capturing
+	// AST node, which may equal Line.
+	EndLine  int               `json:"end_line,omitempty"`
 	Language string            `json:"language"`
 	Meta     map[string]string `json:"meta,omitempty"`
 

@@ -52,6 +52,7 @@ func (p *StylesheetParser) Parse(file, service string, _ *patterns.TreeSitterMat
 			Service:  service,
 			File:     file,
 			Line:     sel.Line,
+			EndLine:  sel.Line,
 			Language: lang,
 			Meta: map[string]string{
 				"pattern":       "stylesheet_selector",
@@ -102,6 +103,7 @@ func fontSourceNode(service, file, lang string, fs css.FontSource) (graph.Node, 
 			Service:  service,
 			File:     file,
 			Line:     fs.Line,
+			EndLine:  fs.Line,
 			Language: lang,
 			Meta:     meta,
 		}, true

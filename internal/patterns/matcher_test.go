@@ -536,6 +536,56 @@ func TestMatchAMQPService(t *testing.T) {
 	assert.True(t, patternNames["amqp_consume"], "expected amqp_consume pattern")
 }
 
+// TestMatchToGraph_EndLine_RealFixture runs a real fixture function of known
+// extent through parser->matcher->MatchToGraph end to end for Go, TypeScript,
+// and Python, asserting the minted node's EndLine exactly (UB.0; rule 6).
+func TestMatchToGraph_EndLine_RealFixture(t *testing.T) {
+	cases := []struct {
+		lang, dir, file, src string
+		wantEndLine          int
+	}{
+		{
+			lang: "go", dir: "../../patterns/go", file: "f.go",
+			src: "package p\n\nfunc Foo() {\n\tx := 1\n\t_ = x\n}\n",
+			// func Foo() {  -> line 3
+			// x := 1        -> line 4
+			// _ = x         -> line 5
+			// }             -> line 6
+			wantEndLine: 6,
+		},
+		{
+			lang: "javascript", dir: "../../patterns/javascript", file: "f.ts",
+			src:         "function foo() {\n  const x = 1;\n  return x;\n}\n",
+			wantEndLine: 4,
+		},
+		{
+			lang: "python", dir: "../../patterns/python", file: "f.py",
+			src:         "def foo():\n    x = 1\n    return x\n",
+			wantEndLine: 3,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.lang, func(t *testing.T) {
+			reg, err := patterns.DefaultRegistry(tc.dir)
+			require.NoError(t, err)
+			m := patterns.NewTreeSitterMatcher(reg)
+
+			results, err := m.Match(tc.lang, tc.file, []byte(tc.src))
+			require.NoError(t, err)
+
+			nodes, _, _ := patterns.MatchToGraph("svc", results)
+			var fn *graph.Node
+			for i := range nodes {
+				if nodes[i].Type == graph.NodeTypeFunction {
+					fn = &nodes[i]
+				}
+			}
+			require.NotNil(t, fn, "expected a function node from the fixture")
+			assert.Equal(t, tc.wantEndLine, fn.EndLine)
+		})
+	}
+}
+
 func mustLoadRegistry(t *testing.T, yamlPath string) *patterns.Registry {
 	t.Helper()
 	pf, err := patterns.LoadFile(yamlPath)
@@ -753,8 +803,8 @@ func TestStripStringLiteral_PythonForms(t *testing.T) {
 		// No-op cases
 		{"no_quotes", "no_quotes"},
 		{"/path/no/quotes", "/path/no/quotes"},
-		{`""`, ""},   // empty string
-		{`''`, ""},   // empty string
+		{`""`, ""}, // empty string
+		{`''`, ""}, // empty string
 	}
 	for _, c := range cases {
 		got := patterns.StripStringLiteral(c.input)

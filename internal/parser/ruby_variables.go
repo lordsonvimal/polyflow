@@ -101,6 +101,8 @@ func (ex *rubyExtractor) addEdge(typ graph.EdgeType, from, to string, meta map[s
 
 func rbLine(n *sitter.Node) int { return int(n.StartPoint().Row) + 1 }
 
+func rbEndLine(n *sitter.Node) int { return int(n.EndPoint().Row) + 1 }
+
 // ivarNode materialises the variable node for an instance/class variable the
 // first time it is seen and returns its ID.
 func (ex *rubyExtractor) ivarNode(name, class string, ln int) string {
@@ -117,7 +119,7 @@ func (ex *rubyExtractor) ivarNode(name, class string, ln int) string {
 	id := fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, declLine)
 	ex.addNode(graph.Node{
 		ID: id, Type: graph.NodeTypeVariable, Label: name,
-		Service: ex.service, File: ex.file, Line: declLine, Language: "ruby",
+		Service: ex.service, File: ex.file, Line: declLine, EndLine: declLine, Language: "ruby",
 		Meta: map[string]string{
 			"kind": "var", "scope": scope, "mutable": "true",
 			"class": class,
@@ -405,7 +407,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			}
 			ex.addNode(graph.Node{
 				ID: methodID, Type: graph.NodeTypeFunction, Label: name,
-				Service: ex.service, File: ex.file, Line: rbLine(node), Language: "ruby",
+				Service: ex.service, File: ex.file, Line: rbLine(node), EndLine: rbEndLine(node), Language: "ruby",
 				Meta: meta,
 			})
 		}
@@ -420,7 +422,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					ex.addNode(graph.Node{
 						ID:   fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, rbLine(node)),
 						Type: graph.NodeTypeVariable, Label: name,
-						Service: ex.service, File: ex.file, Line: rbLine(node), Language: "ruby",
+						Service: ex.service, File: ex.file, Line: rbLine(node), EndLine: rbEndLine(node), Language: "ruby",
 						Meta: map[string]string{
 							"kind": "const", "scope": "module", "mutable": "false",
 							"class": class,
@@ -591,7 +593,7 @@ func (ex *rubyExtractor) collectClass(node *sitter.Node, name string) {
 	ex.addNode(graph.Node{
 		ID:   fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, rbLine(node)),
 		Type: graph.NodeTypeClass, Label: name,
-		Service: ex.service, File: ex.file, Line: rbLine(node), Language: "ruby",
+		Service: ex.service, File: ex.file, Line: rbLine(node), EndLine: rbEndLine(node), Language: "ruby",
 		Meta: map[string]string{
 			"methods": strings.Join(methods, ","),
 			"attrs":   strings.Join(attrs, ","),

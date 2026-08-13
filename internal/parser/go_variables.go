@@ -198,7 +198,7 @@ func extractVariables(
 				globalIDs[v] = id
 				addNode(graph.Node{
 					ID: id, Type: graph.NodeTypeVariable, Label: v.Name(),
-					Service: service, File: file, Line: pos.Line, Language: "go",
+					Service: service, File: file, Line: pos.Line, EndLine: pos.Line, Language: "go",
 					Meta: map[string]string{
 						"data_type": dataType, "kind": "var",
 						"scope": "package", "mutable": "true",
@@ -218,7 +218,7 @@ func extractVariables(
 				id := fmt.Sprintf("%s:%s:variable:%s:%d", service, file, v.Name(), pos.Line)
 				addNode(graph.Node{
 					ID: id, Type: graph.NodeTypeVariable, Label: v.Name(),
-					Service: service, File: file, Line: pos.Line, Language: "go",
+					Service: service, File: file, Line: pos.Line, EndLine: pos.Line, Language: "go",
 					Meta: map[string]string{
 						"data_type": v.Value.Type().String(), "kind": "const",
 						"scope": "package", "mutable": "false",
@@ -260,13 +260,15 @@ func extractVariables(
 						"fields":      string(fieldsJSON),
 						"field_count": fmt.Sprintf("%d", under.NumFields()),
 					}
+					structEndLine := pos.Line
 					if end, ok := typeSpecEndLine[m.Pos()]; ok && end >= pos.Line {
 						structMeta["end_line"] = fmt.Sprintf("%d", end)
+						structEndLine = end
 					}
 					addNode(graph.Node{
 						ID: id, Type: graph.NodeTypeStruct, Label: v.Name(),
-						Service: service, File: file, Line: pos.Line, Language: "go",
-						Meta:    structMeta,
+						Service: service, File: file, Line: pos.Line, EndLine: structEndLine, Language: "go",
+						Meta: structMeta,
 					})
 					if under.NumFields() > 0 {
 						pendingEmbeds = append(pendingEmbeds, embedEntry{id, under})
@@ -292,13 +294,15 @@ func extractVariables(
 						}
 					}
 					ifaceMeta := map[string]string{"methods": string(methodsJSON)}
+					ifaceEndLine := pos.Line
 					if end, ok := typeSpecEndLine[m.Pos()]; ok && end >= pos.Line {
 						ifaceMeta["end_line"] = fmt.Sprintf("%d", end)
+						ifaceEndLine = end
 					}
 					addNode(graph.Node{
 						ID: id, Type: graph.NodeTypeInterface, Label: v.Name(),
-						Service: service, File: file, Line: pos.Line, Language: "go",
-						Meta:    ifaceMeta,
+						Service: service, File: file, Line: pos.Line, EndLine: ifaceEndLine, Language: "go",
+						Meta: ifaceMeta,
 					})
 				}
 			}
@@ -398,7 +402,7 @@ func extractVariables(
 				id := fmt.Sprintf("%s:%s:variable:%s:%d", service, file, fv.Name(), pos.Line)
 				addNode(graph.Node{
 					ID: id, Type: graph.NodeTypeVariable, Label: fv.Name(),
-					Service: service, File: file, Line: pos.Line, Language: "go",
+					Service: service, File: file, Line: pos.Line, EndLine: pos.Line, Language: "go",
 					Meta: map[string]string{
 						"data_type": dataType, "kind": "var",
 						"scope": "captured", "mutable": "true",
@@ -495,7 +499,7 @@ func extractVariables(
 								addNode(graph.Node{
 									ID: mid, Type: graph.NodeTypeMethod,
 									Label:   obj.Name() + "." + common.Method.Name(),
-									Service: service, File: relPath(pos.Filename), Line: pos.Line,
+									Service: service, File: relPath(pos.Filename), Line: pos.Line, EndLine: pos.Line,
 									Language: "go",
 									Meta: map[string]string{
 										"kind": "interface_method", "interface": iid,

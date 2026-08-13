@@ -248,6 +248,7 @@ func linkTemplates(
 				Service:  svc,
 				File:     f,
 				Line:     rc.Line,
+				EndLine:  rc.Line,
 				Language: "erb",
 				Meta:     map[string]string{"data-react-class": rc.Name, "mechanism": "react_component"},
 			}
