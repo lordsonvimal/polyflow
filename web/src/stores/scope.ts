@@ -29,7 +29,7 @@ export type ViewState = {
 };
 
 export const DEFAULT_STATE: ViewState = {
-  stack: [{ kind: "search" }],
+  stack: [{ kind: "overview" }],
   filters: { confidence: [], edgeTypes: [], services: [] },
 };
 
