@@ -12,6 +12,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/mcpserver"
 	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
@@ -116,6 +117,16 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile), enabled)
 	handle.SetSearcher(buildSearcher(store, emb, synonyms))
+
+	// UB.2: ops.db lives next to graph.db and is never touched by the
+	// indexer, so it survives graph.db's rebuild-then-atomic-rename.
+	opsPath := filepath.Join(meta.DBDir, meta.OpsFile)
+	if opsStore, err := ops.Open(opsPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: tool-call audit log disabled: %v\n", err)
+	} else {
+		defer opsStore.Close()
+		handle.SetOps(opsStore)
+	}
 
 	// Pick up reindexes during the session: polyflow index atomically swaps
 	// graph.db, so watch it and swap in a fresh store + index. Diagnostics go

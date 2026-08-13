@@ -33,6 +33,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/indexer"
 	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
@@ -45,7 +46,9 @@ import (
 )
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	err := rootCmd.Execute()
+	opsFinalize(err)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -370,6 +373,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer closeEmb()
 	synonyms := cfg.Search.Synonyms
 	srv.SetSearcher(buildSearcher(store, emb, synonyms))
+
+	// UB.2: ops.db lives next to graph.db and is never touched by the
+	// indexer, so it survives graph.db's rebuild-then-atomic-rename.
+	opsPath := filepath.Join(meta.DBDir, meta.OpsFile)
+	opsStore, err := ops.Open(opsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: tool-call audit log disabled: %v\n", err)
+	} else {
+		defer opsStore.Close()
+		srv.SetOps(opsStore)
+	}
 
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).
 	// On a Write or Create event, reopen the store, rebuild the index, and push a
