@@ -19,12 +19,37 @@ export interface ApiTreeResult {
   counts: { folders: number; files: number; symbols: number };
 }
 
-// Mirrors internal/graph/stack.go's ServiceStack (GET /api/stack).
+// Mirrors internal/graph/stack.go's DependencyInfo.
+export interface DependencyInfo {
+  name: string;
+  version: string;
+  ecosystem: string;
+}
+
+// Mirrors internal/graph/stack.go's ServiceStack (GET /api/stack). deps/
+// nodeCounts/edgeCounts were already in the server response (UN.1's own
+// server-change budget was spent elsewhere in this plan) but UN.0 never
+// read them off the JSON — StackPanel (UN.4) is the first caller.
 export interface ServiceSummary {
   name: string;
   language: string;
   frameworks: string[];
   files: number;
+  deps: DependencyInfo[];
+  nodeCounts: Record<string, number>;
+  edgeCounts: Record<string, number>;
+}
+
+// The raw /api/stack wire shape (snake_case, as internal/graph/stack.go's
+// ServiceStack marshals it) — loadServices() maps this into ServiceSummary.
+interface ApiServiceStack {
+  name: string;
+  language: string;
+  frameworks: string[];
+  files: number;
+  deps?: DependencyInfo[];
+  node_counts?: Record<string, number>;
+  edge_counts?: Record<string, number>;
 }
 
 // Mirrors internal/graph/model.go's UnresolvedRef (GET /api/unresolved).
@@ -211,8 +236,18 @@ async function loadServices(): Promise<void> {
   setServicesLoading(true);
   setServicesError(undefined);
   try {
-    const data = await apiFetchJSON<{ services: ServiceSummary[] }>("/api/stack");
-    setServices(data.services ?? []);
+    const data = await apiFetchJSON<{ services: ApiServiceStack[] }>("/api/stack");
+    setServices(
+      (data.services ?? []).map((s) => ({
+        name: s.name,
+        language: s.language,
+        frameworks: s.frameworks ?? [],
+        files: s.files,
+        deps: s.deps ?? [],
+        nodeCounts: s.node_counts ?? {},
+        edgeCounts: s.edge_counts ?? {},
+      })),
+    );
   } catch (err) {
     setServicesError(err instanceof Error ? err.message : String(err));
   } finally {

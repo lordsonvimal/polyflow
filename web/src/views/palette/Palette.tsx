@@ -252,6 +252,11 @@ export default function Palette() {
   createEffect(() => {
     if (paletteStore.isOpen()) {
       setHighlight(0);
+      const pending = paletteStore.pendingQuery();
+      if (pending !== undefined) {
+        onInput(pending);
+        paletteStore.clearPendingQuery();
+      }
       queueMicrotask(() => inputEl?.focus());
     }
   });

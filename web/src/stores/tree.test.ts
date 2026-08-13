@@ -76,6 +76,38 @@ describe("tree store", () => {
     expect(serviceOfNodeId("auth:app/user.rb:class:User:1")).toBe("auth");
   });
 
+  it("loadServices maps the /api/stack wire shape (deps/node_counts/edge_counts) into ServiceSummary (UN.4)", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/stack": {
+        services: [
+          {
+            name: "auth",
+            language: "ruby",
+            frameworks: ["rails"],
+            files: 3,
+            deps: [{ name: "rails", version: "7.1.0", ecosystem: "rubygems" }],
+            node_counts: { method: 5 },
+            edge_counts: { calls: 9 },
+          },
+          { name: "empty-svc", language: "", frameworks: [], files: 0 }, // no deps/counts at all
+        ],
+      },
+    });
+    await treeStore.loadServices();
+    expect(treeStore.services()).toEqual([
+      {
+        name: "auth",
+        language: "ruby",
+        frameworks: ["rails"],
+        files: 3,
+        deps: [{ name: "rails", version: "7.1.0", ecosystem: "rubygems" }],
+        nodeCounts: { method: 5 },
+        edgeCounts: { calls: 9 },
+      },
+      { name: "empty-svc", language: "", frameworks: [], files: 0, deps: [], nodeCounts: {}, edgeCounts: {} },
+    ]);
+  });
+
   describe("buildRows", () => {
     it("shows only the service row when collapsed", () => {
       const services = [{ name: "auth", language: "ruby", frameworks: [], files: 1 }];

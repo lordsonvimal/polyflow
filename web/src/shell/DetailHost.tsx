@@ -2,6 +2,9 @@ import { Show, For } from "solid-js";
 import { selectionStore } from "../stores/selection";
 import type { Selection } from "../stores/selection";
 import SourcePanel from "./SourcePanel";
+import { isServiceNodeId, serviceFromNodeId } from "../lib/aggregate";
+import { exploreStore } from "../stores/explore";
+import { layoutPrefs } from "../stores/layoutPrefs";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -49,7 +52,20 @@ export default function DetailHost() {
                   </button>
                 </div>
               </div>
-              <Show when={sel().kind === "node"}>
+              <Show when={sel().kind === "node" && isServiceNodeId(sel().id)}>
+                <button
+                  data-testid="detail-view-in-stack"
+                  class="text-xs text-indigo-300 hover:text-indigo-200 mb-2"
+                  onClick={() => {
+                    layoutPrefs.setActivity("explore");
+                    if (layoutPrefs.panelCollapsed()) layoutPrefs.setPanelCollapsed(false);
+                    exploreStore.openStackFor(serviceFromNodeId(sel().id));
+                  }}
+                >
+                  View in Tech Stack →
+                </button>
+              </Show>
+              <Show when={sel().kind === "node" && !isServiceNodeId(sel().id)}>
                 <SourcePanel nodeId={sel().id} />
               </Show>
             </div>
