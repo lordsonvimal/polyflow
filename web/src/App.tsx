@@ -7,6 +7,7 @@ import BottomDrawer from "./shell/BottomDrawer";
 import ContextMenu from "./interaction/ContextMenu";
 import HoverTooltip from "./shell/HoverTooltip";
 import CanvasHost from "./views/canvas/CanvasHost";
+import Palette from "./views/palette/Palette";
 import { scopeStore } from "./stores/scope";
 import { registerKeys } from "./interaction/keys";
 
@@ -40,6 +41,7 @@ const App: Component = () => {
       <BottomDrawer />
       <ContextMenu />
       <HoverTooltip />
+      <Palette />
     </div>
   );
 };

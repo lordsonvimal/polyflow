@@ -1,4 +1,5 @@
 import { scopeStore } from "../stores/scope";
+import { paletteStore } from "../stores/palette";
 
 export type KeyBinding = {
   key: string;       // matches KeyboardEvent.key or "Meta+k" compound
@@ -20,13 +21,13 @@ export const KEY_BINDINGS: KeyBinding[] = [
     key: "Meta+k",
     display: "⌘K",
     description: "Open command palette",
-    handler: () => {}, // US.4
+    handler: () => paletteStore.toggle(),
   },
   {
     key: "/",
     display: "/",
     description: "Open command palette",
-    handler: () => {}, // US.4
+    handler: () => paletteStore.toggle(),
   },
   {
     key: "p",
