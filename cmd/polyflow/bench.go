@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,9 +15,6 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/agentbench"
 	"github.com/lordsonvimal/polyflow/internal/eval"
 )
-
-//go:embed hookscripts/polyflow-context-inject.py
-var hookScriptContextInject []byte
 
 var (
 	benchCorpus     string
@@ -153,18 +149,17 @@ func runBench(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 
-	// polyflow-context-inject.py (embedded from cmd/polyflow/hookscripts, the
-	// same source this repo's own .claude/settings.json wires for
-	// interactive sessions) only fires when the *target* repo's own settings
-	// wire it — which none of nextGen/datascience/etc. do. --settings
-	// injects it by absolute path regardless of which repo `claude -p` runs
-	// in, so the with_polyflow_semantic arm gets the same grep/cat/Read
-	// auto-augmentation a local polyflow-repo session already gets for free.
-	hookSettingsJSON, hookCleanup, err := writeHookScripts()
+	// `polyflow hook-context-inject` (the same built-in hook this repo's own
+	// .claude/settings.json wires for interactive sessions) only fires when
+	// the *target* repo's own settings wire it — which none of
+	// nextGen/datascience/etc. do. --settings injects it regardless of which
+	// repo `claude -p` runs in, so the with_polyflow_semantic arm gets the
+	// same grep/cat/Read auto-augmentation a local polyflow-repo session
+	// already gets for free.
+	hookSettingsJSON, err := writeHookSettings(polyflowBin)
 	if err != nil {
 		return err
 	}
-	defer hookCleanup()
 
 	// ── Run benchmark ──────────────────────────────────────────────────────────
 	//
@@ -426,14 +421,21 @@ func writeMCPConfig(polyflowBin string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
-// writeHookScripts stages the embedded polyflow-context-inject.py hook to a
-// temp file and returns a --settings JSON blob wiring it as a PostToolUse
-// hook for Bash and Read — the same hook this repo's own
-// .claude/settings.json wires for interactive sessions, but portable to
-// whatever repo the with_polyflow_semantic arm's `claude -p` runs in. Without
-// this, the hook is dead weight outside this checkout: Claude Code loads
-// hooks from the *target* repo's own settings, and nextGen/datascience/etc.
-// don't carry a copy.
+// writeHookSettings returns a --settings JSON blob wiring `polyflow
+// hook-context-inject` (a hidden built-in subcommand, see
+// cmd/polyflow/hook_context_inject.go) as a PostToolUse hook for Bash and
+// Read — the same hook this repo's own .claude/settings.json wires for
+// interactive sessions, but portable to whatever repo the
+// with_polyflow_semantic arm's `claude -p` runs in. Without this, the hook
+// is dead weight outside this checkout: Claude Code loads hooks from the
+// *target* repo's own settings, and nextGen/datascience/etc. don't carry a
+// copy.
+//
+// Runs the same polyflowBin resolved for the MCP config (os.Executable(),
+// falling back to "polyflow" on PATH) rather than a temp script, so no
+// interpreter (python3 or otherwise) needs to be present on the machine
+// running the bench — only the polyflow binary itself, which the with_polyflow
+// arm already requires for the MCP server.
 //
 // This replaced an earlier pair of PreToolUse hooks (polyflow-first.py,
 // polyflow-read-gate.py) that denied the first grep/cat/Read of a session
@@ -445,33 +447,21 @@ func writeMCPConfig(polyflowBin string) (string, func(), error) {
 // intended and appends a compact graph-context block to the output, so the
 // payoff lands on the first matching call regardless of what the agent does
 // next.
-func writeHookScripts() (string, func(), error) {
-	f, err := os.CreateTemp("", "polyflow-hook-context-*.py")
-	if err != nil {
-		return "", func() {}, fmt.Errorf("write context-inject hook: %w", err)
-	}
-	if _, err := f.Write(hookScriptContextInject); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", func() {}, err
-	}
-	f.Close()
-
-	cleanup := func() { os.Remove(f.Name()) }
-
+func writeHookSettings(polyflowBin string) (string, error) {
+	hookCmd := polyflowBin + " hook-context-inject"
 	settings := map[string]interface{}{
 		"hooks": map[string]interface{}{
 			"PostToolUse": []map[string]interface{}{
 				{
 					"matcher": "Bash",
 					"hooks": []map[string]interface{}{
-						{"type": "command", "command": "python3 " + f.Name()},
+						{"type": "command", "command": hookCmd},
 					},
 				},
 				{
 					"matcher": "Read",
 					"hooks": []map[string]interface{}{
-						{"type": "command", "command": "python3 " + f.Name()},
+						{"type": "command", "command": hookCmd},
 					},
 				},
 			},
@@ -479,10 +469,9 @@ func writeHookScripts() (string, func(), error) {
 	}
 	data, err := json.Marshal(settings)
 	if err != nil {
-		cleanup()
-		return "", func() {}, fmt.Errorf("marshal hook settings: %w", err)
+		return "", fmt.Errorf("marshal hook settings: %w", err)
 	}
-	return string(data), cleanup, nil
+	return string(data), nil
 }
 
 // polyflowNudge tells the with_polyflow_semantic arm to reach for the MCP
