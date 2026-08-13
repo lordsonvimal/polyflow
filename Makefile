@@ -41,7 +41,9 @@ test-e2e:
 bench:
 	go test ./... -bench=. -benchtime=5s -run=^$
 
-# eval-corpus — clone + index all URL-based corpus repos into eval/.cache/
+# eval-corpus — clone + index all URL-based corpus repos into eval/.cache/,
+# and index path-based repos that live inside this checkout (no clone needed,
+# e.g. polyflow itself or a committed fixture like eval/testdata/pyflask).
 # Skips offline repos with a warning; never silently passes a missing clone.
 eval-corpus:
 	@mkdir -p eval/.cache
@@ -59,7 +61,16 @@ eval-corpus:
 		name=$$(basename "$$dir"); \
 		url=$$(grep -m1 'url:' "$$manifest" | awk '{print $$2}'); \
 		sha=$$(grep -m1 'sha:' "$$manifest" | awk '{print $$2}'); \
-		if [ -z "$$url" ]; then continue; fi; \
+		path=$$(grep -m1 'path:' "$$manifest" | awk '{print $$2}'); \
+		if [ -z "$$url" ]; then \
+			if [ -z "$$path" ] || [ ! -e "$$path" ]; then \
+				echo "WARNING: $$name has no url and no local path present — skipping (local-only repo?)"; \
+				continue; \
+			fi; \
+			echo "Indexing $$name (in place at $$path) ..."; \
+			(cd "$$path" && $$POLYFLOW index --full --workspace polyflow.yml) || echo "WARNING: index failed for $$name"; \
+			continue; \
+		fi; \
 		cachedir="eval/.cache/$$name"; \
 		if [ "$$ONLINE" = "0" ]; then \
 			if [ ! -d "$$cachedir/.git" ]; then \
