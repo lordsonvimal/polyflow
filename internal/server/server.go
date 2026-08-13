@@ -15,17 +15,18 @@ import (
 
 // Server is the polyflow HTTP API and UI server.
 type Server struct {
-	db        graph.Store
-	idx       *graph.AdjacencyIndex
-	idxMu     sync.RWMutex
-	searcher  *semantic.Searcher // nil → FTS-only fallback
-	mux       *http.ServeMux
-	devMode   bool
-	broadcast chan string
-	clients   map[chan string]struct{}
-	clientsMu sync.Mutex
-	ops       *ops.Store    // nil → tool-call audit logging disabled (UB.2)
-	jobs      *jobs.Manager // nil → jobs API disabled (UB.3)
+	db         graph.Store
+	idx        *graph.AdjacencyIndex
+	idxMu      sync.RWMutex
+	searcher   *semantic.Searcher // nil → FTS-only fallback
+	mux        *http.ServeMux
+	devMode    bool
+	broadcast  chan string
+	clients    map[chan string]struct{}
+	clientsMu  sync.Mutex
+	ops        *ops.Store    // nil → tool-call audit logging disabled (UB.2)
+	jobs       *jobs.Manager // nil → jobs API disabled (UB.3)
+	configPath string        // polyflow.yml path; "" → meta.ConfigFile (UB.4)
 }
 
 // New creates a Server backed by the given store and adjacency index.
@@ -78,6 +79,16 @@ func (s *Server) SetOps(o *ops.Store) {
 func (s *Server) SetJobs(j *jobs.Manager) {
 	s.idxMu.Lock()
 	s.jobs = j
+	s.idxMu.Unlock()
+}
+
+// SetConfigPath wires the polyflow.yml path the UB.4 config API reads and
+// writes. Safe to call at any time; an unset path falls back to
+// meta.ConfigFile (relative to the process's working directory), matching
+// every other CLI/server entry point's default.
+func (s *Server) SetConfigPath(path string) {
+	s.idxMu.Lock()
+	s.configPath = path
 	s.idxMu.Unlock()
 }
 
@@ -146,6 +157,8 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/jobs", s.handleListJobs)
 	s.handle("GET /api/jobs/{id}", s.handleGetJob)
 	s.handle("DELETE /api/jobs/{id}", s.handleCancelJob)
+	s.handle("GET /api/config", s.handleGetConfig)
+	s.handle("PUT /api/config", s.handlePutConfig)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend from the embedded FS so `serve` works
 	// from any working directory (not just the source-tree root).
