@@ -14,6 +14,9 @@ let countdownTimer: ReturnType<typeof setInterval> | undefined;
 let retryDelay = INITIAL_RETRY_MS;
 let stopped = true;
 
+type EventListener = (data: { type: string; [k: string]: unknown }) => void;
+const eventListeners = new Set<EventListener>();
+
 function clearTimers(): void {
   clearTimeout(retryTimer);
   clearInterval(countdownTimer);
@@ -53,6 +56,14 @@ function connect(): void {
     setState("disconnected");
     scheduleReconnect();
   };
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      eventListeners.forEach((l) => l(data));
+    } catch {
+      // Non-JSON / malformed payload — ignore rather than crash the stream.
+    }
+  };
 }
 
 export const connectionStore = {
@@ -73,5 +84,10 @@ export const connectionStore = {
     clearTimers();
     retryDelay = INITIAL_RETRY_MS;
     connect();
+  },
+  // Subscribe to parsed SSE payloads (e.g. {type:"graph_updated"}); returns an unsubscribe fn.
+  onEvent: (l: EventListener): (() => void) => {
+    eventListeners.add(l);
+    return () => eventListeners.delete(l);
   },
 };

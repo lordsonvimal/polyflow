@@ -21,6 +21,8 @@ import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./b
 import { wireCytoscape, handleIntent } from "../../interaction/gestures";
 import { apiFetch } from "../../lib/apiFetch";
 import { EmptyScopeEmptyState } from "../../shell/EmptyState";
+import { selectionStore } from "../../stores/selection";
+import { canvasElementsStore } from "../../stores/canvasElements";
 import {
   NODE_TYPE_STYLES,
   CANVAS_BG,
@@ -270,6 +272,25 @@ export default function CanvasHost() {
       onCleanup(() => { unwire(); cy?.destroy(); cy = undefined; });
     } catch {
       // Canvas renderer unavailable (e.g., jsdom in tests)
+    }
+  });
+
+  // Publish the active scope's rendered node ids so other views (e.g. the
+  // tree explorer's two-way sync) can tell "on canvas" from "needs a scope
+  // change" without reaching into Cytoscape directly.
+  createEffect(() => {
+    const d = renderData();
+    canvasElementsStore.setIds(new Set(d ? d.nodes.map((n) => n.id) : []));
+  });
+
+  // Reflect external selection changes (e.g. a tree row click) onto the
+  // canvas so the two are never visually out of sync.
+  createEffect(() => {
+    const sel = selectionStore.selection();
+    if (!cy) return;
+    cy.elements(":selected").unselect();
+    if (sel && cy.getElementById(sel.id).length > 0) {
+      cy.getElementById(sel.id).select();
     }
   });
 
