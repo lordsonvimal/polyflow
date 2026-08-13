@@ -20,11 +20,12 @@ type SeamResult struct {
 	Consumers         []SeamSide `json:"consumers"`
 }
 
-// findEdgeByID scans the index for an edge with the given ID. There is no
+// FindEdgeByID scans the index for an edge with the given ID. There is no
 // dedicated by-ID edge index (AllEdges already pays this linear cost
 // elsewhere), so this mirrors that precedent rather than adding a new map to
-// every AddEdge call for a lookup only the seam endpoint needs.
-func findEdgeByID(idx *AdjacencyIndex, id string) *Edge {
+// every AddEdge call for a lookup only the seam and UB.6 context-bundle
+// endpoints need.
+func FindEdgeByID(idx *AdjacencyIndex, id string) *Edge {
 	for _, list := range idx.OutEdges {
 		for _, e := range list {
 			if e.ID == id {
@@ -43,7 +44,7 @@ func findEdgeByID(idx *AdjacencyIndex, id string) *Edge {
 // out of it a consumer edge — the topology publishers/subscribers already
 // use), else the edge's own two endpoints as a singleton channel.
 func Seam(idx *AdjacencyIndex, edgeID string) (*SeamResult, error) {
-	e := findEdgeByID(idx, edgeID)
+	e := FindEdgeByID(idx, edgeID)
 	if e == nil {
 		return nil, fmt.Errorf("edge not found: %s", edgeID)
 	}
