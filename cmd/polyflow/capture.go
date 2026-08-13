@@ -5,13 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
-	"github.com/lordsonvimal/polyflow/internal/evidence/trace_ingest"
+	"github.com/lordsonvimal/polyflow/internal/capture"
 )
 
 // Each capture subcommand has its own flag variable set. They share the same
@@ -84,27 +83,18 @@ func init() {
 // ─── capture start ────────────────────────────────────────────────────────────
 
 func runCaptureStart(cmd *cobra.Command, args []string) error {
-	name := sessionName(captureStartSession)
+	name := capture.DefaultSessionName(captureStartSession)
 
-	sess, err := trace_ingest.NewSession(capturesBase(), name, "partial")
+	mgr := capture.NewManager(capture.BaseDir())
+	h, err := mgr.Start(name, "partial", captureStartHTTPPort, captureStartGRPCPort)
 	if err != nil {
 		return fmt.Errorf("capture start: %w", err)
 	}
 
-	recv := trace_ingest.NewReceiver(sess, captureStartHTTPPort, captureStartGRPCPort)
-	if err := recv.Start(); err != nil {
-		return fmt.Errorf("capture start: receiver: %w", err)
-	}
-
-	if err := sess.WritePID(); err != nil {
-		recv.Stop()
-		return fmt.Errorf("capture start: write pid: %w", err)
-	}
-
 	fmt.Printf("Capture session %q started.\n", name)
-	fmt.Printf("  OTLP/HTTP  http://localhost:%d/v1/traces\n", recv.HTTPPort())
-	fmt.Printf("  OTLP/gRPC  localhost:%d\n", recv.GRPCPort())
-	fmt.Printf("\nSet OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:%d in your app.\n", recv.HTTPPort())
+	fmt.Printf("  OTLP/HTTP  http://localhost:%d/v1/traces\n", h.Receiver.HTTPPort())
+	fmt.Printf("  OTLP/gRPC  localhost:%d\n", h.Receiver.GRPCPort())
+	fmt.Printf("\nSet OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:%d in your app.\n", h.Receiver.HTTPPort())
 	fmt.Printf("Stop: polyflow capture stop --session %s\n\n", name)
 
 	quit := make(chan os.Signal, 1)
@@ -112,13 +102,10 @@ func runCaptureStart(cmd *cobra.Command, args []string) error {
 	<-quit
 
 	fmt.Printf("\nStopping capture session %q...\n", name)
-	recv.Stop()
-	<-recv.Done()
-	sess.RemovePID()
-	if err := sess.Finalize(""); err != nil {
+	if _, err := mgr.Stop(name, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "capture start: finalize: %v\n", err)
 	}
-	fmt.Printf("Session %q finalised in %s\n", name, sess.Dir())
+	fmt.Printf("Session %q finalised in %s\n", name, h.Session.Dir())
 	return nil
 }
 
@@ -128,38 +115,27 @@ func runCaptureStop(cmd *cobra.Command, args []string) error {
 	if captureStopSession == "" {
 		return fmt.Errorf("capture stop: --session is required")
 	}
-	sessDir := filepath.Join(capturesBase(), captureStopSession)
-	pid, err := trace_ingest.ReadSessionPID(sessDir)
+	mgr := capture.NewManager(capture.BaseDir())
+	res, err := mgr.Stop(captureStopSession, "")
 	if err != nil {
-		return fmt.Errorf("capture stop: read pidfile for session %q: %w", captureStopSession, err)
+		return fmt.Errorf("capture stop: %w", err)
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("capture stop: find process %d: %w", pid, err)
-	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("capture stop: signal process %d: %w", pid, err)
-	}
-	fmt.Printf("Sent SIGTERM to session %q (pid %d); session will be finalised shortly.\n", captureStopSession, pid)
+	fmt.Printf("Sent SIGTERM to session %q (pid %d); session will be finalised shortly.\n", captureStopSession, res.PID)
 	return nil
 }
 
 // ─── capture run ──────────────────────────────────────────────────────────────
 
 func runCaptureRun(cmd *cobra.Command, args []string) error {
-	name := sessionName(captureRunSession)
+	name := capture.DefaultSessionName(captureRunSession)
 
-	sess, err := trace_ingest.NewSession(capturesBase(), name, "full")
+	mgr := capture.NewManager(capture.BaseDir())
+	h, err := mgr.Start(name, "full", captureRunHTTPPort, captureRunGRPCPort)
 	if err != nil {
 		return fmt.Errorf("capture run: %w", err)
 	}
 
-	recv := trace_ingest.NewReceiver(sess, captureRunHTTPPort, captureRunGRPCPort)
-	if err := recv.Start(); err != nil {
-		return fmt.Errorf("capture run: receiver: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("http://localhost:%d", recv.HTTPPort())
+	endpoint := fmt.Sprintf("http://localhost:%d", h.Receiver.HTTPPort())
 	child := exec.Command(args[0], args[1:]...)
 	child.Env = injectOTELEnv(os.Environ(), endpoint)
 	child.Stdout = os.Stdout
@@ -169,9 +145,7 @@ func runCaptureRun(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Capture run session %q: %s\n", name, strings.Join(args, " "))
 
 	runErr := child.Run()
-	recv.Stop()
-	<-recv.Done()
-	if finalErr := sess.Finalize(strings.Join(args, " ")); finalErr != nil {
+	if _, finalErr := mgr.Stop(name, strings.Join(args, " ")); finalErr != nil {
 		fmt.Fprintf(os.Stderr, "capture run: finalize: %v\n", finalErr)
 	}
 
