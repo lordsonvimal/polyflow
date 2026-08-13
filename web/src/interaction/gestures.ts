@@ -18,7 +18,10 @@ export function handleIntent(intent: Intent): void {
       selectionStore.setSelection(intent.target);
       break;
     case "drill":
-      // ponytail: neighborhood placeholder until canvas scopes land in US.3
+      // Default drill target for a plain symbol node (function, class, ...)
+      // with no more specific container scope to expand into. CanvasHost
+      // (UN.1) intercepts drill on folder/file/service compounds and
+      // boundary stubs before this generic handler runs.
       scopeStore.push({ kind: "neighborhood", nodeId: intent.target.id, depth: 1 });
       break;
     case "hoverTarget":
