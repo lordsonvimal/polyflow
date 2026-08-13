@@ -1,8 +1,9 @@
-.PHONY: web build build-all release test test-e2e bench lint clean
+.PHONY: web build install build-all release test test-e2e bench lint clean
 
 BUILD_DIR := dist
 BINARY    := polyflow
 VERSION   := $(shell grep 'Version' internal/meta/meta.go | head -1 | cut -d'"' -f2)
+PREFIX    ?= /usr/local/bin
 
 web:
 	cd web && npm install && npm run build
@@ -10,10 +11,25 @@ web:
 	# `//go:embed all:dist` stays satisfied and the working tree stays clean.
 	touch web/dist/.gitkeep
 
+# build — native build for the host OS/arch (e.g. darwin/arm64 on Apple
+# Silicon). Plain `go build`, no cross-compiler: CGO_ENABLED=1 links against
+# the toolchain already on this machine (Xcode Command Line Tools' clang on
+# macOS), so this works with zero extra setup as long as GOOS/GOARCH match the
+# host. Cross-compiling for a *different* OS/arch is what build-all/release
+# are for, and those need a cross C toolchain (see the zig note below).
 build: web
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
 	# V.2 parser sidecar; discovered next to the polyflow binary at runtime.
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/polyflow-parse-templ ./cmd/polyflow-parse-templ
+
+# install — copy the just-built native binary + its sidecar onto PATH.
+# PREFIX defaults to /usr/local/bin (already on PATH on macOS); override with
+# `make install PREFIX=$$HOME/bin` for a user-local, no-sudo install.
+install: build
+	install -d $(PREFIX)
+	install -m 0755 $(BUILD_DIR)/$(BINARY) $(PREFIX)/$(BINARY)
+	install -m 0755 $(BUILD_DIR)/polyflow-parse-templ $(PREFIX)/polyflow-parse-templ
+	@echo "Installed $(BINARY) and polyflow-parse-templ to $(PREFIX)"
 
 test:
 	go test ./... -coverprofile=coverage.out
