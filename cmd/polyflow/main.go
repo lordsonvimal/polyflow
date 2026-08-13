@@ -366,6 +366,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	} else {
 		srv = server.New(store, idx)
 	}
+	srv.SetConfigPath(serveWS)
 	// Build the embedder once for the server lifetime; share it across reloads.
 	emb, closeEmb, err := resolveEmbedder(cfg)
 	if err != nil {
