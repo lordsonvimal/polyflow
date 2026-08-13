@@ -337,11 +337,9 @@ func RunAllAgent(ctx context.Context, root string, opts AgentRunOptions) (*Agent
 	if len(argv0) == 0 {
 		return nil, fmt.Errorf("empty agent command template")
 	}
-	if _, err := exec.LookPath(argv0[0]); err != nil {
-		return nil, fmt.Errorf("%w: %q (set --agent-cmd or POLYFLOW_AGENT_CMD)", ErrAgentCLIUnavailable, argv0[0])
-	}
 
 	out := &AgentMultiReport{GeneratedAt: time.Now().UTC()}
+	cliChecked := false
 	for _, dir := range dirs {
 		m, err := LoadManifest(dir)
 		if err != nil {
@@ -350,6 +348,12 @@ func RunAllAgent(ctx context.Context, root string, opts AgentRunOptions) (*Agent
 		}
 		if len(m.AgentCases) == 0 {
 			continue
+		}
+		if !cliChecked {
+			if _, err := exec.LookPath(argv0[0]); err != nil {
+				return nil, fmt.Errorf("%w: %q (set --agent-cmd or POLYFLOW_AGENT_CMD)", ErrAgentCLIUnavailable, argv0[0])
+			}
+			cliChecked = true
 		}
 		report, err := RunAgentCorpus(ctx, AgentRunOptions{CorpusDir: dir, AgentCmd: opts.AgentCmd})
 		if err != nil {
