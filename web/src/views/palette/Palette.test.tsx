@@ -15,6 +15,7 @@ function flush() {
 describe("Palette", () => {
   let container: HTMLElement;
   let deferred: Record<string, (body: unknown) => void>;
+  let dispose: (() => void) | undefined;
 
   beforeEach(() => {
     localStorage.clear();
@@ -34,10 +35,14 @@ describe("Palette", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     paletteStore.open();
-    render(() => <Palette />, container);
+    dispose = render(() => <Palette />, container);
   });
 
   afterEach(() => {
+    // Un-disposed prior renders stay reactive on the paletteStore singleton
+    // (isOpen/pendingQuery) and race the current test's instance — dispose
+    // is required, not just DOM removal.
+    dispose?.();
     container.remove();
     vi.useRealTimers();
   });
@@ -162,5 +167,23 @@ describe("Palette", () => {
     key("Enter"); // no symbol/file hits for "rails" — the service row is first
 
     expect(scopeStore.stack().at(-1)).toEqual({ kind: "service", service: "railssvc" });
+  });
+
+  it("openWithQuery (UN.4 number click-navigate) pre-fills the search box and consumes the pending query once", async () => {
+    vi.useFakeTimers();
+    paletteStore.close();
+    await flush();
+
+    paletteStore.openWithQuery("kind:http_handler service:railssvc");
+    await flush();
+
+    expect(input().value).toBe("kind:http_handler service:railssvc");
+    expect(paletteStore.pendingQuery()).toBeUndefined();
+
+    // Re-opening later (no pending query set) must not replay the old text.
+    key("Escape"); // full reset, including the query box
+    paletteStore.open();
+    await flush();
+    expect(input().value).toBe("");
   });
 });
