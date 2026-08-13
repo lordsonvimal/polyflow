@@ -15,7 +15,7 @@ func validManifest() *eval.Manifest {
 			Name:      "testrepo",
 			URL:       "https://github.com/example/testrepo",
 			SHA:       "abc1234",
-			Workspace: "workspace.yaml",
+			Workspace: "polyflow.yml",
 		},
 		Cases: []eval.Case{
 			{

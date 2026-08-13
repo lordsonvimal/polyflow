@@ -2,7 +2,7 @@ repo:
   name: polyflow
   path: .                    # local repo — no clone needed
   sha: 792a1ebac2319edd8f48ba1bd28fb5281f5c8057
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Hand-verified ground truth: each case was verified by reading the source
 # code (grep/read), never by running polyflow itself (circular truth).

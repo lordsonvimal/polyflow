@@ -18,7 +18,7 @@ Status legend: `pending` · `in progress` · `done`
 **size** (a 30k-file monorepo must index in tolerable time and memory —
 today's perf gate is `BenchmarkIndexCold` on a 1,200-file synthetic tree
 and chessleap at ~690 files) and **shape** (workspace/service discovery is
-hand-written `workspace.yaml`; monorepo tooling already knows the answer).
+hand-written `polyflow.yml`; monorepo tooling already knows the answer).
 Two further consistency gaps ride along: **generated code** (protobuf/
 openapi output distorts both recall math and search ranking if handled
 naively) and the absence of a written **coverage contract** — the goal
@@ -153,7 +153,7 @@ recorded in the phase note.
 
 ### Phase N.2 — Monorepo service auto-discovery `pending`
 
-**Problem.** `polyflow init` requires hand-writing `workspace.yaml`; on a
+**Problem.** `polyflow init` requires hand-writing `polyflow.yml`; on a
 30-package monorepo that is the adoption cliff, and wrong service
 boundaries silently corrupt same-service/cross-service semantics.
 
@@ -163,7 +163,7 @@ and printed for confirmation** — init writes the file, the user edits;
 auto-discovery never runs implicitly on `index`):
 
 1. `go.work` → one service per `use` directive module.
-2. `pnpm-workspace.yaml` `packages:` globs / root `package.json`
+2. `pnpm-polyflow.yml` `packages:` globs / root `package.json`
    `workspaces` → one service per matched package dir (packages with no
    `src`/no source files after excludes are dropped with a printed
    note — pure-config packages are not services).
@@ -179,7 +179,7 @@ auto-discovery never runs implicitly on `index`):
 5. **Bazel is descoped with a written claim**: BUILD-file evaluation is
    its own product; a repo with `WORKSPACE`/`MODULE.bazel` gets a
    printed warning naming the descope + a pointer to manual
-   `workspace.yaml`, and a `bazel_workspace_detected` note in doctor —
+   `polyflow.yml`, and a `bazel_workspace_detected` note in doctor —
    considered, visible, not guessed.
 6. Every generated service entry carries provenance
    (`# discovered: go.work`) as a YAML comment; `DefaultExcludes()`
@@ -189,12 +189,12 @@ auto-discovery never runs implicitly on `index`):
 **Tests.** One fixture tree per detector (incl. a go.work + pnpm
 polyglot combining both); empty-package drop; detector-order test
 (nx beats turbo when both exist); bazel warning fixture; golden
-`workspace.yaml` outputs (determinism: globs expanded in sorted order,
+`polyflow.yml` outputs (determinism: globs expanded in sorted order,
 rule 2).
 
 **Acceptance.** `polyflow init` on the N.0 large repo (or a pinned
 monorepo fixture if that repo is single-module) produces a
-`workspace.yaml` needing zero manual edits to index; recorded in the
+`polyflow.yml` needing zero manual edits to index; recorded in the
 phase note with the diff against a hand-written one.
 
 **Field notes (2026-07-18, synergy dry run — bank these into N.2's tests).**
@@ -211,7 +211,7 @@ the semantic-pass warning must name the missing module, not fail the run;
 (b) the run also exposed bug-class rule 10 (`docs/phases.md` — dangling
 in-memory edges after proxy-node deletion aborted the whole index); N.2's
 acceptance run must therefore complete `index` end-to-end, not just
-produce a plausible `workspace.yaml`.
+produce a plausible `polyflow.yml`.
 
 ### Phase N.3 — The coverage contract (tiering doc + doctor repo report) `pending`
 

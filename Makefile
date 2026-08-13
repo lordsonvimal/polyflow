@@ -76,11 +76,11 @@ eval-corpus:
 		echo "Pinning $$name to $$sha ..."; \
 		git -C "$$cachedir" fetch --quiet origin; \
 		git -C "$$cachedir" checkout --quiet "$$sha"; \
-		if [ -f "$$dir/workspace.yaml" ]; then \
-			cp "$$dir/workspace.yaml" "$$cachedir/workspace.yaml"; \
+		if [ -f "$$dir/polyflow.yml" ]; then \
+			cp "$$dir/polyflow.yml" "$$cachedir/polyflow.yml"; \
 		fi; \
 		echo "Indexing $$name ..."; \
-		(cd "$$cachedir" && $$POLYFLOW index --full --workspace workspace.yaml) || echo "WARNING: index failed for $$name"; \
+		(cd "$$cachedir" && $$POLYFLOW index --full --workspace polyflow.yml) || echo "WARNING: index failed for $$name"; \
 	done; \
 	echo "eval-corpus done."
 

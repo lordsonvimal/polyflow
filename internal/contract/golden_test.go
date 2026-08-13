@@ -85,7 +85,7 @@ func contractEdgeTypes(t *testing.T) map[graph.EdgeType]bool {
 func indexChessleapContractEdges(t *testing.T, chessleapDir string) []goldenEdge {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(chessleapDir, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(chessleapDir, "polyflow.yml"))
 	require.NoError(t, err)
 
 	dbDir := t.TempDir()

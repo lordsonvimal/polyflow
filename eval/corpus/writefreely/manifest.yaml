@@ -2,7 +2,7 @@ repo:
   name: writefreely
   url: https://github.com/writefreely/writefreely
   sha: 6501fa4774bdac7f29ba3a285bde9bce0ce2fa92
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Selection rationale: WriteFreely is a Markdown blogging platform with a Go
 # backend (gorilla/mux — patterns/go/net_http_handler.yaml covers HandleFunc)

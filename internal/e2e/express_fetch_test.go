@@ -30,7 +30,7 @@ const expressFetchFixtureWS = "testdata/express_fetch"
 func indexExpressFetch(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(expressFetchFixtureWS, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(expressFetchFixtureWS, "polyflow.yml"))
 	require.NoError(t, err)
 
 	reg, err := patterns.DefaultRegistry(expressFetchPatternsDir)

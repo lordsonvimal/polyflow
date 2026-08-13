@@ -7,7 +7,7 @@ repo:
   # make eval-corpus skips path-based repos (SkippedCorpus.LocalOnly in CI).
   path: eval/.cache/chessleap
   sha: 7a74e0e06b2259ddea2cfe48136d5fd7f1a7ec13
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Selection rationale: chessleap is the repository used for all
 # BenchmarkIndexCold timing, the golden contract-edge snapshot

@@ -170,7 +170,7 @@ repo:
   name: chessleap
   url: https://github.com/…            # or path: for local
   sha: 3f2a91c                          # pinned — eval is reproducible or it is nothing
-  workspace: workspace.yaml             # checked-in workspace config for the repo
+  workspace: polyflow.yml             # checked-in workspace config for the repo
 cases:
   - id: datastar-action-blast
     kind: node                          # node | file | diff

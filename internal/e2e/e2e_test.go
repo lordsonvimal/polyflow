@@ -33,7 +33,7 @@ const patternsDir = "../../patterns"
 func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(fixtureWS, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(fixtureWS, "polyflow.yml"))
 	require.NoError(t, err)
 
 	reg, err := patterns.DefaultRegistry(patternsDir)

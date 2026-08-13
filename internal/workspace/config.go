@@ -123,7 +123,7 @@ type SearchConfig struct {
 	Synonyms map[string][]string `yaml:"synonyms,omitempty"`
 }
 
-// WorkspaceConfig is the parsed representation of workspace.yaml.
+// WorkspaceConfig is the parsed representation of polyflow.yml.
 type WorkspaceConfig struct {
 	Name     string    `yaml:"name"`
 	Version  string    `yaml:"version"`
@@ -190,7 +190,7 @@ func (cfg *WorkspaceConfig) EffectivePort() int {
 	return meta.DefaultPort
 }
 
-// Load reads and parses a workspace.yaml file at path, then resolves every
+// Load reads and parses a polyflow.yml file at path, then resolves every
 // Service.Path to an absolute directory:
 //  1. a leading "~/" expands to os.UserHomeDir(); any other leading "~"
 //     (e.g. "~user/") is rejected — that form is not supported;
@@ -296,7 +296,7 @@ func Save(path string, cfg *WorkspaceConfig) error {
 }
 
 // InitHeaderComment is the single comment line `polyflow init` prepends to
-// the workspace.yaml it generates (Z.0), documenting Load's path resolution
+// the polyflow.yml it generates (Z.0), documenting Load's path resolution
 // rules for hand-editors who add out-of-tree services later.
 const InitHeaderComment = "# paths may be absolute or ~/-prefixed; relative paths resolve against this file\n"
 

@@ -32,7 +32,7 @@ const wsConnectFixtureWS = "testdata/ws_connect"
 func indexWSConnect(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(wsConnectFixtureWS, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(wsConnectFixtureWS, "polyflow.yml"))
 	require.NoError(t, err)
 
 	reg, err := patterns.DefaultRegistry(wsConnectPatternsDir)

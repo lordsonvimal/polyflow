@@ -18,8 +18,8 @@ func TestCheckOnboarding_MissingWorkspace(t *testing.T) {
 	if issues[0].Kind != doctor.IssueAction {
 		t.Errorf("want action, got %s", issues[0].Kind)
 	}
-	if !strings.Contains(issues[0].Message, "workspace.yaml") {
-		t.Errorf("message should mention workspace.yaml: %q", issues[0].Message)
+	if !strings.Contains(issues[0].Message, "polyflow.yml") {
+		t.Errorf("message should mention polyflow.yml: %q", issues[0].Message)
 	}
 	if !strings.Contains(issues[0].Fix, "polyflow init") {
 		t.Errorf("fix should mention polyflow init: %q", issues[0].Fix)

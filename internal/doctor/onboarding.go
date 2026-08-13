@@ -25,11 +25,11 @@ type OnboardingIssue struct {
 // OnboardingParams is the resolved workspace state for onboarding checks.
 // All fields are pre-resolved by the caller; CheckOnboarding does no I/O.
 type OnboardingParams struct {
-	// WorkspaceFound is true when workspace.yaml (or the equivalent config file)
+	// WorkspaceFound is true when polyflow.yml (or the equivalent config file)
 	// exists in the working directory.
 	WorkspaceFound bool
 
-	// ConfiguredServices holds the service names declared in workspace.yaml.
+	// ConfiguredServices holds the service names declared in polyflow.yml.
 	// Empty slice means workspace exists but has no services.
 	ConfiguredServices []string
 
@@ -54,7 +54,7 @@ func CheckOnboarding(p OnboardingParams) []OnboardingIssue {
 	if !p.WorkspaceFound {
 		return append(issues, OnboardingIssue{
 			Kind:    IssueAction,
-			Message: "Workspace not configured — workspace.yaml not found",
+			Message: "Workspace not configured — polyflow.yml not found",
 			Fix:     "polyflow init",
 		})
 	}
@@ -62,7 +62,7 @@ func CheckOnboarding(p OnboardingParams) []OnboardingIssue {
 	if len(p.ConfiguredServices) == 0 {
 		issues = append(issues, OnboardingIssue{
 			Kind:    IssueAction,
-			Message: "No services configured in workspace.yaml",
+			Message: "No services configured in polyflow.yml",
 			Fix:     "polyflow init --interactive",
 		})
 		// No further checks possible without services.

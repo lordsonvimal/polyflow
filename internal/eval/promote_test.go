@@ -91,7 +91,7 @@ func TestPromoteGaps_SortedByID(t *testing.T) {
 func TestAppendCasesToManifest_IdempotentAndDeterministic(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "manifest.yaml")
-	original := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: workspace.yaml\n\ncases:\n  - id: existing-case\n    kind: node\n    target: Foo\n    expected_impacted:\n      - a.go\n    must_not_miss:\n      - a.go\n"
+	original := "repo:\n  name: fixture\n  path: .\n  sha: deadbeef\n  workspace: polyflow.yml\n\ncases:\n  - id: existing-case\n    kind: node\n    target: Foo\n    expected_impacted:\n      - a.go\n    must_not_miss:\n      - a.go\n"
 	require.NoError(t, os.WriteFile(manifestPath, []byte(original), 0o644))
 
 	cases := []eval.Case{

@@ -108,13 +108,13 @@ var initCmd = &cobra.Command{
 
 func init() {
 	initCmd.Flags().BoolVar(&initInteractive, "interactive", false, "prompt for each service instead of auto-discovering")
-	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing workspace.yaml without asking")
+	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing polyflow.yml without asking")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	cfgPath := meta.ConfigFile
 	if _, err := os.Stat(cfgPath); err == nil && !initForce {
-		fmt.Printf("workspace.yaml already exists. Overwrite? [y/N]: ")
+		fmt.Printf("polyflow.yml already exists. Overwrite? [y/N]: ")
 		var ans string
 		fmt.Scanln(&ans)
 		if strings.ToLower(ans) != "y" {
@@ -229,7 +229,7 @@ var (
 )
 
 func initIndexFlags() {
-	indexCmd.Flags().StringVar(&indexWorkspace, "workspace", meta.ConfigFile, "path to workspace.yaml")
+	indexCmd.Flags().StringVar(&indexWorkspace, "workspace", meta.ConfigFile, "path to polyflow.yml")
 	indexCmd.Flags().IntVar(&indexWorkers, "workers", runtime.GOMAXPROCS(0), "parser worker pool size")
 	indexCmd.Flags().BoolVar(&indexFull, "full", false, "force a full re-parse, ignoring the incremental cache")
 	indexCmd.Flags().BoolVar(&indexNoEmbed, "no-embed", false, "skip the embedding pass (search runs FTS-only; semantic: unavailable)")
@@ -319,7 +319,7 @@ func initServeFlags() {
 	serveCmd.Flags().IntVar(&servePort, "port", 0, "override port")
 	serveCmd.Flags().StringVar(&serveHost, "host", "127.0.0.1", "host to listen on")
 	serveCmd.Flags().BoolVar(&serveNoOpen, "no-open", false, "skip browser launch")
-	serveCmd.Flags().StringVar(&serveWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
+	serveCmd.Flags().StringVar(&serveWS, "workspace", meta.ConfigFile, "path to polyflow.yml")
 	serveCmd.Flags().BoolVar(&serveDev, "dev", false, "enable CORS for Vite dev server (port 5173)")
 }
 
@@ -728,7 +728,7 @@ func initStatusFlags() {
 	statusCmd.Flags().BoolVar(&statusUnresolved, "unresolved", false, "list references the graph could not resolve (blind spots)")
 	statusCmd.Flags().BoolVar(&statusTrend, "trend", false, "show per-service unresolved count trend over recent index runs")
 	statusCmd.Flags().IntVar(&statusTrendN, "trend-n", 5, "number of past runs to compare against for --trend")
-	statusCmd.Flags().StringVar(&statusWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
+	statusCmd.Flags().StringVar(&statusWS, "workspace", meta.ConfigFile, "path to polyflow.yml")
 }
 
 var statusCmd = &cobra.Command{
@@ -1045,7 +1045,7 @@ func runPatternsAdd(cmd *cobra.Command, args []string) error {
 	if err := workspace.Save(meta.ConfigFile, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("Added pattern file %s to workspace.yaml\n", path)
+	fmt.Printf("Added pattern file %s to polyflow.yml\n", path)
 	return nil
 }
 
@@ -2060,7 +2060,7 @@ var configCmd = &cobra.Command{
 func initConfigSubcmds() {
 	showCmd := &cobra.Command{
 		Use:   "show",
-		Short: "Pretty-print current workspace.yaml",
+		Short: "Pretty-print current polyflow.yml",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, err := os.ReadFile(meta.ConfigFile)
 			if err != nil {
@@ -2300,7 +2300,7 @@ func initEvalFlags() {
 	evalCmd.Flags().StringVar(&evalGate, "gate", "", "baseline JSON file to gate against; exits non-zero on any regression")
 
 	stampCmd.Flags().StringVar(&evalStampCorpus, "corpus", "", "path to a single corpus dir (with manifest.yaml) to stamp against the current workspace")
-	stampCmd.Flags().StringVar(&evalStampWS, "workspace", meta.ConfigFile, "path to workspace.yaml")
+	stampCmd.Flags().StringVar(&evalStampWS, "workspace", meta.ConfigFile, "path to polyflow.yml")
 	_ = stampCmd.MarkFlagRequired("corpus")
 	evalCmd.AddCommand(stampCmd)
 
@@ -2606,9 +2606,9 @@ func runEvalStamp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// repo.workspace is a path/filename field (always "workspace.yaml" in
+	// repo.workspace is a path/filename field (always "polyflow.yml" in
 	// practice); repo.name is what actually identifies the target
-	// workspace — it matches the loaded workspace.yaml's top-level `name:`.
+	// workspace — it matches the loaded polyflow.yml's top-level `name:`.
 	if m.Repo.Name != cfg.Name {
 		return fmt.Errorf("corpus %q targets workspace %q, but the loaded workspace is %q — stamp must run against its own corpus's workspace",
 			evalStampCorpus, m.Repo.Name, cfg.Name)
@@ -3433,7 +3433,7 @@ func runModelsPull(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Printf("Model saved to %s\n", dest)
-	fmt.Printf("Point your sidecar binary at this file and set search.embedder: sidecar in workspace.yaml\n")
+	fmt.Printf("Point your sidecar binary at this file and set search.embedder: sidecar in polyflow.yml\n")
 	return nil
 }
 
