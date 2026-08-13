@@ -117,10 +117,12 @@ func TestChain_TemplDatastarGinHubSSE(t *testing.T) {
 	text, ok := chainWith(r,
 		"-[datastar_action]->",
 		"-[http_call]-> ‖hub‖",
-		"-[calls]-> handleMove",
-		"-[hub_broadcast]-> Subscribe",
+		"-[calls]->",
+		"handleMove",
+		"-[hub_broadcast]->",
 	)
 	require.True(t, ok, "expected templ→gin→hub→SSE chain, got:\n%s", text)
+	assert.True(t, strings.HasSuffix(text, "Subscribe"), text)
 
 	// ≥4 hops: count nodes in the matched chain.
 	for _, c := range r.Chains {
@@ -152,7 +154,8 @@ func TestChain_RailsBunnyRabbitGoConsumer(t *testing.T) {
 		"-[subscribes]-> ‖agent‖",
 	)
 	require.True(t, ok, "expected rails→rabbitmq→agent chain, got:\n%s", text)
-	assert.True(t, strings.HasPrefix(text, "(rails) create"), text)
+	assert.True(t, strings.HasPrefix(text, "(rails) "), text)
+	assert.Contains(t, text, "create", text)
 	t.Logf("chain 2: %s", text)
 }
 

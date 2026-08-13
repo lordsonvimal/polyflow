@@ -40,6 +40,7 @@ type flowsInput struct {
 	MaxHops         int    `json:"max_hops,omitempty" jsonschema:"max hops per flow (default 8, -1 = unlimited)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter flows by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = compact default, negative = unlimited); over budget, flows collapse to the coverage block plus a sample"`
+	Detail          bool   `json:"detail,omitempty" jsonschema:"return full per-hop node/edge objects instead of the default compact arrow-chain text (file:line label -[edge_type]-> file:line label -> ...); costs substantially more tokens, use only when you need per-hop verification state or exact node IDs"`
 }
 
 // flowHop is one edge traversal within a flow path. From/To are node IDs.
@@ -147,7 +148,127 @@ func (s *Server) flows(ctx context.Context, req *mcp.CallToolRequest, in flowsIn
 		TargetCandidates: candidates,
 		ResolutionNote:   graph.ResolutionNote(in.Target, exactMatch),
 	}
-	return jsonResult(applyFlowsBudget(out, effectiveBudget(in.MaxTokens)))
+	budgeted := applyFlowsBudget(out, effectiveBudget(in.MaxTokens))
+	if in.Detail {
+		return jsonResult(budgeted)
+	}
+	return jsonResult(compactFlows(budgeted, idx))
+}
+
+// compactFlowsOutput is flowsOutput's default wire shape: each flow path
+// rendered as one arrow-chain string (file:line label -[edge_type]-> file:line
+// label -> ...) instead of a []flowHop of raw node IDs per path. Mirrors
+// trace.CompactResult for the same measured reason: a bench trial's raw flows
+// response repeated long absolute-path node IDs on both ends of every hop,
+// much of it identical to the adjacent hop's other end.
+type compactFlowsOutput struct {
+	Flows            []string                `json:"flows"`
+	Coverage         yield.CoverageBlock     `json:"coverage"`
+	Unresolved       []graph.UnresolvedRef   `json:"unresolved"`
+	Truncated        bool                    `json:"truncated,omitempty"`
+	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	ResolutionNote   string                  `json:"resolution_note,omitempty"`
+	Budget           *budget.Info            `json:"budget,omitempty"`
+}
+
+// compactFlowsSummary is flowsSummary's compact twin, used when the full flow
+// set exceeded max_tokens and applyFlowsBudget already collapsed to a sample.
+type compactFlowsSummary struct {
+	Summary          bool                    `json:"summary"`
+	FlowCount        int                     `json:"flow_count"`
+	SampleFlows      []string                `json:"sample_flows"`
+	Coverage         yield.CoverageBlock     `json:"coverage"`
+	Unresolved       []graph.UnresolvedRef   `json:"unresolved"`
+	Truncated        bool                    `json:"truncated,omitempty"`
+	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	ResolutionNote   string                  `json:"resolution_note,omitempty"`
+	Budget           *budget.Info            `json:"budget,omitempty"`
+}
+
+// compactFlows converts applyFlowsBudget's result (either a full flowsOutput
+// or a flowsSummary rollup) to its compact twin.
+func compactFlows(res any, idx *graph.AdjacencyIndex) any {
+	switch v := res.(type) {
+	case *flowsOutput:
+		return &compactFlowsOutput{
+			Flows:            renderFlowChains(idx, v.Flows),
+			Coverage:         v.Coverage,
+			Unresolved:       v.Unresolved,
+			Truncated:        v.Truncated,
+			TargetCandidates: v.TargetCandidates,
+			ResolutionNote:   v.ResolutionNote,
+			Budget:           v.Budget,
+		}
+	case *flowsSummary:
+		return &compactFlowsSummary{
+			Summary:          v.Summary,
+			FlowCount:        v.FlowCount,
+			SampleFlows:      renderFlowChains(idx, v.SampleFlows),
+			Coverage:         v.Coverage,
+			Unresolved:       v.Unresolved,
+			Truncated:        v.Truncated,
+			TargetCandidates: v.TargetCandidates,
+			ResolutionNote:   v.ResolutionNote,
+			Budget:           v.Budget,
+		}
+	default:
+		return res
+	}
+}
+
+func renderFlowChains(idx *graph.AdjacencyIndex, flows [][]flowHop) []string {
+	out := make([]string, len(flows))
+	for i, fp := range flows {
+		out[i] = renderFlowChain(idx, fp)
+	}
+	return out
+}
+
+// renderFlowChain renders one flow path as an arrow-chain string, matching
+// trace.renderChain's format so the two tools read the same way.
+func renderFlowChain(idx *graph.AdjacencyIndex, hops []flowHop) string {
+	if len(hops) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	first := idx.Nodes[hops[0].From]
+	prevService := hops[0].Service
+	if first != nil {
+		prevService = first.Service
+		fmt.Fprintf(&b, "(%s) %s", first.Service, flowNodeLocLabel(first, hops[0].From))
+	} else {
+		b.WriteString(hops[0].From)
+	}
+	for _, h := range hops {
+		fmt.Fprintf(&b, " -[%s]-> ", h.Edge)
+		to := idx.Nodes[h.To]
+		if to == nil {
+			b.WriteString(h.To)
+			continue
+		}
+		if to.Service != prevService {
+			fmt.Fprintf(&b, "‖%s‖ ", to.Service)
+			prevService = to.Service
+		}
+		b.WriteString(flowNodeLocLabel(to, h.To))
+	}
+	return b.String()
+}
+
+// flowNodeLocLabel renders "file:line label" for a node, falling back to the
+// raw node ID when the node carries no label (synthetic/unresolved targets).
+func flowNodeLocLabel(n *graph.Node, id string) string {
+	label := n.Label
+	if label == "" {
+		label = id
+	}
+	if n.File == "" {
+		return label
+	}
+	if n.Line > 0 {
+		return fmt.Sprintf("%s:%d %s", n.File, n.Line, label)
+	}
+	return fmt.Sprintf("%s %s", n.File, label)
 }
 
 // applyFlowsBudget mirrors impact.Result.ApplyBudget's detail-or-rollup
@@ -174,17 +295,42 @@ func applyFlowsBudget(out *flowsOutput, maxTokens int) any {
 		Budget:           &budget.Info{MaxTokens: maxTokens, Level: budget.LevelSummary},
 	}
 	s.Budget.AppendNote("full flow set exceeds the token budget; showing a sample plus the coverage tally")
-	keep := budget.TrimToFit(len(sample), maxTokens, func(n int) int {
+	// The prefix cut runs against a shrunk budget, reserving flowBackfillReserve
+	// for the backfill pass below — same shape as impact/summary.go's file
+	// backfill and trace.ApplyBudget's node backfill. Without the reservation,
+	// TrimToFit's binary search leaves only incidental slack, starving
+	// backfill down to whatever near-empty flow happens to be cheapest
+	// instead of a real short flow just past the cut.
+	cutBudget := int(float64(maxTokens) * (1 - flowBackfillReserve))
+	keep := budget.TrimToFit(len(sample), cutBudget, func(n int) int {
 		s.SampleFlows = sample[:n]
 		return budget.Estimate(s)
 	})
 	s.SampleFlows = sample[:keep]
-	if omitted := len(sample) - keep; omitted > 0 {
-		s.Budget.AppendNote(fmt.Sprintf("%d more flow(s) omitted to fit the budget", omitted))
+	used := budget.Estimate(s)
+
+	admitted := budget.Backfill(len(sample), keep, maxTokens, used, func(i int) int {
+		return budget.Estimate(sample[i])
+	})
+	for _, i := range admitted {
+		s.SampleFlows = append(s.SampleFlows, sample[i])
+	}
+
+	if omitted := len(sample) - len(s.SampleFlows); omitted > 0 {
+		note := fmt.Sprintf("%d more flow(s) omitted to fit the budget", omitted)
+		if len(admitted) > 0 {
+			note = fmt.Sprintf("%s (%d cheap flow(s) admitted out of order to use leftover budget)", note, len(admitted))
+		}
+		s.Budget.AppendNote(note)
 	}
 	s.Budget.EstimatedTokens = budget.Estimate(s)
 	return s
 }
+
+// flowBackfillReserve is the share of a token budget set aside so the
+// backfill pass in applyFlowsBudget has room to admit a cheap flow the
+// prefix cut skipped over. Mirrors impact/summary.go's fileBackfillReserve.
+const flowBackfillReserve = 0.10
 
 // filterFlows drops flows containing any hop whose VerificationState does not
 // meet the threshold — a flow is kept only when every hop passes, matching

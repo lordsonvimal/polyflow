@@ -161,6 +161,76 @@ func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
 	r.UnresolvedNote = graph.UnresolvedNote(len(r.Unresolved))
 }
 
+// CompactResult is Result's default wire shape: chains rendered as arrow-chain
+// text (file:line label -[edge_type]-> file:line label -> ...) and nodes as
+// one-line summaries, instead of a Hop object per node repeated once in Nodes
+// and again inside every Chain that touches it. Every other field survives —
+// VerificationSummary, Trust, TargetCandidates and Budget are cheap and carry
+// trust signals a plain string can't, so dropping them to save bytes would
+// cost more than it saves.
+//
+// Added after a live bench trial's raw trace response for a single depth-12
+// call measured 16-20KB, dominated by three redundant sources: absolute paths
+// repeated on every hop, a struct/interface node's full field-by-type-tag
+// list embedded in node_meta even when the trace question never asked about
+// the type's shape, and Chains re-embedding every hop's full Hop object per
+// path instead of referencing the already-sent Nodes list.
+type CompactResult struct {
+	Root      string   `json:"root"`
+	Direction string   `json:"direction"`
+	Depth     int      `json:"depth"`
+	Nodes     []string `json:"nodes"`
+	Chains    []string `json:"chains"`
+	EdgeTypes []string `json:"edge_types"`
+	Services  []string `json:"services"`
+	Truncated bool     `json:"truncated,omitempty"`
+
+	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
+	UnresolvedNote string                `json:"unresolved_note,omitempty"`
+
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	Trust               graph.TrustStamp          `json:"trust"`
+	TargetCandidates    []graph.TargetCandidate   `json:"target_candidates"`
+	ResolutionNote      string                    `json:"resolution_note,omitempty"`
+	Budget              *budget.Info              `json:"budget,omitempty"`
+}
+
+// Compact converts r to its token-lean wire shape. Call after ApplyBudget:
+// budgeting decides which chains/nodes survive against the full (more
+// expensive) representation, which is the conservative direction — a result
+// that fits the budget as Hops fits it as arrow-chain text too, just smaller.
+func (r *Result) Compact() *CompactResult {
+	chains := make([]string, len(r.Chains))
+	for i, c := range r.Chains {
+		chains[i] = c.Text
+	}
+	nodes := make([]string, len(r.Nodes))
+	for i, h := range r.Nodes {
+		nodes[i] = hopLocLabel(h) + " [" + h.Type + "]"
+	}
+	root := ""
+	if r.Root != nil {
+		root = fmt.Sprintf("(%s) %s [%s]", r.Root.Service, hopLocLabel(nodeHop(r.Root)), r.Root.Type)
+	}
+	return &CompactResult{
+		Root:                root,
+		Direction:           r.Direction,
+		Depth:               r.Depth,
+		Nodes:               nodes,
+		Chains:              chains,
+		EdgeTypes:           r.EdgeTypes,
+		Services:            r.Services,
+		Truncated:           r.Truncated,
+		Unresolved:          r.Unresolved,
+		UnresolvedNote:      r.UnresolvedNote,
+		VerificationSummary: r.VerificationSummary,
+		Trust:               r.Trust,
+		TargetCandidates:    r.TargetCandidates,
+		ResolutionNote:      r.ResolutionNote,
+		Budget:              r.Budget,
+	}
+}
+
 // toHops converts traversal results to hops with full node + edge metadata.
 // Returns the hop slice and the edges traversed (for VerificationSummary).
 func toHops(idx *graph.AdjacencyIndex, results []graph.TraversalResult, verboseSources bool) ([]Hop, []graph.Edge) {
@@ -351,7 +421,7 @@ func renderChain(hops []Hop) string {
 	var b strings.Builder
 	for i, h := range hops {
 		if i == 0 {
-			fmt.Fprintf(&b, "(%s) %s", h.Service, h.Label)
+			fmt.Fprintf(&b, "(%s) %s", h.Service, hopLocLabel(h))
 			continue
 		}
 		marker := ""
@@ -366,9 +436,23 @@ func renderChain(hops []Hop) string {
 		if h.CrossService {
 			fmt.Fprintf(&b, "‖%s‖ ", h.Service)
 		}
-		b.WriteString(h.Label)
+		b.WriteString(hopLocLabel(h))
 	}
 	return b.String()
+}
+
+// hopLocLabel renders "file:line label" for a hop — the filename disambiguates
+// same-named symbols across files/services (a real collision hit twice in
+// live bench trials: RemoveConfig exists as both a maple-agent handler and a
+// maple-manager client method with the same label).
+func hopLocLabel(h Hop) string {
+	if h.File == "" {
+		return h.Label
+	}
+	if h.Line > 0 {
+		return fmt.Sprintf("%s:%d %s", h.File, h.Line, h.Label)
+	}
+	return fmt.Sprintf("%s %s", h.File, h.Label)
 }
 
 // sortedEdges returns the node's edges in the given direction ordered by
@@ -436,22 +520,60 @@ func (r *Result) ApplyBudget(maxTokens int) *Result {
 		return r
 	}
 
+	// The prefix cut runs against a shrunk budget, reserving
+	// nodeBackfillReserve for the backfill pass below — same shape as
+	// impact/summary.go's file backfill. Without the reservation, TrimToFit's
+	// binary search picks the largest prefix that fits and leaves only
+	// incidental slack, starving backfill down to whatever near-empty node
+	// happens to be cheapest instead of a real deep node like an exchange
+	// declaration or health-check gate (E.1 xsvc-exec-config-build-roundtrip
+	// bench trial: max_tokens truncation dropped 2 real hops that would have
+	// fit for free in the leftover headroom).
 	allNodes := r.Nodes
-	m := budget.TrimToFit(len(allNodes), maxTokens, func(m int) int {
+	cutBudget := int(float64(maxTokens) * (1 - nodeBackfillReserve))
+	m := budget.TrimToFit(len(allNodes), cutBudget, func(m int) int {
 		r.Nodes = allNodes[:m]
 		return budget.Estimate(r)
 	})
 	r.Nodes = allNodes[:m]
+	used := budget.Estimate(r)
+
+	// Backfill: BFS order means survival depends entirely on depth, so a
+	// cheap one-hop node just past the cut is dropped for free alongside
+	// genuinely large ones. Splice back any omitted node cheap enough to fit
+	// the leftover headroom (the full maxTokens, not the shrunk cutBudget),
+	// then re-sort by depth so the traversal order in the response still
+	// reads shallow-to-deep.
+	admitted := budget.Backfill(len(allNodes), m, maxTokens, used, func(i int) int {
+		return budget.Estimate(allNodes[i])
+	})
+	for _, i := range admitted {
+		r.Nodes = append(r.Nodes, allNodes[i])
+	}
+	if len(admitted) > 0 {
+		sort.SliceStable(r.Nodes, func(i, j int) bool { return r.Nodes[i].Depth < r.Nodes[j].Depth })
+	}
 	if m < len(allNodes) {
 		r.Truncated = true
 	}
+
+	note := fmt.Sprintf("chains trimmed to %d of %d, nodes trimmed to %d of %d to fit max_tokens",
+		n, len(allChains), len(r.Nodes), len(allNodes))
+	if len(admitted) > 0 {
+		note = fmt.Sprintf("%s (%d cheap node(s) admitted out of depth order to use leftover budget)", note, len(admitted))
+	}
 	r.Budget = &budget.Info{
 		MaxTokens: maxTokens, EstimatedTokens: budget.Estimate(r), Level: budget.LevelSummary,
-		Note: fmt.Sprintf("chains trimmed to %d of %d, nodes trimmed to %d of %d to fit max_tokens",
-			n, len(allChains), m, len(allNodes)),
+		Note: note,
 	}
 	return r
 }
+
+// nodeBackfillReserve is the share of a token budget set aside so the
+// backfill pass in ApplyBudget has room to admit a cheap, deeper node
+// instead of starving on whatever incidental slack the prefix cut left
+// behind. Mirrors impact/summary.go's fileBackfillReserve.
+const nodeBackfillReserve = 0.10
 
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
