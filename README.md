@@ -60,17 +60,70 @@ it is roughly break-even.
 
 ## Installation
 
-**Prerequisites:** Go 1.22+ with CGO enabled (SQLite is bundled via
-`go-sqlite3`).
+There are two ways to get `polyflow` on your machine: build it from source,
+or drop in a binary someone else built (e.g. shared over Slack). Either way,
+**two binaries travel together**: `polyflow` and `polyflow-parse-templ` (a
+sidecar the indexer shells out to for `.templ` files, discovered next to
+`polyflow` at runtime). Installing one without the other builds and runs
+fine, it just silently under-indexes any `.templ` sources.
+
+### Option A — build from source
+
+**Prerequisites:** Go 1.22+. CGO must be enabled (the tree-sitter grammars
+require it); on macOS this just means the Xcode Command Line Tools are
+installed (`xcode-select --install` if `clang` isn't already on your PATH) —
+no separate SQLite dependency, `internal/graph` uses a pure-Go driver.
 
 ```sh
 git clone https://github.com/lordsonvimal/polyflow
 cd polyflow
-make build
-# Binary at ./dist/polyflow — add dist/ to PATH or run it directly.
+make install                      # installs to /usr/local/bin (already on PATH on macOS)
+# no-sudo alternative:
+# make install PREFIX=$HOME/bin
 ```
 
-Verify:
+`make install` builds `polyflow` + `polyflow-parse-templ` and copies both
+into `PREFIX` together — safer than `make build` + manually moving
+`./dist/polyflow`, which is easy to do for one binary and forget the other.
+
+If you use `PREFIX=$HOME/bin`, make sure that's actually on `PATH` — on a
+modern Mac (zsh is the default shell) add this once to `~/.zshrc`:
+
+```sh
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Option B — install a shared binary
+
+If someone hands you `polyflow` (and `polyflow-parse-templ`) directly instead
+of you building from this repo — a Slack upload, a tarball from `make
+release`, etc. — three things matter:
+
+1. **Get the right architecture.** Apple Silicon (M1/M2/M3/M4) Macs need
+   `darwin-arm64`; Intel Macs need `darwin-amd64`. Check yours with
+   `uname -m` (`arm64` or `x86_64`). `make release` in this repo produces
+   correctly-named tarballs for both, each already bundling both binaries —
+   ask whoever's sharing to send that rather than a bare `dist/polyflow`.
+2. **Keep both binaries in the same directory**, and put that directory
+   somewhere on `PATH` (see Option A above for the PATH setup):
+   ```sh
+   mkdir -p ~/bin
+   mv ~/Downloads/polyflow ~/Downloads/polyflow-parse-templ ~/bin/
+   chmod +x ~/bin/polyflow ~/bin/polyflow-parse-templ
+   ```
+3. **Clear macOS Gatekeeper's quarantine flag.** Files downloaded through
+   Slack (or any browser/app that sets `com.apple.quarantine`) get blocked
+   by Gatekeeper on first run ("cannot be opened because the developer
+   cannot be verified") since these binaries aren't notarized. Clear it
+   once per binary:
+   ```sh
+   xattr -d com.apple.quarantine ~/bin/polyflow ~/bin/polyflow-parse-templ
+   ```
+   (If `xattr` reports no such attribute, Gatekeeper was never going to
+   block it — safe to ignore.)
+
+### Verify
 
 ```sh
 polyflow --version
