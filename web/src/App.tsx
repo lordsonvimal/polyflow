@@ -6,20 +6,28 @@ import DetailHost from "./shell/DetailHost";
 import BottomDrawer from "./shell/BottomDrawer";
 import ContextMenu from "./interaction/ContextMenu";
 import HoverTooltip from "./shell/HoverTooltip";
+import ConnectionBanner from "./shell/ConnectionBanner";
+import Toasts from "./shell/Toasts";
 import CanvasHost from "./views/canvas/CanvasHost";
 import Palette from "./views/palette/Palette";
 import { scopeStore } from "./stores/scope";
 import { registerKeys } from "./interaction/keys";
+import { connectionStore } from "./stores/connection";
 
 const App: Component = () => {
   onMount(() => {
     const cleanup = registerKeys(window);
-    onCleanup(cleanup);
+    connectionStore.start();
+    onCleanup(() => {
+      cleanup();
+      connectionStore.stop();
+    });
   });
 
   return (
     <div class="flex flex-col h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100">
       <TopBar />
+      <ConnectionBanner />
       <Show when={scopeStore.unknownVersionNotice()}>
         <div class="flex items-center gap-2 px-3 py-1 bg-amber-900/60 text-amber-200 text-xs shrink-0">
           <span>This link was created with a newer version of polyflow — view restored to default.</span>
@@ -42,6 +50,7 @@ const App: Component = () => {
       <ContextMenu />
       <HoverTooltip />
       <Palette />
+      <Toasts />
     </div>
   );
 };
