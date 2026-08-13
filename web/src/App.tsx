@@ -4,15 +4,15 @@ import TopBar from "./shell/TopBar";
 import PanelHost from "./shell/PanelHost";
 import DetailHost from "./shell/DetailHost";
 import BottomDrawer from "./shell/BottomDrawer";
+import ContextMenu from "./interaction/ContextMenu";
+import HoverTooltip from "./shell/HoverTooltip";
 import { scopeStore } from "./stores/scope";
+import { registerKeys } from "./interaction/keys";
 
 const App: Component = () => {
   onMount(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") scopeStore.handleEsc();
-    };
-    window.addEventListener("keydown", handler);
-    onCleanup(() => window.removeEventListener("keydown", handler));
+    const cleanup = registerKeys(window);
+    onCleanup(cleanup);
   });
 
   return (
@@ -37,6 +37,8 @@ const App: Component = () => {
         <DetailHost />
       </div>
       <BottomDrawer />
+      <ContextMenu />
+      <HoverTooltip />
     </div>
   );
 };
