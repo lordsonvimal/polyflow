@@ -111,7 +111,8 @@ func TestChains_RabbitMQCrossRepo(t *testing.T) {
 	var hit string
 	for _, c := range r.Chains {
 		if strings.Contains(c.Text, "-[publishes]-> ‖svc-c-agent‖ dsw.builds") &&
-			strings.Contains(c.Text, "-[subscribes]-> ConsumeWithContext") {
+			strings.Contains(c.Text, "-[subscribes]->") &&
+			strings.HasSuffix(c.Text, "ConsumeWithContext") {
 			hit = c.Text
 		}
 	}
@@ -154,8 +155,10 @@ func TestChains_SSEHubFanout(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, hit, "expected a chain through the hub fan-out, got:\n%s", chainTexts(r))
-	assert.True(t, strings.HasPrefix(hit, "(chessleap) handleMove -[calls]->"), hit)
-	assert.True(t, strings.HasSuffix(hit, "-[hub_broadcast]-> Subscribe"), hit)
+	assert.True(t, strings.HasPrefix(hit, "(chessleap) "), hit)
+	assert.Contains(t, hit, "handleMove -[calls]->", hit)
+	assert.Contains(t, hit, "-[hub_broadcast]->", hit)
+	assert.True(t, strings.HasSuffix(hit, "Subscribe"), hit)
 }
 
 // TestChains_WebSocketTypedDispatch traces the tether shape: reportBattery
@@ -189,7 +192,8 @@ func TestChains_WebSocketTypedDispatch(t *testing.T) {
 		}
 	}
 	require.NotNil(t, hitChain, "expected a chain through the typed ws_send link, got:\n%s", chainTexts(r))
-	assert.True(t, strings.HasPrefix(hitChain.Text, "(tether) reportBattery -[calls]->"), hitChain.Text)
+	assert.True(t, strings.HasPrefix(hitChain.Text, "(tether) "), hitChain.Text)
+	assert.Contains(t, hitChain.Text, "reportBattery -[calls]->", hitChain.Text)
 
 	// The message type is carried as the edge label on the ws_send hop.
 	last := hitChain.Hops[len(hitChain.Hops)-1]

@@ -447,16 +447,14 @@ func TestTraceTool_BackwardChain(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Chains []struct {
-			Text string `json:"text"`
-		} `json:"chains"`
+		Chains     []string               `json:"chains"`
 		Unresolved []graph.UnresolvedRef `json:"unresolved"`
 	}
 	callJSON(t, cs, "trace", map[string]any{"root": "queryDB", "direction": "backward"}, &out)
 
 	require.Len(t, out.Chains, 1)
-	assert.Contains(t, out.Chains[0].Text, "fetchUser")
-	assert.Contains(t, out.Chains[0].Text, "queryDB")
+	assert.Contains(t, out.Chains[0], "fetchUser")
+	assert.Contains(t, out.Chains[0], "queryDB")
 	require.Len(t, out.Unresolved, 1)
 }
 
@@ -709,9 +707,7 @@ func TestTraceTool_MinVerificationFiltersChains(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Chains []struct {
-			Text string `json:"text"`
-		} `json:"chains"`
+		Chains              []string                  `json:"chains"`
 		VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 	}
 	// backward trace from queryDB: chain fetchUser->getUser->queryDB has a candidate hop
