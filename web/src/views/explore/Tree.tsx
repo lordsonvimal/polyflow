@@ -10,6 +10,7 @@ import { registerMenuItems, unregisterMenuItems, openMenu } from "../../interact
 import { TreeSkeleton } from "../../shell/Skeleton";
 import EmptyState from "../../shell/EmptyState";
 import { notificationsStore } from "../../stores/notifications";
+import { formatLocation, formatRange } from "../../lib/location";
 
 const ROW_HEIGHT = 22;
 const ACTIVITY_ID = "explore-tree";
@@ -45,9 +46,7 @@ function scopeForRow(row: Row): Parameters<typeof scopeStore.push>[0] | null {
 }
 
 function locationLabel(row: Row): string | null {
-  if (!row.file) return null;
-  if (row.endLine && row.endLine !== 0) return `${row.file}:${row.line ?? ""}–${row.endLine}`;
-  return row.line ? `${row.file}:${row.line}` : row.file;
+  return formatLocation(row.file, row.line, row.endLine) || null;
 }
 
 function copyPath(row: Row): void {
@@ -251,9 +250,9 @@ export default function Tree() {
                     </Show>
                     <span class="shrink-0 text-neutral-400">{iconFor(row.kind)}</span>
                     <span class="text-neutral-200 truncate">{row.name}</span>
-                    <Show when={row.kind !== "folder" && row.kind !== "service" && row.kind !== "file" && row.endLine}>
+                    <Show when={row.kind !== "folder" && row.kind !== "service" && row.kind !== "file" && row.line}>
                       <span class="text-neutral-600 text-xs shrink-0">
-                        {row.line}–{row.endLine}
+                        {formatRange(row.line, row.endLine)}
                       </span>
                     </Show>
                     <Show when={badgeCount(row) > 0}>
