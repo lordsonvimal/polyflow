@@ -1,6 +1,7 @@
 import { Show, For } from "solid-js";
 import { selectionStore } from "../stores/selection";
 import type { Selection } from "../stores/selection";
+import SourcePanel from "./SourcePanel";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -48,6 +49,9 @@ export default function DetailHost() {
                   </button>
                 </div>
               </div>
+              <Show when={sel().kind === "node"}>
+                <SourcePanel nodeId={sel().id} />
+              </Show>
             </div>
           </div>
         )}

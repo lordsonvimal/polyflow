@@ -1,5 +1,6 @@
 import { createSignal, Show, onMount, onCleanup } from "solid-js";
 import { selectionStore } from "../stores/selection";
+import { formatLocation } from "../lib/location";
 
 export default function HoverTooltip() {
   const [pos, setPos] = createSignal({ x: 0, y: 0 });
@@ -14,9 +15,7 @@ export default function HoverTooltip() {
     <Show when={selectionStore.hoverTarget()}>
       {(t) => {
         const target = t();
-        const filePart = target.file
-          ? `${target.file}:${target.line ?? ""}${target.end_line && target.end_line !== target.line ? `–${target.end_line}` : ""}`
-          : null;
+        const filePart = formatLocation(target.file, target.line, target.end_line) || null;
         return (
           <div
             data-testid="hover-tooltip"

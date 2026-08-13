@@ -6,6 +6,7 @@ import { scopeStore } from "../../stores/scope";
 import { selectionStore } from "../../stores/selection";
 import { treeStore } from "../../stores/tree";
 import { parseQuery, parseNodeCard, type ParsedQuery } from "./query";
+import { formatLocation } from "../../lib/location";
 
 const DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 8;
@@ -302,7 +303,7 @@ export default function Palette() {
                       </Show>
                       <span class="text-neutral-200">{s.label}</span>
                       <span class="text-neutral-500 ml-2 text-xs">
-                        {s.type} · {s.service} · {s.file}:{s.line}{s.endLine ? `–${s.endLine}` : ""}
+                        {s.type} · {s.service} · {formatLocation(s.file, s.line, s.endLine)}
                       </span>
                     </Row>
                   )}
