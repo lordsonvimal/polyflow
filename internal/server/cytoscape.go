@@ -17,6 +17,7 @@ type CytoscapeNodeData struct {
 	Service  string            `json:"service"`
 	File     string            `json:"file"`
 	Line     int               `json:"line"`
+	EndLine  int               `json:"end_line,omitempty"`
 	Language string            `json:"language"`
 	Meta     map[string]string `json:"meta,omitempty"`
 }
@@ -61,6 +62,7 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 				Service:  n.Service,
 				File:     n.File,
 				Line:     n.Line,
+				EndLine:  n.EndLine,
 				Language: n.Language,
 				Meta:     n.Meta,
 			},

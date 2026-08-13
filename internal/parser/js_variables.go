@@ -8,8 +8,8 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
-	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
+	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -76,9 +76,9 @@ type jsVar struct {
 
 // jsScope is one lexical function frame (or the module frame at index 0).
 type jsScope struct {
-	fnName string          // attribution: nearest named enclosing function
+	fnName string // attribution: nearest named enclosing function
 	fnLine int
-	locals map[string]int  // name → declaration line (function scopes only)
+	locals map[string]int // name → declaration line (function scopes only)
 }
 
 type jsExtractor struct {
@@ -86,7 +86,7 @@ type jsExtractor struct {
 	src                    []byte
 
 	moduleVars map[string]*jsVar
-	fnDecls    map[string]int    // top-level function name → line
+	fnDecls    map[string]int // top-level function name → line
 	// localFns maps every self-attributable function name (nested function
 	// declarations + `const handler = () => …` locals, at any depth) to its decl
 	// line — the same line the walk mints the function node at. It lets Y.7
@@ -94,7 +94,7 @@ type jsExtractor struct {
 	// dominant React/Solid idiom) to their function node. Cross-scope name
 	// collisions are approximated (last-wins), consistent with this pass's
 	// reduced-confidence, no-type-checker contract.
-	localFns map[string]int
+	localFns   map[string]int
 	classNodes map[string]string // class/interface name → nodeID (same-file)
 	// signals maps a Solid reactive accessor name (createSignal/createResource/
 	// createMemo binding) to its variable node ID, so a JSX interpolation reading
@@ -159,6 +159,8 @@ func (ex *jsExtractor) fnNodeID(name string, line int) string {
 }
 
 func tsLine(n *sitter.Node) int { return int(n.StartPoint().Row) + 1 }
+
+func tsEndLine(n *sitter.Node) int { return int(n.EndPoint().Row) + 1 }
 
 // isFunctionNode reports whether the AST node opens a new function scope.
 func isFunctionNode(t string) bool {
@@ -234,7 +236,7 @@ func (ex *jsExtractor) collectTopLevel(root *sitter.Node) {
 					ex.addNode(graph.Node{
 						ID: ex.fnNodeID(name, tsLine(stmt)), Type: graph.NodeTypeFunction,
 						Label: name, Service: ex.service, File: ex.file,
-						Line: tsLine(stmt), Language: ex.langTag,
+						Line: tsLine(stmt), EndLine: tsEndLine(stmt), Language: ex.langTag,
 					})
 					continue
 				}
@@ -251,7 +253,7 @@ func (ex *jsExtractor) collectTopLevel(root *sitter.Node) {
 				ex.moduleVars[name] = &jsVar{nodeID: id, dataType: dataType}
 				ex.addNode(graph.Node{
 					ID: id, Type: graph.NodeTypeVariable, Label: name,
-					Service: ex.service, File: ex.file, Line: tsLine(stmt), Language: ex.langTag,
+					Service: ex.service, File: ex.file, Line: tsLine(stmt), EndLine: tsEndLine(stmt), Language: ex.langTag,
 					Meta: map[string]string{
 						"data_type": dataType, "kind": kind,
 						"scope": "module", "mutable": fmt.Sprintf("%t", kind != "const"),
@@ -349,7 +351,7 @@ func (ex *jsExtractor) collectDestructured(decl, pattern *sitter.Node, kind stri
 		}
 		ex.addNode(graph.Node{
 			ID: id, Type: graph.NodeTypeVariable, Label: name,
-			Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+			Service: ex.service, File: ex.file, Line: line, EndLine: line, Language: ex.langTag,
 			Meta: meta,
 		})
 	})
@@ -561,9 +563,9 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 		}
 	}
 	ex.addNode(graph.Node{
-		ID: fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, tsLine(stmt)),
+		ID:   fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, tsLine(stmt)),
 		Type: graph.NodeTypeClass, Label: name,
-		Service: ex.service, File: ex.file, Line: tsLine(stmt), Language: ex.langTag,
+		Service: ex.service, File: ex.file, Line: tsLine(stmt), EndLine: tsEndLine(stmt), Language: ex.langTag,
 		Meta: map[string]string{
 			"methods": strings.Join(methods, ","),
 			"fields":  strings.Join(fields, ","),
@@ -605,8 +607,8 @@ func (ex *jsExtractor) preCollectClasses(root *sitter.Node) {
 // the inherits_unresolved ledger.
 //
 // The JS and TS grammars differ:
-//  - JavaScript: class_heritage has a `value` field directly (the superclass expr).
-//  - TypeScript: class_heritage has named children extends_clause / implements_clause.
+//   - JavaScript: class_heritage has a `value` field directly (the superclass expr).
+//   - TypeScript: class_heritage has named children extends_clause / implements_clause.
 func (ex *jsExtractor) processClassHeritage(stmt *sitter.Node, classID string) {
 	// Find class_heritage named child.
 	var heritage *sitter.Node
@@ -734,7 +736,7 @@ func (ex *jsExtractor) collectInterface(stmt *sitter.Node) {
 	}
 	ex.addNode(graph.Node{
 		ID: nodeID, Type: graph.NodeTypeInterface, Label: name,
-		Service: ex.service, File: ex.file, Line: tsLine(stmt), Language: ex.langTag,
+		Service: ex.service, File: ex.file, Line: tsLine(stmt), EndLine: tsEndLine(stmt), Language: ex.langTag,
 		Meta: map[string]string{"methods": strings.Join(methods, ",")},
 	})
 
@@ -870,10 +872,10 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		// the matcher already covers.
 		if selfAttributed {
 			ex.addNode(graph.Node{
-				ID:    ex.fnNodeID(frame.fnName, frame.fnLine),
-				Type:  graph.NodeTypeFunction,
-				Label: frame.fnName,
-				Service: ex.service, File: ex.file, Line: frame.fnLine,
+				ID:      ex.fnNodeID(frame.fnName, frame.fnLine),
+				Type:    graph.NodeTypeFunction,
+				Label:   frame.fnName,
+				Service: ex.service, File: ex.file, Line: frame.fnLine, EndLine: frame.fnLine,
 				Language: ex.langTag,
 			})
 		}
@@ -946,7 +948,7 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 							}
 							ex.addNode(graph.Node{
 								ID: id, Type: graph.NodeTypeVariable, Label: name,
-								Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+								Service: ex.service, File: ex.file, Line: line, EndLine: line, Language: ex.langTag,
 								Meta: meta,
 							})
 							ex.signals[name] = id
@@ -1196,7 +1198,7 @@ func (ex *jsExtractor) captureEdge(node *sitter.Node, name string, scopes []*jsS
 	id := ex.varNodeID(name, declLine)
 	ex.addNode(graph.Node{
 		ID: id, Type: graph.NodeTypeVariable, Label: name,
-		Service: ex.service, File: ex.file, Line: declLine, Language: ex.langTag,
+		Service: ex.service, File: ex.file, Line: declLine, EndLine: declLine, Language: ex.langTag,
 		Meta: map[string]string{
 			"kind": "var", "scope": "captured", "mutable": "true",
 		},
@@ -1246,7 +1248,7 @@ func (ex *jsExtractor) handleJSXWrite(jsxExpr *sitter.Node) {
 					elementAdded = true
 					ex.addNode(graph.Node{
 						ID: elID, Type: graph.NodeTypeElement, Label: tag,
-						Service: ex.service, File: ex.file, Line: elLine, Language: ex.langTag,
+						Service: ex.service, File: ex.file, Line: elLine, EndLine: elLine, Language: ex.langTag,
 						Meta: map[string]string{"tag": tag},
 					})
 				}
@@ -1362,7 +1364,7 @@ func (ex *jsExtractor) emitDOMListen(elID string, elementAdded *bool, elLine int
 		*elementAdded = true
 		ex.addNode(graph.Node{
 			ID: elID, Type: graph.NodeTypeElement, Label: tag,
-			Service: ex.service, File: ex.file, Line: elLine, Language: ex.langTag,
+			Service: ex.service, File: ex.file, Line: elLine, EndLine: elLine, Language: ex.langTag,
 			Meta: map[string]string{"tag": tag},
 		})
 	}
@@ -1494,7 +1496,7 @@ func (ex *jsExtractor) handleAddEventListener(call *sitter.Node) {
 			added = true
 			ex.addNode(graph.Node{
 				ID: elID, Type: graph.NodeTypeElement, Label: target,
-				Service: ex.service, File: ex.file, Line: line, Language: ex.langTag,
+				Service: ex.service, File: ex.file, Line: line, EndLine: line, Language: ex.langTag,
 				Meta: map[string]string{"tag": target, "via": "addEventListener"},
 			})
 		}
@@ -1739,7 +1741,7 @@ func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
 				if !ex.nodeSeen[nodeID] {
 					newNodes = append(newNodes, graph.Node{
 						ID: nodeID, Type: graph.NodeTypeFunction, Label: leaf,
-						Service: ex.service, File: ex.file, Line: lineNo, Language: ex.langTag,
+						Service: ex.service, File: ex.file, Line: lineNo, EndLine: lineNo, Language: ex.langTag,
 						Meta: map[string]string{"global_symbol": leaf, "global_path": dotted},
 					})
 				}
@@ -1750,7 +1752,7 @@ func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
 			if !ex.nodeSeen[nodeID] {
 				newNodes = append(newNodes, graph.Node{
 					ID: nodeID, Type: graph.NodeTypeVariable, Label: leaf,
-					Service: ex.service, File: ex.file, Line: lineNo, Language: ex.langTag,
+					Service: ex.service, File: ex.file, Line: lineNo, EndLine: lineNo, Language: ex.langTag,
 					Meta: map[string]string{"global_symbol": leaf, "global_path": dotted, "scope": "global"},
 				})
 			}

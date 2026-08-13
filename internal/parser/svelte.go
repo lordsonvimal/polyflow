@@ -222,12 +222,12 @@ func extractSvelteMarkupAttrs(blanked []byte, file, service string) ([]graph.Nod
 
 	// on:event={handler} bindings.
 	for _, m := range reSvelteEvent.FindAllSubmatchIndex(blanked, -1) {
-		rawEvent := string(blanked[m[2]:m[3]])  // e.g. "click", "click|preventDefault"
-		handler := string(blanked[m[4]:m[5]])   // e.g. "save", "handleClick"
+		rawEvent := string(blanked[m[2]:m[3]]) // e.g. "click", "click|preventDefault"
+		handler := string(blanked[m[4]:m[5]])  // e.g. "save", "handleClick"
 		matchStart := m[0]
 
 		eventName := normalizeSvelteEvent(rawEvent) // "click"
-		handler = stripCallArgs(handler)             // "save(x)" → "save"
+		handler = stripCallArgs(handler)            // "save(x)" → "save"
 
 		lineNo := bytes.Count(blanked[:matchStart], []byte{'\n'}) + 1
 		nodeID := fmt.Sprintf("%s:%s:svelte_event:%d:%s", service, file, lineNo, eventName)
@@ -238,6 +238,7 @@ func extractSvelteMarkupAttrs(blanked []byte, file, service string) ([]graph.Nod
 			Service:  service,
 			File:     file,
 			Line:     lineNo,
+			EndLine:  lineNo,
 			Language: "svelte",
 			Meta: map[string]string{
 				"event":   eventName,

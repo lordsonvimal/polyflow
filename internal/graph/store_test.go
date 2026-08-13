@@ -71,6 +71,30 @@ func TestUpsertNodeIdempotent(t *testing.T) {
 	assert.Equal(t, "updated_label", got.Label)
 }
 
+func TestUpsertAndGetNode_EndLine(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	n := nodeFixture("n1")
+	n.EndLine = 48
+
+	require.NoError(t, s.UpsertNode(ctx, n))
+
+	got, err := s.GetNode(ctx, "n1")
+	require.NoError(t, err)
+	assert.Equal(t, 48, got.EndLine)
+
+	found, err := s.SearchNodes(ctx, got.Label, 5)
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	assert.Equal(t, 48, found[0].EndLine)
+
+	idx, err := s.BuildIndex(ctx)
+	require.NoError(t, err)
+	require.Contains(t, idx.Nodes, "n1")
+	assert.Equal(t, 48, idx.Nodes["n1"].EndLine)
+}
+
 func TestGetNodeNotFound(t *testing.T) {
 	s := newTestStore(t)
 	_, err := s.GetNode(context.Background(), "nonexistent")

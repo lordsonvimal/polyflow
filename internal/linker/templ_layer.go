@@ -257,6 +257,7 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 			Service:  svc,
 			File:     d.file,
 			Line:     d.line,
+			EndLine:  d.line,
 			Language: d.lang,
 			Meta:     map[string]string{"dom_id": elemName, "component": d.compID},
 		})

@@ -56,6 +56,26 @@ func TestRubyVariables_Class(t *testing.T) {
 	}
 }
 
+func TestRubyVariables_EndLine(t *testing.T) {
+	nodes, _ := parseRubyVarFixture(t)
+
+	cls := jsNode(nodes, graph.NodeTypeClass, "OrdersController")
+	if cls == nil {
+		t.Fatalf("missing class node; nodes: %+v", nodes)
+	}
+	if cls.Line != 3 || cls.EndLine != 15 {
+		t.Errorf("class OrdersController span wrong: got line=%d end_line=%d, want line=3 end_line=15", cls.Line, cls.EndLine)
+	}
+
+	fn := jsNode(nodes, graph.NodeTypeFunction, "create")
+	if fn == nil {
+		t.Fatalf("missing function node; nodes: %+v", nodes)
+	}
+	if fn.Line != 7 || fn.EndLine != 10 {
+		t.Errorf("method create span wrong: got line=%d end_line=%d, want line=7 end_line=10", fn.Line, fn.EndLine)
+	}
+}
+
 func TestRubyVariables_IvarWritesAndReads(t *testing.T) {
 	nodes, edges := parseRubyVarFixture(t)
 
