@@ -84,6 +84,20 @@ function commit(next: ViewState) {
   syncHash(next);
 }
 
+// US.5: every scope-stack change cancels in-flight fetches from the scope
+// being left, so a slow response can never paint over the new scope.
+let scopeController = new AbortController();
+
+function abortInFlight(): void {
+  scopeController.abort();
+  scopeController = new AbortController();
+}
+
+function commitStackChange(next: ViewState): void {
+  abortInFlight();
+  commit(next);
+}
+
 export const scopeStore = {
   stack: () => viewState().stack,
   viewState,
@@ -92,9 +106,13 @@ export const scopeStore = {
   dismissVersionNotice: () => setUnknownVersionNotice(false),
   dismissStaleIdNotice: () => setStaleIdNotice(false),
 
-  push: (scope: Scope) => commit({ ...viewState(), stack: [...viewState().stack, scope] }),
-  popTo: (i: number) => commit({ ...viewState(), stack: viewState().stack.slice(0, i + 1) }),
-  reset: () => commit({ ...DEFAULT_STATE }),
+  // AbortSignal tied to the current scope; pass to fetches so a scope pop
+  // cancels them (see abortInFlight above).
+  signal: () => scopeController.signal,
+
+  push: (scope: Scope) => commitStackChange({ ...viewState(), stack: [...viewState().stack, scope] }),
+  popTo: (i: number) => commitStackChange({ ...viewState(), stack: viewState().stack.slice(0, i + 1) }),
+  reset: () => commitStackChange({ ...DEFAULT_STATE }),
 
   setIsolation: (iso: FlowRef | undefined) => commit({ ...viewState(), isolation: iso }),
   setFilters: (filters: ViewState["filters"]) => commit({ ...viewState(), filters }),
@@ -103,7 +121,7 @@ export const scopeStore = {
   // Called by graph loader when a stored node id is no longer valid after reindex
   handleStaleId: () => {
     setStaleIdNotice(true);
-    commit({ ...DEFAULT_STATE });
+    commitStackChange({ ...DEFAULT_STATE });
   },
 
   // Esc ordering: clear selection → pop isolation → pop scope (bottom of stack = no-op)
@@ -118,7 +136,7 @@ export const scopeStore = {
       return;
     }
     if (state.stack.length > 1) {
-      commit({ ...state, stack: state.stack.slice(0, -1) });
+      commitStackChange({ ...state, stack: state.stack.slice(0, -1) });
     }
   },
 };
