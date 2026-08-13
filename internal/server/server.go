@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jobs"
 	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	webui "github.com/lordsonvimal/polyflow/web"
@@ -23,7 +24,8 @@ type Server struct {
 	broadcast chan string
 	clients   map[chan string]struct{}
 	clientsMu sync.Mutex
-	ops       *ops.Store // nil → tool-call audit logging disabled (UB.2)
+	ops       *ops.Store    // nil → tool-call audit logging disabled (UB.2)
+	jobs      *jobs.Manager // nil → jobs API disabled (UB.3)
 }
 
 // New creates a Server backed by the given store and adjacency index.
@@ -69,6 +71,26 @@ func (s *Server) SetOps(o *ops.Store) {
 	s.idxMu.Lock()
 	s.ops = o
 	s.idxMu.Unlock()
+}
+
+// SetJobs wires the UB.3 job manager into the server. Safe to call at any
+// time; nil disables the jobs API (handlers return 503).
+func (s *Server) SetJobs(j *jobs.Manager) {
+	s.idxMu.Lock()
+	s.jobs = j
+	s.idxMu.Unlock()
+}
+
+// Broadcast pushes a raw SSE message to every connected /api/events client,
+// non-blocking (mirroring Reload's fan-out). Exported so internal/jobs
+// (constructed and owned by the CLI's serve command, outside this package)
+// can push job_progress/job_done events without this package depending on
+// internal/jobs for anything but the *jobs.Manager type.
+func (s *Server) Broadcast(msg string) {
+	select {
+	case s.broadcast <- msg:
+	default:
+	}
 }
 
 // Reload swaps the adjacency index and broadcasts a graph_updated SSE event.
@@ -120,6 +142,10 @@ func (s *Server) registerRoutes() {
 	s.handle("DELETE /api/toolcalls", s.handleDeleteToolCalls)
 	s.handle("GET /api/settings", s.handleGetSettings)
 	s.handle("PUT /api/settings", s.handlePutSettings)
+	s.handle("POST /api/jobs", s.handleCreateJob)
+	s.handle("GET /api/jobs", s.handleListJobs)
+	s.handle("GET /api/jobs/{id}", s.handleGetJob)
+	s.handle("DELETE /api/jobs/{id}", s.handleCancelJob)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend from the embedded FS so `serve` works
 	// from any working directory (not just the source-tree root).
