@@ -7,10 +7,10 @@ function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
     <div class="w-80 bg-neutral-950 border-l border-neutral-800 overflow-y-auto shrink-0">
       <div class="p-4 text-sm text-neutral-300">
-        <div class="flex items-center justify-between mb-1">
-          <span class="font-medium text-blue-300">📌 {sel.kind}: {sel.id}</span>
+        <div class="flex items-start justify-between mb-1 gap-2">
+          <span class="font-medium text-blue-300 break-all min-w-0" title={sel.id}>📌 {sel.kind}: {sel.id}</span>
           <button
-            class="text-xs text-neutral-500 hover:text-white"
+            class="text-xs text-neutral-500 hover:text-white shrink-0"
             onClick={() => selectionStore.unpin(sel.id)}
           >
             × unpin
@@ -31,9 +31,9 @@ export default function DetailHost() {
         {(sel) => (
           <div class="w-80 bg-neutral-950 overflow-y-auto shrink-0">
             <div class="p-4 text-sm text-neutral-300">
-              <div class="flex items-center justify-between mb-2">
-                <span class="font-medium">{sel().kind}: {sel().id}</span>
-                <div class="flex gap-2">
+              <div class="flex items-start justify-between gap-2 mb-2">
+                <span class="font-medium break-all min-w-0" title={sel().id}>{sel().kind}: {sel().id}</span>
+                <div class="flex gap-2 shrink-0">
                   <button
                     class="text-xs text-blue-400 hover:text-blue-300"
                     title="Pin to compare"

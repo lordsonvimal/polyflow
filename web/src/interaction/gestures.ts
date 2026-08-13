@@ -88,7 +88,10 @@ export function wireCytoscape(cy: any, onIntent: (i: Intent) => void): () => voi
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function onTap(e: any) {
     const el = e.target;
-    if (el === cy) return;
+    if (el === cy) {
+      onIntent({ type: "escape" });
+      return;
+    }
     const t = ref(el);
     const id: string = el.id();
     if ((e.originalEvent as MouseEvent)?.shiftKey) {
