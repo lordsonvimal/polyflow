@@ -1,5 +1,6 @@
 import { createSignal, onMount, createEffect } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
+import { paletteStore } from "../stores/palette";
 import Breadcrumbs from "./Breadcrumbs";
 
 export default function TopBar() {
@@ -45,7 +46,10 @@ export default function TopBar() {
         >
           {layoutPrefs.theme() === "dark" ? "☀" : "☾"}
         </button>
-        <button class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded px-2 py-0.5">
+        <button
+          class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
+          onClick={() => paletteStore.open()}
+        >
           ⌘K
         </button>
       </div>
