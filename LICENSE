@@ -1,0 +1,32 @@
+Polyflow — Internal Use License
+
+Copyright (c) 2026 Lordson Vimal. All rights reserved.
+
+This software and associated documentation (the "Software") are made
+available for internal use only by members of the team or organization
+with whom the copyright holder has shared it ("Authorized Users").
+
+Authorized Users are granted a non-exclusive, non-transferable,
+royalty-free license to:
+
+  1. use, run, and modify the Software for internal, non-commercial-
+     resale purposes within the organization; and
+  2. share the Software and modifications with other Authorized Users
+     within the same organization.
+
+No rights are granted to:
+
+  - distribute, sublicense, sell, or otherwise make the Software
+    available to any party outside the organization;
+  - use the Software to provide a commercial product or service to
+    third parties; or
+  - remove or alter this notice from copies of the Software.
+
+This is a temporary, informal license pending a decision on a permanent
+license for the project. It may be revised or replaced at any time.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY ARISING FROM THE USE OF THE SOFTWARE.

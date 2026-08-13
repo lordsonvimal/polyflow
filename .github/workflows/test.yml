@@ -1,0 +1,32 @@
+name: Test
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    name: Go test suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # tree-sitter grammars require cgo.
+      - name: Run go vet
+        run: CGO_ENABLED=1 go vet ./...
+
+      # No corpus/private-repo data is checked out here (eval/corpus,
+      # eval/.cache, eval/agent-bench/ and sibling fleet checkouts are all
+      # gitignored — see eval/agent-bench/live-e1/README.md). Tests that need
+      # them stat the path first and t.Skip when it's absent, so `go test
+      # ./...` already runs everything that can run in this environment
+      # without a manual exclude list.
+      - name: Run go test
+        run: CGO_ENABLED=1 go test ./...
