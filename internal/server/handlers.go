@@ -302,6 +302,27 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleTree handles GET /api/tree?service=<name> — the Folder -> File ->
+// Class/Struct -> Function/Method outline for one service (UB.1).
+func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
+	service := r.URL.Query().Get("service")
+	if service == "" {
+		writeError(w, http.StatusBadRequest, "missing query parameter 'service'")
+		return
+	}
+
+	s.idxMu.RLock()
+	idx := s.idx
+	s.idxMu.RUnlock()
+
+	result, err := graph.BuildTree(idx, service)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 // handleTrace handles GET /api/graph/trace?root=<id>&direction=<forward|backward|both>&depth=<n>
 func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	root := r.URL.Query().Get("root")

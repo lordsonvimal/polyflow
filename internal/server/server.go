@@ -94,6 +94,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/graph/search", s.handleSearch)
 	s.mux.HandleFunc("GET /api/graph/trace", s.handleTrace)
 	s.mux.HandleFunc("GET /api/node/{id}", s.handleNode)
+	s.mux.HandleFunc("GET /api/tree", s.handleTree)
 	s.mux.HandleFunc("GET /api/variable/{id}/flow", s.handleVariableFlow)
 	s.mux.HandleFunc("GET /api/node/{id}/source", s.handleNodeSource)
 	s.mux.HandleFunc("GET /api/files", s.handleFiles)
