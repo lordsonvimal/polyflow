@@ -127,7 +127,7 @@ export default function SourcePanel(props: { nodeId: string }) {
                 </button>
               </div>
             </div>
-            <pre data-testid="source-code" class="text-xs font-mono bg-neutral-900 rounded p-1 overflow-x-auto max-h-96">
+            <pre data-testid="source-code" class="text-xs font-mono bg-neutral-900 rounded p-1">
               <For each={d().lines}>
                 {(line, i) => {
                   const lineNo = d().first_line + i();
@@ -137,7 +137,7 @@ export default function SourcePanel(props: { nodeId: string }) {
                       data-testid="source-line"
                       data-line={lineNo}
                       data-highlighted={inExtent ? "true" : "false"}
-                      class={`px-1 whitespace-pre ${inExtent ? "bg-blue-950/60 text-neutral-100" : "text-neutral-500"}`}
+                      class={`px-1 whitespace-pre-wrap break-all ${inExtent ? "bg-blue-950/60 text-neutral-100" : "text-neutral-500"}`}
                     >
                       <span class="inline-block w-10 text-right pr-2 text-neutral-600 select-none">{lineNo}</span>
                       {line}
