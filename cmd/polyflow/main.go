@@ -32,6 +32,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/indexer"
+	"github.com/lordsonvimal/polyflow/internal/jobs"
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/parser"
@@ -383,6 +384,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 	} else {
 		defer opsStore.Close()
 		srv.SetOps(opsStore)
+
+		// UB.3: the jobs manager wraps indexer.Run/eval.Run/evidence.BuildReport
+		// — the same internals the CLI commands use — so the UI can trigger them
+		// with progress/cancellation. Index-job completion needs no explicit
+		// reload call: it renames graph.db.tmp -> graph.db like `polyflow index`
+		// does, and the fsnotify watcher below already reloads on that rename.
+		mgr := jobs.NewManager(jobs.Options{
+			Ops:             opsStore,
+			WorkspacePath:   serveWS,
+			DBPath:          dbPath,
+			Broadcast:       srv.Broadcast,
+			ResolveEmbedder: resolveEmbedder,
+		})
+		srv.SetJobs(mgr)
 	}
 
 	// Watch graph.db for atomic swaps (polyflow index renames graph.db.tmp → graph.db).

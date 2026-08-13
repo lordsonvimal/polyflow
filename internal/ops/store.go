@@ -6,6 +6,7 @@ package ops
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -51,6 +52,23 @@ CREATE TABLE IF NOT EXISTS meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS jobs (
+	id             TEXT PRIMARY KEY,
+	kind           TEXT NOT NULL,
+	args           TEXT NOT NULL DEFAULT '{}',
+	state          TEXT NOT NULL,
+	started_at     TEXT NOT NULL,
+	ended_at       TEXT NOT NULL DEFAULT '',
+	progress_done  INTEGER NOT NULL DEFAULT 0,
+	progress_total INTEGER NOT NULL DEFAULT 0,
+	error          TEXT NOT NULL DEFAULT '',
+	result         TEXT NOT NULL DEFAULT '',
+	log_tail       TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_started_at ON jobs(started_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_kind       ON jobs(kind);
 `
 
 // MaxResultBytes caps the persisted "result" text. Beyond this the row holds
@@ -414,4 +432,113 @@ func int64SliceToAny(ids []int64) []any {
 		out[i] = id
 	}
 	return out
+}
+
+// ErrJobNotFound is returned by GetJob when no row matches id.
+var ErrJobNotFound = fmt.Errorf("job not found")
+
+// JobProgress is the {done,total} pair reported during a running job (UB.3).
+type JobProgress struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`
+}
+
+// Job is a persisted jobs row — the UB.3 background-job record (index/eval/
+// reconcile), independent of tool_calls (this is state, not an audit entry).
+type Job struct {
+	ID        string      `json:"id"`
+	Kind      string      `json:"kind"`
+	Args      string      `json:"args"`  // JSON
+	State     string      `json:"state"` // running|succeeded|failed|canceled
+	StartedAt string      `json:"started_at"`
+	EndedAt   string      `json:"ended_at,omitempty"`
+	Progress  JobProgress `json:"progress"`
+	Error     string      `json:"error,omitempty"`
+	Result    string      `json:"result,omitempty"` // JSON, non-index kinds
+	LogTail   []string    `json:"log_tail"`
+}
+
+// UpsertJob inserts or fully replaces the jobs row for j.ID — the single
+// write path for both job creation and every progress/terminal-state update.
+func (s *Store) UpsertJob(ctx context.Context, j Job) error {
+	logTail, err := json.Marshal(j.LogTail)
+	if err != nil {
+		return fmt.Errorf("marshal log_tail: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO jobs (id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			kind = excluded.kind, args = excluded.args, state = excluded.state,
+			started_at = excluded.started_at, ended_at = excluded.ended_at,
+			progress_done = excluded.progress_done, progress_total = excluded.progress_total,
+			error = excluded.error, result = excluded.result, log_tail = excluded.log_tail`,
+		j.ID, j.Kind, j.Args, j.State, j.StartedAt, j.EndedAt,
+		j.Progress.Done, j.Progress.Total, j.Error, j.Result, string(logTail))
+	if err != nil {
+		return fmt.Errorf("upsert job: %w", err)
+	}
+	return nil
+}
+
+// GetJob returns the persisted job row for id, or ErrJobNotFound.
+func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail
+		FROM jobs WHERE id = ?`, id)
+	j, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return Job{}, ErrJobNotFound
+	}
+	if err != nil {
+		return Job{}, fmt.Errorf("get job: %w", err)
+	}
+	return j, nil
+}
+
+// ListJobs returns jobs newest-first (by started_at, then id, both
+// descending — id is monotonically increasing-ish via its timestamp prefix,
+// so this is a stable deterministic order even for same-millisecond starts).
+func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail
+		FROM jobs ORDER BY started_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanJob(row rowScanner) (Job, error) {
+	var j Job
+	var logTail string
+	if err := row.Scan(&j.ID, &j.Kind, &j.Args, &j.State, &j.StartedAt, &j.EndedAt,
+		&j.Progress.Done, &j.Progress.Total, &j.Error, &j.Result, &logTail); err != nil {
+		return Job{}, err
+	}
+	if logTail != "" {
+		_ = json.Unmarshal([]byte(logTail), &j.LogTail)
+	}
+	return j, nil
 }
