@@ -1,6 +1,7 @@
 import { createSignal, onMount, createEffect } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { paletteStore } from "../stores/palette";
+import { apiFetchJSON } from "../lib/apiFetch";
 import Breadcrumbs from "./Breadcrumbs";
 
 export default function TopBar() {
@@ -8,9 +9,7 @@ export default function TopBar() {
 
   onMount(async () => {
     try {
-      const r = await fetch("/api/stats");
-      if (!r.ok) throw new Error();
-      const d = await r.json();
+      const d = await apiFetchJSON<{ nodes: number; edges: number }>("/api/stats", { silent: true });
       setStats(`${d.nodes}n/${d.edges}e`);
     } catch {
       setStats("--n/--e");

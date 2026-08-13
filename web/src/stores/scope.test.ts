@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { encodeViewState, decodeViewState, DEFAULT_STATE } from "./scope";
+import { encodeViewState, decodeViewState, DEFAULT_STATE, scopeStore } from "./scope";
 import type { Scope, ViewState } from "./scope";
 
 // Codec round-trips for every scope kind
@@ -94,6 +94,42 @@ describe("Esc ordering", () => {
     expect(hasMore3).toBe(false);
     // No change — at rest
     expect(state3.stack[0].kind).toBe("search");
+  });
+});
+
+// US.5: scope-stack changes abort in-flight fetches (no stale renders)
+describe("scopeStore.signal", () => {
+  beforeEach(() => scopeStore.reset());
+
+  it("push aborts the previous signal and issues a fresh one", () => {
+    const before = scopeStore.signal();
+    expect(before.aborted).toBe(false);
+    scopeStore.push({ kind: "service", service: "svc" });
+    expect(before.aborted).toBe(true);
+    expect(scopeStore.signal().aborted).toBe(false);
+    expect(scopeStore.signal()).not.toBe(before);
+  });
+
+  it("popTo aborts the previous signal", () => {
+    scopeStore.push({ kind: "service", service: "svc" });
+    scopeStore.push({ kind: "folder", service: "svc", path: "app" });
+    const before = scopeStore.signal();
+    scopeStore.popTo(0);
+    expect(before.aborted).toBe(true);
+  });
+
+  it("reset aborts the previous signal", () => {
+    scopeStore.push({ kind: "service", service: "svc" });
+    const before = scopeStore.signal();
+    scopeStore.reset();
+    expect(before.aborted).toBe(true);
+  });
+
+  it("does not abort on filter-only changes", () => {
+    const before = scopeStore.signal();
+    scopeStore.setFilters({ confidence: ["static"], edgeTypes: [], services: [] });
+    expect(before.aborted).toBe(false);
+    expect(scopeStore.signal()).toBe(before);
   });
 });
 

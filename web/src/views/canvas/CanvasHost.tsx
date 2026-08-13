@@ -19,6 +19,8 @@ import { scopeStore, Scope } from "../../stores/scope";
 import { GraphNode, GraphEdge } from "../../lib/types";
 import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./budget";
 import { wireCytoscape, handleIntent } from "../../interaction/gestures";
+import { apiFetch } from "../../lib/apiFetch";
+import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import {
   NODE_TYPE_STYLES,
   CANVAS_BG,
@@ -61,24 +63,23 @@ function parseCytoGraph(raw: unknown): GraphData {
   };
 }
 
-async function fetchAll(): Promise<GraphData> {
-  const r = await fetch("/api/graph?limit=2000");
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+async function fetchAll(signal?: AbortSignal): Promise<GraphData> {
+  const r = await apiFetch("/api/graph?limit=2000", { signal, silent: true });
   return parseCytoGraph(await r.json());
 }
 
 // Scopes that have no canvas — show a placeholder instead.
 const NO_CANVAS = new Set(["search", "flow", "group"]);
 
-async function fetchForScope(scope: Scope): Promise<GraphData | null> {
+async function fetchForScope(scope: Scope, signal?: AbortSignal): Promise<GraphData | null> {
   if (NO_CANVAS.has(scope.kind)) return null;
 
   switch (scope.kind) {
     case "overview":
-      return fetchAll();
+      return fetchAll(signal);
 
     case "service": {
-      const all = await fetchAll();
+      const all = await fetchAll(signal);
       const ids = new Set(all.nodes.filter((n) => n.service === scope.service).map((n) => n.id));
       return {
         nodes: all.nodes.filter((n) => ids.has(n.id)),
@@ -87,7 +88,7 @@ async function fetchForScope(scope: Scope): Promise<GraphData | null> {
     }
 
     case "folder": {
-      const all = await fetchAll();
+      const all = await fetchAll(signal);
       const ids = new Set(
         all.nodes.filter((n) => n.service === scope.service && n.file.startsWith(scope.path)).map((n) => n.id),
       );
@@ -98,7 +99,7 @@ async function fetchForScope(scope: Scope): Promise<GraphData | null> {
     }
 
     case "file": {
-      const all = await fetchAll();
+      const all = await fetchAll(signal);
       const ids = new Set(
         all.nodes
           .filter((n) => n.file === scope.path && (!scope.service || n.service === scope.service))
@@ -112,15 +113,13 @@ async function fetchForScope(scope: Scope): Promise<GraphData | null> {
 
     case "neighborhood": {
       const p = new URLSearchParams({ root: scope.nodeId, direction: "both", depth: String(scope.depth) });
-      const r = await fetch(`/api/graph/trace?${p}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const r = await apiFetch(`/api/graph/trace?${p}`, { signal, silent: true });
       return parseCytoGraph(await r.json());
     }
 
     case "impact": {
       const p = new URLSearchParams({ root: scope.target, direction: scope.direction, depth: String(scope.depth) });
-      const r = await fetch(`/api/graph/trace?${p}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const r = await apiFetch(`/api/graph/trace?${p}`, { signal, silent: true });
       return parseCytoGraph(await r.json());
     }
   }
@@ -224,7 +223,9 @@ export default function CanvasHost() {
   const reducedMotion = () =>
     typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-  const [data, { refetch }] = createResource(scope, fetchForScope);
+  const [data, { refetch }] = createResource(scope, (s) => fetchForScope(s, scopeStore.signal()));
+
+  const isAbortError = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
 
   // When scope changes, clear any cluster override.
   const [clusteredData, setClusteredData] = createSignal<GraphData | null>(null);
@@ -346,8 +347,8 @@ export default function CanvasHost() {
         </div>
       </Show>
 
-      {/* Fetch error */}
-      <Show when={data.error && !isNoCanvas()}>
+      {/* Fetch error (a deliberate scope-pop abort is not a user-facing error) */}
+      <Show when={data.error && !isAbortError(data.error) && !isNoCanvas()}>
         <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-neutral-400">
           <span class="text-sm">
             Failed to load graph: {String((data.error as Error)?.message ?? data.error)}
@@ -358,6 +359,13 @@ export default function CanvasHost() {
           >
             Retry
           </button>
+        </div>
+      </Show>
+
+      {/* Empty scope — resolved successfully but has nothing to show */}
+      <Show when={!data.loading && !data.error && !isNoCanvas() && data() && data()!.nodes.length === 0}>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <EmptyScopeEmptyState onReset={() => scopeStore.reset()} />
         </div>
       </Show>
 
