@@ -53,7 +53,7 @@ func TestFlowsTool_CrossServiceGolden(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out flowsOutput
-	callJSON(t, cs, "flows", map[string]any{"target": "browser:fetchOrder", "direction": "downstream"}, &out)
+	callJSON(t, cs, "flows", map[string]any{"target": "browser:fetchOrder", "direction": "downstream", "detail": true}, &out)
 
 	require.Len(t, out.Flows, 1, "single linear path from root to the DB write")
 	flow := out.Flows[0]
@@ -108,6 +108,7 @@ func TestFlowsTool_MinVerificationFiltersFlows(t *testing.T) {
 	callJSON(t, cs, "flows", map[string]any{
 		"target":           "browser:fetchOrder",
 		"min_verification": "verified",
+		"detail":           true,
 	}, &out)
 
 	// Every flow contains a candidate hop past the first (calls to
@@ -120,7 +121,7 @@ func TestFlowsTool_HTTPRouteTarget(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out flowsOutput
-	callJSON(t, cs, "flows", map[string]any{"target": "POST /orders"}, &out)
+	callJSON(t, cs, "flows", map[string]any{"target": "POST /orders", "detail": true}, &out)
 
 	require.Len(t, out.Flows, 1)
 	assert.Equal(t, "api:publishOrderCreated", out.Flows[0][0].To)
@@ -131,7 +132,7 @@ func TestFlowsTool_UpstreamDirection(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out flowsOutput
-	callJSON(t, cs, "flows", map[string]any{"target": "worker:orders_table", "direction": "upstream"}, &out)
+	callJSON(t, cs, "flows", map[string]any{"target": "worker:orders_table", "direction": "upstream", "detail": true}, &out)
 
 	require.Len(t, out.Flows, 1)
 	flow := out.Flows[0]
@@ -167,7 +168,7 @@ func TestFlowsTool_HubFanoutRollsUp(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out flowsOutput
-	callJSON(t, cs, "flows", map[string]any{"target": "api:dispatch"}, &out)
+	callJSON(t, cs, "flows", map[string]any{"target": "api:dispatch", "detail": true}, &out)
 
 	require.Len(t, out.Flows, 1, "fan-out beyond the threshold collapses into one rollup flow")
 	flow := out.Flows[0]

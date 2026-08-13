@@ -289,6 +289,22 @@ func effectiveDepth(depth, def int) int {
 // summary instead of dumping the verbose form into the agent's context.
 const defaultImpactBudget = impact.DefaultBudget
 
+// multiRootBudgetCeiling caps the token budget honoured on a merged
+// multi-service impact (impact.BuildMulti unions N full blast radii, so the
+// payload scales with N). An explicit max_tokens<=0 (unlimited) or an
+// oversized positive budget, honoured as-is, produced a measured 71.8KB
+// payload on a 2-service merge — over Claude Code's own tool-output
+// threshold, which silently truncates to a 2KB preview + on-disk pointer and
+// forces extra round-trips to recover the data. Clamping straight down to
+// defaultImpactBudget (2000) avoided that regression but also discarded a
+// caller's reasonable, bounded request (e.g. 15000-20000): the agent asking
+// for more headroom got the same compact rollup as an agent asking for
+// nothing, well below the threshold that actually caused the regression.
+// This ceiling sits comfortably under that ~60-70KB trip point (≈15000
+// tokens at the 4-bytes/token estimate) while still respecting a caller's
+// explicit request up to that point.
+const multiRootBudgetCeiling = 15000
+
 // effectiveBudget maps an MCP max_tokens input to an impact.ApplyBudget budget.
 // 0 (unset) → the compact default; a negative value → 0 (unlimited, opt-in);
 // any positive value is honoured as-is.
@@ -526,7 +542,7 @@ type impactInput struct {
 	Direction       string `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read. Use both for a 'what else do I need to touch/change' question — backward alone will not surface things the target itself depends on"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
 	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
-	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. Pass a negative value for unlimited detail (capped to the compact default anyway when the query auto-merges >1 service's blast radius, to keep the merged answer from exceeding your own tool-output size limit — set target_service if you need unlimited detail for just one service)"`
+	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. A merged multi-service answer (query auto-merges when a name matches >1 service, e.g. a shared HTTP-contract symbol) honours your requested budget up to 15000 tokens even if you pass more or an unlimited negative value — one merged call at max_tokens 15000 is cheaper and more complete than splitting into one target_service call per candidate, and is the preferred way to call this. Only set target_service when you specifically want just one service's slice, or need more than 15000 tokens of detail for that one service"`
 	Summary         bool   `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
 	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
@@ -590,18 +606,14 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 	out.InlineSnippets(".", defaultSnippetLines(in.SnippetLines))
 	budget := effectiveBudget(in.MaxTokens)
-	if len(roots) > 1 && (budget == 0 || budget > defaultImpactBudget) {
-		// A merged multi-service result is roughly Nx one service's size by
-		// construction (BuildMulti unions N full blast radii). An explicit
-		// max_tokens<=0 (unlimited) or an oversized positive budget, honoured
-		// as-is here, produced a measured 71.8KB payload on a 2-service merge
-		// — over Claude Code's own tool-output threshold, which silently
-		// truncated it to a 2KB preview + on-disk pointer and forced 4 extra
-		// Bash round-trips to recover the data. Capping the merged path to
-		// the compact default keeps the single-call win intact without ever
-		// reproducing that regression; --target-service still gets the
-		// caller's requested budget verbatim on the single-root path above.
-		budget = defaultImpactBudget
+	if len(roots) > 1 && (budget == 0 || budget > multiRootBudgetCeiling) {
+		// See multiRootBudgetCeiling: cap the merged path at a safe ceiling
+		// rather than collapsing to the compact default, so a caller's
+		// bounded request (e.g. 15000-20000) is still honoured up to that
+		// ceiling instead of being silently downgraded to 2000.
+		// --target-service still gets the caller's requested budget verbatim
+		// on the single-root path above.
+		budget = multiRootBudgetCeiling
 	}
 	return jsonResult(out.ApplyBudget(budget, in.Summary))
 }
@@ -617,6 +629,7 @@ type traceInput struct {
 	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that trims chains then nodes to fit. direction=both with a deep depth on a busy hub node (e.g. a shared queue/exchange) can otherwise produce a result too large for your own tool-output limit to even return. Pass a negative value for unlimited detail"`
+	Detail          bool   `json:"detail,omitempty" jsonschema:"return full per-hop metadata (types, node_meta, sources) instead of the default compact arrow-chain text (file:line label -[edge_type]-> file:line label -> ...); costs substantially more tokens, use only when you need struct shapes, provenance, or exact line-level edge metadata"`
 }
 
 func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceInput) (*mcp.CallToolResult, any, error) {
@@ -652,7 +665,11 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		result.Nodes = filterHops(result.Nodes, in.MinVerification)
 		result.Chains = filterChains(result.Chains, in.MinVerification)
 	}
-	return jsonResult(result.ApplyBudget(effectiveBudget(in.MaxTokens)))
+	budgeted := result.ApplyBudget(effectiveBudget(in.MaxTokens))
+	if in.Detail {
+		return jsonResult(budgeted)
+	}
+	return jsonResult(budgeted.Compact())
 }
 
 // ─── min_verification filter helpers ─────────────────────────────────────────
