@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/lordsonvimal/polyflow/internal/capture"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/jobs"
 	"github.com/lordsonvimal/polyflow/internal/ops"
@@ -24,9 +25,10 @@ type Server struct {
 	broadcast  chan string
 	clients    map[chan string]struct{}
 	clientsMu  sync.Mutex
-	ops        *ops.Store    // nil → tool-call audit logging disabled (UB.2)
-	jobs       *jobs.Manager // nil → jobs API disabled (UB.3)
-	configPath string        // polyflow.yml path; "" → meta.ConfigFile (UB.4)
+	ops        *ops.Store       // nil → tool-call audit logging disabled (UB.2)
+	jobs       *jobs.Manager    // nil → jobs API disabled (UB.3)
+	configPath string           // polyflow.yml path; "" → meta.ConfigFile (UB.4)
+	capture    *capture.Manager // nil → capture/runtime API disabled (UB.7)
 }
 
 // New creates a Server backed by the given store and adjacency index.
@@ -89,6 +91,18 @@ func (s *Server) SetJobs(j *jobs.Manager) {
 func (s *Server) SetConfigPath(path string) {
 	s.idxMu.Lock()
 	s.configPath = path
+	s.idxMu.Unlock()
+}
+
+// SetCapture wires the UB.7 capture session manager into the server. Safe
+// to call at any time; nil disables the capture/runtime API (handlers
+// return 503). The same on-disk session store (.polyflow/captures) is
+// shared with the CLI's `capture`/`ingest`/`flows` subcommands, so a
+// session started by either surface is visible and stoppable from the
+// other.
+func (s *Server) SetCapture(c *capture.Manager) {
+	s.idxMu.Lock()
+	s.capture = c
 	s.idxMu.Unlock()
 }
 
@@ -168,6 +182,12 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/health", s.handleHealth)
 	s.handle("GET /api/unresolved", s.handleUnresolved)
 	s.handle("POST /api/context/bundle", s.handleContextBundle)
+	s.handle("POST /api/capture/start", s.handleCaptureStart)
+	s.handle("POST /api/capture/stop", s.handleCaptureStop)
+	s.handle("GET /api/capture/status", s.handleCaptureStatus)
+	s.handle("POST /api/capture/ingest", s.handleCaptureIngest)
+	s.handle("GET /api/runtime/flows", s.handleRuntimeFlows)
+	s.handle("GET /api/runtime/coverage", s.handleRuntimeCoverage)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend from the embedded FS so `serve` works
 	// from any working directory (not just the source-tree root).
