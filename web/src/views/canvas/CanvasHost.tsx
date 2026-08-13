@@ -22,6 +22,8 @@ import { apiFetch } from "../../lib/apiFetch";
 import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
+import { applyFilters } from "../../lib/filters";
+import FilterBar from "./FilterBar";
 import { GraphData, parseCytoGraph, sortGraphData } from "./scopes/common";
 import { resolveOverview } from "./scopes/overview";
 import { resolveService } from "./scopes/service";
@@ -113,6 +115,12 @@ function buildStylesheet(): object[] {
     },
     { selector: "edge[confidence = 'candidate']", style: { "line-style": "dashed" } },
     { selector: "edge[confidence = 'conflicting']", style: { "line-style": "dotted" } },
+    // Opt-in confidence tiers (FilterBar, UN.2): partial/unknown edges are
+    // only ever on canvas because the corresponding chip was explicitly
+    // turned on, so they render dashed as a standing reminder they're
+    // uncertain — never presented identically to a static/inferred edge.
+    { selector: "edge[confidence = 'partial']", style: { "line-style": "dashed" } },
+    { selector: "edge[confidence = 'unknown']", style: { "line-style": "dashed" } },
     // Boundary connectors: a node standing in for something outside the
     // current scope (plan-10's stub-connector contract) — dimmed + dashed
     // border so it reads as "click to expand", not a peer element.
@@ -184,14 +192,23 @@ export default function CanvasHost() {
   const [clusteredData, setClusteredData] = createSignal<GraphData | null>(null);
   createEffect(() => { scope(); setClusteredData(null); });
 
-  const budgetResult = createMemo(() => {
+  // Filters (US.1 ViewState.filters, UN.2 FilterBar) are applied before the
+  // budget check so a narrowing filter can pull a scope back under budget,
+  // and before render so the element set on screen always matches the chips.
+  const filteredData = createMemo((): GraphData | null => {
     const d = clusteredData() ?? data();
+    if (!d) return null;
+    return applyFilters(d, scopeStore.viewState().filters);
+  });
+
+  const budgetResult = createMemo(() => {
+    const d = filteredData();
     if (!d) return null;
     return checkBudget(d.nodes, d.edges);
   });
 
   const renderData = createMemo((): GraphData | null => {
-    const d = clusteredData() ?? data();
+    const d = filteredData();
     const br = budgetResult();
     if (!d || !br || !br.ok) return null;
     return d;
@@ -305,9 +322,46 @@ export default function CanvasHost() {
     }
   });
 
+  // Ids currently on canvas, tracked outside Solid's reactivity so the render
+  // effect below can tell "filter narrowed the same scope" (a pure removal)
+  // from "scope changed" without re-deriving it from Cytoscape each time.
+  let lastElementIds: Set<string> | undefined;
+  let lastRenderStackKey: string | undefined;
+
   createEffect(() => {
     const d = renderData();
     if (!cy || !d) return;
+
+    const nextIds = new Set<string>([...d.nodes.map((n) => n.id), ...d.edges.map((e) => e.id)]);
+    const currentStackKey = stackKey(scopeStore.stack());
+    const sameScope = lastRenderStackKey === currentStackKey;
+    lastRenderStackKey = currentStackKey;
+
+    // Filter chips narrowing the current scope only ever remove elements
+    // (never add ones the unfiltered fetch didn't already contain) — detect
+    // that case and fade the removed elements out in place, skipping layout
+    // entirely ("never re-layout unless element set changed" / no
+    // gratuitous motion for a filter-only change). Gated on the scope stack
+    // being unchanged so a coincidental subset relationship across two
+    // different scopes never skips a real layout.
+    if (sameScope && lastElementIds && nextIds.size < lastElementIds.size) {
+      let isPureRemoval = true;
+      for (const id of nextIds) {
+        if (!lastElementIds.has(id)) { isPureRemoval = false; break; }
+      }
+      if (isPureRemoval) {
+        const removed = cy.elements().filter((el) => !nextIds.has(el.id()));
+        if (!reducedMotion()) {
+          removed.animate({ style: { opacity: 0 } }, { duration: 150, complete: () => removed.remove() });
+        } else {
+          removed.remove();
+        }
+        lastElementIds = nextIds;
+        return;
+      }
+    }
+    lastElementIds = nextIds;
+
     const hasCompounds = d.nodes.some((n) => !!n.parent);
     const opts = layoutOptions(hasCompounds, preferredLayout(), reducedMotion());
     setDagreDisabledReason(opts.dagreDisabledReason);
@@ -364,7 +418,11 @@ export default function CanvasHost() {
   };
 
   return (
-    <div data-testid="canvas-host" class="flex-1 relative min-w-0 flex" style={{ background: CANVAS_BG }}>
+    <div class="flex-1 min-w-0 flex flex-col">
+      <Show when={!isNoCanvas()}>
+        <FilterBar />
+      </Show>
+      <div data-testid="canvas-host" class="flex-1 relative min-w-0 flex" style={{ background: CANVAS_BG }}>
       {/* Cytoscape container — always mounted so cy instance survives scope changes */}
       <div
         ref={canvasRef!}
@@ -486,6 +544,7 @@ export default function CanvasHost() {
           </Show>
         </div>
       </Show>
+      </div>
     </div>
   );
 }

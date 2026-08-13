@@ -1,19 +1,30 @@
-import { createSignal, createEffect, For, Show, onCleanup } from "solid-js";
+import { createSignal, createEffect, For, Show, onCleanup, onMount } from "solid-js";
 import { paletteStore, type RecentItem } from "../../stores/palette";
 import { commands as registeredCommands, type Command } from "../../commands/registry";
 import { handleIntent } from "../../interaction/gestures";
 import { scopeStore } from "../../stores/scope";
+import { selectionStore } from "../../stores/selection";
+import { treeStore } from "../../stores/tree";
 import { parseQuery, parseNodeCard, type ParsedQuery } from "./query";
 
 const DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 8;
 
-type SymbolEntry = { id: string; label: string; type: string; service: string; file: string; line: number };
+type SymbolEntry = {
+  id: string; label: string; type: string; service: string; file: string; line: number;
+  endLine?: number;
+  // "semantic" = the hit only matched by vector similarity, not a literal
+  // token — surfaced as a confidence dot so a fuzzy match never looks as
+  // certain as a lexical/exact one.
+  retrieval?: string;
+};
 type FileEntry = { file: string; service: string };
+type ServiceEntry = { name: string };
 type Entry =
   | { group: "recent"; item: RecentItem }
   | { group: "symbol"; item: SymbolEntry }
   | { group: "file"; item: FileEntry }
+  | { group: "service"; item: ServiceEntry }
   | { group: "command"; item: Command };
 
 async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
@@ -26,7 +37,10 @@ async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
     const data = await r.json();
     let out: SymbolEntry[];
     if (Array.isArray(data)) {
-      out = data.map((n: any) => ({ id: n.id, label: n.label, type: n.type, service: n.service, file: n.file, line: n.line }));
+      out = data.map((n: any) => ({
+        id: n.id, label: n.label, type: n.type, service: n.service, file: n.file, line: n.line,
+        endLine: n.end_line, retrieval: "lexical",
+      }));
     } else {
       out = (data.nodes ?? []).map((hit: any) => {
         const card = parseNodeCard(hit.entity?.Text ?? "");
@@ -37,6 +51,7 @@ async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
           service: card.service,
           file: hit.entity?.File ?? "",
           line: hit.entity?.Line ?? 0,
+          retrieval: hit.retrieval,
         };
       });
     }
@@ -62,6 +77,18 @@ async function fetchFiles(parsed: ParsedQuery): Promise<FileEntry[]> {
   }
 }
 
+// Services aren't a search-indexed entity — /api/stack is the whole list, so
+// this filters the already-cached treeStore.services() (loaded once, on
+// Palette mount, below) synchronously rather than issuing a network request
+// on every keystroke. Empty until that initial load resolves.
+function fetchServices(parsed: ParsedQuery): ServiceEntry[] {
+  const needle = parsed.text.toLowerCase();
+  let out = treeStore.services().map(s => ({ name: s.name }));
+  if (needle) out = out.filter(s => s.name.toLowerCase().includes(needle));
+  if (parsed.chips.service) out = out.filter(s => s.name === parsed.chips.service);
+  return out.slice(0, RESULT_LIMIT);
+}
+
 function matchCommands(parsed: ParsedQuery): Command[] {
   const needle = parsed.text.toLowerCase();
   const all = registeredCommands();
@@ -69,11 +96,27 @@ function matchCommands(parsed: ParsedQuery): Command[] {
   return all.filter(c => c.label.toLowerCase().includes(needle)).slice(0, RESULT_LIMIT);
 }
 
+// A symbol result's Enter/pick behavior (UN.2): land in its file scope with
+// it selected and revealed in the tree, in one action — replaces the old
+// generic neighborhood-drill. A symbol with no known file (synthetic node)
+// falls back to the neighborhood drill rather than silently no-opping.
+function openSymbol(id: string, service: string, file: string) {
+  if (file) {
+    scopeStore.push({ kind: "file", service, path: file });
+    selectionStore.setSelection({ kind: "node", id });
+    treeStore.reveal(id);
+  } else {
+    handleIntent({ type: "select", target: { kind: "node", id } });
+    handleIntent({ type: "drill", target: { kind: "node", id } });
+  }
+}
+
 export default function Palette() {
   let inputEl: HTMLInputElement | undefined;
   const [query, setQuery] = createSignal("");
   const [symbols, setSymbols] = createSignal<SymbolEntry[]>([]);
   const [files, setFiles] = createSignal<FileEntry[]>([]);
+  const [services, setServices] = createSignal<ServiceEntry[]>([]);
   const [cmds, setCmds] = createSignal<Command[]>([]);
   const [highlight, setHighlight] = createSignal(0);
 
@@ -81,9 +124,14 @@ export default function Palette() {
   let seq = 0;
   onCleanup(() => clearTimeout(debounceTimer));
 
+  // Loaded once and cached on the treeStore singleton (shared with the tree
+  // explorer / FilterBar) — not re-fetched per keystroke.
+  onMount(() => treeStore.loadServices());
+
   function runSearch(raw: string) {
     const parsed = parseQuery(raw);
     setCmds(matchCommands(parsed));
+    setServices(parsed.chips.kind ? [] : fetchServices(parsed)); // a kind: chip means "symbols only"
     if (!parsed.text && !parsed.chips.kind && !parsed.chips.service) {
       setSymbols([]);
       setFiles([]);
@@ -111,6 +159,7 @@ export default function Palette() {
     return [
       ...symbols().map(item => ({ group: "symbol", item }) as Entry),
       ...files().map(item => ({ group: "file", item }) as Entry),
+      ...services().map(item => ({ group: "service", item }) as Entry),
       ...cmds().map(item => ({ group: "command", item }) as Entry),
     ];
   }
@@ -119,8 +168,7 @@ export default function Palette() {
     switch (entry.group) {
       case "symbol": {
         const s = entry.item;
-        handleIntent({ type: "select", target: { kind: "node", id: s.id } });
-        handleIntent({ type: "drill", target: { kind: "node", id: s.id } });
+        openSymbol(s.id, s.service, s.file);
         paletteStore.addRecent({ id: s.id, kind: "symbol", label: s.label, sub: `${s.service} · ${s.file}` });
         break;
       }
@@ -128,6 +176,12 @@ export default function Palette() {
         const f = entry.item;
         scopeStore.push({ kind: "file", service: f.service, path: f.file });
         paletteStore.addRecent({ id: `${f.service}:${f.file}`, kind: "file", label: f.file, sub: f.service });
+        break;
+      }
+      case "service": {
+        const sv = entry.item;
+        scopeStore.push({ kind: "service", service: sv.name });
+        paletteStore.addRecent({ id: sv.name, kind: "service", label: sv.name });
         break;
       }
       case "command": {
@@ -139,11 +193,13 @@ export default function Palette() {
       case "recent": {
         const r = entry.item;
         if (r.kind === "symbol") {
-          handleIntent({ type: "select", target: { kind: "node", id: r.id } });
-          handleIntent({ type: "drill", target: { kind: "node", id: r.id } });
+          const [service, file] = (r.sub ?? "").split(" · ");
+          openSymbol(r.id, service ?? "", file ?? "");
         } else if (r.kind === "file") {
           const [service, ...rest] = r.id.split(":");
           scopeStore.push({ kind: "file", service, path: rest.join(":") });
+        } else if (r.kind === "service") {
+          scopeStore.push({ kind: "service", service: r.id });
         } else {
           registeredCommands().find(c => c.id === r.id)?.run();
         }
@@ -159,6 +215,7 @@ export default function Palette() {
     setQuery("");
     setSymbols([]);
     setFiles([]);
+    setServices([]);
     setHighlight(0);
   }
 
@@ -236,8 +293,17 @@ export default function Palette() {
                 <For each={symbols()}>
                   {(s, i) => (
                     <Row active={highlight() === i()} onClick={() => pick({ group: "symbol", item: s })}>
+                      <Show when={s.retrieval === "semantic"}>
+                        <span
+                          data-testid="confidence-dot"
+                          title="inferred match (semantic similarity, not a literal match)"
+                          class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 shrink-0"
+                        />
+                      </Show>
                       <span class="text-neutral-200">{s.label}</span>
-                      <span class="text-neutral-500 ml-2 text-xs">{s.type} · {s.service} · {s.file}:{s.line}</span>
+                      <span class="text-neutral-500 ml-2 text-xs">
+                        {s.type} · {s.service} · {s.file}:{s.line}{s.endLine ? `–${s.endLine}` : ""}
+                      </span>
                     </Row>
                   )}
                 </For>
@@ -252,10 +318,25 @@ export default function Palette() {
                   )}
                 </For>
               </Group>
+              <Group label="SERVICES">
+                <For each={services()}>
+                  {(sv, i) => (
+                    <Row
+                      active={highlight() === symbols().length + files().length + i()}
+                      onClick={() => pick({ group: "service", item: sv })}
+                    >
+                      <span class="text-neutral-200">{sv.name}</span>
+                    </Row>
+                  )}
+                </For>
+              </Group>
               <Group label="COMMANDS">
                 <For each={cmds()}>
                   {(c, i) => (
-                    <Row active={highlight() === symbols().length + files().length + i()} onClick={() => pick({ group: "command", item: c })}>
+                    <Row
+                      active={highlight() === symbols().length + files().length + services().length + i()}
+                      onClick={() => pick({ group: "command", item: c })}
+                    >
                       <span class="text-neutral-200">{c.label}</span>
                     </Row>
                   )}
