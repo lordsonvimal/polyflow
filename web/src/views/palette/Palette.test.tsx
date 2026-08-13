@@ -3,6 +3,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Palette from "./Palette";
 import { paletteStore } from "../../stores/palette";
 import { layoutPrefs } from "../../stores/layoutPrefs";
+import { scopeStore } from "../../stores/scope";
+import { selectionStore } from "../../stores/selection";
+import { treeStore } from "../../stores/tree";
 
 // Flushes pending microtasks under fake timers (real setTimeout is stubbed out).
 function flush() {
@@ -17,6 +20,9 @@ describe("Palette", () => {
     localStorage.clear();
     paletteStore.close();
     layoutPrefs.setActivity("explore");
+    treeStore.reset();
+    scopeStore.reset();
+    selectionStore.setSelection(null);
     deferred = {};
     (globalThis as any).fetch = vi.fn((url: string) => {
       const u = new URL(url, "http://localhost");
@@ -54,9 +60,9 @@ describe("Palette", () => {
     vi.useFakeTimers();
     type("sync");
     await vi.advanceTimersByTimeAsync(100);
-    expect(fetch).not.toHaveBeenCalled(); // still within the 150ms debounce window
+    expect(deferred["/api/graph/search?sync"]).toBeUndefined(); // still within the 150ms debounce window
     await vi.advanceTimersByTimeAsync(60);
-    expect(fetch).toHaveBeenCalled(); // "sync" request fired
+    expect(deferred["/api/graph/search?sync"]).toBeDefined(); // "sync" request fired
 
     type("syncing");
     await vi.advanceTimersByTimeAsync(150); // "syncing" request fires
@@ -101,5 +107,60 @@ describe("Palette", () => {
 
     expect(paletteStore.isOpen()).toBe(false);
     expect(layoutPrefs.activity()).toBe("explore"); // unchanged
+  });
+
+  it("Enter on a symbol result builds its file scope, selects it, and reveals it in the tree (UN.2)", async () => {
+    vi.useFakeTimers();
+    const revealSpy = vi.spyOn(treeStore, "reveal").mockResolvedValue();
+    type("createUser");
+    await vi.advanceTimersByTimeAsync(150);
+
+    deferred["/api/graph/search?createUser"]([
+      { id: "auth:app/user.rb:method:createUser:10", label: "createUser", type: "method", service: "auth", file: "app/user.rb", line: 10, end_line: 15 },
+    ]);
+    deferred["/api/files?createUser"]({ files: [] });
+    await flush();
+
+    key("Enter");
+
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "file", service: "auth", path: "app/user.rb" });
+    expect(selectionStore.selection()).toEqual({ kind: "node", id: "auth:app/user.rb:method:createUser:10" });
+    expect(revealSpy).toHaveBeenCalledWith("auth:app/user.rb:method:createUser:10");
+    expect(paletteStore.isOpen()).toBe(false);
+  });
+
+  it("falls back to a neighborhood drill for a symbol with no known file (never a silent no-op)", async () => {
+    vi.useFakeTimers();
+    type("mystery");
+    await vi.advanceTimersByTimeAsync(150);
+
+    deferred["/api/graph/search?mystery"]([
+      { id: "svc:synthetic:mystery", label: "mystery", type: "function", service: "svc", file: "", line: 0 },
+    ]);
+    deferred["/api/files?mystery"]({ files: [] });
+    await flush();
+
+    key("Enter");
+
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "neighborhood", nodeId: "svc:synthetic:mystery", depth: 1 });
+  });
+
+  it("Enter on a service result pushes its service scope", async () => {
+    vi.useFakeTimers();
+    await flush(); // let Palette's onMount-triggered /api/stack fetch fire
+    deferred["/api/stack?"]({ services: [{ name: "railssvc", language: "ruby", frameworks: [], files: 10 }] });
+    await flush();
+
+    type("rails");
+    await vi.advanceTimersByTimeAsync(150);
+    deferred["/api/graph/search?rails"]([]);
+    deferred["/api/files?rails"]({ files: [] });
+    await flush();
+
+    expect(container.textContent).toContain("railssvc");
+
+    key("Enter"); // no symbol/file hits for "rails" — the service row is first
+
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "service", service: "railssvc" });
   });
 });

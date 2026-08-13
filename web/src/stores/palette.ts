@@ -5,7 +5,7 @@ const RECENT_MAX = 20;
 
 export type RecentItem = {
   id: string;
-  kind: "symbol" | "file" | "command";
+  kind: "symbol" | "file" | "service" | "command";
   label: string;
   sub?: string;
 };
