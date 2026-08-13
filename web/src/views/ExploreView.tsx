@@ -1,3 +1,5 @@
+import Tree from "./explore/Tree";
+
 export default function ExploreView() {
-  return <div class="p-4 text-sm text-neutral-400">Explore — planned in plan-11</div>;
+  return <Tree />;
 }
