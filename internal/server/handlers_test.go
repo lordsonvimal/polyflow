@@ -189,6 +189,68 @@ func TestHandleNodeSource_OK(t *testing.T) {
 	}
 }
 
+func TestHandleNodeSource_RangeBounded(t *testing.T) {
+	// go.mod is a stable real file; bound lines 3-5 with context=2.
+	nodes := []*graph.Node{
+		{ID: "n1", Type: graph.NodeTypeFunction, Label: "createUser", Service: "auth", File: "../../go.mod", Line: 3, EndLine: 5, Language: "go"},
+	}
+	srv := buildTestServer(t, nodes, nil)
+	req := httptest.NewRequest("GET", "/api/node/n1/source?range=1&context=2", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		File      string   `json:"file"`
+		Start     int      `json:"start"`
+		End       int      `json:"end"`
+		Context   int      `json:"context"`
+		FirstLine int      `json:"first_line"`
+		Lines     []string `json:"lines"`
+	}
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if resp.Start != 3 || resp.End != 5 {
+		t.Errorf("want start=3 end=5, got start=%d end=%d", resp.Start, resp.End)
+	}
+	if resp.FirstLine != 1 {
+		t.Errorf("want first_line=1 (line 3 - context 2), got %d", resp.FirstLine)
+	}
+	if len(resp.Lines) != 7 { // lines 1..7 inclusive (5+2)
+		t.Errorf("want 7 lines, got %d", len(resp.Lines))
+	}
+}
+
+func TestHandleNodeSource_RangeUnknownEndLine(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "n1", Type: graph.NodeTypeFunction, Label: "createUser", Service: "auth", File: "../../go.mod", Line: 3, Language: "go"},
+	}
+	srv := buildTestServer(t, nodes, nil)
+	req := httptest.NewRequest("GET", "/api/node/n1/source?range=1", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		End       int      `json:"end"`
+		FirstLine int      `json:"first_line"`
+		Lines     []string `json:"lines"`
+	}
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if resp.End != 0 {
+		t.Errorf("want end=0 (honest unknown), got %d", resp.End)
+	}
+	if resp.FirstLine != 1 {
+		t.Errorf("want first_line=1 (whole-file fallback), got %d", resp.FirstLine)
+	}
+	if len(resp.Lines) == 0 {
+		t.Error("expected whole-file lines fallback, got none")
+	}
+}
+
 // --- /api/graph/trace ---
 
 func TestHandleTrace_Forward(t *testing.T) {

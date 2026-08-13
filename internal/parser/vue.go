@@ -271,12 +271,12 @@ func extractVueTemplateAttrs(src []byte, blocks []sfcBlock, file, service string
 
 	// Event bindings: @click="save" / v-on:click="save" / @submit.prevent="onSubmit"
 	for _, m := range reVueEvent.FindAllSubmatchIndex(tmpl, -1) {
-		rawEvent := string(tmpl[m[2]:m[3]])  // e.g. "click", "submit.prevent"
-		handler := string(tmpl[m[4]:m[5]])   // e.g. "save", "onSubmit"
+		rawEvent := string(tmpl[m[2]:m[3]]) // e.g. "click", "submit.prevent"
+		handler := string(tmpl[m[4]:m[5]])  // e.g. "save", "onSubmit"
 		matchStart := m[0]
 
 		eventName := normalizeVueEvent(rawEvent) // "click", "submit"
-		handler = stripCallArgs(handler)          // "save(x)" → "save"
+		handler = stripCallArgs(handler)         // "save(x)" → "save"
 
 		lineNo := baseLines + bytes.Count(tmpl[:matchStart], []byte{'\n'}) + 1
 		nodeID := fmt.Sprintf("%s:%s:vue_event:%d:%s", service, file, lineNo, eventName)
@@ -287,6 +287,7 @@ func extractVueTemplateAttrs(src []byte, blocks []sfcBlock, file, service string
 			Service:  service,
 			File:     file,
 			Line:     lineNo,
+			EndLine:  lineNo,
 			Language: "vue",
 			Meta: map[string]string{
 				"event":   eventName,
@@ -321,6 +322,7 @@ func extractVueTemplateAttrs(src []byte, blocks []sfcBlock, file, service string
 			Service:  service,
 			File:     file,
 			Line:     lineNo,
+			EndLine:  lineNo,
 			Language: "vue",
 			Meta: map[string]string{
 				"path":     path,

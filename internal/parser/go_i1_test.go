@@ -77,8 +77,8 @@ func analyzeIface(t *testing.T) SemanticResult {
 }
 
 func TestGoI1_SchemaVersion(t *testing.T) {
-	if graph.SchemaVersion != "31" {
-		t.Errorf("expected SchemaVersion 31 (IA.5: dom_contract producer->consumer edge), got %q", graph.SchemaVersion)
+	if graph.SchemaVersion != "32" {
+		t.Errorf("expected SchemaVersion 32 (UB.0: Node.EndLine end to end), got %q", graph.SchemaVersion)
 	}
 }
 

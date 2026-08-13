@@ -1024,6 +1024,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			Line:    r.Line,
 			Meta:    meta,
 		}
+		if r.EndLine >= r.Line {
+			node.EndLine = r.EndLine
+		}
 		nodes = append(nodes, node)
 	}
 

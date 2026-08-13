@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -137,10 +138,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 // flowRef is one endpoint in a variable's flow summary — deliberately tiny
 // so agents can pull a variable's full story in a few hundred tokens.
 type flowRef struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	File  string `json:"file"`
-	Line  int    `json:"line"`
+	ID    string            `json:"id"`
+	Label string            `json:"label"`
+	File  string            `json:"file"`
+	Line  int               `json:"line"`
 	Meta  map[string]string `json:"meta,omitempty"`
 }
 
@@ -233,7 +234,12 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleNodeSource handles GET /api/node/{id}/source
+// handleNodeSource handles GET /api/node/{id}/source[?range=1&context=<n>].
+// Without range=1 the whole file is returned unchanged (existing consumers
+// keep working). With range=1, and the node has EndLine > 0, the response is
+// bounded to Line..EndLine plus context lines each side; a node with
+// EndLine == 0 falls back to the whole file with "end": 0 (honest unknown,
+// never a guessed span).
 func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -253,7 +259,47 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"source": string(src)})
+	if r.URL.Query().Get("range") != "1" {
+		writeJSON(w, http.StatusOK, map[string]string{"source": string(src)})
+		return
+	}
+
+	context, _ := strconv.Atoi(r.URL.Query().Get("context"))
+	if context <= 0 {
+		context = 5
+	}
+
+	allLines := strings.Split(string(src), "\n")
+
+	if node.EndLine <= 0 || node.Line <= 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"file":       node.File,
+			"start":      node.Line,
+			"end":        0,
+			"context":    context,
+			"first_line": 1,
+			"lines":      allLines,
+		})
+		return
+	}
+
+	firstLine := node.Line - context
+	if firstLine < 1 {
+		firstLine = 1
+	}
+	lastLine := node.EndLine + context
+	if lastLine > len(allLines) {
+		lastLine = len(allLines)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"file":       node.File,
+		"start":      node.Line,
+		"end":        node.EndLine,
+		"context":    context,
+		"first_line": firstLine,
+		"lines":      allLines[firstLine-1 : lastLine],
+	})
 }
 
 // handleTrace handles GET /api/graph/trace?root=<id>&direction=<forward|backward|both>&depth=<n>
@@ -400,8 +446,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":            nodes,
-		"edges":            edges,
+		"nodes":             nodes,
+		"edges":             edges,
 		"semantic_warnings": semanticWarnings,
 	})
 }
