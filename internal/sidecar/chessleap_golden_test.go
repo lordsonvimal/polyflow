@@ -60,7 +60,7 @@ func chessleapGraph(t *testing.T, dir string) (nodes []*graph.Node, edges []*gra
 	t.Setenv(sidecar.SidecarDirEnv, dir)
 
 	chessleap := chessleapPath(t)
-	cfg, err := workspace.Load(filepath.Join(chessleap, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(chessleap, "polyflow.yml"))
 	require.NoError(t, err)
 
 	dbDir := t.TempDir()

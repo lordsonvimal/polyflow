@@ -8,7 +8,7 @@ instrumentation at polyflow's built-in receiver:
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 OTEL_TRACES_EXPORTER=otlp
-OTEL_SERVICE_NAME=<name matching your workspace.yaml service>
+OTEL_SERVICE_NAME=<name matching your polyflow.yml service>
 ```
 
 Then start a capture session before exercising your service:
@@ -36,10 +36,10 @@ polyflow index   # re-index to fuse captured evidence
 ## Service name mapping
 
 If your instrumentation uses service names that differ from the names in
-`workspace.yaml`, add a mapping:
+`polyflow.yml`, add a mapping:
 
 ```yaml
-# workspace.yaml
+# polyflow.yml
 evidence:
   runtime:
     service_names:

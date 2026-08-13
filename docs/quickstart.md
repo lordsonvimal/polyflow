@@ -24,7 +24,7 @@ Run this in your project root (or a directory containing your services):
 polyflow init
 ```
 
-This creates `workspace.yaml` listing detected services.  Edit it if auto-detection misses a service:
+This creates `polyflow.yml` listing detected services.  Edit it if auto-detection misses a service:
 
 ```yaml
 services:

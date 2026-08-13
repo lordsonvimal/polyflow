@@ -20,7 +20,7 @@ ledger anything it cannot resolve, rather than inventing edges.
 - [How it works](#how-it-works)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
-- [Configuration (`workspace.yaml`)](#configuration-workspaceyaml)
+- [Configuration (`polyflow.yml`)](#configuration-workspaceyaml)
 - [CLI commands](#cli-commands)
 - [MCP server & tools](#mcp-server--tools)
 - [Supported languages & frameworks](#supported-languages--frameworks)
@@ -81,7 +81,7 @@ polyflow doctor
 
 ```sh
 # 1. In your project root (or a folder containing your services):
-polyflow init          # auto-discovers services → writes workspace.yaml
+polyflow init          # auto-discovers services → writes polyflow.yml
 
 # 2. Build the graph:
 polyflow index         # incremental on subsequent runs
@@ -98,9 +98,9 @@ polyflow trace  --target handleCheckout
 polyflow flows  "checkout order across services"
 ```
 
-## Configuration (`workspace.yaml`)
+## Configuration (`polyflow.yml`)
 
-`polyflow init` writes a `workspace.yaml` in the current directory. It is the
+`polyflow init` writes a `polyflow.yml` in the current directory. It is the
 single source of truth for the workspace; paths resolve relative to the file's
 directory. All fields below are optional except `services`.
 
@@ -178,7 +178,7 @@ polyflow config link add --from web --to api --via http
 
 | Command | Purpose |
 |---|---|
-| `polyflow init` | Auto-discover services and write `workspace.yaml`. |
+| `polyflow init` | Auto-discover services and write `polyflow.yml`. |
 | `polyflow index` | Parse all services and build/update the graph (incremental). |
 | `polyflow doctor` | Health check; flags zero-match services, can `--propose` contract rules. |
 | `polyflow status` | Index statistics (node/edge/link counts) and a freshness verdict (STALE when sources changed since the last index). |
@@ -190,7 +190,7 @@ polyflow config link add --from web --to api --via http
 | `polyflow link --infer` | Propose cross-service links from indexed evidence. |
 | `polyflow deps` | Resolved dependency versions per service. |
 | `polyflow patterns list` / `add <file>` | List loaded pattern packs or register a custom one. |
-| `polyflow config …` | View/edit `workspace.yaml` (`show`, `set`, `service`, `link`). |
+| `polyflow config …` | View/edit `polyflow.yml` (`show`, `set`, `service`, `link`). |
 | `polyflow mcp` | Start the MCP stdio server (used by agents). Subcommands: `on` / `off` / `status` toggle the query tools for the next session (A/B token measurement). |
 | `polyflow serve` | Start the web UI + HTTP API. |
 | `polyflow capture start\|stop\|run\|ingest` | Runtime OTLP trace capture (see below). |
@@ -332,11 +332,11 @@ without downgrading the edge.
 
 ## Multi-repo workspaces
 
-A `workspace.yaml` can list services that live in different repositories (by
+A `polyflow.yml` can list services that live in different repositories (by
 path). Cross-service links are inferred across all of them, so an agent can
 trace a request from a frontend repo through an API into a background worker in a
 third repo. Because the MCP/CLI reads the DB from the current directory, run the
-server from the directory holding the multi-service `workspace.yaml`.
+server from the directory holding the multi-service `polyflow.yml`.
 
 ## Limitations & honest gaps
 

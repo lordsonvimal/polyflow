@@ -2,7 +2,7 @@ repo:
   name: gotify
   url: https://github.com/gotify/server
   sha: 9f7dc63defae71ab719c7c370fa3b9d90a3baf98
-  workspace: workspace.yaml
+  workspace: polyflow.yml
 
 # Selection rationale: gotify/server is a real-time notification server with a Go
 # gin backend (supported framework) and a TypeScript/React frontend. It has a clear

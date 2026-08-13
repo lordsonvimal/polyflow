@@ -35,7 +35,7 @@ const pythonGoFixtureWS = "testdata/python_go"
 func indexPythonGo(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.WorkspaceConfig) {
 	t.Helper()
 
-	cfg, err := workspace.Load(filepath.Join(pythonGoFixtureWS, "workspace.yaml"))
+	cfg, err := workspace.Load(filepath.Join(pythonGoFixtureWS, "polyflow.yml"))
 	require.NoError(t, err)
 
 	reg, err := patterns.DefaultRegistry(pythonGoPatternsDir)
