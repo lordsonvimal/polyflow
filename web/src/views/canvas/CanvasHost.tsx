@@ -306,7 +306,7 @@ export default function CanvasHost() {
 
   const handleNarrow = (childKey: string) => {
     const s = scope();
-    if (s.kind === "overview" || s.kind === "service") {
+    if (s.kind === "overview") {
       scopeStore.push({ kind: "service", service: childKey });
     } else if (s.kind === "service") {
       scopeStore.push({ kind: "folder", service: s.service, path: childKey });
