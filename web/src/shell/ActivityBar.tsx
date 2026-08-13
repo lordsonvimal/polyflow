@@ -23,7 +23,12 @@ export default function ActivityBar() {
         {(a) => (
           <button
             title={a.label}
-            onClick={() => layoutPrefs.setActivity(a.id)}
+            onClick={() => {
+              // Switching activity while the panel is collapsed produced no
+              // visible change, making the sidebar look unresponsive.
+              layoutPrefs.setActivity(a.id);
+              if (layoutPrefs.panelCollapsed()) layoutPrefs.setPanelCollapsed(false);
+            }}
             class={`w-9 h-9 rounded flex items-center justify-center text-lg transition-colors
               ${layoutPrefs.activity() === a.id
                 ? "bg-neutral-700 text-white"
