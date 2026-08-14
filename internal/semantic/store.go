@@ -317,21 +317,27 @@ func (s *Store) LoadEntitiesByIDs(ctx context.Context, ids []string) (map[string
 			nargs[i] = id
 		}
 		nrows, nerr := s.db.QueryContext(ctx,
-			`SELECT id, file, line FROM nodes WHERE id IN (`+nph+`)`, nargs...)
+			`SELECT id, type, label, service, file, line FROM nodes WHERE id IN (`+nph+`)`, nargs...)
 		if nerr != nil {
 			return nil, fmt.Errorf("enrich node meta: %w", nerr)
 		}
 		defer nrows.Close()
 		for nrows.Next() {
-			var id, file string
+			var id, ntype, label, service, file string
 			var line int
-			if err := nrows.Scan(&id, &file, &line); err != nil {
+			if err := nrows.Scan(&id, &ntype, &label, &service, &file, &line); err != nil {
 				return nil, fmt.Errorf("scan node row: %w", err)
 			}
 			if ent, ok := result[id]; ok {
 				ent.File = file
 				ent.Line = line
 				ent.NodeID = id
+				// The embeddings table has no text column — Text lives only
+				// in entities_fts, which is UNINDEXED on entity_id and would
+				// full-scan per lookup. Nodes carry label/type/service
+				// directly, so rebuild the card text (see nodeCardText) from
+				// the authoritative row instead of a second lookup.
+				ent.Text = label + " " + ntype + " " + service + " " + file
 				result[id] = ent
 			}
 		}
