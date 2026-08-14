@@ -19,7 +19,7 @@ export default function HoverTooltip() {
         return (
           <div
             data-testid="hover-tooltip"
-            class="fixed z-50 pointer-events-none px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-xs text-neutral-200 max-w-xs"
+            class="fixed z-50 pointer-events-none px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-xs text-neutral-200 max-w-xs break-words"
             style={{ left: `${pos().x}px`, top: `${pos().y}px` }}
           >
             <span class="font-medium">{target.label ?? target.id}</span>

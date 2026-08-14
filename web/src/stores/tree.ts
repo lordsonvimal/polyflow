@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { apiFetchJSON } from "../lib/apiFetch";
 import { connectionStore } from "./connection";
+import { isContainerGroupNodeId } from "../lib/aggregate";
 
 // Mirrors internal/graph/tree.go's TreeNode/TreeResult (GET /api/tree).
 export interface ApiTreeNode {
@@ -238,7 +239,9 @@ async function loadServices(): Promise<void> {
   try {
     const data = await apiFetchJSON<{ services: ApiServiceStack[] }>("/api/stack");
     setServices(
-      (data.services ?? []).map((s) => ({
+      (data.services ?? [])
+        .filter((s) => s.name)
+        .map((s) => ({
         name: s.name,
         language: s.language,
         frameworks: s.frameworks ?? [],
@@ -281,6 +284,12 @@ function unresolvedCount(service: string, kind: "folder" | "file", path: string)
 // Loads the owning service's tree first if it isn't cached yet. No-ops
 // (beyond the load) if the node has no tree representation.
 async function reveal(nodeId: string): Promise<void> {
+  // Folder/file/service group ids are synthesized client-side by the
+  // container/overview scopes and have no backing graph node — their
+  // first colon segment ("folder"/"file"/"service") isn't a real service
+  // name, so treating it as one sends /api/tree and /api/unresolved
+  // requests for a service that doesn't exist.
+  if (isContainerGroupNodeId(nodeId)) return;
   const service = serviceOfNodeId(nodeId);
   if (!service) return;
   await loadService(service);
