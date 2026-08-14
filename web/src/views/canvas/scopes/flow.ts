@@ -34,7 +34,7 @@ export interface FlowResolution {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseHop(raw: any): FlowHop {
+export function parseHop(raw: any): FlowHop {
   return {
     nodeId: raw.node_id,
     label: raw.label,
@@ -48,8 +48,36 @@ function parseHop(raw: any): FlowHop {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseChain(raw: any[] | undefined): FlowChain {
+export function parseChain(raw: any[] | undefined): FlowChain {
   return { hops: (raw ?? []).map(parseHop) };
+}
+
+// Worst-first ranking so "min across a group of chains" always picks the
+// least-trustworthy state present, never silently defaulting to the best
+// one when a mix is present. A hop with no explicit state is a solid,
+// resolved static edge (FlowLane's default un-dashed rendering) — ranked
+// best, not unknown.
+const VERIFICATION_RANK: Record<string, number> = {
+  verified: 3,
+  candidate: 2,
+  conflicting: 1,
+  observed_only_gap: 0,
+};
+
+export function minVerificationState(chains: FlowChain[]): string {
+  let worst = "verified";
+  let worstRank = VERIFICATION_RANK[worst];
+  for (const chain of chains) {
+    for (const hop of chain.hops) {
+      const state = hop.verificationState ?? "verified";
+      const rank = VERIFICATION_RANK[state] ?? VERIFICATION_RANK.verified;
+      if (rank < worstRank) {
+        worst = state;
+        worstRank = rank;
+      }
+    }
+  }
+  return worst;
 }
 
 function chainLabel(chain: FlowChain, fallback: string): string {

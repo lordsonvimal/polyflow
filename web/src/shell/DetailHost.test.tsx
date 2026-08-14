@@ -5,6 +5,7 @@ import { selectionStore } from "../stores/selection";
 import { exploreStore } from "../stores/explore";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { serviceNodeId } from "../lib/aggregate";
+import { flowsThroughStore } from "../stores/flowsThrough";
 
 describe("DetailHost", () => {
   let container: HTMLElement;
@@ -41,5 +42,26 @@ describe("DetailHost", () => {
   it("a regular node selection shows the source panel, not the tech-stack link", () => {
     selectionStore.setSelection({ kind: "node", id: "auth:app/user.rb:method:save:5" });
     expect(container.querySelector('[data-testid="detail-view-in-stack"]')).toBeFalsy();
+  });
+
+  it("the 'Isolate flows through here' toggle is collapsed by default and expands the through panel on click", () => {
+    selectionStore.setSelection({ kind: "node", id: "auth:app/user.rb:method:save:5" });
+    expect(container.querySelector('[data-testid="through-panel"]')).toBeFalsy();
+
+    const toggle = container.querySelector('[data-testid="detail-isolate-flows-through"]') as HTMLElement;
+    expect(toggle).toBeTruthy();
+    toggle.click();
+
+    expect(container.querySelector('[data-testid="through-panel"]')).toBeTruthy();
+  });
+
+  it("a context-menu 'Isolate flows through here' request (flowsThroughStore) auto-expands the panel for that node", () => {
+    selectionStore.setSelection({ kind: "node", id: "auth:app/user.rb:method:save:5" });
+    expect(container.querySelector('[data-testid="through-panel"]')).toBeFalsy();
+
+    flowsThroughStore.request("auth:app/user.rb:method:save:5");
+
+    expect(container.querySelector('[data-testid="through-panel"]')).toBeTruthy();
+    expect(flowsThroughStore.requestedNodeId()).toBeNull();
   });
 });
