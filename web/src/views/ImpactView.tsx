@@ -67,7 +67,7 @@ function ImpactRingsTab() {
       <Show
         when={impactScope()}
         fallback={
-          <div class="text-neutral-500">
+          <div class="text-neutral-400">
             Right-click a node on canvas → "Impact from here" to see its blast radius here.
           </div>
         }
@@ -78,7 +78,7 @@ function ImpactRingsTab() {
               Target: <span class="text-neutral-200">{s().target}</span>
             </div>
             <div>
-              <div class="text-neutral-500 mb-1">Direction</div>
+              <div class="text-neutral-400 mb-1">Direction</div>
               <div class="flex gap-1">
                 <For each={DIRECTIONS}>
                   {(d) => (
@@ -94,7 +94,7 @@ function ImpactRingsTab() {
               </div>
             </div>
             <div>
-              <div class="text-neutral-500 mb-1">Depth: {s().depth}</div>
+              <div class="text-neutral-400 mb-1">Depth: {s().depth}</div>
               <input
                 data-testid="impact-depth"
                 type="range"
@@ -140,7 +140,7 @@ function DiffTab() {
           <span>Staged only</span>
         </label>
         <label class="flex items-center gap-1.5">
-          <span class="text-neutral-500">Depth</span>
+          <span class="text-neutral-400">Depth</span>
           <input
             data-testid="diff-depth"
             type="number"
@@ -160,7 +160,7 @@ function DiffTab() {
       </div>
 
       <Show when={result.loading}>
-        <div class="text-neutral-500">Computing diff impact…</div>
+        <div class="text-neutral-400">Computing diff impact…</div>
       </Show>
 
       <Show when={result.error}>
@@ -172,7 +172,7 @@ function DiffTab() {
       <Show when={!result.loading && !result.error && result()}>
         {(r) => (
           <div class="space-y-3">
-            <div class="text-neutral-500">
+            <div class="text-neutral-400">
               {r().mode} · {r().changed_files} changed file{r().changed_files === 1 ? "" : "s"} ·{" "}
               {r().total_callers} in blast radius
               <Show when={r().services_affected.length > 0}>
@@ -181,8 +181,8 @@ function DiffTab() {
             </div>
 
             <div>
-              <div class="text-neutral-500 mb-1">Changed nodes</div>
-              <Show when={r().targets.length > 0} fallback={<div class="text-neutral-600">none mapped</div>}>
+              <div class="text-neutral-400 mb-1">Changed nodes</div>
+              <Show when={r().targets.length > 0} fallback={<div class="text-neutral-500">none mapped</div>}>
                 <ul data-testid="diff-targets" class="space-y-1">
                   <For each={r().targets}>
                     {(t) => (
@@ -194,7 +194,7 @@ function DiffTab() {
                           M
                         </span>
                         <span class="text-neutral-200 truncate">{displayLabel(t.node.label)}</span>
-                        <span class="text-neutral-600 truncate">
+                        <span class="text-neutral-500 truncate">
                           {t.node.file}:{t.node.line}
                         </span>
                       </li>
@@ -205,15 +205,15 @@ function DiffTab() {
             </div>
 
             <div>
-              <div class="text-neutral-500 mb-1">Union blast radius</div>
-              <Show when={r().callers.length > 0} fallback={<div class="text-neutral-600">no callers</div>}>
+              <div class="text-neutral-400 mb-1">Union blast radius</div>
+              <Show when={r().callers.length > 0} fallback={<div class="text-neutral-500">no callers</div>}>
                 <ul data-testid="diff-callers" class="space-y-1 max-h-40 overflow-y-auto">
                   <For each={r().callers}>
                     {(c) => (
                       <li class="flex items-center gap-1.5">
-                        <span class="text-neutral-600 shrink-0">d{c.depth}</span>
+                        <span class="text-neutral-500 shrink-0">d{c.depth}</span>
                         <span class="text-neutral-200 truncate">{displayLabel(c.label)}</span>
-                        <span class="text-neutral-600 truncate">
+                        <span class="text-neutral-500 truncate">
                           {c.file}:{c.line}
                         </span>
                       </li>
@@ -227,8 +227,8 @@ function DiffTab() {
                 graph has no node for (including no_git_repo services) is
                 always listed, whether or not it's empty this run. */}
             <div>
-              <div class="text-neutral-500 mb-1">Unmapped hunks</div>
-              <Show when={r().unmapped_hunks.length > 0} fallback={<div class="text-neutral-600">none</div>}>
+              <div class="text-neutral-400 mb-1">Unmapped hunks</div>
+              <Show when={r().unmapped_hunks.length > 0} fallback={<div class="text-neutral-500">none</div>}>
                 <ul data-testid="diff-unmapped" class="space-y-1">
                   <For each={r().unmapped_hunks}>
                     {(u) => (
@@ -256,14 +256,14 @@ export default function ImpactView() {
       <div class="flex items-center gap-2 px-3 pt-2 text-xs">
         <button
           data-testid="impact-tab-rings"
-          class={tab() === "rings" ? "text-white" : "text-neutral-500 hover:text-white"}
+          class={tab() === "rings" ? "text-white" : "text-neutral-400 hover:text-white"}
           onClick={() => setTab("rings")}
         >
           Impact
         </button>
         <button
           data-testid="impact-tab-diff"
-          class={tab() === "diff" ? "text-white" : "text-neutral-500 hover:text-white"}
+          class={tab() === "diff" ? "text-white" : "text-neutral-400 hover:text-white"}
           onClick={() => setTab("diff")}
         >
           Diff

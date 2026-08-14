@@ -19,6 +19,11 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// this parser mints must carry the cwd-relative form instead, matching
+	// the Go semantic pass's convention — extractRubyVariables and friends
+	// build nodes directly (bypassing the matcher's own relativization).
+	file = patterns.RelativizeToCwd(file)
 	results, err := matcher.Match("ruby", file, src)
 
 	// Tier HH.1: a receiverless `get "…"` only declares a route inside a Rails

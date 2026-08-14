@@ -32,14 +32,14 @@ export default function LensBar() {
 
   return (
     <div data-testid="lens-bar" class="flex items-center gap-1 text-xs">
-      <span class="text-neutral-600">lens:</span>
+      <span class="text-neutral-500">lens:</span>
       <For each={LENS_NAMES}>
         {(name) => (
           <button
             class={`px-1.5 py-0.5 rounded transition-colors ${
               active() === name
                 ? "bg-neutral-700 text-white"
-                : "text-neutral-500 hover:text-white"
+                : "text-neutral-400 hover:text-white"
             }`}
             onClick={() => scopeStore.setLens(name)}
           >
@@ -56,7 +56,7 @@ export default function LensBar() {
         class={`ml-1 px-1.5 py-0.5 rounded border transition-colors ${
           scopeStore.viewState().lensHideUnlinked
             ? "bg-neutral-700 text-white border-neutral-600"
-            : "text-neutral-500 border-neutral-800 hover:text-neutral-300"
+            : "text-neutral-400 border-neutral-800 hover:text-neutral-300"
         }`}
         onClick={() => scopeStore.setLensHideUnlinked(!scopeStore.viewState().lensHideUnlinked)}
       >
@@ -69,7 +69,7 @@ export default function LensBar() {
           class={`px-1.5 py-0.5 rounded border transition-colors ${
             scopeStore.viewState().lensRollup
               ? "bg-neutral-700 text-white border-neutral-600"
-              : "text-neutral-500 border-neutral-800 hover:text-neutral-300"
+              : "text-neutral-400 border-neutral-800 hover:text-neutral-300"
           }`}
           onClick={() => scopeStore.setLensRollup(!scopeStore.viewState().lensRollup)}
         >

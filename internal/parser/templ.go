@@ -60,6 +60,13 @@ func (p *TemplParser) ParseSource(file, service string, content []byte, datastar
 		return nil, nil, nil, err
 	}
 
+	// `file` may arrive absolute (the local Parse path) or already relative
+	// (the V.2 sidecar, which ships content over IPC) — RelativizeToCwd is a
+	// no-op for an already-relative path, so this is safe either way. Every
+	// node here is built directly by the visitor (no matcher pass to
+	// relativize it), matching the Go semantic pass's convention.
+	file = patterns.RelativizeToCwd(file)
+
 	v := &templVisitor{
 		file:                file,
 		service:             service,

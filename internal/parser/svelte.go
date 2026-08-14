@@ -52,6 +52,12 @@ func (p *SvelteParser) Parse(file, service string, matcher *patterns.TreeSitterM
 		return nil, nil, nil, err
 	}
 
+	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// this parser mints must carry the cwd-relative form instead, matching
+	// the Go semantic pass's convention — extractSvelteMarkupAttrs builds
+	// nodes directly (bypassing the matcher's own relativization).
+	file = patterns.RelativizeToCwd(file)
+
 	blocks := splitSvelteSFC(src)
 
 	virtualScript, scriptLang := buildSvelteVirtualScript(src, blocks)

@@ -60,7 +60,7 @@ function Chip(props: { label: string; active: boolean; dashed?: boolean; onClick
       class={`px-2 py-0.5 rounded text-xs border transition-colors ${
         props.active
           ? "bg-neutral-700 text-white border-neutral-600"
-          : "bg-transparent text-neutral-500 border-neutral-800 hover:text-neutral-300"
+          : "bg-transparent text-neutral-400 border-neutral-800 hover:text-neutral-300"
       } ${props.dashed ? "border-dashed" : ""}`}
       onClick={props.onClick}
     >
@@ -165,7 +165,7 @@ export default function FilterBar() {
         <Show when={canvasElementsStore.ids().size > 0}>
           <button
             data-testid="filter-add-all-matches"
-            class="text-neutral-500 hover:text-white"
+            class="text-neutral-400 hover:text-white"
             onClick={addAllMatches}
           >
             Add all matches
@@ -178,7 +178,7 @@ export default function FilterBar() {
           >
             {activeCount()}
           </span>
-          <button class="text-neutral-500 hover:text-white" onClick={reset}>
+          <button class="text-neutral-400 hover:text-white" onClick={reset}>
             reset
           </button>
         </Show>

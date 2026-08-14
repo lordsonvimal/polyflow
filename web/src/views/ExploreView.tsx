@@ -33,7 +33,7 @@ export default function ExploreView() {
               class={`px-2 py-1 text-xs rounded-t ${
                 exploreStore.tab() === t.id
                   ? "bg-neutral-900 text-white border border-b-0 border-neutral-800"
-                  : "text-neutral-500 hover:text-neutral-300"
+                  : "text-neutral-400 hover:text-neutral-300"
               }`}
               onClick={() => exploreStore.setTab(t.id)}
             >

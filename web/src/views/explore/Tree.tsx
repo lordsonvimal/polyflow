@@ -233,7 +233,7 @@ export default function Tree() {
                   {...(isLoading || isError ? {} : handlers)}
                 >
                   <Show when={isLoading}>
-                    <span class="text-neutral-600 text-xs">loading…</span>
+                    <span class="text-neutral-500 text-xs">loading…</span>
                   </Show>
                   <Show when={isError}>
                     <span class="text-red-400 text-xs">{row.name}</span>
@@ -245,7 +245,7 @@ export default function Tree() {
                     >
                       <button
                         data-testid="tree-row-toggle"
-                        class="w-3 shrink-0 text-neutral-500 text-[10px] hover:text-white"
+                        class="w-3 shrink-0 text-neutral-400 text-[10px] hover:text-white"
                         onClick={(e) => {
                           e.stopPropagation();
                           toggleContainer(row);
@@ -257,7 +257,7 @@ export default function Tree() {
                     <span class="shrink-0 text-neutral-400">{iconFor(row.kind)}</span>
                     <span class="text-neutral-200 truncate">{row.name}</span>
                     <Show when={row.kind !== "folder" && row.kind !== "service" && row.kind !== "file" && row.line}>
-                      <span class="text-neutral-600 text-xs shrink-0">
+                      <span class="text-neutral-500 text-xs shrink-0">
                         {formatRange(row.line, row.endLine)}
                       </span>
                     </Show>

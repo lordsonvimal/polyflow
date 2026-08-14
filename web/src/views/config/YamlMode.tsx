@@ -6,7 +6,7 @@ export default function YamlMode() {
 
   return (
     <div data-testid="config-yaml-mode" class="flex-1 min-h-0 flex overflow-hidden">
-      <div class="select-none text-right pr-2 py-2 text-[11px] text-neutral-600 font-mono bg-neutral-950 overflow-hidden shrink-0">
+      <div class="select-none text-right pr-2 py-2 text-[11px] text-neutral-500 font-mono bg-neutral-950 overflow-hidden shrink-0">
         <For each={lines()}>{(_, i) => <div>{i() + 1}</div>}</For>
       </div>
       <textarea

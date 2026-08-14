@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -239,9 +241,53 @@ func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchRes
 	return m.execQueries(cqs, root, src, file, language)
 }
 
+// indexCwd is the canonicalized process working directory, resolved once —
+// EvalSymlinks is a syscall, and callers must mirror internal/parser's
+// canonicalPath (which resolves both sides) so paths under a symlinked cwd
+// (e.g. macOS /var -> /private/var) still match.
+var indexCwd = sync.OnceValue(func() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		return resolved
+	}
+	return cwd
+})
+
+// RelativizeToCwd converts an absolute file path to one relative to the
+// indexing process's cwd, matching the convention internal/parser's
+// semantic passes already use for struct/interface/variable nodes. Falls
+// back to the input unchanged if it's not absolute, or resolves outside cwd.
+func RelativizeToCwd(file string) string {
+	cwd := indexCwd()
+	if cwd == "" || !filepath.IsAbs(file) {
+		return file
+	}
+	canon := file
+	if resolved, err := filepath.EvalSymlinks(file); err == nil {
+		canon = resolved
+	}
+	rel, err := filepath.Rel(cwd, canon)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return file
+	}
+	return filepath.ToSlash(rel)
+}
+
 func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, src []byte, file, grammarLang string) ([]MatchResult, error) {
 	var results []MatchResult
 	testDSLFamily := testDSLLangFamily(grammarLang)
+	// `file` arrives absolute (the indexer walks services from an absolute
+	// root so os.ReadFile works regardless of process cwd). Every other node
+	// producer (the Go semantic/SSA pass in internal/parser) stores paths
+	// relative to the indexing cwd, so an unconverted absolute path here
+	// desyncs this node's File/ID from the rest of the graph — and the
+	// frontend's /api/tree builds folders by splitting File on "/", so an
+	// absolute path mints a phantom "Users" -> "<username>" -> ... subtree
+	// at the workspace root.
+	file = RelativizeToCwd(file)
 
 	for _, cq := range cqs {
 		cursor := sitter.NewQueryCursor()

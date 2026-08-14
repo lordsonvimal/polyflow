@@ -18,7 +18,7 @@ export default function PanelHost() {
         <div class="flex flex-col flex-1 min-h-0 border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950">
           <div class="p-2 shrink-0">
             <button
-              class="text-xs text-neutral-500 hover:text-white mb-2"
+              class="text-xs text-neutral-400 hover:text-white mb-2"
               onClick={() => layoutPrefs.setPanelCollapsed(true)}
             >
               ◀ collapse
@@ -40,7 +40,7 @@ export default function PanelHost() {
       </Show>
       <Show when={layoutPrefs.panelCollapsed()}>
         <button
-          class="w-6 flex items-center justify-center text-neutral-500 hover:text-white border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950"
+          class="w-6 flex items-center justify-center text-neutral-400 hover:text-white border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950"
           onClick={() => layoutPrefs.setPanelCollapsed(false)}
         >
           ▶

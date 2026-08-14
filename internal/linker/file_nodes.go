@@ -5,6 +5,7 @@ import (
 	"path"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // fileNodeIndex looks up the NodeTypeFile backbone LinkContainment built, and
@@ -39,6 +40,14 @@ func newFileNodeIndex(nodes []graph.Node) *fileNodeIndex {
 // ensure returns the file node ID for service/file, minting the node and its
 // service→file contains edge when containment did not.
 func (x *fileNodeIndex) ensure(service, file string) string {
+	// Callers here (rails_views.go, sprockets_assets.go, stylesheet_imports.go)
+	// source `file` from the indexer's raw absolute file-walk list (needed for
+	// their own os.ReadFile calls), unlike the parser-minted nodes already in
+	// `nodes` — those carry the cwd-relative convention (see
+	// patterns.RelativizeToCwd). Relativize here too so a minted node's ID/File
+	// matches the existing convention instead of forking a duplicate absolute
+	// entry (and, via /api/tree's naive File-splitting, a phantom root folder).
+	file = patterns.RelativizeToCwd(file)
 	key := service + "\x00" + file
 	if id, ok := x.id[key]; ok {
 		return id

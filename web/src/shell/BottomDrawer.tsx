@@ -54,7 +54,7 @@ function ContextTab() {
     <div data-testid="context-tab" class="flex h-full text-xs">
       <div class="w-48 shrink-0 border-r border-neutral-800 p-2 space-y-3 overflow-y-auto">
         <div>
-          <div class="text-neutral-500 mb-1">Mode</div>
+          <div class="text-neutral-400 mb-1">Mode</div>
           <div class="flex gap-1">
             <For each={["viewed", "expanded"] as CopyMode[]}>
               {(m) => (
@@ -72,7 +72,7 @@ function ContextTab() {
 
         <Show when={contextCopyStore.mode() === "expanded"}>
           <div>
-            <div class="text-neutral-500 mb-1">Depth: {contextCopyStore.depth()}</div>
+            <div class="text-neutral-400 mb-1">Depth: {contextCopyStore.depth()}</div>
             <input
               data-testid="context-depth"
               type="range"
@@ -96,7 +96,7 @@ function ContextTab() {
         </label>
 
         <div>
-          <div class="text-neutral-500 mb-1">Token budget</div>
+          <div class="text-neutral-400 mb-1">Token budget</div>
           <div class="flex flex-wrap gap-1">
             <For each={TOKEN_BUDGETS}>
               {(b) => (
@@ -125,7 +125,7 @@ function ContextTab() {
 
         <Show when={contextCopyStore.recent().length > 0}>
           <div>
-            <div class="text-neutral-500 mb-1">Recent</div>
+            <div class="text-neutral-400 mb-1">Recent</div>
             <ul class="space-y-0.5">
               <For each={contextCopyStore.recent()}>
                 {(b) => (
@@ -148,7 +148,7 @@ function ContextTab() {
 
       <div class="flex-1 overflow-y-auto p-2 min-w-0">
         <Show when={contextCopyStore.loading()}>
-          <div class="text-neutral-500">Building context…</div>
+          <div class="text-neutral-400">Building context…</div>
         </Show>
 
         <Show when={err()}>
@@ -174,7 +174,7 @@ function ContextTab() {
                   ~{r().tokens_estimate.toLocaleString()} tokens
                 </span>
                 <Show when={contextCopyStore.requestNote()}>
-                  <span class="text-neutral-500">{contextCopyStore.requestNote()}</span>
+                  <span class="text-neutral-400">{contextCopyStore.requestNote()}</span>
                 </Show>
                 <button
                   data-testid="context-copy-clipboard"
@@ -216,7 +216,7 @@ function ContextTab() {
         </Show>
 
         <Show when={!contextCopyStore.loading() && !err() && !result()}>
-          <div class="text-neutral-600">No context copied yet — use "Copy context" on a node, edge, flow, group, or scope.</div>
+          <div class="text-neutral-500">No context copied yet — use "Copy context" on a node, edge, flow, group, or scope.</div>
         </Show>
       </div>
     </div>
@@ -295,18 +295,18 @@ function UnresolvedTab() {
           value={q()}
           onInput={(e) => setQ(e.currentTarget.value)}
         />
-        <button class="text-neutral-500 hover:text-white shrink-0" onClick={refetch}>
+        <button class="text-neutral-400 hover:text-white shrink-0" onClick={refetch}>
           ↻
         </button>
       </div>
       <div class="flex-1 overflow-y-auto min-h-0">
         <Show when={result.loading}>
-          <div class="text-neutral-500">Loading…</div>
+          <div class="text-neutral-400">Loading…</div>
         </Show>
         <Show when={!result.loading && result()}>
           {(r) => (
             <>
-              <div class="text-neutral-500 mb-1">{r().total} unresolved ref{r().total === 1 ? "" : "s"}</div>
+              <div class="text-neutral-400 mb-1">{r().total} unresolved ref{r().total === 1 ? "" : "s"}</div>
               <ul data-testid="unresolved-list" class="space-y-0.5">
                 <For each={r().refs}>
                   {(ref) => (
@@ -315,9 +315,9 @@ function UnresolvedTab() {
                       class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-neutral-800 cursor-pointer"
                       onClick={() => openFile(ref)}
                     >
-                      <span class="text-neutral-500 shrink-0">{ref.kind}</span>
+                      <span class="text-neutral-400 shrink-0">{ref.kind}</span>
                       <span class="text-neutral-200 truncate">{ref.name}</span>
-                      <span class="text-neutral-600 truncate ml-auto">
+                      <span class="text-neutral-500 truncate ml-auto">
                         {ref.file}:{ref.line}
                       </span>
                     </li>
@@ -342,7 +342,7 @@ export default function BottomDrawer() {
       class="shrink-0 border-t border-neutral-800 dark:border-neutral-700 bg-neutral-950 transition-all flex flex-col"
       style={{ height: open() ? "260px" : "28px" }}
     >
-      <div class="flex items-center px-2 h-7 gap-2 text-xs text-neutral-500 shrink-0">
+      <div class="flex items-center px-2 h-7 gap-2 text-xs text-neutral-400 shrink-0">
         <button onClick={() => setOpen(!open())} class="hover:text-white">
           {open() ? "▼" : "▲"} Drawer
         </button>

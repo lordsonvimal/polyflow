@@ -65,7 +65,7 @@ export default function TopBar() {
           one pin exists (badges from 1; the canvas fade only starts at 2). */}
       <Show when={pinboardStore.pins().length > 0}>
         <div data-testid="pin-tray" class="flex items-center gap-1">
-          <span class="text-neutral-500">pins:</span>
+          <span class="text-neutral-400">pins:</span>
           <For each={pinboardStore.pins()}>
             {(p) => (
               <span
@@ -79,7 +79,7 @@ export default function TopBar() {
                 >
                   {displayLabel(p.label)}
                 </button>
-                <button class="text-neutral-500 hover:text-white" onClick={() => pinboardStore.unpin(p.id)}>
+                <button class="text-neutral-400 hover:text-white" onClick={() => pinboardStore.unpin(p.id)}>
                   ×
                 </button>
               </span>
@@ -99,7 +99,7 @@ export default function TopBar() {
           </Show>
           <button
             data-testid="pin-tray-clear"
-            class="text-xs text-neutral-500 hover:text-white"
+            class="text-xs text-neutral-400 hover:text-white"
             onClick={() => pinboardStore.clear()}
           >
             [clear all]
@@ -113,14 +113,14 @@ export default function TopBar() {
             class="flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-300"
           >
             <span class="truncate max-w-[160px]" title={start().label}>A: {displayLabel(start().label)}</span>
-            <button class="text-neutral-500 hover:text-white" onClick={() => pathFinderStore.clearStart()}>
+            <button class="text-neutral-400 hover:text-white" onClick={() => pathFinderStore.clearStart()}>
               ×
             </button>
           </span>
         )}
       </Show>
       <div class="ml-auto flex items-center gap-2">
-        <span class="text-xs text-neutral-500 font-mono">{stats()}</span>
+        <span class="text-xs text-neutral-400 font-mono">{stats()}</span>
         <div class="relative flex items-center">
           <Show
             when={jobsStore.activeIndexJob()}
@@ -128,14 +128,14 @@ export default function TopBar() {
               <>
                 <button
                   data-testid="index-button"
-                  class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded-l px-2 py-0.5"
+                  class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded-l px-2 py-0.5"
                   onClick={() => jobsStore.startIndex(false)}
                 >
                   Index ▸
                 </button>
                 <button
                   data-testid="index-menu-toggle"
-                  class="text-xs text-neutral-500 hover:text-white border border-l-0 border-neutral-700 rounded-r px-1 py-0.5"
+                  class="text-xs text-neutral-400 hover:text-white border border-l-0 border-neutral-700 rounded-r px-1 py-0.5"
                   onClick={() => setIndexMenuOpen((v) => !v)}
                 >
                   ▾
@@ -172,17 +172,17 @@ export default function TopBar() {
             </div>
           </Show>
         </div>
-        <button class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded px-2 py-0.5" disabled>
+        <button class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5" disabled>
           Share ▾
         </button>
         <button
-          class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
+          class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
           onClick={() => layoutPrefs.setTheme(layoutPrefs.theme() === "dark" ? "light" : "dark")}
         >
           {layoutPrefs.theme() === "dark" ? "☀" : "☾"}
         </button>
         <button
-          class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
+          class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
           onClick={() => paletteStore.open()}
         >
           ⌘K

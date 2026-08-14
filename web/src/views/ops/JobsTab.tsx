@@ -12,7 +12,7 @@ const STATE_COLOR: Record<Job["state"], string> = {
   running: "text-indigo-300",
   succeeded: "text-emerald-400",
   failed: "text-red-400",
-  canceled: "text-neutral-500",
+  canceled: "text-neutral-400",
 };
 
 function formatDuration(startedAt: string, endedAt?: string): string {
@@ -48,7 +48,7 @@ function RunningJobCard(props: { job: Job }) {
       <div class="flex items-center gap-2">
         <span class={`${STATE_COLOR[props.job.state]}`}>{STATE_ICON[props.job.state]}</span>
         <span class="text-neutral-200 font-medium">{props.job.kind}</span>
-        <span data-testid="jobs-running-progress" class="text-neutral-500 ml-auto">
+        <span data-testid="jobs-running-progress" class="text-neutral-400 ml-auto">
           {props.job.progress.done}/{props.job.progress.total || "?"}
         </span>
       </div>
@@ -70,7 +70,7 @@ function RunningJobCard(props: { job: Job }) {
       <div class="flex items-center gap-2">
         <button
           data-testid="jobs-log-pause"
-          class="text-neutral-500 hover:text-white"
+          class="text-neutral-400 hover:text-white"
           onClick={() => setPaused((p) => !p)}
         >
           {paused() ? "▶ resume autoscroll" : "⏸ pause autoscroll"}
@@ -90,7 +90,7 @@ function RunningJobCard(props: { job: Job }) {
               >
                 Yes
               </button>
-              <button class="text-neutral-500 hover:text-white" onClick={() => setConfirmingCancel(false)}>
+              <button class="text-neutral-400 hover:text-white" onClick={() => setConfirmingCancel(false)}>
                 No
               </button>
             </span>
@@ -98,7 +98,7 @@ function RunningJobCard(props: { job: Job }) {
         >
           <button
             data-testid="jobs-cancel"
-            class="ml-auto text-neutral-500 hover:text-red-300"
+            class="ml-auto text-neutral-400 hover:text-red-300"
             onClick={() => setConfirmingCancel(true)}
           >
             Cancel
@@ -116,8 +116,8 @@ function HistoryRow(props: { job: Job }) {
       <div class="flex items-center gap-2">
         <span class={STATE_COLOR[props.job.state]}>{STATE_ICON[props.job.state]}</span>
         <span class="text-neutral-300">{props.job.kind}</span>
-        <span class="text-neutral-600">{props.job.started_at}</span>
-        <span class="text-neutral-500 ml-auto">{formatDuration(props.job.started_at, props.job.ended_at)}</span>
+        <span class="text-neutral-500">{props.job.started_at}</span>
+        <span class="text-neutral-400 ml-auto">{formatDuration(props.job.started_at, props.job.ended_at)}</span>
         <Show when={props.job.state === "failed"}>
           <button
             data-testid="jobs-history-error-toggle"
@@ -145,17 +145,17 @@ export default function JobsTab() {
       <Show when={jobsStore.activeIndexJob()}>{(job) => <RunningJobCard job={job()} />}</Show>
 
       <div class="flex items-center shrink-0">
-        <span class="text-neutral-500">History</span>
-        <button data-testid="jobs-history-refresh" class="ml-auto text-neutral-500 hover:text-white" onClick={() => jobsStore.fetchHistory()}>
+        <span class="text-neutral-400">History</span>
+        <button data-testid="jobs-history-refresh" class="ml-auto text-neutral-400 hover:text-white" onClick={() => jobsStore.fetchHistory()}>
           ↻
         </button>
       </div>
       <div class="flex-1 overflow-y-auto min-h-0">
         <Show when={jobsStore.historyLoading()}>
-          <div class="text-neutral-500">Loading…</div>
+          <div class="text-neutral-400">Loading…</div>
         </Show>
         <Show when={!jobsStore.historyLoading() && jobsStore.history().length === 0}>
-          <div class="text-neutral-600">No jobs run yet.</div>
+          <div class="text-neutral-500">No jobs run yet.</div>
         </Show>
         <ul data-testid="jobs-history-list">
           <For each={jobsStore.history()}>{(job) => <HistoryRow job={job} />}</For>

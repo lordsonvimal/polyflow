@@ -159,7 +159,7 @@ function ToolCallRowView(props: { row: ToolCallRow; q: string; expanded: boolean
         class="flex items-center gap-2 px-1 py-1 cursor-pointer hover:bg-neutral-900"
         onClick={props.onToggle}
       >
-        <span data-testid="toolcalls-row-time" title={props.row.ts} class="text-neutral-600 w-16 shrink-0">
+        <span data-testid="toolcalls-row-time" title={props.row.ts} class="text-neutral-500 w-16 shrink-0">
           {relativeTime(props.row.ts)}
         </span>
         <span data-testid="toolcalls-row-source" class={`px-1.5 py-0.5 rounded shrink-0 ${SOURCE_BADGE[props.row.source] ?? "bg-neutral-800 text-neutral-300"}`}>
@@ -171,7 +171,7 @@ function ToolCallRowView(props: { row: ToolCallRow; q: string; expanded: boolean
         <span data-testid="toolcalls-row-duration" class={`ml-auto shrink-0 ${durationColor(props.row.duration_ms)}`}>
           {props.row.duration_ms}ms
         </span>
-        <span data-testid="toolcalls-row-size" class="text-neutral-600 shrink-0">
+        <span data-testid="toolcalls-row-size" class="text-neutral-500 shrink-0">
           {formatBytes(props.row.result_bytes)}
         </span>
         <span data-testid="toolcalls-row-status" class={`shrink-0 ${props.row.status === "error" ? "text-red-400" : "text-emerald-400"}`}>
@@ -194,7 +194,7 @@ function ToolCallRowView(props: { row: ToolCallRow; q: string; expanded: boolean
 
           <div class="grid grid-cols-2 gap-2">
             <div data-testid="toolcalls-input-pane" class="min-w-0">
-              <div class="flex items-center gap-2 text-neutral-500 mb-0.5">
+              <div class="flex items-center gap-2 text-neutral-400 mb-0.5">
                 <span>Input</span>
                 <button data-testid="toolcalls-copy-input" class="ml-auto hover:text-white" onClick={() => copyText(inputText(), "Input")}>
                   copy
@@ -205,7 +205,7 @@ function ToolCallRowView(props: { row: ToolCallRow; q: string; expanded: boolean
               </pre>
             </div>
             <div data-testid="toolcalls-output-pane" class="min-w-0">
-              <div class="flex items-center gap-2 text-neutral-500 mb-0.5">
+              <div class="flex items-center gap-2 text-neutral-400 mb-0.5">
                 <span>Output</span>
                 <button data-testid="toolcalls-copy-output" class="ml-auto hover:text-white" onClick={() => copyText(outputText(), "Output")}>
                   copy
@@ -325,7 +325,7 @@ export default function ToolCallsTab() {
       <div class="flex items-center gap-2 shrink-0">
         <button
           data-testid="toolcalls-pause"
-          class="text-neutral-500 hover:text-white"
+          class="text-neutral-400 hover:text-white"
           onClick={toolCallsStore.togglePause}
         >
           {toolCallsStore.paused() ? "▶ resume" : "⏸ pause"}
@@ -339,7 +339,7 @@ export default function ToolCallsTab() {
             +{toolCallsStore.bufferedCount()} new
           </button>
         </Show>
-        <button data-testid="toolcalls-download" class="text-neutral-500 hover:text-white ml-auto" onClick={toolCallsStore.downloadFiltered}>
+        <button data-testid="toolcalls-download" class="text-neutral-400 hover:text-white ml-auto" onClick={toolCallsStore.downloadFiltered}>
           Download
         </button>
         <Show
@@ -357,13 +357,13 @@ export default function ToolCallsTab() {
               >
                 Yes
               </button>
-              <button data-testid="toolcalls-clear-cancel" class="text-neutral-500 hover:text-white" onClick={() => setConfirmingClear(false)}>
+              <button data-testid="toolcalls-clear-cancel" class="text-neutral-400 hover:text-white" onClick={() => setConfirmingClear(false)}>
                 No
               </button>
             </span>
           }
         >
-          <button data-testid="toolcalls-clear" class="text-neutral-500 hover:text-red-300" onClick={() => setConfirmingClear(true)}>
+          <button data-testid="toolcalls-clear" class="text-neutral-400 hover:text-red-300" onClick={() => setConfirmingClear(true)}>
             Clear all
           </button>
         </Show>
@@ -371,10 +371,10 @@ export default function ToolCallsTab() {
 
       <div class="flex-1 overflow-y-auto min-h-0">
         <Show when={toolCallsStore.loading() && toolCallsStore.rows().length === 0}>
-          <div class="text-neutral-500">Loading…</div>
+          <div class="text-neutral-400">Loading…</div>
         </Show>
         <Show when={!toolCallsStore.loading() && toolCallsStore.rows().length === 0}>
-          <div data-testid="toolcalls-empty" class="text-neutral-600">
+          <div data-testid="toolcalls-empty" class="text-neutral-500">
             Log cleared · new calls appear live
           </div>
         </Show>
@@ -398,7 +398,7 @@ export default function ToolCallsTab() {
           </div>
         </Show>
         <Show when={!toolCallsStore.loading() && toolCallsStore.rows().length > 0 && toolCallsStore.rows().length < toolCallsStore.total()}>
-          <button data-testid="toolcalls-load-more" class="w-full text-neutral-500 hover:text-white py-1" onClick={toolCallsStore.loadMore}>
+          <button data-testid="toolcalls-load-more" class="w-full text-neutral-400 hover:text-white py-1" onClick={toolCallsStore.loadMore}>
             Load more ({toolCallsStore.rows().length}/{toolCallsStore.total()})
           </button>
         </Show>

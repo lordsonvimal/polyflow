@@ -19,7 +19,7 @@ export default function EmptyState(props: {
       </Show>
       <p class="text-sm text-neutral-300">{props.message}</p>
       <Show when={props.detail}>
-        <p class="text-xs text-neutral-500 max-w-sm">{props.detail}</p>
+        <p class="text-xs text-neutral-400 max-w-sm">{props.detail}</p>
       </Show>
       <Show when={props.action}>
         {(a) => (

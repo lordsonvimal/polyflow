@@ -18,10 +18,10 @@ export default function SeamSummary(props: { edgeId: string }) {
   return (
     <div data-testid="seam-summary" class="mt-2 border-t border-neutral-800 pt-2">
       <Show when={resolution.loading}>
-        <div class="text-xs text-neutral-500">Loading seam…</div>
+        <div class="text-xs text-neutral-400">Loading seam…</div>
       </Show>
       <Show when={resolution.error}>
-        <div class="text-xs text-neutral-500">Failed to load seam.</div>
+        <div class="text-xs text-neutral-400">Failed to load seam.</div>
       </Show>
       <Show when={resolution()}>
         {(seam) => (
@@ -30,21 +30,21 @@ export default function SeamSummary(props: { edgeId: string }) {
               {seam().channel}
             </div>
             <Show when={seam().verification_state}>
-              <div class="text-neutral-500">verification: {seam().verification_state}</div>
+              <div class="text-neutral-400">verification: {seam().verification_state}</div>
             </Show>
-            <div class="text-neutral-500">
+            <div class="text-neutral-400">
               {seam().producers.length} producer{seam().producers.length === 1 ? "" : "s"} ·{" "}
               {seam().consumers.length} consumer{seam().consumers.length === 1 ? "" : "s"}
             </div>
             <Show when={seam().sources?.length}>
-              <ul class="text-neutral-500">
+              <ul class="text-neutral-400">
                 <For each={seam().sources}>
                   {(s) => <li>{s.provider} ({s.confidence})</li>}
                 </For>
               </ul>
             </Show>
             <Show when={!seam().expanded}>
-              <div data-testid="seam-summary-no-closure" class="text-neutral-600">
+              <div data-testid="seam-summary-no-closure" class="text-neutral-500">
                 no channel closure — this edge kind has nothing to expand past its own pair
               </div>
             </Show>

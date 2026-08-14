@@ -47,6 +47,12 @@ func (p *VueParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 		return nil, nil, nil, err
 	}
 
+	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// this parser mints must carry the cwd-relative form instead, matching
+	// the Go semantic pass's convention — extractVueTemplateAttrs builds
+	// nodes directly (bypassing the matcher's own relativization).
+	file = patterns.RelativizeToCwd(file)
+
 	blocks := splitSFC(src)
 
 	virtualScript, scriptLang := buildVirtualScript(src, blocks)

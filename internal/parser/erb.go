@@ -35,6 +35,11 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 	}
 
 	blankedHTML, virtualRuby := railsview.SplitERB(src)
+	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// this parser mints must carry the cwd-relative form instead, matching
+	// the Go semantic pass's convention — extractRubyVariables builds nodes
+	// directly (bypassing the matcher's own relativization).
+	file = patterns.RelativizeToCwd(file)
 
 	// HTML pass: nav links and inline event attributes from static markup.
 	htmlResults, _ := matcher.Match("html", file, blankedHTML)

@@ -20,7 +20,7 @@ interface Link {
 
 function Field(props: { label: string; testid: string; value: string; onInput: (v: string) => void; placeholder?: string }) {
   return (
-    <label class="flex flex-col gap-0.5 text-[11px] text-neutral-500">
+    <label class="flex flex-col gap-0.5 text-[11px] text-neutral-400">
       {props.label}
       <input
         data-testid={props.testid}
@@ -213,7 +213,7 @@ function EvidenceSection(props: { evidence: Record<string, any> }) {
   return (
     <Section title="Evidence">
       <div class="space-y-1">
-        <div class="text-[11px] text-neutral-500">Contract globs</div>
+        <div class="text-[11px] text-neutral-400">Contract globs</div>
         <For each={contractGlobs()}>
           {(glob, i) => (
             <div data-testid="config-contract-glob-row" class="flex items-center gap-2 mb-1">
@@ -243,7 +243,7 @@ function EvidenceSection(props: { evidence: Record<string, any> }) {
       </div>
 
       <div class="space-y-1">
-        <div class="text-[11px] text-neutral-500">Runtime service names (otel name → workspace service)</div>
+        <div class="text-[11px] text-neutral-400">Runtime service names (otel name → workspace service)</div>
         <For each={Object.entries(serviceNames())}>
           {([otelName, svcName]) => (
             <div data-testid="config-service-name-row" class="flex items-center gap-2 mb-1">
@@ -267,7 +267,7 @@ function EvidenceSection(props: { evidence: Record<string, any> }) {
       </div>
 
       <div class="space-y-1">
-        <div class="text-[11px] text-neutral-500">SSE routes</div>
+        <div class="text-[11px] text-neutral-400">SSE routes</div>
         <For each={sseRoutes()}>
           {(route, i) => (
             <div data-testid="config-sse-route-row" class="flex items-center gap-2 mb-1">
