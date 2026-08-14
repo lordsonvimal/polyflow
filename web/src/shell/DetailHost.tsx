@@ -1,4 +1,4 @@
-import { Show, For } from "solid-js";
+import { Show, For, createEffect, createSignal } from "solid-js";
 import { selectionStore } from "../stores/selection";
 import type { Selection } from "../stores/selection";
 import SourcePanel from "./SourcePanel";
@@ -6,6 +6,8 @@ import { isServiceNodeId, serviceFromNodeId } from "../lib/aggregate";
 import { exploreStore } from "../stores/explore";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { importRollupStore } from "../stores/importRollup";
+import { flowsThroughStore } from "../stores/flowsThrough";
+import ThroughPanel from "../views/flows/ThroughPanel";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -26,6 +28,19 @@ function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
 }
 
 export default function DetailHost() {
+  const [flowsOpenFor, setFlowsOpenFor] = createSignal<string | null>(null);
+
+  // A context-menu "Isolate flows through here" click selects the node and
+  // leaves a one-shot request (flowsThroughStore) — auto-expand this
+  // panel's own toggle for it, so the two entry points land in the same
+  // place instead of drifting apart.
+  createEffect(() => {
+    const requested = flowsThroughStore.requestedNodeId();
+    if (!requested) return;
+    setFlowsOpenFor(requested);
+    flowsThroughStore.consume();
+  });
+
   return (
     <div
       data-testid="detail-host"
@@ -68,6 +83,16 @@ export default function DetailHost() {
               </Show>
               <Show when={sel().kind === "node" && !isServiceNodeId(sel().id)}>
                 <SourcePanel nodeId={sel().id} />
+                <button
+                  data-testid="detail-isolate-flows-through"
+                  class="text-xs text-indigo-300 hover:text-indigo-200 mt-2"
+                  onClick={() => setFlowsOpenFor(flowsOpenFor() === sel().id ? null : sel().id)}
+                >
+                  {flowsOpenFor() === sel().id ? "▾" : "▸"} Isolate flows through here
+                </button>
+                <Show when={flowsOpenFor() === sel().id}>
+                  <ThroughPanel nodeId={sel().id} />
+                </Show>
               </Show>
               <Show when={sel().kind === "edge" && importRollupStore.get(sel().id)}>
                 {(concrete) => (
