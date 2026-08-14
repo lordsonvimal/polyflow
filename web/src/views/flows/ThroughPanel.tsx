@@ -89,13 +89,13 @@ export default function ThroughPanel(props: { nodeId: string }) {
   return (
     <div data-testid="through-panel" class="mt-2 border-t border-neutral-800 pt-2">
       <Show when={resolution.loading}>
-        <div class="text-xs text-neutral-500">Loading flows…</div>
+        <div class="text-xs text-neutral-400">Loading flows…</div>
       </Show>
       <Show when={resolution.error}>
-        <div class="text-xs text-neutral-500">Failed to load flows through here.</div>
+        <div class="text-xs text-neutral-400">Failed to load flows through here.</div>
       </Show>
       <Show when={!resolution.loading && !resolution.error && groups().length === 0}>
-        <div class="text-xs text-neutral-500" data-testid="through-panel-empty">
+        <div class="text-xs text-neutral-400" data-testid="through-panel-empty">
           No flows pass through this node.
         </div>
       </Show>
@@ -116,7 +116,7 @@ export default function ThroughPanel(props: { nodeId: string }) {
                   <span class="text-neutral-200 truncate" title={group.label}>{displayLabel(group.label)}</span>
                   <span class={`shrink-0 ${badge().class}`}>{badge().label}</span>
                 </div>
-                <div class="text-neutral-500 mt-0.5">
+                <div class="text-neutral-400 mt-0.5">
                   {maxHopCount(group.chains)} hop{maxHopCount(group.chains) === 1 ? "" : "s"} ·{" "}
                   {servicesTouched(group.chains).join(", ") || "—"}
                 </div>
@@ -126,7 +126,7 @@ export default function ThroughPanel(props: { nodeId: string }) {
         </For>
       </ul>
       <Show when={resolution()?.truncated}>
-        <div class="text-[10px] text-neutral-600 mt-1">more entrypoints exist past the fetch limit</div>
+        <div class="text-[10px] text-neutral-500 mt-1">more entrypoints exist past the fetch limit</div>
       </Show>
     </div>
   );

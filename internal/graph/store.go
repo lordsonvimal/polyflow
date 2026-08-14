@@ -154,6 +154,7 @@ type Store interface {
 	GetNode(ctx context.Context, id string) (*Node, error)
 	GetEdge(ctx context.Context, id string) (*Edge, error)
 	SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error)
+	ListNodesByType(ctx context.Context, nodeType, service string, limit int) ([]*Node, error)
 	ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
 	ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
 	BuildIndex(ctx context.Context) (*AdjacencyIndex, error)
@@ -435,6 +436,28 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 		LIMIT ?`, ftsQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search nodes: %w", err)
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// ListNodesByType lists nodes of a given kind, optionally narrowed to one
+// service, with no text query — the palette's "kind:x service:y" chip-only
+// searches (e.g. from the Stack panel's per-kind bar chart) land here rather
+// than SearchNodes, whose FTS5 MATCH requires a non-empty query term.
+func (s *SQLiteStore) ListNodesByType(ctx context.Context, nodeType, service string, limit int) ([]*Node, error) {
+	query := `SELECT id, type, label, service, file, line, end_line, language, meta
+		FROM nodes n WHERE n.type = ?`
+	args := []any{nodeType}
+	if service != "" {
+		query += ` AND n.service = ?`
+		args = append(args, service)
+	}
+	query += ` ORDER BY ` + testFileRankPenalty + ` ASC, n.label, n.id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list nodes by type: %w", err)
 	}
 	defer rows.Close()
 	return scanNodes(rows)

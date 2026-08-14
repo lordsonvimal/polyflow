@@ -41,7 +41,7 @@ export default function Breadcrumbs() {
       <For each={scopeStore.stack()}>
         {(scope, i) => (
           <>
-            {i() > 0 && <span class="text-neutral-600">▸</span>}
+            {i() > 0 && <span class="text-neutral-500">▸</span>}
             <button
               class="hover:text-white truncate"
               title={crumbTitle(scope)}
@@ -66,7 +66,7 @@ export default function Breadcrumbs() {
         </button>
       </Show>
       <button
-        class="ml-1 text-neutral-600 hover:text-white text-xs"
+        class="ml-1 text-neutral-500 hover:text-white text-xs"
         onClick={() => scopeStore.reset()}
       >
         [×]

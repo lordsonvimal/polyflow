@@ -30,9 +30,14 @@ type Entry =
   | { group: "command"; item: Command };
 
 async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
-  if (!parsed.text) return [];
-  const params = new URLSearchParams({ q: parsed.text, limit: String(RESULT_LIMIT) });
+  // A bare "kind:x service:y" query (no free text — e.g. the Stack panel's
+  // per-kind bar-chart click) is still a real symbol search; only a totally
+  // empty query (nothing typed, no chips) has nothing to search for.
+  if (!parsed.text && !parsed.chips.kind) return [];
+  const params = new URLSearchParams({ limit: String(RESULT_LIMIT) });
+  if (parsed.text) params.set("q", parsed.text);
   if (parsed.chips.kind) params.set("kind", parsed.chips.kind);
+  if (parsed.chips.service) params.set("service", parsed.chips.service);
   try {
     const r = await fetch(`/api/graph/search?${params}`);
     if (!r.ok) return [];
@@ -298,7 +303,7 @@ export default function Palette() {
                   {(r, i) => (
                     <Row active={highlight() === i()} onClick={() => pick({ group: "recent", item: r })}>
                       <span class="text-neutral-200 shrink-0">{displayLabel(r.label)}</span>
-                      <Show when={r.sub}><span class="text-neutral-500 ml-2 text-xs truncate min-w-0">{r.sub}</span></Show>
+                      <Show when={r.sub}><span class="text-neutral-400 ml-2 text-xs truncate min-w-0">{r.sub}</span></Show>
                     </Row>
                   )}
                 </For>
@@ -317,7 +322,7 @@ export default function Palette() {
                         />
                       </Show>
                       <span class="text-neutral-200 shrink-0">{s.label}</span>
-                      <span class="text-neutral-500 ml-2 text-xs truncate min-w-0">
+                      <span class="text-neutral-400 ml-2 text-xs truncate min-w-0">
                         {s.type} · {s.service} · {formatLocation(s.file, s.line, s.endLine)}
                       </span>
                       <button
@@ -341,7 +346,7 @@ export default function Palette() {
                   {(f, i) => (
                     <Row active={highlight() === symbols().length + i()} onClick={() => pick({ group: "file", item: f })}>
                       <span class="text-neutral-200 truncate min-w-0" title={f.file}>{displayLabel(f.file)}</span>
-                      <span class="text-neutral-500 ml-2 text-xs shrink-0">{f.service}</span>
+                      <span class="text-neutral-400 ml-2 text-xs shrink-0">{f.service}</span>
                     </Row>
                   )}
                 </For>
@@ -381,7 +386,7 @@ export default function Palette() {
 function Group(props: { label: string; children: any }) {
   return (
     <div>
-      <div class="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-neutral-500">{props.label}</div>
+      <div class="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-neutral-400">{props.label}</div>
       {props.children}
     </div>
   );

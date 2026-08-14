@@ -96,7 +96,7 @@ export default function WaypointBuilder() {
     <div data-testid="waypoint-builder" class="p-2 text-xs">
       <div class="flex items-center justify-between mb-2">
         <span class="text-neutral-400 font-medium">Waypoint flow builder</span>
-        <button data-testid="waypoint-clear" class="text-neutral-500 hover:text-white" onClick={clear}>
+        <button data-testid="waypoint-clear" class="text-neutral-400 hover:text-white" onClick={clear}>
           clear
         </button>
       </div>
@@ -111,7 +111,7 @@ export default function WaypointBuilder() {
               <span class="truncate max-w-[120px]" title={w.label}>{displayLabel(w.label)}</span>
               <button
                 data-testid="waypoint-chip-remove"
-                class="text-neutral-500 hover:text-white"
+                class="text-neutral-400 hover:text-white"
                 onClick={() => waypointBuilderStore.removeAt(i())}
               >
                 ×
@@ -122,11 +122,11 @@ export default function WaypointBuilder() {
       </div>
 
       <Show when={waypointBuilderStore.waypoints().length === 0}>
-        <div class="text-neutral-600">"Start flow here" from the canvas context menu to seed a session.</div>
+        <div class="text-neutral-500">"Start flow here" from the canvas context menu to seed a session.</div>
       </Show>
 
       <Show when={refine.loading}>
-        <div class="text-neutral-500">Refining…</div>
+        <div class="text-neutral-400">Refining…</div>
       </Show>
 
       <Show when={refine.error}>
@@ -140,7 +140,7 @@ export default function WaypointBuilder() {
         {(res) => (
           <div class="space-y-2">
             <div>
-              <div class="text-neutral-500 mb-1">Upstream</div>
+              <div class="text-neutral-400 mb-1">Upstream</div>
               <Show when={res().candidates.upstream.length > 0} fallback={<div class="text-neutral-700">none</div>}>
                 <ul class="space-y-1">
                   <For each={res().candidates.upstream}>
@@ -150,7 +150,7 @@ export default function WaypointBuilder() {
                         class="px-2 py-1 rounded bg-neutral-900 hover:bg-neutral-800 cursor-pointer"
                         onClick={() => waypointBuilderStore.prepend(toRef(c))}
                       >
-                        {displayLabel(c.label)} <span class="text-neutral-600">· {c.via_edge_type}</span>
+                        {displayLabel(c.label)} <span class="text-neutral-500">· {c.via_edge_type}</span>
                       </li>
                     )}
                   </For>
@@ -158,7 +158,7 @@ export default function WaypointBuilder() {
               </Show>
             </div>
             <div>
-              <div class="text-neutral-500 mb-1">Downstream</div>
+              <div class="text-neutral-400 mb-1">Downstream</div>
               <Show when={res().candidates.downstream.length > 0} fallback={<div class="text-neutral-700">none</div>}>
                 <ul class="space-y-1">
                   <For each={res().candidates.downstream}>
@@ -168,7 +168,7 @@ export default function WaypointBuilder() {
                         class="px-2 py-1 rounded bg-neutral-900 hover:bg-neutral-800 cursor-pointer"
                         onClick={() => waypointBuilderStore.append(toRef(c))}
                       >
-                        {displayLabel(c.label)} <span class="text-neutral-600">· {c.via_edge_type}</span>
+                        {displayLabel(c.label)} <span class="text-neutral-500">· {c.via_edge_type}</span>
                       </li>
                     )}
                   </For>

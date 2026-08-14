@@ -147,7 +147,7 @@ export default function Catalog() {
         <div class="flex items-center gap-1 flex-wrap">
           <button
             class={`px-2 py-0.5 rounded border text-[11px] ${
-              kindFilter() === null ? "bg-neutral-700 text-white border-neutral-600" : "text-neutral-500 border-neutral-800"
+              kindFilter() === null ? "bg-neutral-700 text-white border-neutral-600" : "text-neutral-400 border-neutral-800"
             }`}
             onClick={() => setKindFilter(null)}
           >
@@ -158,7 +158,7 @@ export default function Catalog() {
               <button
                 data-testid={`catalog-kind-${k}`}
                 class={`px-2 py-0.5 rounded border text-[11px] ${
-                  kindFilter() === k ? "bg-neutral-700 text-white border-neutral-600" : "text-neutral-500 border-neutral-800"
+                  kindFilter() === k ? "bg-neutral-700 text-white border-neutral-600" : "text-neutral-400 border-neutral-800"
                 }`}
                 onClick={() => setKindFilter(kindFilter() === k ? null : k)}
               >
@@ -167,7 +167,7 @@ export default function Catalog() {
             )}
           </For>
         </div>
-        <div class="flex items-center gap-2 text-neutral-500">
+        <div class="flex items-center gap-2 text-neutral-400">
           <span>Sort:</span>
           <For each={["kind", "label", "service"] as SortKey[]}>
             {(k) => (
@@ -183,11 +183,11 @@ export default function Catalog() {
       </div>
 
       <Show when={resolution.loading}>
-        <div class="p-4 text-neutral-500">Loading entrypoints…</div>
+        <div class="p-4 text-neutral-400">Loading entrypoints…</div>
       </Show>
 
       <Show when={!resolution.loading && rows().length === 0}>
-        <div class="p-4 text-neutral-500" data-testid="catalog-empty">
+        <div class="p-4 text-neutral-400" data-testid="catalog-empty">
           No entrypoints match.
         </div>
       </Show>
@@ -206,10 +206,10 @@ export default function Catalog() {
                 <span>{KIND_ICON[item.kind] ?? "•"}</span>
                 <span class="text-neutral-200 truncate">{displayLabel(item)}</span>
                 <Show when={item.channel}>
-                  <span class="text-neutral-500 ml-1 truncate">{item.channel}</span>
+                  <span class="text-neutral-400 ml-1 truncate">{item.channel}</span>
                 </Show>
               </div>
-              <div class="text-neutral-600 truncate">
+              <div class="text-neutral-500 truncate">
                 {item.service} · {formatLocation(item.file, item.line, item.endLine)}
               </div>
             </div>
@@ -219,7 +219,7 @@ export default function Catalog() {
       </div>
 
       <Show when={totalSkipped() > 0}>
-        <div class="p-2 border-t border-neutral-800 text-neutral-500 shrink-0">
+        <div class="p-2 border-t border-neutral-800 text-neutral-400 shrink-0">
           <button data-testid="catalog-skipped-toggle" class="hover:text-neutral-300" onClick={() => setShowSkippedDetail((v) => !v)}>
             {totalSkipped()} not listed — show anyway
           </button>

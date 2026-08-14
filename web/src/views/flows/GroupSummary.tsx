@@ -61,10 +61,10 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
   return (
     <div data-testid="group-summary" class="mt-2 border-t border-neutral-800 pt-2">
       <Show when={data.loading}>
-        <div class="text-xs text-neutral-500">Loading group…</div>
+        <div class="text-xs text-neutral-400">Loading group…</div>
       </Show>
       <Show when={data.error}>
-        <div class="text-xs text-neutral-500">Failed to load group.</div>
+        <div class="text-xs text-neutral-400">Failed to load group.</div>
       </Show>
       <Show when={data()}>
         <div class="text-xs text-neutral-300 space-y-2">
@@ -74,7 +74,7 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
 
           <Show when={edgeTypeCounts(edges()).size > 0}>
             <div>
-              <div class="text-neutral-500 mb-1">Edge types</div>
+              <div class="text-neutral-400 mb-1">Edge types</div>
               <ul class="space-y-0.5">
                 <For each={[...edgeTypeCounts(edges())].sort((a, b) => a[0].localeCompare(b[0]))}>
                   {([type, count]) => (
@@ -88,19 +88,19 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
           </Show>
 
           <div>
-            <div class="text-neutral-500 mb-1">Services touched</div>
+            <div class="text-neutral-400 mb-1">Services touched</div>
             <div>{servicesTouched(nodes()).join(", ") || "—"}</div>
           </div>
 
           <Show when={sharedChannels(nodes()).length > 0}>
             <div>
-              <div class="text-neutral-500 mb-1">Shared channels</div>
+              <div class="text-neutral-400 mb-1">Shared channels</div>
               <div>{sharedChannels(nodes()).join(", ")}</div>
             </div>
           </Show>
 
           <div>
-            <div class="text-neutral-500 mb-1">Contained files</div>
+            <div class="text-neutral-400 mb-1">Contained files</div>
             <ul class="space-y-0.5">
               <For each={containedFiles(nodes())}>
                 {(f) => <li class="break-all">{f}</li>}
@@ -110,14 +110,14 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
 
           <Show when={showMatrix()}>
             <div>
-              <div class="text-neutral-500 mb-1">Interconnections</div>
+              <div class="text-neutral-400 mb-1">Interconnections</div>
               <table data-testid="group-matrix" class="text-[10px] border-collapse">
                 <thead>
                   <tr>
                     <th class="p-0.5" />
                     <For each={nodes()}>
                       {(n) => (
-                        <th class="p-0.5 text-neutral-500 font-normal truncate max-w-[40px]" title={n.label}>
+                        <th class="p-0.5 text-neutral-400 font-normal truncate max-w-[40px]" title={n.label}>
                           {displayLabel(n.label)}
                         </th>
                       )}
@@ -128,7 +128,7 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
                   <For each={nodes()}>
                     {(row) => (
                       <tr>
-                        <th class="p-0.5 text-neutral-500 font-normal text-right truncate max-w-[60px]" title={row.label}>
+                        <th class="p-0.5 text-neutral-400 font-normal text-right truncate max-w-[60px]" title={row.label}>
                           {displayLabel(row.label)}
                         </th>
                         <For each={nodes()}>

@@ -86,15 +86,30 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 // FTS-only SearchNodes path for backward compatibility and kind filtering.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
-	if q == "" {
-		writeError(w, http.StatusBadRequest, "missing query parameter 'q'")
-		return
-	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = 20
 	}
 	kind := r.URL.Query().Get("kind")
+	service := r.URL.Query().Get("service")
+
+	// No text term but a kind chip is present (e.g. the palette opened from
+	// the Stack panel's "kind:function service:web" bar-chart click) — FTS5
+	// MATCH requires a non-empty query, so list nodes by type/service
+	// directly rather than erroring.
+	if q == "" {
+		if kind == "" {
+			writeError(w, http.StatusBadRequest, "missing query parameter 'q'")
+			return
+		}
+		nodes, err := s.db.ListNodesByType(r.Context(), kind, service, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, nodes)
+		return
+	}
 
 	s.idxMu.RLock()
 	sr := s.searcher
@@ -272,7 +287,7 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 
 	allLines := strings.Split(string(src), "\n")
 
-	if node.EndLine <= 0 || node.Line <= 0 {
+	if node.Line <= 0 {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"file":       node.File,
 			"start":      node.Line,
@@ -284,11 +299,20 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// EndLine == 0 means "unknown extent" (never guessed) — still bound the
+	// view around the node's start line rather than falling back to the
+	// whole file, which for most node kinds today (EndLine population is a
+	// known gap) would defeat the point of "range=1" entirely.
+	endLine := node.EndLine
+	if endLine < node.Line {
+		endLine = node.Line
+	}
+
 	firstLine := node.Line - context
 	if firstLine < 1 {
 		firstLine = 1
 	}
-	lastLine := node.EndLine + context
+	lastLine := endLine + context
 	if lastLine > len(allLines) {
 		lastLine = len(allLines)
 	}
