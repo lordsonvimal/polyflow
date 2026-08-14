@@ -6,7 +6,7 @@ import { createSignal } from "solid-js";
 // without owning it. Both the Context (UF.5) and Unresolved (UF.6) tabs are
 // real; `unresolvedFilter` seeds the Unresolved tab's service/free-text
 // query (BottomDrawer.tsx's UnresolvedTab).
-export type DrawerTab = "context" | "unresolved" | "jobs";
+export type DrawerTab = "context" | "unresolved" | "jobs" | "toolcalls";
 
 const [open, setOpen] = createSignal(false);
 const [activeTab, setActiveTab] = createSignal<DrawerTab>("context");
@@ -32,6 +32,12 @@ export const drawerStore = {
   // a job's auto-open on start.
   openJobs: () => {
     setActiveTab("jobs");
+    setOpen(true);
+  },
+  // UO.1: the tool-call log tab (top-bar/menu entry points and the debug
+  // question "what did my agent just ask?" land here).
+  openToolCalls: () => {
+    setActiveTab("toolcalls");
     setOpen(true);
   },
 };

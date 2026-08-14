@@ -64,6 +64,20 @@ describe("connectionStore", () => {
     expect(FakeEventSource.instances.length).toBe(2);
   });
 
+  it("onReconnect fires on the second open, not the first", () => {
+    const calls: number[] = [];
+    const unsub = connectionStore.onReconnect(() => calls.push(1));
+    connectionStore.start();
+    FakeEventSource.instances[0].onopen?.();
+    expect(calls).toHaveLength(0);
+
+    FakeEventSource.instances[0].onerror?.();
+    vi.advanceTimersByTime(1000);
+    FakeEventSource.instances[1].onopen?.();
+    expect(calls).toHaveLength(1);
+    unsub();
+  });
+
   it("stop closes the connection and prevents further reconnects", () => {
     connectionStore.start();
     const es = FakeEventSource.instances[0];
