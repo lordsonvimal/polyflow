@@ -107,3 +107,72 @@ describe("BottomDrawer / Context tab", () => {
     expect((items[1] as HTMLElement).textContent).toBe("node n1");
   });
 });
+
+// UF.6: Unresolved tab — kind filters + free-text search mirroring
+// GET /api/unresolved's own params, seeded from a badge's pre-filter.
+describe("BottomDrawer / Unresolved tab", () => {
+  let container: HTMLElement;
+  let dispose: (() => void) | undefined;
+
+  beforeEach(() => {
+    scopeStore.reset();
+    drawerStore.setOpen(false);
+    drawerStore.setActiveTab("context");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    dispose = render(() => <BottomDrawer />, container);
+  });
+
+  afterEach(() => {
+    dispose?.();
+    container.remove();
+  });
+
+  it("opening via a badge pre-filters service + file and fetches /api/unresolved with those params", async () => {
+    const calls: string[] = [];
+    (globalThis as any).fetch = vi.fn((url: string) => {
+      calls.push(url);
+      return Promise.resolve({ ok: true, json: async () => ({ refs: [], total: 0 }) } as Response);
+    });
+
+    drawerStore.openUnresolvedFor("auth", "auth/user.go");
+
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    const u = new URL(calls[calls.length - 1], "http://localhost");
+    expect(u.searchParams.get("service")).toBe("auth");
+    expect(u.searchParams.get("q")).toBe("auth/user.go");
+
+    expect(container.querySelector('[data-testid="unresolved-filter-chip"]')!.textContent).toContain("auth");
+  });
+
+  it("renders the ref list and re-fetches on kind/search change", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unresolved": { refs: [{ service: "auth", file: "auth/a.go", line: 3, name: "helper", kind: "call" }], total: 1 },
+    });
+    drawerStore.openUnresolvedFor("auth", "");
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unresolved-row"]')).toBeTruthy());
+    expect(container.querySelector('[data-testid="unresolved-list"]')!.textContent).toContain("helper");
+
+    const calls: string[] = [];
+    (globalThis as any).fetch = vi.fn((url: string) => {
+      calls.push(url);
+      return Promise.resolve({ ok: true, json: async () => ({ refs: [], total: 0 }) } as Response);
+    });
+    const kindSelect = container.querySelector('[data-testid="unresolved-kind"]') as HTMLSelectElement;
+    kindSelect.value = "call";
+    kindSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    const u = new URL(calls[calls.length - 1], "http://localhost");
+    expect(u.searchParams.get("kind")).toBe("call");
+  });
+
+  it("clicking a ref pushes its file scope", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unresolved": { refs: [{ service: "auth", file: "auth/a.go", line: 3, name: "helper", kind: "call" }], total: 1 },
+    });
+    drawerStore.openUnresolvedFor("auth", "");
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unresolved-row"]')).toBeTruthy());
+    (container.querySelector('[data-testid="unresolved-row"]') as HTMLElement).click();
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "file", service: "auth", path: "auth/a.go" });
+  });
+});

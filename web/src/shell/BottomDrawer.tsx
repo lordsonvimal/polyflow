@@ -1,8 +1,11 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createResource, createSignal, createEffect } from "solid-js";
 import { drawerStore, type DrawerTab } from "../stores/drawer";
 import { contextCopyStore, TOKEN_BUDGETS } from "../stores/contextCopy";
 import { parseMarkdownLite } from "../lib/markdownLite";
 import type { CopyMode } from "../views/context/copy";
+import { apiFetch } from "../lib/apiFetch";
+import { scopeStore } from "../stores/scope";
+import type { UnresolvedRef } from "../stores/tree";
 
 const TABS: { id: DrawerTab; label: string }[] = [
   { id: "context", label: "Context" },
@@ -216,16 +219,111 @@ function ContextTab() {
   );
 }
 
+// UF.6: the Unresolved tab (UN.0's ⚠ badge opens it, pre-filtered) gains
+// kind filters + free-text search mirroring GET /api/unresolved's own
+// params (service/kind/q) — the tree's badge count already fetches per
+// service, but this tab is the one place that actually browses the ledger.
+const UNRESOLVED_KINDS = ["import", "call", "route", "component"];
+
 function UnresolvedTab() {
+  const filter = drawerStore.unresolvedFilter;
+  const [service, setService] = createSignal("");
+  const [kind, setKind] = createSignal("");
+  const [q, setQ] = createSignal("");
+
+  // A fresh "open pre-filtered to this file" request seeds service + a
+  // free-text query for the file path (the server has no dedicated `file`
+  // param — `q` already substring-matches File, see graph.FilterUnresolvedRefs).
+  createEffect(() => {
+    const f = filter();
+    if (!f) return;
+    setService(f.service);
+    setQ(f.path);
+  });
+
+  const [result, { refetch }] = createResource(
+    () => ({ service: service(), kind: kind(), q: q() }),
+    async ({ service: svc, kind: k, q: query }) => {
+      const p = new URLSearchParams();
+      if (svc) p.set("service", svc);
+      if (k) p.set("kind", k);
+      if (query) p.set("q", query);
+      p.set("limit", "200");
+      const r = await apiFetch(`/api/unresolved?${p}`, { silent: true });
+      return (await r.json()) as { refs: UnresolvedRef[]; total: number };
+    },
+  );
+
+  function openFile(ref: UnresolvedRef) {
+    scopeStore.push({ kind: "file", service: ref.service, path: ref.file });
+  }
+
   return (
-    <div class="p-2 text-xs text-neutral-400">
-      <Show when={drawerStore.unresolvedFilter()} fallback={<div>Unresolved refs — implemented in plan 13.</div>}>
+    <div data-testid="unresolved-tab" class="p-2 text-xs text-neutral-300 flex flex-col h-full gap-2">
+      <Show when={filter()}>
         {(f) => (
           <span data-testid="unresolved-filter-chip" class="text-amber-400">
             ⚠ Unresolved · {f().service} · {f().path || "/"}
           </span>
         )}
       </Show>
+      <div class="flex items-center gap-2 shrink-0">
+        <input
+          data-testid="unresolved-service"
+          class="bg-neutral-800 rounded px-1.5 py-0.5 w-28"
+          placeholder="service"
+          value={service()}
+          onInput={(e) => setService(e.currentTarget.value)}
+        />
+        <select
+          data-testid="unresolved-kind"
+          class="bg-neutral-800 rounded px-1.5 py-0.5"
+          value={kind()}
+          onChange={(e) => setKind(e.currentTarget.value)}
+        >
+          <option value="">all kinds</option>
+          <For each={UNRESOLVED_KINDS}>{(k) => <option value={k}>{k}</option>}</For>
+        </select>
+        <input
+          data-testid="unresolved-search"
+          class="bg-neutral-800 rounded px-1.5 py-0.5 flex-1 min-w-0"
+          placeholder="search name or file…"
+          value={q()}
+          onInput={(e) => setQ(e.currentTarget.value)}
+        />
+        <button class="text-neutral-500 hover:text-white shrink-0" onClick={refetch}>
+          ↻
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto min-h-0">
+        <Show when={result.loading}>
+          <div class="text-neutral-500">Loading…</div>
+        </Show>
+        <Show when={!result.loading && result()}>
+          {(r) => (
+            <>
+              <div class="text-neutral-500 mb-1">{r().total} unresolved ref{r().total === 1 ? "" : "s"}</div>
+              <ul data-testid="unresolved-list" class="space-y-0.5">
+                <For each={r().refs}>
+                  {(ref) => (
+                    <li
+                      data-testid="unresolved-row"
+                      class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-neutral-800 cursor-pointer"
+                      onClick={() => openFile(ref)}
+                    >
+                      <span class="text-neutral-500 shrink-0">{ref.kind}</span>
+                      <span class="text-neutral-200 truncate">{ref.name}</span>
+                      <span class="text-neutral-600 truncate ml-auto">
+                        {ref.file}:{ref.line}
+                      </span>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </>
+          )}
+        </Show>
+      </div>
     </div>
   );
 }

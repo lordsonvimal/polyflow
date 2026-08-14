@@ -130,6 +130,40 @@ describe("FilterBar - Add all matches", () => {
   });
 });
 
+// UF.6: coverage overlay toggle — default on (undefined decodes as "on"),
+// classes-only toggle (CanvasHost's own effect adds/removes the border
+// class; this just flips the ViewState flag FilterBar reads).
+describe("FilterBar - Coverage overlay toggle", () => {
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    treeStore.reset();
+    scopeStore.reset();
+    (globalThis as any).fetch = fakeFetch();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(() => <FilterBar />, container);
+    await vi.waitFor(() => expect(treeStore.services().length).toBe(2));
+  });
+
+  afterEach(() => container.remove());
+
+  function chip(label: string): HTMLElement {
+    return [...container.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement;
+  }
+
+  it("is on by default", () => {
+    expect(scopeStore.viewState().coverageOverlay).not.toBe(false);
+  });
+
+  it("toggles off then back on", () => {
+    chip("Coverage").click();
+    expect(scopeStore.viewState().coverageOverlay).toBe(false);
+    chip("Coverage").click();
+    expect(scopeStore.viewState().coverageOverlay).toBe(true);
+  });
+});
+
 describe("computeActiveCount", () => {
   const allServices = ["svc1", "svc2"];
 
