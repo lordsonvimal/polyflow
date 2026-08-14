@@ -25,6 +25,10 @@ import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
 import { flowHighlightStore } from "../../stores/flowHighlight";
 import { flowsThroughStore } from "../../stores/flowsThrough";
+import { pathFinderStore } from "../../stores/pathFinder";
+import { pathOverlayStore } from "../../stores/pathOverlay";
+import { waypointBuilderStore } from "../../stores/waypointBuilder";
+import { layoutPrefs } from "../../stores/layoutPrefs";
 import { applyFilters } from "../../lib/filters";
 import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
 import { importRollupStore } from "../../stores/importRollup";
@@ -55,6 +59,15 @@ cytoscape.use(dagreFn);
 export const NO_CANVAS = new Set(["search", "flow", "group"]);
 
 const MENU_ACTIVITY_ID = "canvas";
+
+// UF.2: "Overlay all" path colors — 5 distinct accents, index 5 is the
+// shared "more" bucket for every path beyond the 5th (pathOverlay.ts).
+const PATH_OVERLAY_COLORS = ["#f87171", "#fbbf24", "#34d399", "#60a5fa", "#c084fc"];
+const PATH_OVERLAY_MORE_COLOR = "#9ca3af";
+const PATH_OVERLAY_CLASSES = [
+  ...PATH_OVERLAY_COLORS.map((_, i) => `path-overlay-${i}`),
+  "path-overlay-more",
+];
 
 // UN.1: each drill scope (overview/service/folder/file/neighborhood) has its
 // own resolver module under scopes/ — one module per pinned scope kind, all
@@ -149,6 +162,13 @@ function buildStylesheet(): object[] {
       selector: ".flow-highlight-member",
       style: { opacity: 1, "border-width": 2, "border-color": "#818cf8" },
     },
+    // UF.2: path-finder "Overlay all" — one border color per ranked path,
+    // shared nodes keep their best-ranked path's color (pathOverlay.ts).
+    ...PATH_OVERLAY_COLORS.map((color, i) => ({
+      selector: `.path-overlay-${i}`,
+      style: { "border-width": 3, "border-color": color },
+    })),
+    { selector: ".path-overlay-more", style: { "border-width": 3, "border-color": PATH_OVERLAY_MORE_COLOR } },
     {
       selector: "$node > node",
       style: {
@@ -299,12 +319,41 @@ export default function CanvasHost() {
     if (intent.type === "menu") {
       const items = [];
       if (intent.target.kind === "node") {
+        const nodeId = intent.target.id;
+        const label = (cy?.getElementById(nodeId).data("label") as string | undefined) ?? nodeId;
         items.push({
           id: "isolate-flows-through",
           label: "Isolate flows through here",
           handler: () => {
-            selectionStore.setSelection({ kind: "node", id: intent.target.id });
-            flowsThroughStore.request(intent.target.id);
+            selectionStore.setSelection({ kind: "node", id: nodeId });
+            flowsThroughStore.request(nodeId);
+          },
+        });
+        items.push({
+          id: "set-path-start",
+          label: "Set as path start",
+          handler: () => pathFinderStore.setStart({ id: nodeId, label }),
+        });
+        // UF.2: "Find paths from A" only makes sense once a start pin
+        // exists and this node isn't it — same one-click discipline as
+        // UF.1's flows-through action.
+        const start = pathFinderStore.startNode();
+        if (start && start.id !== nodeId) {
+          items.push({
+            id: "find-paths-from-a",
+            label: `Find paths from ${start.label}`,
+            handler: () => {
+              selectionStore.setSelection({ kind: "node", id: nodeId });
+              pathFinderStore.requestPaths({ id: nodeId, label });
+            },
+          });
+        }
+        items.push({
+          id: "start-flow-here",
+          label: "Start flow here",
+          handler: () => {
+            waypointBuilderStore.requestStart({ id: nodeId, label });
+            layoutPrefs.setActivity("flows");
           },
         });
       }
@@ -401,6 +450,22 @@ export default function CanvasHost() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cy!.elements().forEach((el: any) => {
         el.addClass(hl.has(el.id()) ? "flow-highlight-member" : "flow-highlight-dim");
+      });
+    });
+  });
+
+  // UF.2: "Overlay all" path colors — same classes-only discipline as the
+  // flow-highlight effect above, keyed by pathOverlayStore's node→color map.
+  createEffect(() => {
+    if (!cy) return;
+    const assignment = pathOverlayStore.assignment();
+    cy.batch(() => {
+      cy!.nodes().removeClass(PATH_OVERLAY_CLASSES.join(" "));
+      if (assignment.size === 0) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cy!.nodes().forEach((el: any) => {
+        const color = assignment.get(el.id());
+        if (color !== undefined) el.addClass(PATH_OVERLAY_CLASSES[color]);
       });
     });
   });

@@ -142,6 +142,31 @@ describe("scopeStore.signal", () => {
   });
 });
 
+// UF.2: replaceTop swaps the last stack entry in place (waypoint builder's
+// live lane update) without growing the stack, and aborts in-flight fetches
+// like push/popTo.
+describe("scopeStore.replaceTop", () => {
+  beforeEach(() => scopeStore.reset());
+
+  it("swaps the last stack entry without changing stack length", () => {
+    scopeStore.push({ kind: "flow", flow: { kind: "waypoints", ids: ["a"], direction: "forward" } });
+    const lengthBefore = scopeStore.stack().length;
+    scopeStore.replaceTop({ kind: "flow", flow: { kind: "waypoints", ids: ["a", "b"], direction: "forward" } });
+    expect(scopeStore.stack().length).toBe(lengthBefore);
+    expect(scopeStore.stack().at(-1)).toEqual({
+      kind: "flow",
+      flow: { kind: "waypoints", ids: ["a", "b"], direction: "forward" },
+    });
+  });
+
+  it("aborts the previous in-flight signal", () => {
+    scopeStore.push({ kind: "flow", flow: { kind: "waypoints", ids: ["a"], direction: "forward" } });
+    const before = scopeStore.signal();
+    scopeStore.replaceTop({ kind: "flow", flow: { kind: "waypoints", ids: ["a", "b"], direction: "forward" } });
+    expect(before.aborted).toBe(true);
+  });
+});
+
 // Breadcrumb pop truncates stack
 describe("popTo", () => {
   it("truncates to index i+1", () => {
