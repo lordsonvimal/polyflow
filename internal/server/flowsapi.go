@@ -197,6 +197,37 @@ func (s *Server) handleFlowsRefine(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleNodeLinks handles
+// GET /api/node/{id}/links?direction=upstream|downstream&depth=1&kind=&service=&offset=&limit=
+// — the UF.8 link explorer's paginated single-direction adjacency.
+func (s *Server) handleNodeLinks(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing node id")
+		return
+	}
+	q := r.URL.Query()
+	direction := q.Get("direction")
+	if direction != "upstream" && direction != "downstream" {
+		direction = "downstream"
+	}
+	depth, _ := strconv.Atoi(q.Get("depth"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+
+	s.idxMu.RLock()
+	idx := s.idx
+	s.idxMu.RUnlock()
+
+	if _, ok := idx.Nodes[id]; !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	result := graph.LinkExplorerAdjacency(idx, id, direction, depth, offset, limit, q.Get("kind"), q.Get("service"))
+	writeJSON(w, http.StatusOK, result)
+}
+
 // handleSeam handles GET /api/seam/{edge-id}
 func (s *Server) handleSeam(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

@@ -317,3 +317,66 @@ func TestHandleUnresolved_OK(t *testing.T) {
 		t.Fatalf("want total=1 for service=auth filter, got %+v", resp)
 	}
 }
+
+// --- /api/node/{id}/links (UF.8) ---
+
+func TestHandleNodeLinks_Downstream(t *testing.T) {
+	srv := buildTestServer(t, testNodes(), testEdges())
+	req := httptest.NewRequest("GET", "/api/node/n2/links?direction=downstream", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp graph.LinkExplorerResult
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if len(resp.Rows) != 1 || resp.Rows[0].NodeID != "n1" {
+		t.Fatalf("want single downstream row n1, got %+v", resp.Rows)
+	}
+	if resp.Total != 1 || resp.Truncated {
+		t.Fatalf("want total=1 truncated=false, got total=%d truncated=%v", resp.Total, resp.Truncated)
+	}
+}
+
+func TestHandleNodeLinks_Upstream(t *testing.T) {
+	srv := buildTestServer(t, testNodes(), testEdges())
+	req := httptest.NewRequest("GET", "/api/node/n1/links?direction=upstream", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	var resp graph.LinkExplorerResult
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if len(resp.Rows) != 1 || resp.Rows[0].NodeID != "n2" {
+		t.Fatalf("want single upstream row n2, got %+v", resp.Rows)
+	}
+}
+
+func TestHandleNodeLinks_DepthAndKindFilter(t *testing.T) {
+	srv := buildTestServer(t, testNodes(), testEdges())
+	req := httptest.NewRequest("GET", "/api/node/n2/links?direction=downstream&depth=2&kind=function", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	var resp graph.LinkExplorerResult
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if resp.Total != 2 {
+		t.Fatalf("want total=2 (n1, n3) at depth 2, got %+v", resp.Rows)
+	}
+	for _, row := range resp.Rows {
+		if row.NodeID == "n3" && len(row.Via) != 1 {
+			t.Fatalf("want n3's via path to include n1's label, got %+v", row.Via)
+		}
+	}
+}
+
+func TestHandleNodeLinks_NotFound(t *testing.T) {
+	srv := buildTestServer(t, testNodes(), testEdges())
+	req := httptest.NewRequest("GET", "/api/node/does-not-exist/links", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", w.Code, w.Body)
+	}
+}

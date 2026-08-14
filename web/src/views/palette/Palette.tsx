@@ -7,6 +7,7 @@ import { selectionStore } from "../../stores/selection";
 import { treeStore } from "../../stores/tree";
 import { parseQuery, parseNodeCard, type ParsedQuery } from "./query";
 import { formatLocation } from "../../lib/location";
+import { linkExplorerStore } from "../../stores/linkExplorer";
 
 const DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 8;
@@ -110,6 +111,15 @@ function openSymbol(id: string, service: string, file: string) {
     handleIntent({ type: "select", target: { kind: "node", id } });
     handleIntent({ type: "drill", target: { kind: "node", id } });
   }
+}
+
+// UF.8: "Explore links" — selects the symbol and leaves a one-shot request
+// for DetailHost's LinkExplorer toggle, deliberately WITHOUT pushing a
+// scope change (unlike openSymbol/pick), so the peek/browse stays
+// non-committal until the user acts inside the panel itself.
+function exploreLinks(id: string) {
+  selectionStore.setSelection({ kind: "node", id });
+  linkExplorerStore.request(id);
 }
 
 export default function Palette() {
@@ -310,6 +320,18 @@ export default function Palette() {
                       <span class="text-neutral-500 ml-2 text-xs">
                         {s.type} · {s.service} · {formatLocation(s.file, s.line, s.endLine)}
                       </span>
+                      <button
+                        data-testid="palette-explore-links"
+                        class="ml-auto text-xs text-indigo-300 hover:text-indigo-200 opacity-0 group-hover:opacity-100 shrink-0 pl-2"
+                        title="Explore links"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          exploreLinks(s.id);
+                          close();
+                        }}
+                      >
+                        links
+                      </button>
                     </Row>
                   )}
                 </For>
@@ -368,7 +390,7 @@ function Group(props: { label: string; children: any }) {
 function Row(props: { active: boolean; onClick: () => void; children: any }) {
   return (
     <div
-      class={`px-3 py-1.5 cursor-pointer flex items-baseline ${props.active ? "bg-neutral-700" : "hover:bg-neutral-800"}`}
+      class={`group px-3 py-1.5 cursor-pointer flex items-baseline ${props.active ? "bg-neutral-700" : "hover:bg-neutral-800"}`}
       onClick={props.onClick}
     >
       {props.children}

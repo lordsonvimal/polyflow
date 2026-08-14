@@ -64,6 +64,12 @@ export type ViewState = {
   // scope-stack state — pins "survive scope changes" (plan text) and are
   // never pushed/popped, so they live beside `isolation`, not inside `stack`.
   pins?: PinRef[];
+  // UF.8: link explorer commit-expand (`＋`) target ids, added to whatever
+  // scope is on top of the stack. Like `pins`, a top-level field rather than
+  // scope-stack state — expansion accretes across scope-local browsing and
+  // is budget-checked by the caller before being committed here, not undone
+  // by a push/pop.
+  expanded?: string[];
 };
 
 export const DEFAULT_STATE: ViewState = {
@@ -173,6 +179,9 @@ export const scopeStore = {
   // not abort the active scope's in-flight fetch or touch the stack; the
   // canvas fades non-members in place (fade-not-remove) with no refetch.
   setPins: (pins: PinRef[]) => commit({ ...viewState(), pins }),
+  // UF.8: commit-expand. Plain `commit`, same reasoning as setPins — growing
+  // the expanded set must not abort the active scope's in-flight fetch.
+  setExpanded: (expanded: string[]) => commit({ ...viewState(), expanded }),
 
   // Called by graph loader when a stored node id is no longer valid after reindex
   handleStaleId: () => {

@@ -30,6 +30,7 @@ import { waypointBuilderStore } from "../../stores/waypointBuilder";
 import { servicePairStore } from "../../stores/servicePair";
 import { multiSelectStore } from "../../stores/multiSelect";
 import { pinboardStore } from "../../stores/pinboard";
+import { expandedElementsStore } from "../../stores/expandedElements";
 import { resolvePinboard, filterChainsByLens, pinboardMemberIds } from "./scopes/pinboard";
 import { serviceFromNodeId } from "../../lib/aggregate";
 import { layoutPrefs } from "../../stores/layoutPrefs";
@@ -285,14 +286,39 @@ export default function CanvasHost() {
   // HUD (a stale "N selected" chip surviving a scope change would offer
   // "View as group" over nodes no longer on screen).
   const [clusteredData, setClusteredData] = createSignal<GraphData | null>(null);
-  createEffect(() => { scope(); setClusteredData(null); multiSelectStore.clear(); });
+  createEffect(() => {
+    scope();
+    setClusteredData(null);
+    multiSelectStore.clear();
+    // UF.8: commit-expand additions are local to the scope they were added
+    // in — a scope change clears them the same way clusteredData resets,
+    // rather than letting expansions from a previous scope leak forward.
+    if ((scopeStore.viewState().expanded ?? []).length > 0) scopeStore.setExpanded([]);
+    expandedElementsStore.clear();
+  });
+
+  // UF.8: unions commit-expand's node+edge additions into the scope's own
+  // fetched data before any narrowing (lens/filters/budget) sees it — an
+  // expanded node behaves exactly like a scope-native one from here on.
+  const withExpansions = createMemo((): GraphData | null => {
+    const d = clusteredData() ?? data();
+    if (!d) return null;
+    const extra = [...expandedElementsStore.entries().values()];
+    if (extra.length === 0) return d;
+    const existingIds = new Set(d.nodes.map((n) => n.id));
+    const newNodes = extra.filter((e) => !existingIds.has(e.node.id)).map((e) => e.node);
+    if (newNodes.length === 0) return d;
+    const existingEdgeIds = new Set(d.edges.map((e) => e.id));
+    const newEdges = extra.filter((e) => !existingEdgeIds.has(e.edge.id)).map((e) => e.edge);
+    return { nodes: [...d.nodes, ...newNodes], edges: [...d.edges, ...newEdges] };
+  });
 
   // Lens (UN.5) narrows first — its own axis over edge types, independent
   // of FilterBar's coarser edgeType chips (see lenses.ts's header note) —
   // then Imports' optional module rollup collapses what's left to file→file
   // counts before FilterBar's confidence/edgeType/service chips apply.
   const lensedData = createMemo((): GraphData | null => {
-    const d = clusteredData() ?? data();
+    const d = withExpansions();
     if (!d) return null;
     const vs = scopeStore.viewState();
     const lens = vs.lens ?? DEFAULT_LENS;

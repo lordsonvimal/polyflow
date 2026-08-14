@@ -179,6 +179,7 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/flows/through/{id}", s.handleFlowsThrough)
 	s.handle("GET /api/flows/paths", s.handleFlowsPaths)
 	s.handle("GET /api/flows/refine", s.handleFlowsRefine)
+	s.handle("GET /api/node/{id}/links", s.handleNodeLinks)
 	s.handle("GET /api/seam/{id}", s.handleSeam)
 	s.handle("GET /api/services/channels", s.handleServiceChannels)
 	s.handle("GET /api/stack", s.handleStack)
