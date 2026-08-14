@@ -15,6 +15,7 @@ import { expandedElementsStore } from "../../stores/expandedElements";
 import { parseQuery } from "../palette/query";
 import { BUDGET } from "../canvas/budget";
 import type { GraphNode, GraphEdge } from "../../lib/types";
+import { displayLabel } from "../../lib/location";
 
 export type LinkDirection = "upstream" | "downstream";
 
@@ -245,7 +246,7 @@ export default function LinkExplorer(props: { nodeId: string }) {
                         <div class="flex items-center justify-between gap-2">
                           <span class="flex items-center gap-1.5 min-w-0">
                             <Show when={dot()}>{(d) => <span class={`w-1.5 h-1.5 rounded-full shrink-0 ${d().class}`} title={d().title} />}</Show>
-                            <span class="text-neutral-200 truncate" title={row.label}>{row.label}</span>
+                            <span class="text-neutral-200 truncate" title={row.label}>{displayLabel(row.label)}</span>
                           </span>
                           <span class="flex items-center gap-1 shrink-0">
                             <Show when={row.depth === 1}>

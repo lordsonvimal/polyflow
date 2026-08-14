@@ -3,6 +3,7 @@ import { scopeStore, type Scope } from "../stores/scope";
 import { flowRefLabel } from "../views/canvas/scopes/flow";
 import { contextCopyStore } from "../stores/contextCopy";
 import { flowRefToSource, type CopySource } from "../views/context/copy";
+import { displayLabel } from "../lib/location";
 
 // UF.5: the breadcrumb menu's "Copy context" only has a UB.6 reading for
 // the current (last) scope — everything on screen right now — since
@@ -15,13 +16,18 @@ function copySourceForScope(scope: Scope): CopySource {
   return { kind: "scope" };
 }
 
+function crumbTitle(scope: Scope): string | undefined {
+  if (scope.kind === "folder" || scope.kind === "file") return scope.path;
+  return undefined;
+}
+
 function crumbLabel(scope: Scope): string {
   switch (scope.kind) {
     case "overview": return "overview";
     case "search": return "search";
     case "service": return scope.service;
-    case "folder": return scope.path;
-    case "file": return scope.path;
+    case "folder": return displayLabel(scope.path);
+    case "file": return displayLabel(scope.path);
     case "neighborhood": return scope.nodeId;
     case "impact": return scope.target;
     case "flow": return flowRefLabel(scope.flow);
@@ -38,6 +44,7 @@ export default function Breadcrumbs() {
             {i() > 0 && <span class="text-neutral-600">▸</span>}
             <button
               class="hover:text-white truncate"
+              title={crumbTitle(scope)}
               onClick={() => scopeStore.popTo(i())}
             >
               {crumbLabel(scope)}

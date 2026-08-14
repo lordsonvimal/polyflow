@@ -6,7 +6,7 @@ import { scopeStore } from "../../stores/scope";
 import { selectionStore } from "../../stores/selection";
 import { treeStore } from "../../stores/tree";
 import { parseQuery, parseNodeCard, type ParsedQuery } from "./query";
-import { formatLocation } from "../../lib/location";
+import { formatLocation, displayLabel } from "../../lib/location";
 import { linkExplorerStore } from "../../stores/linkExplorer";
 
 const DEBOUNCE_MS = 150;
@@ -297,7 +297,7 @@ export default function Palette() {
                 <For each={paletteStore.recent()}>
                   {(r, i) => (
                     <Row active={highlight() === i()} onClick={() => pick({ group: "recent", item: r })}>
-                      <span class="text-neutral-200 shrink-0">{r.label}</span>
+                      <span class="text-neutral-200 shrink-0">{displayLabel(r.label)}</span>
                       <Show when={r.sub}><span class="text-neutral-500 ml-2 text-xs truncate min-w-0">{r.sub}</span></Show>
                     </Row>
                   )}
@@ -340,7 +340,7 @@ export default function Palette() {
                 <For each={files()}>
                   {(f, i) => (
                     <Row active={highlight() === symbols().length + i()} onClick={() => pick({ group: "file", item: f })}>
-                      <span class="text-neutral-200 truncate min-w-0">{f.file}</span>
+                      <span class="text-neutral-200 truncate min-w-0" title={f.file}>{displayLabel(f.file)}</span>
                       <span class="text-neutral-500 ml-2 text-xs shrink-0">{f.service}</span>
                     </Row>
                   )}
