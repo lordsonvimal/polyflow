@@ -6,7 +6,7 @@ import { createResource, createMemo, createSignal, createEffect, onMount, onClea
 import cytoscape from "cytoscape";
 
 import { scopeStore, Scope } from "../../stores/scope";
-import { resolveFlow, computeFlowLaneLayout, FlowResolution } from "../canvas/scopes/flow";
+import { resolveFlow, computeFlowLaneLayout, FlowResolution, SEAM_CHANNEL_PREFIX } from "../canvas/scopes/flow";
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { selectionStore } from "../../stores/selection";
 import { CANVAS_BG, LABEL_COLOR, DEFAULT_NODE_COLOR, NODE_TYPE_STYLES, LANG_COLORS } from "../../lib/styles";
@@ -82,6 +82,22 @@ function buildStylesheet(): object[] {
     {
       selector: ":selected",
       style: { "border-width": 2, "border-color": "#ffffff", "overlay-opacity": 0.1, "overlay-color": "#ffffff" },
+    },
+    // UF.3: the synthetic seam channel node — a pill, not a symbol node, so
+    // "producers left, channel center, consumers right" reads at a glance.
+    {
+      selector: `node[id ^= "${SEAM_CHANNEL_PREFIX}"]`,
+      style: {
+        shape: "round-rectangle",
+        "background-color": "#4338ca",
+        width: "label",
+        height: "24px",
+        padding: "6px",
+        "text-valign": "center",
+        "text-halign": "center",
+        "font-size": "11px",
+        color: "#ffffff",
+      },
     },
   ];
 }
@@ -238,6 +254,15 @@ export default function FlowLane() {
       <Show when={!resolution.loading && !resolution.error && resolution() && !resolution()!.reachable}>
         <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
           No static path — try Path finder (UF.2) or check /api/unresolved for a ledgered gap.
+        </div>
+      </Show>
+
+      <Show when={resolution()?.note}>
+        <div
+          data-testid="flow-lane-note"
+          class="absolute top-2 right-2 z-10 max-w-xs px-2 py-1 rounded bg-neutral-800/90 border border-neutral-700 text-xs text-neutral-400"
+        >
+          {resolution()!.note}
         </div>
       </Show>
 

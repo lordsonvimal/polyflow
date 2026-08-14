@@ -16,8 +16,19 @@ type SeamSide struct {
 type SeamResult struct {
 	Channel           string     `json:"channel"`
 	VerificationState string     `json:"verification_state,omitempty"`
-	Producers         []SeamSide `json:"producers"`
-	Consumers         []SeamSide `json:"consumers"`
+	// Expanded is false when edgeID's kind couldn't be widened past its own
+	// two endpoints (the default case below) — the frontend renders that as
+	// an honest "no channel closure" note rather than treating a lone pair
+	// as a degenerate one-producer-one-consumer channel (rule 12: never
+	// silently guess).
+	Expanded  bool        `json:"expanded"`
+	// Sources is edgeID's own evidence provenance (F.0) — the seam's
+	// entry-point edge, not a union across every producer/consumer edge on
+	// the channel, since those can carry different provenance and merging
+	// them would misrepresent any one of them.
+	Sources   []SourceRef `json:"sources,omitempty"`
+	Producers []SeamSide  `json:"producers"`
+	Consumers []SeamSide  `json:"consumers"`
 }
 
 // FindEdgeByID scans the index for an edge with the given ID. There is no
@@ -51,6 +62,7 @@ func Seam(idx *AdjacencyIndex, edgeID string) (*SeamResult, error) {
 
 	var producerEdges, consumerEdges []*Edge
 	channel := ""
+	expanded := true
 
 	switch {
 	case e.Meta["channel_key"] != "":
@@ -83,6 +95,7 @@ func Seam(idx *AdjacencyIndex, edgeID string) (*SeamResult, error) {
 		if channel == "" {
 			channel = string(e.Type)
 		}
+		expanded = false
 	}
 
 	producers := seamSidesFromEdges(idx, producerEdges, true)
@@ -91,6 +104,8 @@ func Seam(idx *AdjacencyIndex, edgeID string) (*SeamResult, error) {
 	return &SeamResult{
 		Channel:           channel,
 		VerificationState: e.VerificationState,
+		Expanded:          expanded,
+		Sources:           e.Sources,
 		Producers:         producers,
 		Consumers:         consumers,
 	}, nil

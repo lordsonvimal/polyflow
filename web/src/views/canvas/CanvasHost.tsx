@@ -28,6 +28,8 @@ import { flowsThroughStore } from "../../stores/flowsThrough";
 import { pathFinderStore } from "../../stores/pathFinder";
 import { pathOverlayStore } from "../../stores/pathOverlay";
 import { waypointBuilderStore } from "../../stores/waypointBuilder";
+import { servicePairStore } from "../../stores/servicePair";
+import { serviceFromNodeId } from "../../lib/aggregate";
 import { layoutPrefs } from "../../stores/layoutPrefs";
 import { applyFilters } from "../../lib/filters";
 import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
@@ -357,6 +359,22 @@ export default function CanvasHost() {
           },
         });
       }
+      // UF.3: seam isolation on any REAL edge — not the synthetic overview
+      // aggregation pill (`agg:`, lib/aggregate.ts) or the Imports lens
+      // rollup (`rollup:`, lenses.ts), neither of which /api/seam can
+      // resolve (there is no one channel to isolate; those get the
+      // service-pair drill-in / rollup detail instead).
+      if (intent.target.kind === "edge" && !intent.target.id.startsWith("agg:") && !intent.target.id.startsWith("rollup:")) {
+        const edgeId = intent.target.id;
+        items.push({
+          id: "isolate-seam",
+          label: "Isolate seam",
+          handler: () => {
+            selectionStore.setSelection({ kind: "edge", id: edgeId });
+            scopeStore.push({ kind: "flow", flow: { kind: "seam", edgeId } });
+          },
+        });
+      }
       registerMenuItems(MENU_ACTIVITY_ID, items);
       openMenu(intent.x, intent.y);
       return;
@@ -374,6 +392,22 @@ export default function CanvasHost() {
           scopeStore.push(containerScope);
           return;
         }
+      }
+    }
+    // UF.3: single-click (or double-click) on an aggregated overview
+    // service-pair pill opens the channel-list drill-in instead of the
+    // generic edge-select/neighborhood-drill path — there's no single node
+    // an `agg:` id resolves to, so handleIntent's default "drill" case
+    // (which treats any target id as a node id) would be a dead end here.
+    if ((intent.type === "select" || intent.type === "drill") && intent.target.kind === "edge" && cy) {
+      const edgeId = intent.target.id;
+      if (scope().kind === "overview" && edgeId.startsWith("agg:")) {
+        const el = cy.getElementById(edgeId);
+        const from = serviceFromNodeId((el.data("source") as string) ?? "");
+        const to = serviceFromNodeId((el.data("target") as string) ?? "");
+        selectionStore.setSelection({ kind: "edge", id: edgeId });
+        servicePairStore.open(from, to, edgeId);
+        return;
       }
     }
     handleIntent(intent);

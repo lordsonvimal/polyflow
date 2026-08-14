@@ -81,10 +81,12 @@ describe("resolveFlow / path", () => {
 });
 
 describe("resolveFlow / seam", () => {
-  it("merges producer and consumer chains", async () => {
+  it("splices a synthetic channel hop into every producer×consumer combination (rule 1 fan-out)", async () => {
     (globalThis as any).fetch = fakeFetch({
       "/api/seam/edge-1": {
         channel: "rabbitmq:vega_requests",
+        verification_state: "verified",
+        expanded: true,
         producers: [{ node: { id: "p1" }, chain: [{ node_id: "p1", label: "Publisher", service: "rails-svc" }] }],
         consumers: [
           { node: { id: "c1" }, chain: [{ node_id: "c1", label: "Consumer1", service: "rails-consumer1" }] },
@@ -93,8 +95,27 @@ describe("resolveFlow / seam", () => {
       },
     });
     const res = await resolveFlow({ kind: "seam", edgeId: "edge-1" });
-    expect(res.chains).toHaveLength(3);
+    // 1 producer × 2 consumers = 2 combined chains, each producer -> channel -> consumer.
+    expect(res.chains).toHaveLength(2);
+    expect(res.chains[0].hops.map((h) => h.nodeId)).toEqual(["p1", "seam-channel:edge-1", "c1"]);
+    expect(res.chains[1].hops.map((h) => h.nodeId)).toEqual(["p1", "seam-channel:edge-1", "c2"]);
+    expect(res.reachable).toBe(true);
     expect(res.label).toBe("Seam: rabbitmq:vega_requests");
+    expect(res.note).toBeUndefined();
+  });
+
+  it("surfaces an honest note when the edge kind couldn't expand past its own pair", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/seam/edge-2": {
+        channel: "calls",
+        expanded: false,
+        producers: [{ node: { id: "a" }, chain: [{ node_id: "a", label: "A", service: "svc" }] }],
+        consumers: [{ node: { id: "b" }, chain: [{ node_id: "b", label: "B", service: "svc" }] }],
+      },
+    });
+    const res = await resolveFlow({ kind: "seam", edgeId: "edge-2" });
+    expect(res.chains).toHaveLength(1);
+    expect(res.note).toMatch(/no channel closure/i);
   });
 });
 

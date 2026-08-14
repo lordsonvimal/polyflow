@@ -216,3 +216,20 @@ func (s *Server) handleSeam(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+// handleServiceChannels handles GET /api/services/channels?from=&to=
+func (s *Server) handleServiceChannels(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+
+	s.idxMu.RLock()
+	idx := s.idx
+	s.idxMu.RUnlock()
+
+	result, err := graph.ServiceChannels(idx, from, to)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}

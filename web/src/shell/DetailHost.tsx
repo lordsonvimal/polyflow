@@ -10,6 +10,9 @@ import { flowsThroughStore } from "../stores/flowsThrough";
 import ThroughPanel from "../views/flows/ThroughPanel";
 import { pathFinderStore } from "../stores/pathFinder";
 import PathFinderPanel from "../views/flows/PathFinderPanel";
+import { servicePairStore } from "../stores/servicePair";
+import ServicePairPanel from "../views/flows/ServicePairPanel";
+import SeamSummary from "../views/flows/SeamSummary";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -127,6 +130,21 @@ export default function DetailHost() {
                     </ul>
                   </div>
                 )}
+              </Show>
+              {/* UF.3: aggregated overview service-pair pill → channel drill-in. */}
+              <Show when={sel().kind === "edge" && servicePairStore.pair()?.edgeId === sel().id}>
+                {() => <ServicePairPanel from={servicePairStore.pair()!.from} to={servicePairStore.pair()!.to} />}
+              </Show>
+              {/* UF.3: any other real edge → its seam summary. */}
+              <Show
+                when={
+                  sel().kind === "edge" &&
+                  !sel().id.startsWith("agg:") &&
+                  !sel().id.startsWith("rollup:") &&
+                  servicePairStore.pair()?.edgeId !== sel().id
+                }
+              >
+                <SeamSummary edgeId={sel().id} />
               </Show>
             </div>
           </div>
