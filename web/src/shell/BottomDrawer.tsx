@@ -7,11 +7,13 @@ import { apiFetch } from "../lib/apiFetch";
 import { scopeStore } from "../stores/scope";
 import type { UnresolvedRef } from "../stores/tree";
 import JobsTab from "../views/ops/JobsTab";
+import ToolCallsTab from "../views/ops/ToolCallsTab";
 
 const TABS: { id: DrawerTab; label: string }[] = [
   { id: "context", label: "Context" },
   { id: "unresolved", label: "Unresolved" },
   { id: "jobs", label: "Jobs" },
+  { id: "toolcalls", label: "Tool Calls" },
 ];
 
 function MarkdownPreview(props: { markdown: string }) {
@@ -371,6 +373,9 @@ export default function BottomDrawer() {
           </Show>
           <Show when={drawerStore.activeTab() === "jobs"}>
             <JobsTab />
+          </Show>
+          <Show when={drawerStore.activeTab() === "toolcalls"}>
+            <ToolCallsTab />
           </Show>
         </div>
       </Show>
