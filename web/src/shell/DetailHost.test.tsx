@@ -6,6 +6,7 @@ import { exploreStore } from "../stores/explore";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { serviceNodeId } from "../lib/aggregate";
 import { flowsThroughStore } from "../stores/flowsThrough";
+import { servicePairStore } from "../stores/servicePair";
 
 describe("DetailHost", () => {
   let container: HTMLElement;
@@ -63,5 +64,20 @@ describe("DetailHost", () => {
 
     expect(container.querySelector('[data-testid="through-panel"]')).toBeTruthy();
     expect(flowsThroughStore.requestedNodeId()).toBeNull();
+  });
+
+  it("a real edge selection renders its seam summary (UF.3)", () => {
+    selectionStore.setSelection({ kind: "edge", id: "e-p1-ch1" });
+    expect(container.querySelector('[data-testid="seam-summary"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="service-pair-panel"]')).toBeFalsy();
+  });
+
+  it("an aggregated overview pill selection (servicePairStore bridge) renders the channel drill-in, not the seam summary", () => {
+    servicePairStore.open("rails-svc", "cdr-svc", "agg:rails-svc->cdr-svc:publishes");
+    selectionStore.setSelection({ kind: "edge", id: "agg:rails-svc->cdr-svc:publishes" });
+
+    expect(container.querySelector('[data-testid="service-pair-panel"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="seam-summary"]')).toBeFalsy();
+    servicePairStore.close();
   });
 });

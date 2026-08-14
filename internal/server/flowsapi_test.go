@@ -217,6 +217,38 @@ func TestHandleSeam_NotFound(t *testing.T) {
 	}
 }
 
+// --- /api/services/channels ---
+
+func TestHandleServiceChannels_OK(t *testing.T) {
+	srv := buildTestServer(t, seamNodes(), seamEdges())
+	req := httptest.NewRequest("GET", "/api/services/channels?from=svc-a&to=svc-b", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp graph.ServiceChannelsResult
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if len(resp.Channels) != 1 {
+		t.Fatalf("want 1 channel, got %+v", resp.Channels)
+	}
+	if resp.Channels[0].EdgeID != "e-ch1-s1" {
+		t.Fatalf("want representative edge e-ch1-s1, got %s", resp.Channels[0].EdgeID)
+	}
+}
+
+func TestHandleServiceChannels_MissingParams(t *testing.T) {
+	srv := buildTestServer(t, seamNodes(), seamEdges())
+	req := httptest.NewRequest("GET", "/api/services/channels?from=svc-a", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
 // --- /api/stack ---
 
 func TestHandleStack_OK(t *testing.T) {

@@ -198,6 +198,24 @@ func TestSeam_FromConsumerEdge(t *testing.T) {
 	require.Len(t, result.Producers, 1)
 }
 
+func TestSeam_Expanded(t *testing.T) {
+	idx := buildFlowsIndex()
+	result, err := graph.Seam(idx, "e-f1-ch1")
+	require.NoError(t, err)
+	assert.True(t, result.Expanded, "channel_key/NodeTypeChannel path must report Expanded")
+}
+
+func TestSeam_NotExpanded_DirectEdge(t *testing.T) {
+	idx := buildFlowsIndex()
+	// e-h1-f1 is a plain `calls` edge between two functions — no channel
+	// node, no channel_key — the default fallback case.
+	result, err := graph.Seam(idx, "e-h1-f1")
+	require.NoError(t, err)
+	assert.False(t, result.Expanded, "a lone edge pair must report Expanded=false")
+	assert.Len(t, result.Producers, 1)
+	assert.Len(t, result.Consumers, 1)
+}
+
 func TestSeam_UnknownEdge(t *testing.T) {
 	idx := buildFlowsIndex()
 	_, err := graph.Seam(idx, "nope")
