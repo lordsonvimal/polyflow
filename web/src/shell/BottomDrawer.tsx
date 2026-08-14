@@ -6,10 +6,12 @@ import type { CopyMode } from "../views/context/copy";
 import { apiFetch } from "../lib/apiFetch";
 import { scopeStore } from "../stores/scope";
 import type { UnresolvedRef } from "../stores/tree";
+import JobsTab from "../views/ops/JobsTab";
 
 const TABS: { id: DrawerTab; label: string }[] = [
   { id: "context", label: "Context" },
   { id: "unresolved", label: "Unresolved" },
+  { id: "jobs", label: "Jobs" },
 ];
 
 function MarkdownPreview(props: { markdown: string }) {
@@ -366,6 +368,9 @@ export default function BottomDrawer() {
           </Show>
           <Show when={drawerStore.activeTab() === "unresolved"}>
             <UnresolvedTab />
+          </Show>
+          <Show when={drawerStore.activeTab() === "jobs"}>
+            <JobsTab />
           </Show>
         </div>
       </Show>
