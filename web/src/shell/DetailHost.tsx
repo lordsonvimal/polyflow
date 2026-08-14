@@ -5,6 +5,7 @@ import SourcePanel from "./SourcePanel";
 import { isServiceNodeId, serviceFromNodeId } from "../lib/aggregate";
 import { exploreStore } from "../stores/explore";
 import { layoutPrefs } from "../stores/layoutPrefs";
+import { importRollupStore } from "../stores/importRollup";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -67,6 +68,24 @@ export default function DetailHost() {
               </Show>
               <Show when={sel().kind === "node" && !isServiceNodeId(sel().id)}>
                 <SourcePanel nodeId={sel().id} />
+              </Show>
+              <Show when={sel().kind === "edge" && importRollupStore.get(sel().id)}>
+                {(concrete) => (
+                  <div data-testid="rollup-detail">
+                    <div class="text-xs text-neutral-500 mb-1">
+                      {concrete().length} concrete import{concrete().length === 1 ? "" : "s"}
+                    </div>
+                    <ul class="space-y-1">
+                      <For each={concrete()}>
+                        {(e) => (
+                          <li class="text-xs text-neutral-300 break-all">
+                            {e.from} → {e.to}
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </div>
+                )}
               </Show>
             </div>
           </div>

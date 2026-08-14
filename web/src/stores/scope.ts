@@ -26,6 +26,17 @@ export type ViewState = {
   filters: { confidence: string[]; edgeTypes: string[]; services: string[] };
   selection?: { kind: "node" | "edge"; id: string };
   layout?: string;
+  // UN.5 flow lens — independent of filters.edgeTypes (FilterBar's coarse
+  // six-group chips, lib/edgeGroups.ts): the lens table is finer-grained and
+  // the two axes compose (lens narrows first, chips further narrow), so they
+  // can't share one array without collapsing two different vocabularies into
+  // one. Undefined decodes as the "All" lens (views/canvas/lenses.ts).
+  lens?: string;
+  // "hide unlinked" toggle: when true, nodes with zero visible edges under
+  // the active lens are removed instead of dimmed to 30%.
+  lensHideUnlinked?: boolean;
+  // Imports lens only: aggregate to file→file import edges with counts.
+  lensRollup?: boolean;
 };
 
 export const DEFAULT_STATE: ViewState = {
@@ -117,6 +128,9 @@ export const scopeStore = {
   setIsolation: (iso: FlowRef | undefined) => commit({ ...viewState(), isolation: iso }),
   setFilters: (filters: ViewState["filters"]) => commit({ ...viewState(), filters }),
   setLayout: (layout: string | undefined) => commit({ ...viewState(), layout }),
+  setLens: (lens: string) => commit({ ...viewState(), lens }),
+  setLensHideUnlinked: (v: boolean) => commit({ ...viewState(), lensHideUnlinked: v }),
+  setLensRollup: (v: boolean) => commit({ ...viewState(), lensRollup: v }),
 
   // Called by graph loader when a stored node id is no longer valid after reindex
   handleStaleId: () => {
