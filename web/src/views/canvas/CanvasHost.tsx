@@ -3,6 +3,7 @@ import {
   createMemo,
   createResource,
   createEffect,
+  on,
   onMount,
   onCleanup,
   Show,
@@ -42,6 +43,7 @@ import { contextCopyStore } from "../../stores/contextCopy";
 import { importRollupStore } from "../../stores/importRollup";
 import { treeStore } from "../../stores/tree";
 import { drawerStore } from "../../stores/drawer";
+import { notificationsStore } from "../../stores/notifications";
 import FilterBar from "./FilterBar";
 import FlowLane from "../flows/FlowLane";
 import { GraphData, sortGraphData } from "./scopes/common";
@@ -282,6 +284,28 @@ export default function CanvasHost() {
   const [data, { refetch }] = createResource(scope, (s) => fetchForScope(s, scopeStore.signal()));
 
   const isAbortError = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
+
+  // UO.0: "Reload view" banner action — re-resolves the current scope's
+  // data in place (no stack change, so viewport/multi-select survive
+  // untouched) and, once the fresh data lands, drops the selection if its id
+  // didn't survive the reindex rather than leaving a dangling reference —
+  // honest notice instead of a silently stale selection.
+  createEffect(on(scopeStore.reloadNonce, async (n) => {
+    if (n === 0) return;
+    await refetch();
+    const d = data();
+    const sel = selectionStore.selection();
+    if (!sel || !d) return;
+    const stillExists = d.nodes.some((x) => x.id === sel.id) || d.edges.some((x) => x.id === sel.id);
+    if (!stillExists) {
+      selectionStore.setSelection(null);
+      notificationsStore.add({
+        id: `reload-selection-gone-${Date.now()}`,
+        kind: "info",
+        message: "Selection cleared — no longer present after reindex",
+      });
+    }
+  }, { defer: true }));
 
   // When scope changes, clear any cluster override and the multi-selection
   // HUD (a stale "N selected" chip surviving a scope change would offer
