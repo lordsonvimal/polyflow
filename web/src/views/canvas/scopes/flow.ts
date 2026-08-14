@@ -31,6 +31,11 @@ export interface FlowResolution {
   reachable: boolean;
   // Breadcrumb chip text: "<entrypoint label> → <terminus label>".
   label: string;
+  // UF.3: set for a seam whose edge kind /api/seam couldn't expand past its
+  // own two endpoints (`expanded: false`) — FlowLane shows this as a small
+  // non-blocking note next to the (still-rendered) pair, per the "never an
+  // error" rule for an edge kind the seam endpoint can't widen.
+  note?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -102,6 +107,58 @@ export function flowRefLabel(ref: FlowRef): string {
   }
 }
 
+// UF.3: seam node id prefix — FlowLane's stylesheet selects on this to
+// render the channel as a distinct pill rather than a regular flow node.
+export const SEAM_CHANNEL_PREFIX = "seam-channel:";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export interface SeamBody {
+  channel: string;
+  verification_state?: string;
+  expanded: boolean;
+  sources?: { provider: string; confidence: string; ref?: string }[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  producers: { node: any; chain: any[] }[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  consumers: { node: any; chain: any[] }[];
+}
+
+export async function fetchSeam(edgeId: string, signal?: AbortSignal): Promise<SeamBody> {
+  const r = await apiFetch(`/api/seam/${encodeURIComponent(edgeId)}`, { signal, silent: true });
+  return (await r.json()) as SeamBody;
+}
+
+// A P×C cross product of every producer chain against every consumer chain,
+// spliced through one synthetic channel hop — this is what makes the
+// generic hop-rank/service-lane engine (computeFlowLaneLayout) place
+// producers left of the channel and consumers right of it "for free",
+// without a bespoke seam layout: each combined chain's ranks run ancestor →
+// … → producer → channel → consumer → … → terminus. Capped at 200 combined
+// chains (e.g. 14 producers × 14 consumers) — a real fan-out this wide would
+// blow the canvas budget anyway, so this is a determinism/perf guard, not a
+// meaningful UX limit.
+const MAX_SEAM_COMBINATIONS = 200;
+
+export function seamChains(body: SeamBody, edgeId: string): FlowChain[] {
+  const channelHop: FlowHop = {
+    nodeId: `${SEAM_CHANNEL_PREFIX}${edgeId}`,
+    label: body.channel || "channel",
+    service: "channel",
+    verificationState: body.verification_state,
+  };
+  const producerChains = body.producers.length ? body.producers.map((p) => parseChain(p.chain)) : [{ hops: [] }];
+  const consumerChains = body.consumers.length ? body.consumers.map((c) => parseChain(c.chain)) : [{ hops: [] }];
+
+  const chains: FlowChain[] = [];
+  outer: for (const p of producerChains) {
+    for (const c of consumerChains) {
+      if (chains.length >= MAX_SEAM_COMBINATIONS) break outer;
+      chains.push({ hops: [...p.hops, channelHop, ...c.hops] });
+    }
+  }
+  return chains;
+}
+
 // UF.0 wires the four FlowRef kinds already backed by a UB.5 endpoint
 // (through/path/waypoints/seam). varflow/edgeset/pins compose flows built by
 // later phases (UF.4, the UN.5 lens tie-in, UF.7's pinboard intersection) —
@@ -155,20 +212,13 @@ export async function resolveFlow(
       return { chains: [chain], truncated: false, reachable: chain.hops.length > 0, label: chainLabel(chain, "flow") };
     }
     case "seam": {
-      const r = await apiFetch(`/api/seam/${encodeURIComponent(ref.edgeId)}`, { signal, silent: true });
-      const body = (await r.json()) as {
-        channel: string;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        producers: { node: any; chain: any[] }[];
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        consumers: { node: any; chain: any[] }[];
-      };
-      const chains = [...body.producers, ...body.consumers].map((s) => parseChain(s.chain));
+      const body: SeamBody = await fetchSeam(ref.edgeId, signal);
       return {
-        chains,
+        chains: seamChains(body, ref.edgeId),
         truncated: false,
-        reachable: chains.length > 0,
+        reachable: true,
         label: `Seam: ${body.channel || ref.edgeId}`,
+        note: body.expanded ? undefined : "No channel closure — this edge kind has nothing to expand past its own pair.",
       };
     }
     case "varflow":
