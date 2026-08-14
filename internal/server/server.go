@@ -161,6 +161,7 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/files", s.handleFiles)
 	s.handle("GET /api/file", s.handleFile)
 	s.handle("GET /api/file/impact", s.handleFileImpact)
+	s.handle("GET /api/impact/diff", s.handleImpactDiff)
 	s.handle("GET /api/scope", s.handleScope)
 	s.handle("GET /api/stats", s.handleStats)
 	s.handle("GET /api/export/mermaid", s.handleExportMermaid)

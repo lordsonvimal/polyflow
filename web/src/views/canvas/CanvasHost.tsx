@@ -19,7 +19,6 @@ import { scopeStore, Scope } from "../../stores/scope";
 import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./budget";
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { registerMenuItems, openMenu } from "../../interaction/ContextMenu";
-import { apiFetch } from "../../lib/apiFetch";
 import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
@@ -37,15 +36,18 @@ import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
 import { applyFileGrouping, FILE_GROUP_TYPE } from "../../lib/filegroup";
 import { contextCopyStore } from "../../stores/contextCopy";
 import { importRollupStore } from "../../stores/importRollup";
+import { treeStore } from "../../stores/tree";
+import { drawerStore } from "../../stores/drawer";
 import FilterBar from "./FilterBar";
 import FlowLane from "../flows/FlowLane";
-import { GraphData, parseCytoGraph, sortGraphData } from "./scopes/common";
+import { GraphData, sortGraphData } from "./scopes/common";
 import { resolveOverview } from "./scopes/overview";
 import { resolveService } from "./scopes/service";
 import { resolveFolder } from "./scopes/folder";
 import { resolveFile } from "./scopes/file";
 import { resolveNeighborhood } from "./scopes/neighborhood";
 import { resolveGroup } from "./scopes/group";
+import { resolveImpact } from "./scopes/impact";
 import { stackKey, getViewport, saveViewport } from "./viewportCache";
 import {
   NODE_TYPE_STYLES,
@@ -67,6 +69,10 @@ cytoscape.use(dagreFn);
 export const NO_CANVAS = new Set(["search", "flow"]);
 
 const MENU_ACTIVITY_ID = "canvas";
+
+// UF.6: default ring depth for a freshly-opened "Impact from here" scope —
+// ImpactView's stepper (1-10) takes it from there.
+const IMPACT_DEFAULT_DEPTH = 3;
 
 // UF.2: "Overlay all" path colors — 5 distinct accents, index 5 is the
 // shared "more" bucket for every path beyond the 5th (pathOverlay.ts).
@@ -98,11 +104,8 @@ async function fetchForScope(scope: Scope, signal?: AbortSignal): Promise<GraphD
       return resolveNeighborhood(scope, signal);
     case "group":
       return resolveGroup(scope, signal);
-    case "impact": {
-      const p = new URLSearchParams({ root: scope.target, direction: scope.direction, depth: String(scope.depth) });
-      const r = await apiFetch(`/api/graph/trace?${p}`, { signal, silent: true });
-      return sortGraphData(parseCytoGraph(await r.json()));
-    }
+    case "impact":
+      return resolveImpact(scope, signal);
   }
 }
 
@@ -154,6 +157,34 @@ function buildStylesheet(): object[] {
     // uncertain — never presented identically to a static/inferred edge.
     { selector: "edge[confidence = 'partial']", style: { "line-style": "dashed" } },
     { selector: "edge[confidence = 'unknown']", style: { "line-style": "dashed" } },
+    // UF.6: coverage overlay — plan-10's verification-state edge encoding,
+    // now applied everywhere (not just FlowLane's bespoke stylesheet).
+    // Takes precedence over the confidence-based rules above (declared
+    // after them; Cytoscape's cascade is last-selector-wins per property).
+    { selector: "edge[verification_state = 'candidate']", style: { "line-style": "dashed" } },
+    { selector: "edge[verification_state = 'conflicting']", style: { "line-style": "dotted" } },
+    { selector: "edge[verification_state = 'observed_only_gap']", style: { "line-style": "dashed", width: 3 } },
+    // UF.6: impact scope depth rings — target accented, direct dependents
+    // strong, transitive fading. Set client-side (scopes/impact.ts's BFS
+    // over the already-fetched edge set) since /api/graph/trace has no
+    // per-node depth in its response.
+    {
+      selector: "node[impact_role = 'target']",
+      style: { "border-width": 3, "border-color": "#f59e0b" },
+    },
+    {
+      selector: "node[impact_role = 'direct']",
+      style: { "border-width": 2, "border-color": "#818cf8", opacity: 1 },
+    },
+    { selector: "node[impact_role = 'transitive']", style: { opacity: 0.55 } },
+    // UF.6: coverage overlay ⚠ badge — a node whose file has unresolved
+    // refs (CanvasHost's coverage-overlay effect, computed client-side from
+    // treeStore's per-service unresolved ledger). Amber dashed ring, same
+    // visual language as the tree's ⚠ badge count.
+    {
+      selector: "node.coverage-unresolved",
+      style: { "border-width": 2, "border-style": "dashed", "border-color": "#f59e0b" },
+    },
     // Boundary connectors: a node standing in for something outside the
     // current scope (plan-10's stub-connector contract) — dimmed + dashed
     // border so it reads as "click to expand", not a peer element.
@@ -222,6 +253,7 @@ function toElements(d: GraphData): object[] {
         type: e.type,
         ...(e.label ? { label: e.label } : {}),
         ...(e.confidence ? { confidence: e.confidence } : {}),
+        ...(e.verificationState ? { verification_state: e.verificationState } : {}),
         ...(e.meta ?? {}),
       },
     })),
@@ -375,6 +407,31 @@ export default function CanvasHost() {
             layoutPrefs.setActivity("flows");
           },
         });
+        // UF.6: pushes the impact scope (depth rings rendered by
+        // scopes/impact.ts) and opens the Impact activity's direction/depth
+        // controls in the same click.
+        items.push({
+          id: "impact-from-here",
+          label: "Impact from here",
+          handler: () => {
+            selectionStore.setSelection({ kind: "node", id: nodeId });
+            scopeStore.push({ kind: "impact", target: nodeId, direction: "both", depth: IMPACT_DEFAULT_DEPTH });
+            layoutPrefs.setActivity("impact");
+          },
+        });
+        // UF.6: coverage overlay's ⚠ badge is a border style, not a
+        // clickable DOM element (Cytoscape draws to canvas) — the menu is
+        // the click-through to the pre-filtered Unresolved drawer tab.
+        const el = cy?.getElementById(nodeId);
+        const nodeService = (el?.data("service") as string | undefined) ?? "";
+        const nodeFile = (el?.data("file") as string | undefined) ?? "";
+        if (nodeFile && unresolvedFileSet().has(`${nodeService} ${nodeFile}`)) {
+          items.push({
+            id: "view-unresolved-for-file",
+            label: "⚠ View unresolved refs for this file",
+            handler: () => drawerStore.openUnresolvedFor(nodeService, nodeFile),
+          });
+        }
       }
       // UF.3: seam isolation on any REAL edge — not the synthetic overview
       // aggregation pill (`agg:`, lib/aggregate.ts) or the Imports lens
@@ -556,6 +613,47 @@ export default function CanvasHost() {
         const color = assignment.get(el.id());
         if (color !== undefined) el.addClass(PATH_OVERLAY_CLASSES[color]);
       });
+    });
+  });
+
+  // UF.6: coverage overlay — ⚠ ledger badge. Loads (lazily, via treeStore's
+  // own cache) the unresolved-ref ledger for every service currently on
+  // canvas, then flags nodes whose file has at least one unresolved ref.
+  // Classes only (no layout call), and skipped entirely when the FilterBar
+  // toggle is off.
+  createEffect(() => {
+    const d = renderData();
+    if (!d) return;
+    const services = new Set(d.nodes.map((n) => n.service).filter(Boolean));
+    for (const svc of services) treeStore.loadService(svc);
+  });
+
+  const unresolvedFileSet = createMemo((): Set<string> => {
+    const d = renderData();
+    if (!d) return new Set();
+    const services = new Set(d.nodes.map((n) => n.service).filter(Boolean));
+    const files = new Set<string>();
+    for (const svc of services) {
+      for (const ref of treeStore.entryFor(svc).unresolved ?? []) {
+        files.add(`${svc} ${ref.file}`);
+      }
+    }
+    return files;
+  });
+
+  createEffect(() => {
+    if (!cy) return;
+    const d = renderData();
+    const overlayOn = scopeStore.viewState().coverageOverlay !== false;
+    const files = unresolvedFileSet();
+    cy.batch(() => {
+      cy!.nodes().removeClass("coverage-unresolved");
+      if (!overlayOn || !d) return;
+      for (const n of d.nodes) {
+        if (n.file && files.has(`${n.service} ${n.file}`)) {
+          cy!.getElementById(n.id).addClass("coverage-unresolved");
+        }
+      }
     });
   });
 

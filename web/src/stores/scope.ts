@@ -46,6 +46,11 @@ export type ViewState = {
   lensHideUnlinked?: boolean;
   // Imports lens only: aggregate to file→file import edges with counts.
   lensRollup?: boolean;
+  // UF.6: coverage overlay (verification-state edge styling + ⚠ unresolved
+  // badges) toggle in FilterBar. Undefined decodes as "on" (default-on,
+  // same convention as lensHideUnlinked/lensRollup's absent-means-off, but
+  // inverted here since the overlay ships default-on).
+  coverageOverlay?: boolean;
 };
 
 export const DEFAULT_STATE: ViewState = {
@@ -150,6 +155,7 @@ export const scopeStore = {
   setLens: (lens: string) => commit({ ...viewState(), lens }),
   setLensHideUnlinked: (v: boolean) => commit({ ...viewState(), lensHideUnlinked: v }),
   setLensRollup: (v: boolean) => commit({ ...viewState(), lensRollup: v }),
+  setCoverageOverlay: (v: boolean) => commit({ ...viewState(), coverageOverlay: v }),
 
   // Called by graph loader when a stored node id is no longer valid after reindex
   handleStaleId: () => {
