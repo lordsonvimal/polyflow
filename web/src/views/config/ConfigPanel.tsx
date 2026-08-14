@@ -18,14 +18,14 @@ export default function ConfigPanel() {
           <div class="flex items-center border border-neutral-800 rounded overflow-hidden">
             <button
               data-testid="config-mode-form"
-              class={`px-2 py-0.5 text-xs ${configStore.mode() === "form" ? "bg-neutral-700 text-white" : "text-neutral-500 hover:text-white"}`}
+              class={`px-2 py-0.5 text-xs ${configStore.mode() === "form" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"}`}
               onClick={() => configStore.setMode("form")}
             >
               Form
             </button>
             <button
               data-testid="config-mode-yaml"
-              class={`px-2 py-0.5 text-xs ${configStore.mode() === "yaml" ? "bg-neutral-700 text-white" : "text-neutral-500 hover:text-white"}`}
+              class={`px-2 py-0.5 text-xs ${configStore.mode() === "yaml" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"}`}
               onClick={() => configStore.setMode("yaml")}
             >
               YAML

@@ -154,11 +154,11 @@ export default function PathFinderPanel(props: { from: string; fromLabel: string
       </div>
 
       <Show when={resolution.loading}>
-        <div class="text-xs text-neutral-500">Finding paths…</div>
+        <div class="text-xs text-neutral-400">Finding paths…</div>
       </Show>
 
       <Show when={resolution.error}>
-        <div class="text-xs text-neutral-500 flex items-center gap-2">
+        <div class="text-xs text-neutral-400 flex items-center gap-2">
           Failed to find paths.
           <button class="text-indigo-300 hover:text-indigo-200" onClick={refetch}>Retry</button>
         </div>
@@ -168,16 +168,16 @@ export default function PathFinderPanel(props: { from: string; fromLabel: string
         <div data-testid="path-finder-unreachable" class="text-xs text-neutral-400 space-y-2">
           <div>No static path {props.fromLabel} → {props.to}.</div>
           <div>
-            <div class="text-neutral-500">Nearest entrypoints reaching A:</div>
-            <Show when={nearestFrom() && nearestFrom()!.length > 0} fallback={<div class="text-neutral-600">none found</div>}>
+            <div class="text-neutral-400">Nearest entrypoints reaching A:</div>
+            <Show when={nearestFrom() && nearestFrom()!.length > 0} fallback={<div class="text-neutral-500">none found</div>}>
               <ul class="list-disc list-inside">
                 <For each={nearestFrom()}>{(label) => <li>{label}</li>}</For>
               </ul>
             </Show>
           </div>
           <div>
-            <div class="text-neutral-500">Nearest entrypoints reaching B:</div>
-            <Show when={nearestTo() && nearestTo()!.length > 0} fallback={<div class="text-neutral-600">none found</div>}>
+            <div class="text-neutral-400">Nearest entrypoints reaching B:</div>
+            <Show when={nearestTo() && nearestTo()!.length > 0} fallback={<div class="text-neutral-500">none found</div>}>
               <ul class="list-disc list-inside">
                 <For each={nearestTo()}>{(label) => <li>{label}</li>}</For>
               </ul>
@@ -206,7 +206,7 @@ export default function PathFinderPanel(props: { from: string; fromLabel: string
             >
               <div class="flex items-center justify-between gap-2">
                 <span class="text-neutral-200">#{i() + 1}</span>
-                <span class="text-neutral-500">
+                <span class="text-neutral-400">
                   {p.hops} hop{p.hops === 1 ? "" : "s"} ·{" "}
                   {p.worstConfidenceRank < 0 ? "—" : CONFIDENCE_LEVELS[p.worstConfidenceRank]}
                 </span>
@@ -216,7 +216,7 @@ export default function PathFinderPanel(props: { from: string; fromLabel: string
         </For>
       </ul>
       <Show when={overlayOn()}>
-        <div class="text-[10px] text-neutral-600 mt-1">
+        <div class="text-[10px] text-neutral-500 mt-1">
           {Math.min(ranked().length, OVERLAY_COLOR_COUNT)} colored, {Math.max(0, ranked().length - OVERLAY_COLOR_COUNT)} grouped
         </div>
       </Show>

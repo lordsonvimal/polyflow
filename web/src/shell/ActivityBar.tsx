@@ -32,7 +32,7 @@ export default function ActivityBar() {
             class={`w-9 h-9 rounded flex items-center justify-center text-lg transition-colors
               ${layoutPrefs.activity() === a.id
                 ? "bg-neutral-700 text-white"
-                : "text-neutral-500 hover:text-white hover:bg-neutral-800"}`}
+                : "text-neutral-400 hover:text-white hover:bg-neutral-800"}`}
           >
             {a.icon}
           </button>

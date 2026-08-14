@@ -24,7 +24,7 @@ export default function HoverTooltip() {
           >
             <span class="font-medium">{target.label ?? target.id}</span>
             <span class="text-neutral-400 ml-1">{target.kind}</span>
-            {filePart && <span class="text-neutral-500 ml-1">{filePart}</span>}
+            {filePart && <span class="text-neutral-400 ml-1">{filePart}</span>}
           </div>
         );
       }}

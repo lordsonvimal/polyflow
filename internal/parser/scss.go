@@ -29,6 +29,10 @@ func (p *StylesheetParser) Parse(file, service string, _ *patterns.TreeSitterMat
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// `file` arrives absolute (needed for the os.ReadFile above); this parser
+	// builds nodes directly (no matcher/execQueries pass to relativize for
+	// it), so it must convert to the cwd-relative convention itself.
+	file = patterns.RelativizeToCwd(file)
 	res := css.Scan(src)
 	lang := stylesheetLanguage(file)
 

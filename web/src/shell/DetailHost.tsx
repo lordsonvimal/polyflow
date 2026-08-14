@@ -19,15 +19,16 @@ import ServicePairPanel from "../views/flows/ServicePairPanel";
 import SeamSummary from "../views/flows/SeamSummary";
 import { contextCopyStore } from "../stores/contextCopy";
 import { pinboardStore } from "../stores/pinboard";
+import Resizer from "./Resizer";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
     <div class="w-80 bg-neutral-950 border-l border-neutral-800 overflow-y-auto shrink-0">
       <div class="p-4 text-sm text-neutral-300">
         <div class="flex items-center justify-between gap-2 mb-1">
-          <span class="text-xs uppercase tracking-wide text-neutral-500">📌 {sel.kind}</span>
+          <span class="text-xs uppercase tracking-wide text-neutral-400">📌 {sel.kind}</span>
           <button
-            class="text-xs text-neutral-500 hover:text-white shrink-0"
+            class="text-xs text-neutral-400 hover:text-white shrink-0"
             onClick={() => selectionStore.unpin(sel.id)}
           >
             × unpin
@@ -92,11 +93,14 @@ export default function DetailHost() {
   return (
     <div
       data-testid="detail-host"
-      class="flex shrink-0 border-l border-neutral-800 dark:border-neutral-700 overflow-hidden transition-all"
+      class="flex shrink-0 border-l border-neutral-800 dark:border-neutral-700 overflow-hidden"
     >
+      <Show when={groupScope() || selectionStore.selection()}>
+        <Resizer width={layoutPrefs.detailWidth} setWidth={layoutPrefs.setDetailWidth} invert />
+      </Show>
       <Show when={groupScope()}>
         {(g) => (
-          <div class="w-80 bg-neutral-950 overflow-y-auto shrink-0">
+          <div class="bg-neutral-950 overflow-y-auto shrink-0" style={{ width: `${layoutPrefs.detailWidth()}px` }}>
             <div class="p-4 text-sm text-neutral-300">
               <div class="flex items-start justify-between gap-2 mb-2">
                 <span class="font-medium">{g().nodeIds.length} selected — Group</span>
@@ -108,12 +112,12 @@ export default function DetailHost() {
       </Show>
       <Show when={selectionStore.selection()}>
         {(sel) => (
-          <div class="w-80 bg-neutral-950 overflow-y-auto shrink-0">
+          <div class="bg-neutral-950 overflow-y-auto shrink-0" style={{ width: `${layoutPrefs.detailWidth()}px` }}>
             <div class="p-4 text-sm text-neutral-300">
               <div class="flex items-center justify-between gap-2 mb-1">
-                <span class="text-xs uppercase tracking-wide text-neutral-500">{sel().kind}</span>
+                <span class="text-xs uppercase tracking-wide text-neutral-400">{sel().kind}</span>
                 <button
-                  class="text-xs text-neutral-500 hover:text-white shrink-0"
+                  class="text-xs text-neutral-400 hover:text-white shrink-0"
                   onClick={() => selectionStore.setSelection(null)}
                 >
                   × close
@@ -194,7 +198,7 @@ export default function DetailHost() {
               <Show when={sel().kind === "edge" && importRollupStore.get(sel().id)}>
                 {(concrete) => (
                   <div data-testid="rollup-detail">
-                    <div class="text-xs text-neutral-500 mb-1">
+                    <div class="text-xs text-neutral-400 mb-1">
                       {concrete().length} concrete import{concrete().length === 1 ? "" : "s"}
                     </div>
                     <ul class="space-y-1">

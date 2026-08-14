@@ -267,7 +267,7 @@ export default function FlowLane() {
       </Show>
 
       <Show when={!resolution.loading && !resolution.error && resolution() && !resolution()!.reachable}>
-        <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
+        <div class="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">
           No static path — try Path finder (UF.2) or check /api/unresolved for a ledgered gap.
         </div>
       </Show>

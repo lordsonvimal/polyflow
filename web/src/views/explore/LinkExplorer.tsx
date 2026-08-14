@@ -215,13 +215,13 @@ export default function LinkExplorer(props: { nodeId: string }) {
         onInput={(e) => setFilterText(e.currentTarget.value)}
       />
       <Show when={page.loading}>
-        <div class="text-xs text-neutral-500">Loading links…</div>
+        <div class="text-xs text-neutral-400">Loading links…</div>
       </Show>
       <Show when={page.error}>
-        <div class="text-xs text-neutral-500">Failed to load links.</div>
+        <div class="text-xs text-neutral-400">Failed to load links.</div>
       </Show>
       <Show when={!page.loading && !page.error && filtered().length === 0}>
-        <div class="text-xs text-neutral-500" data-testid="link-explorer-empty">
+        <div class="text-xs text-neutral-400" data-testid="link-explorer-empty">
           No {direction()} links{filterText().trim() ? " match this filter" : ""}.
         </div>
       </Show>
@@ -230,7 +230,7 @@ export default function LinkExplorer(props: { nodeId: string }) {
           {(group) => (
             <div>
               <Show when={group.via}>
-                <div class="text-[10px] text-neutral-600 mb-0.5">via {group.via}</div>
+                <div class="text-[10px] text-neutral-500 mb-0.5">via {group.via}</div>
               </Show>
               <ul class="space-y-1">
                 <For each={group.rows}>
@@ -252,7 +252,7 @@ export default function LinkExplorer(props: { nodeId: string }) {
                             <Show when={row.depth === 1}>
                               <button
                                 data-testid="link-explorer-commit-expand"
-                                class="text-neutral-500 hover:text-white"
+                                class="text-neutral-400 hover:text-white"
                                 title="Add to canvas"
                                 onClick={() => commitExpand(row)}
                               >
@@ -261,7 +261,7 @@ export default function LinkExplorer(props: { nodeId: string }) {
                             </Show>
                             <button
                               data-testid="link-explorer-commit-navigate"
-                              class="text-neutral-500 hover:text-white"
+                              class="text-neutral-400 hover:text-white"
                               title="Go to"
                               onClick={() => commitNavigate(row)}
                             >
@@ -269,7 +269,7 @@ export default function LinkExplorer(props: { nodeId: string }) {
                             </button>
                           </span>
                         </div>
-                        <div class="text-neutral-500 mt-0.5 truncate">
+                        <div class="text-neutral-400 mt-0.5 truncate">
                           {row.edge_type}
                           {row.channel ? ` · ${row.channel}` : ""} · {row.service} ·{" "}
                           {row.file ? `${row.file}:${row.line}` : "—"}
@@ -284,7 +284,7 @@ export default function LinkExplorer(props: { nodeId: string }) {
         </For>
       </div>
       <div class="flex items-center justify-between mt-1">
-        <span class="text-[10px] text-neutral-600">
+        <span class="text-[10px] text-neutral-500">
           {filtered().length} of {total()} {direction()} link{total() === 1 ? "" : "s"}
         </span>
         <Show when={truncated()}>

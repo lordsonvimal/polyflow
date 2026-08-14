@@ -93,7 +93,7 @@ export default function SourcePanel(props: { nodeId: string }) {
   return (
     <div data-testid="source-panel" class="mt-3 border-t border-neutral-800 pt-2">
       <Show when={loading() && !data()}>
-        <div class="text-xs text-neutral-500">Loading source…</div>
+        <div class="text-xs text-neutral-400">Loading source…</div>
       </Show>
       <Show when={error()}>
         <div class="text-xs text-red-400" data-testid="source-error">{error()}</div>
@@ -102,7 +102,7 @@ export default function SourcePanel(props: { nodeId: string }) {
         {(d) => (
           <div>
             <div class="flex items-center justify-between mb-1 gap-2">
-              <span class="text-[11px] text-neutral-500 truncate" data-testid="source-location">
+              <span class="text-[11px] text-neutral-400 truncate" data-testid="source-location">
                 {formatLocation(d().file, d().start, d().end) || d().file}
               </span>
               <div class="flex gap-2 shrink-0">
@@ -137,9 +137,9 @@ export default function SourcePanel(props: { nodeId: string }) {
                       data-testid="source-line"
                       data-line={lineNo}
                       data-highlighted={inExtent ? "true" : "false"}
-                      class={`px-1 whitespace-pre-wrap break-all ${inExtent ? "bg-blue-950/60 text-neutral-100" : "text-neutral-500"}`}
+                      class={`px-1 whitespace-pre-wrap break-all ${inExtent ? "bg-blue-950/60 text-neutral-100" : "text-neutral-400"}`}
                     >
-                      <span class="inline-block w-10 text-right pr-2 text-neutral-600 select-none">{lineNo}</span>
+                      <span class="inline-block w-10 text-right pr-2 text-neutral-500 select-none">{lineNo}</span>
                       {line}
                     </div>
                   );

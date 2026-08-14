@@ -62,8 +62,8 @@ function BarList(props: { title: string; counts: Record<string, number>; onClick
   const max = createMemo(() => rows().reduce((m, [, n]) => Math.max(m, n), 0) || 1);
   return (
     <div>
-      <div class="text-[10px] uppercase tracking-wide text-neutral-500 mb-1">{props.title}</div>
-      <Show when={rows().length > 0} fallback={<div class="text-xs text-neutral-600">none</div>}>
+      <div class="text-[10px] uppercase tracking-wide text-neutral-400 mb-1">{props.title}</div>
+      <Show when={rows().length > 0} fallback={<div class="text-xs text-neutral-500">none</div>}>
         <div class="flex flex-col gap-0.5">
           <For each={rows()}>
             {([kind, count]) => (
@@ -78,7 +78,7 @@ function BarList(props: { title: string; counts: Record<string, number>; onClick
                 </span>
                 <span
                   data-testid={`stack-count-${props.title}-${kind}`}
-                  class={`w-10 text-right shrink-0 ${props.onClick ? "text-indigo-300 group-hover:text-indigo-200" : "text-neutral-500"}`}
+                  class={`w-10 text-right shrink-0 ${props.onClick ? "text-indigo-300 group-hover:text-indigo-200" : "text-neutral-400"}`}
                 >
                   {count}
                 </span>
@@ -126,23 +126,23 @@ function ServiceCard(props: { svc: ServiceSummary; focused: boolean }) {
         </Show>
       </div>
       <div class="mb-2">
-        <div class="text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Dependencies</div>
+        <div class="text-[10px] uppercase tracking-wide text-neutral-400 mb-1">Dependencies</div>
         <Show
           when={props.svc.deps.length > 0}
-          fallback={<div class="text-xs text-neutral-600">no dependency manifest found</div>}
+          fallback={<div class="text-xs text-neutral-500">no dependency manifest found</div>}
         >
           <ul class="text-xs text-neutral-400 flex flex-col gap-0.5">
             <For each={props.svc.deps.slice(0, DEPS_VISIBLE_CAP)}>
               {(d: DependencyInfo) => (
                 <li class="flex justify-between gap-2">
                   <span class="truncate">{d.name}</span>
-                  <span class="text-neutral-600 shrink-0">{d.version} · {d.ecosystem}</span>
+                  <span class="text-neutral-500 shrink-0">{d.version} · {d.ecosystem}</span>
                 </li>
               )}
             </For>
           </ul>
           <Show when={props.svc.deps.length > DEPS_VISIBLE_CAP}>
-            <div class="text-xs text-neutral-600 mt-0.5">+{props.svc.deps.length - DEPS_VISIBLE_CAP} more</div>
+            <div class="text-xs text-neutral-500 mt-0.5">+{props.svc.deps.length - DEPS_VISIBLE_CAP} more</div>
           </Show>
         </Show>
       </div>
@@ -197,9 +197,9 @@ export default function StackPanel() {
             </div>
             <Show
               when={channelSummary().length > 0}
-              fallback={<div class="text-xs text-neutral-600 mt-1">no cross-service edges found</div>}
+              fallback={<div class="text-xs text-neutral-500 mt-1">no cross-service edges found</div>}
             >
-              <div class="text-xs text-neutral-500 mt-1">
+              <div class="text-xs text-neutral-400 mt-1">
                 <For each={channelSummary()}>
                   {(c, i) => (
                     <>
