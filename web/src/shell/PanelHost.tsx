@@ -15,8 +15,8 @@ export default function PanelHost() {
   return (
     <div data-testid="panel-host" class="flex shrink-0" style={{ width: `${width()}px` }}>
       <Show when={!layoutPrefs.panelCollapsed()}>
-        <div class="flex-1 overflow-y-auto border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950">
-          <div class="p-2">
+        <div class="flex flex-col flex-1 min-h-0 border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950">
+          <div class="p-2 shrink-0">
             <button
               class="text-xs text-neutral-500 hover:text-white mb-2"
               onClick={() => layoutPrefs.setPanelCollapsed(true)}
@@ -24,15 +24,17 @@ export default function PanelHost() {
               ◀ collapse
             </button>
           </div>
-          <Switch>
-            <Match when={layoutPrefs.activity() === "explore"}><ExploreView /></Match>
-            <Match when={layoutPrefs.activity() === "flows"}><FlowsView /></Match>
-            <Match when={layoutPrefs.activity() === "impact"}><ImpactView /></Match>
-            <Match when={layoutPrefs.activity() === "health"}><HealthView /></Match>
-            <Match when={layoutPrefs.activity() === "config"}><ConfigView /></Match>
-            <Match when={layoutPrefs.activity() === "docs"}><DocsView /></Match>
-            <Match when={layoutPrefs.activity() === "settings"}><SettingsView /></Match>
-          </Switch>
+          <div class="flex-1 min-h-0 overflow-hidden">
+            <Switch>
+              <Match when={layoutPrefs.activity() === "explore"}><ExploreView /></Match>
+              <Match when={layoutPrefs.activity() === "flows"}><FlowsView /></Match>
+              <Match when={layoutPrefs.activity() === "impact"}><ImpactView /></Match>
+              <Match when={layoutPrefs.activity() === "health"}><HealthView /></Match>
+              <Match when={layoutPrefs.activity() === "config"}><ConfigView /></Match>
+              <Match when={layoutPrefs.activity() === "docs"}><DocsView /></Match>
+              <Match when={layoutPrefs.activity() === "settings"}><SettingsView /></Match>
+            </Switch>
+          </div>
         </div>
         <Resizer />
       </Show>

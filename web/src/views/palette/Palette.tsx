@@ -291,14 +291,14 @@ export default function Palette() {
             onInput={(e) => onInput(e.currentTarget.value)}
             onKeyDown={onKeyDown}
           />
-          <div class="max-h-96 overflow-y-auto text-sm">
+          <div class="max-h-96 overflow-y-auto overflow-x-hidden text-sm">
             <Show when={query().trim() === ""}>
               <Group label="RECENT">
                 <For each={paletteStore.recent()}>
                   {(r, i) => (
                     <Row active={highlight() === i()} onClick={() => pick({ group: "recent", item: r })}>
-                      <span class="text-neutral-200">{r.label}</span>
-                      <Show when={r.sub}><span class="text-neutral-500 ml-2 text-xs">{r.sub}</span></Show>
+                      <span class="text-neutral-200 shrink-0">{r.label}</span>
+                      <Show when={r.sub}><span class="text-neutral-500 ml-2 text-xs truncate min-w-0">{r.sub}</span></Show>
                     </Row>
                   )}
                 </For>
@@ -316,8 +316,8 @@ export default function Palette() {
                           class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 shrink-0"
                         />
                       </Show>
-                      <span class="text-neutral-200">{s.label}</span>
-                      <span class="text-neutral-500 ml-2 text-xs">
+                      <span class="text-neutral-200 shrink-0">{s.label}</span>
+                      <span class="text-neutral-500 ml-2 text-xs truncate min-w-0">
                         {s.type} · {s.service} · {formatLocation(s.file, s.line, s.endLine)}
                       </span>
                       <button
@@ -340,8 +340,8 @@ export default function Palette() {
                 <For each={files()}>
                   {(f, i) => (
                     <Row active={highlight() === symbols().length + i()} onClick={() => pick({ group: "file", item: f })}>
-                      <span class="text-neutral-200">{f.file}</span>
-                      <span class="text-neutral-500 ml-2 text-xs">{f.service}</span>
+                      <span class="text-neutral-200 truncate min-w-0">{f.file}</span>
+                      <span class="text-neutral-500 ml-2 text-xs shrink-0">{f.service}</span>
                     </Row>
                   )}
                 </For>
@@ -390,7 +390,7 @@ function Group(props: { label: string; children: any }) {
 function Row(props: { active: boolean; onClick: () => void; children: any }) {
   return (
     <div
-      class={`group px-3 py-1.5 cursor-pointer flex items-baseline ${props.active ? "bg-neutral-700" : "hover:bg-neutral-800"}`}
+      class={`group px-3 py-1.5 cursor-pointer flex items-baseline min-w-0 ${props.active ? "bg-neutral-700" : "hover:bg-neutral-800"}`}
       onClick={props.onClick}
     >
       {props.children}

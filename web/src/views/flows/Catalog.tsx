@@ -46,6 +46,18 @@ function parseItem(raw: any): EntrypointItem {
   };
 }
 
+// Go/JS give every file its own "init"/"main"/"(module)" node, so the bare
+// label is meaningless on its own in a flat list — pair it with the file's
+// basename (the full path is already the row's second line) so rows with
+// the same generic name are still distinguishable at a glance.
+const GENERIC_LABELS = new Set(["init", "main", "(module)", "(document)"]);
+
+function displayLabel(item: Pick<EntrypointItem, "label" | "file">): string {
+  if (!GENERIC_LABELS.has(item.label) || !item.file) return item.label;
+  const basename = item.file.split("/").pop();
+  return basename ? `${item.label} · ${basename}` : item.label;
+}
+
 const KIND_ICON: Record<string, string> = {
   route: "→",
   http_handler: "→",
@@ -192,7 +204,7 @@ export default function Catalog() {
             >
               <div class="flex items-center gap-1.5">
                 <span>{KIND_ICON[item.kind] ?? "•"}</span>
-                <span class="text-neutral-200 truncate">{item.label}</span>
+                <span class="text-neutral-200 truncate">{displayLabel(item)}</span>
                 <Show when={item.channel}>
                   <span class="text-neutral-500 ml-1 truncate">{item.channel}</span>
                 </Show>
