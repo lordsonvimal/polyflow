@@ -4,6 +4,7 @@ import { selectionStore } from "../stores/selection";
 import { multiSelectStore } from "../stores/multiSelect";
 import { contextCopyStore } from "../stores/contextCopy";
 import { selectionCopySource } from "../views/context/copy";
+import { pinboardStore } from "../stores/pinboard";
 
 export type KeyBinding = {
   key: string;       // matches KeyboardEvent.key or "Meta+k" compound
@@ -36,8 +37,22 @@ export const KEY_BINDINGS: KeyBinding[] = [
   {
     key: "p",
     display: "p",
-    description: "Pin/unpin hovered or selected node",
-    handler: () => {}, // plan 12 UF.7
+    description: "Pin/unpin hovered or selected node to the pinboard",
+    handler: () => {
+      // Hover wins (mirrors gesture-grammar precedent elsewhere: a hover
+      // target is the more specific "the thing under the cursor right now"
+      // signal) — hoverTarget carries a real label; a bare selection falls
+      // back to its id (DetailHost's pinboard button does the same).
+      const hover = selectionStore.hoverTarget();
+      if (hover && hover.kind === "node") {
+        pinboardStore.toggle({ id: hover.id, label: hover.label ?? hover.id });
+        return;
+      }
+      const sel = selectionStore.selection();
+      if (sel && sel.kind === "node") {
+        pinboardStore.toggle({ id: sel.id, label: sel.id });
+      }
+    },
   },
   {
     key: "[",

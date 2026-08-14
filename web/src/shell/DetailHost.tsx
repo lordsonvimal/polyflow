@@ -16,6 +16,7 @@ import { servicePairStore } from "../stores/servicePair";
 import ServicePairPanel from "../views/flows/ServicePairPanel";
 import SeamSummary from "../views/flows/SeamSummary";
 import { contextCopyStore } from "../stores/contextCopy";
+import { pinboardStore } from "../stores/pinboard";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -116,6 +117,19 @@ export default function DetailHost() {
                   >
                     📌 pin
                   </button>
+                  {/* UF.7: pinboard chip — distinct feature from the
+                      "📌 pin"/compare button above (selectionStore, capped
+                      at 2, ephemeral). Only meaningful for a real node. */}
+                  <Show when={sel().kind === "node" && !isServiceNodeId(sel().id)}>
+                    <button
+                      data-testid="detail-pin-to-pinboard"
+                      class="text-xs text-blue-400 hover:text-blue-300"
+                      title={pinboardStore.isPinned(sel().id) ? "Unpin from pinboard" : "Pin to pinboard"}
+                      onClick={() => pinboardStore.toggle({ id: sel().id, label: sel().id })}
+                    >
+                      {pinboardStore.isPinned(sel().id) ? "📍 unpin" : "📍 pinboard"}
+                    </button>
+                  </Show>
                   <button
                     class="text-xs text-neutral-500 hover:text-white"
                     onClick={() => selectionStore.setSelection(null)}

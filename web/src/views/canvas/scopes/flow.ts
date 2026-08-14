@@ -5,6 +5,7 @@
 // the shared budget/lens/filter pipeline.
 import { FlowRef } from "../../../stores/scope";
 import { apiFetch } from "../../../lib/apiFetch";
+import { resolvePinboard } from "./pinboard";
 
 export interface FlowHop {
   nodeId: string;
@@ -160,9 +161,11 @@ export function seamChains(body: SeamBody, edgeId: string): FlowChain[] {
 }
 
 // UF.0 wires the four FlowRef kinds already backed by a UB.5 endpoint
-// (through/path/waypoints/seam). varflow/edgeset/pins compose flows built by
-// later phases (UF.4, the UN.5 lens tie-in, UF.7's pinboard intersection) —
-// an honest empty result here rather than guessing at a request shape.
+// (through/path/waypoints/seam). UF.7 wires `pins` (scopes/pinboard.ts's
+// path-set intersection over the existing /api/flows/paths endpoint).
+// varflow/edgeset still compose flows built by later phases (UF.4, the
+// UN.5 lens tie-in) — an honest empty result for those, rather than
+// guessing at a request shape.
 export async function resolveFlow(
   ref: FlowRef,
   signal?: AbortSignal,
@@ -221,9 +224,18 @@ export async function resolveFlow(
         note: body.expanded ? undefined : "No channel closure — this edge kind has nothing to expand past its own pair.",
       };
     }
+    case "pins": {
+      const res = await resolvePinboard(ref.ids, signal);
+      const first = res.chains[0];
+      const label = first
+        ? chainLabel(first, flowRefLabel(ref))
+        : res.brokenPair
+          ? `No path between ${res.brokenPair.from} and ${res.brokenPair.to}`
+          : flowRefLabel(ref);
+      return { chains: res.chains, truncated: false, reachable: res.reachable, label };
+    }
     case "varflow":
     case "edgeset":
-    case "pins":
       return { chains: [], truncated: false, reachable: false, label: flowRefLabel(ref) };
   }
 }
