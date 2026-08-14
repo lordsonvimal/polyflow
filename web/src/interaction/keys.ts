@@ -1,5 +1,9 @@
 import { scopeStore } from "../stores/scope";
 import { paletteStore } from "../stores/palette";
+import { selectionStore } from "../stores/selection";
+import { multiSelectStore } from "../stores/multiSelect";
+import { contextCopyStore } from "../stores/contextCopy";
+import { selectionCopySource } from "../views/context/copy";
 
 export type KeyBinding = {
   key: string;       // matches KeyboardEvent.key or "Meta+k" compound
@@ -51,7 +55,11 @@ export const KEY_BINDINGS: KeyBinding[] = [
     key: "Meta+Shift+C",
     display: "⌘⇧C",
     description: "Copy context for current selection",
-    handler: () => {}, // plan 12
+    handler: () => {
+      const top = scopeStore.stack().at(-1);
+      const source = selectionCopySource(selectionStore.selection(), multiSelectStore.ids(), top);
+      if (source) contextCopyStore.copy(source);
+    },
   },
 ];
 
