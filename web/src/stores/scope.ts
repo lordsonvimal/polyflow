@@ -133,6 +133,16 @@ export const scopeStore = {
   push: (scope: Scope) => commitStackChange({ ...viewState(), stack: [...viewState().stack, scope] }),
   popTo: (i: number) => commitStackChange({ ...viewState(), stack: viewState().stack.slice(0, i + 1) }),
   reset: () => commitStackChange({ ...DEFAULT_STATE }),
+  // UF.2: swaps the top-of-stack scope in place — used by the waypoint
+  // builder so each chip add/remove live-updates the canvas lane without
+  // growing the stack (a `push` per keystroke would wreck breadcrumb/Esc
+  // navigation). Aborts in-flight fetches from the scope being replaced,
+  // same as push/popTo, since the resolved content is about to change.
+  replaceTop: (scope: Scope) => {
+    const stack = viewState().stack;
+    if (stack.length === 0) return;
+    commitStackChange({ ...viewState(), stack: [...stack.slice(0, -1), scope] });
+  },
 
   setIsolation: (iso: FlowRef | undefined) => commit({ ...viewState(), isolation: iso }),
   setFilters: (filters: ViewState["filters"]) => commit({ ...viewState(), filters }),

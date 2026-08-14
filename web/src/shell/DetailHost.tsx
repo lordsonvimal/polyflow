@@ -8,6 +8,8 @@ import { layoutPrefs } from "../stores/layoutPrefs";
 import { importRollupStore } from "../stores/importRollup";
 import { flowsThroughStore } from "../stores/flowsThrough";
 import ThroughPanel from "../views/flows/ThroughPanel";
+import { pathFinderStore } from "../stores/pathFinder";
+import PathFinderPanel from "../views/flows/PathFinderPanel";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -39,6 +41,17 @@ export default function DetailHost() {
     if (!requested) return;
     setFlowsOpenFor(requested);
     flowsThroughStore.consume();
+  });
+
+  // UF.2: "Find paths from A" on a second node — the context menu selects
+  // that node and leaves a one-shot request here, same bridge shape as
+  // flowsThroughStore above.
+  const [pathsOpenFor, setPathsOpenFor] = createSignal<string | null>(null);
+  createEffect(() => {
+    const requested = pathFinderStore.requestedTo();
+    if (!requested) return;
+    setPathsOpenFor(requested.id);
+    pathFinderStore.consume();
   });
 
   return (
@@ -92,6 +105,9 @@ export default function DetailHost() {
                 </button>
                 <Show when={flowsOpenFor() === sel().id}>
                   <ThroughPanel nodeId={sel().id} />
+                </Show>
+                <Show when={pathsOpenFor() === sel().id && pathFinderStore.startNode()}>
+                  {(start) => <PathFinderPanel from={start().id} fromLabel={start().label} to={sel().id} />}
                 </Show>
               </Show>
               <Show when={sel().kind === "edge" && importRollupStore.get(sel().id)}>
