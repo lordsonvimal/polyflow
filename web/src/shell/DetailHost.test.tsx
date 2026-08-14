@@ -8,6 +8,7 @@ import { serviceNodeId } from "../lib/aggregate";
 import { flowsThroughStore } from "../stores/flowsThrough";
 import { servicePairStore } from "../stores/servicePair";
 import { scopeStore } from "../stores/scope";
+import { pinboardStore } from "../stores/pinboard";
 
 describe("DetailHost", () => {
   let container: HTMLElement;
@@ -88,5 +89,20 @@ describe("DetailHost", () => {
     scopeStore.push({ kind: "group", nodeIds: ["n1", "n2"] });
     expect(container.querySelector('[data-testid="group-summary"]')).toBeTruthy();
     expect(container.textContent).toContain("2 selected — Group");
+  });
+
+  it("a node selection's pinboard button toggles the pinboard chip, distinct from 'pin to compare' (UF.7)", () => {
+    selectionStore.setSelection({ kind: "node", id: "auth:app/user.rb:method:save:5" });
+    const btn = container.querySelector('[data-testid="detail-pin-to-pinboard"]') as HTMLElement;
+    expect(btn).toBeTruthy();
+    expect(btn.textContent).toContain("pinboard");
+    expect(pinboardStore.isPinned("auth:app/user.rb:method:save:5")).toBe(false);
+
+    btn.click();
+    expect(pinboardStore.isPinned("auth:app/user.rb:method:save:5")).toBe(true);
+    // selectionStore's own "pin to compare" list is untouched by this action.
+    expect(selectionStore.pinned()).toEqual([]);
+
+    pinboardStore.clear();
   });
 });
