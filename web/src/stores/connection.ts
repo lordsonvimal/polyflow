@@ -17,6 +17,14 @@ let stopped = true;
 type EventListener = (data: { type: string; [k: string]: unknown }) => void;
 const eventListeners = new Set<EventListener>();
 
+// UO.1: distinct from onEvent's per-message stream — fires once per
+// reconnect (an onopen that isn't the very first connection of this
+// session), so a consumer like the tool-call log can tell "we may have
+// missed messages" from "this is just startup".
+type ReconnectListener = () => void;
+const reconnectListeners = new Set<ReconnectListener>();
+let hasConnectedOnce = false;
+
 function clearTimers(): void {
   clearTimeout(retryTimer);
   clearInterval(countdownTimer);
@@ -48,6 +56,8 @@ function connect(): void {
   }
   es.onopen = () => {
     setState("connected");
+    if (hasConnectedOnce) reconnectListeners.forEach((l) => l());
+    hasConnectedOnce = true;
     retryDelay = INITIAL_RETRY_MS;
     clearTimers();
   };
@@ -72,6 +82,7 @@ export const connectionStore = {
   start: () => {
     stopped = false;
     retryDelay = INITIAL_RETRY_MS;
+    hasConnectedOnce = false;
     connect();
   },
   stop: () => {
@@ -89,5 +100,9 @@ export const connectionStore = {
   onEvent: (l: EventListener): (() => void) => {
     eventListeners.add(l);
     return () => eventListeners.delete(l);
+  },
+  onReconnect: (l: ReconnectListener): (() => void) => {
+    reconnectListeners.add(l);
+    return () => reconnectListeners.delete(l);
   },
 };
