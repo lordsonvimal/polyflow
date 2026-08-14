@@ -10,8 +10,32 @@ import { createSignal } from "solid-js";
 // multi-selection).
 const [ids, setIds] = createSignal<ReadonlySet<string>>(new Set());
 
+// UF.5: collapsed file-group id -> its real member node ids, published
+// alongside `ids` whenever budget-forced clustering (CanvasHost's
+// autoCluster) folds a file into one synthetic `filegrp:` node. "Copy
+// context" on a scope must send the backend real node ids — a `filegrp:`
+// id has no graph node behind it — so `expand` swaps every clustered id in
+// for its members before the UB.6 request is built.
+const [clusters, setClusters] = createSignal<ReadonlyMap<string, string[]>>(new Map());
+
 export const canvasElementsStore = {
   ids,
   setIds: (next: ReadonlySet<string>) => setIds(next),
   has: (id: string) => ids().has(id),
+  setClusters: (next: ReadonlyMap<string, string[]>) => setClusters(next),
+  expand: (idList: readonly string[]): { ids: string[]; clusterCount: number } => {
+    const clusterMap = clusters();
+    const out = new Set<string>();
+    let clusterCount = 0;
+    for (const id of idList) {
+      const members = clusterMap.get(id);
+      if (members) {
+        clusterCount++;
+        for (const m of members) out.add(m);
+      } else {
+        out.add(id);
+      }
+    }
+    return { ids: [...out], clusterCount };
+  },
 };

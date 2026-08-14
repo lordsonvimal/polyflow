@@ -34,6 +34,8 @@ import { serviceFromNodeId } from "../../lib/aggregate";
 import { layoutPrefs } from "../../stores/layoutPrefs";
 import { applyFilters } from "../../lib/filters";
 import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
+import { applyFileGrouping, FILE_GROUP_TYPE } from "../../lib/filegroup";
+import { contextCopyStore } from "../../stores/contextCopy";
 import { importRollupStore } from "../../stores/importRollup";
 import FilterBar from "./FilterBar";
 import FlowLane from "../flows/FlowLane";
@@ -494,6 +496,25 @@ export default function CanvasHost() {
   createEffect(() => {
     const d = renderData();
     canvasElementsStore.setIds(new Set(d ? d.nodes.map((n) => n.id) : []));
+
+    // UF.5: when budget-forced clustering is active, resolve each rendered
+    // `filegrp:` id back to its real member ids (against the *unclustered*
+    // data — the group id is deterministic per (service, file), so it's
+    // found there regardless of collapse state) so "Copy context" on a
+    // scope can expand clusters instead of sending an unresolvable id.
+    const clusterMap = new Map<string, string[]>();
+    const raw = data();
+    if (d && raw) {
+      const { groups } = applyFileGrouping(raw.nodes, raw.edges, []);
+      const groupMembers = new Map(groups.map((g) => [g.id, g.members.map((m) => m.id)]));
+      for (const n of d.nodes) {
+        if (n.type === FILE_GROUP_TYPE && n.meta?.collapsed === "true") {
+          const members = groupMembers.get(n.id);
+          if (members) clusterMap.set(n.id, members);
+        }
+      }
+    }
+    canvasElementsStore.setClusters(clusterMap);
   });
 
   // Reflect external selection changes (e.g. a tree row click) onto the
@@ -777,6 +798,13 @@ export default function CanvasHost() {
             onClick={viewAsGroup}
           >
             View as group
+          </button>
+          <button
+            data-testid="multiselect-copy-context"
+            class="text-blue-300 hover:text-blue-200"
+            onClick={() => contextCopyStore.copy({ kind: "group", ids: [...multiSelectStore.ids()].sort() })}
+          >
+            ⧉ copy context
           </button>
           <button
             data-testid="multiselect-clear"
