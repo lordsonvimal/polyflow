@@ -1,6 +1,8 @@
-import { Show, For, createEffect, createSignal } from "solid-js";
+import { Show, For, createEffect, createSignal, createMemo } from "solid-js";
 import { selectionStore } from "../stores/selection";
 import type { Selection } from "../stores/selection";
+import { scopeStore } from "../stores/scope";
+import GroupSummary from "../views/flows/GroupSummary";
 import SourcePanel from "./SourcePanel";
 import { isServiceNodeId, serviceFromNodeId } from "../lib/aggregate";
 import { exploreStore } from "../stores/explore";
@@ -35,6 +37,15 @@ function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
 export default function DetailHost() {
   const [flowsOpenFor, setFlowsOpenFor] = createSignal<string | null>(null);
 
+  // UF.4: group scope has no `selection` — the group itself is the thing
+  // being inspected, so its summary is keyed off the scope stack instead
+  // of selectionStore, alongside (not replacing) the selection-driven panel
+  // below.
+  const groupScope = createMemo(() => {
+    const top = scopeStore.stack().at(-1);
+    return top?.kind === "group" ? top : null;
+  });
+
   // A context-menu "Isolate flows through here" click selects the node and
   // leaves a one-shot request (flowsThroughStore) — auto-expand this
   // panel's own toggle for it, so the two entry points land in the same
@@ -62,6 +73,18 @@ export default function DetailHost() {
       data-testid="detail-host"
       class="flex shrink-0 border-l border-neutral-800 dark:border-neutral-700 overflow-hidden transition-all"
     >
+      <Show when={groupScope()}>
+        {(g) => (
+          <div class="w-80 bg-neutral-950 overflow-y-auto shrink-0">
+            <div class="p-4 text-sm text-neutral-300">
+              <div class="flex items-start justify-between gap-2 mb-2">
+                <span class="font-medium">{g().nodeIds.length} selected — Group</span>
+              </div>
+              <GroupSummary nodeIds={g().nodeIds} />
+            </div>
+          </div>
+        )}
+      </Show>
       <Show when={selectionStore.selection()}>
         {(sel) => (
           <div class="w-80 bg-neutral-950 overflow-y-auto shrink-0">

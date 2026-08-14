@@ -7,6 +7,7 @@ import { layoutPrefs } from "../stores/layoutPrefs";
 import { serviceNodeId } from "../lib/aggregate";
 import { flowsThroughStore } from "../stores/flowsThrough";
 import { servicePairStore } from "../stores/servicePair";
+import { scopeStore } from "../stores/scope";
 
 describe("DetailHost", () => {
   let container: HTMLElement;
@@ -16,6 +17,7 @@ describe("DetailHost", () => {
     selectionStore.setSelection(null);
     exploreStore.reset();
     layoutPrefs.setActivity("flows");
+    scopeStore.reset();
     (globalThis as any).fetch = vi.fn(() => Promise.resolve({ ok: false, status: 404, text: async () => "not found" } as Response));
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -25,6 +27,7 @@ describe("DetailHost", () => {
   afterEach(() => {
     dispose?.();
     container.remove();
+    scopeStore.reset();
   });
 
   it("a service pseudo-node selection shows a 'View in Tech Stack' link instead of a source panel (UN.4)", () => {
@@ -79,5 +82,11 @@ describe("DetailHost", () => {
     expect(container.querySelector('[data-testid="service-pair-panel"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="seam-summary"]')).toBeFalsy();
     servicePairStore.close();
+  });
+
+  it("a group scope renders the group summary (UF.4), independent of node selection", () => {
+    scopeStore.push({ kind: "group", nodeIds: ["n1", "n2"] });
+    expect(container.querySelector('[data-testid="group-summary"]')).toBeTruthy();
+    expect(container.textContent).toContain("2 selected — Group");
   });
 });

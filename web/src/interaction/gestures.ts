@@ -1,5 +1,6 @@
 import { selectionStore } from "../stores/selection";
 import { scopeStore } from "../stores/scope";
+import { multiSelectStore } from "../stores/multiSelect";
 
 export type TargetRef = { kind: "node" | "edge"; id: string };
 
@@ -30,9 +31,18 @@ export function handleIntent(intent: Intent): void {
     case "escape":
       scopeStore.handleEsc();
       break;
-    case "menu":
     case "multiAdd":
-      // Callers handle these (menu → openContextMenu, multiAdd → plan 12)
+      // UF.4: node-only — a group is a set of nodes, so an edge shift-click
+      // has nothing to add. CanvasHost intercepts this intent for canvas
+      // targets before it reaches here (Cytoscape's own native additive
+      // selection already fires, and its select/unselect listener mirrors
+      // that into multiSelectStore — toggling here too would double-flip
+      // it). This path is for sources with no Cytoscape element behind them
+      // (e.g. a tree-row shift-click).
+      if (intent.target.kind === "node") multiSelectStore.toggle(intent.target.id);
+      break;
+    case "menu":
+      // Callers handle this (menu → openContextMenu)
       break;
   }
 }
