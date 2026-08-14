@@ -18,10 +18,13 @@ import dagreFn from "cytoscape-dagre";
 import { scopeStore, Scope } from "../../stores/scope";
 import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./budget";
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
+import { registerMenuItems, openMenu } from "../../interaction/ContextMenu";
 import { apiFetch } from "../../lib/apiFetch";
 import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
+import { flowHighlightStore } from "../../stores/flowHighlight";
+import { flowsThroughStore } from "../../stores/flowsThrough";
 import { applyFilters } from "../../lib/filters";
 import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
 import { importRollupStore } from "../../stores/importRollup";
@@ -50,6 +53,8 @@ cytoscape.use(dagreFn);
 // TopBar can gate the lens control (UN.5) on the same "is this a canvas
 // page" rule without duplicating the list.
 export const NO_CANVAS = new Set(["search", "flow", "group"]);
+
+const MENU_ACTIVITY_ID = "canvas";
 
 // UN.1: each drill scope (overview/service/folder/file/neighborhood) has its
 // own resolver module under scopes/ — one module per pinned scope kind, all
@@ -137,6 +142,13 @@ function buildStylesheet(): object[] {
     // rather than disappear (lenses.ts's applyLens) — orientation is kept
     // until the user opts into "hide unlinked".
     { selector: "node[lens_dim = 'true']", style: { opacity: 0.3 } },
+    // UF.1: ThroughPanel row hover — cheap dim of everything outside the
+    // hovered flow's member set, classes only (no layout call).
+    { selector: ".flow-highlight-dim", style: { opacity: 0.15 } },
+    {
+      selector: ".flow-highlight-member",
+      style: { opacity: 1, "border-width": 2, "border-color": "#818cf8" },
+    },
     {
       selector: "$node > node",
       style: {
@@ -284,6 +296,22 @@ export default function CanvasHost() {
   }
 
   function onCanvasIntent(intent: Intent) {
+    if (intent.type === "menu") {
+      const items = [];
+      if (intent.target.kind === "node") {
+        items.push({
+          id: "isolate-flows-through",
+          label: "Isolate flows through here",
+          handler: () => {
+            selectionStore.setSelection({ kind: "node", id: intent.target.id });
+            flowsThroughStore.request(intent.target.id);
+          },
+        });
+      }
+      registerMenuItems(MENU_ACTIVITY_ID, items);
+      openMenu(intent.x, intent.y);
+      return;
+    }
     if ((intent.type === "select" || intent.type === "drill") && intent.target.kind === "node" && cy) {
       const el = cy.getElementById(intent.target.id);
       const stubScope = scopeForStub(el);
@@ -360,6 +388,21 @@ export default function CanvasHost() {
     if (sel && cy.getElementById(sel.id).length > 0) {
       cy.getElementById(sel.id).select();
     }
+  });
+
+  // UF.1: reflect the hovered flow-through group onto the canvas — classes
+  // only, no layout call, so it's cheap enough for onMouseEnter/Leave.
+  createEffect(() => {
+    if (!cy) return;
+    const hl = flowHighlightStore.ids();
+    cy.batch(() => {
+      cy!.elements().removeClass("flow-highlight-dim flow-highlight-member");
+      if (hl.size === 0) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cy!.elements().forEach((el: any) => {
+        el.addClass(hl.has(el.id()) ? "flow-highlight-member" : "flow-highlight-dim");
+      });
+    });
   });
 
   // Ids currently on canvas, tracked outside Solid's reactivity so the render
