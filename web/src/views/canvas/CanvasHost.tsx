@@ -26,6 +26,7 @@ import { applyFilters } from "../../lib/filters";
 import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
 import { importRollupStore } from "../../stores/importRollup";
 import FilterBar from "./FilterBar";
+import FlowLane from "../flows/FlowLane";
 import { GraphData, parseCytoGraph, sortGraphData } from "./scopes/common";
 import { resolveOverview } from "./scopes/overview";
 import { resolveService } from "./scopes/service";
@@ -469,11 +470,17 @@ export default function CanvasHost() {
         classList={{ invisible: isNoCanvas() || !!budgetOver() }}
       />
 
-      {/* Placeholder for canvas-free scopes */}
-      <Show when={isNoCanvas()}>
+      {/* UF.0: the flow scope gets its own purpose-built lane renderer,
+          not the generic budget/lens/filter canvas pipeline. */}
+      <Show when={scope().kind === "flow"}>
+        <FlowLane />
+      </Show>
+
+      {/* Placeholder for the remaining canvas-free scopes */}
+      <Show when={isNoCanvas() && scope().kind !== "flow"}>
         <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
           {scope().kind === "search" && "Search & Flow — implemented in plan 11"}
-          {(scope().kind === "flow" || scope().kind === "group") && "Flow & Group views — planned in plan 12"}
+          {scope().kind === "group" && "Group views — planned in plan 12"}
         </div>
       </Show>
 

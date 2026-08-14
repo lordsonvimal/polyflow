@@ -12,7 +12,13 @@ const SCOPES: Scope[] = [
   { kind: "file", service: "rails-svc", path: "app/jobs/sync.rb" },
   { kind: "neighborhood", nodeId: "node-1", depth: 2 },
   { kind: "impact", target: "node-2", direction: "both", depth: 3 },
-  { kind: "flow", flow: { id: "flow-1", label: "POST /orders" } },
+  { kind: "flow", flow: { kind: "through", nodeId: "node-3", entrypointId: "node-1" } },
+  { kind: "flow", flow: { kind: "path", from: "node-1", to: "node-4", index: 0 } },
+  { kind: "flow", flow: { kind: "waypoints", ids: ["node-1", "node-2"], direction: "forward" } },
+  { kind: "flow", flow: { kind: "seam", edgeId: "edge-1" } },
+  { kind: "flow", flow: { kind: "varflow", nodeId: "node-1" } },
+  { kind: "flow", flow: { kind: "edgeset", nodeId: "node-1", edgeTypes: ["calls", "publishes"] } },
+  { kind: "flow", flow: { kind: "pins", ids: ["node-1", "node-2", "node-3"] } },
   { kind: "group", nodeIds: ["a", "b", "c"] },
 ];
 
@@ -57,7 +63,7 @@ describe("URL codec", () => {
   it("round-trips isolation chip", () => {
     const state: ViewState = {
       stack: [{ kind: "search" }],
-      isolation: { id: "flow-42", label: "CDR flow" },
+      isolation: { kind: "seam", edgeId: "edge-42" },
       filters: { confidence: [], edgeTypes: [], services: [] },
     };
     const result = decodeViewState(encodeViewState(state));
@@ -72,7 +78,7 @@ describe("Esc ordering", () => {
     // State: selection set, isolation set, stack=[search, service]
     const state0: ViewState = {
       stack: [{ kind: "search" }, { kind: "service", service: "rails-svc" }],
-      isolation: { id: "f1" },
+      isolation: { kind: "varflow", nodeId: "n1" },
       filters: { confidence: [], edgeTypes: [], services: [] },
       selection: { kind: "node", id: "n1" },
     };

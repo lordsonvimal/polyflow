@@ -1,8 +1,17 @@
 import { createSignal } from "solid-js";
 import { selectionStore } from "./selection";
 
-// plan 12 defines full FlowRef — forward-declared here
-export type FlowRef = { id: string; label?: string };
+// UF.0: every way a flow can be pinned down. `label` is never stored here —
+// it's derived from the resolved chain (entrypoint/terminus labels), so the
+// ref itself stays a pure, URL-encodable identifier.
+export type FlowRef =
+  | { kind: "through"; nodeId: string; entrypointId: string }
+  | { kind: "path"; from: string; to: string; index: number }
+  | { kind: "waypoints"; ids: string[]; direction: "forward" | "backward" }
+  | { kind: "seam"; edgeId: string }
+  | { kind: "varflow"; nodeId: string }
+  | { kind: "edgeset"; nodeId: string; edgeTypes: string[] } // lens-scoped flows from a node
+  | { kind: "pins"; ids: string[] }; // pinboard (UF.7)
 
 export type NodeKind =
   | "file" | "function" | "class" | "variable"
