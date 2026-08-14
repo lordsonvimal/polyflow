@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "polyflow": {
+      "type": "stdio",
+      "command": "/Users/lordson/Projects/polyflow/dist/polyflow",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}
