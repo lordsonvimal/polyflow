@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { handleIntent, makeClickHandler } from "./gestures";
 import type { Intent } from "./gestures";
 import { selectionStore } from "../stores/selection";
+import { multiSelectStore } from "../stores/multiSelect";
 import { registerMenuItems, unregisterMenuItems, getMenuItems } from "./ContextMenu";
 
 beforeEach(() => {
@@ -9,6 +10,26 @@ beforeEach(() => {
   selectionStore.setHoverTarget(null);
   // Clear pinned (no direct reset exported, so unpin all)
   selectionStore.pinned().forEach(p => selectionStore.unpin(p.id));
+  multiSelectStore.clear();
+});
+
+// ── UF.4: multiAdd toggles the multi-selection ──────────────────────────────
+describe("handleIntent - multiAdd", () => {
+  it("adds a node target not yet in the multi-selection", () => {
+    handleIntent({ type: "multiAdd", target: { kind: "node", id: "n1" } });
+    expect([...multiSelectStore.ids()]).toEqual(["n1"]);
+  });
+
+  it("removes a node target already in the multi-selection (toggle)", () => {
+    handleIntent({ type: "multiAdd", target: { kind: "node", id: "n1" } });
+    handleIntent({ type: "multiAdd", target: { kind: "node", id: "n1" } });
+    expect(multiSelectStore.ids().size).toBe(0);
+  });
+
+  it("ignores an edge target — a group is nodes only", () => {
+    handleIntent({ type: "multiAdd", target: { kind: "edge", id: "e1" } });
+    expect(multiSelectStore.ids().size).toBe(0);
+  });
 });
 
 // ── 1. Same intent from any source → identical selection state ──────────────
