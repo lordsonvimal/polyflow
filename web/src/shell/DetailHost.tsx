@@ -15,6 +15,7 @@ import PathFinderPanel from "../views/flows/PathFinderPanel";
 import { servicePairStore } from "../stores/servicePair";
 import ServicePairPanel from "../views/flows/ServicePairPanel";
 import SeamSummary from "../views/flows/SeamSummary";
+import { contextCopyStore } from "../stores/contextCopy";
 
 function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
@@ -68,6 +69,12 @@ export default function DetailHost() {
     pathFinderStore.consume();
   });
 
+  // UF.5: "Copy context" on the node/edge detail panel — only real graph
+  // nodes/edges, never a synthetic overview-aggregation pill (`agg:`) or
+  // Imports-lens rollup (`rollup:`) UB.6 has no node/edge for.
+  const isCopyableSelection = (sel: NonNullable<Selection>) =>
+    !sel.id.startsWith("agg:") && !sel.id.startsWith("rollup:") && !(sel.kind === "node" && isServiceNodeId(sel.id));
+
   return (
     <div
       data-testid="detail-host"
@@ -92,6 +99,16 @@ export default function DetailHost() {
               <div class="flex items-start justify-between gap-2 mb-2">
                 <span class="font-medium break-all min-w-0" title={sel().id}>{sel().kind}: {sel().id}</span>
                 <div class="flex gap-2 shrink-0">
+                  <Show when={isCopyableSelection(sel())}>
+                    <button
+                      data-testid="detail-copy-context"
+                      class="text-xs text-blue-400 hover:text-blue-300"
+                      title="Copy context"
+                      onClick={() => contextCopyStore.copy({ kind: sel().kind, id: sel().id })}
+                    >
+                      ⧉ copy context
+                    </button>
+                  </Show>
                   <button
                     class="text-xs text-blue-400 hover:text-blue-300"
                     title="Pin to compare"

@@ -10,6 +10,8 @@ import { resolveFlow, computeFlowLaneLayout, FlowResolution, SEAM_CHANNEL_PREFIX
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { selectionStore } from "../../stores/selection";
 import { CANVAS_BG, LABEL_COLOR, DEFAULT_NODE_COLOR, NODE_TYPE_STYLES, LANG_COLORS } from "../../lib/styles";
+import { contextCopyStore } from "../../stores/contextCopy";
+import { flowRefToSource } from "../context/copy";
 
 const LANE_HEIGHT = 140;
 const HOP_SPACING = 220;
@@ -209,6 +211,18 @@ export default function FlowLane() {
     <div class="absolute inset-0 flex flex-col" style={{ background: CANVAS_BG }}>
       <div class="absolute top-2 left-2 z-10 flex items-center gap-2 bg-neutral-800/90 border border-neutral-700 rounded px-3 py-1.5 text-sm text-white">
         <span>Flow: {resolution()?.label ?? "…"}</span>
+        <Show when={scope()}>
+          {(s) => (
+            <button
+              data-testid="flow-chip-copy-context"
+              class="text-blue-300 hover:text-blue-200 text-xs"
+              title="Copy context"
+              onClick={() => contextCopyStore.copy(flowRefToSource(s().flow, resolution()?.chains ?? []))}
+            >
+              ⧉ copy context
+            </button>
+          )}
+        </Show>
         <button class="text-neutral-400 hover:text-white" onClick={closeFlow} title="Close flow (Esc)">
           ×
         </button>
