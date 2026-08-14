@@ -22,6 +22,9 @@ function makeState(scope: Scope): ViewState {
     filters: { confidence: ["static"], edgeTypes: ["calls"], services: ["rails-svc"] },
     selection: { kind: "node", id: "node-1" },
     layout: "dagre",
+    lens: "Calls",
+    lensHideUnlinked: true,
+    lensRollup: false,
   };
 }
 

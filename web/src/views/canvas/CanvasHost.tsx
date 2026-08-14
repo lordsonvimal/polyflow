@@ -23,6 +23,8 @@ import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
 import { applyFilters } from "../../lib/filters";
+import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
+import { importRollupStore } from "../../stores/importRollup";
 import FilterBar from "./FilterBar";
 import { GraphData, parseCytoGraph, sortGraphData } from "./scopes/common";
 import { resolveOverview } from "./scopes/overview";
@@ -43,8 +45,10 @@ import {
 cytoscape.use(fcose);
 cytoscape.use(dagreFn);
 
-// Scopes that have no canvas — show a placeholder instead.
-const NO_CANVAS = new Set(["search", "flow", "group"]);
+// Scopes that have no canvas — show a placeholder instead. Exported so
+// TopBar can gate the lens control (UN.5) on the same "is this a canvas
+// page" rule without duplicating the list.
+export const NO_CANVAS = new Set(["search", "flow", "group"]);
 
 // UN.1: each drill scope (overview/service/folder/file/neighborhood) has its
 // own resolver module under scopes/ — one module per pinned scope kind, all
@@ -128,6 +132,10 @@ function buildStylesheet(): object[] {
       selector: "node[stub = 'true']",
       style: { "background-opacity": 0.35, "border-width": 1, "border-style": "dashed", "border-color": "#6b7280" },
     },
+    // UN.5: nodes with no visible edge under the active lens dim to 30%
+    // rather than disappear (lenses.ts's applyLens) — orientation is kept
+    // until the user opts into "hide unlinked".
+    { selector: "node[lens_dim = 'true']", style: { opacity: 0.3 } },
     {
       selector: "$node > node",
       style: {
@@ -192,11 +200,30 @@ export default function CanvasHost() {
   const [clusteredData, setClusteredData] = createSignal<GraphData | null>(null);
   createEffect(() => { scope(); setClusteredData(null); });
 
+  // Lens (UN.5) narrows first — its own axis over edge types, independent
+  // of FilterBar's coarser edgeType chips (see lenses.ts's header note) —
+  // then Imports' optional module rollup collapses what's left to file→file
+  // counts before FilterBar's confidence/edgeType/service chips apply.
+  const lensedData = createMemo((): GraphData | null => {
+    const d = clusteredData() ?? data();
+    if (!d) return null;
+    const vs = scopeStore.viewState();
+    const lens = vs.lens ?? DEFAULT_LENS;
+    const lensed = applyLens(d, lens, { hideUnlinked: !!vs.lensHideUnlinked });
+    if (lens === "Imports" && vs.lensRollup) {
+      const { nodes, edges, detail } = aggregateImportsRollup(lensed);
+      importRollupStore.setDetail(detail);
+      return { nodes, edges };
+    }
+    importRollupStore.setDetail(new Map());
+    return lensed;
+  });
+
   // Filters (US.1 ViewState.filters, UN.2 FilterBar) are applied before the
   // budget check so a narrowing filter can pull a scope back under budget,
   // and before render so the element set on screen always matches the chips.
   const filteredData = createMemo((): GraphData | null => {
-    const d = clusteredData() ?? data();
+    const d = lensedData();
     if (!d) return null;
     return applyFilters(d, scopeStore.viewState().filters);
   });
