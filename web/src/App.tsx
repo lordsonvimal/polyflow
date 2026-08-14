@@ -13,6 +13,7 @@ import Palette from "./views/palette/Palette";
 import { scopeStore } from "./stores/scope";
 import { registerKeys } from "./interaction/keys";
 import { connectionStore } from "./stores/connection";
+import { jobsStore } from "./stores/jobs";
 
 const App: Component = () => {
   onMount(() => {
@@ -38,6 +39,15 @@ const App: Component = () => {
         <div class="flex items-center gap-2 px-3 py-1 bg-neutral-800 text-neutral-400 text-xs shrink-0">
           <span>A node from the saved view no longer exists after reindex — view reset to overview.</span>
           <button class="ml-auto hover:text-white" onClick={scopeStore.dismissStaleIdNotice}>×</button>
+        </div>
+      </Show>
+      <Show when={jobsStore.reloadBanner()}>
+        <div data-testid="reload-banner" class="flex items-center gap-2 px-3 py-1 bg-indigo-900/60 text-indigo-200 text-xs shrink-0">
+          <span>Graph updated — Reload view</span>
+          <button data-testid="reload-banner-action" class="hover:text-white underline" onClick={jobsStore.reloadView}>
+            Reload view
+          </button>
+          <button class="ml-auto hover:text-white" onClick={jobsStore.dismissReloadBanner}>×</button>
         </div>
       </Show>
       <div class="flex flex-1 min-h-0">

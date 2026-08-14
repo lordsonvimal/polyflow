@@ -7,6 +7,8 @@ export type Toast = {
   message: string;
   // Verbatim server error body / stack, shown behind a details expander.
   detail?: string;
+  // Optional inline action (e.g. UO.0's failed-index toast "open Jobs tab").
+  action?: { label: string; onClick: () => void };
 };
 
 // info/success toasts self-dismiss; error toasts persist until the user
@@ -32,7 +34,7 @@ function dismiss(id: string): void {
 
 function add(toast: Partial<Toast> & Pick<Toast, "kind" | "message">): string {
   const id = toast.id ?? `toast-${++seq}`;
-  const full: Toast = { id, kind: toast.kind, message: toast.message, detail: toast.detail };
+  const full: Toast = { id, kind: toast.kind, message: toast.message, detail: toast.detail, action: toast.action };
   setToasts((ts) => [...ts.filter((t) => t.id !== id), full]);
   if (full.kind !== "error") {
     clearTimer(id);

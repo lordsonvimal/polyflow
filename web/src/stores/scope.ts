@@ -111,6 +111,12 @@ const initial = readHash();
 const [viewState, setViewState] = createSignal<ViewState>(initial.state);
 const [unknownVersionNotice, setUnknownVersionNotice] = createSignal(initial.unknownVersion);
 const [staleIdNotice, setStaleIdNotice] = createSignal(false);
+// UO.0: bumped by the "Reload view" banner action — CanvasHost watches this
+// to re-resolve the current scope's data in place (no stack change, so
+// selection/viewport survive where their ids still exist), distinct from
+// handleStaleId's full reset which is for a *known-gone* id, not a fresh
+// index result that mostly still applies.
+const [reloadNonce, setReloadNonce] = createSignal(0);
 
 let hashTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -149,6 +155,8 @@ export const scopeStore = {
   staleIdNotice,
   dismissVersionNotice: () => setUnknownVersionNotice(false),
   dismissStaleIdNotice: () => setStaleIdNotice(false),
+  reloadNonce,
+  requestReload: () => setReloadNonce((n) => n + 1),
 
   // AbortSignal tied to the current scope; pass to fetches so a scope pop
   // cancels them (see abortInFlight above).

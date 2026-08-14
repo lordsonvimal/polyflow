@@ -17,6 +17,17 @@ function ToastRow(props: { toast: Toast }) {
     >
       <div class="flex items-start gap-2">
         <span class="flex-1">{props.toast.message}</span>
+        <Show when={props.toast.action}>
+          {(action) => (
+            <button
+              data-testid="toast-action"
+              class="text-[10px] underline opacity-80 hover:opacity-100 shrink-0"
+              onClick={() => action().onClick()}
+            >
+              {action().label}
+            </button>
+          )}
+        </Show>
         <Show when={props.toast.detail}>
           <button
             data-testid="toast-expand"
