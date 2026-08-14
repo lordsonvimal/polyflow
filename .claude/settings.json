@@ -2,22 +2,30 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
-            "type": "command",
-            "command": "polyflow hook-context-inject"
+            "command": "polyflow hook-context-inject",
+            "type": "command"
+          },
+          {
+            "command": "/Users/lordson/Projects/polyflow/dist/polyflow hook-context-inject",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Bash"
       },
       {
-        "matcher": "Read",
         "hooks": [
           {
-            "type": "command",
-            "command": "polyflow hook-context-inject"
+            "command": "polyflow hook-context-inject",
+            "type": "command"
+          },
+          {
+            "command": "/Users/lordson/Projects/polyflow/dist/polyflow hook-context-inject",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Read"
       }
     ]
   }
