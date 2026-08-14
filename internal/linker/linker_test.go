@@ -579,3 +579,69 @@ func TestLinkSSEClients(t *testing.T) {
 	assert.Equal(t, "web:notif.tsx:http_client:eventsource_connect:23", edges[0].From)
 	assert.Equal(t, "web:notif.tsx:subscriber:ws_onmessage_assign:24", edges[0].To)
 }
+
+// grpcRegisterNode builds a grpc_handler node as the grpc_server_register
+// pattern produces it: labeled with the Register<Service>Server function
+// name, carrying the impl argument's raw source text.
+func grpcRegisterNode(id, impl string) graph.Node {
+	return graph.Node{
+		ID: id, Type: graph.NodeTypeGRPCHandler, Label: "RegisterTraceServiceServer", Service: "app",
+		File: "receiver.go",
+		Meta: map[string]string{"pattern": "grpc_server_register", "impl": impl},
+	}
+}
+
+// RegisterTraceServiceServer(s, &grpcTraceHandler{session: r.session}) — the
+// registration node must gain a calls edge to every method on the impl
+// struct, since that struct (not the registration call) is where a request's
+// static flow actually continues.
+func TestLinkGRPCHandlers_StructLiteral(t *testing.T) {
+	nodes := []graph.Node{
+		grpcRegisterNode("app:receiver.go:grpc_handler:grpc_server_register:80", "&grpcTraceHandler{session: r.session}"),
+		handlerMethod("receiver.go", "grpcTraceHandler", "Export"),
+		handlerMethod("receiver.go", "grpcTraceHandler", "Close"),
+		handlerMethod("receiver.go", "otherHandler", "Export"),
+	}
+
+	edges, unresolved := LinkGRPCHandlers(nodes)
+
+	require.Len(t, edges, 2, "links every method on the impl struct, not just one")
+	assert.Empty(t, unresolved)
+	got := map[string]bool{}
+	for _, e := range edges {
+		assert.Equal(t, "app:receiver.go:grpc_handler:grpc_server_register:80", e.From)
+		assert.Equal(t, graph.EdgeTypeCalls, e.Type)
+		got[e.To] = true
+	}
+	assert.True(t, got["app:receiver.go:method:Export"])
+	assert.True(t, got["app:receiver.go:method:Close"])
+}
+
+// A `New<Type>(...)` constructor call is the other common registration
+// shape — the type name is recoverable from the function name alone.
+func TestLinkGRPCHandlers_ConstructorCall(t *testing.T) {
+	nodes := []graph.Node{
+		grpcRegisterNode("app:receiver.go:grpc_handler:grpc_server_register:12", "NewFooHandler(session)"),
+		handlerMethod("receiver.go", "FooHandler", "Export"),
+	}
+
+	edges, unresolved := LinkGRPCHandlers(nodes)
+
+	require.Len(t, edges, 1)
+	assert.Empty(t, unresolved)
+	assert.Equal(t, "app:receiver.go:method:Export", edges[0].To)
+}
+
+// A bare identifier (`impl`) names a local variable whose type isn't visible
+// from text alone — the pass must ledger it rather than guess.
+func TestLinkGRPCHandlers_BareIdentifierUnresolved(t *testing.T) {
+	nodes := []graph.Node{
+		grpcRegisterNode("app:receiver.go:grpc_handler:grpc_server_register:9", "impl"),
+	}
+
+	edges, unresolved := LinkGRPCHandlers(nodes)
+
+	assert.Empty(t, edges)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "grpc_impl_unresolved", unresolved[0].Kind)
+}

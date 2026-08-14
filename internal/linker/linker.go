@@ -124,6 +124,95 @@ func uniqueAbbreviatedReceiver(candidates []*graph.Node, qualifier string) (stri
 	return found, found != ""
 }
 
+// LinkGRPCHandlers emits calls edges from a gRPC server-registration site
+// (`Register<Service>Server(s, impl)`) to every method defined on the impl
+// struct type. The grpc_server_register pattern captures the impl argument's
+// raw source text into Meta["impl"] but nothing ever resolved it to a type,
+// so the registration node — the only node representing the RPC entrypoint —
+// had zero outgoing edges. A forward flow trace from it (UF flow lane, "flows
+// through" a gRPC entrypoint) found nothing to walk despite the impl struct's
+// methods containing the real handler logic.
+//
+// Unlike LinkRouteHandlers, there is no per-method capture to pin a single
+// callee, so every method on the impl type is linked — the registration call
+// hands the whole struct to grpc.Server, which dispatches to whichever RPC
+// method a request names.
+func LinkGRPCHandlers(nodes []graph.Node) ([]graph.Edge, []graph.UnresolvedRef) {
+	recvIndex := make(map[string][]string) // service + "\x00" + lower(receiver) → method node IDs
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeMethod {
+			continue
+		}
+		recv := n.Meta["receiver"]
+		if recv == "" {
+			continue
+		}
+		key := n.Service + "\x00" + strings.ToLower(strings.TrimPrefix(recv, "*"))
+		recvIndex[key] = append(recvIndex[key], n.ID)
+	}
+
+	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeGRPCHandler || n.Meta["pattern"] != "grpc_server_register" {
+			continue
+		}
+		implType, ok := grpcImplTypeName(n.Meta["impl"])
+		if !ok {
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: n.Meta["impl"], Kind: "grpc_impl_unresolved",
+			})
+			continue
+		}
+		methodIDs := recvIndex[n.Service+"\x00"+strings.ToLower(implType)]
+		if len(methodIDs) == 0 {
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: implType, Kind: "grpc_impl_unresolved",
+			})
+			continue
+		}
+		for _, methodID := range methodIDs {
+			edges = append(edges, graph.Edge{
+				ID:   fmt.Sprintf("calls:%s->%s", n.ID, methodID),
+				From: n.ID,
+				To:   methodID,
+				Type: graph.EdgeTypeCalls,
+			})
+		}
+	}
+	return edges, unresolved
+}
+
+// grpcImplTypeName recovers a bare type name from the raw source text of a
+// gRPC registration's impl argument: `&grpcTraceHandler{session: r.session}`
+// → "grpcTraceHandler", `pkg.FooHandler{}` → "FooHandler",
+// `NewFooHandler(x)` → "FooHandler" (the New-prefixed constructor convention
+// mirrored from uniqueAbbreviatedReceiver's abbreviation matching below). A
+// bare identifier (`impl`) names a local variable whose type isn't visible
+// from text alone, so it's reported unresolved rather than guessed at.
+func grpcImplTypeName(impl string) (string, bool) {
+	s := strings.TrimPrefix(strings.TrimSpace(impl), "&")
+	i := strings.IndexAny(s, "{(")
+	if i <= 0 {
+		return "", false
+	}
+	head := s[:i]
+	if s[i] == '(' {
+		if !strings.HasPrefix(head, "New") {
+			return "", false
+		}
+		head = head[len("New"):]
+	}
+	if dot := strings.LastIndex(head, "."); dot >= 0 {
+		head = head[dot+1:]
+	}
+	return head, head != ""
+}
+
 // LinkRouteComponents emits renders edges from Solid Router client-route
 // declarations (NodeTypeRoute, Meta["component"] set by the solid_route
 // pattern) to the component function/method they reference. Mirrors

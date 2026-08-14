@@ -808,6 +808,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := writeEdges(linker.LinkRouteHandlers(allNodes)); err != nil {
 		return nil, err
 	}
+	{
+		grpcEdges, grpcUnresolved := linker.LinkGRPCHandlers(allNodes)
+		if err := writeEdges(grpcEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, grpcUnresolved...)
+	}
 	// Rails routes name their action by convention, not by the Meta["handler"]
 	// receiver string LinkRouteHandlers keys on, so they need their own pass.
 	{
