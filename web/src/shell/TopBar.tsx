@@ -1,11 +1,15 @@
-import { createSignal, onMount, createEffect } from "solid-js";
+import { createSignal, onMount, createEffect, Show, createMemo } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { paletteStore } from "../stores/palette";
 import { apiFetchJSON } from "../lib/apiFetch";
 import Breadcrumbs from "./Breadcrumbs";
+import LensBar from "../views/canvas/LensBar";
+import { NO_CANVAS } from "../views/canvas/CanvasHost";
+import { scopeStore } from "../stores/scope";
 
 export default function TopBar() {
   const [stats, setStats] = createSignal("--n/--e");
+  const isCanvasPage = createMemo(() => !NO_CANVAS.has(scopeStore.stack().at(-1)?.kind ?? "search"));
 
   onMount(async () => {
     try {
@@ -31,6 +35,9 @@ export default function TopBar() {
     >
       <span class="font-semibold text-white">◆ polyflow</span>
       <Breadcrumbs />
+      <Show when={isCanvasPage()}>
+        <LensBar />
+      </Show>
       <div class="ml-auto flex items-center gap-2">
         <span class="text-xs text-neutral-500 font-mono">{stats()}</span>
         <button class="text-xs text-neutral-500 hover:text-white border border-neutral-700 rounded px-2 py-0.5" disabled>
