@@ -157,6 +157,11 @@ export default function FilterBar() {
         </div>
       </Show>
       <div class="ml-auto flex items-center gap-2">
+        <Chip
+          label="Coverage"
+          active={scopeStore.viewState().coverageOverlay !== false}
+          onClick={() => scopeStore.setCoverageOverlay(scopeStore.viewState().coverageOverlay === false)}
+        />
         <Show when={canvasElementsStore.ids().size > 0}>
           <button
             data-testid="filter-add-all-matches"

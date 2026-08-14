@@ -30,6 +30,7 @@ export function parseCytoGraph(raw: unknown): GraphData {
       type: e.data.type,
       label: e.data.label,
       confidence: e.data.confidence,
+      verificationState: e.data.verification_state,
       meta: e.data.meta,
     })),
   };

@@ -21,5 +21,8 @@ export interface GraphEdge {
   type: string;
   label?: string;
   confidence?: string;
+  // UF.6: plan-10's edge-styling contract, now on every general-purpose
+  // graph endpoint (see internal/server/cytoscape.go's CytoscapeEdgeData).
+  verificationState?: string;
   meta?: Record<string, string>;
 }
