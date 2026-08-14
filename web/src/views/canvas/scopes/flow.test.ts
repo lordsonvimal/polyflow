@@ -120,16 +120,41 @@ describe("resolveFlow / seam", () => {
 });
 
 describe("resolveFlow / not-yet-backed kinds", () => {
-  it("returns an honest empty result for varflow/edgeset/pins without fetching", async () => {
+  it("returns an honest empty result for varflow/edgeset without fetching", async () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
     const varflow = await resolveFlow({ kind: "varflow", nodeId: "n1" });
     const edgeset = await resolveFlow({ kind: "edgeset", nodeId: "n1", edgeTypes: ["calls"] });
-    const pins = await resolveFlow({ kind: "pins", ids: ["n1", "n2"] });
     expect(varflow).toEqual({ chains: [], truncated: false, reachable: false, label: "varflow" });
     expect(edgeset.reachable).toBe(false);
-    expect(pins.reachable).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// UF.7: `pins` composes scopes/pinboard.ts's resolvePinboard — see
+// pinboard.test.ts for the path-set intersection math itself; this just
+// checks resolveFlow wires the chain/label/reachable shape correctly.
+describe("resolveFlow / pins", () => {
+  it("derives the chip label from the resolved chain's endpoints", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/flows/paths?from=a&to=b&k=5": {
+        reachable: true,
+        paths: [{ chain: [{ node_id: "a", label: "A", service: "svc" }, { node_id: "b", label: "B", service: "svc" }] }],
+      },
+    });
+    const res = await resolveFlow({ kind: "pins", ids: ["a", "b"] });
+    expect(res.reachable).toBe(true);
+    expect(res.label).toBe("A → B");
+  });
+
+  it("names the broken pair in the label for an honest empty result", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/flows/paths?from=a&to=b&k=5": { reachable: false, paths: [] },
+      "/api/flows/paths?from=b&to=a&k=5": { reachable: false, paths: [] },
+    });
+    const res = await resolveFlow({ kind: "pins", ids: ["a", "b"] });
+    expect(res.reachable).toBe(false);
+    expect(res.label).toBe("No path between a and b");
   });
 });
 

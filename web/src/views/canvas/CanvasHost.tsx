@@ -29,6 +29,8 @@ import { pathOverlayStore } from "../../stores/pathOverlay";
 import { waypointBuilderStore } from "../../stores/waypointBuilder";
 import { servicePairStore } from "../../stores/servicePair";
 import { multiSelectStore } from "../../stores/multiSelect";
+import { pinboardStore } from "../../stores/pinboard";
+import { resolvePinboard, filterChainsByLens, pinboardMemberIds } from "./scopes/pinboard";
 import { serviceFromNodeId } from "../../lib/aggregate";
 import { layoutPrefs } from "../../stores/layoutPrefs";
 import { applyFilters } from "../../lib/filters";
@@ -210,6 +212,14 @@ function buildStylesheet(): object[] {
       style: { "border-width": 3, "border-color": color },
     })),
     { selector: ".path-overlay-more", style: { "border-width": 3, "border-color": PATH_OVERLAY_MORE_COLOR } },
+    // UF.7: pinboard mode (≥2 pins) — same fade-not-remove discipline as the
+    // flow-highlight classes above: dim everything not on a path through
+    // every pin, never actually remove it (unpinning restores instantly).
+    { selector: ".pinboard-dim", style: { opacity: 0.15 } },
+    { selector: ".pinboard-member", style: { opacity: 1, "border-width": 2, "border-color": "#2dd4bf" } },
+    // UF.7: 📌 badge — any pinned node, independent of pinboard mode (a
+    // single pin only badges, per the plan's "1 pin only badges" rule).
+    { selector: ".pinboard-pinned", style: { "border-width": 3, "border-color": "#f472b6" } },
     {
       selector: "$node > node",
       style: {
@@ -419,6 +429,14 @@ export default function CanvasHost() {
             layoutPrefs.setActivity("impact");
           },
         });
+        // UF.7: toggles this node's pinboard chip — distinct from
+        // selectionStore's existing "Pin to compare" (📌 pin) action, a
+        // different, already-shipped feature this must not collide with.
+        items.push({
+          id: "pin-to-pinboard",
+          label: pinboardStore.isPinned(nodeId) ? "Unpin from pinboard" : "Pin to pinboard",
+          handler: () => pinboardStore.toggle({ id: nodeId, label }),
+        });
         // UF.6: coverage overlay's ⚠ badge is a border style, not a
         // clickable DOM element (Cytoscape draws to canvas) — the menu is
         // the click-through to the pre-filtered Unresolved drawer tab.
@@ -612,6 +630,56 @@ export default function CanvasHost() {
       cy!.nodes().forEach((el: any) => {
         const color = assignment.get(el.id());
         if (color !== undefined) el.addClass(PATH_OVERLAY_CLASSES[color]);
+      });
+    });
+  });
+
+  // UF.7: 📌 badge — any pinned node currently on canvas, independent of
+  // pinboard mode (badges from the first pin; the fade below only starts at
+  // the second). Classes only, no layout call.
+  createEffect(() => {
+    if (!cy) return;
+    const pinned = new Set(pinboardStore.pins().map((p) => p.id));
+    cy.batch(() => {
+      cy!.nodes().removeClass("pinboard-pinned");
+      if (pinned.size === 0) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cy!.nodes().forEach((el: any) => {
+        if (pinned.has(el.id())) el.addClass("pinboard-pinned");
+      });
+    });
+  });
+
+  // UF.7: pinboard mode — only resolves (and only fetches) once 2+ pins are
+  // set, mirroring WaypointBuilder/PathFinderPanel's "null key skips the
+  // fetch" discipline. Dropping back below 2 pins clears the fade with no
+  // network call at all — the "unpinning restores instantly" guarantee.
+  const [pinboardResolution] = createResource(
+    () => (pinboardStore.active() ? pinboardStore.pins().map((p) => p.id) : null),
+    (ids) => resolvePinboard(ids, scopeStore.signal()),
+  );
+
+  const pinboardMembers = createMemo((): Set<string> | null => {
+    const res = pinboardResolution();
+    if (!res) return null;
+    const lens = scopeStore.viewState().lens ?? DEFAULT_LENS;
+    return pinboardMemberIds(filterChainsByLens(res.chains, lens));
+  });
+
+  createEffect(() => {
+    if (!cy) return;
+    const members = pinboardMembers();
+    cy.batch(() => {
+      cy!.elements().removeClass("pinboard-dim pinboard-member");
+      if (!members) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cy!.nodes().forEach((el: any) => {
+        el.addClass(members.has(el.id()) ? "pinboard-member" : "pinboard-dim");
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cy!.edges().forEach((el: any) => {
+        const onPath = members.has(el.data("source")) && members.has(el.data("target"));
+        el.addClass(onPath ? "pinboard-member" : "pinboard-dim");
       });
     });
   });
@@ -912,6 +980,48 @@ export default function CanvasHost() {
             × clear
           </button>
         </div>
+      </Show>
+
+      {/* UF.7: honest empty pinboard result — "No flow passes through all N
+          pins" naming the broken pair, never a silent blank canvas. */}
+      <Show when={!isNoCanvas() && pinboardStore.active() && pinboardResolution() && !pinboardResolution()!.reachable}>
+        {(res) => {
+          const labelFor = (id: string) => pinboardStore.pins().find((p) => p.id === id)?.label ?? id;
+          const broken = res().brokenPair;
+          return (
+            <div
+              data-testid="pinboard-empty"
+              class="absolute bottom-2 left-2 z-10 flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-xs text-neutral-300"
+            >
+              <span>
+                No flow passes through all {pinboardStore.pins().length} pins
+                <Show when={broken}>
+                  {(b) => <> — {labelFor(b().from)} ↮ {labelFor(b().to)}</>}
+                </Show>
+              </span>
+              <Show when={broken}>
+                {(b) => (
+                  <>
+                    <button
+                      data-testid="pinboard-remove-from"
+                      class="text-indigo-300 hover:text-indigo-200"
+                      onClick={() => pinboardStore.unpin(b().from)}
+                    >
+                      remove {labelFor(b().from)}
+                    </button>
+                    <button
+                      data-testid="pinboard-remove-to"
+                      class="text-indigo-300 hover:text-indigo-200"
+                      onClick={() => pinboardStore.unpin(b().to)}
+                    >
+                      remove {labelFor(b().to)}
+                    </button>
+                  </>
+                )}
+              </Show>
+            </div>
+          );
+        }}
       </Show>
 
       {/* Layout picker — top-right of canvas */}

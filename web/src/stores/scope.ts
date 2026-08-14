@@ -13,6 +13,15 @@ export type FlowRef =
   | { kind: "edgeset"; nodeId: string; edgeTypes: string[] } // lens-scoped flows from a node
   | { kind: "pins"; ids: string[] }; // pinboard (UF.7)
 
+// UF.7: a pinboard chip. Unlike FlowRef's bare ids (label derived from the
+// resolved chain), the tray needs a label *before* any chain resolves —
+// there's no flow yet with only one pin, and the label has to survive an
+// unreachable/broken-pair result too — so it's carried alongside the id.
+export interface PinRef {
+  id: string;
+  label: string;
+}
+
 export type NodeKind =
   | "file" | "function" | "class" | "variable"
   | "http" | "amqp" | "dom" | "interface" | "method"
@@ -51,6 +60,10 @@ export type ViewState = {
   // same convention as lensHideUnlinked/lensRollup's absent-means-off, but
   // inverted here since the overlay ships default-on).
   coverageOverlay?: boolean;
+  // UF.7: pinboard chips. Deliberately a top-level ViewState field, not
+  // scope-stack state — pins "survive scope changes" (plan text) and are
+  // never pushed/popped, so they live beside `isolation`, not inside `stack`.
+  pins?: PinRef[];
 };
 
 export const DEFAULT_STATE: ViewState = {
@@ -156,6 +169,10 @@ export const scopeStore = {
   setLensHideUnlinked: (v: boolean) => commit({ ...viewState(), lensHideUnlinked: v }),
   setLensRollup: (v: boolean) => commit({ ...viewState(), lensRollup: v }),
   setCoverageOverlay: (v: boolean) => commit({ ...viewState(), coverageOverlay: v }),
+  // UF.7: plain `commit`, never `commitStackChange` — pinning/unpinning must
+  // not abort the active scope's in-flight fetch or touch the stack; the
+  // canvas fades non-members in place (fade-not-remove) with no refetch.
+  setPins: (pins: PinRef[]) => commit({ ...viewState(), pins }),
 
   // Called by graph loader when a stored node id is no longer valid after reindex
   handleStaleId: () => {

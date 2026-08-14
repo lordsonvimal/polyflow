@@ -1,4 +1,4 @@
-import { createSignal, onMount, createEffect, Show, createMemo } from "solid-js";
+import { createSignal, onMount, createEffect, Show, createMemo, For } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { paletteStore } from "../stores/palette";
 import { apiFetchJSON } from "../lib/apiFetch";
@@ -7,6 +7,8 @@ import LensBar from "../views/canvas/LensBar";
 import { NO_CANVAS } from "../views/canvas/CanvasHost";
 import { scopeStore } from "../stores/scope";
 import { pathFinderStore } from "../stores/pathFinder";
+import { pinboardStore } from "../stores/pinboard";
+import { selectionStore } from "../stores/selection";
 
 export default function TopBar() {
   const [stats, setStats] = createSignal("--n/--e");
@@ -38,6 +40,51 @@ export default function TopBar() {
       <Breadcrumbs />
       <Show when={isCanvasPage()}>
         <LensBar />
+      </Show>
+      {/* UF.7: pin tray — chips for pinboard pins, shown any time at least
+          one pin exists (badges from 1; the canvas fade only starts at 2). */}
+      <Show when={pinboardStore.pins().length > 0}>
+        <div data-testid="pin-tray" class="flex items-center gap-1">
+          <span class="text-neutral-500">pins:</span>
+          <For each={pinboardStore.pins()}>
+            {(p) => (
+              <span
+                data-testid="pin-chip"
+                class="flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-300"
+              >
+                <button
+                  class="truncate max-w-[160px] hover:text-white"
+                  title={p.label}
+                  onClick={() => selectionStore.setSelection({ kind: "node", id: p.id })}
+                >
+                  {p.label}
+                </button>
+                <button class="text-neutral-500 hover:text-white" onClick={() => pinboardStore.unpin(p.id)}>
+                  ×
+                </button>
+              </span>
+            )}
+          </For>
+          <Show when={pinboardStore.active()}>
+            <button
+              data-testid="pin-tray-view-as-lane"
+              class="text-xs text-indigo-300 hover:text-indigo-200"
+              onClick={() => scopeStore.push({
+                kind: "flow",
+                flow: { kind: "pins", ids: pinboardStore.pins().map((p) => p.id) },
+              })}
+            >
+              View as flow lane
+            </button>
+          </Show>
+          <button
+            data-testid="pin-tray-clear"
+            class="text-xs text-neutral-500 hover:text-white"
+            onClick={() => pinboardStore.clear()}
+          >
+            [clear all]
+          </button>
+        </div>
       </Show>
       <Show when={pathFinderStore.startNode()}>
         {(start) => (

@@ -69,6 +69,19 @@ describe("URL codec", () => {
     const result = decodeViewState(encodeViewState(state));
     expect(result!.state.isolation).toEqual(state.isolation);
   });
+
+  // UF.7: pins are a top-level ViewState field (not scope-stack state) so
+  // they survive scope changes and round-trip through the URL like any
+  // other chip.
+  it("round-trips pinboard chips", () => {
+    const state: ViewState = {
+      stack: [{ kind: "search" }],
+      filters: { confidence: [], edgeTypes: [], services: [] },
+      pins: [{ id: "node-1", label: "Publisher" }, { id: "node-2", label: "Consumer" }],
+    };
+    const result = decodeViewState(encodeViewState(state));
+    expect(result!.state.pins).toEqual(state.pins);
+  });
 });
 
 // Esc ordering state machine (tested via pure logic, not reactive signals)
