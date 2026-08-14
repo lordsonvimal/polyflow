@@ -16,6 +16,7 @@ import fcose from "cytoscape-fcose";
 import dagreFn from "cytoscape-dagre";
 
 import { scopeStore, Scope } from "../../stores/scope";
+import { displayLabel } from "../../lib/location";
 import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./budget";
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { registerMenuItems, openMenu } from "../../interaction/ContextMenu";
@@ -245,7 +246,7 @@ function toElements(d: GraphData): object[] {
       group: "nodes",
       data: {
         id: n.id,
-        label: n.label,
+        label: displayLabel(n.label),
         type: n.type,
         service: n.service,
         file: n.file,

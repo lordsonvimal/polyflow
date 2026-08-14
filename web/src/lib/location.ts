@@ -13,3 +13,15 @@ export function formatLocation(file?: string, line?: number, endLine?: number): 
   const range = formatRange(line, endLine);
   return range ? `${file}:${range}` : file;
 }
+
+// A label is only ever a full filesystem path when nothing more specific
+// (a symbol, service, or node name) was available upstream — in that case
+// the core display label (canvas node text, breadcrumb crumb) should show
+// just the file name; the full path stays available via title/tooltip.
+export function displayLabel(label: string): string {
+  // Route labels ("POST /orders") and other multi-word strings also contain
+  // "/" but aren't paths — only a single space-free token is a candidate.
+  if (label.includes(" ") || !label.includes("/")) return label;
+  const parts = label.split("/").filter(Boolean);
+  return parts.at(-1) ?? label;
+}
