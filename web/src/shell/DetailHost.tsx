@@ -12,6 +12,8 @@ import { flowsThroughStore } from "../stores/flowsThrough";
 import ThroughPanel from "../views/flows/ThroughPanel";
 import { pathFinderStore } from "../stores/pathFinder";
 import PathFinderPanel from "../views/flows/PathFinderPanel";
+import { linkExplorerStore } from "../stores/linkExplorer";
+import LinkExplorer from "../views/explore/LinkExplorer";
 import { servicePairStore } from "../stores/servicePair";
 import ServicePairPanel from "../views/flows/ServicePairPanel";
 import SeamSummary from "../views/flows/SeamSummary";
@@ -68,6 +70,16 @@ export default function DetailHost() {
     if (!requested) return;
     setPathsOpenFor(requested.id);
     pathFinderStore.consume();
+  });
+
+  // UF.8: palette's "Explore links" result action — same bridge shape as
+  // flowsThroughStore above.
+  const [linksOpenFor, setLinksOpenFor] = createSignal<string | null>(null);
+  createEffect(() => {
+    const requested = linkExplorerStore.requestedNodeId();
+    if (!requested) return;
+    setLinksOpenFor(requested);
+    linkExplorerStore.consume();
   });
 
   // UF.5: "Copy context" on the node/edge detail panel — only real graph
@@ -165,6 +177,16 @@ export default function DetailHost() {
                 </Show>
                 <Show when={pathsOpenFor() === sel().id && pathFinderStore.startNode()}>
                   {(start) => <PathFinderPanel from={start().id} fromLabel={start().label} to={sel().id} />}
+                </Show>
+                <button
+                  data-testid="detail-explore-links"
+                  class="text-xs text-indigo-300 hover:text-indigo-200 mt-2 block"
+                  onClick={() => setLinksOpenFor(linksOpenFor() === sel().id ? null : sel().id)}
+                >
+                  {linksOpenFor() === sel().id ? "▾" : "▸"} Explore links
+                </button>
+                <Show when={linksOpenFor() === sel().id}>
+                  <LinkExplorer nodeId={sel().id} />
                 </Show>
               </Show>
               <Show when={sel().kind === "edge" && importRollupStore.get(sel().id)}>

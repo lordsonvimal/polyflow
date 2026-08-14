@@ -5,6 +5,7 @@ import { multiSelectStore } from "../stores/multiSelect";
 import { contextCopyStore } from "../stores/contextCopy";
 import { selectionCopySource } from "../views/context/copy";
 import { pinboardStore } from "../stores/pinboard";
+import { peekTopLink } from "../views/explore/linkExplorerPeek";
 
 export type KeyBinding = {
   key: string;       // matches KeyboardEvent.key or "Meta+k" compound
@@ -58,13 +59,23 @@ export const KEY_BINDINGS: KeyBinding[] = [
     key: "[",
     display: "[",
     description: "Peek one hop upstream from selection",
-    handler: () => {}, // plan 12 UF.8
+    handler: () => {
+      const hover = selectionStore.hoverTarget();
+      const sel = selectionStore.selection();
+      const id = (hover && hover.kind === "node" ? hover.id : undefined) ?? (sel && sel.kind === "node" ? sel.id : undefined);
+      if (id) void peekTopLink(id, "upstream");
+    },
   },
   {
     key: "]",
     display: "]",
     description: "Peek one hop downstream from selection",
-    handler: () => {}, // plan 12 UF.8
+    handler: () => {
+      const hover = selectionStore.hoverTarget();
+      const sel = selectionStore.selection();
+      const id = (hover && hover.kind === "node" ? hover.id : undefined) ?? (sel && sel.kind === "node" ? sel.id : undefined);
+      if (id) void peekTopLink(id, "downstream");
+    },
   },
   {
     key: "Meta+Shift+C",
