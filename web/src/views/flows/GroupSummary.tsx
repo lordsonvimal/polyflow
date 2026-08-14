@@ -7,6 +7,7 @@
 import { createMemo, createResource, For, Show } from "solid-js";
 import { resolveGroup } from "../canvas/scopes/group";
 import type { GraphNode, GraphEdge } from "../../lib/types";
+import { displayLabel } from "../../lib/location";
 
 // Per-pair matrix only renders below this size — an N×N grid stops being
 // "compact" well before real budget limits kick in.
@@ -117,7 +118,7 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
                     <For each={nodes()}>
                       {(n) => (
                         <th class="p-0.5 text-neutral-500 font-normal truncate max-w-[40px]" title={n.label}>
-                          {n.label}
+                          {displayLabel(n.label)}
                         </th>
                       )}
                     </For>
@@ -128,7 +129,7 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
                     {(row) => (
                       <tr>
                         <th class="p-0.5 text-neutral-500 font-normal text-right truncate max-w-[60px]" title={row.label}>
-                          {row.label}
+                          {displayLabel(row.label)}
                         </th>
                         <For each={nodes()}>
                           {(col) => (

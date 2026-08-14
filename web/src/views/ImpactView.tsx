@@ -7,6 +7,7 @@
 import { createSignal, createMemo, createResource, For, Show } from "solid-js";
 import { scopeStore, Scope } from "../stores/scope";
 import { apiFetch } from "../lib/apiFetch";
+import { displayLabel } from "../lib/location";
 
 type Direction = "up" | "down" | "both";
 const DIRECTIONS: { id: Direction; label: string }[] = [
@@ -192,7 +193,7 @@ function DiffTab() {
                         >
                           M
                         </span>
-                        <span class="text-neutral-200 truncate">{t.node.label}</span>
+                        <span class="text-neutral-200 truncate">{displayLabel(t.node.label)}</span>
                         <span class="text-neutral-600 truncate">
                           {t.node.file}:{t.node.line}
                         </span>
@@ -211,7 +212,7 @@ function DiffTab() {
                     {(c) => (
                       <li class="flex items-center gap-1.5">
                         <span class="text-neutral-600 shrink-0">d{c.depth}</span>
-                        <span class="text-neutral-200 truncate">{c.label}</span>
+                        <span class="text-neutral-200 truncate">{displayLabel(c.label)}</span>
                         <span class="text-neutral-600 truncate">
                           {c.file}:{c.line}
                         </span>

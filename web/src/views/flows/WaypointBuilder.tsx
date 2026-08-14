@@ -8,6 +8,7 @@ import { createResource, createMemo, createEffect, untrack, For, Show } from "so
 import { apiFetch, ApiError } from "../../lib/apiFetch";
 import { scopeStore, Scope } from "../../stores/scope";
 import { waypointBuilderStore, type WaypointRef } from "../../stores/waypointBuilder";
+import { displayLabel } from "../../lib/location";
 
 interface CandidateNode {
   node_id: string;
@@ -107,7 +108,7 @@ export default function WaypointBuilder() {
               data-testid="waypoint-chip"
               class="flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-neutral-200"
             >
-              <span class="truncate max-w-[120px]" title={w.label}>{w.label}</span>
+              <span class="truncate max-w-[120px]" title={w.label}>{displayLabel(w.label)}</span>
               <button
                 data-testid="waypoint-chip-remove"
                 class="text-neutral-500 hover:text-white"
@@ -149,7 +150,7 @@ export default function WaypointBuilder() {
                         class="px-2 py-1 rounded bg-neutral-900 hover:bg-neutral-800 cursor-pointer"
                         onClick={() => waypointBuilderStore.prepend(toRef(c))}
                       >
-                        {c.label} <span class="text-neutral-600">· {c.via_edge_type}</span>
+                        {displayLabel(c.label)} <span class="text-neutral-600">· {c.via_edge_type}</span>
                       </li>
                     )}
                   </For>
@@ -167,7 +168,7 @@ export default function WaypointBuilder() {
                         class="px-2 py-1 rounded bg-neutral-900 hover:bg-neutral-800 cursor-pointer"
                         onClick={() => waypointBuilderStore.append(toRef(c))}
                       >
-                        {c.label} <span class="text-neutral-600">· {c.via_edge_type}</span>
+                        {displayLabel(c.label)} <span class="text-neutral-600">· {c.via_edge_type}</span>
                       </li>
                     )}
                   </For>

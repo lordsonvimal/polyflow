@@ -9,6 +9,7 @@ import { scopeStore } from "../stores/scope";
 import { pathFinderStore } from "../stores/pathFinder";
 import { pinboardStore } from "../stores/pinboard";
 import { selectionStore } from "../stores/selection";
+import { displayLabel } from "../lib/location";
 
 export default function TopBar() {
   const [stats, setStats] = createSignal("--n/--e");
@@ -57,7 +58,7 @@ export default function TopBar() {
                   title={p.label}
                   onClick={() => selectionStore.setSelection({ kind: "node", id: p.id })}
                 >
-                  {p.label}
+                  {displayLabel(p.label)}
                 </button>
                 <button class="text-neutral-500 hover:text-white" onClick={() => pinboardStore.unpin(p.id)}>
                   ×
@@ -92,7 +93,7 @@ export default function TopBar() {
             data-testid="path-start-chip"
             class="flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-300"
           >
-            <span class="truncate max-w-[160px]" title={start().label}>A: {start().label}</span>
+            <span class="truncate max-w-[160px]" title={start().label}>A: {displayLabel(start().label)}</span>
             <button class="text-neutral-500 hover:text-white" onClick={() => pathFinderStore.clearStart()}>
               ×
             </button>

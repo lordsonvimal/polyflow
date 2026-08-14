@@ -10,6 +10,7 @@ import { apiFetch } from "../../lib/apiFetch";
 import { scopeStore } from "../../stores/scope";
 import { flowHighlightStore } from "../../stores/flowHighlight";
 import { parseChain, minVerificationState, type FlowChain } from "../canvas/scopes/flow";
+import { displayLabel } from "../../lib/location";
 
 interface ThroughGroup {
   entrypointId: string;
@@ -112,7 +113,7 @@ export default function ThroughPanel(props: { nodeId: string }) {
                 onClick={() => isolate(group)}
               >
                 <div class="flex items-center justify-between gap-2">
-                  <span class="text-neutral-200 truncate" title={group.label}>{group.label}</span>
+                  <span class="text-neutral-200 truncate" title={group.label}>{displayLabel(group.label)}</span>
                   <span class={`shrink-0 ${badge().class}`}>{badge().label}</span>
                 </div>
                 <div class="text-neutral-500 mt-0.5">
