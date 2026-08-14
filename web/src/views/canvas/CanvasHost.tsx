@@ -29,6 +29,7 @@ import { pathFinderStore } from "../../stores/pathFinder";
 import { pathOverlayStore } from "../../stores/pathOverlay";
 import { waypointBuilderStore } from "../../stores/waypointBuilder";
 import { servicePairStore } from "../../stores/servicePair";
+import { multiSelectStore } from "../../stores/multiSelect";
 import { serviceFromNodeId } from "../../lib/aggregate";
 import { layoutPrefs } from "../../stores/layoutPrefs";
 import { applyFilters } from "../../lib/filters";
@@ -42,6 +43,7 @@ import { resolveService } from "./scopes/service";
 import { resolveFolder } from "./scopes/folder";
 import { resolveFile } from "./scopes/file";
 import { resolveNeighborhood } from "./scopes/neighborhood";
+import { resolveGroup } from "./scopes/group";
 import { stackKey, getViewport, saveViewport } from "./viewportCache";
 import {
   NODE_TYPE_STYLES,
@@ -57,8 +59,10 @@ cytoscape.use(dagreFn);
 
 // Scopes that have no canvas — show a placeholder instead. Exported so
 // TopBar can gate the lens control (UN.5) on the same "is this a canvas
-// page" rule without duplicating the list.
-export const NO_CANVAS = new Set(["search", "flow", "group"]);
+// page" rule without duplicating the list. UF.4's group scope DOES render
+// on canvas (the induced subgraph, default fcose) — it's a real scope, not
+// a placeholder one, so it's deliberately absent here.
+export const NO_CANVAS = new Set(["search", "flow"]);
 
 const MENU_ACTIVITY_ID = "canvas";
 
@@ -90,6 +94,8 @@ async function fetchForScope(scope: Scope, signal?: AbortSignal): Promise<GraphD
       return resolveFile(scope, signal);
     case "neighborhood":
       return resolveNeighborhood(scope, signal);
+    case "group":
+      return resolveGroup(scope, signal);
     case "impact": {
       const p = new URLSearchParams({ root: scope.target, direction: scope.direction, depth: String(scope.depth) });
       const r = await apiFetch(`/api/graph/trace?${p}`, { signal, silent: true });
@@ -231,9 +237,11 @@ export default function CanvasHost() {
 
   const isAbortError = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
 
-  // When scope changes, clear any cluster override.
+  // When scope changes, clear any cluster override and the multi-selection
+  // HUD (a stale "N selected" chip surviving a scope change would offer
+  // "View as group" over nodes no longer on screen).
   const [clusteredData, setClusteredData] = createSignal<GraphData | null>(null);
-  createEffect(() => { scope(); setClusteredData(null); });
+  createEffect(() => { scope(); setClusteredData(null); multiSelectStore.clear(); });
 
   // Lens (UN.5) narrows first — its own axis over edge types, independent
   // of FilterBar's coarser edgeType chips (see lenses.ts's header note) —
@@ -318,6 +326,13 @@ export default function CanvasHost() {
   }
 
   function onCanvasIntent(intent: Intent) {
+    // UF.4: shift-click on a canvas node already drives Cytoscape's own
+    // native additive selection (gestures.ts's onTap fires this alongside
+    // it, not instead of it) — the select/unselect listener wired in
+    // onMount below mirrors cy's live `:selected` set into
+    // multiSelectStore, so forwarding this to the generic handleIntent
+    // toggle would flip the same node twice.
+    if (intent.type === "multiAdd") return;
     if (intent.type === "menu") {
       const items = [];
       if (intent.target.kind === "node") {
@@ -429,6 +444,18 @@ export default function CanvasHost() {
       });
       const unwire = wireCytoscape(cy, onCanvasIntent);
 
+      // UF.4: marquee-drag (shift + drag on background, Cytoscape's default
+      // box-selection gesture) never fires a "tap" event per node, so it
+      // never reaches gestures.ts's intent pipeline — this listener is the
+      // only way to observe it. It also covers shift-click's native
+      // additive select (see onCanvasIntent's multiAdd intercept above),
+      // so it's the single source of truth for what's multi-selected on
+      // canvas: always a full mirror of cy's own `:selected` node set.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncMultiSelect = () => multiSelectStore.setIds(new Set(cy!.nodes(":selected").map((n: any) => n.id())));
+      cy.on("select", "node", syncMultiSelect);
+      cy.on("unselect", "node", syncMultiSelect);
+
       // Cytoscape sizes its internal <canvas> layers once at construction and
       // never re-reads the container box on its own — without this, resizing
       // the container (e.g. opening the bottom drawer) leaves stale, oversized
@@ -436,7 +463,14 @@ export default function CanvasHost() {
       const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => cy?.resize()) : undefined;
       resizeObserver?.observe(canvasRef);
 
-      onCleanup(() => { resizeObserver?.disconnect(); unwire(); cy?.destroy(); cy = undefined; });
+      onCleanup(() => {
+        resizeObserver?.disconnect();
+        cy?.off("select", "node", syncMultiSelect);
+        cy?.off("unselect", "node", syncMultiSelect);
+        unwire();
+        cy?.destroy();
+        cy = undefined;
+      });
     } catch {
       // Canvas renderer unavailable (e.g., jsdom in tests)
     }
@@ -588,6 +622,23 @@ export default function CanvasHost() {
     setClusteredData(autoCluster(d.nodes, d.edges));
   };
 
+  // UF.4: the HUD chip's "View as group" action — clearing the live
+  // Cytoscape selection (rather than leaving it painted) avoids landing on
+  // the new group scope with a stale ":selected" set from the scope just
+  // left, which the selection-sync effect above would otherwise fight.
+  const viewAsGroup = () => {
+    const ids = [...multiSelectStore.ids()].sort();
+    if (ids.length < 2) return;
+    cy?.elements().unselect();
+    multiSelectStore.clear();
+    scopeStore.push({ kind: "group", nodeIds: ids });
+  };
+
+  const clearMultiSelect = () => {
+    cy?.elements().unselect();
+    multiSelectStore.clear();
+  };
+
   const handleNarrow = (childKey: string) => {
     const s = scope();
     if (s.kind === "overview") {
@@ -622,7 +673,6 @@ export default function CanvasHost() {
       <Show when={isNoCanvas() && scope().kind !== "flow"}>
         <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
           {scope().kind === "search" && "Search & Flow — implemented in plan 11"}
-          {scope().kind === "group" && "Group views — planned in plan 12"}
         </div>
       </Show>
 
@@ -709,6 +759,33 @@ export default function CanvasHost() {
             </div>
           </div>
         )}
+      </Show>
+
+      {/* UF.4: multi-select HUD chip — top-left, appears once the marquee
+          drag or shift-click set (mirrored from Cytoscape's own `:selected`
+          nodes, or from Tree's shift-click via multiSelectStore.toggle)
+          holds 2+ nodes. */}
+      <Show when={!isNoCanvas() && multiSelectStore.ids().size >= 2}>
+        <div
+          data-testid="multiselect-hud"
+          class="absolute top-2 left-2 z-10 flex items-center gap-2 px-2 py-1 rounded bg-neutral-800 border border-neutral-700 text-xs text-neutral-200"
+        >
+          <span>{multiSelectStore.ids().size} selected</span>
+          <button
+            data-testid="multiselect-view-as-group"
+            class="text-indigo-300 hover:text-indigo-200"
+            onClick={viewAsGroup}
+          >
+            View as group
+          </button>
+          <button
+            data-testid="multiselect-clear"
+            class="text-neutral-500 hover:text-white"
+            onClick={clearMultiSelect}
+          >
+            × clear
+          </button>
+        </div>
       </Show>
 
       {/* Layout picker — top-right of canvas */}

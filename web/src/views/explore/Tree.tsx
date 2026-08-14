@@ -4,6 +4,7 @@ import { computeWindow } from "./virtualize";
 import { selectionStore } from "../../stores/selection";
 import { scopeStore } from "../../stores/scope";
 import { canvasElementsStore } from "../../stores/canvasElements";
+import { multiSelectStore } from "../../stores/multiSelect";
 import { drawerStore } from "../../stores/drawer";
 import { makeClickHandler, type Intent, type TargetRef } from "../../interaction/gestures";
 import { registerMenuItems, unregisterMenuItems, openMenu } from "../../interaction/ContextMenu";
@@ -171,6 +172,11 @@ export default function Tree() {
             ? { kind: "node", id: row.nodeId ?? row.key, label: row.name, file: row.file, line: row.line, end_line: row.endLine }
             : null,
         );
+        break;
+      case "multiAdd":
+        // UF.4: only real graph nodes (row.nodeId set) can join a group —
+        // a bare folder/service row's synthetic key isn't a node id.
+        if (row.nodeId) multiSelectStore.toggle(row.nodeId);
         break;
       default:
         break;

@@ -3,6 +3,10 @@ import { scopeStore, type ViewState } from "../../stores/scope";
 import { treeStore } from "../../stores/tree";
 import { CONFIDENCE_LEVELS, DEFAULT_CONFIDENCE } from "../../lib/confidence";
 import { EDGE_GROUP_NAMES } from "../../lib/edgeGroups";
+import { canvasElementsStore } from "../../stores/canvasElements";
+import { multiSelectStore } from "../../stores/multiSelect";
+import { notificationsStore } from "../../stores/notifications";
+import { BUDGET } from "./budget";
 
 type Filters = ViewState["filters"];
 
@@ -92,6 +96,23 @@ export default function FilterBar() {
     scopeStore.setFilters({ confidence: [], edgeTypes: [], services: [] });
   }
 
+  // UF.4: "Add all matches" — unions every node currently on canvas
+  // (post-filter: canvasElementsStore.ids is CanvasHost's renderData, the
+  // same set the chips above just narrowed) into the multi-selection, so
+  // it composes with the marquee/shift-click HUD instead of being a
+  // separate selection mechanism. Capped at BUDGET, same ceiling as any
+  // other scope, so "add all" can never hand the group resolver a set the
+  // budget dialog would immediately reject.
+  function addAllMatches() {
+    const { capped } = multiSelectStore.addAll(canvasElementsStore.ids(), BUDGET);
+    if (capped) {
+      notificationsStore.add({
+        kind: "info",
+        message: `Selection capped at ${BUDGET.toLocaleString()} nodes.`,
+      });
+    }
+  }
+
   return (
     <div
       data-testid="filter-bar"
@@ -136,6 +157,15 @@ export default function FilterBar() {
         </div>
       </Show>
       <div class="ml-auto flex items-center gap-2">
+        <Show when={canvasElementsStore.ids().size > 0}>
+          <button
+            data-testid="filter-add-all-matches"
+            class="text-neutral-500 hover:text-white"
+            onClick={addAllMatches}
+          >
+            Add all matches
+          </button>
+        </Show>
         <Show when={activeCount() > 0}>
           <span
             data-testid="filter-active-count"

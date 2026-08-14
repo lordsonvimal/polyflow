@@ -4,6 +4,9 @@ import FilterBar, { computeActiveCount, effectiveAllOn, effectiveConfidence } fr
 import { scopeStore } from "../../stores/scope";
 import { treeStore } from "../../stores/tree";
 import { EDGE_GROUP_NAMES } from "../../lib/edgeGroups";
+import { canvasElementsStore } from "../../stores/canvasElements";
+import { multiSelectStore } from "../../stores/multiSelect";
+import { BUDGET } from "./budget";
 
 function fakeFetch() {
   return vi.fn((url: string) => {
@@ -83,6 +86,47 @@ describe("FilterBar", () => {
     const resetBtn = [...container.querySelectorAll("button")].find((b) => b.textContent === "reset")!;
     resetBtn.click();
     expect(scopeStore.viewState().filters).toEqual({ confidence: [], edgeTypes: [], services: [] });
+  });
+});
+
+// UF.4: "Add all matches" unions the current on-canvas node set into the
+// multi-selection (budget-checked), so it composes with the marquee HUD.
+describe("FilterBar - Add all matches", () => {
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    treeStore.reset();
+    scopeStore.reset();
+    multiSelectStore.clear();
+    canvasElementsStore.setIds(new Set());
+    (globalThis as any).fetch = fakeFetch();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(() => <FilterBar />, container);
+    await vi.waitFor(() => expect(treeStore.services().length).toBe(2));
+  });
+
+  afterEach(() => container.remove());
+
+  function button(label: string): HTMLElement | undefined {
+    return [...container.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement | undefined;
+  }
+
+  it("is hidden when nothing is on canvas", () => {
+    expect(button("Add all matches")).toBeUndefined();
+  });
+
+  it("unions the on-canvas node ids into the multi-selection", () => {
+    canvasElementsStore.setIds(new Set(["n1", "n2", "n3"]));
+    button("Add all matches")!.click();
+    expect([...multiSelectStore.ids()].sort()).toEqual(["n1", "n2", "n3"]);
+  });
+
+  it("caps the union at BUDGET and warns", () => {
+    const many = new Set(Array.from({ length: BUDGET + 50 }, (_, i) => `n${i}`));
+    canvasElementsStore.setIds(many);
+    button("Add all matches")!.click();
+    expect(multiSelectStore.ids().size).toBe(BUDGET);
   });
 });
 
