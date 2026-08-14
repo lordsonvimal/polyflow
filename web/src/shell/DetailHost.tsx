@@ -4,7 +4,7 @@ import type { Selection } from "../stores/selection";
 import { scopeStore } from "../stores/scope";
 import GroupSummary from "../views/flows/GroupSummary";
 import SourcePanel from "./SourcePanel";
-import { isServiceNodeId, serviceFromNodeId } from "../lib/aggregate";
+import { isServiceNodeId, isContainerGroupNodeId, serviceFromNodeId } from "../lib/aggregate";
 import { exploreStore } from "../stores/explore";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { importRollupStore } from "../stores/importRollup";
@@ -24,8 +24,8 @@ function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
   return (
     <div class="w-80 bg-neutral-950 border-l border-neutral-800 overflow-y-auto shrink-0">
       <div class="p-4 text-sm text-neutral-300">
-        <div class="flex items-start justify-between mb-1 gap-2">
-          <span class="font-medium text-blue-300 break-all min-w-0" title={sel.id}>📌 {sel.kind}: {sel.id}</span>
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <span class="text-xs uppercase tracking-wide text-neutral-500">📌 {sel.kind}</span>
           <button
             class="text-xs text-neutral-500 hover:text-white shrink-0"
             onClick={() => selectionStore.unpin(sel.id)}
@@ -33,6 +33,7 @@ function PinnedPanel({ sel }: { sel: NonNullable<Selection> }) {
             × unpin
           </button>
         </div>
+        <div class="font-medium text-blue-300 truncate" title={sel.id}>{sel.id}</div>
       </div>
     </div>
   );
@@ -86,7 +87,7 @@ export default function DetailHost() {
   // nodes/edges, never a synthetic overview-aggregation pill (`agg:`) or
   // Imports-lens rollup (`rollup:`) UB.6 has no node/edge for.
   const isCopyableSelection = (sel: NonNullable<Selection>) =>
-    !sel.id.startsWith("agg:") && !sel.id.startsWith("rollup:") && !(sel.kind === "node" && isServiceNodeId(sel.id));
+    !sel.id.startsWith("agg:") && !sel.id.startsWith("rollup:") && !(sel.kind === "node" && isContainerGroupNodeId(sel.id));
 
   return (
     <div
@@ -109,46 +110,47 @@ export default function DetailHost() {
         {(sel) => (
           <div class="w-80 bg-neutral-950 overflow-y-auto shrink-0">
             <div class="p-4 text-sm text-neutral-300">
-              <div class="flex items-start justify-between gap-2 mb-2">
-                <span class="font-medium break-all min-w-0" title={sel().id}>{sel().kind}: {sel().id}</span>
-                <div class="flex gap-2 shrink-0">
-                  <Show when={isCopyableSelection(sel())}>
-                    <button
-                      data-testid="detail-copy-context"
-                      class="text-xs text-blue-400 hover:text-blue-300"
-                      title="Copy context"
-                      onClick={() => contextCopyStore.copy({ kind: sel().kind, id: sel().id })}
-                    >
-                      ⧉ copy context
-                    </button>
-                  </Show>
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <span class="text-xs uppercase tracking-wide text-neutral-500">{sel().kind}</span>
+                <button
+                  class="text-xs text-neutral-500 hover:text-white shrink-0"
+                  onClick={() => selectionStore.setSelection(null)}
+                >
+                  × close
+                </button>
+              </div>
+              <div class="font-medium truncate mb-2" title={sel().id}>{sel().id}</div>
+              <div class="flex flex-wrap gap-x-3 gap-y-1 mb-2">
+                <Show when={isCopyableSelection(sel())}>
                   <button
+                    data-testid="detail-copy-context"
                     class="text-xs text-blue-400 hover:text-blue-300"
-                    title="Pin to compare"
-                    onClick={() => selectionStore.pin(sel())}
+                    title="Copy context"
+                    onClick={() => contextCopyStore.copy({ kind: sel().kind, id: sel().id })}
                   >
-                    📌 pin
+                    ⧉ copy context
                   </button>
-                  {/* UF.7: pinboard chip — distinct feature from the
-                      "📌 pin"/compare button above (selectionStore, capped
-                      at 2, ephemeral). Only meaningful for a real node. */}
-                  <Show when={sel().kind === "node" && !isServiceNodeId(sel().id)}>
-                    <button
-                      data-testid="detail-pin-to-pinboard"
-                      class="text-xs text-blue-400 hover:text-blue-300"
-                      title={pinboardStore.isPinned(sel().id) ? "Unpin from pinboard" : "Pin to pinboard"}
-                      onClick={() => pinboardStore.toggle({ id: sel().id, label: sel().id })}
-                    >
-                      {pinboardStore.isPinned(sel().id) ? "📍 unpin" : "📍 pinboard"}
-                    </button>
-                  </Show>
+                </Show>
+                <button
+                  class="text-xs text-blue-400 hover:text-blue-300"
+                  title="Pin to compare"
+                  onClick={() => selectionStore.pin(sel())}
+                >
+                  📌 pin
+                </button>
+                {/* UF.7: pinboard chip — distinct feature from the
+                    "📌 pin"/compare button above (selectionStore, capped
+                    at 2, ephemeral). Only meaningful for a real node. */}
+                <Show when={sel().kind === "node" && !isContainerGroupNodeId(sel().id)}>
                   <button
-                    class="text-xs text-neutral-500 hover:text-white"
-                    onClick={() => selectionStore.setSelection(null)}
+                    data-testid="detail-pin-to-pinboard"
+                    class="text-xs text-blue-400 hover:text-blue-300"
+                    title={pinboardStore.isPinned(sel().id) ? "Unpin from pinboard" : "Pin to pinboard"}
+                    onClick={() => pinboardStore.toggle({ id: sel().id, label: sel().id })}
                   >
-                    × close
+                    {pinboardStore.isPinned(sel().id) ? "📍 unpin" : "📍 pinboard"}
                   </button>
-                </div>
+                </Show>
               </div>
               <Show when={sel().kind === "node" && isServiceNodeId(sel().id)}>
                 <button
@@ -163,7 +165,7 @@ export default function DetailHost() {
                   View in Tech Stack →
                 </button>
               </Show>
-              <Show when={sel().kind === "node" && !isServiceNodeId(sel().id)}>
+              <Show when={sel().kind === "node" && !isContainerGroupNodeId(sel().id)}>
                 <SourcePanel nodeId={sel().id} />
                 <button
                   data-testid="detail-isolate-flows-through"
