@@ -64,6 +64,11 @@ export async function resolveContainer(
   const nodeById = new Map(all.nodes.map((n) => [n.id, n]));
 
   function groupIdFor(n: GraphNode): string | undefined {
+    // Nodes with no service attribution (e.g. the contract engine's synthetic
+    // "unresolved"/"unresolved:<svc>" bucket for unmatched HTTP calls) aren't
+    // foreign-service members — serviceNodeId("") would wrongly group them
+    // under a blank-labeled "service:" stub. Stand in for themselves instead.
+    if (!n.service) return n.id;
     if (n.service !== service) return serviceNodeId(n.service);
     return (groupForFile(containerGroups, n.file) ?? groupForFile(rootGroups, n.file))?.id;
   }
@@ -110,7 +115,14 @@ export async function resolveContainer(
       continue;
     }
     const rg = rootGroups.find((g) => g.id === id);
-    if (rg) nodes.push(stubNode(id, rg.label, service, rg.kind, rg.path, rg.nodeCount));
+    if (rg) {
+      nodes.push(stubNode(id, rg.label, service, rg.kind, rg.path, rg.nodeCount));
+      continue;
+    }
+    // Not a folder/file group and not a real foreign service — a graph node
+    // with no service attribution standing in for itself (see groupIdFor).
+    const raw = nodeById.get(id);
+    if (raw) nodes.push(stubNode(id, raw.label, raw.service, "service", ""));
   }
 
   const edges: GraphEdge[] = [...agg.values()].map((a) => ({
