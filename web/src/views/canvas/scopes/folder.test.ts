@@ -79,4 +79,22 @@ describe("resolveFolder", () => {
     const b = await resolveFolder({ kind: "folder", service: "svcA", path: "app" });
     expect(a).toEqual(b);
   });
+
+  // The contract engine's synthetic "unresolved" node (the bucket an
+  // unmatched http_client call links to) carries no `.service` — it's not a
+  // real service member. groupIdFor used to fall through to
+  // serviceNodeId("") for any node whose service didn't match the current
+  // one, producing a stub with an empty label instead of "unresolved".
+  it("renders a service-less contract-engine node as itself, not a blank stub", async () => {
+    const graphWithUnresolved = {
+      nodes: [...GRAPH.nodes, { data: { id: "unresolved", label: "unresolved", type: "service", service: "", file: "", line: 0, language: "" } }],
+      edges: [...GRAPH.edges, e("e4", "n1", "unresolved", "http_call")],
+    };
+    (globalThis as any).fetch = fakeFetch({ "/api/tree?service=svcA": TREE, "/api/graph?limit=2000": graphWithUnresolved });
+    const d = await resolveFolder({ kind: "folder", service: "svcA", path: "app" });
+    const stub = d.nodes.find((x) => x.id === "unresolved");
+    expect(stub).toBeTruthy();
+    expect(stub!.label).toBe("unresolved");
+    expect(stub!.meta?.stub).toBe("true");
+  });
 });
