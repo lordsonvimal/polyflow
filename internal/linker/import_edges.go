@@ -39,12 +39,14 @@ func LinkJSImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (ne
 		}
 	}
 
-	// Build per-service set of all indexed JS/TS file paths (for resolution).
+	// Build per-service set of all indexed JS/TS/stylesheet file paths (for
+	// resolution). Stylesheets are included because plain `import "./x.css"`
+	// side-effect imports are valid JS and should resolve like any other.
 	svcFileSet := make(map[string]map[string]bool, len(serviceFiles))
 	for svcName, files := range serviceFiles {
 		s := make(map[string]bool, len(files))
 		for _, f := range files {
-			if isJSFile(f) {
+			if isJSFile(f) || isStylesheetFile(f) {
 				s[f] = true
 			}
 		}
@@ -165,7 +167,7 @@ func resolveJSImportPath(importingFile, specifier string, indexedFiles map[strin
 
 	ext := strings.ToLower(filepath.Ext(specifier))
 	switch ext {
-	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".es6":
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".es6", ".css", ".scss":
 		if indexedFiles[base] {
 			return base
 		}

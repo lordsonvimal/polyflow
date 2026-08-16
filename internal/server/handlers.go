@@ -515,6 +515,22 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 		inFile[n.ID] = true
 	}
 
+	// A `contains` edge is structural backbone, not a meaningful canvas edge,
+	// when a file/struct declares many children (App.tsx -> {App, cleanup} would
+	// just clutter a real edge with a trivial one). But when a node has exactly
+	// one child, hiding it is what produces the clutter: the lone symbol (e.g. a
+	// single-component file) renders as a second, disconnected island next to
+	// its own file node. So only collapse `contains` once there's more than one
+	// child to fan out to.
+	containsChildren := make(map[string]int, len(inFile))
+	for id := range inFile {
+		for _, e := range idx.OutEdges[id] {
+			if e.Type == graph.EdgeTypeContains {
+				containsChildren[id]++
+			}
+		}
+	}
+
 	var edges []*graph.Edge
 	boundary := make(map[string]*graph.Node)
 	var boundaryIDs []string
@@ -528,7 +544,7 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 
 	for id := range inFile {
 		for _, e := range idx.OutEdges[id] {
-			if e.Type == graph.EdgeTypeContains {
+			if e.Type == graph.EdgeTypeContains && containsChildren[id] > 1 {
 				continue // structural backbone, not a visible canvas edge at file scope
 			}
 			edges = append(edges, e)
@@ -539,8 +555,11 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, e := range idx.InEdges[id] {
-			if e.Type == graph.EdgeTypeContains || inFile[e.From] {
+			if inFile[e.From] {
 				continue // intra-file edges already captured via the OutEdges loop above
+			}
+			if e.Type == graph.EdgeTypeContains && containsChildren[e.From] > 1 {
+				continue
 			}
 			edges = append(edges, e)
 			if ext, ok := idx.Nodes[e.From]; ok {
