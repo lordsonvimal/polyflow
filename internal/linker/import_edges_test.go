@@ -125,6 +125,66 @@ export class Widget extends Base {}
 	}
 }
 
+// TestLinkJSImportEdges_AbsoluteWalkPaths_RelativeNodeFile: reproduces the
+// production shape, where serviceFiles carries the indexer's raw absolute
+// walk paths (config.go resolves every service.Path to absolute) but node.File
+// is cwd-relative (every node producer applies patterns.RelativizeToCwd).
+// Before the fix, the fileNodeID lookup compared these two representations
+// directly and never matched — LinkJSImportEdges silently returned zero
+// edges against any real index, though every synthetic same-representation
+// test above kept passing.
+func TestLinkJSImportEdges_AbsoluteWalkPaths_RelativeNodeFile(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Must live under cwd (unlike t.TempDir(), which is outside it) so
+	// patterns.RelativizeToCwd actually produces a relative path instead of
+	// falling back to the absolute input unchanged.
+	dir := filepath.Join(cwd, "zz_importfix_testdata")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	utilsAbs := filepath.Join(dir, "utils.ts")
+	if err := os.WriteFile(utilsAbs, []byte(`export function helper() {}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	appAbs := filepath.Join(dir, "app.ts")
+	if err := os.WriteFile(appAbs, []byte(`import { helper } from "./utils";
+helper();
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// serviceFiles: raw absolute paths, as indexer.go's walkService produces.
+	svcFiles := map[string][]string{"svc": {appAbs, utilsAbs}}
+
+	// nodes: cwd-relative File, as every real node producer stores it.
+	appRel, err := filepath.Rel(cwd, appAbs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	utilsRel, err := filepath.Rel(cwd, utilsAbs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := []graph.Node{makeFileNode("svc", appRel), makeFileNode("svc", utilsRel)}
+
+	edges, _, unresolved := LinkJSImportEdges(nodes, svcFiles)
+
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 imports edge, got %d: %+v", len(edges), edges)
+	}
+	if edges[0].From != fileNodeID("svc", appRel) || edges[0].To != fileNodeID("svc", utilsRel) {
+		t.Errorf("wrong edge: from=%q to=%q", edges[0].From, edges[0].To)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unexpected unresolved: %+v", unresolved)
+	}
+}
+
 // TestLinkJSImportEdges_CSSSideEffectImport: a bare `import "./x.css"` (no
 // bindings, pure side-effect) resolves to the stylesheet's file node like any
 // other relative import — CSS files aren't excluded from the target set.

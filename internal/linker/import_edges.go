@@ -12,6 +12,7 @@ import (
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // LinkJSImportEdges emits file→file imports edges for JS/TS files between the
@@ -60,7 +61,11 @@ func LinkJSImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (ne
 			if !isJSFile(file) {
 				continue
 			}
-			importingNodeID := fileNodeID[svcName+"\x00"+file]
+			// nodes carry File relative to the indexing process's cwd
+			// (patterns.RelativizeToCwd, applied by every node producer) while
+			// serviceFiles here is the raw absolute walk list — normalize before
+			// keying into fileNodeID or every lookup below misses.
+			importingNodeID := fileNodeID[svcName+"\x00"+patterns.RelativizeToCwd(file)]
 			if importingNodeID == "" {
 				continue // file node not yet present (containment not run yet)
 			}
@@ -89,7 +94,7 @@ func LinkJSImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (ne
 				if resolved == "" {
 					continue
 				}
-				importedNodeID := fileNodeID[svcName+"\x00"+resolved]
+				importedNodeID := fileNodeID[svcName+"\x00"+patterns.RelativizeToCwd(resolved)]
 				if importedNodeID == "" {
 					continue
 				}
@@ -234,7 +239,10 @@ func LinkRubyImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (
 			if !isRubyFile(file) {
 				continue
 			}
-			importingNodeID := fileNodeID[svcName+"\x00"+file]
+			// See the matching comment in LinkJSImportEdges: nodes key on the
+			// cwd-relative File, serviceFiles is the raw absolute walk list.
+			relFile := patterns.RelativizeToCwd(file)
+			importingNodeID := fileNodeID[svcName+"\x00"+relFile]
 			if importingNodeID == "" {
 				continue
 			}
@@ -247,7 +255,7 @@ func LinkRubyImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (
 					if !seen[missKey] {
 						seen[missKey] = true
 						allUnresolved = append(allUnresolved, graph.UnresolvedRef{
-							Service: svcName, File: file,
+							Service: svcName, File: relFile,
 							Name: spec, Kind: "import_unresolved",
 						})
 					}
@@ -256,7 +264,7 @@ func LinkRubyImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (
 				if resolved == "" {
 					continue
 				}
-				importedNodeID := fileNodeID[svcName+"\x00"+resolved]
+				importedNodeID := fileNodeID[svcName+"\x00"+patterns.RelativizeToCwd(resolved)]
 				if importedNodeID == "" {
 					continue
 				}
