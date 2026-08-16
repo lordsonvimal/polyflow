@@ -125,6 +125,41 @@ export class Widget extends Base {}
 	}
 }
 
+// TestLinkJSImportEdges_CSSSideEffectImport: a bare `import "./x.css"` (no
+// bindings, pure side-effect) resolves to the stylesheet's file node like any
+// other relative import — CSS files aren't excluded from the target set.
+func TestLinkJSImportEdges_CSSSideEffectImport(t *testing.T) {
+	dir := t.TempDir()
+
+	cssFile := filepath.Join(dir, "index.css")
+	if err := os.WriteFile(cssFile, []byte(`body { margin: 0; }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entryFile := filepath.Join(dir, "index.tsx")
+	if err := os.WriteFile(entryFile, []byte(`import "./index.css";
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes := []graph.Node{
+		makeFileNode("svc", entryFile),
+		makeFileNode("svc", cssFile),
+	}
+	svcFiles := map[string][]string{"svc": {entryFile, cssFile}}
+
+	edges, _, unresolved := LinkJSImportEdges(nodes, svcFiles)
+
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 imports edge, got %d: %+v", len(edges), edges)
+	}
+	if edges[0].From != fileNodeID("svc", entryFile) || edges[0].To != fileNodeID("svc", cssFile) {
+		t.Errorf("wrong edge: from=%q to=%q", edges[0].From, edges[0].To)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unexpected unresolved: %+v", unresolved)
+	}
+}
+
 // TestLinkJSImportEdges_ExtImportsNotEdge: npm bare-specifier imports produce
 // no edges and no unresolved refs; their count goes to file-node meta.
 func TestLinkJSImportEdges_ExtImportsNotEdge(t *testing.T) {

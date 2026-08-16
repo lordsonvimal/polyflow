@@ -110,6 +110,63 @@ func TestHandleScope_UnknownFile(t *testing.T) {
 	}
 }
 
+// A file's `contains` edge to its lone declared symbol must be visible — a
+// single-component file (e.g. a SolidJS component) shouldn't render as two
+// disconnected islands just because the general contains-backbone filter
+// hides it. But once a file/struct has multiple children, contains edges
+// stay hidden — showing all of them is what the filter exists to avoid.
+func TestHandleScope_ContainsEdge_SingleChildVisible(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "file1", Type: graph.NodeTypeFile, Label: "App.tsx", Service: "web", File: "web/src/App.tsx"},
+		{ID: "comp1", Type: graph.NodeTypeFunction, Label: "App", Service: "web", File: "web/src/App.tsx", Line: 18},
+	}
+	edges := []*graph.Edge{
+		{ID: "e1", From: "file1", To: "comp1", Type: graph.EdgeTypeContains},
+	}
+	srv := buildTestServer(t, nodes, edges)
+	req := httptest.NewRequest("GET", "/api/scope?kind=file&service=web&path=web/src/App.tsx", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Edges []CytoscapeEdge `json:"edges"`
+	}
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if len(resp.Edges) != 1 || resp.Edges[0].Data.ID != "e1" {
+		t.Fatalf("want the single contains edge visible, got %+v", resp.Edges)
+	}
+}
+
+func TestHandleScope_ContainsEdge_MultiChildHidden(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "file1", Type: graph.NodeTypeFile, Label: "user.go", Service: "auth", File: "auth/user.go"},
+		{ID: "n1", Type: graph.NodeTypeFunction, Label: "createUser", Service: "auth", File: "auth/user.go", Line: 10},
+		{ID: "n2", Type: graph.NodeTypeFunction, Label: "validateUser", Service: "auth", File: "auth/user.go", Line: 20},
+	}
+	edges := []*graph.Edge{
+		{ID: "e1", From: "file1", To: "n1", Type: graph.EdgeTypeContains},
+		{ID: "e2", From: "file1", To: "n2", Type: graph.EdgeTypeContains},
+	}
+	srv := buildTestServer(t, nodes, edges)
+	req := httptest.NewRequest("GET", "/api/scope?kind=file&service=auth&path=auth/user.go", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Edges []CytoscapeEdge `json:"edges"`
+	}
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if len(resp.Edges) != 0 {
+		t.Fatalf("want contains edges hidden when a node has multiple children, got %+v", resp.Edges)
+	}
+}
+
 // Two-run determinism (bug-class rule 2): identical requests must produce
 // byte-identical bodies.
 func TestHandleScope_Deterministic(t *testing.T) {
