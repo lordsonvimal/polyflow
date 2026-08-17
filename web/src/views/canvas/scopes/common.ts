@@ -37,8 +37,20 @@ export function parseCytoGraph(raw: unknown): GraphData {
 }
 
 export async function fetchAllGraph(signal?: AbortSignal): Promise<GraphData> {
-  const r = await apiFetch("/api/graph?limit=2000", { signal, silent: true });
-  return parseCytoGraph(await r.json());
+  const limit = 2000;
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  for (let page = 1; ; page++) {
+    const r = await apiFetch(`/api/graph?limit=${limit}&page=${page}`, {
+      signal,
+      silent: true,
+    });
+    const d = parseCytoGraph(await r.json());
+    nodes.push(...d.nodes);
+    edges.push(...d.edges);
+    if (d.nodes.length < limit) break;
+  }
+  return { nodes, edges };
 }
 
 // Rule 2 (docs/phases.md, bug-class rules): deterministic output, always —
