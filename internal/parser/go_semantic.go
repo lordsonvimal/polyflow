@@ -544,6 +544,16 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	allNodes = append(allNodes, sprintfNodes...)
 	edges = append(edges, sprintfEdges...)
 
+	// Tier X.14: sibling to X.7 on the server side — HTTP routes registered
+	// through a local wrapper (e.g. an audit/logging decorator around
+	// mux.HandleFunc) whose path/handler are parameters, invisible to the
+	// tree-sitter net_http_handler patterns because neither the wrapper call
+	// site (callee isn't literally named HandleFunc/Handle) nor the wrapper's
+	// own registration call (path/handler aren't literals there) matches.
+	handlerNodes, handlerEdges := extractWrapperHandlers(service, dir, fset, inService, resolveFunc)
+	allNodes = append(allNodes, handlerNodes...)
+	edges = append(edges, handlerEdges...)
+
 	// W.2: resolve wrapper-mediated / const AMQP publish exchanges into producer
 	// channel nodes so the amqp contract can join them to W.1's consumer binds.
 	amqpNodes, amqpEdges := extractAMQPNames(service, dir, fset, inService, resolveFunc)
