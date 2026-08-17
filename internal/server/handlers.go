@@ -43,11 +43,14 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	idx := s.idx
 	s.idxMu.RUnlock()
 
-	// Collect all nodes from the in-memory index
+	// Collect all nodes from the in-memory index, sorted by ID for a
+	// deterministic page order (idx.Nodes is a map — iteration order is
+	// otherwise randomized per server run, which page a node lands on).
 	allNodes := make([]*graph.Node, 0, len(idx.Nodes))
 	for _, n := range idx.Nodes {
 		allNodes = append(allNodes, n)
 	}
+	sort.Slice(allNodes, func(i, j int) bool { return allNodes[i].ID < allNodes[j].ID })
 
 	// Paginate
 	start := (page - 1) * limit
@@ -61,20 +64,15 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	end := min(start+limit, len(allNodes))
 	pageNodes := allNodes[start:end]
 
-	// Build a set of node IDs in this page
-	nodeSet := make(map[string]bool, len(pageNodes))
-	for _, n := range pageNodes {
-		nodeSet[n.ID] = true
-	}
-
-	// Collect edges where both endpoints are in the page
+	// Collect edges outbound from nodes in this page, regardless of which
+	// page the target lands on. Callers that page through the full node
+	// set (fetchAllGraph) then see every edge exactly once, keyed by the
+	// page containing its source — requiring both endpoints in the same
+	// page silently dropped edges (esp. cross-service ones) whose target
+	// fell on a different page.
 	var pageEdges []*graph.Edge
-	for fromID := range nodeSet {
-		for _, e := range idx.OutEdges[fromID] {
-			if nodeSet[e.To] {
-				pageEdges = append(pageEdges, e)
-			}
-		}
+	for _, n := range pageNodes {
+		pageEdges = append(pageEdges, idx.OutEdges[n.ID]...)
 	}
 
 	writeJSON(w, http.StatusOK, ToCytoscapeJSON(pageNodes, pageEdges))

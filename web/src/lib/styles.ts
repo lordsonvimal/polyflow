@@ -34,8 +34,8 @@ export const NODE_TYPE_STYLES: NodeTypeStyle[] = [
   { type: "function", shape: "ellipse", glyph: "●", desc: "function (language color)" },
   { type: "method", shape: "ellipse", glyph: "●", desc: "method (language color)" },
   { type: "component", shape: "ellipse", glyph: "●", desc: "UI component" },
-  { type: "http_handler", shape: "round-rectangle", glyph: "◼", desc: "HTTP handler / route" },
-  { type: "http_client", shape: "round-tag", glyph: "◗", desc: "HTTP/SSE/WS client call" },
+  { type: "http_handler", shape: "round-rectangle", color: "#14b8a6", glyph: "◼", desc: "HTTP handler / route" },
+  { type: "http_client", shape: "round-tag", color: "#06b6d4", glyph: "◗", desc: "HTTP/SSE/WS client call" },
   { type: "route", shape: "round-rectangle", glyph: "◼", desc: "declared route" },
   {
     type: "route_group",
