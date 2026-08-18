@@ -257,7 +257,43 @@ level, before `EnrichAliases` runs — matcher output, not final graph output).
 `"url"` key still pass unchanged (single-key objects still produce exactly one
 candidate).
 
-## Phase WB.3 — Linker resolution
+## Phase WB.3 — Linker resolution `done`
+
+**Shipped as pinned, plus one prerequisite fix discovered during
+implementation.** The pinned interfaces (`spanKey`, `resolveObjCallGroup`) and
+the three-step resolution order (wrapper fact → fixed priority list →
+first-by-source-order + `wrapper_key_ambiguous` ledger) match the plan text
+exactly.
+
+**Prerequisite fix (not in the original plan):** `MatchToGraph`'s Pass 1b
+already deduplicated `http_client` nodes sharing one `file:line` down to a
+single first-match survivor — added earlier, for the unrelated case of two
+*different* patterns matching one call site. This ran *before* WB.3 ever
+existed, so WB.2's multi-key candidates were being silently collapsed to one
+node inside the matcher, before `EnrichAliases` ever saw more than one
+candidate to resolve — WB.3's grouping logic would never have fired on a
+multi-key call site. Fixed by exempting `producer_alias_obj_call` candidates
+from that same-line dedup (`internal/patterns/matcher.go`, keyed on
+`Meta["pattern"] == "producer_alias_obj_call"`), so all N candidates now reach
+`EnrichAliases` and WB.3's grouping/resolution is what collapses them back to
+one — not an accident of pattern-registration order.
+
+**Second wrinkle:** WB.1's `wrapper_url_target`/`wrapper_url_param_key` fact
+nodes reuse the capture name `wrapper_name`, which collides with the
+*pre-existing*, semantically different `wrapper_name` meta key used by
+call-site nodes for the older function-wrapper mechanism (`wrapperEntry`).
+Without a pattern-prefix guard, a WB.1 fact node was mistaken for a call to an
+unknown wrapper and dropped with a bogus `factory_dynamic` ledger entry. Fixed
+by checking `Meta["pattern"]` has the `wrapper_url_` prefix before either
+table-population branch in `EnrichAliases`.
+
+**Verified:** 5 new unit tests in `internal/contract/alias_test.go` (single
+key regression, priority-list fallback, wrapper-fact override, genuine
+ambiguity + ledger, independent spans not cross-contaminating); full suite
+green (2300 tests, 37 packages, up from 2295); real-corpus golden snapshot for
+chessleap unchanged (`TestGoldenChessleapParity`, no compile-query errors);
+both `polyflow` (this repo) and chessleap index cleanly end-to-end with `go
+install ./cmd/polyflow` + `polyflow index`.
 
 **Problem:** `EnrichAliases` has no table for WB.1's per-wrapper facts and no
 logic to pick one candidate out of WB.2's group.

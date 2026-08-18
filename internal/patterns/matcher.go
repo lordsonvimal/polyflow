@@ -1117,12 +1117,19 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// began life as an http_client, so it shares the same
 		// multiple-patterns-match-one-.Get() duplication and dedups the same way.
 		reclassedExternal := n.Type == graph.NodeTypeExternalService && n.Meta["external_url"] != ""
+		// WB.2: producer_alias_obj_call intentionally emits one candidate node
+		// per object key at the same call site (`{ url, uri, method }` → up to
+		// three matches, same file+line). They must all survive to WB.3's
+		// linker-level grouping in EnrichAliases, which collapses them to one —
+		// the generic same-line dedup below would otherwise silently keep only
+		// the first-registered key and defeat WB.2 before WB.3 ever runs.
+		isObjCallCandidate := n.Meta["pattern"] == "producer_alias_obj_call"
 		if n.Type == graph.NodeTypeHTTPClient || n.Meta[graph.MetaIsTest] == "true" || reclassedExternal {
 			key := fmt.Sprintf("%s:%d", n.File, n.Line)
 			if handlerLines[key] {
 				continue // drop: a handler pattern already owns this call site
 			}
-			if seenClientLines[key] {
+			if seenClientLines[key] && !isObjCallCandidate {
 				continue // drop: already have an http_client node for this line
 			}
 			if n.Meta["nav_link"] == "true" {

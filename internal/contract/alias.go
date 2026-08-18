@@ -1,6 +1,9 @@
 package contract
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -11,6 +14,102 @@ type wrapperEntry struct {
 	Service string
 	File    string
 	Line    int
+}
+
+// wrapperURLTarget records which parameter of a WB.1-detected wrapper
+// function actually carries the URL, keyed by indirKey(service, file,
+// wrapperName) — same scoping as aliasTable/wrapperTable. Populated from
+// wrapper_url_target/wrapper_url_param_key facts emitted by
+// patterns/javascript/producer_wrapper_body.yaml.
+type wrapperURLTarget struct {
+	ParamIndex int    // -1 if unset (WB.1 only ships member-access/destructure detection, never positional)
+	ParamKey   string // "" if unset
+}
+
+// objCallPriority is the fallback key-name order WB.3 uses to disambiguate a
+// producer_alias_obj_call candidate group when no wrapper_url_param_key fact
+// is available for the callee.
+var objCallPriority = []string{"url", "uri", "path", "endpoint"}
+
+// spanKey returns the call-site grouping key WB.3 uses to collapse WB.2's
+// per-object-key producer_alias_obj_call candidates back to one. graph.Node
+// has no column, so two independent wrapper calls sharing a line (minified/
+// generated JS) are indistinguishable and will incorrectly group — a known,
+// accepted limitation (see docs/js-wrapper-url-backtrack-plan.md Phase WB.2).
+func spanKey(n graph.Node) string {
+	return fmt.Sprintf("%s\x00%s\x00%d", n.Service, n.File, n.Line)
+}
+
+// resolveObjCallGroup picks exactly one node from a group of
+// producer_alias_obj_call candidates that share one call-site span:
+//
+//  1. If the callee resolves in wrapperURLTable with a ParamKey, keep the
+//     candidate whose obj_key meta equals it.
+//  2. Else fall back to objCallPriority, keeping the first candidate whose
+//     key matches, in that order.
+//  3. Else keep the first candidate by source order and report it as
+//     ambiguous — recall is preserved either way, never silently guessed.
+func resolveObjCallGroup(group []graph.Node, wrapperURLTable map[string]wrapperURLTarget) (graph.Node, *graph.UnresolvedRef) {
+	if len(group) == 1 {
+		return group[0], nil
+	}
+	if via := group[0].Meta["via_alias"]; via != "" {
+		k := indirKey(group[0].Service, group[0].File, via)
+		if w, ok := wrapperURLTable[k]; ok && w.ParamKey != "" {
+			for _, n := range group {
+				if n.Meta["key"] == w.ParamKey {
+					return n, nil
+				}
+			}
+		}
+	}
+	for _, want := range objCallPriority {
+		for _, n := range group {
+			if n.Meta["key"] == want {
+				return n, nil
+			}
+		}
+	}
+	winner := group[0]
+	return winner, &graph.UnresolvedRef{
+		Service: winner.Service, File: winner.File, Line: winner.Line,
+		Name: winner.Meta["via_alias"], Kind: "wrapper_key_ambiguous",
+	}
+}
+
+// resolveObjCallCandidates groups producer_alias_obj_call nodes by call-site
+// span and collapses each group to a single winner via resolveObjCallGroup,
+// stripping the obj_key meta ("key") off the survivor so it flows through the
+// rest of EnrichAliases exactly like a single-key match always has. All other
+// nodes pass through unchanged, in original order; resolved winners are
+// appended after them (order doesn't matter downstream: edges built earlier
+// by MatchToGraph already target these nodes by ID, and every candidate in a
+// group shares one ID since http_client nodes are keyed by pattern name, not
+// by which object key they captured).
+func resolveObjCallCandidates(nodes []graph.Node, wrapperURLTable map[string]wrapperURLTarget) ([]graph.Node, []graph.UnresolvedRef) {
+	groups := make(map[string][]graph.Node)
+	var order []string
+	result := make([]graph.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Meta["pattern"] == "producer_alias_obj_call" {
+			k := spanKey(n)
+			if _, exists := groups[k]; !exists {
+				order = append(order, k)
+			}
+			groups[k] = append(groups[k], n)
+			continue
+		}
+		result = append(result, n)
+	}
+	var unresolved []graph.UnresolvedRef
+	for _, k := range order {
+		winner, ref := resolveObjCallGroup(groups[k], wrapperURLTable)
+		result = append(result, stripNodeMeta(winner, "key"))
+		if ref != nil {
+			unresolved = append(unresolved, *ref)
+		}
+	}
+	return result, unresolved
 }
 
 // EnrichAliases resolves producer alias bindings, instance idioms, and
@@ -60,8 +159,23 @@ func EnrichAliases(nodes []graph.Node) ([]graph.Node, []graph.UnresolvedRef) {
 	}
 	aliasTable := make(map[string]*aliasEntry) // indirKey → entry
 	wrapperTable := make(map[string]*wrapperEntry)
+	wrapperURLTable := make(map[string]wrapperURLTarget)
 
 	for _, n := range nodes {
+		// WB.1: wrapper_url_target/wrapper_url_param_key facts — a wrapper
+		// function's own body revealed which of its parameters carries the URL.
+		// Distinguished from the pre-existing wrapper_for/wrapper_name call-site
+		// mechanism above by pattern prefix, since both happen to use the
+		// "wrapper_name" capture name for different things.
+		if strings.HasPrefix(n.Meta["pattern"], "wrapper_url_") {
+			wname := n.Meta["wrapper_name"]
+			if wname != "" {
+				k := indirKey(n.Service, n.File, wname)
+				if _, exists := wrapperURLTable[k]; !exists {
+					wrapperURLTable[k] = wrapperURLTarget{ParamIndex: -1, ParamKey: n.Meta["url_key"]}
+				}
+			}
+		}
 		if name := n.Meta["alias_name"]; name != "" {
 			k := indirKey(n.Service, n.File, name)
 			if e, ok := aliasTable[k]; ok {
@@ -120,14 +234,34 @@ func EnrichAliases(nodes []graph.Node) ([]graph.Node, []graph.UnresolvedRef) {
 		}
 	}
 
+	// WB.3: collapse WB.2's per-object-key producer_alias_obj_call candidate
+	// groups to one winner each, before the existing via_alias handling below
+	// runs on them — a resolved winner still carries via_alias and flows
+	// through that generic path exactly like any other single-key match.
+	nodes, objCallUnresolved := resolveObjCallCandidates(nodes, wrapperURLTable)
+
 	// Pass 2: process nodes.
 	result := make([]graph.Node, 0, len(nodes))
-	var unresolved []graph.UnresolvedRef
+	unresolved := objCallUnresolved
 	ledgeredAlias := make(map[string]bool) // suppress duplicate alias_reassigned entries
 
 	for _, n := range nodes {
 		// Remove alias/instance binding nodes (consumed above; not real producers).
 		if n.Meta["alias_name"] != "" || n.Meta["instance_name"] != "" {
+			continue
+		}
+
+		// WB.1: wrapper_url_target/wrapper_url_param_key bookkeeping nodes are
+		// self-describing facts about a wrapper function's own body, already
+		// consumed into wrapperURLTable above — not a call site. They happen to
+		// reuse the "wrapper_name" capture name, so they must be excluded here
+		// before the generic wrapper-call-site branch below, or they're
+		// mistaken for a call to an unknown wrapper (bogus factory_dynamic
+		// ledger entry) and dropped. Left in the result unmodified, same as
+		// gin_group_registrar_* bookkeeping nodes (inert, no calls edges — see
+		// internal/patterns/matcher.go's classifyPattern/Pass 2 exclusion).
+		if strings.HasPrefix(n.Meta["pattern"], "wrapper_url_") {
+			result = append(result, n)
 			continue
 		}
 
