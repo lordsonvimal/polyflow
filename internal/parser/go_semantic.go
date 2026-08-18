@@ -85,24 +85,31 @@ func collapseTestVariants(pkgs []*packages.Package) []*packages.Package {
 	return out
 }
 
-// AnalyzeService loads all packages under dir, builds SSA, then walks every Call
-// instruction in every function to emit caller→callee edges. Only functions whose
-// source file is inside dir are included — stdlib and vendor dependencies are skipped.
-//
-// knownNodes is the set of node IDs already written by tree-sitter. The semantic
-// pass resolves SSA functions against this set by file+name lookup (ignoring line
-// number, which differs between tree-sitter and SSA due to how each counts the
-// `func` keyword position). Edges where either endpoint is not in knownNodes are
-// dropped.
-func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.FileSet, knownNodes map[string]bool) SemanticResult {
-	// Reset the canonicalPath memoization for this service. AnalyzeService runs
-	// single-threaded per call (no concurrency within or across calls in the
-	// indexer's semantic pass), so replacing the map here is race-free and
-	// keeps the cache from serving another service's paths or growing without
-	// bound across a long-lived process that re-indexes repeatedly.
-	canonicalPathCache = sync.Map{}
+// countPackageErrors is packages.PrintErrors without the printing: it counts
+// accumulated errors across the import graph rooted at pkgs so a caller can
+// decide whether to retry under a different load mode before committing to
+// stderr output the retry might make moot.
+func countPackageErrors(pkgs []*packages.Package) int {
+	var n int
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		n += len(pkg.Errors)
+		if pkg.Module != nil && pkg.Module.Error != nil {
+			n++
+		}
+	})
+	return n
+}
+
+// loadServicePackages loads dir under the given mode, widens with any safe
+// test build tags, and collapses test variants — the shared prelude for both
+// the fast LoadSyntax attempt and its LoadAllSyntax retry in AnalyzeService.
+// quiet suppresses stderr error output: the caller passes true for an
+// attempt it may still retry, so a build error that the retry clears doesn't
+// leave a confusing message behind. Returns ("", warning) — pkgs is nil — on
+// any failure; warning is "" on success.
+func loadServicePackages(dir, service string, fset *token.FileSet, mode packages.LoadMode, quiet bool) ([]*packages.Package, string) {
 	cfg := &packages.Config{
-		Mode: packages.LoadAllSyntax,
+		Mode: mode,
 		Dir:  dir,
 		Fset: fset,
 		// Tests: load *_test.go too — tests are real callers, and blast radius
@@ -113,9 +120,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		return SemanticResult{
-			Warning: fmt.Sprintf("go/packages load failed for service %q: %v — falling back to tree-sitter call edges", service, err),
-		}
+		return nil, fmt.Sprintf("go/packages load failed for service %q: %v — falling back to tree-sitter call edges", service, err)
 	}
 	// Build-tag-gated test files (`//go:build integration`, `e2e`, etc.) are
 	// otherwise invisible to go/packages under default build constraints —
@@ -132,10 +137,62 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 		pkgs = widened
 	}
 	pkgs = collapseTestVariants(pkgs)
-	if packages.PrintErrors(pkgs) > 0 {
-		return SemanticResult{
-			Warning: fmt.Sprintf("service %q has build errors — semantic call graph unavailable, falling back to tree-sitter", service),
+	if quiet {
+		if countPackageErrors(pkgs) > 0 {
+			return nil, fmt.Sprintf("service %q has build errors — semantic call graph unavailable, falling back to tree-sitter", service)
 		}
+		return pkgs, ""
+	}
+	if packages.PrintErrors(pkgs) > 0 {
+		return nil, fmt.Sprintf("service %q has build errors — semantic call graph unavailable, falling back to tree-sitter", service)
+	}
+	return pkgs, ""
+}
+
+// AnalyzeService loads all packages under dir, builds SSA, then walks every Call
+// instruction in every function to emit caller→callee edges. Only functions whose
+// source file is inside dir are included — stdlib and vendor dependencies are skipped.
+//
+// knownNodes is the set of node IDs already written by tree-sitter. The semantic
+// pass resolves SSA functions against this set by file+name lookup (ignoring line
+// number, which differs between tree-sitter and SSA due to how each counts the
+// `func` keyword position). Edges where either endpoint is not in knownNodes are
+// dropped.
+func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.FileSet, knownNodes map[string]bool) SemanticResult {
+	// Reset the canonicalPath memoization for this service. AnalyzeService runs
+	// single-threaded per call (no concurrency within or across calls in the
+	// indexer's semantic pass), so replacing the map here is race-free and
+	// keeps the cache from serving another service's paths or growing without
+	// bound across a long-lived process that re-indexes repeatedly.
+	canonicalPathCache = sync.Map{}
+
+	// LoadSyntax (not LoadAllSyntax): full typed syntax for dir's own
+	// packages, but only type info via export data for dependencies — no
+	// parse, no type-check of their bodies. Safe because the SSA walk below
+	// only ever keeps functions whose source file is inside dir ("stdlib and
+	// vendor dependencies are skipped"); a callee outside dir only needs its
+	// type signature to resolve the call edge, never its body. On a service
+	// with hundreds of transitive deps, parsing and type-checking every one
+	// of them (what LoadAllSyntax does) is most of indexing wall-clock.
+	//
+	// This does carry a correctness risk LoadAllSyntax doesn't have: the two
+	// modes have been observed to disagree on whether a `//go:embed` pattern
+	// matching zero files (e.g. a generated frontend-build directory that
+	// hasn't been built in this checkout) is a package error — LoadSyntax
+	// surfaces it, LoadAllSyntax silently tolerates it. Losing an entire
+	// service's semantic call graph to that one directive is a real recall
+	// loss (confirmed on gotify/server: 7213→3237 edges), so a build-error
+	// result gets one retry under LoadAllSyntax before falling back to
+	// tree-sitter-only. The retry only fires on the rarer error path, so it
+	// doesn't cost the common case anything.
+	pkgs, warning := loadServicePackages(dir, service, fset, packages.LoadSyntax, true)
+	if warning != "" {
+		if retried, retryWarning := loadServicePackages(dir, service, fset, packages.LoadAllSyntax, false); retryWarning == "" {
+			pkgs, warning = retried, ""
+		}
+	}
+	if warning != "" {
+		return SemanticResult{Warning: warning}
 	}
 
 	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
