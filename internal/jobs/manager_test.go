@@ -192,6 +192,28 @@ func writeTinyGraphDB(t *testing.T, dir string) string {
 	return path
 }
 
+func TestInitJob_DiscoversServices(t *testing.T) {
+	m, _ := newTestManager(t)
+	dir := t.TempDir()
+	svcDir := filepath.Join(dir, "svc")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(svcDir, "go.mod"), []byte("module svc\n\ngo 1.21\n"), 0o644))
+
+	args, _ := json.Marshal(InitArgs{Root: dir})
+	job, err := m.Start("init", args)
+	require.NoError(t, err)
+
+	final := waitForTerminal(t, m, job.ID)
+	assert.Equal(t, "succeeded", final.State)
+	require.NotEmpty(t, final.Result)
+
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal([]byte(final.Result), &cfg))
+	services, ok := cfg["services"].([]any)
+	require.True(t, ok, "result should have a services array, got %+v", cfg)
+	assert.NotEmpty(t, services)
+}
+
 func TestReconcileJob_EndToEnd(t *testing.T) {
 	m, _ := newTestManager(t)
 	m.dbPath = writeTinyGraphDB(t, t.TempDir())

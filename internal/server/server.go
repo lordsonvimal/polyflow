@@ -29,6 +29,7 @@ type Server struct {
 	jobs       *jobs.Manager    // nil → jobs API disabled (UB.3)
 	configPath string           // polyflow.yml path; "" → meta.ConfigFile (UB.4)
 	capture    *capture.Manager // nil → capture/runtime API disabled (UB.7)
+	dbPath     string           // graph.db path; used only by GET /api/setup/status (UO.7)
 }
 
 // New creates a Server backed by the given store and adjacency index.
@@ -103,6 +104,15 @@ func (s *Server) SetConfigPath(path string) {
 func (s *Server) SetCapture(c *capture.Manager) {
 	s.idxMu.Lock()
 	s.capture = c
+	s.idxMu.Unlock()
+}
+
+// SetDBPath records the graph.db path GET /api/setup/status stats to
+// report whether the workspace has been indexed yet. Safe to call at any
+// time.
+func (s *Server) SetDBPath(path string) {
+	s.idxMu.Lock()
+	s.dbPath = path
 	s.idxMu.Unlock()
 }
 
@@ -198,6 +208,10 @@ func (s *Server) registerRoutes() {
 	s.handle("POST /api/views", s.handleCreateView)
 	s.handle("PATCH /api/views/{id}", s.handleRenameView)
 	s.handle("DELETE /api/views/{id}", s.handleDeleteView)
+	s.handle("GET /api/patterns", s.handleListPatterns)
+	s.handle("POST /api/patterns", s.handleAddPattern)
+	s.handle("GET /api/setup/status", s.handleSetupStatus)
+	s.handle("POST /api/setup/apply", s.handleSetupApply)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend from the embedded FS so `serve` works
 	// from any working directory (not just the source-tree root).

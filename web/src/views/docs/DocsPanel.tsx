@@ -4,6 +4,7 @@ import MarkdownPreview from "../../lib/MarkdownPreview";
 import { KEY_BINDINGS } from "../../interaction/keys";
 import guideMd from "../../docs/guide.md?raw";
 import conceptsMd from "../../docs/concepts.md?raw";
+import parityMd from "../../docs/parity.md?raw";
 
 // UO.4: in-UI docs — Setup / CLI reference / UI guide / Concepts. The CLI
 // reference is generated server-side from the live cobra tree (GET
@@ -13,13 +14,14 @@ import conceptsMd from "../../docs/concepts.md?raw";
 type CLIFlag = { name: string; shorthand?: string; default?: string; usage?: string };
 type CLICommand = { name: string; short?: string; long?: string; usage?: string; flags?: CLIFlag[]; subcommands?: CLICommand[] };
 
-type Section = "setup" | "cli" | "guide" | "concepts";
+type Section = "setup" | "cli" | "guide" | "concepts" | "parity";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "setup", label: "Setup" },
   { id: "cli", label: "CLI reference" },
   { id: "guide", label: "UI guide" },
   { id: "concepts", label: "Concepts" },
+  { id: "parity", label: "CLI ↔ UI parity" },
 ];
 
 function anchorId(path: string[]): string {
@@ -240,6 +242,21 @@ function Concepts() {
   );
 }
 
+// UO.7's parity matrix (docs/plan-13-ui-ops.md) — pinned in
+// web/src/docs/parity.md and CI-enforced by cmd/polyflow's
+// TestParityMatrixCoversAllCommands (walks the live cobra tree, fails if a
+// command has no row here), so this can't silently fall behind the CLI.
+// Rendered as raw text rather than through MarkdownPreview: its table is
+// outside parseMarkdownLite's deliberately narrow (heading/code/list/quote/
+// paragraph) shape, and a monospace pipe-table reads fine as-is.
+function Parity() {
+  return (
+    <div data-testid="docs-parity" class="p-3 overflow-y-auto h-full">
+      <pre data-testid="docs-parity-rendered" class="text-[11px] text-neutral-300 whitespace-pre-wrap">{parityMd}</pre>
+    </div>
+  );
+}
+
 export default function DocsPanel() {
   const [section, setSection] = createSignal<Section>("setup");
 
@@ -272,6 +289,9 @@ export default function DocsPanel() {
         </Show>
         <Show when={section() === "concepts"}>
           <Concepts />
+        </Show>
+        <Show when={section() === "parity"}>
+          <Parity />
         </Show>
       </div>
     </div>
