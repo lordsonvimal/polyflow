@@ -40,6 +40,65 @@ describe("fetchMermaid", () => {
 
 import { safeExportScale, MAX_EXPORT_DIM } from "./export";
 
+import { mermaidLevelForScope, mermaidTraceScopeFor, exportSVG, exportPNGBlob, exportElementsJSON } from "./export";
+import type { Scope } from "../stores/scope";
+
+describe("mermaidLevelForScope", () => {
+  it("maps scope kinds to the closest mermaid level", () => {
+    expect(mermaidLevelForScope({ kind: "service", service: "svc" })).toBe("service");
+    expect(mermaidLevelForScope({ kind: "file", service: "svc", path: "a.go" })).toBe("file");
+    expect(mermaidLevelForScope({ kind: "folder", service: "svc", path: "pkg" })).toBe("file");
+    expect(mermaidLevelForScope({ kind: "neighborhood", nodeId: "n1", depth: 2 })).toBe("function");
+    expect(mermaidLevelForScope({ kind: "overview" })).toBe("service");
+  });
+});
+
+describe("mermaidTraceScopeFor", () => {
+  it("resolves a root/direction/depth for node-anchored scopes", () => {
+    expect(mermaidTraceScopeFor({ kind: "neighborhood", nodeId: "n1", depth: 3 })).toEqual({ root: "n1", direction: "both", depth: 3 });
+    expect(mermaidTraceScopeFor({ kind: "impact", target: "n2", direction: "up", depth: 4 })).toEqual({ root: "n2", direction: "up", depth: 4 });
+  });
+
+  it("returns null for scopes with no single anchor node", () => {
+    const overview: Scope = { kind: "overview" };
+    expect(mermaidTraceScopeFor(overview)).toBeNull();
+  });
+});
+
+describe("canvas exports (SVG/PNG/JSON)", () => {
+  function fakeCy() {
+    return {
+      svg: () => "<svg></svg>",
+      png: () => "data:image/png;base64,AAAA",
+      elements: () => ({
+        boundingBox: () => ({ w: 100, h: 100 }),
+        jsons: () => [{ group: "nodes", data: { id: "n1" } }],
+      }),
+    } as any;
+  }
+
+  it("exportSVG returns the cy.svg() text", () => {
+    expect(exportSVG(fakeCy())).toBe("<svg></svg>");
+  });
+
+  it("exportPNGBlob decodes the data URL into a Blob", () => {
+    const blob = exportPNGBlob(fakeCy());
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("image/png");
+  });
+
+  it("exportPNGBlob throws on an empty render so callers can fall back to SVG", () => {
+    const cy = fakeCy();
+    cy.png = () => "data:image/png;base64,";
+    expect(() => exportPNGBlob(cy)).toThrow();
+  });
+
+  it("exportElementsJSON serializes the current element set", () => {
+    const json = exportElementsJSON(fakeCy());
+    expect(JSON.parse(json)).toEqual([{ group: "nodes", data: { id: "n1" } }]);
+  });
+});
+
 describe("safeExportScale", () => {
   it("keeps the desired scale for small graphs", () => {
     expect(safeExportScale(1000, 800)).toBe(2);
