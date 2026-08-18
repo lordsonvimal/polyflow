@@ -90,21 +90,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	unresolvedByKind := map[string]int{}
+	for _, ref := range unresolved {
+		unresolvedByKind[ref.Kind]++
+	}
 
 	trust, _ := graph.LoadTrustStamp(ctx, s.db)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"index": map[string]any{
-			"indexed_at":     indexedAt,
-			"schema_version": schemaVersion,
-			"nodes":          nodes,
-			"edges":          edges,
-			"parse_errors":   len(parseErrors),
+			"indexed_at":       indexedAt,
+			"schema_version":   schemaVersion,
+			"nodes":            nodes,
+			"edges":            edges,
+			"parse_errors":     len(parseErrors),
+			"parse_error_list": parseErrors,
 		},
-		"coverage":         graph.BuildVerificationSummary(idx.AllEdges()),
-		"unresolved_total": len(unresolved),
-		"eval":             s.loadEvalHealth(),
-		"trust":            trust,
+		"coverage":           graph.BuildVerificationSummary(idx.AllEdges()),
+		"unresolved_total":   len(unresolved),
+		"unresolved_by_kind": unresolvedByKind,
+		"eval":               s.loadEvalHealth(),
+		"trust":              trust,
 	})
 }
 
