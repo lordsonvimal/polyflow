@@ -131,7 +131,7 @@ function edgeHash(id: string): number {
 
 function edgeCurveDistance(ele: { id(): string }): number {
   const h = edgeHash(ele.id());
-  const magnitude = 18 + (Math.abs(h) % 15); // 18-32px
+  const magnitude = 4 + (Math.abs(h) % 5); // 4-8px — just enough to break collinearity, not a visible arc
   return h % 2 === 0 ? magnitude : -magnitude;
 }
 
