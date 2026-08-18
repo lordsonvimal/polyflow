@@ -150,10 +150,14 @@ type sidecarParser struct {
 func (s *sidecarParser) Language() string     { return "templ" }
 func (s *sidecarParser) Extensions() []string { return []string{".templ"} }
 
-func (s *sidecarParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	content, err := os.ReadFile(file)
-	if err != nil {
-		return nil, nil, nil, err
+func (s *sidecarParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache parser.SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	content, ok := cache[file]
+	if !ok {
+		var err error
+		content, err = os.ReadFile(file)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	variant := ""
 	if matcher != nil {
@@ -162,7 +166,7 @@ func (s *sidecarParser) Parse(file, service string, matcher *patterns.TreeSitter
 	backend := s.sel.Backend.SidecarBackend
 	client, err := s.router.manager.Client(backend)
 	if err != nil {
-		return s.fallback(file, service, matcher, backend, err, "")
+		return s.fallback(file, service, matcher, cache, backend, err, "")
 	}
 	req := ParseRequest{
 		File:            file,
@@ -174,18 +178,18 @@ func (s *sidecarParser) Parse(file, service string, matcher *patterns.TreeSitter
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return s.fallback(file, service, matcher, backend, err, "")
+		return s.fallback(file, service, matcher, cache, backend, err, "")
 	}
 	respBytes, err := client.RoundTrip(payload)
 	if err != nil {
-		return s.fallback(file, service, matcher, backend, err, client.Stderr())
+		return s.fallback(file, service, matcher, cache, backend, err, client.Stderr())
 	}
 	var resp ParseResponse
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return s.fallback(file, service, matcher, backend, err, client.Stderr())
+		return s.fallback(file, service, matcher, cache, backend, err, client.Stderr())
 	}
 	if resp.Error != "" {
-		return s.fallback(file, service, matcher, backend, fmt.Errorf("sidecar error: %s", resp.Error), client.Stderr())
+		return s.fallback(file, service, matcher, cache, backend, fmt.Errorf("sidecar error: %s", resp.Error), client.Stderr())
 	}
 	return resp.Nodes, resp.Edges, resp.Unresolved, nil
 }
@@ -194,7 +198,7 @@ func (s *sidecarParser) Parse(file, service string, matcher *patterns.TreeSitter
 // coverage note per (backend, failure) for the run. The registry parser is
 // the same engine version as this build, so output content is unchanged —
 // the note records that isolation was unavailable, not a graph gap.
-func (s *sidecarParser) fallback(file, service string, matcher *patterns.TreeSitterMatcher, backend string, cause error, stderr string) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+func (s *sidecarParser) fallback(file, service string, matcher *patterns.TreeSitterMatcher, cache parser.SourceCache, backend string, cause error, stderr string) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
 	noteText := fmt.Sprintf("sidecar %s unavailable, parsed in-process: %v", backend, cause)
 	if stderr != "" {
 		noteText += " | stderr: " + strings.TrimSpace(stderr)
@@ -210,5 +214,5 @@ func (s *sidecarParser) fallback(file, service string, matcher *patterns.TreeSit
 	if p == nil {
 		return nil, nil, nil, fmt.Errorf("sidecar fallback: no in-process parser for %s", file)
 	}
-	return p.Parse(file, service, matcher)
+	return p.Parse(file, service, matcher, cache)
 }

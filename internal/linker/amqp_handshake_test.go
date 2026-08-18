@@ -47,7 +47,7 @@ func handshakeFixture(t *testing.T) ([]graph.Node, []graph.UnresolvedRef, map[st
 		for _, f := range files[svc] {
 			p := parser.ForFile(f)
 			require.NotNil(t, p, "no parser for %s", f)
-			ns, _, _, err := p.Parse(f, svc, m)
+			ns, _, _, err := p.Parse(f, svc, m, nil)
 			require.NoError(t, err)
 			nodes = append(nodes, ns...)
 		}

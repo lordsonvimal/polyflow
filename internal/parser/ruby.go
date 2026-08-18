@@ -13,8 +13,8 @@ type RubyParser struct{}
 func (p *RubyParser) Language() string     { return "ruby" }
 func (p *RubyParser) Extensions() []string { return []string{".rb", ".rake"} }
 
-func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

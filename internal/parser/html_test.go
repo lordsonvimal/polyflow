@@ -29,7 +29,7 @@ func TestHTMLParser_NavLinksAndEvents(t *testing.T) {
 	require.NotNil(t, p, "expected a parser for .html files")
 
 	m := mustMatcher(t)
-	nodes, _, _, err := p.Parse(file, "site", m)
+	nodes, _, _, err := p.Parse(file, "site", m, nil)
 	require.NoError(t, err)
 
 	navPaths := map[string]bool{}
@@ -71,7 +71,7 @@ func TestHTML_InlineEventAttr_EmitsDomTarget(t *testing.T) {
 
 	p := parser.ForFile(file)
 	require.NotNil(t, p)
-	nodes, edges, _, err := p.Parse(file, "site", mustMatcher(t))
+	nodes, edges, _, err := p.Parse(file, "site", mustMatcher(t), nil)
 	require.NoError(t, err)
 
 	var target, doc *graph.Node
@@ -109,7 +109,7 @@ func TestTemplParser_NativeEventAttr(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, edges, _, err := p.Parse("testdata/page.templ", "app", m)
+	nodes, edges, _, err := p.Parse("testdata/page.templ", "app", m, nil)
 	require.NoError(t, err)
 
 	var eventNode *graph.Node
@@ -150,7 +150,7 @@ func TestHTMLParser_ProtocolRelativeIsNotNavigation(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
 
 	m := mustMatcher(t)
-	nodes, _, _, err := parser.ForFile(file).Parse(file, "site", m)
+	nodes, _, _, err := parser.ForFile(file).Parse(file, "site", m, nil)
 	require.NoError(t, err)
 
 	navPaths := []string{}

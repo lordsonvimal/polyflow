@@ -95,7 +95,7 @@ func TestVueParser_BasicFixture_EventsAndNavLinks(t *testing.T) {
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, unresolved, err := p.Parse(vueFixtureBasic, "myapp", m)
+	nodes, _, unresolved, err := p.Parse(vueFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// Count dom_target nodes (event bindings).
@@ -143,7 +143,7 @@ func TestVueParser_FanOut_TwoClickHandlers(t *testing.T) {
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(vueFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(vueFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	clickCount := 0
@@ -163,7 +163,7 @@ func TestVueParser_ScriptFunctions(t *testing.T) {
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(vueFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(vueFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	funcLabels := map[string]bool{}
@@ -183,7 +183,7 @@ func TestVueParser_TSLang(t *testing.T) {
 	p := parser.ForFile(vueFixtureTS)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(vueFixtureTS, "myapp", m)
+	nodes, _, _, err := p.Parse(vueFixtureTS, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// All nodes must have language="vue".
@@ -209,7 +209,7 @@ func TestVueParser_LineOffset(t *testing.T) {
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(vueFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(vueFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// The script block starts at line 15 (1-indexed) in the basic fixture.
@@ -229,7 +229,7 @@ func TestVueParser_Determinism(t *testing.T) {
 	require.NotNil(t, p)
 
 	run := func() []string {
-		nodes, _, unresolved, err := p.Parse(vueFixtureBasic, "myapp", m)
+		nodes, _, unresolved, err := p.Parse(vueFixtureBasic, "myapp", m, nil)
 		require.NoError(t, err)
 		var keys []string
 		for _, n := range nodes {
@@ -269,7 +269,7 @@ export default { name: 'Static' }
 	p := parser.ForFile(tmpFile)
 	require.NotNil(t, p)
 
-	nodes, _, unresolved, err := p.Parse(tmpFile, "myapp", m)
+	nodes, _, unresolved, err := p.Parse(tmpFile, "myapp", m, nil)
 	require.NoError(t, err)
 
 	for _, n := range nodes {
@@ -304,7 +304,7 @@ export default {}
 	require.NotNil(t, p)
 
 	// Should not panic or error even with <template> in script string.
-	_, _, _, err := p.Parse(tmpFile, "myapp", m)
+	_, _, _, err := p.Parse(tmpFile, "myapp", m, nil)
 	assert.NoError(t, err, "parsing a .vue with <template> in a script string must not error")
 }
 
@@ -327,7 +327,7 @@ export default {}
 	p := parser.ForFile(tmpFile)
 	require.NotNil(t, p)
 
-	_, _, unresolved, err := p.Parse(tmpFile, "myapp", m)
+	_, _, unresolved, err := p.Parse(tmpFile, "myapp", m, nil)
 	require.NoError(t, err)
 
 	hasDynamicURL := false

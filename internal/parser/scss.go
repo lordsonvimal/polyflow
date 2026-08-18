@@ -23,8 +23,8 @@ type StylesheetParser struct{}
 func (p *StylesheetParser) Language() string     { return "css" }
 func (p *StylesheetParser) Extensions() []string { return []string{".scss", ".css"} }
 
-func (p *StylesheetParser) Parse(file, service string, _ *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *StylesheetParser) Parse(file, service string, _ *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

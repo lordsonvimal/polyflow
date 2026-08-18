@@ -102,6 +102,7 @@ func allChains(r *trace.Result) string {
 // Chain 1: templ button → Datastar action → Gin handler → hub.Broadcast →
 // SSE subscriber. ≥5 hops spanning the templ UI and the Go service.
 func TestChain_TemplDatastarGinHubSSE(t *testing.T) {
+	t.Parallel()
 	idx := indexChains(t)
 
 	// Note: data-text bindings also produce pseudo-component nodes
@@ -137,6 +138,7 @@ func TestChain_TemplDatastarGinHubSSE(t *testing.T) {
 // connected by the workspace broker hint) → RabbitMQ channel → Go amqp091
 // consumer, cross-language and cross-repo.
 func TestChain_RailsBunnyRabbitGoConsumer(t *testing.T) {
+	t.Parallel()
 	idx := indexChains(t)
 
 	// Ruby methods (incl. Rails controller actions) index as function nodes;
@@ -163,6 +165,7 @@ func TestChain_RailsBunnyRabbitGoConsumer(t *testing.T) {
 // typed response write → client onmessage dispatch case (both directions of
 // the tether shape).
 func TestChain_WebSocketTypedRoundTrip(t *testing.T) {
+	t.Parallel()
 	idx := indexChains(t)
 
 	// Client → server: reportBattery sends {type:'battery'}, the Go read
@@ -195,6 +198,7 @@ func TestChain_WebSocketTypedRoundTrip(t *testing.T) {
 // The chains workspace collectively spans ≥3 languages with cross-service
 // links between them.
 func TestChains_SpanThreeLanguages(t *testing.T) {
+	t.Parallel()
 	idx := indexChains(t)
 
 	langs := map[string]bool{}

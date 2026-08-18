@@ -26,8 +26,8 @@ type ERBParser struct{}
 func (p *ERBParser) Language() string     { return "erb" }
 func (p *ERBParser) Extensions() []string { return []string{".erb"} }
 
-func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}
