@@ -5,6 +5,7 @@
 import { For, Show, createMemo, onMount } from "solid-js";
 import { healthStore, type HealthCoverage } from "../../stores/health";
 import { drawerStore } from "../../stores/drawer";
+import { runtimeViewStore } from "../../stores/runtimeView";
 
 const COVERAGE_ROWS: { key: keyof HealthCoverage; label: string; explanation: string; color: string }[] = [
   {
@@ -98,6 +99,13 @@ function CoverageCard() {
   return (
     <Card title="Coverage" testId="health-coverage-card">
       <div class="space-y-1.5">
+        <button
+          data-testid="health-coverage-runtime-link"
+          class="text-xs text-indigo-300 hover:text-indigo-200"
+          onClick={() => runtimeViewStore.openRuntime()}
+        >
+          per-session breakdown (Runtime tab) →
+        </button>
         <For each={COVERAGE_ROWS}>
           {(row) => {
             const count = () => (cov()[row.key] as number) ?? 0;
