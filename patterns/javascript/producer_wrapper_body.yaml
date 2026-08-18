@@ -1,0 +1,442 @@
+language: javascript
+version: "1"
+# Tier WB.1 — wrapper-body detection. A wrapper function like
+#   function apiFetch(opts) { return fetch(opts.uri); }
+# forwards its own parameter into a fetch/axios call. These patterns read the
+# wrapper's *own body* to discover which parameter — by member-access key or
+# destructured key, however it's named — actually carries the URL, instead of
+# producer_alias.yaml's call-site patterns guessing a hardcoded "url" key.
+#
+# These are bookkeeping-only nodes (like *_alias_binding / gin_group_registrar
+# markers): classifyPattern types them NodeTypeVariable and suppresses their
+# calls-edges (see internal/patterns/matcher.go). Tier WB.3 (not yet built)
+# consumes wrapper_url_target/wrapper_url_param_key to resolve
+# producer_alias_obj_call's key ambiguity; until then these nodes are inert.
+#
+# Positional forwarding (`function apiFetch(uri) { return fetch(uri); }`) is
+# deliberately NOT covered here — for a sole/first parameter it doesn't change
+# which argument producer_alias_url_call already picks (index 0), so there is
+# nothing for WB.3 to resolve differently. Multi-param positional forwarding
+# is WB.4, corpus-gated (see docs/js-wrapper-url-backtrack-plan.md).
+patterns:
+  # ── member-access forward: function apiFetch(opts) { return fetch(opts.uri); } ──
+  - name: wrapper_url_key_member_fetch_decl
+    query: |
+      (function_declaration
+        name: (identifier) @wrapper_name
+        parameters: (formal_parameters . (identifier) @param_name .)
+        body: (statement_block
+          (return_statement
+            (call_expression
+              function: (identifier) @callee
+              (#match? @callee "^(fetch)$")
+              arguments: (arguments
+                . (member_expression
+                    object: (identifier) @obj2
+                    (#eq? @obj2 @param_name)
+                    property: (property_identifier) @url_key)
+                .)))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_member_fetch_assigned
+    query: |
+      (variable_declarator
+        name: (identifier) @wrapper_name
+        value: [
+          (arrow_function
+            parameters: (formal_parameters . (identifier) @param_name .)
+            body: [
+              (statement_block
+                (return_statement
+                  (call_expression
+                    function: (identifier) @callee
+                    (#match? @callee "^(fetch)$")
+                    arguments: (arguments
+                      . (member_expression
+                          object: (identifier) @obj2
+                          (#eq? @obj2 @param_name)
+                          property: (property_identifier) @url_key)
+                      .))))
+              (call_expression
+                function: (identifier) @callee
+                (#match? @callee "^(fetch)$")
+                arguments: (arguments
+                  . (member_expression
+                      object: (identifier) @obj2
+                      (#eq? @obj2 @param_name)
+                      property: (property_identifier) @url_key)
+                  .))
+            ])
+          (function_expression
+            parameters: (formal_parameters . (identifier) @param_name .)
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (identifier) @callee
+                  (#match? @callee "^(fetch)$")
+                  arguments: (arguments
+                    . (member_expression
+                        object: (identifier) @obj2
+                        (#eq? @obj2 @param_name)
+                        property: (property_identifier) @url_key)
+                    .)))))
+        ])
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_member_axios_decl
+    query: |
+      (function_declaration
+        name: (identifier) @wrapper_name
+        parameters: (formal_parameters . (identifier) @param_name .)
+        body: (statement_block
+          (return_statement
+            (call_expression
+              function: (member_expression
+                object: (identifier) @axios_obj
+                (#eq? @axios_obj "axios")
+                property: (property_identifier) @callee
+                (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+              arguments: (arguments
+                . (member_expression
+                    object: (identifier) @obj2
+                    (#eq? @obj2 @param_name)
+                    property: (property_identifier) @url_key)
+                .)))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_member_axios_assigned
+    query: |
+      (variable_declarator
+        name: (identifier) @wrapper_name
+        value: [
+          (arrow_function
+            parameters: (formal_parameters . (identifier) @param_name .)
+            body: [
+              (statement_block
+                (return_statement
+                  (call_expression
+                    function: (member_expression
+                      object: (identifier) @axios_obj
+                      (#eq? @axios_obj "axios")
+                      property: (property_identifier) @callee
+                      (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                    arguments: (arguments
+                      . (member_expression
+                          object: (identifier) @obj2
+                          (#eq? @obj2 @param_name)
+                          property: (property_identifier) @url_key)
+                      .))))
+              (call_expression
+                function: (member_expression
+                  object: (identifier) @axios_obj
+                  (#eq? @axios_obj "axios")
+                  property: (property_identifier) @callee
+                  (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                arguments: (arguments
+                  . (member_expression
+                      object: (identifier) @obj2
+                      (#eq? @obj2 @param_name)
+                      property: (property_identifier) @url_key)
+                  .))
+            ])
+          (function_expression
+            parameters: (formal_parameters . (identifier) @param_name .)
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (member_expression
+                    object: (identifier) @axios_obj
+                    (#eq? @axios_obj "axios")
+                    property: (property_identifier) @callee
+                    (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                  arguments: (arguments
+                    . (member_expression
+                        object: (identifier) @obj2
+                        (#eq? @obj2 @param_name)
+                        property: (property_identifier) @url_key)
+                    .)))))
+        ])
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+
+  # ── destructured shorthand: function apiFetch({ uri }) { return fetch(uri); } ──
+  - name: wrapper_url_key_destructure_fetch_decl
+    query: |
+      (function_declaration
+        name: (identifier) @wrapper_name
+        parameters: (formal_parameters
+          . (object_pattern (shorthand_property_identifier_pattern) @url_key) .)
+        body: (statement_block
+          (return_statement
+            (call_expression
+              function: (identifier) @callee
+              (#match? @callee "^(fetch)$")
+              arguments: (arguments . (identifier) @arg_name .)
+              (#eq? @arg_name @url_key)))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_destructure_fetch_assigned
+    query: |
+      (variable_declarator
+        name: (identifier) @wrapper_name
+        value: [
+          (arrow_function
+            parameters: (formal_parameters
+              . (object_pattern (shorthand_property_identifier_pattern) @url_key) .)
+            body: [
+              (statement_block
+                (return_statement
+                  (call_expression
+                    function: (identifier) @callee
+                    (#match? @callee "^(fetch)$")
+                    arguments: (arguments . (identifier) @arg_name .)
+                    (#eq? @arg_name @url_key))))
+              (call_expression
+                function: (identifier) @callee
+                (#match? @callee "^(fetch)$")
+                arguments: (arguments . (identifier) @arg_name .)
+                (#eq? @arg_name @url_key))
+            ])
+          (function_expression
+            parameters: (formal_parameters
+              . (object_pattern (shorthand_property_identifier_pattern) @url_key) .)
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (identifier) @callee
+                  (#match? @callee "^(fetch)$")
+                  arguments: (arguments . (identifier) @arg_name .)
+                  (#eq? @arg_name @url_key)))))
+        ])
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_destructure_axios_decl
+    query: |
+      (function_declaration
+        name: (identifier) @wrapper_name
+        parameters: (formal_parameters
+          . (object_pattern (shorthand_property_identifier_pattern) @url_key) .)
+        body: (statement_block
+          (return_statement
+            (call_expression
+              function: (member_expression
+                object: (identifier) @axios_obj
+                (#eq? @axios_obj "axios")
+                property: (property_identifier) @callee
+                (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+              arguments: (arguments . (identifier) @arg_name .)
+              (#eq? @arg_name @url_key)))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_destructure_axios_assigned
+    query: |
+      (variable_declarator
+        name: (identifier) @wrapper_name
+        value: [
+          (arrow_function
+            parameters: (formal_parameters
+              . (object_pattern (shorthand_property_identifier_pattern) @url_key) .)
+            body: [
+              (statement_block
+                (return_statement
+                  (call_expression
+                    function: (member_expression
+                      object: (identifier) @axios_obj
+                      (#eq? @axios_obj "axios")
+                      property: (property_identifier) @callee
+                      (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                    arguments: (arguments . (identifier) @arg_name .)
+                    (#eq? @arg_name @url_key))))
+              (call_expression
+                function: (member_expression
+                  object: (identifier) @axios_obj
+                  (#eq? @axios_obj "axios")
+                  property: (property_identifier) @callee
+                  (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                arguments: (arguments . (identifier) @arg_name .)
+                (#eq? @arg_name @url_key))
+            ])
+          (function_expression
+            parameters: (formal_parameters
+              . (object_pattern (shorthand_property_identifier_pattern) @url_key) .)
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (member_expression
+                    object: (identifier) @axios_obj
+                    (#eq? @axios_obj "axios")
+                    property: (property_identifier) @callee
+                    (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                  arguments: (arguments . (identifier) @arg_name .)
+                  (#eq? @arg_name @url_key)))))
+        ])
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+
+  # ── destructured + renamed: function apiFetch({ uri: myUri }) { return fetch(myUri); } ──
+  - name: wrapper_url_key_destructure_renamed_fetch_decl
+    query: |
+      (function_declaration
+        name: (identifier) @wrapper_name
+        parameters: (formal_parameters
+          . (object_pattern
+              (pair_pattern
+                key: (property_identifier) @url_key
+                value: (identifier) @local_name)) .)
+        body: (statement_block
+          (return_statement
+            (call_expression
+              function: (identifier) @callee
+              (#match? @callee "^(fetch)$")
+              arguments: (arguments . (identifier) @arg_name .)
+              (#eq? @arg_name @local_name)))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_destructure_renamed_fetch_assigned
+    query: |
+      (variable_declarator
+        name: (identifier) @wrapper_name
+        value: [
+          (arrow_function
+            parameters: (formal_parameters
+              . (object_pattern
+                  (pair_pattern
+                    key: (property_identifier) @url_key
+                    value: (identifier) @local_name)) .)
+            body: [
+              (statement_block
+                (return_statement
+                  (call_expression
+                    function: (identifier) @callee
+                    (#match? @callee "^(fetch)$")
+                    arguments: (arguments . (identifier) @arg_name .)
+                    (#eq? @arg_name @local_name))))
+              (call_expression
+                function: (identifier) @callee
+                (#match? @callee "^(fetch)$")
+                arguments: (arguments . (identifier) @arg_name .)
+                (#eq? @arg_name @local_name))
+            ])
+          (function_expression
+            parameters: (formal_parameters
+              . (object_pattern
+                  (pair_pattern
+                    key: (property_identifier) @url_key
+                    value: (identifier) @local_name)) .)
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (identifier) @callee
+                  (#match? @callee "^(fetch)$")
+                  arguments: (arguments . (identifier) @arg_name .)
+                  (#eq? @arg_name @local_name)))))
+        ])
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_destructure_renamed_axios_decl
+    query: |
+      (function_declaration
+        name: (identifier) @wrapper_name
+        parameters: (formal_parameters
+          . (object_pattern
+              (pair_pattern
+                key: (property_identifier) @url_key
+                value: (identifier) @local_name)) .)
+        body: (statement_block
+          (return_statement
+            (call_expression
+              function: (member_expression
+                object: (identifier) @axios_obj
+                (#eq? @axios_obj "axios")
+                property: (property_identifier) @callee
+                (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+              arguments: (arguments . (identifier) @arg_name .)
+              (#eq? @arg_name @local_name)))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key
+  - name: wrapper_url_key_destructure_renamed_axios_assigned
+    query: |
+      (variable_declarator
+        name: (identifier) @wrapper_name
+        value: [
+          (arrow_function
+            parameters: (formal_parameters
+              . (object_pattern
+                  (pair_pattern
+                    key: (property_identifier) @url_key
+                    value: (identifier) @local_name)) .)
+            body: [
+              (statement_block
+                (return_statement
+                  (call_expression
+                    function: (member_expression
+                      object: (identifier) @axios_obj
+                      (#eq? @axios_obj "axios")
+                      property: (property_identifier) @callee
+                      (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                    arguments: (arguments . (identifier) @arg_name .)
+                    (#eq? @arg_name @local_name))))
+              (call_expression
+                function: (member_expression
+                  object: (identifier) @axios_obj
+                  (#eq? @axios_obj "axios")
+                  property: (property_identifier) @callee
+                  (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                arguments: (arguments . (identifier) @arg_name .)
+                (#eq? @arg_name @local_name))
+            ])
+          (function_expression
+            parameters: (formal_parameters
+              . (object_pattern
+                  (pair_pattern
+                    key: (property_identifier) @url_key
+                    value: (identifier) @local_name)) .)
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (member_expression
+                    object: (identifier) @axios_obj
+                    (#eq? @axios_obj "axios")
+                    property: (property_identifier) @callee
+                    (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+                  arguments: (arguments . (identifier) @arg_name .)
+                  (#eq? @arg_name @local_name)))))
+        ])
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: url_key
+        role: wrapper_url_param_key

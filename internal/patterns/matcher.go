@@ -744,6 +744,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			label = stripStringLiteral(aliasN)
 		} else if instN, ok := r.Captures["instance_name"]; ok {
 			label = stripStringLiteral(instN)
+		} else if wrapN, ok := r.Captures["wrapper_name"]; ok {
+			// WB.1: wrapper-body bookkeeping nodes — label with the function name.
+			label = stripStringLiteral(wrapN)
 		} else if id, ok := r.Captures["id"]; ok {
 			// HTML/JSX element id attribute — label as "#id" for CSS-selector readability.
 			label = "#" + stripStringLiteral(id)
@@ -1288,7 +1291,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// they feed EnrichRouteGroups and would otherwise emit a self-edge from
 		// their enclosing function (the func node sits on the same line).
 		if n.Type == graph.NodeTypeVariable && (n.Meta["alias_name"] != "" || n.Meta["instance_name"] != "" ||
-			strings.HasPrefix(n.Meta["pattern"], "gin_group_registrar")) {
+			strings.HasPrefix(n.Meta["pattern"], "gin_group_registrar") ||
+			strings.HasPrefix(n.Meta["pattern"], "wrapper_url_")) {
 			continue
 		}
 		var fromID string
@@ -1687,6 +1691,13 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	// call sites and MUST NOT emit edges (guarded in Pass 2 by the
 	// gin_group_registrar prefix), same discipline as alias binding markers.
 	case lower == "gin_group_registrar_func" || lower == "gin_group_registrar_call":
+		return graph.NodeTypeVariable, graph.EdgeTypeCalls
+
+	// ── WB.1: wrapper-body param→URL bookkeeping ──────────────────────────────
+	// wrapper_url_target/wrapper_url_param_key facts feed Tier WB.3's linker
+	// resolution (not yet built); same discipline as alias binding markers —
+	// not call sites, must not emit edges.
+	case strings.HasPrefix(lower, "wrapper_url_"):
 		return graph.NodeTypeVariable, graph.EdgeTypeCalls
 
 	// ── G.7: alias/instance call sites (calls through a named alias or instance) ──
