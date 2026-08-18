@@ -1,4 +1,4 @@
-import { createSignal, onMount, createEffect, Show, createMemo, For } from "solid-js";
+import { createSignal, onMount, onCleanup, createEffect, Show, createMemo, For } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { paletteStore } from "../stores/palette";
 import { apiFetchJSON } from "../lib/apiFetch";
@@ -11,6 +11,8 @@ import { pinboardStore } from "../stores/pinboard";
 import { selectionStore } from "../stores/selection";
 import { displayLabel } from "../lib/location";
 import { jobsStore } from "../stores/jobs";
+import { captureStore } from "../stores/capture";
+import { runtimeViewStore } from "../stores/runtimeView";
 import { drawerStore } from "../stores/drawer";
 import { savedViewsStore } from "../stores/savedViews";
 import { canvasRefStore } from "../stores/canvasRef";
@@ -33,6 +35,11 @@ export default function TopBar() {
   const [shareMenuOpen, setShareMenuOpen] = createSignal(false);
   const [saveDialogOpen, setSaveDialogOpen] = createSignal(false);
   const [saveNameInput, setSaveNameInput] = createSignal("");
+  const [recordDialogOpen, setRecordDialogOpen] = createSignal(false);
+  const [recordStopConfirm, setRecordStopConfirm] = createSignal(false);
+  const [recordSessionInput, setRecordSessionInput] = createSignal("");
+  const [recordHTTPPort, setRecordHTTPPort] = createSignal(4318);
+  const [recordGRPCPort, setRecordGRPCPort] = createSignal(4317);
   const isCanvasPage = createMemo(() => !NO_CANVAS.has(scopeStore.stack().at(-1)?.kind ?? "search"));
 
   async function copyLink(): Promise<void> {
@@ -104,6 +111,35 @@ export default function TopBar() {
     }
   }
 
+  function defaultSessionName(): string {
+    return `ui-${new Date().toISOString().slice(0, 10)}`;
+  }
+
+  function openRecordDialog(): void {
+    setRecordSessionInput(defaultSessionName());
+    setRecordHTTPPort(4318);
+    setRecordGRPCPort(4317);
+    setRecordDialogOpen(true);
+  }
+
+  async function submitRecordStart(): Promise<void> {
+    const name = recordSessionInput().trim() || defaultSessionName();
+    const ok = await captureStore.start(name, recordHTTPPort(), recordGRPCPort());
+    if (ok) setRecordDialogOpen(false);
+  }
+
+  async function confirmRecordStop(): Promise<void> {
+    setRecordStopConfirm(false);
+    const session = captureStore.activeSessions()[0]?.session;
+    await captureStore.stop(session);
+  }
+
+  function recordTooltip(): string {
+    const s = captureStore.activeSessions()[0];
+    if (!s) return "Record runtime traffic";
+    return `${s.spans_received} span${s.spans_received === 1 ? "" : "s"} · point OTEL_EXPORTER_OTLP_ENDPOINT at :${s.http_port}`;
+  }
+
   function elapsedLabel(startedAt: string): string {
     const ms = Date.now() - Date.parse(startedAt);
     if (Number.isNaN(ms) || ms < 0) return "";
@@ -127,6 +163,34 @@ export default function TopBar() {
     } catch {
       setStats("--n/--e");
     }
+  });
+
+  // UO.6: light status polling so a CLI-started `polyflow capture start`
+  // shows live in this tab too (mirrored, not just SSE-pushed for
+  // sessions this tab itself started).
+  onMount(() => {
+    void captureStore.refreshStatus();
+    captureStore.startPolling();
+  });
+  onCleanup(() => captureStore.stopPolling());
+
+  // Stop/ingest completion prompt: "Captured N spans. Fuse into graph now?"
+  createEffect(() => {
+    const prompt = captureStore.fusePrompt();
+    if (!prompt) return;
+    notificationsStore.add({
+      id: `capture-fuse-${prompt.session}-${Date.now()}`,
+      kind: "info",
+      message: `Captured ${prompt.spanCount} span${prompt.spanCount === 1 ? "" : "s"}. Fuse into graph now?`,
+      action: {
+        label: "Fuse now",
+        onClick: () => {
+          captureStore.fuseNow();
+          runtimeViewStore.openRuntime(prompt.session);
+        },
+      },
+    });
+    captureStore.dismissFusePrompt();
   });
 
   createEffect(() => {
@@ -207,6 +271,45 @@ export default function TopBar() {
       </Show>
       <div class="ml-auto flex items-center gap-2">
         <span class="text-xs text-neutral-400 font-mono">{stats()}</span>
+        <div class="relative flex items-center">
+          <Show
+            when={captureStore.activeSessions().length > 0}
+            fallback={
+              <button
+                data-testid="record-button"
+                title="Record runtime traffic"
+                class="flex items-center gap-1 text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5 disabled:opacity-40"
+                disabled={captureStore.captureState() === "starting"}
+                onClick={openRecordDialog}
+              >
+                <span class="inline-block w-2 h-2 rounded-full border border-neutral-500" />
+                {captureStore.captureState() === "starting" ? "Starting…" : "Record"}
+              </button>
+            }
+          >
+            <button
+              data-testid="record-active-button"
+              title={recordTooltip()}
+              class="flex items-center gap-1.5 text-xs text-red-300 hover:text-red-200 border border-red-800 rounded px-2 py-0.5 disabled:opacity-40"
+              disabled={captureStore.captureState() === "stopping"}
+              onClick={() => setRecordStopConfirm(true)}
+            >
+              <span data-testid="record-pulse" class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+              <span data-testid="record-span-count">{captureStore.activeSessions()[0]?.spans_received ?? 0}</span>
+            </button>
+          </Show>
+          <Show when={recordStopConfirm()}>
+            <div class="absolute top-full right-0 mt-1 z-20 bg-neutral-900 border border-neutral-700 rounded shadow-lg text-xs whitespace-nowrap p-2 flex items-center gap-2">
+              <span class="text-neutral-300">Stop recording?</span>
+              <button data-testid="record-stop-confirm" class="text-red-400 hover:text-red-300" onClick={() => void confirmRecordStop()}>
+                Stop
+              </button>
+              <button class="text-neutral-400 hover:text-white" onClick={() => setRecordStopConfirm(false)}>
+                Cancel
+              </button>
+            </div>
+          </Show>
+        </div>
         <div class="relative flex items-center">
           <Show
             when={jobsStore.activeIndexJob()}
@@ -348,6 +451,69 @@ export default function TopBar() {
           ⌘K
         </button>
       </div>
+      <Show when={recordDialogOpen()}>
+        <div
+          data-testid="record-dialog-overlay"
+          class="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/50"
+          onClick={() => setRecordDialogOpen(false)}
+        >
+          <div
+            class="w-full max-w-sm bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl p-4 flex flex-col gap-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span class="text-sm text-neutral-200">Record runtime traffic</span>
+            <label class="text-xs text-neutral-400 flex flex-col gap-1">
+              Session name
+              <input
+                data-testid="record-session-name-input"
+                class="w-full px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-sm text-neutral-100 outline-none"
+                value={recordSessionInput()}
+                autofocus
+                onInput={(e) => setRecordSessionInput(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitRecordStart();
+                  if (e.key === "Escape") setRecordDialogOpen(false);
+                }}
+              />
+            </label>
+            <div class="flex gap-3 text-xs text-neutral-400">
+              <label class="flex flex-col gap-1">
+                HTTP port
+                <input
+                  data-testid="record-http-port-input"
+                  type="number"
+                  class="w-20 px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-sm text-neutral-100 outline-none"
+                  value={recordHTTPPort()}
+                  onInput={(e) => setRecordHTTPPort(parseInt(e.currentTarget.value, 10) || 4318)}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                gRPC port
+                <input
+                  data-testid="record-grpc-port-input"
+                  type="number"
+                  class="w-20 px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-sm text-neutral-100 outline-none"
+                  value={recordGRPCPort()}
+                  onInput={(e) => setRecordGRPCPort(parseInt(e.currentTarget.value, 10) || 4317)}
+                />
+              </label>
+            </div>
+            <div class="flex justify-end gap-2 text-xs">
+              <button class="px-2 py-1 text-neutral-400 hover:text-white" onClick={() => setRecordDialogOpen(false)}>
+                Cancel
+              </button>
+              <button
+                data-testid="record-dialog-submit"
+                class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded disabled:opacity-40"
+                disabled={captureStore.captureState() === "starting"}
+                onClick={() => void submitRecordStart()}
+              >
+                Start
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
       <Show when={saveDialogOpen()}>
         <div
           data-testid="save-view-overlay"

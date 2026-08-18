@@ -193,6 +193,7 @@ func (s *Server) registerRoutes() {
 	s.handle("POST /api/capture/ingest", s.handleCaptureIngest)
 	s.handle("GET /api/runtime/flows", s.handleRuntimeFlows)
 	s.handle("GET /api/runtime/coverage", s.handleRuntimeCoverage)
+	s.handle("GET /api/reconcile/propose", s.handleReconcilePropose)
 	s.handle("GET /api/views", s.handleListViews)
 	s.handle("POST /api/views", s.handleCreateView)
 	s.handle("PATCH /api/views/{id}", s.handleRenameView)
