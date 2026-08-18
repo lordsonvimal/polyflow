@@ -50,6 +50,25 @@ async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
       }));
     } else {
       out = (data.nodes ?? []).map((hit: any) => {
+        // The server attaches structured label/node_type/service (looked up
+        // from the live index by entity.NodeID) precisely so this never has
+        // to fall back to parsing entity.Text: that card is "label type
+        // service file", and any node whose *label* itself contains a space
+        // (every http_handler, e.g. "GET /api/jobs") shifts every field —
+        // service ends up as "http_handler", which then 404s on whatever
+        // endpoint gets called next. Only fall back for a stale/older server
+        // response that lacks these fields.
+        if (hit.label || hit.node_type || hit.service) {
+          return {
+            id: hit.entity?.ID ?? hit.entity?.NodeID ?? "",
+            label: hit.label ?? "",
+            type: hit.node_type ?? "",
+            service: hit.service ?? "",
+            file: hit.entity?.File ?? "",
+            line: hit.entity?.Line ?? 0,
+            retrieval: hit.retrieval,
+          };
+        }
         const card = parseNodeCard(hit.entity?.Text ?? "");
         return {
           id: hit.entity?.ID ?? hit.entity?.NodeID ?? "",
