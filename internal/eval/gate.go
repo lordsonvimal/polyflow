@@ -25,6 +25,9 @@ type Regression struct {
 	// (D.1) — the point of the condition is which phantom appeared, not that
 	// one did.
 	ForbiddenHits []string `json:"forbidden_hits,omitempty"`
+	// SemanticWarnings names the indexer's own "semantic call graph
+	// unavailable" notices that are new versus baseline (condition 8).
+	SemanticWarnings []string `json:"semantic_warnings,omitempty"`
 }
 
 // GateResult holds the outcome of comparing a run against the baseline.
@@ -57,20 +60,54 @@ type GateResult struct {
 //     returns beyond that set is by definition a false positive — this
 //     condition is what turns that declaration into an assertion, and it
 //     catches the phantom nobody thought to forbid.
+//  8. a NEW semantic-analysis fallback warning (indexer meta key
+//     semantic_warnings). When a service's semantic pass (e.g. go/packages)
+//     fails, the indexer silently degrades to tree-sitter-only edges and
+//     every recall number for that repo looks like an ordinary resolver
+//     regression — conditions 2/3 alone would just report a recall drop with
+//     no indication the graph itself was never fully built. A warning already
+//     present in the baseline is not re-flagged here, matching condition 6's
+//     "new, not existing" rule.
 func CheckGate(current, baseline *MultiReport) *GateResult {
 	// Index baseline by repo → caseID.
 	type baselineKey struct{ repo, caseID string }
 	baselineCases := make(map[baselineKey]CaseResult)
 	baselineRepoRecall := make(map[string]float64)
+	baselineWarnings := make(map[string]map[string]bool)
 	for _, rep := range baseline.Reports {
 		baselineRepoRecall[rep.Repo] = rep.Recall
 		for _, cr := range rep.Results {
 			baselineCases[baselineKey{rep.Repo, cr.CaseID}] = cr
 		}
+		if len(rep.SemanticWarnings) > 0 {
+			set := make(map[string]bool, len(rep.SemanticWarnings))
+			for _, w := range rep.SemanticWarnings {
+				set[w] = true
+			}
+			baselineWarnings[rep.Repo] = set
+		}
 	}
 
 	var regressions []Regression
 	for _, rep := range current.Reports {
+		// Condition 8: a NEW semantic-analysis fallback warning.
+		if len(rep.SemanticWarnings) > 0 {
+			known := baselineWarnings[rep.Repo]
+			var fresh []string
+			for _, w := range rep.SemanticWarnings {
+				if !known[w] {
+					fresh = append(fresh, w)
+				}
+			}
+			if len(fresh) > 0 {
+				regressions = append(regressions, Regression{
+					Repo:             rep.Repo,
+					CaseID:           "*",
+					Reason:           "semantic_fallback",
+					SemanticWarnings: fresh,
+				})
+			}
+		}
 		// Condition 6: a NEW must_not_include violation (D.1).
 		//
 		// Checked as a set difference rather than "any hit at all", for the same

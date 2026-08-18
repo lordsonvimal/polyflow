@@ -2427,6 +2427,9 @@ func runEval(cmd *cobra.Command, args []string) error {
 	for _, report := range multi.Reports {
 		fmt.Printf("Repo: %-20s  cases: %d  recall=%.3f  precision=%s\n",
 			report.Repo, len(report.Results), report.Recall, evalRepoPrecision(report))
+		for _, w := range report.SemanticWarnings {
+			fmt.Printf("  WARNING: %s — recall numbers below are measured against an incomplete graph\n", w)
+		}
 		for _, r := range report.Results {
 			status := "ok"
 			if r.HardFail {
@@ -2494,6 +2497,9 @@ func runEval(cmd *cobra.Command, args []string) error {
 				case "precision_drop":
 					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/%s  precision_drop  baseline=%.3f  current=%.3f  (exhaustive case: it now returns files its complete truth set does not contain)\n",
 						r.Repo, r.CaseID, deref(r.BaselinePrecision), deref(r.CurrentPrecision))
+				case "semantic_fallback":
+					fmt.Fprintf(os.Stderr, "  REGRESSION  %s/*  semantic_fallback  (graph is incomplete, not just lower-recall): %s\n",
+						r.Repo, strings.Join(r.SemanticWarnings, "; "))
 				}
 			}
 			fmt.Fprintln(os.Stderr, "Update eval/baseline.json when recall improves: polyflow eval --output eval/baseline.json")
@@ -2621,7 +2627,11 @@ func runEvalSingle(ctx context.Context, corpusDir, caseID string) error {
 	}
 
 	fmt.Printf("Repo: %s   cases: %d\n", report.Repo, len(report.Results))
-	fmt.Printf("Corpus  recall=%.3f  precision=%s\n\n", report.Recall, evalRepoPrecision(*report))
+	fmt.Printf("Corpus  recall=%.3f  precision=%s\n", report.Recall, evalRepoPrecision(*report))
+	for _, w := range report.SemanticWarnings {
+		fmt.Printf("  WARNING: %s — recall numbers below are measured against an incomplete graph\n", w)
+	}
+	fmt.Println()
 
 	hardFailed := false
 	for _, r := range report.Results {

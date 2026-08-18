@@ -67,6 +67,10 @@ eval-corpus:
 				echo "WARNING: $$name has no url and no local path present — skipping (local-only repo?)"; \
 				continue; \
 			fi; \
+			if [ -f "$$path/go.mod" ]; then \
+				echo "Downloading Go modules for $$name ..."; \
+				(cd "$$path" && go mod download) || echo "WARNING: go mod download failed for $$name — semantic call graph may fall back to tree-sitter"; \
+			fi; \
 			echo "Indexing $$name (in place at $$path) ..."; \
 			(cd "$$path" && $$POLYFLOW index --full --workspace polyflow.yml) || echo "WARNING: index failed for $$name"; \
 			continue; \
@@ -89,6 +93,10 @@ eval-corpus:
 		git -C "$$cachedir" checkout --quiet "$$sha"; \
 		if [ -f "$$dir/polyflow.yml" ]; then \
 			cp "$$dir/polyflow.yml" "$$cachedir/polyflow.yml"; \
+		fi; \
+		if [ -f "$$cachedir/go.mod" ]; then \
+			echo "Downloading Go modules for $$name ..."; \
+			(cd "$$cachedir" && go mod download) || echo "WARNING: go mod download failed for $$name — semantic call graph may fall back to tree-sitter"; \
 		fi; \
 		echo "Indexing $$name ..."; \
 		(cd "$$cachedir" && $$POLYFLOW index --full --workspace polyflow.yml) || echo "WARNING: index failed for $$name"; \

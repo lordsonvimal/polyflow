@@ -16,7 +16,29 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          # Cache is handled below by a single step keyed on both this
+          # module's go.sum AND the corpus manifests, so setup-go's own
+          # (narrower) cache is disabled to avoid two actions/cache steps
+          # fighting over the same ~/go/pkg/mod and ~/.cache/go-build paths.
+          cache: false
+
+      # ~/go/pkg/mod and ~/.cache/go-build cover both polyflow's own build
+      # AND the Go-based corpus repos under eval/.cache (e.g. gotify), which
+      # are cloned fresh by `make eval-corpus` below and have their own
+      # go.mod/go.sum. Without this, gotify's dependencies must be downloaded
+      # from scratch every run; `polyflow index`'s semantic pass
+      # (go/packages.Load) silently falls back to tree-sitter-only edges when
+      # that download is slow/unavailable, which used to masquerade as a
+      # resolver regression (see eval's semantic_fallback gate condition).
+      # Keyed on both go.sum files since either can change the module set.
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: gomod-${{ hashFiles('go.sum', 'eval/corpus/**/manifest.yaml') }}
+          restore-keys: gomod-
 
       - name: Install zig (cross-compilation toolchain)
         run: |
