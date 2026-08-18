@@ -335,27 +335,43 @@ var serveCmd = &cobra.Command{
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	cfg, err := workspace.Load(serveWS)
-	if err != nil {
-		return err
-	}
+	// UO.7 setup mode: a missing polyflow.yml or graph.db no longer errors
+	// serve out — it boots the UI shell (and the jobs/setup API) against an
+	// empty in-memory graph, and the setup wizard's init+index jobs bring up
+	// the real workspace in place. cfg is nil when serveWS doesn't parse;
+	// every cfg-dependent call below is nil-safe (resolveEmbedder(nil) is an
+	// explicit fallback) or guarded.
+	cfg, cfgErr := workspace.Load(serveWS)
+
+	dbPath := filepath.Join(meta.DBDir, meta.DBFile)
+	_, dbStatErr := os.Stat(dbPath)
+	dbMissing := os.IsNotExist(dbStatErr)
 
 	port := servePort
 	if port == 0 {
-		port = cfg.EffectivePort()
-	}
-
-	dbPath := filepath.Join(meta.DBDir, meta.DBFile)
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return fmt.Errorf("graph database not found at %s — run `polyflow index` first", dbPath)
-	}
-
-	store, err := graph.NewSQLiteStore(dbPath)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		if cfgErr == nil {
+			port = cfg.EffectivePort()
+		} else {
+			port = meta.DefaultPort
+		}
 	}
 
 	ctx := context.Background()
+	var (
+		store *graph.SQLiteStore
+		err   error
+	)
+	if cfgErr != nil || dbMissing {
+		store, err = graph.NewSQLiteStore(":memory:")
+		if err != nil {
+			return fmt.Errorf("open in-memory store: %w", err)
+		}
+	} else {
+		store, err = graph.NewSQLiteStore(dbPath)
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+	}
 	idx, err := store.BuildIndex(ctx)
 	if err != nil {
 		return fmt.Errorf("build index: %w", err)
@@ -368,6 +384,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		srv = server.New(store, idx)
 	}
 	srv.SetConfigPath(serveWS)
+	srv.SetDBPath(dbPath)
 	// UO.4: generate the CLI reference from the live command tree once, at
 	// startup, so GET /api/docs/cli can never drift from the actual binary.
 	meta.SetCLIDocs(buildCLIDocs(rootCmd))
@@ -377,11 +394,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("embedder: %w", err)
 	}
 	defer closeEmb()
-	synonyms := cfg.Search.Synonyms
+	var synonyms map[string][]string
+	if cfgErr == nil {
+		synonyms = cfg.Search.Synonyms
+	}
 	srv.SetSearcher(buildSearcher(store, emb, synonyms))
 
 	// UB.2: ops.db lives next to graph.db and is never touched by the
-	// indexer, so it survives graph.db's rebuild-then-atomic-rename.
+	// indexer, so it survives graph.db's rebuild-then-atomic-rename. In
+	// setup mode meta.DBDir may not exist yet — the jobs API (needed for the
+	// wizard's init/index steps) requires it regardless of workspace state.
+	if err := os.MkdirAll(meta.DBDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create %s: %v\n", meta.DBDir, err)
+	}
 	opsPath := filepath.Join(meta.DBDir, meta.OpsFile)
 	opsStore, err := ops.Open(opsPath)
 	if err != nil {
@@ -390,11 +415,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer opsStore.Close()
 		srv.SetOps(opsStore)
 
-		// UB.3: the jobs manager wraps indexer.Run/eval.Run/evidence.BuildReport
-		// — the same internals the CLI commands use — so the UI can trigger them
-		// with progress/cancellation. Index-job completion needs no explicit
-		// reload call: it renames graph.db.tmp -> graph.db like `polyflow index`
-		// does, and the fsnotify watcher below already reloads on that rename.
+		// UB.3/UO.7: the jobs manager wraps indexer.Run/eval.Run/
+		// evidence.BuildReport/workspace.Discover — the same internals the
+		// CLI commands use — so the UI can trigger them with progress/
+		// cancellation. Index-job completion needs no explicit reload call:
+		// it renames graph.db.tmp -> graph.db like `polyflow index` does, and
+		// the fsnotify watcher below already reloads on that rename —
+		// including the setup wizard's first index, which is what carries
+		// this server out of setup mode.
 		mgr := jobs.NewManager(jobs.Options{
 			Ops:             opsStore,
 			WorkspacePath:   serveWS,

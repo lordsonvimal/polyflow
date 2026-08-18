@@ -102,6 +102,59 @@ func LoadFile(path string) (*PatternFile, error) {
 	return &pf, nil
 }
 
+// PatternFileInfo pairs a parsed PatternFile with the path it was loaded
+// from — Load/LoadFS discard this once WalkDir moves on, but the UO.7
+// patterns API needs it to show each pattern's source file.
+type PatternFileInfo struct {
+	Path string
+	File *PatternFile
+}
+
+// LoadWithPaths is like Load but retains each file's source path.
+func LoadWithPaths(dir string) ([]PatternFileInfo, error) {
+	var files []PatternFileInfo
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".yaml" {
+			return nil
+		}
+		pf, err := LoadFile(path)
+		if err != nil {
+			return fmt.Errorf("load pattern %s: %w", path, err)
+		}
+		files = append(files, PatternFileInfo{Path: path, File: pf})
+		return nil
+	})
+	return files, err
+}
+
+// EmbeddedFilesWithPaths is the LoadWithPaths analogue for the built-in
+// patterns compiled into the binary (see EmbeddedRegistry).
+func EmbeddedFilesWithPaths() ([]PatternFileInfo, error) {
+	var files []PatternFileInfo
+	err := fs.WalkDir(patterndata.FS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".yaml" {
+			return nil
+		}
+		data, err := fs.ReadFile(patterndata.FS, path)
+		if err != nil {
+			return fmt.Errorf("load pattern %s: %w", path, err)
+		}
+		var pf PatternFile
+		if err := yaml.Unmarshal(data, &pf); err != nil {
+			return fmt.Errorf("load pattern %s: %w", path, err)
+		}
+		files = append(files, PatternFileInfo{Path: "embedded:" + path, File: &pf})
+		return nil
+	})
+	return files, err
+}
+
 // LoadFS reads and parses all *.yaml pattern files in fsys (recursively). It is
 // the io/fs analogue of Load, used to read the patterns embedded in the binary.
 func LoadFS(fsys fs.FS) ([]*PatternFile, error) {

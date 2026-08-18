@@ -33,10 +33,11 @@ const (
 	KindIndex     Kind = "index"
 	KindEval      Kind = "eval"
 	KindReconcile Kind = "reconcile"
+	KindInit      Kind = "init"
 )
 
 // Kinds lists the valid job kinds, in the order the 400 error names them.
-var Kinds = []Kind{KindIndex, KindEval, KindReconcile}
+var Kinds = []Kind{KindIndex, KindEval, KindReconcile, KindInit}
 
 func validKind(k string) bool {
 	for _, v := range Kinds {
@@ -156,6 +157,12 @@ type EvalArgs struct {
 // ReconcileArgs is the args payload for kind "reconcile".
 type ReconcileArgs struct {
 	ProposeDir string `json:"propose_dir"`
+}
+
+// InitArgs is the args payload for kind "init" — the UO.7 setup-mode
+// discovery job. Root defaults to "." (the server's working directory).
+type InitArgs struct {
+	Root string `json:"root"`
 }
 
 // Start validates and launches a job, returning its initial (running) record.
@@ -378,6 +385,12 @@ func (m *Manager) run(ctx context.Context, k Kind, rs *runState, argsJSON json.R
 			_ = json.Unmarshal(argsJSON, &args)
 		}
 		result, runErr = m.runReconcile(ctx, rs, args)
+	case KindInit:
+		var args InitArgs
+		if len(argsJSON) > 0 {
+			_ = json.Unmarshal(argsJSON, &args)
+		}
+		result, runErr = m.runInit(ctx, rs, args)
 	}
 
 	state := "succeeded"
@@ -569,6 +582,30 @@ func (m *Manager) runReconcile(ctx context.Context, rs *runState, args Reconcile
 		"report":            report,
 		"proposals_written": written,
 	})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ─── init (UO.7 setup mode) ────────────────────────────────────────────────
+
+// runInit discovers services under args.Root using the exact same
+// workspace.Discover internals `polyflow init` uses non-interactively. It
+// does not write polyflow.yml — the setup wizard shows the result for
+// confirmation first; POST /api/setup/apply does the write, byte-identical
+// to `polyflow init`'s workspace.SaveInit call.
+func (m *Manager) runInit(ctx context.Context, rs *runState, args InitArgs) (string, error) {
+	root := args.Root
+	if root == "" {
+		root = "."
+	}
+	cfg, err := workspace.Discover(root)
+	if err != nil {
+		return "", fmt.Errorf("discover services: %w", err)
+	}
+	rs.appendLog(fmt.Sprintf("init: discovered %d service(s) under %s", len(cfg.Services), root))
+	data, err := json.Marshal(cfg)
 	if err != nil {
 		return "", err
 	}

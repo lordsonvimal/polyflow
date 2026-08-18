@@ -14,17 +14,33 @@ import { scopeStore } from "./stores/scope";
 import { registerKeys } from "./interaction/keys";
 import { connectionStore } from "./stores/connection";
 import { jobsStore } from "./stores/jobs";
+import { setupStore } from "./stores/setup";
+import SetupView from "./views/SetupView";
 
 const App: Component = () => {
   onMount(() => {
     const cleanup = registerKeys(window);
     connectionStore.start();
+    setupStore.checkStatus();
     onCleanup(() => {
       cleanup();
       connectionStore.stop();
     });
   });
 
+  const needsSetup = () => {
+    const s = setupStore.status();
+    return s != null && (s.needs_config || s.needs_index);
+  };
+
+  return (
+    <Show when={needsSetup()} fallback={<AppShell />}>
+      <SetupView />
+    </Show>
+  );
+};
+
+const AppShell: Component = () => {
   return (
     <div class="flex flex-col h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100">
       <TopBar />

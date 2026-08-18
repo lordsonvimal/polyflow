@@ -58,7 +58,7 @@ func TestHandleGetConfig(t *testing.T) {
 	if resp.Raw != raw {
 		t.Fatalf("raw mismatch: got %q want %q", resp.Raw, raw)
 	}
-	if resp.Parsed == nil || resp.Parsed["Name"] != "test-ws" {
+	if resp.Parsed == nil || resp.Parsed["name"] != "test-ws" {
 		t.Fatalf("parsed missing/wrong: %+v", resp.Parsed)
 	}
 	if resp.ETag == "" {
