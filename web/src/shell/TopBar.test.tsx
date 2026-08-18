@@ -9,6 +9,9 @@ import { jobsStore, type Job } from "../stores/jobs";
 import { drawerStore } from "../stores/drawer";
 import { canvasRefStore } from "../stores/canvasRef";
 import { savedViewsStore } from "../stores/savedViews";
+import { captureStore } from "../stores/capture";
+import { runtimeViewStore } from "../stores/runtimeView";
+import { notificationsStore } from "../stores/notifications";
 
 describe("TopBar theme toggle", () => {
   let container: HTMLElement;
@@ -345,5 +348,113 @@ describe("TopBar Share menu", () => {
     expect(JSON.parse((call![1] as RequestInit).body as string).name).toBe("my view");
     expect(container.querySelector('[data-testid="save-view-overlay"]')).toBeFalsy();
     savedViewsStore.reset();
+  });
+});
+
+// UO.6: Record control state machine (idle/starting/active/stopping)
+function fakeCaptureFetch(routes: Record<string, unknown | { status: number; body: string }>) {
+  return vi.fn((url: string) => {
+    const u = new URL(url, "http://localhost");
+    const key = u.pathname;
+    const match = Object.keys(routes).find((k) => key === k);
+    if (!match) return Promise.resolve({ ok: true, json: async () => ({ active: [], sessions: [] }) } as Response);
+    const entry = routes[match];
+    if (entry && typeof entry === "object" && "status" in (entry as object) && "body" in (entry as object)) {
+      const e = entry as { status: number; body: string };
+      return Promise.resolve({ ok: false, status: e.status, text: async () => e.body } as Response);
+    }
+    return Promise.resolve({ ok: true, json: async () => entry } as Response);
+  });
+}
+
+describe("TopBar Record control", () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    captureStore.reset();
+    notificationsStore.clear();
+  });
+
+  afterEach(() => {
+    captureStore.stopPolling();
+    captureStore.reset();
+    runtimeViewStore.setTab("catalog");
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  it("idle: clicking Record opens the session dialog prefilled with ui-<date>", () => {
+    (globalThis as any).fetch = fakeCaptureFetch({});
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="record-button"]') as HTMLElement).click();
+    const input = container.querySelector('[data-testid="record-session-name-input"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    expect(input.value).toMatch(/^ui-\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("submitting the dialog starts a capture and shows the pulsing active control", async () => {
+    (globalThis as any).fetch = fakeCaptureFetch({
+      "/api/capture/start": { session: "ui-test", status: "active", http_port: 4318, grpc_port: 4317 },
+      "/api/capture/status": { active: [{ session: "ui-test", since: "now", spans_received: 0, http_port: 4318, grpc_port: 4317 }], sessions: [] },
+    });
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="record-button"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="record-dialog-submit"]') as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(container.querySelector('[data-testid="record-active-button"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="record-pulse"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="record-dialog-overlay"]')).toBeFalsy();
+  });
+
+  it("active: clicking shows a stop confirm; confirming stops and prompts to fuse", async () => {
+    (globalThis as any).fetch = fakeCaptureFetch({
+      "/api/capture/start": { session: "ui-test", status: "active", http_port: 4318, grpc_port: 4317 },
+      "/api/capture/status": { active: [{ session: "ui-test", since: "now", spans_received: 5, http_port: 4318, grpc_port: 4317 }], sessions: [] },
+      "/api/capture/stop": { session: "ui-test", finalized: true, fusion_hint: "run index to fuse this evidence into the graph" },
+    });
+    render(() => <TopBar />, container);
+
+    await captureStore.start("ui-test");
+    await new Promise((r) => setTimeout(r, 0));
+
+    (container.querySelector('[data-testid="record-active-button"]') as HTMLElement).click();
+    expect(container.querySelector('[data-testid="record-stop-confirm"]')).toBeTruthy();
+
+    (globalThis as any).fetch = fakeCaptureFetch({
+      "/api/capture/status": { active: [], sessions: [{ Name: "ui-test", StartedAt: "now", SpanCount: 5, Age: "1s old" }] },
+      "/api/capture/stop": { session: "ui-test", finalized: true, fusion_hint: "run index to fuse this evidence into the graph" },
+    });
+    (container.querySelector('[data-testid="record-stop-confirm"]') as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(container.querySelector('[data-testid="record-active-button"]')).toBeFalsy();
+  });
+
+  it("stop -> fuse prompt toast wires 'Fuse now' to the index job and opens the Runtime tab", async () => {
+    const startIndexSpy = vi.spyOn(jobsStore, "startIndex").mockResolvedValue();
+    (globalThis as any).fetch = fakeCaptureFetch({
+      "/api/capture/status": { active: [{ session: "ui-test", since: "now", spans_received: 5, http_port: 4318, grpc_port: 4317 }], sessions: [] },
+    });
+    render(() => <TopBar />, container);
+    await captureStore.refreshStatus();
+
+    (globalThis as any).fetch = fakeCaptureFetch({
+      "/api/capture/status": { active: [], sessions: [{ Name: "ui-test", StartedAt: "now", SpanCount: 5, Age: "1s old" }] },
+      "/api/capture/stop": { session: "ui-test", finalized: true, fusion_hint: "run index to fuse this evidence into the graph" },
+    });
+    await captureStore.stop("ui-test");
+    await new Promise((r) => setTimeout(r, 0));
+
+    const toast = notificationsStore.toasts().find((t) => t.message.includes("Fuse into graph now?"));
+    expect(toast).toBeTruthy();
+    expect(toast!.action?.label).toBe("Fuse now");
+    toast!.action!.onClick();
+    expect(startIndexSpy).toHaveBeenCalledWith(false);
+    expect(runtimeViewStore.tab()).toBe("runtime");
   });
 });
