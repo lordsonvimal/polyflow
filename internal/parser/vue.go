@@ -40,8 +40,8 @@ type VueParser struct{}
 func (p *VueParser) Language() string     { return "vue" }
 func (p *VueParser) Extensions() []string { return []string{".vue"} }
 
-func (p *VueParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *VueParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

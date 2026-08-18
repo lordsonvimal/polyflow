@@ -487,15 +487,15 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 		// Hand the parse phase the bytes already read for these files during
 		// the hash pre-pass instead of making every parser re-read from disk.
-		svcSource := make(map[string][]byte, len(toParse))
+		svcSource := make(parser.SourceCache, len(toParse))
 		for _, file := range toParse {
 			svcSource[file] = fileData[file]
 		}
-		parser.SetSourceCache(svcSource)
 
 		router := sidecar.NewRouter(sidecarMgr, tcReg, sf.svc.Name, svcToolchainVersions[sf.svc.Name])
 		pool := parser.NewWorkerPool(opts.Workers, matcher, sf.svc.Name)
 		pool.SetRoute(router.ParserFor)
+		pool.SetSourceCache(svcSource)
 		for result := range pool.Run(toParse) {
 			done++
 			stats.ParsedFiles++
@@ -536,7 +536,6 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				allEdges = append(allEdges, e)
 			}
 		}
-		parser.SetSourceCache(nil)
 		// This service's bytes (parsed or cache-hit) are no longer needed —
 		// drop them now rather than holding the whole workspace's file
 		// contents in memory for the entire parse loop.

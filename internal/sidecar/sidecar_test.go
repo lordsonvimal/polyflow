@@ -129,7 +129,7 @@ func TestSidecarParityWithInProcess(t *testing.T) {
 	require.NoError(t, json.Unmarshal(respBytes, &got))
 	require.Empty(t, got.Error)
 
-	nodes, edges, unresolved, err := (&parser.TemplParser{}).Parse(file, "websvc", nil)
+	nodes, edges, unresolved, err := (&parser.TemplParser{}).Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	want := sidecar.ParseResponse{Nodes: nodes, Edges: edges, Unresolved: unresolved}
 	want.Sort()
@@ -210,11 +210,11 @@ func TestRouterFallbackMissingBinary(t *testing.T) {
 	p := router.ParserFor(file)
 	require.NotNil(t, p, "templ files must be routed")
 
-	nodes, edges, _, err := p.Parse(file, "websvc", nil)
+	nodes, edges, _, err := p.Parse(file, "websvc", nil, nil)
 	require.NoError(t, err, "fallback parse must succeed")
 	require.NotEmpty(t, nodes)
 
-	wantNodes, wantEdges, _, err := (&parser.TemplParser{}).Parse(file, "websvc", nil)
+	wantNodes, wantEdges, _, err := (&parser.TemplParser{}).Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, wantNodes, nodes, "fallback output must equal the in-process parse")
 	assert.Equal(t, wantEdges, edges)
@@ -226,7 +226,7 @@ func TestRouterFallbackMissingBinary(t *testing.T) {
 	assert.Contains(t, notes[0].Note, "unavailable")
 
 	// Second file through the same router: still parsed, note not duplicated.
-	_, _, _, err = p.Parse(file, "websvc", nil)
+	_, _, _, err = p.Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, router.Notes(), 1)
 }
@@ -244,7 +244,7 @@ func TestRouterFallbackRenamedBinary(t *testing.T) {
 
 	mgr := sidecar.NewManager(dir)
 	router := sidecar.NewRouter(mgr, toolchain.DefaultRegistry(), "websvc", templVersions())
-	nodes, _, _, err := router.ParserFor(file).Parse(file, "websvc", nil)
+	nodes, _, _, err := router.ParserFor(file).Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, nodes)
 	assert.Empty(t, router.Notes(), "sidecar present — no fallback note expected")
@@ -255,7 +255,7 @@ func TestRouterFallbackRenamedBinary(t *testing.T) {
 	mgr2 := sidecar.NewManager(dir)
 	defer mgr2.Shutdown()
 	router2 := sidecar.NewRouter(mgr2, toolchain.DefaultRegistry(), "websvc", templVersions())
-	nodes2, _, _, err := router2.ParserFor(file).Parse(file, "websvc", nil)
+	nodes2, _, _, err := router2.ParserFor(file).Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	// The sidecar sorts by ID before framing; the in-process fallback emits
 	// visitor order — canonicalize both for the content comparison.
@@ -279,7 +279,7 @@ func TestRouterFallbackDeadSidecar(t *testing.T) {
 	router := sidecar.NewRouter(mgr, toolchain.DefaultRegistry(), "websvc", templVersions())
 
 	file, _ := fixtureTempl(t)
-	nodes, _, _, err := router.ParserFor(file).Parse(file, "websvc", nil)
+	nodes, _, _, err := router.ParserFor(file).Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, nodes)
 
@@ -309,7 +309,7 @@ func TestRouterInferredVersionStillRoutes(t *testing.T) {
 	router := sidecar.NewRouter(mgr, toolchain.DefaultRegistry(), "websvc", versions)
 
 	file, _ := fixtureTempl(t)
-	nodes, _, _, err := router.ParserFor(file).Parse(file, "websvc", nil)
+	nodes, _, _, err := router.ParserFor(file).Parse(file, "websvc", nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, nodes)
 

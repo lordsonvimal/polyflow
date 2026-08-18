@@ -22,7 +22,7 @@ func parseRubyController(t *testing.T, src string) map[string]graph.Node {
 
 	p := parser.ForFile(file)
 	require.NotNil(t, p)
-	nodes, _, _, err := p.Parse(file, "svc", m)
+	nodes, _, _, err := p.Parse(file, "svc", m, nil)
 	require.NoError(t, err)
 
 	out := map[string]graph.Node{}

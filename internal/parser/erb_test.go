@@ -26,7 +26,7 @@ func TestERBParser_Fixture(t *testing.T) {
 	p := parser.ForFile("testdata/view.erb")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/view.erb", "myapp", m)
+	nodes, _, _, err := p.Parse("testdata/view.erb", "myapp", m, nil)
 	require.NoError(t, err)
 
 	patCount := make(map[string]int)
@@ -70,7 +70,7 @@ func TestERBParser_NegativeStaticHTML(t *testing.T) {
 	content := `<html><body><a href="/about">About</a><p>No Ruby here</p></body></html>`
 	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0o644))
 
-	nodes, _, _, err := p.Parse(tmpFile, "svc", m)
+	nodes, _, _, err := p.Parse(tmpFile, "svc", m, nil)
 	require.NoError(t, err)
 
 	for _, n := range nodes {
@@ -95,7 +95,7 @@ func TestERBParser_Determinism(t *testing.T) {
 	require.NotNil(t, p)
 
 	run := func() []string {
-		nodes, _, _, err := p.Parse("testdata/view.erb", "myapp", m)
+		nodes, _, _, err := p.Parse("testdata/view.erb", "myapp", m, nil)
 		require.NoError(t, err)
 		ids := make([]string, len(nodes))
 		for i, n := range nodes {

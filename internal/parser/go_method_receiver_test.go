@@ -18,7 +18,7 @@ func TestGoParser_MethodReceiverCapture(t *testing.T) {
 	p := parser.ForFile("testdata/methods.go")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/methods.go", service, m)
+	nodes, _, _, err := p.Parse("testdata/methods.go", service, m, nil)
 	require.NoError(t, err)
 
 	recv := map[string]string{}

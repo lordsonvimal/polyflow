@@ -24,7 +24,7 @@ func parseRubyRoutes(t *testing.T, src string) []graph.Node {
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)
 	p := &RubyParser{}
-	nodes, _, _, err := p.Parse(file, "svc", m)
+	nodes, _, _, err := p.Parse(file, "svc", m, nil)
 	require.NoError(t, err)
 	return nodes
 }
@@ -133,7 +133,7 @@ func parseRubyAt(t *testing.T, rel, src string) []graph.Node {
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)
 	p := &RubyParser{}
-	nodes, _, _, err := p.Parse(file, "svc", m)
+	nodes, _, _, err := p.Parse(file, "svc", m, nil)
 	require.NoError(t, err)
 	return nodes
 }

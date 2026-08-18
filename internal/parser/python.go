@@ -11,8 +11,8 @@ type PythonParser struct{}
 func (p *PythonParser) Language() string     { return "python" }
 func (p *PythonParser) Extensions() []string { return []string{".py"} }
 
-func (p *PythonParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *PythonParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -45,8 +45,8 @@ type SvelteParser struct{}
 func (p *SvelteParser) Language() string     { return "svelte" }
 func (p *SvelteParser) Extensions() []string { return []string{".svelte"} }
 
-func (p *SvelteParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *SvelteParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

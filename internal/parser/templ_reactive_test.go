@@ -12,7 +12,7 @@ import (
 func TestTemplParser_ReactiveReads(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, edges, _, err := p.Parse("testdata/reactive.templ", "app", nil)
+	nodes, edges, _, err := p.Parse("testdata/reactive.templ", "app", nil, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

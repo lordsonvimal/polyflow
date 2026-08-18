@@ -32,7 +32,7 @@ func TestERBElementLinksToJQuerySelector_RealParse(t *testing.T) {
 	} {
 		p := parser.ForFile(f)
 		require.NotNil(t, p, "no parser for %s", f)
-		ns, _, _, err := p.Parse(f, "app", m)
+		ns, _, _, err := p.Parse(f, "app", m, nil)
 		require.NoError(t, err)
 		nodes = append(nodes, ns...)
 	}

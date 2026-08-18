@@ -27,7 +27,7 @@ func parseRuby(t *testing.T, file string) ([]graph.Node, []graph.Edge) {
 	t.Helper()
 	p := parser.ForFile(file)
 	require.NotNil(t, p, "no parser for %s", file)
-	nodes, edges, _, err := p.Parse(file, service, mustMatcher(t))
+	nodes, edges, _, err := p.Parse(file, service, mustMatcher(t), nil)
 	require.NoError(t, err)
 	return nodes, edges
 }

@@ -23,7 +23,7 @@ func parsePythonSrc(t *testing.T, filename, src string) ([]graph.Node, []graph.E
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)
 	p := &PythonParser{}
-	nodes, edges, unresolved, err := p.Parse(file, "svc", m)
+	nodes, edges, unresolved, err := p.Parse(file, "svc", m, nil)
 	require.NoError(t, err)
 	return nodes, edges, unresolved
 }

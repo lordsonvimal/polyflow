@@ -12,7 +12,7 @@ import (
 func TestTemplParser_DatastarActions(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, edges, _, err := p.Parse("testdata/datastar.templ", "app", nil)
+	nodes, edges, _, err := p.Parse("testdata/datastar.templ", "app", nil, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

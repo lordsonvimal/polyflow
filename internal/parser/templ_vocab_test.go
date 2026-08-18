@@ -30,7 +30,7 @@ func countDatastarActions(nodes []graph.Node) int {
 func TestTemplParser_V0Vocab_Positive(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v0"))
+	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v0"), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestTemplParser_V0Vocab_Positive(t *testing.T) {
 func TestTemplParser_V0Vocab_WrongVersion(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v1"))
+	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v1"), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestTemplParser_V0Vocab_WrongVersion(t *testing.T) {
 func TestTemplParser_V1Vocab_WrongVersion(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", matcherWithVariant("datastar-v0"))
+	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", matcherWithVariant("datastar-v0"), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestTemplParser_V1Vocab_WrongVersion(t *testing.T) {
 func TestTemplParser_FallbackVocab_V1File(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", nil)
+	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", nil, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestTemplParser_FallbackVocab_V1File(t *testing.T) {
 func TestTemplParser_FallbackVocab_V0File(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", nil)
+	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", nil, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestTemplParser_FallbackVocab_V0File(t *testing.T) {
 func TestTemplParser_V0Vocab_ReactiveHyphenAttr(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v0"))
+	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v0"), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestTemplParser_V0Vocab_ReactiveHyphenAttr(t *testing.T) {
 func TestTemplParser_V1Vocab_DataInit(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v1"))
+	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v1"), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestTemplParser_V1Vocab_DataInit(t *testing.T) {
 func TestTemplParser_V0Vocab_DataInitNotMatched(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v0"))
+	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v0"), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestTemplParser_V0Vocab_DataInitNotMatched(t *testing.T) {
 func TestTemplParser_CombinedVocab_DataInit(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", nil)
+	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", nil, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

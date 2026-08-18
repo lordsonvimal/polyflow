@@ -87,6 +87,7 @@ func openIndex(t *testing.T, cfg *workspace.WorkspaceConfig, dbDir string, full 
 // TestSynthesizeFileRoutes_NextPages_And_NextApp exercises all M.0 table rows
 // for Next.js (pages + app router) through the real indexer path (rule 6).
 func TestSynthesizeFileRoutes_NextPages_And_NextApp(t *testing.T) {
+	t.Parallel()
 	cfg := buildNextWorkspace(t)
 	dbDir := t.TempDir()
 	idx := openIndex(t, cfg, dbDir, true)
@@ -180,6 +181,7 @@ func TestSynthesizeFileRoutes_NextPages_And_NextApp(t *testing.T) {
 // TestSynthesizeFileRoutes_NegativeNoDep ensures a pages/ dir without the
 // "next" dep produces zero file_convention nodes.
 func TestSynthesizeFileRoutes_NegativeNoDep(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "web")
 	require.NoError(t, os.MkdirAll(svc, 0o755))
@@ -200,6 +202,7 @@ func TestSynthesizeFileRoutes_NegativeNoDep(t *testing.T) {
 
 // TestSynthesizeFileRoutes_SvelteKit exercises SvelteKit page/handler synthesis.
 func TestSynthesizeFileRoutes_SvelteKit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "sk")
 	require.NoError(t, os.MkdirAll(svc, 0o755))
@@ -235,6 +238,7 @@ func TestSynthesizeFileRoutes_SvelteKit(t *testing.T) {
 
 // TestSynthesizeFileRoutes_Nuxt exercises Nuxt pages and server/api handlers.
 func TestSynthesizeFileRoutes_Nuxt(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "nuxt")
 	require.NoError(t, os.MkdirAll(svc, 0o755))
@@ -277,6 +281,7 @@ func TestSynthesizeFileRoutes_Nuxt(t *testing.T) {
 
 // TestSynthesizeFileRoutes_Remix exercises Remix dot-path and $param conventions.
 func TestSynthesizeFileRoutes_Remix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "remix")
 	require.NoError(t, os.MkdirAll(svc, 0o755))
@@ -311,6 +316,7 @@ func TestSynthesizeFileRoutes_Remix(t *testing.T) {
 
 // TestSynthesizeFileRoutes_DynamicNormalization verifies [id] → :id output.
 func TestSynthesizeFileRoutes_DynamicNormalization(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "web")
 	require.NoError(t, os.MkdirAll(svc, 0o755))
@@ -335,6 +341,7 @@ func TestSynthesizeFileRoutes_DynamicNormalization(t *testing.T) {
 // TestSynthesizeFileRoutes_Determinism runs the full indexer twice on the same
 // fixture and requires byte-identical file_convention node+edge output (rule 2).
 func TestSynthesizeFileRoutes_Determinism(t *testing.T) {
+	t.Parallel()
 	cfg := buildNextWorkspace(t)
 	dbDir := t.TempDir()
 
@@ -377,6 +384,7 @@ func TestSynthesizeFileRoutes_Determinism(t *testing.T) {
 // TestSynthesizeFileRoutes_FanOut verifies both next-pages and next-app activate
 // when the "next" dep is present and both root dirs exist (rule 1).
 func TestSynthesizeFileRoutes_FanOut(t *testing.T) {
+	t.Parallel()
 	cfg := buildNextWorkspace(t) // fixture has both pages/ and app/
 	dbDir := t.TempDir()
 	idx := openIndex(t, cfg, dbDir, true)

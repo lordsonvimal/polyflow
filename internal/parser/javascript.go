@@ -18,8 +18,8 @@ func (p *JavaScriptParser) Extensions() []string {
 	return []string{".js", ".ts", ".jsx", ".tsx", ".mjs", ".es6"}
 }
 
-func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

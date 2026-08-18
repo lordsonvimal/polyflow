@@ -12,8 +12,8 @@ type HTMLParser struct{}
 func (p *HTMLParser) Language() string     { return "html" }
 func (p *HTMLParser) Extensions() []string { return []string{".html", ".htm"} }
 
-func (p *HTMLParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *HTMLParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

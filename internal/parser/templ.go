@@ -37,8 +37,8 @@ var reReactiveSignal = regexp.MustCompile(`\$([A-Za-z_]\w*)`)
 // (data-on-* datastar actions are handled separately and never reach this).
 var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
 
-func (p *TemplParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	content, err := readSource(file)
+func (p *TemplParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	content, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}

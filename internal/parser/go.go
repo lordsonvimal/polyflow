@@ -11,8 +11,8 @@ type GoParser struct{}
 func (p *GoParser) Language() string     { return "go" }
 func (p *GoParser) Extensions() []string { return []string{".go"} }
 
-func (p *GoParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := readSource(file)
+func (p *GoParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
+	src, err := readSource(file, cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}
