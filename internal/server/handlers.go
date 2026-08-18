@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -78,6 +79,51 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ToCytoscapeJSON(pageNodes, pageEdges))
 }
 
+// enrichedHit adds a node hit's structured label/type/service, looked up from
+// the live index by Entity.NodeID. semantic.Entity carries no such fields —
+// only a human-readable Text card ("label type service file", built by
+// semantic.BuildNodeCard) — so a client that needs these values separately
+// has no choice but to split Text on spaces. That silently breaks for any
+// node whose *label itself* contains a space, which includes every
+// http_handler ("GET /api/jobs") and any other multi-word label: splitting
+// "GET /api/jobs http_handler polyflow ..." by space yields label="GET",
+// type="/api/jobs", service="http_handler" — nonsense that then 404s
+// whatever endpoint the client calls next with the wrong service. The web
+// palette (web/src/views/palette/query.ts's parseNodeCard) is exactly that
+// client; these fields let it stop parsing Text at all for node hits.
+type enrichedHit struct {
+	semantic.Hit
+	Label    string `json:"label,omitempty"`
+	NodeType string `json:"node_type,omitempty"`
+	Service  string `json:"service,omitempty"`
+}
+
+type enrichedSearchResponse struct {
+	Nodes    []enrichedHit  `json:"nodes"`
+	Flows    []semantic.Hit `json:"flows"`
+	Docs     []semantic.Hit `json:"docs"`
+	Semantic string         `json:"semantic"`
+}
+
+func enrichSearchResponse(resp semantic.Response, idx *graph.AdjacencyIndex) enrichedSearchResponse {
+	out := enrichedSearchResponse{
+		Nodes:    make([]enrichedHit, len(resp.Nodes)),
+		Flows:    resp.Flows,
+		Docs:     resp.Docs,
+		Semantic: resp.Semantic,
+	}
+	for i, hit := range resp.Nodes {
+		eh := enrichedHit{Hit: hit}
+		if n, ok := idx.Nodes[hit.Entity.NodeID]; ok {
+			eh.Label = n.Label
+			eh.NodeType = string(n.Type)
+			eh.Service = n.Service
+		}
+		out.Nodes[i] = eh
+	}
+	return out
+}
+
 // handleSearch handles GET /api/graph/search?q=<query>&limit=<n>&kind=<type>
 // When a hybrid Searcher is wired (S.2) and kind is empty, returns a typed
 // semantic.Response (nodes/flows/docs sections). Otherwise falls back to the
@@ -120,7 +166,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, resp)
+		s.idxMu.RLock()
+		idx := s.idx
+		s.idxMu.RUnlock()
+		writeJSON(w, http.StatusOK, enrichSearchResponse(resp, idx))
 		return
 	}
 
