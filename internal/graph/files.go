@@ -52,17 +52,24 @@ func ListFiles(idx *AdjacencyIndex, q string, limit int) []FileSummary {
 
 // NodesInFile returns all nodes whose File matches path, sorted by line.
 // If service is non-empty the match is restricted to that service. An exact
-// path match is preferred; when none exists, nodes whose path ends with
-// "/"+path are returned (so short relative paths resolve).
+// path match is preferred; when none exists, a suffix match is tried in
+// either direction: node.File ending with "/"+path (a short relative path
+// query against a longer node.File — e.g. an out-of-tree service, where
+// Z.0 stores node.File absolute) or path ending with "/"+node.File (a long
+// absolute query — e.g. gitdiff.MultiChanges' root-joined paths — against a
+// workspace-relative node.File, which is how in-tree services are stored).
+// Without the second direction, an absolute query against an in-tree
+// service's relative node.File matches nothing at all.
 func NodesInFile(idx *AdjacencyIndex, service, path string) []*Node {
 	var exact, suffix []*Node
 	for _, n := range idx.Nodes {
 		if service != "" && n.Service != service {
 			continue
 		}
-		if n.File == path {
+		switch {
+		case n.File == path:
 			exact = append(exact, n)
-		} else if strings.HasSuffix(n.File, "/"+path) {
+		case strings.HasSuffix(n.File, "/"+path), strings.HasSuffix(path, "/"+n.File):
 			suffix = append(suffix, n)
 		}
 	}
