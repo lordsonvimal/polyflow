@@ -75,6 +75,14 @@ type Report struct {
 	// Rank1MinGap is the smallest rank1−rank2 score margin among the passing
 	// rank1 cases — the thinnest ice the search surface is standing on.
 	Rank1MinGap float64 `json:"rank1_min_gap,omitempty"`
+	// SemanticWarnings carries the indexer's own "semantic call graph
+	// unavailable, falling back to tree-sitter" notices (graph.db meta key
+	// semantic_warnings) into the eval report. Without this, a service whose
+	// go/packages (or equivalent) pass failed — e.g. because its module cache
+	// was never warmed — silently degrades to tree-sitter-only edges and every
+	// recall number affected reads as a resolver regression instead of what it
+	// actually is: a graph that was never fully built.
+	SemanticWarnings []string `json:"semantic_warnings,omitempty"`
 }
 
 // Score computes a CaseResult.
