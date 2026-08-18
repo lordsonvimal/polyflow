@@ -1,4 +1,4 @@
-.PHONY: web build install build-all release test test-e2e bench lint clean
+.PHONY: web build install build-all release test test-chessleap test-e2e bench lint clean
 
 BUILD_DIR := dist
 BINARY    := polyflow
@@ -34,6 +34,15 @@ install: build
 test:
 	go test ./... -coverprofile=coverage.out
 	go tool cover -func=coverage.out
+
+# test-chessleap — the 5 tests that index the private chessleap repo end to
+# end (contract golden, evidence F0, sidecar byte-identical). Skipped by
+# default in `make test` since they only run at all when chessleap is cloned
+# locally (never in CI) and add ~90s of real indexing to the local test loop.
+# Run this before pushing changes that touch contract rules, the F0
+# reconciler, or the sidecar migration path.
+test-chessleap:
+	POLYFLOW_CHESSLEAP=1 go test ./internal/contract/... ./internal/evidence/... ./internal/sidecar/... -run 'Chessleap' -v -count=1
 
 test-e2e:
 	go test ./internal/e2e/... -v -count=1

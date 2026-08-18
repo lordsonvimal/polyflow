@@ -68,6 +68,18 @@ func chessleapCachePath() string {
 	return p
 }
 
+// skipUnlessChessleapOptIn skips full chessleap index runs by default — they
+// take 10-30s each and only run at all on machines with the private repo
+// cloned locally, which made `go test ./...` slow for local dev without ever
+// affecting CI (which never has the clone). Opt in with POLYFLOW_CHESSLEAP=1
+// or `make test-chessleap`.
+func skipUnlessChessleapOptIn(t *testing.T) {
+	t.Helper()
+	if os.Getenv("POLYFLOW_CHESSLEAP") != "1" {
+		t.Skip("chessleap integration test skipped by default; set POLYFLOW_CHESSLEAP=1 to run (see `make test-chessleap`)")
+	}
+}
+
 // contractEdgeTypes returns the set of edge types any embedded rule can emit.
 func contractEdgeTypes(t *testing.T) map[graph.EdgeType]bool {
 	t.Helper()
@@ -140,6 +152,7 @@ func edgeToGolden(e *graph.Edge) goldenEdge {
 // is identical to the committed golden snapshot. Run with -update-golden to
 // regenerate after an intentional change.
 func TestGoldenChessleapParity(t *testing.T) {
+	skipUnlessChessleapOptIn(t)
 	chessleap := chessleapCachePath()
 	if _, err := os.Stat(chessleap); os.IsNotExist(err) {
 		t.Skip("chessleap eval repo not available; clone to eval/.cache/chessleap")
@@ -173,9 +186,7 @@ func TestGoldenChessleapParity(t *testing.T) {
 // contract edge set is byte-identical — guards the deterministic-ordering
 // invariant (wildcard tier previously iterated a Go map).
 func TestGoldenChessleapDeterminism(t *testing.T) {
-	if testing.Short() {
-		t.Skip("two full index runs; skipped in -short mode")
-	}
+	skipUnlessChessleapOptIn(t)
 	chessleap := chessleapCachePath()
 	if _, err := os.Stat(chessleap); os.IsNotExist(err) {
 		t.Skip("chessleap eval repo not available; clone to eval/.cache/chessleap")
