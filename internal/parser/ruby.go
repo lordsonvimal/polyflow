@@ -2,7 +2,6 @@ package parser
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -15,11 +14,11 @@ func (p *RubyParser) Language() string     { return "ruby" }
 func (p *RubyParser) Extensions() []string { return []string{".rb", ".rake"} }
 
 func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// `file` arrives absolute (needed for readSource/os.ReadFile); every node
 	// this parser mints must carry the cwd-relative form instead, matching
 	// the Go semantic pass's convention — extractRubyVariables and friends
 	// build nodes directly (bypassing the matcher's own relativization).

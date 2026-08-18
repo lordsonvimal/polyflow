@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"os"
-
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
@@ -14,7 +12,7 @@ func (p *GoParser) Language() string     { return "go" }
 func (p *GoParser) Extensions() []string { return []string{".go"} }
 
 func (p *GoParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -3,7 +3,6 @@ package parser
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -42,12 +41,12 @@ func (p *VueParser) Language() string     { return "vue" }
 func (p *VueParser) Extensions() []string { return []string{".vue"} }
 
 func (p *VueParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// `file` arrives absolute (needed for readSource/os.ReadFile); every node
 	// this parser mints must carry the cwd-relative form instead, matching
 	// the Go semantic pass's convention — extractVueTemplateAttrs builds
 	// nodes directly (bypassing the matcher's own relativization).

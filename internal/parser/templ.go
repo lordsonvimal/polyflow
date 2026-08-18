@@ -2,7 +2,6 @@ package parser
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -39,7 +38,7 @@ var reReactiveSignal = regexp.MustCompile(`\$([A-Za-z_]\w*)`)
 var reOnEventAttr = regexp.MustCompile(`^on[a-z]+$`)
 
 func (p *TemplParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	content, err := os.ReadFile(file)
+	content, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
