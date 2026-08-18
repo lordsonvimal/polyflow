@@ -29,3 +29,9 @@ function apiOther(opts) {
 function apiMismatchedRename({ uri: myUri }) {
   return fetch(otherVar);
 }
+
+// Positional forward: identifier is not a parameter of the enclosing function.
+function apiFetchPositionalLocalVar(a, b) {
+  const url = compute();
+  fetch(url);
+}

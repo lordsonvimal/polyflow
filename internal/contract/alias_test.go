@@ -7,6 +7,7 @@ package contract_test
 // from pattern extraction (consistent with the G.6 test convention).
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ func aliasBindingNode(service, file string, line int, aliasName, sourceKind, sou
 		meta["alias_base_url"] = baseURL
 	}
 	return graph.Node{
-		ID: service + ":" + file + ":variable:" + aliasName + ":1",
+		ID:   service + ":" + file + ":variable:" + aliasName + ":1",
 		Type: graph.NodeTypeVariable, Service: service, File: file, Line: line,
 		Label: aliasName, Meta: meta,
 	}
@@ -45,7 +46,7 @@ func instanceBindingNode(service, file string, line int, instanceName, sourceKin
 		meta["instance_base_url"] = baseURL
 	}
 	return graph.Node{
-		ID: service + ":" + file + ":variable:" + instanceName + ":1",
+		ID:   service + ":" + file + ":variable:" + instanceName + ":1",
 		Type: graph.NodeTypeVariable, Service: service, File: file, Line: line,
 		Label: instanceName, Meta: meta,
 	}
@@ -53,7 +54,7 @@ func instanceBindingNode(service, file string, line int, instanceName, sourceKin
 
 func aliasCallNode(service, file string, line int, viaAlias, method, url string) graph.Node {
 	return graph.Node{
-		ID: service + ":" + file + ":http_client:" + viaAlias + ":" + url + ":" + file + "." + string(rune('0'+line)),
+		ID:   service + ":" + file + ":http_client:" + viaAlias + ":" + url + ":" + file + "." + string(rune('0'+line)),
 		Type: graph.NodeTypeHTTPClient, Service: service, File: file, Line: line,
 		Meta: map[string]string{
 			"via_alias": viaAlias,
@@ -72,7 +73,7 @@ func wrapperFunctionNode(service, file string, line int, funcLabel, wrapperFor, 
 		meta["wrapper_base_url"] = wrapperBaseURL
 	}
 	return graph.Node{
-		ID: service + ":" + file + ":function:" + funcLabel + ":" + string(rune('0'+line)),
+		ID:   service + ":" + file + ":function:" + funcLabel + ":" + string(rune('0'+line)),
 		Type: graph.NodeTypeFunction, Service: service, File: file, Line: line,
 		Label: funcLabel, Meta: meta,
 	}
@@ -80,7 +81,7 @@ func wrapperFunctionNode(service, file string, line int, funcLabel, wrapperFor, 
 
 func wrapperCallNode(service, file string, line int, wrapperName, url string) graph.Node {
 	return graph.Node{
-		ID: service + ":" + file + ":http_client:wrapper_call:" + url + ":" + string(rune('0'+line)),
+		ID:   service + ":" + file + ":http_client:wrapper_call:" + url + ":" + string(rune('0'+line)),
 		Type: graph.NodeTypeHTTPClient, Service: service, File: file, Line: line,
 		Meta: map[string]string{
 			"wrapper_name": wrapperName,
@@ -92,8 +93,8 @@ func wrapperCallNode(service, file string, line int, wrapperName, url string) gr
 
 func publisherAliasBinding(service, file string, line int, aliasName, sourceKind string) graph.Node {
 	return graph.Node{
-		ID:    service + ":" + file + ":variable:" + aliasName + ":1",
-		Type:  graph.NodeTypeVariable,
+		ID:      service + ":" + file + ":variable:" + aliasName + ":1",
+		Type:    graph.NodeTypeVariable,
 		Service: service, File: file, Line: line,
 		Label: aliasName,
 		Meta: map[string]string{
@@ -105,8 +106,8 @@ func publisherAliasBinding(service, file string, line int, aliasName, sourceKind
 
 func publisherCallNode(service, file string, line int, viaAlias, topic string) graph.Node {
 	return graph.Node{
-		ID:    service + ":" + file + ":publisher:via_" + viaAlias + ":" + string(rune('0'+line)),
-		Type:  graph.NodeTypePublisher,
+		ID:      service + ":" + file + ":publisher:via_" + viaAlias + ":" + string(rune('0'+line)),
+		Type:    graph.NodeTypePublisher,
 		Service: service, File: file, Line: line,
 		Meta: map[string]string{
 			"via_alias": viaAlias,
@@ -344,13 +345,13 @@ func TestEnrichAliases_EmptyInput(t *testing.T) {
 func TestEnrichAliases_WrapperKindToPublisher(t *testing.T) {
 	nodes := []graph.Node{
 		{
-			ID: "svc-a:events.js:function:publishOrder:1",
+			ID:   "svc-a:events.js:function:publishOrder:1",
 			Type: graph.NodeTypeFunction, Service: "svc-a", File: "events.js", Line: 1,
 			Label: "publishOrder",
 			Meta:  map[string]string{"wrapper_for": "kafka", "wrapper_base_url": ""},
 		},
 		{
-			ID: "svc-a:events.js:publisher:wrapper_call:5",
+			ID:   "svc-a:events.js:publisher:wrapper_call:5",
 			Type: graph.NodeTypePublisher, Service: "svc-a", File: "events.js", Line: 5,
 			Meta: map[string]string{"wrapper_name": "publishOrder", "topic": "orders.created"},
 		},
@@ -416,7 +417,7 @@ func objCallCandidateNode(service, file string, line int, viaAlias, key, url str
 		// nodes are keyed by pattern name, not by which object key they captured) —
 		// intentional, verified tolerable since WB.3 always collapses the group to
 		// one node before anything is persisted.
-		ID: service + ":" + file + ":http_client:producer_alias_obj_call:" + string(rune('0'+line)),
+		ID:   service + ":" + file + ":http_client:producer_alias_obj_call:" + string(rune('0'+line)),
 		Type: graph.NodeTypeHTTPClient, Service: service, File: file, Line: line,
 		Meta: map[string]string{
 			"pattern":   "producer_alias_obj_call",
@@ -430,12 +431,12 @@ func objCallCandidateNode(service, file string, line int, viaAlias, key, url str
 
 func wrapperURLFactNode(service, file string, line int, wrapperName, urlKey string) graph.Node {
 	return graph.Node{
-		ID: service + ":" + file + ":variable:wrapper_url_key_member_fetch_decl:" + string(rune('0'+line)),
+		ID:   service + ":" + file + ":variable:wrapper_url_key_member_fetch_decl:" + string(rune('0'+line)),
 		Type: graph.NodeTypeVariable, Service: service, File: file, Line: line,
 		Meta: map[string]string{
-			"pattern":     "wrapper_url_key_member_fetch_decl",
+			"pattern":      "wrapper_url_key_member_fetch_decl",
 			"wrapper_name": wrapperName,
-			"url_key":     urlKey,
+			"url_key":      urlKey,
 		},
 	}
 }
@@ -504,6 +505,95 @@ func TestEnrichAliases_ObjCallDifferentSpansIndependent(t *testing.T) {
 	nodes := []graph.Node{
 		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "url", "/a"),
 		objCallCandidateNode("svc-a", "a.js", 20, "apiFetch", "uri", "/b"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	clients := findNodesByType(enriched, graph.NodeTypeHTTPClient)
+	require.Len(t, clients, 2)
+}
+
+// ── WB.4: producer_alias_url_call positional candidate resolution ──────────────
+
+func urlCallCandidateNode(service, file string, line int, viaAlias string, argIndex int, url string) graph.Node {
+	return graph.Node{
+		// WB.4: every candidate at one call site shares this exact ID, same
+		// tolerance as producer_alias_obj_call (see objCallCandidateNode).
+		ID:   service + ":" + file + ":http_client:producer_alias_url_call:" + string(rune('0'+line)),
+		Type: graph.NodeTypeHTTPClient, Service: service, File: file, Line: line,
+		Meta: map[string]string{
+			"pattern":   "producer_alias_url_call",
+			"via_alias": viaAlias,
+			"arg_index": strconv.Itoa(argIndex),
+			"url":       url,
+			"path":      url,
+		},
+	}
+}
+
+func wrapperURLPositionalFactNode(service, file string, line int, wrapperName string, paramIndex int) graph.Node {
+	return graph.Node{
+		ID:   service + ":" + file + ":variable:wrapper_url_positional_fetch_call:" + string(rune('0'+line)),
+		Type: graph.NodeTypeVariable, Service: service, File: file, Line: line,
+		Meta: map[string]string{
+			"pattern":      "wrapper_url_positional_fetch_call",
+			"wrapper_name": wrapperName,
+			"param_index":  strconv.Itoa(paramIndex),
+		},
+	}
+}
+
+// TestEnrichAliases_URLCallSingleArg: a lone literal argument resolves exactly
+// as before WB.4 existed — no grouping ambiguity, no ledger entry.
+func TestEnrichAliases_URLCallSingleArg(t *testing.T) {
+	nodes := []graph.Node{
+		urlCallCandidateNode("svc-a", "a.js", 10, "apiFetch", 0, "/items"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	require.Len(t, enriched, 1)
+	assert.Equal(t, "", enriched[0].Meta["arg_index"], "arg_index stripped off the survivor")
+	assert.Equal(t, "/items", enriched[0].Meta["url"])
+}
+
+// TestEnrichAliases_URLCallWrapperResolved: a WB.4 wrapper_url_positional fact
+// (fleet example: _loadVersionHistoryBody(configId, fetchUrl, ...), param
+// index 1) picks the literal at that index, not index 0.
+func TestEnrichAliases_URLCallWrapperResolved(t *testing.T) {
+	nodes := []graph.Node{
+		wrapperURLPositionalFactNode("svc-a", "a.js", 1, "loadHistory", 1),
+		urlCallCandidateNode("svc-a", "a.js", 10, "loadHistory", 0, "/wrong"),
+		urlCallCandidateNode("svc-a", "a.js", 10, "loadHistory", 1, "/right"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	clients := findNodesByType(enriched, graph.NodeTypeHTTPClient)
+	require.Len(t, clients, 1)
+	assert.Equal(t, "/right", clients[0].Meta["url"], "wrapper fact's param index overrides index-0 default")
+}
+
+// TestEnrichAliases_URLCallAmbiguous: no wrapper fact for the callee →
+// first-by-source-order (index 0) wins, plus a wrapper_index_ambiguous ledger
+// entry (recall preserved, nothing silently guessed).
+func TestEnrichAliases_URLCallAmbiguous(t *testing.T) {
+	nodes := []graph.Node{
+		urlCallCandidateNode("svc-a", "a.js", 10, "apiFetch", 0, "/first"),
+		urlCallCandidateNode("svc-a", "a.js", 10, "apiFetch", 1, "/second"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "wrapper_index_ambiguous", unresolved[0].Kind)
+	assert.Equal(t, "apiFetch", unresolved[0].Name)
+	clients := findNodesByType(enriched, graph.NodeTypeHTTPClient)
+	require.Len(t, clients, 1)
+	assert.Equal(t, "/first", clients[0].Meta["url"], "index 0 wins when genuinely ambiguous — same as pre-WB.4 anchored behavior")
+}
+
+// TestEnrichAliases_URLCallDifferentSpansIndependent: two distinct call sites
+// (different lines) never cross-contaminate each other's grouping.
+func TestEnrichAliases_URLCallDifferentSpansIndependent(t *testing.T) {
+	nodes := []graph.Node{
+		urlCallCandidateNode("svc-a", "a.js", 10, "apiFetch", 0, "/a"),
+		urlCallCandidateNode("svc-a", "a.js", 20, "apiFetch", 0, "/b"),
 	}
 	enriched, unresolved := contract.EnrichAliases(nodes)
 	require.Empty(t, unresolved)
