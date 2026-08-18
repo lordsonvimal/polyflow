@@ -10,8 +10,8 @@ import {
 } from "./lenses";
 import { GraphNode, GraphEdge } from "../../lib/types";
 
-function node(id: string, file: string, service = "svc1"): GraphNode {
-  return { id, type: "function", label: id, service, file, line: 1, language: "go" };
+function node(id: string, file: string, service = "svc1", parent?: string): GraphNode {
+  return { id, type: "function", label: id, service, file, line: 1, language: "go", ...(parent ? { parent } : {}) };
 }
 function edge(id: string, from: string, to: string, type: string): GraphEdge {
   return { id, from, to, type };
@@ -68,8 +68,21 @@ describe("applyLens", () => {
     ],
   };
 
-  it("All hides contains but keeps everything else", () => {
+  it("All keeps a contains edge when its child has no compound-nesting parent", () => {
     const out = applyLens(graph, "All", { hideUnlinked: false });
+    expect(out.edges.map((e) => e.id)).toEqual(["e1", "e2", "e3"]);
+  });
+
+  it("All hides a contains edge only when compound nesting already shows it", () => {
+    const nested = {
+      nodes: [node("a", "a.go"), node("b", "b.go"), node("c", "c.go", "svc1", "a")],
+      edges: [
+        edge("e1", "a", "b", "calls"),
+        edge("e2", "b", "c", "reads"),
+        edge("e3", "a", "c", "contains"),
+      ],
+    };
+    const out = applyLens(nested, "All", { hideUnlinked: false });
     expect(out.edges.map((e) => e.id)).toEqual(["e1", "e2"]);
   });
 
