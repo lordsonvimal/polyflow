@@ -10,6 +10,7 @@ import (
 // emit a `reads` edge per distinct referenced signal. data-when's on/off value
 // and dynamic `"$" + sig` names contribute no reads.
 func TestTemplParser_ReactiveReads(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, edges, _, err := p.Parse("testdata/reactive.templ", "app", nil)
 	if err != nil {

@@ -68,6 +68,7 @@ func jsEdge(edges []graph.Edge, typ graph.EdgeType, fromSub, toSub string) *grap
 }
 
 func TestJSVariables_ModuleDeclarations(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseJSVarFixture(t)
 
 	cfg := jsNode(nodes, graph.NodeTypeVariable, "config")
@@ -85,6 +86,7 @@ func TestJSVariables_ModuleDeclarations(t *testing.T) {
 }
 
 func TestJSVariables_WritesAndReads(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseJSVarFixture(t)
 	_ = nodes
 
@@ -101,6 +103,7 @@ func TestJSVariables_WritesAndReads(t *testing.T) {
 }
 
 func TestJSVariables_ClosureCapture(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseJSVarFixture(t)
 
 	total := jsNode(nodes, graph.NodeTypeVariable, "total")
@@ -123,6 +126,7 @@ func TestJSVariables_ClosureCapture(t *testing.T) {
 }
 
 func TestJSVariables_FlowsTo(t *testing.T) {
+	t.Parallel()
 	_, edges := parseJSVarFixture(t)
 
 	obj := jsEdge(edges, graph.EdgeTypeFlowsTo, "variable:config", "function:report")
@@ -139,6 +143,7 @@ func TestJSVariables_FlowsTo(t *testing.T) {
 }
 
 func TestJSVariables_Class(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseJSVarFixture(t)
 
 	cls := jsNode(nodes, graph.NodeTypeClass, "Store")
@@ -158,6 +163,7 @@ func TestJSVariables_Class(t *testing.T) {
 // (`return function enqueue(fn) { … chain … }`) emitted a captures edge whose
 // `from` had no node, failing the edges."from" FK during indexing.
 func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
+	t.Parallel()
 	src := []byte(`export function createPostMoveQueue() {
   let chain = Promise.resolve();
   return function enqueue(fn) {
@@ -193,6 +199,7 @@ func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
 
 // TypeScript type annotations become data_type verbatim.
 func TestJSVariables_TSTypeAnnotation(t *testing.T) {
+	t.Parallel()
 	src := []byte("const layouts: string[] = [];\nexport const port: number = 4;\n")
 	nodes, _, _, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src)
 

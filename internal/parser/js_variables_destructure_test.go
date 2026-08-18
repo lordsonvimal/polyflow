@@ -44,6 +44,7 @@ func parseJSSignalFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 // Destructured module bindings become variable nodes (Solid signals were
 // previously invisible: "destructuring patterns are not tracked in v1").
 func TestJSVariables_DestructuredModuleBindings(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseJSSignalFixture(t)
 
 	for _, label := range []string{"notification", "setNotification", "host", "port"} {
@@ -64,6 +65,7 @@ func TestJSVariables_DestructuredModuleBindings(t *testing.T) {
 // the read/write split is what makes variable impact queries answer "who
 // mutates this state" vs "who depends on it".
 func TestJSVariables_SignalCallSemantics(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseJSSignalFixture(t)
 
 	if e := jsEdge(edges, graph.EdgeTypeWrites, "clearNotification", "setNotification"); e == nil {
@@ -83,6 +85,7 @@ func TestJSVariables_SignalCallSemantics(t *testing.T) {
 // Destructured locals are capturable: a closure using a component-local
 // signal produces captures edges on the binding.
 func TestJSVariables_DestructuredLocalCapture(t *testing.T) {
+	t.Parallel()
 	_, edges := parseJSSignalFixture(t)
 
 	if e := jsEdge(edges, graph.EdgeTypeCaptures, "toggle", "open"); e == nil {
@@ -106,6 +109,7 @@ createEffect(() => {
 // silently missing for every store-derivation file (regression: derived.ts
 // had zero outgoing edges, making variable impact queries wrong).
 func TestJSVariables_ModuleLevelReactiveAttribution(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "derived.ts")
 	if err := os.WriteFile(file, []byte(jsReactiveFixture), 0o644); err != nil {
@@ -138,6 +142,7 @@ export function scale(cy: unknown, maxDim = MAX_DIM) {
 // binding (regression: MAX_EXPORT_DIM was shadowed by its own default-value
 // position and stayed isolated).
 func TestJSVariables_DefaultParamReadsModuleConst(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "export.ts")
 	if err := os.WriteFile(file, []byte(jsDefaultParamFixture), 0o644); err != nil {
@@ -153,6 +158,7 @@ func TestJSVariables_DefaultParamReadsModuleConst(t *testing.T) {
 
 // Calls to declared functions must still not read variables.
 func TestJSVariables_FunctionCallsStillNotReads(t *testing.T) {
+	t.Parallel()
 	_, edges := parseJSSignalFixture(t)
 
 	if e := jsEdge(edges, graph.EdgeTypeReads, "showNotification", "clearNotification"); e != nil {

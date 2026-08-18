@@ -23,6 +23,7 @@ func parseStylesheet(t *testing.T, name, src string) ([]graph.Node, []graph.Unre
 // TestStylesheetParser_SelectorNodes: each top-level class/id selector becomes
 // one element node — the join target Tier K.4 needs for `$(\".btn\")`.
 func TestStylesheetParser_SelectorNodes(t *testing.T) {
+	t.Parallel()
 	nodes, unresolved := parseStylesheet(t, "issues.scss", `
 .resolve-issue-btn {
   content: "\f046";
@@ -51,6 +52,7 @@ func TestStylesheetParser_SelectorNodes(t *testing.T) {
 // functions, declarations and nested rules mint nothing. 145 stylesheets can
 // otherwise bury real search results.
 func TestStylesheetParser_NoNoiseNodes(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseStylesheet(t, "settings.scss", `
 $brand-color: #0055aa;
 $spacing-unit: 4px;
@@ -70,6 +72,7 @@ $spacing-unit: 4px;
 // rather than guessed (phases.md #12) — the last is the only shape that
 // actually occurs in nextGen, via utilities/mixins.scss.
 func TestStylesheetParser_FontFaceSources(t *testing.T) {
+	t.Parallel()
 	nodes, unresolved := parseStylesheet(t, "fonts.scss", `
 @font-face {
   font-family: "DejaVu Sans";
@@ -103,6 +106,7 @@ func TestStylesheetParser_FontFaceSources(t *testing.T) {
 // TestStylesheetParser_PlainCSS: `.css` is parsed by the same reader and tagged
 // distinctly, so a search can scope to one or the other.
 func TestStylesheetParser_PlainCSS(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseStylesheet(t, "brand.css", `.brand-header { color: red; }`)
 	require.Len(t, nodes, 1)
 	require.Equal(t, "css", nodes[0].Language)
@@ -111,6 +115,7 @@ func TestStylesheetParser_PlainCSS(t *testing.T) {
 // TestStylesheetParser_Deterministic: node IDs and order are stable across runs
 // (bug-class #2).
 func TestStylesheetParser_Deterministic(t *testing.T) {
+	t.Parallel()
 	src := `.a { color: red; } #b, .c { color: blue; }`
 	dir := t.TempDir()
 	file := filepath.Join(dir, "d.scss")
@@ -128,6 +133,7 @@ func TestStylesheetParser_Deterministic(t *testing.T) {
 // the registry, which is also what removes them from the indexer's unparsed
 // blind-spot count.
 func TestStylesheetParser_Registered(t *testing.T) {
+	t.Parallel()
 	for _, ext := range []string{"a.scss", "a.css"} {
 		require.NotNil(t, ForFile(ext), "no parser registered for %s", ext)
 	}

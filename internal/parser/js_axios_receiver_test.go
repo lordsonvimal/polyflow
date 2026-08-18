@@ -41,6 +41,7 @@ func httpClients(nodes []graph.Node) []graph.Node {
 // so a Map lookup was indexed as an outbound HTTP request — 44 such phantoms on
 // the datascience fleet.
 func TestMapReceiverIsNotAnHTTPCall(t *testing.T) {
+	t.Parallel()
 	nodes := parseJSSource(t, "modal.js", `
 function onMessage(data, prevDetail) {
   const updatedDetailsMap = new Map(data.map((r) => [r.id, r]));
@@ -52,6 +53,7 @@ function onMessage(data, prevDetail) {
 }
 
 func TestSetAndObjectReceiversAreNotHTTPCalls(t *testing.T) {
+	t.Parallel()
 	nodes := parseJSSource(t, "caches.js", `
 function go(id) {
   const listenerSet = new WeakSet();
@@ -70,6 +72,7 @@ function go(id) {
 // binding. Dropping on absence of evidence would delete real edges, so the
 // guard must fire only on positive evidence of a container.
 func TestUnknownReceiverIsKept(t *testing.T) {
+	t.Parallel()
 	nodes := parseJSSource(t, "api.js", `
 import client from "./client";
 function load(id) {
@@ -85,6 +88,7 @@ function load(id) {
 // any `ident("literal")`. React's `useState("")` is the fleet's dominant
 // instance: 79 of 89 producer-alias http_clients had an empty URL.
 func TestEmptyStringAliasCallIsNotAnHTTPCall(t *testing.T) {
+	t.Parallel()
 	nodes := parseJSSource(t, "badge.jsx", `
 function SyncStatusBadge() {
   const [status, setSyncStatus] = useState("");
@@ -98,6 +102,7 @@ function SyncStatusBadge() {
 
 // TestAliasCallWithRealPathIsKept — the 10 genuine ones must survive.
 func TestAliasCallWithRealPathIsKept(t *testing.T) {
+	t.Parallel()
 	nodes := parseJSSource(t, "table.jsx", `
 function BatchesTable() {
   apiGet("/app/favorites");
@@ -110,6 +115,7 @@ function BatchesTable() {
 
 // TestAxiosInstanceReceiverIsKept — the pattern's whole reason for existing.
 func TestAxiosInstanceReceiverIsKept(t *testing.T) {
+	t.Parallel()
 	nodes := parseJSSource(t, "inst.js", `
 const api = axios.create({ baseURL: "/client_api/v1" });
 function load(id) {

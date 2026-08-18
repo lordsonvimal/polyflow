@@ -13,6 +13,7 @@ import (
 // the unadorned struct name) so the containment linker can draw struct→method
 // edges. Plain functions carry no receiver.
 func TestGoParser_MethodReceiverCapture(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/methods.go")
 	require.NotNil(t, p)

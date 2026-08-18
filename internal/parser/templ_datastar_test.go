@@ -10,6 +10,7 @@ import (
 // http_client nodes; signal bindings become signal nodes (not component junk);
 // signal-only handlers produce nothing.
 func TestTemplParser_DatastarActions(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, edges, _, err := p.Parse("testdata/datastar.templ", "app", nil)
 	if err != nil {
@@ -84,6 +85,7 @@ func keys(m map[string]graph.Node) []string {
 // prefixes, and concatenated (interpolated) paths — the Datastar v1 shapes
 // found in chessleap.
 func TestExtractDatastarAction(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		val        string

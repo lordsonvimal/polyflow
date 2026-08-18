@@ -30,6 +30,7 @@ func parseRubyVarFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 }
 
 func TestRubyVariables_Constants(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseRubyVarFixture(t)
 
 	c := jsNode(nodes, graph.NodeTypeVariable, "MAX_RETRIES")
@@ -42,6 +43,7 @@ func TestRubyVariables_Constants(t *testing.T) {
 }
 
 func TestRubyVariables_Class(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseRubyVarFixture(t)
 
 	cls := jsNode(nodes, graph.NodeTypeClass, "OrdersController")
@@ -57,6 +59,7 @@ func TestRubyVariables_Class(t *testing.T) {
 }
 
 func TestRubyVariables_EndLine(t *testing.T) {
+	t.Parallel()
 	nodes, _ := parseRubyVarFixture(t)
 
 	cls := jsNode(nodes, graph.NodeTypeClass, "OrdersController")
@@ -77,6 +80,7 @@ func TestRubyVariables_EndLine(t *testing.T) {
 }
 
 func TestRubyVariables_IvarWritesAndReads(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseRubyVarFixture(t)
 
 	order := jsNode(nodes, graph.NodeTypeVariable, "@order")
@@ -131,6 +135,7 @@ end
 `
 
 func TestRubyVariables_BareCallResolvesSameClass(t *testing.T) {
+	t.Parallel()
 	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
@@ -139,6 +144,7 @@ func TestRubyVariables_BareCallResolvesSameClass(t *testing.T) {
 }
 
 func TestRubyVariables_ExplicitSelfCallResolves(t *testing.T) {
+	t.Parallel()
 	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:notify") == nil {
@@ -147,6 +153,7 @@ func TestRubyVariables_ExplicitSelfCallResolves(t *testing.T) {
 }
 
 func TestRubyVariables_SameNameDifferentClassDoesNotCollide(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
 
 	// UserManager#create calls UserManager#notify — must NOT resolve to
@@ -172,6 +179,7 @@ func TestRubyVariables_SameNameDifferentClassDoesNotCollide(t *testing.T) {
 }
 
 func TestRubyVariables_BareCallForwardReferenceResolves(t *testing.T) {
+	t.Parallel()
 	// later_helper is defined below notify() in the file — forward
 	// references must still resolve via the pre-collection pass.
 	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
@@ -182,6 +190,7 @@ func TestRubyVariables_BareCallForwardReferenceResolves(t *testing.T) {
 }
 
 func TestRubyVariables_UnresolvableBareCallGoesToLedger(t *testing.T) {
+	t.Parallel()
 	// `audit_trail` is app-defined somewhere the extractor cannot see (a
 	// concern, say) — a real blind spot, and the ledger must keep it.
 	//
@@ -219,6 +228,7 @@ end
 }
 
 func TestRubyVariables_ConstantReceiverCallResolvesSelfMethod(t *testing.T) {
+	t.Parallel()
 	// UserCategoryRuleSet.latest_for is a `ClassName.method` call whose
 	// receiver is a same-file constant — unambiguous the same way `Foo.new`
 	// already is, since the class it names declares exactly one `self.`
@@ -257,6 +267,7 @@ end
 }
 
 func TestRubyVariables_ConstantReceiverFrameworkCallNotLedgered(t *testing.T) {
+	t.Parallel()
 	// Product.find_by is a `ClassName.method` call to an ActiveRecord finder
 	// no repository ever defines. It cannot resolve — Product may not even be
 	// declared in this file — and ledgering every such miss would just be
@@ -283,6 +294,7 @@ end
 }
 
 func TestRubyVariables_ReceiverTypedCallNotAttributed(t *testing.T) {
+	t.Parallel()
 	// article.save has an explicit non-self receiver — Ruby's dynamism rules
 	// out static type inference, so this must not be attributed to any
 	// same-named method (no false positive), nor land in the ledger (it's
@@ -327,6 +339,7 @@ end
 // syntactically identical to a local-variable read in tree-sitter-ruby.
 
 func TestRubyVariables_BareIdentifierMemoizationCallResolves(t *testing.T) {
+	t.Parallel()
 	// The exact live shape from the E.2 nextGen recall miss:
 	// `@category = category` — RHS is a bare call to a private helper, not a
 	// local-variable read (there is no local named `category` in `destroy`).
@@ -356,6 +369,7 @@ end
 }
 
 func TestRubyVariables_BareIdentifierStatementCallResolves(t *testing.T) {
+	t.Parallel()
 	// A bare statement call (no assignment at all) — as idiomatic as the
 	// memoization shape, e.g. a guard/callback: `authorize!`, `validate`.
 	src := `class UserManager
@@ -376,6 +390,7 @@ end
 }
 
 func TestRubyVariables_LocalVariableReadNotAttributedAsCall(t *testing.T) {
+	t.Parallel()
 	// `x` is assigned locally, then read bare later in the same method. Even
 	// though a same-named method `x` exists elsewhere in the file, the local
 	// read must never be misattributed as a call to it (gate #3).
@@ -415,6 +430,7 @@ end
 }
 
 func TestRubyVariables_LocalAssignedAfterUseStillNotACall(t *testing.T) {
+	t.Parallel()
 	// Conservative-in-the-false-negative-direction: `y` is assigned AFTER its
 	// bare read in source order. Real Ruby would treat the early read as
 	// calling method `y` (lexical-position semantics), but this pass
@@ -451,6 +467,7 @@ end
 }
 
 func TestRubyVariables_ParameterNameNotAttributedAsCall(t *testing.T) {
+	t.Parallel()
 	// Every parameter shape (positional, optional, splat, keyword,
 	// hash-splat, block) must be excluded from bare-call resolution, but a
 	// default-value expression on an optional/keyword parameter is itself a
@@ -493,6 +510,7 @@ end
 }
 
 func TestRubyVariables_ForLoopVariableNotAttributedAsCall(t *testing.T) {
+	t.Parallel()
 	src := `class Report
   def run
     for row in rows
@@ -524,6 +542,7 @@ end
 }
 
 func TestRubyVariables_PatternMatchBindingNotAttributedAsCall(t *testing.T) {
+	t.Parallel()
 	src := `class Report
   def run
     case pair
@@ -556,6 +575,7 @@ end
 }
 
 func TestRubyVariables_RescueVariableNotAttributedAsCall(t *testing.T) {
+	t.Parallel()
 	src := `class Report
   def run
     begin
@@ -589,6 +609,7 @@ end
 }
 
 func TestRubyVariables_MultiAssignTargetsNotAttributedAsCalls(t *testing.T) {
+	t.Parallel()
 	// `y, z = pair` and a splat target `a, *b = arr` — multi-assign targets
 	// must never be misread as calls even when same-named methods exist.
 	src := `class Report
@@ -628,6 +649,7 @@ end
 }
 
 func TestRubyVariables_UnresolvedBareIdentifierNotLedgered(t *testing.T) {
+	t.Parallel()
 	// Ledger policy: an unresolved bare identifier is NOT reported, unlike an
 	// unresolved case "call" (TestRubyVariables_UnresolvableBareCallGoesToLedger)
 	// — the parser has no guarantee this was ever a call at all.

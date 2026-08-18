@@ -14,12 +14,14 @@ import (
 )
 
 func TestERBParser_Registered(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("views/users.html.erb")
 	require.NotNil(t, p, "no parser registered for .erb (filepath.Ext('.html.erb') == '.erb')")
 	assert.Equal(t, "erb", p.Language())
 }
 
 func TestERBParser_Fixture(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/view.erb")
 	require.NotNil(t, p)
@@ -58,6 +60,7 @@ func TestERBParser_Fixture(t *testing.T) {
 }
 
 func TestERBParser_NegativeStaticHTML(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("x.erb")
 	require.NotNil(t, p)
@@ -86,6 +89,7 @@ func TestERBParser_NegativeStaticHTML(t *testing.T) {
 }
 
 func TestERBParser_Determinism(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/view.erb")
 	require.NotNil(t, p)
@@ -109,6 +113,7 @@ func TestERBParser_Determinism(t *testing.T) {
 }
 
 func TestForFile_ERBExtension(t *testing.T) {
+	t.Parallel()
 	assert.NotNil(t, parser.ForFile("app/views/users/index.html.erb"))
 	assert.NotNil(t, parser.ForFile("layouts/application.erb"))
 	assert.Equal(t, "erb", parser.ForFile("index.erb").Language())

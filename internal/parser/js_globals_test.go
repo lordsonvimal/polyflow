@@ -23,6 +23,7 @@ func parseJS(t *testing.T, src string) ([]graph.Node, []graph.Edge, []graph.Unre
 // TestStampGlobalSymbols_NonModuleFunctionDecl: top-level function declarations
 // in a non-module script (no import/export) get global_symbol stamped.
 func TestStampGlobalSymbols_NonModuleFunctionDecl(t *testing.T) {
+	t.Parallel()
 	src := `function save() { return 1; }
 function load() { return 2; }
 `
@@ -46,6 +47,7 @@ function load() { return 2; }
 // TestStampGlobalSymbols_ModuleFilesExcluded: top-level functions in a module
 // (has import/export) do NOT get global_symbol.
 func TestStampGlobalSymbols_ModuleFilesExcluded(t *testing.T) {
+	t.Parallel()
 	src := `import { x } from "./x";
 function save() { return 1; }
 `
@@ -62,6 +64,7 @@ function save() { return 1; }
 // TestStampGlobalSymbols_WindowAssignFunction: window.save = function() {}
 // creates a function node with global_symbol=save.
 func TestStampGlobalSymbols_WindowAssignFunction(t *testing.T) {
+	t.Parallel()
 	src := `window.save = function() { return 1; }
 `
 	nodes, _, _ := parseJS(t, src)
@@ -81,6 +84,7 @@ func TestStampGlobalSymbols_WindowAssignFunction(t *testing.T) {
 // TestStampGlobalSymbols_WindowAssignObject: window.App = {...} creates a
 // variable node with global_symbol=App.
 func TestStampGlobalSymbols_WindowAssignObject(t *testing.T) {
+	t.Parallel()
 	src := `window.App = { submit: function() {} }
 `
 	nodes, _, _ := parseJS(t, src)
@@ -100,6 +104,7 @@ func TestStampGlobalSymbols_WindowAssignObject(t *testing.T) {
 // TestStampGlobalSymbols_NestedWindowAssign: window.dsw.save = function(){}
 // mints a function node labelled save with global_path=window.dsw.save.
 func TestStampGlobalSymbols_NestedWindowAssign(t *testing.T) {
+	t.Parallel()
 	src := `window.dsw = window.dsw || {};
 window.dsw.save = function() { return 1; }
 `
@@ -121,6 +126,7 @@ window.dsw.save = function() { return 1; }
 // TestStampGlobalSymbols_WrappedInIIFE: a namespaced registration inside an
 // IIFE still resolves via the recursive assignment walk.
 func TestStampGlobalSymbols_WrappedInIIFE(t *testing.T) {
+	t.Parallel()
 	src := `(function () {
   window.dsw.closeVulnerabilityModal = function () { return 1; };
 })();
@@ -143,6 +149,7 @@ func TestStampGlobalSymbols_WrappedInIIFE(t *testing.T) {
 // TestStampGlobalSymbols_Negative_NonWindow: assignment to non-window object
 // does NOT produce a global_symbol node.
 func TestStampGlobalSymbols_Negative_NonWindow(t *testing.T) {
+	t.Parallel()
 	src := `document.title = "hello";
 `
 	nodes, _, _ := parseJS(t, src)
