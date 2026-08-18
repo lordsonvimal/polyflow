@@ -11,6 +11,7 @@ import (
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // LinkRubyClassMethodCalls resolves cross-file `ClassName.method_name` calls.
@@ -239,6 +240,7 @@ func scanRubyClassMethodCalls(file, svcName string) ([]rubyDecl, []classMethodCa
 	if err != nil {
 		return nil, nil
 	}
+	file = patterns.RelativizeToCwd(file)
 	p := sitter.NewParser()
 	p.SetLanguage(rubysitter.GetLanguage())
 	tree, err := p.ParseCtx(context.Background(), nil, src)
