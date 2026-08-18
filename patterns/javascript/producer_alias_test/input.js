@@ -26,3 +26,10 @@ apiFetch({ url: `/api/jobs` });
 // WB.2: wrapper obj-style call with a non-"url" key — both keys are now
 // captured as candidates; the linker (WB.3) picks one.
 apiFetch({ uri: '/a', method: 'GET' });
+
+// WB.4: wrapper call whose URL literal is not the first argument (fleet
+// example: _loadVersionHistoryBody(configId, "/maple/...", loadingClass, ...)).
+// producer_alias_url_call no longer anchors to position 0, so this is now
+// captured as a candidate; the linker (WB.4) picks it via wrapperURLTable's
+// ParamIndex, or index 0 by default if no wrapper fact exists.
+loadHistory(configId, '/maple/app-configs/x/version-history-body');
