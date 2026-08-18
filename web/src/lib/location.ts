@@ -25,3 +25,15 @@ export function displayLabel(label: string): string {
   const parts = label.split("/").filter(Boolean);
   return parts.at(-1) ?? label;
 }
+
+// dom_target nodes (addEventListener/removeEventListener call sites) all
+// share the bare method name as their label — a file with an add/remove
+// pair, or multiple listeners on different events, renders as visually
+// identical circles with no way to tell which is which without opening the
+// detail panel. Every dom_target carries meta.event (the listener's event
+// string), so surface it in the label instead.
+export function nodeDisplayLabel(n: { label: string; type?: string; meta?: Record<string, string> }): string {
+  const base = displayLabel(n.label);
+  if (n.type === "dom_target" && n.meta?.event) return `${base} (${n.meta.event})`;
+  return base;
+}

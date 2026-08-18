@@ -123,15 +123,23 @@ function matchCommands(parsed: ParsedQuery): Command[] {
 }
 
 // A symbol result's Enter/pick behavior: land in a neighborhood scope
-// centered on the picked node (depth 3), selected and revealed in the file
+// centered on the picked node (depth 4), selected and revealed in the file
 // tree, in one action. File scope (UN.2's original behavior) dumped every
 // symbol declared in the file — including hundreds of unrelated ones for a
 // large router/handlers file — and collapsed cross-service edges into a
 // single boundary stub, hiding the actual connected node. Neighborhood
 // scope shows only what's really connected, cross-service included, since
 // /api/graph/trace does a real BFS with no service filtering.
+//
+// depth 4, not 3: /api/graph/trace has no truncation signal (no boundary
+// stub for a node whose own neighbors fall just past the depth cutoff), so
+// a root 3 hops from a hub node (e.g. onMouseDown -> addEventListener ->
+// onUp) silently drops that hub's own children (onUp's removeEventListener
+// calls) with nothing in the UI indicating they exist. One extra hop of
+// headroom is a cheap mitigation; it doesn't fix arbitrarily deep chains,
+// which need real frontier-stub support in the trace endpoint.
 function openSymbol(id: string, file: string) {
-  scopeStore.push({ kind: "neighborhood", nodeId: id, depth: 3 });
+  scopeStore.push({ kind: "neighborhood", nodeId: id, depth: 4 });
   selectionStore.setSelection({ kind: "node", id });
   if (file) treeStore.reveal(id);
 }
