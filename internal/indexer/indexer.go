@@ -106,41 +106,56 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, fmt.Errorf("create %s: %w", opts.DBDir, err)
 	}
 
-	// Load the incremental cache from the previous graph, if any.
+	// Load the incremental cache from the previous graph, if any. Only the
+	// workspace fingerprint (a single meta row) is fetched up front — it's
+	// all the no-change fast path below needs. The heavy per-file/per-service
+	// tables (file hashes with their cached parse-result blobs, semantic
+	// cache, embedding metadata) are loaded lazily, only if the fingerprint
+	// check falls through to a real rebuild. On an unchanged workspace this
+	// avoids scanning tables that would otherwise never be used.
 	finalDB := filepath.Join(opts.DBDir, meta.DBFile)
 	oldHashes := map[string]*graph.FileHash{}
 	oldSemantic := map[string][4]string{} // service → (fingerprint, nodesJSON, edgesJSON, referencedJSON)
 	oldFingerprint := ""
 	// oldEmbedMeta: entity_id → "embedder_id\x00content_hash" for hash-gating.
 	oldEmbedMeta := map[string]string{}
+	var oldStore *graph.SQLiteStore
+	oldSchemaOK := false
 	if !opts.Full {
 		if _, err := os.Stat(finalDB); err == nil {
-			if oldStore, err := graph.NewSQLiteStore(finalDB); err == nil {
+			if s, err := graph.NewSQLiteStore(finalDB); err == nil {
+				oldStore = s
 				// Cached results from an older data-model generation are
 				// unusable — ignore them all and re-index from scratch.
 				ver, _ := oldStore.GetMeta(ctx, "schema_version")
 				if ver == graph.SchemaVersion {
-					if hs, err := oldStore.ListFileHashes(ctx); err == nil {
-						oldHashes = hs
-					}
-					for _, svc := range cfg.Services {
-						if fp, nodes, edges, referenced, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
-							oldSemantic[svc.Name] = [4]string{fp, nodes, edges, referenced}
-						}
-					}
+					oldSchemaOK = true
 					if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
 						oldFingerprint = fp
-					}
-					// Load embedding metadata for incremental re-embed gating.
-					if metas, err := oldStore.ListEmbeddingMeta(ctx); err == nil {
-						for _, m := range metas {
-							oldEmbedMeta[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
-						}
 					}
 				} else {
 					fmt.Fprintf(logw, "  Schema version changed (%q → %q) — full re-index\n", ver, graph.SchemaVersion)
 				}
-				oldStore.Close()
+			}
+		}
+	}
+	// loadIncrementalCache pulls the heavy per-file/per-service tables. Called
+	// only once the no-change fast path has been ruled out.
+	loadIncrementalCache := func() {
+		if oldStore == nil || !oldSchemaOK {
+			return
+		}
+		if hs, err := oldStore.ListFileHashes(ctx); err == nil {
+			oldHashes = hs
+		}
+		for _, svc := range cfg.Services {
+			if fp, nodes, edges, referenced, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
+				oldSemantic[svc.Name] = [4]string{fp, nodes, edges, referenced}
+			}
+		}
+		if metas, err := oldStore.ListEmbeddingMeta(ctx); err == nil {
+			for _, m := range metas {
+				oldEmbedMeta[m.EntityID] = m.EmbedderID + "\x00" + m.ContentHash
 			}
 		}
 	}
@@ -258,22 +273,50 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// Hash every file up front. If the workspace fingerprint (config + file
 	// set + content hashes + pattern files) matches the previous run, the
 	// graph cannot differ — skip the rebuild entirely.
+	//
+	// This runs even when nothing changed (it's what proves that), so the
+	// read+hash of every file is parallelized across opts.Workers the same
+	// way the parse phase below is — otherwise it dominates a no-op re-index.
 	now := time.Now().Unix()
+	type hashJob struct {
+		svc  string
+		file string
+	}
+	var jobs []hashJob
+	for _, sf := range allSvcFiles {
+		for _, file := range sf.files {
+			jobs = append(jobs, hashJob{sf.svc.Name, file})
+		}
+	}
+	jobHashes := make([]string, len(jobs)) // "" = unreadable, recorded as an error during the parse loop
+	{
+		g, _ := errgroup.WithContext(ctx)
+		g.SetLimit(opts.Workers)
+		for i, j := range jobs {
+			i, j := i, j
+			g.Go(func() error {
+				data, err := os.ReadFile(j.file)
+				if err != nil {
+					return nil
+				}
+				sum := sha256.Sum256(data)
+				jobHashes[i] = hex.EncodeToString(sum[:])
+				return nil
+			})
+		}
+		_ = g.Wait()
+	}
 	hashes := map[string]string{}         // file → content hash
 	svcHashLines := map[string][]string{} // semantic cache key input
 	var fpLines []string
-	for _, sf := range allSvcFiles {
-		for _, file := range sf.files {
-			data, err := os.ReadFile(file)
-			if err != nil {
-				continue // recorded as an error during the parse loop
-			}
-			sum := sha256.Sum256(data)
-			h := hex.EncodeToString(sum[:])
-			hashes[file] = h
-			svcHashLines[sf.svc.Name] = append(svcHashLines[sf.svc.Name], file+":"+h)
-			fpLines = append(fpLines, sf.svc.Name+":"+file+":"+h)
+	for i, j := range jobs {
+		h := jobHashes[i]
+		if h == "" {
+			continue
 		}
+		hashes[j.file] = h
+		svcHashLines[j.svc] = append(svcHashLines[j.svc], j.file+":"+h)
+		fpLines = append(fpLines, j.svc+":"+j.file+":"+h)
 	}
 	cfgJSON, _ := json.Marshal(cfg)
 	fpLines = append(fpLines, "config:"+string(cfgJSON))
@@ -312,9 +355,18 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			stats.SkippedFiles = stats.TotalFiles
 			stats.Elapsed = time.Since(start)
 			fmt.Fprintf(logw, "  No changes since last index — graph reused.\n")
+			if oldStore != nil {
+				oldStore.Close()
+			}
 			return stats, nil
 		}
 		// Fall through to a full build if the previous DB cannot be opened.
+	}
+	// No-change fast path didn't apply — this is a real (re)build, so pull in
+	// whatever incremental cache exists to skip per-file/per-service work below.
+	loadIncrementalCache()
+	if oldStore != nil {
+		oldStore.Close()
 	}
 
 	// V.2: one sidecar process pool for the whole run; per-service routers
