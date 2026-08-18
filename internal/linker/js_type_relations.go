@@ -119,21 +119,21 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 		return strings.HasPrefix(t, "./") || strings.HasPrefix(t, "../")
 	}
 
-	namedQ, _ := sitter.NewQuery([]byte(`
+	namedQ, _ := compiledQuery(`
 (import_statement
   (import_clause
     (named_imports
       (import_specifier
         name: (identifier) @exported
         alias: (identifier) @local)))
-  source: (string) @source)`), lang)
-	sameAliasQ, _ := sitter.NewQuery([]byte(`
+  source: (string) @source)`, lang)
+	sameAliasQ, _ := compiledQuery(`
 (import_statement
   (import_clause
     (named_imports
       (import_specifier
         name: (identifier) @name)))
-  source: (string) @source)`), lang)
+  source: (string) @source)`, lang)
 
 	for _, q := range []*sitter.Query{namedQ, sameAliasQ} {
 		if q == nil {

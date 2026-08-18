@@ -130,7 +130,7 @@ func parseJSImportSources(file string) (relative []string, externalCount int) {
 		return
 	}
 
-	q, err := sitter.NewQuery([]byte(`(import_statement source: (string) @source)`), lang)
+	q, err := compiledQuery(`(import_statement source: (string) @source)`, lang)
 	if err != nil {
 		return
 	}
