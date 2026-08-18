@@ -37,25 +37,31 @@ function crumbLabel(scope: Scope): string {
 
 export default function Breadcrumbs() {
   return (
-    <div class="flex items-center gap-1 text-sm text-neutral-400 min-w-0 overflow-hidden">
-      <For each={scopeStore.stack()}>
-        {(scope, i) => (
-          <>
-            {i() > 0 && <span class="text-neutral-500">▸</span>}
-            <button
-              class="hover:text-white truncate"
-              title={crumbTitle(scope)}
-              onClick={() => scopeStore.popTo(i())}
-            >
-              {crumbLabel(scope)}
-            </button>
-          </>
-        )}
-      </For>
+    <div class="flex items-center gap-1 text-sm text-neutral-400 min-w-0 flex-1">
+      {/* A long navigation trail (e.g. clicking through several flows)
+          scrolls within its own bounded strip instead of pushing the
+          copy-context/reset controls — or the rest of the header (LensBar,
+          pin tray) — out of view. */}
+      <div class="flex items-center gap-1 min-w-0 overflow-x-auto whitespace-nowrap">
+        <For each={scopeStore.stack()}>
+          {(scope, i) => (
+            <>
+              {i() > 0 && <span class="text-neutral-500">▸</span>}
+              <button
+                class="hover:text-white truncate shrink-0"
+                title={crumbTitle(scope)}
+                onClick={() => scopeStore.popTo(i())}
+              >
+                {crumbLabel(scope)}
+              </button>
+            </>
+          )}
+        </For>
+      </div>
       <Show when={scopeStore.stack().at(-1)?.kind !== "search"}>
         <button
           data-testid="breadcrumb-copy-context"
-          class="ml-1 text-blue-400 hover:text-blue-300 text-xs"
+          class="ml-1 text-blue-400 hover:text-blue-300 text-xs shrink-0"
           title="Copy context for current scope"
           onClick={() => {
             const top = scopeStore.stack().at(-1);
@@ -66,7 +72,7 @@ export default function Breadcrumbs() {
         </button>
       </Show>
       <button
-        class="ml-1 text-neutral-500 hover:text-white text-xs"
+        class="ml-1 text-neutral-500 hover:text-white text-xs shrink-0"
         onClick={() => scopeStore.reset()}
       >
         [×]

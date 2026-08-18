@@ -162,7 +162,15 @@ export const scopeStore = {
   // cancels them (see abortInFlight above).
   signal: () => scopeController.signal,
 
-  push: (scope: Scope) => commitStackChange({ ...viewState(), stack: [...viewState().stack, scope] }),
+  // Clicking the same flow/node twice in a row (e.g. re-clicking the
+  // already-open flow) is a no-op, not a second identical breadcrumb —
+  // dedup against the current top of stack before growing it.
+  push: (scope: Scope) => {
+    const stack = viewState().stack;
+    const top = stack.at(-1);
+    if (top && JSON.stringify(top) === JSON.stringify(scope)) return;
+    commitStackChange({ ...viewState(), stack: [...stack, scope] });
+  },
   popTo: (i: number) => commitStackChange({ ...viewState(), stack: viewState().stack.slice(0, i + 1) }),
   reset: () => commitStackChange({ ...DEFAULT_STATE }),
   // UO.5: load an entire external ViewState (saved view / share link), same
