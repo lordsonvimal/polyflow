@@ -29,7 +29,7 @@ const GRAPH = {
 
 describe("resolveOverview", () => {
   it("aggregates one node per service and cross-service edges only", async () => {
-    (globalThis as any).fetch = fakeFetch({ "/api/graph?limit=2000": GRAPH });
+    (globalThis as any).fetch = fakeFetch({ "/api/graph?limit=2000&page=1": GRAPH });
     const d = await resolveOverview();
     expect(d.nodes.map((x) => x.id)).toEqual(["service:svcA", "service:svcB"]);
     expect(d.edges).toHaveLength(1);
@@ -37,13 +37,13 @@ describe("resolveOverview", () => {
   });
 
   it("never includes a same-service edge (negative)", async () => {
-    (globalThis as any).fetch = fakeFetch({ "/api/graph?limit=2000": GRAPH });
+    (globalThis as any).fetch = fakeFetch({ "/api/graph?limit=2000&page=1": GRAPH });
     const d = await resolveOverview();
     expect(d.edges.find((x) => x.type === "calls")).toBeUndefined();
   });
 
   it("is deterministic across two runs", async () => {
-    (globalThis as any).fetch = fakeFetch({ "/api/graph?limit=2000": GRAPH });
+    (globalThis as any).fetch = fakeFetch({ "/api/graph?limit=2000&page=1": GRAPH });
     const a = await resolveOverview();
     const b = await resolveOverview();
     expect(a).toEqual(b);
