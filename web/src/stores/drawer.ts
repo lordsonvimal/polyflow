@@ -11,6 +11,10 @@ export type DrawerTab = "context" | "unresolved" | "jobs" | "toolcalls";
 const [open, setOpen] = createSignal(false);
 const [activeTab, setActiveTab] = createSignal<DrawerTab>("context");
 const [unresolvedFilter, setUnresolvedFilter] = createSignal<{ service: string; path: string } | undefined>(undefined);
+// UO.3: the Health dashboard's Unresolved card links through by kind only
+// (no service/path context there), so it gets its own seed signal rather
+// than overloading unresolvedFilter's service/path shape.
+const [unresolvedKindFilter, setUnresolvedKindFilter] = createSignal<string | undefined>(undefined);
 
 export const drawerStore = {
   open,
@@ -18,8 +22,14 @@ export const drawerStore = {
   activeTab,
   setActiveTab,
   unresolvedFilter,
+  unresolvedKindFilter,
   openUnresolvedFor: (service: string, path: string) => {
     setUnresolvedFilter({ service, path });
+    setActiveTab("unresolved");
+    setOpen(true);
+  },
+  openUnresolvedByKind: (kind: string) => {
+    setUnresolvedKindFilter(kind);
     setActiveTab("unresolved");
     setOpen(true);
   },

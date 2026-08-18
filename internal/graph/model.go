@@ -426,11 +426,11 @@ type UnresolvedHistoryRow struct {
 // ParseError records a file that produced errors during indexing.
 // Partial extraction may still have occurred; consult the associated nodes/edges.
 type ParseError struct {
-	FilePath       string
-	Service        string
-	ErrorCount     int
-	FirstErrorLine int
-	IndexedAt      int64 // unix timestamp
+	FilePath       string `json:"file_path"`
+	Service        string `json:"service"`
+	ErrorCount     int    `json:"error_count"`
+	FirstErrorLine int    `json:"first_error_line"`
+	IndexedAt      int64  `json:"indexed_at"` // unix timestamp
 }
 
 // AdjacencyIndex is an in-memory representation of the graph for fast traversal.
