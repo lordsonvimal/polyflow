@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -299,7 +300,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	}
 
 	for _, qstr := range []string{importQuery} {
-		q, err := sitter.NewQuery([]byte(qstr), lang)
+		q, err := compiledQuery(qstr, lang)
 		if err != nil {
 			continue
 		}
@@ -322,7 +323,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 		}
 	}
 	for _, qstr := range []string{importQuerySameAlias} {
-		q, err := sitter.NewQuery([]byte(qstr), lang)
+		q, err := compiledQuery(qstr, lang)
 		if err != nil {
 			continue
 		}
@@ -343,7 +344,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 		}
 	}
 	{
-		q, err := sitter.NewQuery([]byte(nsQuery), lang)
+		q, err := compiledQuery(nsQuery, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
@@ -415,7 +416,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	var callSites []callSite
 
 	{
-		q, err := sitter.NewQuery([]byte(plainCallQuery), lang)
+		q, err := compiledQuery(plainCallQuery, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
@@ -438,7 +439,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 		}
 	}
 	{
-		q, err := sitter.NewQuery([]byte(memberCallQuery), lang)
+		q, err := compiledQuery(memberCallQuery, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
@@ -488,7 +489,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
   (jsx_expression
     (identifier) @callee))`
 	for _, qstr := range []string{jsxEventPropQuery, jsxEventDirectiveQuery} {
-		q, err := sitter.NewQuery([]byte(qstr), lang)
+		q, err := compiledQuery(qstr, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
@@ -521,7 +522,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	// itself are excluded (covered by the call queries or not a use).
 	valueUseQuery := `(identifier) @id`
 	{
-		q, err := sitter.NewQuery([]byte(valueUseQuery), lang)
+		q, err := compiledQuery(valueUseQuery, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
@@ -756,14 +757,46 @@ func moduleDeclSpans(root *sitter.Node, src []byte) []declSpan {
 	return spans
 }
 
+// tsLang/tsxLang are process-wide singletons: GetLanguage() allocates a new Go
+// wrapper around the same static C grammar on every call, but a *sitter.Query
+// is compiled against the wrapper's identity, so reusing one wrapper per
+// grammar is what makes queryCache's pointer-keyed lookups actually hit.
+var (
+	tsLang  = tssitter.GetLanguage()
+	tsxLang = tsxsitter.GetLanguage()
+)
+
 func grammarLangForFile(file string) *sitter.Language {
 	ext := strings.ToLower(filepath.Ext(file))
 	switch ext {
 	case ".tsx", ".jsx":
-		return tsxsitter.GetLanguage()
-	case ".ts", ".js", ".mjs", ".es6":
-		return tssitter.GetLanguage()
+		return tsxLang
 	default:
-		return tssitter.GetLanguage()
+		return tsLang
 	}
+}
+
+// queryCache compiles each (grammar, query text) pair at most once. Every
+// linking pass over a service's JS/TS files re-issues the same handful of
+// static query strings per file; compiling a *sitter.Query invokes
+// ts_query_new via cgo, which dominated profiled re-index time before this
+// cache existed (compilation, not matching, was the expensive part).
+var queryCache sync.Map // queryCacheKey → *sitter.Query
+
+type queryCacheKey struct {
+	lang  *sitter.Language
+	query string
+}
+
+func compiledQuery(query string, lang *sitter.Language) (*sitter.Query, error) {
+	key := queryCacheKey{lang: lang, query: query}
+	if v, ok := queryCache.Load(key); ok {
+		return v.(*sitter.Query), nil
+	}
+	q, err := sitter.NewQuery([]byte(query), lang)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := queryCache.LoadOrStore(key, q)
+	return actual.(*sitter.Query), nil
 }
