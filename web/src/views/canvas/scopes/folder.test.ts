@@ -45,7 +45,7 @@ const GRAPH = {
 };
 
 function routes() {
-  return { "/api/tree?service=svcA": TREE, "/api/graph?limit=2000": GRAPH };
+  return { "/api/tree?service=svcA": TREE, "/api/graph?limit=2000&page=1": GRAPH };
 }
 
 describe("resolveFolder", () => {
@@ -90,7 +90,7 @@ describe("resolveFolder", () => {
       nodes: [...GRAPH.nodes, { data: { id: "unresolved", label: "unresolved", type: "service", service: "", file: "", line: 0, language: "" } }],
       edges: [...GRAPH.edges, e("e4", "n1", "unresolved", "http_call")],
     };
-    (globalThis as any).fetch = fakeFetch({ "/api/tree?service=svcA": TREE, "/api/graph?limit=2000": graphWithUnresolved });
+    (globalThis as any).fetch = fakeFetch({ "/api/tree?service=svcA": TREE, "/api/graph?limit=2000&page=1": graphWithUnresolved });
     const d = await resolveFolder({ kind: "folder", service: "svcA", path: "app" });
     const stub = d.nodes.find((x) => x.id === "unresolved");
     expect(stub).toBeTruthy();

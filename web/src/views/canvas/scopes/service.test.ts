@@ -45,7 +45,7 @@ const GRAPH = {
 };
 
 function routes() {
-  return { "/api/tree?service=svcA": TREE, "/api/graph?limit=2000": GRAPH };
+  return { "/api/tree?service=svcA": TREE, "/api/graph?limit=2000&page=1": GRAPH };
 }
 
 describe("resolveService", () => {
