@@ -5,6 +5,7 @@
 __pycache__/
 web/dist/*
 !web/dist/.gitkeep
+node_modules/
 web/node_modules/
 *.db
 *.db.tmp
