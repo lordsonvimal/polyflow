@@ -20,26 +20,26 @@ const IgnoreFileName = ".polyflowignore"
 
 // Service describes a single service (repo or subdirectory) in the workspace.
 type Service struct {
-	Name       string   `yaml:"name"`
-	Path       string   `yaml:"path"`
-	Language   string   `yaml:"language"`
-	Frameworks []string `yaml:"frameworks,omitempty"`
-	Port       int      `yaml:"port,omitempty"`
+	Name       string   `yaml:"name" json:"name"`
+	Path       string   `yaml:"path" json:"path"`
+	Language   string   `yaml:"language" json:"language"`
+	Frameworks []string `yaml:"frameworks,omitempty" json:"frameworks,omitempty"`
+	Port       int      `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 // Link declares a known dependency between two services (HTTP or broker).
 type Link struct {
-	From     string `yaml:"from"`
-	To       string `yaml:"to"`
-	Via      string `yaml:"via,omitempty"`      // e.g. "rabbitmq"
-	Hint     string `yaml:"hint,omitempty"`     // e.g. "USER_SERVICE_URL=http://localhost:8081"
-	BaseURL  string `yaml:"base_url,omitempty"` // e.g. "/api" — stripped from client paths before matching
-	Exchange string `yaml:"exchange,omitempty"` // via: rabbitmq — broker exchange connecting the services
+	From     string `yaml:"from" json:"from"`
+	To       string `yaml:"to" json:"to"`
+	Via      string `yaml:"via,omitempty" json:"via,omitempty"`           // e.g. "rabbitmq"
+	Hint     string `yaml:"hint,omitempty" json:"hint,omitempty"`         // e.g. "USER_SERVICE_URL=http://localhost:8081"
+	BaseURL  string `yaml:"base_url,omitempty" json:"base_url,omitempty"` // e.g. "/api" — stripped from client paths before matching
+	Exchange string `yaml:"exchange,omitempty" json:"exchange,omitempty"` // via: rabbitmq — broker exchange connecting the services
 }
 
 // IndexConfig holds settings for the index command.
 type IndexConfig struct {
-	Exclude []string `yaml:"exclude"`
+	Exclude []string `yaml:"exclude" json:"exclude"`
 }
 
 // RuntimeEvidenceConfig holds settings for the OTLP trace evidence provider (R.1+).
@@ -48,12 +48,12 @@ type RuntimeEvidenceConfig struct {
 	// service names declared in the workspace.  Unmapped names that also do not
 	// match a workspace service directly are surfaced in the ingest ledger.
 	//   chessleap-api: api
-	ServiceNames map[string]string `yaml:"service_names,omitempty"`
+	ServiceNames map[string]string `yaml:"service_names,omitempty" json:"service_names,omitempty"`
 	// SSERoutes lists route paths (e.g. "/events", "/stream") that the mapper
 	// must treat as SSE connections even when the span does not carry the
 	// http.response.header.content-type attribute.  Use this when the OTel
 	// instrumentation does not capture response headers.
-	SSERoutes []string `yaml:"sse_routes,omitempty"`
+	SSERoutes []string `yaml:"sse_routes,omitempty" json:"sse_routes,omitempty"`
 }
 
 // EvidenceConfig holds settings for the evidence-fusion providers (F.1+).
@@ -64,15 +64,15 @@ type EvidenceConfig struct {
 	// ContractGlobs are doublestar globs (relative to each service path) that
 	// locate IDL/spec files.  If empty, the contract provider uses built-in
 	// defaults (openapi.yaml, *.proto, *.graphql, asyncapi.yaml, …).
-	ContractGlobs []string `yaml:"contract_globs,omitempty"`
+	ContractGlobs []string `yaml:"contract_globs,omitempty" json:"contract_globs,omitempty"`
 	// Runtime holds OTLP trace evidence settings (R.1+).
-	Runtime RuntimeEvidenceConfig `yaml:"runtime,omitempty"`
+	Runtime RuntimeEvidenceConfig `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// StaleAfter is the duration after which a runtime capture is considered
 	// stale. A verified edge whose runtime sources are all older than this
 	// threshold adds a stale_evidence count to the verification_summary
 	// without downgrading the verification_state. Default: 30 days.
 	// Accepts Go duration strings: "720h", "168h", "30m".
-	StaleAfter string `yaml:"stale_after,omitempty"`
+	StaleAfter string `yaml:"stale_after,omitempty" json:"stale_after,omitempty"`
 }
 
 // DefaultStaleAfter is the default freshness threshold used when workspace
@@ -94,10 +94,10 @@ func (e *EvidenceConfig) StaleAfterDuration() time.Duration {
 
 // Settings holds workspace-level defaults for the server and display.
 type Settings struct {
-	SnippetLines  int    `yaml:"snippet_lines"`  // default 30
-	DefaultLayout string `yaml:"default_layout"` // default "dagre-lr"
-	DefaultDepth  int    `yaml:"default_depth"`  // default 5
-	Port          int    `yaml:"port"`           // default 9400
+	SnippetLines  int    `yaml:"snippet_lines" json:"snippet_lines"`   // default 30
+	DefaultLayout string `yaml:"default_layout" json:"default_layout"` // default "dagre-lr"
+	DefaultDepth  int    `yaml:"default_depth" json:"default_depth"`   // default 5
+	Port          int    `yaml:"port" json:"port"`                     // default 9400
 }
 
 // SearchConfig holds workspace-level settings for hybrid retrieval (S.0+).
@@ -106,41 +106,41 @@ type SearchConfig struct {
 	// "sidecar" (llama.cpp nomic-embed-text, S.3), or "endpoint" (OpenAI-
 	// compatible API, S.3).  Changed Embedder triggers a full re-embed on
 	// the next index run so vector spaces are never mixed.
-	Embedder string `yaml:"embedder,omitempty"`
+	Embedder string `yaml:"embedder,omitempty" json:"embedder,omitempty"`
 	// EndpointURL is the base URL for the OpenAI-compatible embeddings API
 	// (e.g. "http://localhost:11434" for Ollama). Required when Embedder is
 	// "endpoint".
-	EndpointURL string `yaml:"endpoint_url,omitempty"`
+	EndpointURL string `yaml:"endpoint_url,omitempty" json:"endpoint_url,omitempty"`
 	// EndpointModel is the model name sent in /v1/embeddings requests.
 	// Defaults to "nomic-embed-text" when empty.
-	EndpointModel string `yaml:"endpoint_model,omitempty"`
+	EndpointModel string `yaml:"endpoint_model,omitempty" json:"endpoint_model,omitempty"`
 	// EndpointKeyEnv names the environment variable whose value is used as
 	// the Authorization Bearer token.  Leave empty for unauthenticated
 	// endpoints (e.g. local Ollama).
-	EndpointKeyEnv string `yaml:"endpoint_key_env,omitempty"`
+	EndpointKeyEnv string `yaml:"endpoint_key_env,omitempty" json:"endpoint_key_env,omitempty"`
 	// Synonyms maps user-visible terms to code vocabulary, expanding both
 	// the FTS query and the embedding input text (S.2).
 	// Example: checkout: [falcon, purchase]
-	Synonyms map[string][]string `yaml:"synonyms,omitempty"`
+	Synonyms map[string][]string `yaml:"synonyms,omitempty" json:"synonyms,omitempty"`
 }
 
 // WorkspaceConfig is the parsed representation of polyflow.yml.
 type WorkspaceConfig struct {
-	Name     string    `yaml:"name"`
-	Version  string    `yaml:"version"`
-	Services []Service `yaml:"services"`
-	Links    []Link    `yaml:"links"`
+	Name     string    `yaml:"name" json:"name"`
+	Version  string    `yaml:"version" json:"version"`
+	Services []Service `yaml:"services" json:"services"`
+	Links    []Link    `yaml:"links" json:"links"`
 	// LinksProposed holds cross-service Link proposals written by
 	// `polyflow link --infer` (X.5). The contract engine only ever reads
 	// Links, never LinksProposed — a proposal takes effect only once a human
 	// promotes it into Links (e.g. via `polyflow config link add`), per the
 	// "never silently applied" rule (docs/phases.md bug-class #3 spirit).
-	LinksProposed []Link         `yaml:"links_proposed,omitempty"`
-	Patterns      []string       `yaml:"patterns,omitempty"`
-	Index         IndexConfig    `yaml:"index"`
-	Settings      Settings       `yaml:"settings"`
-	Evidence      EvidenceConfig `yaml:"evidence,omitempty"`
-	Search        SearchConfig   `yaml:"search,omitempty"`
+	LinksProposed []Link         `yaml:"links_proposed,omitempty" json:"links_proposed,omitempty"`
+	Patterns      []string       `yaml:"patterns,omitempty" json:"patterns,omitempty"`
+	Index         IndexConfig    `yaml:"index" json:"index"`
+	Settings      Settings       `yaml:"settings" json:"settings"`
+	Evidence      EvidenceConfig `yaml:"evidence,omitempty" json:"evidence,omitempty"`
+	Search        SearchConfig   `yaml:"search,omitempty" json:"search,omitempty"`
 }
 
 // DefaultExcludes returns the exclude globs written by `polyflow init`.
