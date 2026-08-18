@@ -7,6 +7,8 @@ import { scopeStore } from "../stores/scope";
 import { selectionStore } from "../stores/selection";
 import { jobsStore, type Job } from "../stores/jobs";
 import { drawerStore } from "../stores/drawer";
+import { canvasRefStore } from "../stores/canvasRef";
+import { savedViewsStore } from "../stores/savedViews";
 
 describe("TopBar theme toggle", () => {
   let container: HTMLElement;
@@ -198,5 +200,150 @@ describe("TopBar Index button", () => {
     progressBtn.click();
     expect(drawerStore.open()).toBe(true);
     expect(drawerStore.activeTab()).toBe("jobs");
+  });
+});
+
+// UO.5: Share menu — export, copy link, save view
+function fakeCy() {
+  const elements = {
+    boundingBox: () => ({ w: 400, h: 300 }),
+    jsons: () => [{ group: "nodes", data: { id: "n1" } }],
+  };
+  return {
+    svg: vi.fn(() => "<svg></svg>"),
+    png: vi.fn(() => "data:image/png;base64,AAAA"),
+    elements: vi.fn(() => elements),
+  } as any;
+}
+
+describe("TopBar Share menu", () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    scopeStore.reset();
+    canvasRefStore.set(null);
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    (globalThis as any).fetch = vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ nodes: 0, edges: 0 }) } as Response));
+    // jsdom doesn't implement the Blob URL APIs downloadBlob/downloadText use.
+    URL.createObjectURL = vi.fn(() => "blob:fake");
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    container.remove();
+    vi.restoreAllMocks();
+    canvasRefStore.set(null);
+    scopeStore.reset();
+  });
+
+  it("Copy link writes the current view's hash URL to the clipboard", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="share-copy-link"]') as HTMLElement).click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain("#v=");
+  });
+
+  it("export buttons are disabled with no live canvas", () => {
+    render(() => <TopBar />, container);
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+
+    expect((container.querySelector('[data-testid="share-export-png"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((container.querySelector('[data-testid="share-export-svg"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((container.querySelector('[data-testid="share-export-json"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("Export SVG calls cy.svg() when a canvas is live", () => {
+    const cy = fakeCy();
+    canvasRefStore.set(cy);
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="share-export-svg"]') as HTMLElement).click();
+
+    expect(cy.svg).toHaveBeenCalledTimes(1);
+    expect(cy.png).not.toHaveBeenCalled();
+  });
+
+  it("Export PNG calls cy.png() (not cy.svg()) when a canvas is live", () => {
+    const cy = fakeCy();
+    canvasRefStore.set(cy);
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="share-export-png"]') as HTMLElement).click();
+
+    expect(cy.png).toHaveBeenCalledTimes(1);
+    expect(cy.svg).not.toHaveBeenCalled();
+  });
+
+  it("Export PNG falls back to SVG when PNG rasterization fails", () => {
+    const cy = fakeCy();
+    cy.png = vi.fn(() => "not-a-data-url");
+    canvasRefStore.set(cy);
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="share-export-png"]') as HTMLElement).click();
+
+    expect(cy.png).toHaveBeenCalledTimes(1);
+    expect(cy.svg).toHaveBeenCalledTimes(1);
+  });
+
+  it("Export JSON calls cy.elements().jsons()", () => {
+    const cy = fakeCy();
+    canvasRefStore.set(cy);
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="share-export-json"]') as HTMLElement).click();
+
+    expect(cy.elements).toHaveBeenCalled();
+  });
+
+  it("Export Mermaid fetches /api/export/mermaid at the level matching the current scope", async () => {
+    scopeStore.push({ kind: "service", service: "svc" });
+    const fetchSpy = ((globalThis as any).fetch = vi.fn(() => Promise.resolve(new Response("flowchart LR\n", { status: 200 }))));
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="share-menu-toggle"]') as HTMLElement).click();
+    (container.querySelector('[data-testid="share-export-mermaid"]') as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const call = fetchSpy.mock.calls.find(([url]: [string]) => String(url).startsWith("/api/export/mermaid"));
+    expect(call).toBeTruthy();
+    expect(String(call![0])).toContain("level=service");
+  });
+
+  it("star button opens the save-view dialog; submitting POSTs /api/views", async () => {
+    const fetchSpy = ((globalThis as any).fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (String(url) === "/api/views" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ view: { id: 1, name: "my view", state: "s", created_at: "x" } }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    }));
+    render(() => <TopBar />, container);
+
+    (container.querySelector('[data-testid="save-view-button"]') as HTMLElement).click();
+    expect(container.querySelector('[data-testid="save-view-overlay"]')).toBeTruthy();
+
+    const input = container.querySelector('[data-testid="save-view-name-input"]') as HTMLInputElement;
+    input.value = "my view";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    (container.querySelector('[data-testid="save-view-submit"]') as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const call = fetchSpy.mock.calls.find(([url, init]: [string, RequestInit]) => url === "/api/views" && init?.method === "POST");
+    expect(call).toBeTruthy();
+    expect(JSON.parse((call![1] as RequestInit).body as string).name).toBe("my view");
+    expect(container.querySelector('[data-testid="save-view-overlay"]')).toBeFalsy();
+    savedViewsStore.reset();
   });
 });
