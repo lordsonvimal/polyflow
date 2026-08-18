@@ -132,8 +132,8 @@ func templSubgraph(nodes []*graph.Node, edges []*graph.Edge) templGolden {
 // the sidecar was genuinely used (no in-process fallback note) and the
 // profile stamps landed.
 func TestChessleapSidecarByteIdentical(t *testing.T) {
-	if testing.Short() {
-		t.Skip("two full chessleap index runs; skipped in -short mode")
+	if os.Getenv("POLYFLOW_CHESSLEAP") != "1" {
+		t.Skip("chessleap integration test skipped by default; set POLYFLOW_CHESSLEAP=1 to run (see `make test-chessleap`)")
 	}
 	binDir := builtSidecarDir(t)
 
