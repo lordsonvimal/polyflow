@@ -290,6 +290,15 @@ async function reveal(nodeId: string): Promise<void> {
   // name, so treating it as one sends /api/tree and /api/unresolved
   // requests for a service that doesn't exist.
   if (isContainerGroupNodeId(nodeId)) return;
+  // Real node ids are always `service:file:type:name:line` (5 colon-
+  // delimited segments — see aggregate.ts). Synthetic bucket ids like the
+  // contract engine's "unresolved"/"unresolved:<svc>" node (no per-file
+  // location) fail this, and treating their first segment as a service
+  // name sends a doomed /api/tree + /api/unresolved request for a service
+  // that doesn't exist — and, since loadService's re-entry guard only
+  // blocks while a request is in flight (not after it fails), every
+  // subsequent reveal() of that same id refires the same failing request.
+  if (nodeId.split(":").length < 5) return;
   const service = serviceOfNodeId(nodeId);
   if (!service) return;
   await loadService(service);
