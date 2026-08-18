@@ -15,7 +15,20 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # NOT go-version-file: go.mod. polyflow's own go.mod (`go 1.25.0`)
+          # is a floor for *building polyflow*, not a ceiling for what its
+          # embedded go/packages.Load can *parse*. The eval corpus's own
+          # go/packages call parses source files belonging to third-party
+          # corpus repos (e.g. gotify) using whatever go/parser is compiled
+          # into this binary — pinning that to 1.25 broke the moment gotify's
+          # transitive golang.org/x/crypto dependency shipped a go1.26-only
+          # file (fips140only_go1.26.go), well before polyflow's own go.mod
+          # had any reason to move: "file requires newer Go version go1.26
+          # (application built with go1.25)". A newer toolchain building an
+          # older-declared module is always safe (Go toolchains are forward
+          # compatible with lower `go` directives); 'stable' keeps this
+          # self-healing as corpus repos' own dependencies march forward.
+          go-version: 'stable'
           # Cache is handled below by a single step keyed on both this
           # module's go.sum AND the corpus manifests, so setup-go's own
           # (narrower) cache is disabled to avoid two actions/cache steps
