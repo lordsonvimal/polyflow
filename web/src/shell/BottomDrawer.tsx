@@ -231,6 +231,7 @@ const UNRESOLVED_KINDS = ["import", "call", "route", "component"];
 
 function UnresolvedTab() {
   const filter = drawerStore.unresolvedFilter;
+  const kindFilter = drawerStore.unresolvedKindFilter;
   const [service, setService] = createSignal("");
   const [kind, setKind] = createSignal("");
   const [q, setQ] = createSignal("");
@@ -243,6 +244,13 @@ function UnresolvedTab() {
     if (!f) return;
     setService(f.service);
     setQ(f.path);
+  });
+
+  // UO.3: Health dashboard's Unresolved card click-through seeds kind only.
+  createEffect(() => {
+    const k = kindFilter();
+    if (!k) return;
+    setKind(k);
   });
 
   const [result, { refetch }] = createResource(

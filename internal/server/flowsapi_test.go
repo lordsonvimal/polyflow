@@ -292,6 +292,45 @@ func TestHandleHealth_OK(t *testing.T) {
 	}
 }
 
+// TestHandleHealth_UnresolvedByKind asserts the health payload breaks
+// unresolved refs down by kind (UO.3's Health dashboard needs the
+// distribution, not just the total the payload already carried).
+func TestHandleHealth_UnresolvedByKind(t *testing.T) {
+	srv := buildTestServer(t, testNodes(), testEdges())
+	ctx := t.Context()
+	if err := srv.db.(*graph.SQLiteStore).ReplaceUnresolvedRefs(ctx, []graph.UnresolvedRef{
+		{Service: "auth", File: "auth/user.go", Line: 12, Name: "Unknown", Kind: "call_ref"},
+		{Service: "auth", File: "auth/other.go", Line: 3, Name: "Other", Kind: "call_ref"},
+		{Service: "other", File: "x.go", Line: 1, Name: "Import", Kind: "import_ref"},
+	}); err != nil {
+		t.Fatalf("seed unresolved refs: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp map[string]any
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if int(resp["unresolved_total"].(float64)) != 3 {
+		t.Fatalf("want unresolved_total=3, got %+v", resp["unresolved_total"])
+	}
+	byKind, ok := resp["unresolved_by_kind"].(map[string]any)
+	if !ok {
+		t.Fatalf("want unresolved_by_kind map, got %+v", resp["unresolved_by_kind"])
+	}
+	if int(byKind["call_ref"].(float64)) != 2 || int(byKind["import_ref"].(float64)) != 1 {
+		t.Fatalf("want call_ref=2 import_ref=1, got %+v", byKind)
+	}
+	idxSection := resp["index"].(map[string]any)
+	if _, ok := idxSection["parse_error_list"]; !ok {
+		t.Fatalf("want index.parse_error_list present, got %+v", idxSection)
+	}
+}
+
 // --- /api/unresolved ---
 
 func TestHandleUnresolved_OK(t *testing.T) {
