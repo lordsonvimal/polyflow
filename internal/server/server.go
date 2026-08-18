@@ -184,6 +184,7 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/services/channels", s.handleServiceChannels)
 	s.handle("GET /api/stack", s.handleStack)
 	s.handle("GET /api/health", s.handleHealth)
+	s.handle("GET /api/docs/cli", s.handleDocsCLI)
 	s.handle("GET /api/unresolved", s.handleUnresolved)
 	s.handle("POST /api/context/bundle", s.handleContextBundle)
 	s.handle("POST /api/capture/start", s.handleCaptureStart)
