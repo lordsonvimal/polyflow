@@ -13,6 +13,28 @@ type TraversalResult struct {
 	Node  *Node
 	Via   *Edge
 	Depth int
+	// Structural is true when this node's path back to the traversal root
+	// passes through at least one structural edge (contains, declares,
+	// instantiates, uses_type — see structuralEdgeTypes). Such a node is
+	// reachable through the code's shape rather than a verified call chain:
+	// e.g. "main calls NewAgentService, which instantiates AgentService,
+	// which contains RegisterOrUpdate" is a real, correctly-followed edge
+	// chain, but main never calls RegisterOrUpdate. Callers is not filtered
+	// by this (dropping the nodes costs recall — see BlastRadiusPolicy) but
+	// output layers should label it so a reader isn't misled into treating
+	// every listed node as a genuine call-site.
+	Structural bool
+}
+
+// structuralEdgeTypes are edges that describe where a symbol LIVES or is
+// TYPED, not a runtime call. A path that includes one of these is structural:
+// it over-approximates reachability the way a struct's constructor "reaches"
+// every method on that struct, whether or not the method is ever called.
+var structuralEdgeTypes = map[EdgeType]bool{
+	EdgeTypeContains:     true,
+	EdgeTypeDeclares:     true,
+	EdgeTypeInstantiates: true,
+	EdgeTypeUsesType:     true,
 }
 
 // TraversalPolicy shapes a walk for blast-radius use. The zero value is the
@@ -104,6 +126,9 @@ func TraverseWithPolicy(idx *AdjacencyIndex, startID string, direction string, m
 		// terminal marks a node reached by a TerminalEdges hop: reported, but
 		// not expanded.
 		terminal bool
+		// structural marks a node whose path back to startID already crossed
+		// a structuralEdgeTypes edge; it propagates to every descendant.
+		structural bool
 	}
 
 	queue := []item{{nodeID: startID, depth: 0}}
@@ -118,9 +143,10 @@ func TraverseWithPolicy(idx *AdjacencyIndex, startID string, direction string, m
 
 		if cur.depth > 0 {
 			results = append(results, TraversalResult{
-				Node:  idx.Nodes[cur.nodeID],
-				Via:   cur.via,
-				Depth: cur.depth,
+				Node:       idx.Nodes[cur.nodeID],
+				Via:        cur.via,
+				Depth:      cur.depth,
+				Structural: cur.structural,
 			})
 		}
 
@@ -154,10 +180,11 @@ func TraverseWithPolicy(idx *AdjacencyIndex, startID string, direction string, m
 			}
 			visited[next] = true
 			queue = append(queue, item{
-				nodeID:   next,
-				via:      e,
-				depth:    cur.depth + 1,
-				terminal: policy.TerminalEdges[e.Type],
+				nodeID:     next,
+				via:        e,
+				depth:      cur.depth + 1,
+				terminal:   policy.TerminalEdges[e.Type],
+				structural: cur.structural || structuralEdgeTypes[e.Type],
 			})
 		}
 	}
