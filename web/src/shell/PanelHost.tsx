@@ -15,7 +15,7 @@ export default function PanelHost() {
   return (
     <div data-testid="panel-host" class="flex shrink-0" style={{ width: `${width()}px` }}>
       <Show when={!layoutPrefs.panelCollapsed()}>
-        <div class="flex flex-col flex-1 min-h-0 border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950">
+        <div class="flex flex-col flex-1 min-h-0 min-w-0 border-r border-neutral-800 dark:border-neutral-700 bg-neutral-950">
           <div class="p-2 shrink-0">
             <button
               class="text-xs text-neutral-400 hover:text-white mb-2"
@@ -24,7 +24,7 @@ export default function PanelHost() {
               ◀ collapse
             </button>
           </div>
-          <div class="flex-1 min-h-0 overflow-hidden">
+          <div class="flex-1 min-h-0 min-w-0 overflow-hidden">
             <Switch>
               <Match when={layoutPrefs.activity() === "explore"}><ExploreView /></Match>
               <Match when={layoutPrefs.activity() === "flows"}><FlowsView /></Match>
