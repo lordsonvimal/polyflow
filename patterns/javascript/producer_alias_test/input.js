@@ -16,3 +16,9 @@ a('/orders');
 
 // alias obj-style call
 a({ url: '/items' });
+
+// wrapper call via identifier (no-substitution template literal URL)
+apiFetch(`/api/flows/entrypoints`);
+
+// wrapper obj-style call with a template literal URL
+apiFetch({ url: `/api/jobs` });
