@@ -33,3 +33,13 @@ function apiAxiosRenamedDecl({ uri: myUri }) {
   return axios.get(myUri);
 }
 const apiAxiosRenamedArrow = ({ uri: myUri }) => axios.get(myUri);
+
+// ── positional forward (WB.4), fetch ──
+function apiFetchPositionalDecl(configId, uri) {
+  fetch(uri).then(function () {});
+}
+
+// ── positional forward (WB.4), axios ──
+function apiAxiosPositionalDecl(configId, uri) {
+  axios.get(uri).then(function () {});
+}

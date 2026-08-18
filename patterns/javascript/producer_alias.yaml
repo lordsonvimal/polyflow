@@ -52,7 +52,6 @@ patterns:
       (call_expression
         function: (identifier) @via_alias
         arguments: (arguments
-          .
           [(string) (template_string)] @url))
     captures:
       - name: via_alias

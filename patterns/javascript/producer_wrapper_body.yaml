@@ -20,10 +20,23 @@ grammars: [javascript]
 # producer_alias_obj_call's key ambiguity; until then these nodes are inert.
 #
 # Positional forwarding (`function apiFetch(uri) { return fetch(uri); }`) is
-# deliberately NOT covered here — for a sole/first parameter it doesn't change
-# which argument producer_alias_url_call already picks (index 0), so there is
-# nothing for WB.3 to resolve differently. Multi-param positional forwarding
-# is WB.4, corpus-gated (see docs/js-wrapper-url-backtrack-plan.md).
+# handled by the wrapper_url_positional_* patterns below (Tier WB.4). For a
+# sole/first parameter it doesn't change which argument producer_alias_url_call
+# already picks (index 0), so there is nothing to resolve differently — but a
+# real fleet example (`_loadVersionHistoryBody(configId, fetchUrl, ...)`,
+# datascience dsw-manager) forwards its URL param at index 1, which index-0
+# mis-tags. These two patterns intentionally do NOT anchor `@arg_name` inside
+# a return_statement — the fleet example calls `fetch(fetchUrl).then(...)` as
+# a bare statement, not `return fetch(...)`. The wrapper's own name and the
+# forwarded parameter's positional index can't be computed by tree-sitter
+# alone (no arithmetic in queries), so these two patterns only capture the
+# call site + argument identifier; internal/patterns/matcher.go's execQueries
+# walks up from the argument node to the nearest enclosing
+# function/arrow/function_expression, matches the identifier against that
+# function's own parameter list, and injects `wrapper_name` + `param_index`
+# into the match — dropping the match entirely if the identifier isn't
+# actually one of the enclosing function's parameters (i.e. an ordinary local
+# variable passed to fetch, not a forwarded param).
 patterns:
   # ── member-access forward: function apiFetch(opts) { return fetch(opts.uri); } ──
   - name: wrapper_url_key_member_fetch_decl
@@ -446,3 +459,31 @@ patterns:
         role: wrapper_url_target
       - name: url_key
         role: wrapper_url_param_key
+
+  # ── positional forward (WB.4): function apiFetch(a, uri) { fetch(uri)... } ──
+  # Only the call site + argument identifier are captured here; matcher.go's
+  # execQueries walks up to the enclosing function and computes wrapper_name +
+  # param_index (or drops the match if the identifier isn't actually a
+  # parameter of that function). Not anchored inside return_statement — see
+  # header comment for why (real fetch(...).then() chains are bare statements).
+  - name: wrapper_url_positional_fetch_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#match? @callee "^(fetch)$")
+        arguments: (arguments . (identifier) @arg_name))
+    captures:
+      - name: arg_name
+        role: wrapper_url_positional_probe
+  - name: wrapper_url_positional_axios_call
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @axios_obj
+          (#eq? @axios_obj "axios")
+          property: (property_identifier) @callee
+          (#match? @callee "^(get|post|put|patch|delete|head|options|request)$"))
+        arguments: (arguments . (identifier) @arg_name))
+    captures:
+      - name: arg_name
+        role: wrapper_url_positional_probe

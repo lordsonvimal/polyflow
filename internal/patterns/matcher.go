@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -402,6 +403,51 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				}
 			}
 
+			// WB.4: these two patterns only capture the call site + argument
+			// identifier (tree-sitter queries can't do arithmetic to derive a
+			// positional index). Walk up from @arg_name to the nearest enclosing
+			// function and check whether the identifier is genuinely one of its
+			// own parameters — if so inject wrapper_name/param_index; if not
+			// (an ordinary local variable passed to fetch/axios, not a forwarded
+			// param) drop the match entirely so no bookkeeping node is created.
+			if cq.pattern.Name == "wrapper_url_positional_fetch_call" || cq.pattern.Name == "wrapper_url_positional_axios_call" {
+				var argNode *sitter.Node
+				for _, cap := range matchCaps {
+					if cq.query.CaptureNameForId(cap.Index) == "arg_name" {
+						argNode = cap.Node
+						break
+					}
+				}
+				if argNode == nil {
+					continue
+				}
+				wname, idx, ok := jsWrapperParamIndex(argNode, src)
+				if !ok {
+					continue
+				}
+				captures["wrapper_name"] = wname
+				captures["param_index"] = strconv.Itoa(idx)
+			}
+
+			// WB.4: producer_alias_url_call no longer anchors @url to the first
+			// argument (a wrapper's URL param may forward at any position), so
+			// a call site with multiple string/template literal args now emits
+			// one match per literal. The linker (EnrichAliases) needs each
+			// candidate's positional index to pick the right one via
+			// wrapperURLTable, which tree-sitter can't emit directly.
+			if cq.pattern.Name == "producer_alias_url_call" {
+				var urlNode *sitter.Node
+				for _, cap := range matchCaps {
+					if cq.query.CaptureNameForId(cap.Index) == "url" {
+						urlNode = cap.Node
+						break
+					}
+				}
+				if urlNode != nil && urlNode.Parent() != nil {
+					captures["arg_index"] = strconv.Itoa(namedChildIndex(urlNode.Parent(), urlNode))
+				}
+			}
+
 			mr := MatchResult{
 				PatternName: cq.pattern.Name,
 				Captures:    captures,
@@ -582,6 +628,57 @@ func rubyEnclosingClassName(n *sitter.Node, src []byte) string {
 		return nameNode.Content(src)
 	}
 	return ""
+}
+
+// namedChildIndex returns target's position among parent's named children, or
+// -1 if target is not a named child of parent. Tree-sitter queries can't emit
+// a sibling's ordinal position directly, so callers needing an argument's or
+// parameter's index (WB.4) compute it here from the already-matched node.
+func namedChildIndex(parent, target *sitter.Node) int {
+	for i := 0; i < int(parent.NamedChildCount()); i++ {
+		if parent.NamedChild(i).StartByte() == target.StartByte() {
+			return i
+		}
+	}
+	return -1
+}
+
+// jsWrapperParamIndex walks up from a fetch/axios call's argument identifier
+// to the nearest enclosing function_declaration/arrow_function/
+// function_expression and reports whether that identifier is genuinely one of
+// the function's own positional parameters — i.e. the call forwards a
+// parameter into fetch/axios, not an ordinary local variable. Returns the
+// wrapper's name and the parameter's 0-based index when so; ok is false
+// otherwise (caller should not emit a wrapper fact).
+func jsWrapperParamIndex(argNode *sitter.Node, src []byte) (wrapperName string, paramIndex int, ok bool) {
+	argText := argNode.Content(src)
+	cur := argNode.Parent()
+	for depth := 0; cur != nil && depth < testDSLWalkDepth; depth, cur = depth+1, cur.Parent() {
+		var params, name *sitter.Node
+		switch cur.Type() {
+		case "function_declaration":
+			params = cur.ChildByFieldName("parameters")
+			name = cur.ChildByFieldName("name")
+		case "arrow_function", "function_expression":
+			params = cur.ChildByFieldName("parameters")
+			if decl := cur.Parent(); decl != nil && decl.Type() == "variable_declarator" {
+				name = decl.ChildByFieldName("name")
+			}
+		default:
+			continue
+		}
+		if params == nil || name == nil {
+			return "", -1, false
+		}
+		for i := 0; i < int(params.NamedChildCount()); i++ {
+			p := params.NamedChild(i)
+			if p.Type() == "identifier" && p.Content(src) == argText {
+				return name.Content(src), i, true
+			}
+		}
+		return "", -1, false
+	}
+	return "", -1, false
 }
 
 // goInTestDSLScope reports true when the nearest enclosing function_declaration
@@ -1103,8 +1200,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// method-aware pair pattern and the generic action pattern — possibly at
 	// different lines when the attributes span lines. The method-aware
 	// pattern is registered first, so it wins.
-	seenClientLines := make(map[string]bool) // "file:line" → true
-	seenNavPaths := make(map[string]bool)    // "file\x00path" → true
+	seenClientLines := make(map[string]string) // "file:line" → winning pattern name
+	seenNavPaths := make(map[string]bool)      // "file\x00path" → true
 	filtered := nodes[:0]
 	for i := range nodes {
 		n := nodes[i]
@@ -1123,14 +1220,25 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// linker-level grouping in EnrichAliases, which collapses them to one —
 		// the generic same-line dedup below would otherwise silently keep only
 		// the first-registered key and defeat WB.2 before WB.3 ever runs.
-		isObjCallCandidate := n.Meta["pattern"] == "producer_alias_obj_call"
+		// WB.4: producer_alias_url_call is the same shape — dropping @url's
+		// first-position anchor means a call site with multiple string/
+		// template literal args now emits one match per literal, which must
+		// likewise all survive to EnrichAliases's positional-index grouping.
+		isObjCallCandidate := n.Meta["pattern"] == "producer_alias_obj_call" || n.Meta["pattern"] == "producer_alias_url_call"
 		if n.Type == graph.NodeTypeHTTPClient || n.Meta[graph.MetaIsTest] == "true" || reclassedExternal {
 			key := fmt.Sprintf("%s:%d", n.File, n.Line)
 			if handlerLines[key] {
 				continue // drop: a handler pattern already owns this call site
 			}
-			if seenClientLines[key] && !isObjCallCandidate {
-				continue // drop: already have an http_client node for this line
+			if won, seen := seenClientLines[key]; seen {
+				// A same-pattern multi-candidate group (WB.2/WB.4) stacks against
+				// its own earlier members; anything else colliding on this line
+				// (a rival pattern, or a multi-candidate pattern arriving after a
+				// different pattern already claimed the line) is dropped exactly
+				// as before.
+				if !(isObjCallCandidate && won == n.Meta["pattern"]) {
+					continue // drop: already have an http_client node for this line
+				}
 			}
 			if n.Meta["nav_link"] == "true" {
 				// Dynamic/multi-candidate nav links have no literal path; skip
@@ -1143,7 +1251,9 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 					seenNavPaths[navKey] = true
 				}
 			}
-			seenClientLines[key] = true
+			if _, seen := seenClientLines[key]; !seen {
+				seenClientLines[key] = n.Meta["pattern"]
+			}
 		}
 		filtered = append(filtered, n)
 	}

@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -112,6 +113,70 @@ func resolveObjCallCandidates(nodes []graph.Node, wrapperURLTable map[string]wra
 	return result, unresolved
 }
 
+// resolveURLCallGroup picks exactly one node from a group of
+// producer_alias_url_call candidates that share one call-site span (WB.4).
+// Mirrors resolveObjCallGroup's structure but resolves by positional index
+// instead of object key, since producer_alias_url_call's @url capture no
+// longer anchors to the first argument — a wrapper's URL param may forward at
+// any position (e.g. `_loadVersionHistoryBody(configId, fetchUrl, ...)`,
+// index 1, found in the datascience fleet corpus):
+//
+//  1. If the callee resolves in wrapperURLTable with a ParamIndex, keep the
+//     candidate at that positional index.
+//  2. Else keep the first candidate by source order (index 0 — identical to
+//     the pre-WB.4 anchored-first-argument behavior) and report it as
+//     ambiguous — recall is preserved either way, never silently guessed.
+func resolveURLCallGroup(group []graph.Node, wrapperURLTable map[string]wrapperURLTarget) (graph.Node, *graph.UnresolvedRef) {
+	if len(group) == 1 {
+		return group[0], nil
+	}
+	if via := group[0].Meta["via_alias"]; via != "" {
+		k := indirKey(group[0].Service, group[0].File, via)
+		if w, ok := wrapperURLTable[k]; ok && w.ParamIndex >= 0 {
+			want := strconv.Itoa(w.ParamIndex)
+			for _, n := range group {
+				if n.Meta["arg_index"] == want {
+					return n, nil
+				}
+			}
+		}
+	}
+	winner := group[0]
+	return winner, &graph.UnresolvedRef{
+		Service: winner.Service, File: winner.File, Line: winner.Line,
+		Name: winner.Meta["via_alias"], Kind: "wrapper_index_ambiguous",
+	}
+}
+
+// resolveURLCallCandidates groups producer_alias_url_call nodes by call-site
+// span and collapses each group to a single winner via resolveURLCallGroup,
+// same shape/ordering discipline as resolveObjCallCandidates.
+func resolveURLCallCandidates(nodes []graph.Node, wrapperURLTable map[string]wrapperURLTarget) ([]graph.Node, []graph.UnresolvedRef) {
+	groups := make(map[string][]graph.Node)
+	var order []string
+	result := make([]graph.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Meta["pattern"] == "producer_alias_url_call" {
+			k := spanKey(n)
+			if _, exists := groups[k]; !exists {
+				order = append(order, k)
+			}
+			groups[k] = append(groups[k], n)
+			continue
+		}
+		result = append(result, n)
+	}
+	var unresolved []graph.UnresolvedRef
+	for _, k := range order {
+		winner, ref := resolveURLCallGroup(groups[k], wrapperURLTable)
+		result = append(result, stripNodeMeta(winner, "arg_index"))
+		if ref != nil {
+			unresolved = append(unresolved, *ref)
+		}
+	}
+	return result, unresolved
+}
+
 // EnrichAliases resolves producer alias bindings, instance idioms, and
 // one-hop wrapper functions before Engine.Link runs. It returns an updated
 // node slice and ledger entries for unresolvable indirections.
@@ -172,7 +237,13 @@ func EnrichAliases(nodes []graph.Node) ([]graph.Node, []graph.UnresolvedRef) {
 			if wname != "" {
 				k := indirKey(n.Service, n.File, wname)
 				if _, exists := wrapperURLTable[k]; !exists {
-					wrapperURLTable[k] = wrapperURLTarget{ParamIndex: -1, ParamKey: n.Meta["url_key"]}
+					paramIndex := -1
+					if v := n.Meta["param_index"]; v != "" {
+						if parsed, err := strconv.Atoi(v); err == nil {
+							paramIndex = parsed
+						}
+					}
+					wrapperURLTable[k] = wrapperURLTarget{ParamIndex: paramIndex, ParamKey: n.Meta["url_key"]}
 				}
 			}
 		}
@@ -240,9 +311,13 @@ func EnrichAliases(nodes []graph.Node) ([]graph.Node, []graph.UnresolvedRef) {
 	// through that generic path exactly like any other single-key match.
 	nodes, objCallUnresolved := resolveObjCallCandidates(nodes, wrapperURLTable)
 
+	// WB.4: same collapse for producer_alias_url_call's positional-index
+	// candidate groups (see resolveURLCallCandidates doc comment).
+	nodes, urlCallUnresolved := resolveURLCallCandidates(nodes, wrapperURLTable)
+
 	// Pass 2: process nodes.
 	result := make([]graph.Node, 0, len(nodes))
-	unresolved := objCallUnresolved
+	unresolved := append(objCallUnresolved, urlCallUnresolved...)
 	ledgeredAlias := make(map[string]bool) // suppress duplicate alias_reassigned entries
 
 	for _, n := range nodes {

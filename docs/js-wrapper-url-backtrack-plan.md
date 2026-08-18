@@ -355,21 +355,81 @@ zero edges lost — the WB.2 diff already merged into this branch's baseline add
 one `producer_alias_obj_call` edge with a template-literal `url` key; WB.3
 must not regress it).
 
-## Phase WB.4 (stretch, separate commit, corpus-gated)
+## Phase WB.4 (stretch, separate commit, corpus-gated) `done`
 
-**Problem:** `producer_alias_url_call` always takes positional arg 0; a
-wrapper like `apiFetch(options, uri)` mis-tags `options`.
+**Corpus gate cleared:** `datascience/dsw-manager/static/js/dsw/core.js`'s
+`_loadVersionHistoryBody(configId, fetchUrl, loadingClass, errorClass)`
+forwards `fetchUrl` — index 1, not 0 — into `fetch(fetchUrl)`. Call sites pass
+the literal URL as their *second* argument
+(`_loadVersionHistoryBody(configId, "/dsw/app-configs/.../version-history-body",
+...)`), which the pre-WB.4 anchored-to-first-argument
+`producer_alias_url_call` query couldn't match at all (arg 0 is `configId`, an
+identifier, not a string/template literal) — a missed cross-service edge, not
+a mis-tag as originally worried. Also notable: the real wrapper is a bare
+`fetch(fetchUrl).then(...)` statement, not `return fetch(...)` as WB.1a's
+worked example assumed — patterns anchored inside `return_statement` would
+have missed it too.
 
-**Deliverable:** capture all positional args generically (index via sibling
-order, same trick as WB.1a), apply `wrapperURLTable`'s `ParamIndex` the same
-way WB.3 applies `ParamKey`, same ambiguous-fallback/ledger behavior
-(`wrapper_index_ambiguous`, fallback = index 0).
+**Shipped, two parts:**
 
-**Do not build this speculatively.** Positional-arg-0 wrappers are the
-overwhelming common case (`fetch(url)`-shaped wrappers rarely take the URL as
-anything but the sole or first argument). Only take this phase if a real
-fleet/chessleap example is found where index-0 is measurably wrong — check
-during WB.3's chessleap verification pass before scheduling this.
+1. **WB.1a — positional wrapper-body detection**, two new patterns in
+   `patterns/javascript/producer_wrapper_body.yaml`
+   (`wrapper_url_positional_fetch_call`, `wrapper_url_positional_axios_call`).
+   Deliberately *not* anchored inside `return_statement` (see above). Tree-sitter
+   can't compute a sibling's ordinal position, so these patterns only capture
+   the call site + argument identifier; `internal/patterns/matcher.go`'s
+   `execQueries` calls a new `jsWrapperParamIndex` helper that walks up from
+   the argument node to the nearest enclosing
+   function_declaration/arrow_function/function_expression, and — mirroring
+   `#eq?`-predicate matching but done in Go since arithmetic isn't available in
+   queries — checks whether the identifier is genuinely one of that function's
+   own parameters. If so, injects `wrapper_name`/`param_index`; if not (an
+   ordinary local variable passed to fetch, not a forwarded param) the match is
+   dropped entirely so no bookkeeping node is created. `namedChildIndex` is the
+   general sibling-position helper both this and the call-site side use.
+2. **Call-site generalization**: `producer_alias_url_call`
+   (`patterns/javascript/producer_alias.yaml`) no longer anchors `@url` to the
+   first argument — it now matches a string/template literal at *any*
+   position, one match per literal (same unanchored-repeated-child behavior
+   WB.2 already relies on for `producer_alias_obj_call`). `execQueries` injects
+   each candidate's `arg_index` via `namedChildIndex`. `internal/contract/alias.go`
+   gained `resolveURLCallGroup`/`resolveURLCallCandidates`, mirroring WB.3's
+   `resolveObjCallGroup`/`resolveObjCallCandidates` exactly but keyed on
+   positional index instead of object key: a `wrapperURLTable` `ParamIndex`
+   fact wins outright, else the first candidate by source order (index 0 —
+   identical to pre-WB.4 behavior) wins and is ledgered
+   `wrapper_index_ambiguous`. `wrapperURLTable`'s population loop (shared with
+   WB.3) now also parses `param_index` off `wrapper_url_positional_*` facts.
+
+**Prerequisite fix (matcher.go):** `producer_alias_url_call` going unanchored
+meant it could now emit multiple candidates at one call site, so it needed the
+same same-line-dedup exemption as `producer_alias_obj_call` (WB.3) — but a
+blanket exemption reopened a *different*, older bug: `producer_alias_url_call`
+also structurally matches `fetch(...)`'s own call site (any `identifier(string)`
+shape), previously collapsed into the single `fetch_call`-pattern node by the
+generic same-line dedup. Exempting it unconditionally let both nodes survive
+as two `http_client` nodes for one physical call
+(`TestX0_TestDSL_JS_PositiveSuppressesHTTPClient`/`_NegativeKeepsHTTPClient`
+caught this). Fixed by changing `seenClientLines` from a `bool` to a
+`map[string]string` recording which *pattern* first claimed a line: a
+multi-candidate group only stacks against its own earlier members
+(`won == n.Meta["pattern"]`); a rival pattern colliding on the same line is
+still dropped exactly as before.
+
+**Verified:** 4 new unit tests in `internal/contract/alias_test.go` (single-arg
+regression, wrapper-fact index override, genuine ambiguity + ledger,
+independent spans); new positive/negative fixture coverage in
+`producer_wrapper_body_test/` and `producer_alias_test/` (including the actual
+fleet shape: URL literal at argument index 1); full suite green; real-corpus
+golden snapshot for chessleap unchanged
+(`TestGoldenChessleapParity`); this repo (`polyflow`) re-indexed cleanly with
+`go install ./cmd/polyflow` + `polyflow index .` — 30 contract links, 29
+cross-service, zero `wrapper_key_ambiguous`/`wrapper_index_ambiguous` ledger
+entries (every `web` → `polyflow` `apiFetch(...)` call site here is a
+single-argument group, so WB.3/WB.4's grouping logic is a no-op shortcut on
+this repo's own corpus — spot-traced via MCP `trace`, e.g.
+`web/src/stores/jobs.ts:56 apiFetch("/api/jobs")` → `http_call` →
+`internal/server/server.go:173 GET /api/jobs` → `handleListJobs`).
 
 ## Non-goals
 
