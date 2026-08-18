@@ -35,6 +35,7 @@ func pathsOf(nodes []graph.Node) map[string]string {
 
 // TestScopeString_PrefixesThePath is orion's shape verbatim.
 func TestScopeString_PrefixesThePath(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     resources :studies do
@@ -57,6 +58,7 @@ end`)
 // StudiesController, not App::StudiesController — so a module derived from the
 // URL would send phase A's route→action edges to controllers that do not exist.
 func TestScopeString_ContributesNoControllerModule(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     resources :studies
@@ -70,6 +72,7 @@ end`)
 
 // TestNamespace_ContributesBoth — the contrast case.
 func TestNamespace_ContributesBoth(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   namespace :client_api do
     namespace :v1 do
@@ -86,6 +89,7 @@ end`)
 // TestScopeModuleOnly_NoPathSegment — `scope module: "admin"` relocates the
 // controller without touching the URL.
 func TestScopeModuleOnly_NoPathSegment(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope module: "admin" do
     resources :users
@@ -99,6 +103,7 @@ end`)
 
 // TestScopePathOption_WinsOverPositional — Rails' own precedence.
 func TestScopePathOption_WinsOverPositional(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope :api, path: "v2", module: :api do
     resources :jobs
@@ -115,6 +120,7 @@ end`)
 // `scope constraints: {…}` group routes without moving them. Inventing a
 // segment from an unreadable option would shift every route beneath it.
 func TestScopeWithoutPathOrModule_IsTransparent(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope format: false do
     resources :files
@@ -130,6 +136,7 @@ end`)
 // scopes appended onto the same parent slice, and the second overwrote the
 // first's segment in place.
 func TestScopeSiblingsDoNotBleed(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     scope "a" do
@@ -149,6 +156,7 @@ end`)
 // TestScopeAroundNamespaceComposesInOrder — the mixed nesting orion actually
 // has: a URL-only outer scope wrapping a module-bearing namespace.
 func TestScopeAroundNamespaceComposesInOrder(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     namespace :admin do
@@ -166,6 +174,7 @@ end`)
 // TestScopeAppliesToVerbRoutes — the composeAndStamp path, not just the
 // synthesized REST one.
 func TestScopeAppliesToVerbRoutes(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     get "/zstd_level"

@@ -35,6 +35,7 @@ func namesOf(nodes []graph.Node) map[string]string {
 // minimally: the URL gains "app", the name does not. The old helper map derived
 // one from the other in both directions and so had to be wrong in one of them.
 func TestRouteNames_ScopeContributesNoName(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     resources :folders
@@ -53,6 +54,7 @@ end`))
 // TestRouteNames_NamespaceContributesToBoth is the contrast that makes the
 // third stack necessary rather than merely tidy.
 func TestRouteNames_NamespaceContributesToBoth(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   namespace :client_api do
     namespace :v1 do
@@ -70,6 +72,7 @@ end`))
 // The parent contributes `studies/:study_id` to the URL and `study` to the
 // name — the single clearest reason a name cannot be read back off a path.
 func TestRouteNames_NestedParentIsSingularized(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     resources :studies do
@@ -87,6 +90,7 @@ end`))
 // nameScope keeps singular and plural apart for: two routes in the same block,
 // named off opposite inflections of the same resource.
 func TestRouteNames_MemberIsSingularCollectionIsPlural(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     resources :users do
@@ -107,6 +111,7 @@ end`))
 // TestRouteNames_InlineOnMemberAndCollection covers the `on:` spelling, which
 // reaches composeAndStamp by a different pattern and so a different code path.
 func TestRouteNames_InlineOnMemberAndCollection(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   resources :change_logs, only: %i[index] do
     get :export, on: :collection
@@ -122,6 +127,7 @@ end`))
 // of a string route: the literal contributes, the enclosing `scope "app"` does
 // not, so the name is audit_logs and not app_audit_logs.
 func TestRouteNames_LiteralVerbRouteUsesThePathNotTheScope(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   scope "app" do
     get "audit_logs", to: "change_logs#audit_logs"
@@ -134,6 +140,7 @@ end`))
 // TestRouteNames_AsOverridesTheName covers `as:`, the one construct that names
 // a route without touching its URL. orion uses it at routes.rb:160.
 func TestRouteNames_AsOverridesTheName(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   resources :studies do
     resources :task_reports, only: [] do
@@ -149,6 +156,7 @@ end`))
 // TestRouteNames_AsOnResourcesRenamesWithoutMovingTheURL is the other half of
 // `as:`: the path stack and the name stack diverge in opposite directions.
 func TestRouteNames_AsOnResourcesRenamesWithoutMovingTheURL(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   resources :studies, as: :containers
 end`))
@@ -162,6 +170,7 @@ end`))
 // name would shadow a real helper of the same spelling and send its views to
 // the wrong endpoint — the failure mode that is strictly worse than no link.
 func TestRouteNames_DynamicLiteralPathIsUnnamed(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   get "files/:id/raw", to: "files#raw"
 end`)
@@ -175,6 +184,7 @@ end`)
 // TestRouteNames_SiblingScopesDoNotBleed guards the copy-on-append discipline
 // on the third stack, the same shared-backing-array bug appendSeg exists for.
 func TestRouteNames_SiblingScopesDoNotBleed(t *testing.T) {
+	t.Parallel()
 	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
   namespace :admin do
     resources :users

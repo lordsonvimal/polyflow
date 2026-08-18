@@ -40,6 +40,7 @@ func pyNode(nodes []graph.Node, typ graph.NodeType, label string) *graph.Node {
 // TestPython_FunctionNodes verifies module-level and nested function definitions
 // produce NodeTypeFunction nodes.
 func TestPython_FunctionNodes(t *testing.T) {
+	t.Parallel()
 	src := `
 def module_func(x):
     return x
@@ -64,6 +65,7 @@ def outer():
 
 // TestPython_AsyncFuncNode verifies async def produces a NodeTypeFunction node.
 func TestPython_AsyncFuncNode(t *testing.T) {
+	t.Parallel()
 	src := `
 async def fetch_data(url):
     return {}
@@ -74,6 +76,7 @@ async def fetch_data(url):
 
 // TestPython_ClassNode verifies class definitions produce NodeTypeClass nodes.
 func TestPython_ClassNode(t *testing.T) {
+	t.Parallel()
 	src := `
 class MyService(BaseService):
     def __init__(self):
@@ -95,6 +98,7 @@ class MyService(BaseService):
 // TestPython_ModuleLevelCallRef verifies a module-level call to an in-file
 // function produces a calls edge attributed to the synthetic (module) node.
 func TestPython_ModuleLevelCallRef(t *testing.T) {
+	t.Parallel()
 	src := `
 def setup():
     pass
@@ -128,6 +132,7 @@ setup()
 // TestPython_NestedDefAttribution verifies that a call inside a nested function
 // attributes to that nested function, not the enclosing outer function.
 func TestPython_NestedDefAttribution(t *testing.T) {
+	t.Parallel()
 	src := `
 def helper():
     pass
@@ -167,6 +172,7 @@ def outer():
 // TestPython_UnresolvedCallRef verifies that a call to a non-in-file function
 // produces an honest UnresolvedRef entry (not a silent gap).
 func TestPython_UnresolvedCallRef(t *testing.T) {
+	t.Parallel()
 	src := `
 def process():
     external_library_call()
@@ -186,6 +192,7 @@ def process():
 // TestPython_TestFileIndexed verifies that test_*.py files are parsed and indexed
 // like any other Python file (checklist item 10: test code indexed from day one).
 func TestPython_TestFileIndexed(t *testing.T) {
+	t.Parallel()
 	src := `
 def add(a, b):
     return a + b
@@ -225,6 +232,7 @@ def test_add():
 
 // TestPython_DecoratedFunc verifies decorated functions (@decorator) are indexed.
 func TestPython_DecoratedFunc(t *testing.T) {
+	t.Parallel()
 	src := `
 class MyClass:
     @classmethod

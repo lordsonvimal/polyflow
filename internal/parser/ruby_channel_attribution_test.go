@@ -57,6 +57,7 @@ func inboundOf(edges []graph.Edge, id string) []graph.Edge {
 // TestRubyChannel_AttributedToEnclosingMethod is the central claim: a
 // `channel.queue(...)` inside a method is reachable from that method.
 func TestRubyChannel_AttributedToEnclosingMethod(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseRuby(t, "testdata/amqp_attribution/publisher.rb")
 
 	channels := nodesOfType(nodes, graph.NodeTypeChannel)
@@ -90,6 +91,7 @@ func TestRubyChannel_AttributedToEnclosingMethod(t *testing.T) {
 // has no enclosing method, so the class is the only honest anchor. Without it
 // the one node naming the worker's queue hangs off nothing.
 func TestRubyChannel_ClassBodyDeclarationAttributedToClass(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseRuby(t, "testdata/amqp_attribution/event_worker.rb")
 
 	channels := nodesOfType(nodes, graph.NodeTypeChannel)
@@ -125,6 +127,7 @@ func TestRubyChannel_ClassBodyDeclarationAttributedToClass(t *testing.T) {
 // Kicks contains that queue, which is false — and a wrong edge is worse than a
 // missing one (bug-class #12). The node stays unattributed.
 func TestRubyChannel_NoFabricatedAnchorOutsideClassBody(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseRuby(t, "testdata/amqp_attribution/tasks.rake")
 
 	channels := nodesOfType(nodes, graph.NodeTypeChannel)
@@ -149,6 +152,7 @@ func TestRubyChannel_NoFabricatedAnchorOutsideClassBody(t *testing.T) {
 // TestRubyChannel_MethodBeatsClass: when both a method and a class enclose the
 // node, the method wins — it is the tighter scope and the one an agent traces.
 func TestRubyChannel_MethodBeatsClass(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseRuby(t, "testdata/amqp_attribution/publisher.rb")
 
 	byID := map[string]*graph.Node{}
@@ -175,6 +179,7 @@ func TestRubyChannel_MethodBeatsClass(t *testing.T) {
 // A call site has no body. The signal is end_line: a declaration pattern
 // captures @_def and records its span, a call pattern cannot.
 func TestRubyChannel_CallSiteIsNotAScope(t *testing.T) {
+	t.Parallel()
 	nodes, edges := parseRuby(t, "testdata/amqp_attribution/agents_controller.rb")
 
 	byID := map[string]*graph.Node{}
@@ -203,6 +208,7 @@ func TestRubyChannel_CallSiteIsNotAScope(t *testing.T) {
 // TestRubyChannel_AttributionDeterministic: the pass consults maps keyed by
 // file, so pin that repeated parses agree (bug-class #2).
 func TestRubyChannel_AttributionDeterministic(t *testing.T) {
+	t.Parallel()
 	files := []string{
 		"testdata/amqp_attribution/publisher.rb",
 		"testdata/amqp_attribution/event_worker.rb",

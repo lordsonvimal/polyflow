@@ -28,6 +28,7 @@ func countDatastarActions(nodes []graph.Node) int {
 
 // TestTemplParser_V0Vocab_Positive: hyphen syntax with v0 matcher → finds actions.
 func TestTemplParser_V0Vocab_Positive(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v0"))
 	if err != nil {
@@ -43,6 +44,7 @@ func TestTemplParser_V0Vocab_Positive(t *testing.T) {
 // TestTemplParser_V0Vocab_WrongVersion (same-shape wrong-version negative):
 // hyphen-syntax file processed with v1 matcher → zero datastar actions.
 func TestTemplParser_V0Vocab_WrongVersion(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v1"))
 	if err != nil {
@@ -57,6 +59,7 @@ func TestTemplParser_V0Vocab_WrongVersion(t *testing.T) {
 // TestTemplParser_V1Vocab_WrongVersion (same-shape wrong-version negative):
 // colon-syntax file processed with v0 matcher → zero datastar actions.
 func TestTemplParser_V1Vocab_WrongVersion(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", matcherWithVariant("datastar-v0"))
 	if err != nil {
@@ -71,6 +74,7 @@ func TestTemplParser_V1Vocab_WrongVersion(t *testing.T) {
 // TestTemplParser_FallbackVocabAcceptsBoth: nil matcher → combined vocab →
 // both colon and hyphen syntax produce actions.
 func TestTemplParser_FallbackVocab_V1File(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", nil)
 	if err != nil {
@@ -84,6 +88,7 @@ func TestTemplParser_FallbackVocab_V1File(t *testing.T) {
 }
 
 func TestTemplParser_FallbackVocab_V0File(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", nil)
 	if err != nil {
@@ -98,6 +103,7 @@ func TestTemplParser_FallbackVocab_V0File(t *testing.T) {
 
 // TestTemplParser_V0Vocab_ReactiveHyphenAttr: hyphen reactive attr recognized in v0.
 func TestTemplParser_V0Vocab_ReactiveHyphenAttr(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_v0.templ", "app", matcherWithVariant("datastar-v0"))
 	if err != nil {
@@ -121,6 +127,7 @@ func TestTemplParser_V0Vocab_ReactiveHyphenAttr(t *testing.T) {
 // invisible, so the templ→handler edge (and the page's blast-radius
 // membership) silently vanished.
 func TestTemplParser_V1Vocab_DataInit(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v1"))
 	if err != nil {
@@ -136,6 +143,7 @@ func TestTemplParser_V1Vocab_DataInit(t *testing.T) {
 // TestTemplParser_V0Vocab_DataInitNotMatched (wrong-version negative):
 // data-init is a v1 idiom; the v0 hyphen vocab must not match it.
 func TestTemplParser_V0Vocab_DataInitNotMatched(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", matcherWithVariant("datastar-v0"))
 	if err != nil {
@@ -149,6 +157,7 @@ func TestTemplParser_V0Vocab_DataInitNotMatched(t *testing.T) {
 // TestTemplParser_CombinedVocab_DataInit: unversioned projects (combined
 // fallback vocab) must also see data-init actions.
 func TestTemplParser_CombinedVocab_DataInit(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/datastar_init.templ", "app", nil)
 	if err != nil {
