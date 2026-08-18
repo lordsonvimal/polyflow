@@ -119,6 +119,22 @@ async function fetchForScope(scope: Scope, signal?: AbortSignal): Promise<GraphD
   }
 }
 
+// Deterministic per-edge curvature so edges that happen to be collinear with
+// an unrelated third node (common in rank-based layouts like dagre, and in
+// force layouts when two same-shape siblings converge) bend around it
+// instead of visually passing through/behind it as a straight line.
+function edgeHash(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return h;
+}
+
+function edgeCurveDistance(ele: { id(): string }): number {
+  const h = edgeHash(ele.id());
+  const magnitude = 18 + (Math.abs(h) % 15); // 18-32px
+  return h % 2 === 0 ? magnitude : -magnitude;
+}
+
 function buildStylesheet(): object[] {
   return [
     {
@@ -153,7 +169,9 @@ function buildStylesheet(): object[] {
         "line-color": "#374151",
         "target-arrow-color": "#374151",
         "target-arrow-shape": "triangle",
-        "curve-style": "bezier",
+        "curve-style": "unbundled-bezier",
+        "control-point-distances": edgeCurveDistance,
+        "control-point-weights": 0.5,
         "font-size": "9px",
         color: "#6b7280",
         width: 1,
