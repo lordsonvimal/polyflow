@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,11 +24,11 @@ func (p *StylesheetParser) Language() string     { return "css" }
 func (p *StylesheetParser) Extensions() []string { return []string{".scss", ".css"} }
 
 func (p *StylesheetParser) Parse(file, service string, _ *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// `file` arrives absolute (needed for the os.ReadFile above); this parser
+	// `file` arrives absolute (needed for readSource/os.ReadFile); this parser
 	// builds nodes directly (no matcher/execQueries pass to relativize for
 	// it), so it must convert to the cwd-relative convention itself.
 	file = patterns.RelativizeToCwd(file)

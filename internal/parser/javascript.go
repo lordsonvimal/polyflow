@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -20,11 +19,11 @@ func (p *JavaScriptParser) Extensions() []string {
 }
 
 func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// `file` arrives absolute (needed for readSource/os.ReadFile); every node
 	// this parser mints must carry the cwd-relative form instead, matching
 	// the Go semantic pass's convention — extractJSVariables builds nodes
 	// directly (bypassing the matcher's own relativization).
