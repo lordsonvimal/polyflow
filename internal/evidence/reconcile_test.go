@@ -36,6 +36,18 @@ func chessleapPath() string {
 	return p
 }
 
+// skipUnlessChessleapOptIn skips full chessleap index runs by default — they
+// take 10-30s each and only run at all on machines with the private repo
+// cloned locally, which made `go test ./...` slow for local dev without ever
+// affecting CI (which never has the clone). Opt in with POLYFLOW_CHESSLEAP=1
+// or `make test-chessleap`.
+func skipUnlessChessleapOptIn(t *testing.T) {
+	t.Helper()
+	if os.Getenv("POLYFLOW_CHESSLEAP") != "1" {
+		t.Skip("chessleap integration test skipped by default; set POLYFLOW_CHESSLEAP=1 to run (see `make test-chessleap`)")
+	}
+}
+
 // goldenContractEdgesPath returns the path to the committed contract-golden snapshot.
 func goldenContractEdgesPath() string {
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -517,6 +529,7 @@ func TestReconcilerSpecDoesNotVerifyFanout(t *testing.T) {
 //
 // This is the "static-baseline-unchanged guard" required by the F.0 spec.
 func TestChessleapF0StaticBaseline(t *testing.T) {
+	skipUnlessChessleapOptIn(t)
 	chessleap := chessleapPath()
 	if _, err := os.Stat(chessleap); os.IsNotExist(err) {
 		t.Skip("chessleap eval repo not available; clone to eval/.cache/chessleap")
@@ -609,9 +622,7 @@ func TestChessleapF0StaticBaseline(t *testing.T) {
 // TestChessleapF0Determinism indexes chessleap twice and asserts the
 // reconciled edge set (including Sources[]/VerificationState) is byte-identical.
 func TestChessleapF0Determinism(t *testing.T) {
-	if testing.Short() {
-		t.Skip("two full index runs; skipped in -short mode")
-	}
+	skipUnlessChessleapOptIn(t)
 	chessleap := chessleapPath()
 	if _, err := os.Stat(chessleap); os.IsNotExist(err) {
 		t.Skip("chessleap eval repo not available; clone to eval/.cache/chessleap")
