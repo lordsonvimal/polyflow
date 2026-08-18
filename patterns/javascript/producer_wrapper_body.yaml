@@ -1,5 +1,11 @@
 language: javascript
 version: "1"
+# javascript-grammar only: these queries walk formal_parameters' immediate
+# child node types (bare identifier/object_pattern). typescript/tsx wrap
+# every parameter in required_parameter instead, so no single query text
+# compiles as valid tree-sitter syntax against both grammar families — see
+# internal/patterns/loader.go's Pattern.Grammars doc comment.
+grammars: [javascript]
 # Tier WB.1 — wrapper-body detection. A wrapper function like
 #   function apiFetch(opts) { return fetch(opts.uri); }
 # forwards its own parameter into a fetch/axios call. These patterns read the
