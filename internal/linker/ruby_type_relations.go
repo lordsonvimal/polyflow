@@ -12,6 +12,7 @@ import (
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // LinkRubyTypeRelations resolves cross-file inherits (superclass + mixins) and
@@ -176,6 +177,7 @@ type rubyTypeRef struct {
 
 func scanRubyTypes(file, svcName string) ([]rubyDecl, []rubyTypeRef) {
 	src, err := os.ReadFile(file)
+	file = patterns.RelativizeToCwd(file)
 	if err != nil {
 		return nil, nil
 	}
