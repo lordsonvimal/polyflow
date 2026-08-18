@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import { createMemo, createSignal, createEffect, on, onMount, onCleanup, For, Show } from "solid-js";
 import { treeStore, buildRows, type Row } from "../../stores/tree";
 import { computeWindow } from "./virtualize";
 import { selectionStore } from "../../stores/selection";
@@ -96,20 +96,26 @@ export default function Tree() {
     if (sel && sel.kind === "node") treeStore.reveal(sel.id);
   });
 
-  // Scroll the highlighted row into view once it's part of the flattened list.
-  createEffect(() => {
-    const hk = treeStore.highlightedKey();
-    if (!hk || !scrollerRef) return;
-    const idx = rows().findIndex((r) => r.key === hk);
-    if (idx < 0) return;
-    const rowTop = idx * ROW_HEIGHT;
-    const viewTop = scrollTop();
-    const viewBottom = viewTop + viewportHeight();
-    if (rowTop < viewTop || rowTop + ROW_HEIGHT > viewBottom) {
-      scrollerRef.scrollTop = rowTop;
-      setScrollTop(rowTop);
-    }
-  });
+  // Scroll the highlighted row into view once it's part of the flattened
+  // list. Scoped to `highlightedKey` changes only (via `on`) — reading
+  // rows()/scrollTop()/viewportHeight() in a plain createEffect would make
+  // it a dependency too, so it re-fired on every later scroll or unrelated
+  // expand/collapse and yanked the view back to the last-highlighted row
+  // every time the user scrolled or expanded it away.
+  createEffect(
+    on(treeStore.highlightedKey, (hk) => {
+      if (!hk || !scrollerRef) return;
+      const idx = rows().findIndex((r) => r.key === hk);
+      if (idx < 0) return;
+      const rowTop = idx * ROW_HEIGHT;
+      const viewTop = scrollTop();
+      const viewBottom = viewTop + viewportHeight();
+      if (rowTop < viewTop || rowTop + ROW_HEIGHT > viewBottom) {
+        scrollerRef.scrollTop = rowTop;
+        setScrollTop(rowTop);
+      }
+    }),
+  );
 
   onCleanup(() => unregisterMenuItems(ACTIVITY_ID));
 
