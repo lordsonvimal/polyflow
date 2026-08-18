@@ -368,6 +368,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		srv = server.New(store, idx)
 	}
 	srv.SetConfigPath(serveWS)
+	// UO.4: generate the CLI reference from the live command tree once, at
+	// startup, so GET /api/docs/cli can never drift from the actual binary.
+	meta.SetCLIDocs(buildCLIDocs(rootCmd))
 	// Build the embedder once for the server lifetime; share it across reloads.
 	emb, closeEmb, err := resolveEmbedder(cfg)
 	if err != nil {

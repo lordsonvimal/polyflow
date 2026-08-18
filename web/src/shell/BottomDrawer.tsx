@@ -1,7 +1,7 @@
-import { For, Show, createMemo, createResource, createSignal, createEffect } from "solid-js";
+import { For, Show, createResource, createSignal, createEffect } from "solid-js";
 import { drawerStore, type DrawerTab } from "../stores/drawer";
 import { contextCopyStore, TOKEN_BUDGETS } from "../stores/contextCopy";
-import { parseMarkdownLite } from "../lib/markdownLite";
+import MarkdownPreview from "../lib/MarkdownPreview";
 import type { CopyMode } from "../views/context/copy";
 import { apiFetch } from "../lib/apiFetch";
 import { scopeStore } from "../stores/scope";
@@ -15,36 +15,6 @@ const TABS: { id: DrawerTab; label: string }[] = [
   { id: "jobs", label: "Jobs" },
   { id: "toolcalls", label: "Tool Calls" },
 ];
-
-function MarkdownPreview(props: { markdown: string }) {
-  const blocks = createMemo(() => parseMarkdownLite(props.markdown));
-  return (
-    <div data-testid="context-preview-rendered" class="space-y-1.5">
-      <For each={blocks()}>
-        {(b) => {
-          if (b.type === "heading") {
-            const cls = b.level === 1 ? "text-sm font-semibold text-white" : b.level === 2 ? "text-xs font-semibold text-neutral-200 mt-2" : "text-xs font-medium text-neutral-300 mt-1";
-            return <div class={cls}>{b.text}</div>;
-          }
-          if (b.type === "code") {
-            return <pre class="bg-neutral-900 border border-neutral-800 rounded p-2 text-[11px] text-neutral-300 overflow-x-auto whitespace-pre">{b.text}</pre>;
-          }
-          if (b.type === "list") {
-            return (
-              <ul class="list-disc list-inside text-xs text-neutral-300">
-                <For each={b.items}>{(item) => <li>{item}</li>}</For>
-              </ul>
-            );
-          }
-          if (b.type === "quote") {
-            return <div class="text-xs text-amber-300 border-l-2 border-amber-700 pl-2">{b.text}</div>;
-          }
-          return <div class="text-xs text-neutral-400 whitespace-pre-wrap">{b.text}</div>;
-        }}
-      </For>
-    </div>
-  );
-}
 
 function ContextTab() {
   const result = contextCopyStore.result;
@@ -208,7 +178,7 @@ function ContextTab() {
                 </div>
               </Show>
 
-              <Show when={contextCopyStore.rawView()} fallback={<MarkdownPreview markdown={r().markdown} />}>
+              <Show when={contextCopyStore.rawView()} fallback={<MarkdownPreview markdown={r().markdown} testId="context-preview-rendered" />}>
                 <pre data-testid="context-preview-raw" class="text-[11px] text-neutral-300 whitespace-pre-wrap">{r().markdown}</pre>
               </Show>
             </div>
