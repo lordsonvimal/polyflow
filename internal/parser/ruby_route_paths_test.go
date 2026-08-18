@@ -44,6 +44,7 @@ func routeNode(nodes []graph.Node, pattern string) []*graph.Node {
 // namespace/resources composing a prefix, a symbol-based collection action
 // (no path capture pre-Tier-R), and a nested resource's member action.
 func TestComposeRailsRoutePaths_NestedNamespaceAndMemberCollection(t *testing.T) {
+	t.Parallel()
 	src := `Rails.application.routes.draw do
   namespace :client_api do
     namespace :v1 do
@@ -96,6 +97,7 @@ end
 // motivating GetFolderByPath → orion edge from
 // docs/sprintf-url-resolution-plan.md (Tier X.11).
 func TestComposeRailsRoutePaths_InlineOnMemberCollection(t *testing.T) {
+	t.Parallel()
 	src := `Rails.application.routes.draw do
   namespace :client_api do
     namespace :v1 do
@@ -142,6 +144,7 @@ func parseRubyAt(t *testing.T, rel, src string) []graph.Node {
 // route node at all, so what remains to assert is that `resources` does not
 // synthesize its implicit REST surface outside a routes file.
 func TestComposeRailsRoutePaths_SkipsNonRoutesFile(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyAt(t, "not_routes.rb", `Rails.application.routes.draw do
   namespace :client_api do
     resources :folders do
@@ -166,6 +169,7 @@ end
 // `get("…")` in a service object calls the private helper named `get` defined
 // below it — it is an outbound HTTP call, not a route declaration.
 func TestRouteNodesOnlyInRoutesFiles(t *testing.T) {
+	t.Parallel()
 	src := `module Cam
   class UserCategoryRulesClient
     def show(id)
@@ -193,6 +197,7 @@ end
 // to a literal routes.rb: Rails' routes-concerns convention puts real route
 // files under config/routes/.
 func TestRoutesConcernsFileStillAdmitted(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyAt(t, "config/routes/admin.rb", `namespace :admin do
   get "reports", to: "reports#index"
 end
@@ -206,6 +211,7 @@ end
 // not evidence-based. A receiverless verb call with a fully literal path in a
 // service object is still a helper call, not a route.
 func TestLiteralPathRouteStillDroppedOutsideRoutesFile(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyAt(t, "app/services/foo_client.rb", `class FooClient
   def index
     get("/client_api/v1/user_category_rules")
@@ -220,6 +226,7 @@ end
 // TestComposeRailsRoutePaths_Determinism: two runs produce byte-identical
 // composed paths.
 func TestComposeRailsRoutePaths_Determinism(t *testing.T) {
+	t.Parallel()
 	src := `Rails.application.routes.draw do
   namespace :client_api do
     resources :folders do
@@ -249,6 +256,7 @@ end
 // adapter actually calls. Its client-side URL resolved perfectly and still matched
 // nothing, because the handler side of the join did not exist.
 func TestRESTResourceRoutes_ImplicitActions(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `
 Rails.application.routes.draw do
   namespace :client_api do
@@ -315,6 +323,7 @@ end
 // collided with the Atlas user API that maple-manager and willow really call —
 // three cross-service edges to a service that exposes no such route.
 func TestRESTResourceRoutes_EmptyOnlyGeneratesNothing(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `
 Rails.application.routes.draw do
   namespace :api do
@@ -339,6 +348,7 @@ end
 // TestRESTResourceRoutes_Deterministic: the synthesized set is byte-identical
 // across runs (bug-class #2).
 func TestRESTResourceRoutes_Deterministic(t *testing.T) {
+	t.Parallel()
 	src := `
 Rails.application.routes.draw do
   namespace :client_api do
@@ -368,6 +378,7 @@ end
 // role: a parameter name normalizes to a wildcard when matched, but a view's
 // `person_path` is looked up verbatim and either hits or does not.
 func TestSingularize(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"folders":  "folder",
 		"files":    "file",
@@ -392,6 +403,7 @@ func TestSingularize(t *testing.T) {
 // bare-string route captures @method verbatim, so it used to keep Ruby's
 // lowercase `post` while every other handler in the graph carries `POST`.
 func TestBareStringRouteVerbUpcased(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   post "login", to: "sessions#create"
 end
@@ -407,6 +419,7 @@ end
 // read "patch Users/:id" — neither the composed path nor the graph-wide
 // "METHOD /path" shape an agent searches for.
 func TestBareStringRouteLabelRefreshed(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   post "login", to: "sessions#create"
   namespace :scim do
@@ -429,6 +442,7 @@ end
 // path as a fresh literal and prepends the prefix again
 // ("/api/v1/api/v1/users").
 func TestComposeRoutePathsIdempotent(t *testing.T) {
+	t.Parallel()
 	src := `Rails.application.routes.draw do
   namespace :api do
     namespace :v1 do
@@ -481,6 +495,7 @@ func typedNodes(nodes []graph.Node, typ graph.NodeType) []*graph.Node {
 // and it has nothing to do with HTTP. HH.1's gate did not cover it, because
 // namespace_route's query matches a call regardless of receiver.
 func TestRakeNamespaceIsNotARoute(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyAt(t, "lib/tasks/db_hardening.rake", `namespace :db do
   namespace :hardening do
     task :backfill => :environment do
@@ -499,6 +514,7 @@ end
 // `resources :users` declaration itself is a group, while the seven routes it
 // implicitly declares are real, callable endpoints and stay http_handler.
 func TestResourcesRouteIsRouteGroupNotHandler(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   resources :users
 end
@@ -527,6 +543,7 @@ end
 // must change their Type and nothing else: `namespace :api` / `namespace :v1`
 // / `resources :users` still has to compose to /api/v1/users.
 func TestRouteGroupStillComposesPrefix(t *testing.T) {
+	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
   namespace :api do
     namespace :v1 do

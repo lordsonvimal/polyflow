@@ -30,6 +30,7 @@ func jsNodeI2(nodes []graph.Node, typ graph.NodeType, label string) *graph.Node 
 // TestJSI2_SameFileInherits: class Admin extends User in the same file
 // produces a static inherits edge.
 func TestJSI2_SameFileInherits(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class User {
   greet() {}
@@ -63,6 +64,7 @@ class Admin extends User {
 // TestJSI2_UnresolvedExpressionSuperclass: class X extends mixin(Base) goes
 // to the inherits_unresolved ledger, never emitted as an edge.
 func TestJSI2_UnresolvedExpressionSuperclass(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class X extends mixin(Base) {}
 `)
@@ -89,6 +91,7 @@ class X extends mixin(Base) {}
 // TestJSI2_TSImplements: a TS class with an implements clause produces an
 // implements edge with nominal=true.
 func TestJSI2_TSImplements(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 interface Greeter {
   greet(): void;
@@ -118,6 +121,7 @@ class English implements Greeter {
 // TestJSI2_InterfaceExtendsNoCallsEdge: interface_extends must NOT produce a
 // calls edge between interfaces (regression guard for the old wrong mapping).
 func TestJSI2_InterfaceExtendsNoCallsEdge(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 interface Base {
   id(): string;
@@ -154,6 +158,7 @@ interface Extended extends Base {
 
 // TestJSI2_InterfaceMethodsMeta: interface nodes carry a methods meta field.
 func TestJSI2_InterfaceMethodsMeta(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 interface Shape {
   area(): number;
@@ -177,6 +182,7 @@ interface Shape {
 // TestJSI2_SameFileInstantiates: new Foo() inside a function produces a
 // static instantiates edge from the enclosing function to the class.
 func TestJSI2_SameFileInstantiates(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class Store {}
 function createStore() {
@@ -204,6 +210,7 @@ function createStore() {
 // TestJSI2_UnresolvableConstructorSilent: new UnknownExternal() produces
 // no edge and no ledger entry (cross-file; linker handles it, not a blind spot).
 func TestJSI2_UnresolvableConstructorSilent(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 function makeService() {
   return new ExternalService();
@@ -227,6 +234,7 @@ function makeService() {
 // not in the same file produces an inherits_unresolved ref in the extractor
 // (the linker resolves it later if User was imported).
 func TestJSI2_CrossFileInheritsUnresolved(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class Admin extends User {
   ban() {}

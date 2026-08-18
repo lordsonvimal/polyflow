@@ -116,6 +116,7 @@ func loadTableSSA(t *testing.T, dir string) (map[string]*ssa.Function, map[*ssa.
 }
 
 func TestResolveStructTable_ScalarAndSliceFields(t *testing.T) {
+	t.Parallel()
 	byName, _ := loadTableSSA(t, tableModule(t))
 
 	tbl, ok := resolveStructTable(byName["Queues"])
@@ -161,6 +162,7 @@ func TestResolveStructTable_ScalarAndSliceFields(t *testing.T) {
 }
 
 func TestResolveStructTable_RejectsComputedField(t *testing.T) {
+	t.Parallel()
 	byName, _ := loadTableSSA(t, tableModule(t))
 
 	tbl, ok := resolveStructTable(byName["computedQueues"])
@@ -170,6 +172,7 @@ func TestResolveStructTable_RejectsComputedField(t *testing.T) {
 }
 
 func TestResolveStructTable_RejectsNonLiteralReturn(t *testing.T) {
+	t.Parallel()
 	byName, _ := loadTableSSA(t, tableModule(t))
 
 	if tbl, ok := resolveStructTable(byName["indirectQueues"]); ok {
@@ -178,6 +181,7 @@ func TestResolveStructTable_RejectsNonLiteralReturn(t *testing.T) {
 }
 
 func TestTableFieldOf_RangeOverTableCall(t *testing.T) {
+	t.Parallel()
 	byName, inService := loadTableSSA(t, tableModule(t))
 
 	fn := byName["rangeTable"]

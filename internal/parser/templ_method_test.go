@@ -13,6 +13,7 @@ import (
 // Form actions carry their submit verb; data-method spoofs one on anchors;
 // plain anchors (including those outside the form) stay GET.
 func TestTemplParser_NavLinkMethods(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)

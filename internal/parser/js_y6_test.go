@@ -33,6 +33,7 @@ function Detail() {
 // TestJSY6_ResourceMeta verifies the createResource accessor node is stamped
 // reactive=resource and carries the loader fn name for the linker join.
 func TestJSY6_ResourceMeta(t *testing.T) {
+	t.Parallel()
 	nodes, _, _, _ := extractJSVariables("Detail.tsx", "web", "typescript", "tsx", []byte(y6Source))
 
 	var acc *graph.Node
@@ -55,6 +56,7 @@ func TestJSY6_ResourceMeta(t *testing.T) {
 // TestJSY6_DomWrite verifies JSX interpolations reading a signal accessor emit
 // signal→element dom_write edges to a minted element node.
 func TestJSY6_DomWrite(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _, _ := extractJSVariables("Detail.tsx", "web", "typescript", "tsx", []byte(y6Source))
 
 	// d() → <span> dom_write

@@ -13,6 +13,7 @@ import (
 // attribute records its full value verbatim — both under dom_data_attrs so
 // LinkDOMContracts can resolve the templ->JS dom_contract seam.
 func TestTemplParser_DOMDataAttrs(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/dom_attrs.templ", "app", nil)
 	if err != nil {

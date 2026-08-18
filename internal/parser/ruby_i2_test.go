@@ -28,6 +28,7 @@ func rbEdge(edges []graph.Edge, typ graph.EdgeType, fromSub, toSub string) *grap
 // TestRubyI2_SameFileSuperclass: class Admin < User in the same file produces
 // an inferred inherits edge with via=superclass.
 func TestRubyI2_SameFileSuperclass(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class User
   def greet; end
@@ -57,6 +58,7 @@ end
 // TestRubyI2_Mixins: include/extend/prepend in a class body produce inherits
 // edges with via=mixin and mixin=include|extend|prepend.
 func TestRubyI2_Mixins(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 module Serializable; end
 module ClassMethods; end
@@ -101,6 +103,7 @@ end
 
 // TestRubyI2_Instantiates: Foo.new inside a method produces an instantiates edge.
 func TestRubyI2_Instantiates(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class Widget
   def render; end
@@ -129,6 +132,7 @@ end
 // TestRubyI2_AmbiguousConstant: if a constant name appears in an include but
 // is not in the same file, it produces an inherits_unresolved ledger entry.
 func TestRubyI2_UnknownMixinLedger(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class MyClass
   include SomeExternalModule
@@ -155,6 +159,7 @@ end
 // TestRubyI2_NegativeClassLevelMixinOnlyInClassBody: include inside a method
 // body does NOT produce an inherits edge (it's a runtime call, not a class-level mixin).
 func TestRubyI2_NegativeMixinInsideMethod(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 module Mod; end
 

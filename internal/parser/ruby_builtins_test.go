@@ -7,6 +7,7 @@ import (
 )
 
 func TestIsRubyBuiltinCall(t *testing.T) {
+	t.Parallel()
 	const app = "/repo/app/services/thing.rb"
 	const migration = "/repo/db/migrate/20240101_add_users.rb"
 
@@ -43,6 +44,7 @@ func TestIsRubyBuiltinCall(t *testing.T) {
 }
 
 func TestIsRailsMigrationFile(t *testing.T) {
+	t.Parallel()
 	assert.True(t, isRailsMigrationFile("/repo/db/migrate/20240101_x.rb"))
 	assert.True(t, isRailsMigrationFile(`C:\repo\db\migrate\20240101_x.rb`))
 	assert.False(t, isRailsMigrationFile("/repo/app/models/migrate_helper.rb"))

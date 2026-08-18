@@ -10,6 +10,7 @@ import (
 // The templ parser stashes <script src> assets and element id= definitions on
 // the enclosing component's meta for the cross-file linker passes to resolve.
 func TestTemplParser_ScriptsAndIDs(t *testing.T) {
+	t.Parallel()
 	p := &TemplParser{}
 	nodes, _, _, err := p.Parse("testdata/scripts.templ", "app", nil)
 	if err != nil {

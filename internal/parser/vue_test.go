@@ -75,6 +75,7 @@ export default {
 
 // TestVueParser_Registered verifies that .vue is registered.
 func TestVueParser_Registered(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("component.vue")
 	require.NotNil(t, p, "no parser registered for .vue")
 	assert.Equal(t, "vue", p.Language())
@@ -82,12 +83,14 @@ func TestVueParser_Registered(t *testing.T) {
 
 // TestVueParser_ExtensionsRegistered verifies ForFile returns VueParser for .vue.
 func TestVueParser_ExtensionsRegistered(t *testing.T) {
+	t.Parallel()
 	assert.NotNil(t, parser.ForFile("src/views/Home.vue"))
 }
 
 // TestVueParser_BasicFixture_EventsAndNavLinks verifies real-parse extraction
 // of @click, v-on:click, @submit.prevent, router-link, NuxtLink (rule 6: real fixture).
 func TestVueParser_BasicFixture_EventsAndNavLinks(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
@@ -135,6 +138,7 @@ func TestVueParser_BasicFixture_EventsAndNavLinks(t *testing.T) {
 // TestVueParser_FanOut_TwoClickHandlers verifies rule 1 (fan-out): ≥2 entities
 // sharing the "click" event key each produce an independent node.
 func TestVueParser_FanOut_TwoClickHandlers(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
@@ -154,6 +158,7 @@ func TestVueParser_FanOut_TwoClickHandlers(t *testing.T) {
 // TestVueParser_ScriptFunctions verifies that script-block functions are extracted
 // (rule 6: real fixture + real parse path).
 func TestVueParser_ScriptFunctions(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
@@ -173,6 +178,7 @@ func TestVueParser_ScriptFunctions(t *testing.T) {
 
 // TestVueParser_TSLang verifies that <script lang="ts"> runs TypeScript patterns.
 func TestVueParser_TSLang(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(vueFixtureTS)
 	require.NotNil(t, p)
@@ -198,6 +204,7 @@ func TestVueParser_TSLang(t *testing.T) {
 // TestVueParser_LineOffset verifies that a node in the script block reports
 // its line relative to the original .vue file (not a virtual buffer).
 func TestVueParser_LineOffset(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
@@ -216,6 +223,7 @@ func TestVueParser_LineOffset(t *testing.T) {
 
 // TestVueParser_Determinism verifies two-run byte-identical output (rule 2).
 func TestVueParser_Determinism(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(vueFixtureBasic)
 	require.NotNil(t, p)
@@ -244,6 +252,7 @@ func TestVueParser_Determinism(t *testing.T) {
 // TestVueParser_NegativeNoEventBindings verifies that a .vue with only static
 // content produces no dom_target or unresolved call_ref entries.
 func TestVueParser_NegativeNoEventBindings(t *testing.T) {
+	t.Parallel()
 	src := `<template>
   <div><p>Hello world</p></div>
 </template>
@@ -277,6 +286,7 @@ export default { name: 'Static' }
 // attributes (inside <!-- --> in template) do not produce event nodes.
 // This tests the blanking rule (bug-class rule 11) for Vue templates.
 func TestVueParser_NegativeTemplateStringNotSFCBlock(t *testing.T) {
+	t.Parallel()
 	src := `<template>
   <div/>
 </template>
@@ -301,6 +311,7 @@ export default {}
 // TestVueParser_DynamicToLedgered verifies that :to="expr" (bound router-link)
 // is ledgered as dynamic_url rather than silently dropped.
 func TestVueParser_DynamicToLedgered(t *testing.T) {
+	t.Parallel()
 	src := `<template>
   <router-link :to="computedPath">Dynamic</router-link>
 </template>
@@ -331,6 +342,7 @@ export default {}
 // TestVueParser_DropFromUnparsedOnceRegistered verifies that .vue no longer
 // appears as an unparsed extension now that VueParser is registered.
 func TestVueParser_NotUnparsed(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("App.vue")
 	assert.NotNil(t, p, ".vue must now have a registered parser (dropped from B.0 unparsed set)")
 }

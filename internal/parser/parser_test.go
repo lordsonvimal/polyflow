@@ -24,6 +24,7 @@ func mustMatcher(t *testing.T) *patterns.TreeSitterMatcher {
 // --- GoParser ---
 
 func TestGoParser_ReturnsNodesForKnownPatterns(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/routes.go")
 	require.NotNil(t, p, "expected a parser for .go files")
@@ -38,6 +39,7 @@ func TestGoParser_ReturnsNodesForKnownPatterns(t *testing.T) {
 }
 
 func TestGoParser_ContainsHTTPHandlerNode(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/routes.go")
 	require.NotNil(t, p)
@@ -56,6 +58,7 @@ func TestGoParser_ContainsHTTPHandlerNode(t *testing.T) {
 }
 
 func TestGoParser_FileNotFound(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/nonexistent.go")
 	require.NotNil(t, p)
@@ -67,6 +70,7 @@ func TestGoParser_FileNotFound(t *testing.T) {
 // --- JavaScriptParser ---
 
 func TestJavaScriptParser_ReturnsNodesForAxios(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/client.js")
 	require.NotNil(t, p, "expected a parser for .js files")
@@ -80,6 +84,7 @@ func TestJavaScriptParser_ReturnsNodesForAxios(t *testing.T) {
 }
 
 func TestJavaScriptParser_ContainsHTTPClientNodes(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/client.js")
 	require.NotNil(t, p)
@@ -98,6 +103,7 @@ func TestJavaScriptParser_ContainsHTTPClientNodes(t *testing.T) {
 }
 
 func TestTypeScriptExtension(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("testdata/client.ts")
 	require.NotNil(t, p, "expected a parser for .ts files")
 	assert.Equal(t, "javascript", p.Language())
@@ -106,6 +112,7 @@ func TestTypeScriptExtension(t *testing.T) {
 // --- RubyParser ---
 
 func TestRubyParser_ReturnsNodesOrEmpty(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/app.rb")
 	require.NotNil(t, p, "expected a parser for .rb files")
@@ -122,6 +129,7 @@ func TestRubyParser_ReturnsNodesOrEmpty(t *testing.T) {
 // --- TemplParser ---
 
 func TestTemplParser_DetectsComponents(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p, "expected a parser for .templ files")
@@ -143,6 +151,7 @@ func TestTemplParser_DetectsComponents(t *testing.T) {
 // TestTemplParser_NoFalsePositiveForGoFunc asserts that a regular exported Go
 // function inside a .templ file is NOT classified as a component node.
 func TestTemplParser_NoFalsePositiveForGoFunc(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -159,6 +168,7 @@ func TestTemplParser_NoFalsePositiveForGoFunc(t *testing.T) {
 }
 
 func TestTemplParser_DetectsDatastarActions(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -177,6 +187,7 @@ func TestTemplParser_DetectsDatastarActions(t *testing.T) {
 }
 
 func TestTemplParser_DetectsHrefLinks(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -196,6 +207,7 @@ func TestTemplParser_DetectsHrefLinks(t *testing.T) {
 
 // TestTemplParser_DetectsRootPath asserts that href="/" is captured.
 func TestTemplParser_DetectsRootPath(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -216,6 +228,7 @@ func TestTemplParser_DetectsRootPath(t *testing.T) {
 // TestTemplParser_MultiAttributeLine asserts that a line with both data-on-*
 // and href emits nodes for BOTH patterns (no silent drop via continue).
 func TestTemplParser_MultiAttributeLine(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -239,6 +252,7 @@ func TestTemplParser_MultiAttributeLine(t *testing.T) {
 }
 
 func TestTemplParser_Language(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -253,6 +267,7 @@ func TestTemplParser_Language(t *testing.T) {
 // --- WorkerPool ---
 
 func TestWorkerPool_RunMultipleFiles(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	pool := parser.NewWorkerPool(2, m, service)
 
@@ -275,6 +290,7 @@ func TestWorkerPool_RunMultipleFiles(t *testing.T) {
 }
 
 func TestWorkerPool_UnknownExtensionReturnsError(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	pool := parser.NewWorkerPool(1, m, service)
 
@@ -284,6 +300,7 @@ func TestWorkerPool_UnknownExtensionReturnsError(t *testing.T) {
 }
 
 func TestWorkerPool_NoParserReturnsError(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	pool := parser.NewWorkerPool(1, m, service)
 
@@ -295,6 +312,7 @@ func TestWorkerPool_NoParserReturnsError(t *testing.T) {
 // --- ForFile ---
 
 func TestWorkerPool_ZeroFiles(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	pool := parser.NewWorkerPool(2, m, service)
 	results := collect(pool.Run(nil))
@@ -302,6 +320,7 @@ func TestWorkerPool_ZeroFiles(t *testing.T) {
 }
 
 func TestWorkerPool_ZeroWorkers(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	// workers <= 0 should default to 4 without panic
 	pool := parser.NewWorkerPool(0, m, service)
@@ -310,6 +329,7 @@ func TestWorkerPool_ZeroWorkers(t *testing.T) {
 }
 
 func TestLanguage_Methods(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "go", parser.ForFile("x.go").Language())
 	assert.Equal(t, "javascript", parser.ForFile("x.js").Language())
 	assert.Equal(t, "ruby", parser.ForFile("x.rb").Language())
@@ -318,11 +338,13 @@ func TestLanguage_Methods(t *testing.T) {
 }
 
 func TestForFile_ReturnsNilForUnknownExtension(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, parser.ForFile("config.json"))
 	assert.Nil(t, parser.ForFile("main.sql"))
 }
 
 func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
+	t.Parallel()
 	assert.NotNil(t, parser.ForFile("main.go"))
 	assert.NotNil(t, parser.ForFile("app.js"))
 	assert.NotNil(t, parser.ForFile("app.ts"))
@@ -333,12 +355,14 @@ func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
 }
 
 func TestRubyParser_RakeExtension(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("testdata/app.rb")
 	require.NotNil(t, p)
 	assert.Equal(t, []string{".rb", ".rake"}, p.Extensions())
 }
 
 func TestJavaScriptParser_TSX(t *testing.T) {
+	t.Parallel()
 	// .tsx uses the javascript parser (TypeScript JSX)
 	p := parser.ForFile("component.tsx")
 	require.NotNil(t, p)
@@ -346,6 +370,7 @@ func TestJavaScriptParser_TSX(t *testing.T) {
 }
 
 func TestJavaScriptParser_TSX_JSXComponents(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/app.tsx")
 	require.NotNil(t, p)
@@ -373,6 +398,7 @@ func TestJavaScriptParser_TSX_JSXComponents(t *testing.T) {
 }
 
 func TestJavaScriptParser_TSX_ImperativeCalls(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/notification.tsx")
 	require.NotNil(t, p)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestParameterizeQueueName(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"vega progress events":  "vega_progress_events",
 		"vega_progress_events":  "vega_progress_events",
@@ -24,6 +25,7 @@ func TestParameterizeQueueName(t *testing.T) {
 }
 
 func TestRubyQueueMethodRef(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"resolved_queue_name":                             "resolved_queue_name",
 		"QUEUE_NAMES.vega_progress_events_queue(org)":      "vega_progress_events_queue",
@@ -41,6 +43,7 @@ func TestRubyQueueMethodRef(t *testing.T) {
 // consumer whose queue name resolves to the literal in the same-file ternary
 // fallback via QueueNames.
 func TestResolveRubyQueueKeys_WorkerFallback(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 class VegaProgressEventWorker < BaseWorker
   include Sneakers::Worker
@@ -80,6 +83,7 @@ end
 // The queue_name(org, "human name") builder maps its enclosing method to the
 // parameterized literal even though the method name itself contains it.
 func TestResolveRubyQueueKeys_BuilderCall(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 module QueueNames
   def vega_progress_events_queue(organization)
@@ -105,6 +109,7 @@ end
 // A genuinely runtime-only reference (config lookup, no literal anywhere in the
 // file) must stay key_dynamic — never guessed.
 func TestResolveRubyQueueKeys_RuntimeOnly_StaysDynamic(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 module Messaging
   class Publisher

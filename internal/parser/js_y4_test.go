@@ -12,6 +12,7 @@ import (
 // same-file interface, an array decode records container=slice, and an untyped
 // decode emits nothing (ledgered, #12).
 func TestJSY4_Consumes(t *testing.T) {
+	t.Parallel()
 	src := []byte(`interface NodeDetail { node: string; edges: string[] }
 
 async function load() {

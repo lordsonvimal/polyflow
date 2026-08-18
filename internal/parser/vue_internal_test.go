@@ -8,6 +8,7 @@ import (
 // TestSplitSFC_PreservesLineNumbers verifies that byte offsets are preserved
 // after splitting: newline count must be identical to the original source.
 func TestSplitSFC_PreservesLineNumbers(t *testing.T) {
+	t.Parallel()
 	src := []byte("<template>\n  <div>{{ msg }}</div>\n</template>\n\n<script>\nexport default { name: 'A' }\n</script>\n")
 	blocks := splitSFC(src)
 
@@ -26,6 +27,7 @@ func TestSplitSFC_PreservesLineNumbers(t *testing.T) {
 // TestSplitSFC_ScriptContentPreserved verifies that the script body appears
 // in virtualScript and is blanked in blankedScript.
 func TestSplitSFC_ScriptContentPreserved(t *testing.T) {
+	t.Parallel()
 	src := []byte("<template>\n  <div>hi</div>\n</template>\n<script>\nconst x = 1\n</script>\n")
 	blocks := splitSFC(src)
 
@@ -43,6 +45,7 @@ func TestSplitSFC_ScriptContentPreserved(t *testing.T) {
 // TestSplitSFC_TemplateContentPreserved verifies that the template body
 // appears in blankedScript and is blanked in virtualScript.
 func TestSplitSFC_TemplateContentPreserved(t *testing.T) {
+	t.Parallel()
 	src := []byte("<template>\n  <div class=\"card\">hi</div>\n</template>\n<script>\nconst x = 1\n</script>\n")
 	blocks := splitSFC(src)
 
@@ -59,6 +62,7 @@ func TestSplitSFC_TemplateContentPreserved(t *testing.T) {
 
 // TestSplitSFC_ScriptLangDetected verifies that lang="ts" is detected.
 func TestSplitSFC_ScriptLangDetected(t *testing.T) {
+	t.Parallel()
 	src := []byte("<template><div/></template>\n<script lang=\"ts\">\nconst x: number = 1\n</script>\n")
 	blocks := splitSFC(src)
 	_, lang := buildVirtualScript(src, blocks)
@@ -69,6 +73,7 @@ func TestSplitSFC_ScriptLangDetected(t *testing.T) {
 
 // TestSplitSFC_SetupScript verifies that <script setup> is recognised.
 func TestSplitSFC_SetupScript(t *testing.T) {
+	t.Parallel()
 	src := []byte("<template><div/></template>\n<script setup>\nconst emit = defineEmits()\n</script>\n")
 	blocks := splitSFC(src)
 	if len(blocks) < 2 {
@@ -88,6 +93,7 @@ func TestSplitSFC_SetupScript(t *testing.T) {
 // TestSplitSFC_TemplateInsideScriptString verifies that a <template> inside a
 // script string literal does NOT create a new SFC block (rule: column 0 only).
 func TestSplitSFC_TemplateInsideScriptString(t *testing.T) {
+	t.Parallel()
 	src := []byte("<template>\n  <div/>\n</template>\n<script>\nconst s = \"Use <template> in docs\"\n</script>\n")
 	blocks := splitSFC(src)
 
@@ -105,6 +111,7 @@ func TestSplitSFC_TemplateInsideScriptString(t *testing.T) {
 
 // TestNormalizeVueEvent verifies Vue event normalisation.
 func TestNormalizeVueEvent(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{"click", "click"},
 		{"submit.prevent", "submit"},
@@ -121,6 +128,7 @@ func TestNormalizeVueEvent(t *testing.T) {
 
 // TestStripCallArgs verifies handler expression stripping.
 func TestStripCallArgs(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{"save", "save"},
 		{"save(x)", "save"},

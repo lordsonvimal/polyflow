@@ -37,6 +37,7 @@ func parseERBElements(t *testing.T, src string) map[string]graph.Node {
 // An attribute value that is nothing but an ERB tag blanks away entirely, so
 // the node it would mint names nothing at all.
 func TestHTMLElementGate_InterpolatedOnlyValueIsNotAnElement(t *testing.T) {
+	t.Parallel()
 	els := parseERBElements(t, `
 <div class="<%= status_class %>"></div>
 <div id="<%= dom_id(task) %>"></div>
@@ -49,6 +50,7 @@ func TestHTMLElementGate_InterpolatedOnlyValueIsNotAnElement(t *testing.T) {
 // produce a node labelled "." because the label took the text before the first
 // space.
 func TestHTMLElementGate_LiteralClassesSurviveInterpolation(t *testing.T) {
+	t.Parallel()
 	els := parseERBElements(t, `
 <div class="<%= tone %> cell"></div>
 <div class="row <%= tone %>"></div>
@@ -63,6 +65,7 @@ func TestHTMLElementGate_LiteralClassesSurviveInterpolation(t *testing.T) {
 // `task-` plus spaces, and `task-` is not that element's id — emitting it would
 // let a `#task-` selector resolve to an element that never carries that id.
 func TestHTMLElementGate_TruncatedIDIsNotEmitted(t *testing.T) {
+	t.Parallel()
 	els := parseERBElements(t, `
 <div id="task-<%= task.id %>"></div>
 <div id="save-btn"></div>
@@ -75,6 +78,7 @@ func TestHTMLElementGate_TruncatedIDIsNotEmitted(t *testing.T) {
 // normalizes whitespace, so a plain `class="btn primary"` passes through with
 // both classes intact for LinkDOMDefinitions to fan out over.
 func TestHTMLElementGate_StaticMarkupIsUnchanged(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	file := filepath.Join(t.TempDir(), "page.html")
 	require.NoError(t, os.WriteFile(file, []byte(`<div class="btn primary" ></div><p id="intro"></p>`), 0o644))

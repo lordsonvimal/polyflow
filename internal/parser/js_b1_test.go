@@ -14,6 +14,7 @@ import (
 // an argument to any call expression produces a calls edge with via=func_arg
 // and confidence static (same-file resolution).
 func TestJSB1_SameFileFuncArg(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 function save() {}
 function setup() {}
@@ -45,6 +46,7 @@ function init() {
 // TestJSB1_SameFileFuncArgFanOut verifies that multiple function args to one
 // call each get an edge (fan-out, not first-match — bug-class rule 1).
 func TestJSB1_SameFileFuncArgFanOut(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 function alpha() {}
 function beta() {}
@@ -72,6 +74,7 @@ function run() {
 // TestJSB1_SameFileDeterminism runs the JS parser twice and asserts byte-identical
 // func_arg edges (bug-class rule 2).
 func TestJSB1_SameFileDeterminism(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 function alpha() {}
 function beta() {}
@@ -102,6 +105,7 @@ function someReg(a, b) {}
 // TestJSB1_NonFunctionArgNoEdge verifies that a string literal or variable that
 // happens to share a function's name does NOT produce a func_arg edge.
 func TestJSB1_NonFunctionArgNoEdge(t *testing.T) {
+	t.Parallel()
 	src := []byte(`
 function handler() {}
 var handler2 = 42;
@@ -125,6 +129,7 @@ function run() {
 // and call-expression func-arg refs don't both fire for the same reference
 // (no double edges — spec clause 4). Uses a TSX fixture.
 func TestJSB1_JSXNoDuplicateEdge(t *testing.T) {
+	t.Parallel()
 	// JSX onclick prop: handled by jsxEventPropQuery in the linker, not here.
 	// In the same-file extractor, JSX attributes are not call_expressions, so
 	// no func_arg edge is emitted. This test confirms zero func_arg edges for
@@ -149,6 +154,7 @@ function Form() {
 // a call expression, where the function is imported from another file, produces
 // a calls edge with via=func_arg and confidence inferred (cross-file).
 func TestJSB1_CrossFileFuncArg(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// lib.js exports a save function
@@ -205,6 +211,7 @@ function init() {
 // TestJSB1_CrossFileDeterminism runs the linker twice on the same two-file
 // fixture and asserts byte-identical func_arg edge IDs (bug-class rule 2).
 func TestJSB1_CrossFileDeterminism(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	libSrc := `export function alpha() {}`
 	mainSrc := `import { alpha } from "./lib.js";

@@ -32,6 +32,7 @@ function Toolbar() {
 // handler emits element→function dom_listen, that the element node is minted
 // (no dangling endpoint, #10), and that unresolved handlers are ledgered (#12).
 func TestJSY7_JSXEvent(t *testing.T) {
+	t.Parallel()
 	nodes, edges, unresolved, _ := extractJSVariables("Toolbar.tsx", "web", "typescript", "tsx", []byte(y7JSXSource))
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:onRefresh:")
@@ -106,6 +107,7 @@ function Form() {
 // each same-file function it invokes (via:jsx, handler:inline, inferred), while
 // member/store calls and no-op arrows are ledgered (#12).
 func TestJSY7_InlineHandler(t *testing.T) {
+	t.Parallel()
 	_, edges, unresolved, _ := extractJSVariables("Form.tsx", "web", "typescript", "tsx", []byte(y7InlineSource))
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:save:")
@@ -155,6 +157,7 @@ const styles: Ref[] = [];
 // TestJSY7_TypeUses verifies same-file type references emit uses_type edges so a
 // declared-but-never-instantiated TS type is not left dangling.
 func TestJSY7_TypeUses(t *testing.T) {
+	t.Parallel()
 	_, edges, _, _ := extractJSVariables("types.ts", "web", "typescript", "typescript", []byte(y7TypeUseSource))
 
 	// Detail interface references Ref in a member type.
@@ -185,6 +188,7 @@ function wire(evt) {
 // element→function dom_listen for a resolvable handler, and ledgers/skips the
 // dynamic-event-name and inline-handler cases (#12).
 func TestJSY7_AddEventListener(t *testing.T) {
+	t.Parallel()
 	_, edges, _, _ := extractJSVariables("wire.ts", "web", "typescript", "typescript", []byte(y7ListenerSource))
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:document:", ":function:onScroll:")

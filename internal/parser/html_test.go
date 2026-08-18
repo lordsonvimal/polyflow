@@ -13,6 +13,7 @@ import (
 )
 
 func TestHTMLParser_NavLinksAndEvents(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "index.html")
 	src := `<html>
@@ -60,6 +61,7 @@ func TestHTMLParser_NavLinksAndEvents(t *testing.T) {
 // Without the document node the listener would be an orphan and the
 // document→handler chain would have no entry point.
 func TestHTML_InlineEventAttr_EmitsDomTarget(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "index.html")
 	src := `<html><body>
@@ -102,6 +104,7 @@ func TestHTML_InlineEventAttr_EmitsDomTarget(t *testing.T) {
 }
 
 func TestTemplParser_NativeEventAttr(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
@@ -134,6 +137,7 @@ func TestTemplParser_NativeEventAttr(t *testing.T) {
 // graph — three of orion's four html nav nodes were CDN stylesheet links
 // matched by an over-broad `^/`. The bare root link stays: it is a real target.
 func TestHTMLParser_ProtocolRelativeIsNotNavigation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "head.html")
 	src := `<html>

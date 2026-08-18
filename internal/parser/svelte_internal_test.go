@@ -8,6 +8,7 @@ import (
 // TestSplitSvelteSFC_PreservesLineNumbers verifies byte offset preservation:
 // newline count must be identical to the original source.
 func TestSplitSvelteSFC_PreservesLineNumbers(t *testing.T) {
+	t.Parallel()
 	src := []byte("<script>\nconst x = 1\n</script>\n\n<div>\n  <p>Hello</p>\n</div>\n")
 	blocks := splitSvelteSFC(src)
 
@@ -26,6 +27,7 @@ func TestSplitSvelteSFC_PreservesLineNumbers(t *testing.T) {
 // TestSplitSvelteSFC_ScriptContentPreserved verifies that the script body appears
 // in virtualScript and is blanked in blankedScript.
 func TestSplitSvelteSFC_ScriptContentPreserved(t *testing.T) {
+	t.Parallel()
 	src := []byte("<script>\nconst x = 1\n</script>\n<div>hi</div>\n")
 	blocks := splitSvelteSFC(src)
 
@@ -43,6 +45,7 @@ func TestSplitSvelteSFC_ScriptContentPreserved(t *testing.T) {
 // TestSplitSvelteSFC_MarkupContentPreserved verifies that markup content appears
 // in blankedScript and is blanked in virtualScript.
 func TestSplitSvelteSFC_MarkupContentPreserved(t *testing.T) {
+	t.Parallel()
 	src := []byte("<script>\nconst x = 1\n</script>\n<div class=\"card\">hi</div>\n")
 	blocks := splitSvelteSFC(src)
 
@@ -59,6 +62,7 @@ func TestSplitSvelteSFC_MarkupContentPreserved(t *testing.T) {
 
 // TestSplitSvelteSFC_ScriptLangDetected verifies that lang="ts" is detected.
 func TestSplitSvelteSFC_ScriptLangDetected(t *testing.T) {
+	t.Parallel()
 	src := []byte("<script lang=\"ts\">\nconst x: number = 1\n</script>\n<div/>\n")
 	blocks := splitSvelteSFC(src)
 	_, lang := buildSvelteVirtualScript(src, blocks)
@@ -70,6 +74,7 @@ func TestSplitSvelteSFC_ScriptLangDetected(t *testing.T) {
 // TestSplitSvelteSFC_ContextModule verifies that <script context="module"> is
 // recognised as a script block.
 func TestSplitSvelteSFC_ContextModule(t *testing.T) {
+	t.Parallel()
 	src := []byte("<script context=\"module\">\nexport const prerender = true\n</script>\n<script>\nconst x = 1\n</script>\n<div/>\n")
 	blocks := splitSvelteSFC(src)
 
@@ -96,6 +101,7 @@ func TestSplitSvelteSFC_ContextModule(t *testing.T) {
 // TestSplitSvelteSFC_StyleBlankedInVirtualScript verifies that <style> blocks are
 // blanked in virtualScript.
 func TestSplitSvelteSFC_StyleBlankedInVirtualScript(t *testing.T) {
+	t.Parallel()
 	src := []byte("<script>\nconst x = 1\n</script>\n<div/>\n<style>\n.foo { color: red; }\n</style>\n")
 	blocks := splitSvelteSFC(src)
 	virtualScript, _ := buildSvelteVirtualScript(src, blocks)
@@ -107,6 +113,7 @@ func TestSplitSvelteSFC_StyleBlankedInVirtualScript(t *testing.T) {
 
 // TestNormalizeSvelteEvent verifies Svelte event modifier stripping.
 func TestNormalizeSvelteEvent(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{"click", "click"},
 		{"click|preventDefault", "click"},

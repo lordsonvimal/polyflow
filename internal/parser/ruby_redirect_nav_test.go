@@ -45,6 +45,7 @@ func parseRubyController(t *testing.T, src string) map[string]graph.Node {
 // receiverless call in the same call expression, but inside a `pair`, so a
 // direct-child match on argument_list cannot mistake it for the destination.
 func TestRedirectNav_HelperShapes(t *testing.T) {
+	t.Parallel()
 	got := parseRubyController(t, `
 class ThingsController < ApplicationController
   def create
@@ -80,6 +81,7 @@ end
 
 // TestRedirectNav_Literal. `redirect_to "/login"` needs no route table.
 func TestRedirectNav_Literal(t *testing.T) {
+	t.Parallel()
 	got := parseRubyController(t, `
 class SessionsController < ApplicationController
   def new
@@ -101,6 +103,7 @@ end
 // these must produce no nav producer rather than a phantom http_client naming a
 // local variable — the same artifact the C.2 helper gate removed for link_to.
 func TestRedirectNav_UnresolvableTargetsAreNotDestinations(t *testing.T) {
+	t.Parallel()
 	got := parseRubyController(t, `
 class ThingsController < ApplicationController
   def a
@@ -135,6 +138,7 @@ end
 // fleet, but the suffix cannot prove that, and an unresolved entry is an honest
 // gap while a dropped one is a lie about coverage. Same call as C.2's.
 func TestRedirectNav_RouteShapedButUnknownIsKept(t *testing.T) {
+	t.Parallel()
 	got := parseRubyController(t, `
 class ThingsController < ApplicationController
   def show

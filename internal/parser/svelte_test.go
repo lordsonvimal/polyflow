@@ -64,6 +64,7 @@ function increment(): void { count++ }
 
 // TestSvelteParser_Registered verifies that .svelte is registered.
 func TestSvelteParser_Registered(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("component.svelte")
 	require.NotNil(t, p, "no parser registered for .svelte")
 	assert.Equal(t, "svelte", p.Language())
@@ -71,6 +72,7 @@ func TestSvelteParser_Registered(t *testing.T) {
 
 // TestSvelteParser_ExtensionsRegistered verifies ForFile returns SvelteParser for .svelte.
 func TestSvelteParser_ExtensionsRegistered(t *testing.T) {
+	t.Parallel()
 	assert.NotNil(t, parser.ForFile("src/routes/+page.svelte"))
 }
 
@@ -78,6 +80,7 @@ func TestSvelteParser_ExtensionsRegistered(t *testing.T) {
 // of on:click, on:submit|preventDefault, static nav links, and ternary href
 // (rule 6: real fixture through real parse path).
 func TestSvelteParser_BasicFixture_EventsAndNavLinks(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -128,6 +131,7 @@ func TestSvelteParser_BasicFixture_EventsAndNavLinks(t *testing.T) {
 // TestSvelteParser_FanOut_TwoClickHandlers verifies rule 1 (fan-out): ≥2 entities
 // sharing the "click" event key each produce an independent dom_target node.
 func TestSvelteParser_FanOut_TwoClickHandlers(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -148,6 +152,7 @@ func TestSvelteParser_FanOut_TwoClickHandlers(t *testing.T) {
 // TestSvelteParser_ScriptFunctions verifies that script-block functions are
 // extracted (rule 6: real fixture + real parse path).
 func TestSvelteParser_ScriptFunctions(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -167,6 +172,7 @@ func TestSvelteParser_ScriptFunctions(t *testing.T) {
 
 // TestSvelteParser_TSLang verifies that <script lang="ts"> runs TypeScript patterns.
 func TestSvelteParser_TSLang(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureTS)
 	require.NotNil(t, p)
@@ -192,6 +198,7 @@ func TestSvelteParser_TSLang(t *testing.T) {
 // TestSvelteParser_LineOffset verifies that a node in the script block reports
 // its line relative to the original .svelte file (not a virtual buffer).
 func TestSvelteParser_LineOffset(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -213,6 +220,7 @@ func TestSvelteParser_LineOffset(t *testing.T) {
 
 // TestSvelteParser_Determinism verifies two-run byte-identical output (rule 2).
 func TestSvelteParser_Determinism(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -241,6 +249,7 @@ func TestSvelteParser_Determinism(t *testing.T) {
 // TestSvelteParser_TernaryHrefCandidates verifies that href={cond ? "/a" : "/b"}
 // emits key_candidates meta on an http_client node (G.6 walker convention).
 func TestSvelteParser_TernaryHrefCandidates(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -266,6 +275,7 @@ func TestSvelteParser_TernaryHrefCandidates(t *testing.T) {
 // TestSvelteParser_MarkupOnly verifies that a .svelte file with only markup
 // (no <script> block) parses via html patterns alone and produces nav_link nodes.
 func TestSvelteParser_MarkupOnly(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureMarkupOnly)
 	require.NotNil(t, p)
@@ -295,6 +305,7 @@ func TestSvelteParser_MarkupOnly(t *testing.T) {
 // TestSvelteParser_NegativeNoEventBindings verifies that a .svelte with only static
 // content produces no dom_target or unresolved call_ref entries.
 func TestSvelteParser_NegativeNoEventBindings(t *testing.T) {
+	t.Parallel()
 	src := `<div><p>Hello world</p></div>
 `
 	tmpDir := t.TempDir()
@@ -321,6 +332,7 @@ func TestSvelteParser_NegativeNoEventBindings(t *testing.T) {
 // TestSvelteParser_DynamicHrefLedgered verifies that href={someVar} (unresolvable
 // dynamic expression) is ledgered as dynamic_url rather than silently dropped.
 func TestSvelteParser_DynamicHrefLedgered(t *testing.T) {
+	t.Parallel()
 	src := `<script>
 export let targetPath
 </script>
@@ -350,6 +362,7 @@ export let targetPath
 // TestSvelteParser_EventModifierStripped verifies that on:submit|preventDefault
 // produces event name "submit" (modifier stripped).
 func TestSvelteParser_EventModifierStripped(t *testing.T) {
+	t.Parallel()
 	m := mustMatcher(t)
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
@@ -370,6 +383,7 @@ func TestSvelteParser_EventModifierStripped(t *testing.T) {
 // TestSvelteParser_NotUnparsed verifies that .svelte no longer appears as an
 // unparsed extension now that SvelteParser is registered.
 func TestSvelteParser_NotUnparsed(t *testing.T) {
+	t.Parallel()
 	p := parser.ForFile("App.svelte")
 	assert.NotNil(t, p, ".svelte must now have a registered parser (dropped from B.0 unparsed set)")
 }
