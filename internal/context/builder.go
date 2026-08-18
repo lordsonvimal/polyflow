@@ -232,6 +232,15 @@ func extractCrossService(idx *graph.AdjacencyIndex, upstream, downstream []Trace
 		if node == nil {
 			continue
 		}
+		// A service node's own Service field is "" by design (it's the
+		// containment root, not a member of itself) — comparing that against
+		// every file it contains (Service = the service name) makes every
+		// one of its `contains` edges look cross-service. Skip: a service
+		// node's own outgoing containment edges are same-service by
+		// definition, however its bookkeeping field reads.
+		if node.Type == graph.NodeTypeService {
+			continue
+		}
 		for _, e := range idx.OutEdges[nodeID] {
 			toNode := idx.Nodes[e.To]
 			if toNode == nil {
