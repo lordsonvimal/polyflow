@@ -1,4 +1,4 @@
-import { Component, Show, onMount, onCleanup } from "solid-js";
+import { Component, ErrorBoundary, Show, onMount, onCleanup } from "solid-js";
 import ActivityBar from "./shell/ActivityBar";
 import TopBar from "./shell/TopBar";
 import PanelHost from "./shell/PanelHost";
@@ -53,7 +53,38 @@ const App: Component = () => {
       <div class="flex flex-1 min-h-0">
         <ActivityBar />
         <PanelHost />
-        <CanvasHost />
+        {/* An uncaught throw from any of CanvasHost's effects/memos (a resource
+            reading its own error-state accessor unsafely, a Cytoscape call
+            against stale data, etc.) otherwise wedges the canvas permanently:
+            Solid re-throws computation errors when no ErrorBoundary is
+            present, which can leave the reactive graph unable to schedule
+            further updates for this subtree — the resource's own loading
+            state gets stuck true forever and nothing (not even navigating to
+            an unrelated, valid scope) recovers it. This boundary turns that
+            into a recoverable state instead of a dead canvas: reset() clears
+            the boundary and remounts CanvasHost fresh, and scopeStore.reset()
+            ensures it remounts onto a known-good scope rather than
+            re-triggering the same broken one. */}
+        <ErrorBoundary
+          fallback={(err, reset) => (
+            <div class="flex-1 min-w-0 flex flex-col items-center justify-center gap-3 bg-neutral-950 text-neutral-400 p-6">
+              <span class="text-sm text-center max-w-md">
+                Canvas hit an unexpected error and can't continue: {String((err as Error)?.message ?? err)}
+              </span>
+              <button
+                class="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 text-white text-xs"
+                onClick={() => {
+                  scopeStore.reset();
+                  reset();
+                }}
+              >
+                Reset canvas
+              </button>
+            </div>
+          )}
+        >
+          <CanvasHost />
+        </ErrorBoundary>
         <DetailHost />
       </div>
       <BottomDrawer />

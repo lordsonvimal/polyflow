@@ -292,8 +292,15 @@ export default function CanvasHost() {
   // honest notice instead of a silently stale selection.
   createEffect(on(scopeStore.reloadNonce, async (n) => {
     if (n === 0) return;
-    await refetch();
-    const d = data();
+    try {
+      await refetch();
+    } catch {
+      // A failed reload already surfaces via the resource's own error <Show>
+      // below; nothing more to do here (and re-throwing would be an
+      // unhandled rejection with no ErrorBoundary above this effect).
+      return;
+    }
+    const d = data.latest;
     const sel = selectionStore.selection();
     if (!sel || !d) return;
     const stillExists = d.nodes.some((x) => x.id === sel.id) || d.edges.some((x) => x.id === sel.id);
@@ -325,8 +332,20 @@ export default function CanvasHost() {
   // UF.8: unions commit-expand's node+edge additions into the scope's own
   // fetched data before any narrowing (lens/filters/budget) sees it — an
   // expanded node behaves exactly like a scope-native one from here on.
+  //
+  // data.latest, not data(): the resource's plain accessor re-throws the
+  // fetcher's rejection (Suspense/ErrorBoundary integration) into whatever
+  // computation reads it. This memo has no ErrorBoundary above it, and every
+  // other reactive node downstream (lensedData, renderData, the cytoscape
+  // sync effect) derives from it — an uncaught throw here on every scope
+  // whose fetch 404s (e.g. a stale search result) doesn't just fail this one
+  // render, it wedges the whole canvas: data.loading's own <Show> is
+  // unaffected (it never calls the accessor) so the loading shimmer keeps
+  // rendering forever, surviving even a later, successful scope change,
+  // because this memo re-throws again on every subsequent recompute. .latest
+  // returns the last good value (or undefined) without ever throwing.
   const withExpansions = createMemo((): GraphData | null => {
-    const d = clusteredData() ?? data();
+    const d = clusteredData() ?? data.latest;
     if (!d) return null;
     const extra = [...expandedElementsStore.entries().values()];
     if (extra.length === 0) return d;
@@ -629,7 +648,7 @@ export default function CanvasHost() {
     // found there regardless of collapse state) so "Copy context" on a
     // scope can expand clusters instead of sending an unresolvable id.
     const clusterMap = new Map<string, string[]>();
-    const raw = data();
+    const raw = data.latest; // see withExpansions above — never the throwing accessor
     if (d && raw) {
       const { groups } = applyFileGrouping(raw.nodes, raw.edges, []);
       const groupMembers = new Map(groups.map((g) => [g.id, g.members.map((m) => m.id)]));
@@ -855,7 +874,7 @@ export default function CanvasHost() {
   });
 
   const handleAutoCluster = () => {
-    const d = data();
+    const d = data.latest; // see withExpansions above — never the throwing accessor
     if (!d) return;
     setClusteredData(autoCluster(d.nodes, d.edges));
   };
