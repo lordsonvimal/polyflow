@@ -150,7 +150,7 @@ export default function TopBar() {
   function indexTooltip(): string {
     const job = jobsStore.activeIndexJob();
     if (!job) return "Index";
-    const stage = job.log_tail[job.log_tail.length - 1];
+    const stage = job.log_tail?.[job.log_tail.length - 1];
     const parts = [`elapsed ${elapsedLabel(job.started_at)}`];
     if (stage) parts.push(stage);
     return parts.join(" · ");
