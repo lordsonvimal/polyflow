@@ -28,6 +28,12 @@ type Caller struct {
 	Depth      int               `json:"depth"`
 	Snippet    string            `json:"snippet,omitempty"`
 
+	// Structural is true when the path from the target to this node crosses
+	// a contains/declares/instantiates/uses_type edge — the node is reached
+	// through the code's shape (e.g. "constructs a struct that has this
+	// method"), not a verified call chain. See graph.TraversalResult.Structural.
+	Structural bool `json:"structural,omitempty"`
+
 	// F.0 provenance (A.1): always present when the edge has been fused.
 	VerificationState   string          `json:"verification_state,omitempty"`
 	VerifiedGranularity string          `json:"verified_granularity,omitempty"`
@@ -249,14 +255,15 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verb
 	var edges []graph.Edge
 	for _, a := range ancestors {
 		c := Caller{
-			ID:      a.Node.ID,
-			Label:   a.Node.Label,
-			Type:    string(a.Node.Type),
-			Service: a.Node.Service,
-			File:    a.Node.File,
-			Line:    a.Node.Line,
-			Meta:    a.Node.Meta,
-			Depth:   a.Depth,
+			ID:         a.Node.ID,
+			Label:      a.Node.Label,
+			Type:       string(a.Node.Type),
+			Service:    a.Node.Service,
+			File:       a.Node.File,
+			Line:       a.Node.Line,
+			Meta:       a.Node.Meta,
+			Depth:      a.Depth,
+			Structural: a.Structural,
 		}
 		if a.Via != nil {
 			c.EdgeType = string(a.Via.Type)

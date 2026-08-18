@@ -1749,6 +1749,18 @@ func impactNoun(direction string) string {
 	return "callers"
 }
 
+// structuralSuffix flags a caller reached through a contains/declares/
+// instantiates/uses_type hop: it's a real edge but not a verified call
+// chain (e.g. "constructs a struct that has this method"), so a reader
+// shouldn't treat the listed edge type as proof this node calls the target.
+// See graph.TraversalResult.Structural.
+func structuralSuffix(c impact.Caller) string {
+	if !c.Structural {
+		return ""
+	}
+	return "  (structural — via type/containment, not a verified call)"
+}
+
 func printImpactText(out *impact.Result) error {
 	t := out.Target
 	fmt.Fprintf(os.Stdout, "Impact analysis for: %s (%s) %s:%d (direction=%s)\n\n", t.Label, t.Type, t.File, t.Line, out.Direction)
@@ -1767,8 +1779,8 @@ func printImpactText(out *impact.Result) error {
 	if len(direct) > 0 {
 		fmt.Fprintf(os.Stdout, "Direct %s (depth 1):\n", noun)
 		for _, c := range direct {
-			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
-				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d%s\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line, structuralSuffix(c))
 		}
 		fmt.Fprintln(os.Stdout)
 	}
@@ -1776,8 +1788,8 @@ func printImpactText(out *impact.Result) error {
 	if len(indirect) > 0 {
 		fmt.Fprintf(os.Stdout, "Indirect %s (depth 2-%d):\n", noun, out.Depth)
 		for _, c := range indirect {
-			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
-				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d%s\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line, structuralSuffix(c))
 		}
 		fmt.Fprintln(os.Stdout)
 	}
@@ -1934,16 +1946,16 @@ func printImpactDiffText(out *impact.DiffResult) error {
 	if len(direct) > 0 {
 		fmt.Fprintln(os.Stdout, "Direct callers (depth 1):")
 		for _, c := range direct {
-			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
-				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d%s\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line, structuralSuffix(c))
 		}
 		fmt.Fprintln(os.Stdout)
 	}
 	if len(indirect) > 0 {
 		fmt.Fprintf(os.Stdout, "Indirect callers (depth 2-%d):\n", out.Depth)
 		for _, c := range indirect {
-			fmt.Fprintf(os.Stdout, "  %-40s %s:%d\n",
-				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line)
+			fmt.Fprintf(os.Stdout, "  %-40s %s:%d%s\n",
+				fmt.Sprintf("%s  [%s]", c.Label, c.EdgeType), c.File, c.Line, structuralSuffix(c))
 		}
 		fmt.Fprintln(os.Stdout)
 	}
