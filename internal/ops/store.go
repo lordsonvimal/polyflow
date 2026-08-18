@@ -69,6 +69,13 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_started_at ON jobs(started_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_kind       ON jobs(kind);
+
+CREATE TABLE IF NOT EXISTS views (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	name       TEXT NOT NULL UNIQUE,
+	state      TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
 `
 
 // MaxResultBytes caps the persisted "result" text. Beyond this the row holds
@@ -523,6 +530,129 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+// ErrViewNotFound is returned by DeleteView when no row matches id.
+var ErrViewNotFound = fmt.Errorf("view not found")
+
+// ErrViewNameConflict is returned by CreateView when name already exists.
+var ErrViewNameConflict = fmt.Errorf("a saved view with this name already exists")
+
+// View is a persisted views row (UO.5) — a named, shareable ViewState
+// snapshot, stored as opaque JSON the server never interprets.
+type View struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	State     string `json:"state"` // JSON, opaque to the server
+	CreatedAt string `json:"created_at"`
+}
+
+// CreateView inserts a new named view. Returns ErrViewNameConflict if name
+// is already taken (checked within the same transaction as the insert, so
+// concurrent creates can't both succeed with the same name).
+func (s *Store) CreateView(ctx context.Context, name, state string) (View, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return View{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM views WHERE name = ?`, name).Scan(&exists); err != nil {
+		return View{}, fmt.Errorf("check view name: %w", err)
+	}
+	if exists > 0 {
+		return View{}, ErrViewNameConflict
+	}
+
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := tx.ExecContext(ctx, `INSERT INTO views (name, state, created_at) VALUES (?, ?, ?)`, name, state, createdAt)
+	if err != nil {
+		return View{}, fmt.Errorf("insert view: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return View{}, fmt.Errorf("last insert id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return View{}, fmt.Errorf("commit: %w", err)
+	}
+	return View{ID: id, Name: name, State: state, CreatedAt: createdAt}, nil
+}
+
+// ListViews returns all saved views, newest-first.
+func (s *Store) ListViews(ctx context.Context) ([]View, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, state, created_at FROM views ORDER BY id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list views: %w", err)
+	}
+	defer rows.Close()
+
+	views := make([]View, 0)
+	for rows.Next() {
+		var v View
+		if err := rows.Scan(&v.ID, &v.Name, &v.State, &v.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan view: %w", err)
+		}
+		views = append(views, v)
+	}
+	return views, rows.Err()
+}
+
+// RenameView renames the view with id, returning ErrViewNotFound or
+// ErrViewNameConflict as appropriate.
+func (s *Store) RenameView(ctx context.Context, id int64, name string) (View, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return View{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM views WHERE name = ? AND id != ?`, name, id).Scan(&exists); err != nil {
+		return View{}, fmt.Errorf("check view name: %w", err)
+	}
+	if exists > 0 {
+		return View{}, ErrViewNameConflict
+	}
+
+	res, err := tx.ExecContext(ctx, `UPDATE views SET name = ? WHERE id = ?`, name, id)
+	if err != nil {
+		return View{}, fmt.Errorf("rename view: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return View{}, fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return View{}, ErrViewNotFound
+	}
+
+	var v View
+	if err := tx.QueryRowContext(ctx, `SELECT id, name, state, created_at FROM views WHERE id = ?`, id).
+		Scan(&v.ID, &v.Name, &v.State, &v.CreatedAt); err != nil {
+		return View{}, fmt.Errorf("read renamed view: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return View{}, fmt.Errorf("commit: %w", err)
+	}
+	return v, nil
+}
+
+// DeleteView removes the view with id, returning ErrViewNotFound if absent.
+func (s *Store) DeleteView(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM views WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete view: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrViewNotFound
+	}
+	return nil
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.

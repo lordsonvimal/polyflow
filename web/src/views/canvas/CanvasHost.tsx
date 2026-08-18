@@ -15,6 +15,8 @@ import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
 // @ts-ignore
 import dagreFn from "cytoscape-dagre";
+// @ts-ignore — no bundled types; registers cy.svg() (UO.5 export)
+import cySvg from "cytoscape-svg";
 
 import { scopeStore, Scope } from "../../stores/scope";
 import { displayLabel } from "../../lib/location";
@@ -24,6 +26,7 @@ import { registerMenuItems, openMenu } from "../../interaction/ContextMenu";
 import { EmptyScopeEmptyState } from "../../shell/EmptyState";
 import { selectionStore } from "../../stores/selection";
 import { canvasElementsStore } from "../../stores/canvasElements";
+import { canvasRefStore } from "../../stores/canvasRef";
 import { flowHighlightStore } from "../../stores/flowHighlight";
 import { flowsThroughStore } from "../../stores/flowsThrough";
 import { pathFinderStore } from "../../stores/pathFinder";
@@ -66,6 +69,7 @@ import {
 // Register Cytoscape extensions once at module load.
 cytoscape.use(fcose);
 cytoscape.use(dagreFn);
+cytoscape.use(cySvg);
 
 // Scopes that have no canvas — show a placeholder instead. Exported so
 // TopBar can gate the lens control (UN.5) on the same "is this a canvas
@@ -589,6 +593,7 @@ export default function CanvasHost() {
         minZoom: 0.05,
         maxZoom: 2.5,
       });
+      canvasRefStore.set(cy);
       const unwire = wireCytoscape(cy, onCanvasIntent);
 
       // UF.4: marquee-drag (shift + drag on background, Cytoscape's default
@@ -615,6 +620,7 @@ export default function CanvasHost() {
         cy?.off("select", "node", syncMultiSelect);
         cy?.off("unselect", "node", syncMultiSelect);
         unwire();
+        canvasRefStore.set(null);
         cy?.destroy();
         cy = undefined;
       });

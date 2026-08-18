@@ -165,6 +165,10 @@ export const scopeStore = {
   push: (scope: Scope) => commitStackChange({ ...viewState(), stack: [...viewState().stack, scope] }),
   popTo: (i: number) => commitStackChange({ ...viewState(), stack: viewState().stack.slice(0, i + 1) }),
   reset: () => commitStackChange({ ...DEFAULT_STATE }),
+  // UO.5: load an entire external ViewState (saved view / share link), same
+  // stack-changing/abort-in-flight treatment as push/popTo. Callers that
+  // need stale-id validation first (savedViews.ts) do it before calling this.
+  applyViewState: (state: ViewState) => commitStackChange({ ...state }),
   // UF.2: swaps the top-of-stack scope in place — used by the waypoint
   // builder so each chip add/remove live-updates the canvas lane without
   // growing the stack (a `push` per keystroke would wreck breadcrumb/Esc

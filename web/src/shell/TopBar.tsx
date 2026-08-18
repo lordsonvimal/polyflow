@@ -5,18 +5,104 @@ import { apiFetchJSON } from "../lib/apiFetch";
 import Breadcrumbs from "./Breadcrumbs";
 import LensBar from "../views/canvas/LensBar";
 import { NO_CANVAS } from "../views/canvas/CanvasHost";
-import { scopeStore } from "../stores/scope";
+import { scopeStore, encodeViewState } from "../stores/scope";
 import { pathFinderStore } from "../stores/pathFinder";
 import { pinboardStore } from "../stores/pinboard";
 import { selectionStore } from "../stores/selection";
 import { displayLabel } from "../lib/location";
 import { jobsStore } from "../stores/jobs";
 import { drawerStore } from "../stores/drawer";
+import { savedViewsStore } from "../stores/savedViews";
+import { canvasRefStore } from "../stores/canvasRef";
+import { notificationsStore } from "../stores/notifications";
+import {
+  mermaidLevelForScope,
+  mermaidTraceScopeFor,
+  fetchMermaid,
+  exportFilename,
+  exportSVG,
+  exportPNGBlob,
+  exportElementsJSON,
+  downloadText,
+  downloadBlob,
+} from "../lib/export";
 
 export default function TopBar() {
   const [stats, setStats] = createSignal("--n/--e");
   const [indexMenuOpen, setIndexMenuOpen] = createSignal(false);
+  const [shareMenuOpen, setShareMenuOpen] = createSignal(false);
+  const [saveDialogOpen, setSaveDialogOpen] = createSignal(false);
+  const [saveNameInput, setSaveNameInput] = createSignal("");
   const isCanvasPage = createMemo(() => !NO_CANVAS.has(scopeStore.stack().at(-1)?.kind ?? "search"));
+
+  async function copyLink(): Promise<void> {
+    const url = `${location.origin}${location.pathname}#v=${encodeViewState(scopeStore.viewState())}`;
+    try {
+      await navigator.clipboard?.writeText(url);
+      notificationsStore.add({ id: `copy-link-${Date.now()}`, kind: "success", message: "Link copied to clipboard" });
+    } catch {
+      notificationsStore.add({ id: `copy-link-err-${Date.now()}`, kind: "error", message: "Could not copy link" });
+    }
+  }
+
+  function currentScope() {
+    return scopeStore.stack().at(-1);
+  }
+
+  async function exportMermaidCurrent(): Promise<void> {
+    const scope = currentScope();
+    if (!scope) return;
+    const level = mermaidLevelForScope(scope);
+    try {
+      const text = await fetchMermaid(level, mermaidTraceScopeFor(scope));
+      downloadText(exportFilename("mermaid", level), text, "text/plain");
+    } catch {
+      notificationsStore.add({ id: `export-mermaid-err-${Date.now()}`, kind: "error", message: "Mermaid export failed" });
+    }
+  }
+
+  function exportSVGCurrent(): void {
+    const cy = canvasRefStore.cy();
+    if (!cy) return;
+    try {
+      downloadText(exportFilename("svg"), exportSVG(cy), "image/svg+xml");
+    } catch {
+      notificationsStore.add({ id: `export-svg-err-${Date.now()}`, kind: "error", message: "SVG export failed" });
+    }
+  }
+
+  function exportPNGCurrent(): void {
+    const cy = canvasRefStore.cy();
+    if (!cy) return;
+    try {
+      downloadBlob(exportFilename("png"), exportPNGBlob(cy));
+    } catch {
+      // Canvas too large to rasterize even at the clamped scale — SVG has
+      // no such size ceiling, so it's the fallback rather than a dead end.
+      notificationsStore.add({
+        id: `export-png-fallback-${Date.now()}`,
+        kind: "info",
+        message: "PNG export failed (canvas too large) — exported SVG instead",
+      });
+      exportSVGCurrent();
+    }
+  }
+
+  function exportJSONCurrent(): void {
+    const cy = canvasRefStore.cy();
+    if (!cy) return;
+    downloadText(exportFilename("json"), exportElementsJSON(cy), "application/json");
+  }
+
+  async function submitSaveView(): Promise<void> {
+    const name = saveNameInput().trim();
+    if (!name) return;
+    const saved = await savedViewsStore.save(name);
+    if (saved) {
+      setSaveDialogOpen(false);
+      setSaveNameInput("");
+    }
+  }
 
   function elapsedLabel(startedAt: string): string {
     const ms = Date.now() - Date.parse(startedAt);
@@ -172,9 +258,83 @@ export default function TopBar() {
             </div>
           </Show>
         </div>
-        <button class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5" disabled>
-          Share ▾
+        <button
+          data-testid="save-view-button"
+          title="Save current view"
+          class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
+          onClick={() => {
+            setSaveNameInput("");
+            setSaveDialogOpen(true);
+          }}
+        >
+          ☆
         </button>
+        <div class="relative">
+          <button
+            data-testid="share-menu-toggle"
+            class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
+            onClick={() => setShareMenuOpen((v) => !v)}
+          >
+            Share ▾
+          </button>
+          <Show when={shareMenuOpen()}>
+            <div class="absolute top-full right-0 mt-1 z-20 bg-neutral-900 border border-neutral-700 rounded shadow-lg text-xs whitespace-nowrap">
+              <button
+                data-testid="share-copy-link"
+                class="block w-full text-left px-3 py-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                onClick={() => {
+                  setShareMenuOpen(false);
+                  void copyLink();
+                }}
+              >
+                Copy link
+              </button>
+              <button
+                data-testid="share-export-png"
+                disabled={!isCanvasPage() || !canvasRefStore.cy()}
+                class="block w-full text-left px-3 py-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={() => {
+                  setShareMenuOpen(false);
+                  exportPNGCurrent();
+                }}
+              >
+                Export PNG
+              </button>
+              <button
+                data-testid="share-export-svg"
+                disabled={!isCanvasPage() || !canvasRefStore.cy()}
+                class="block w-full text-left px-3 py-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={() => {
+                  setShareMenuOpen(false);
+                  exportSVGCurrent();
+                }}
+              >
+                Export SVG
+              </button>
+              <button
+                data-testid="share-export-json"
+                disabled={!isCanvasPage() || !canvasRefStore.cy()}
+                class="block w-full text-left px-3 py-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={() => {
+                  setShareMenuOpen(false);
+                  exportJSONCurrent();
+                }}
+              >
+                Export JSON
+              </button>
+              <button
+                data-testid="share-export-mermaid"
+                class="block w-full text-left px-3 py-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                onClick={() => {
+                  setShareMenuOpen(false);
+                  void exportMermaidCurrent();
+                }}
+              >
+                Export Mermaid
+              </button>
+            </div>
+          </Show>
+        </div>
         <button
           class="text-xs text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5"
           onClick={() => layoutPrefs.setTheme(layoutPrefs.theme() === "dark" ? "light" : "dark")}
@@ -188,6 +348,48 @@ export default function TopBar() {
           ⌘K
         </button>
       </div>
+      <Show when={saveDialogOpen()}>
+        <div
+          data-testid="save-view-overlay"
+          class="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/50"
+          onClick={() => setSaveDialogOpen(false)}
+        >
+          <div
+            class="w-full max-w-sm bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl p-4 flex flex-col gap-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span class="text-sm text-neutral-200">Save current view</span>
+            <input
+              data-testid="save-view-name-input"
+              class="w-full px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-sm text-neutral-100 outline-none"
+              placeholder="e.g. fleet rabbitmq seam"
+              value={saveNameInput()}
+              autofocus
+              onInput={(e) => setSaveNameInput(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submitSaveView();
+                if (e.key === "Escape") setSaveDialogOpen(false);
+              }}
+            />
+            <div class="flex justify-end gap-2 text-xs">
+              <button
+                class="px-2 py-1 text-neutral-400 hover:text-white"
+                onClick={() => setSaveDialogOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                data-testid="save-view-submit"
+                class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded disabled:opacity-40"
+                disabled={!saveNameInput().trim()}
+                onClick={() => void submitSaveView()}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
     </header>
   );
 }

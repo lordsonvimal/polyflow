@@ -1,12 +1,14 @@
 import { For, Show, createEffect, on, untrack } from "solid-js";
 import Tree from "./explore/Tree";
 import StackPanel from "./explore/StackPanel";
+import SavedViewsPanel from "./explore/SavedViewsPanel";
 import { exploreStore, type ExploreTab } from "../stores/explore";
 import { layoutPrefs } from "../stores/layoutPrefs";
 
 const TABS: { id: ExploreTab; label: string }[] = [
   { id: "tree", label: "Tree" },
   { id: "stack", label: "Stack" },
+  { id: "views", label: "Saved Views" },
 ];
 
 // The default 280px panel is sized for tree rows, not Stack's per-service
@@ -45,6 +47,7 @@ export default function ExploreView() {
       <div class="flex-1 min-h-0 overflow-hidden">
         <Show when={exploreStore.tab() === "tree"}><Tree /></Show>
         <Show when={exploreStore.tab() === "stack"}><StackPanel /></Show>
+        <Show when={exploreStore.tab() === "views"}><SavedViewsPanel /></Show>
       </div>
     </div>
   );
