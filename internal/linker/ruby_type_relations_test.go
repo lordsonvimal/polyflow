@@ -34,6 +34,7 @@ func rubyClassNode(service, file, label string, line int) graph.Node {
 // Here svc-a and svc-b both define Dx and ApiBaseController. svc-a's consumer must
 // bind only to svc-a's copies.
 func TestLinkRubyTypeRelations_NoCrossServiceBinding(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	consumer := writeRuby(t, dir, "agent_messages_controller.rb", `
@@ -112,6 +113,7 @@ end
 // reference is ledgered rather than bound to a same-named class elsewhere. An
 // `inherits_unresolved` entry is the correct outcome — a cross-service edge is not.
 func TestLinkRubyTypeRelations_UnresolvedIsLedgered(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	consumer := writeRuby(t, dir, "only_consumer.rb", "class Widget < RemoteOnlyBase\nend\n")
@@ -185,6 +187,7 @@ func targetsOf(t *testing.T, edges []graph.Edge, nodes []graph.Node, fromID stri
 // Ruby resolves innermost enclosing namespace outward, so each subclass here has
 // exactly one correct answer and they are different answers.
 func TestLinkRubyTypeRelations_SuperclassResolvesLexically(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	topBase := writeRuby(t, dir, "repository_controller.rb", `
@@ -254,6 +257,7 @@ end
 // `ClientApi::V1::ApiBaseController` was indistinguishable from a top-level
 // `ApiBaseController` even though the source spells out which one it means.
 func TestLinkRubyTypeRelations_QualifiedReferenceKeepsEveryComponent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	topBase := writeRuby(t, dir, "api_base_controller.rb", "class ApiBaseController\nend\n")
@@ -297,6 +301,7 @@ end
 // mixin is looked up in: `include Dx` sits in the class *body*, so it resolves
 // with the class itself on the nesting, not outside it.
 func TestLinkRubyTypeRelations_MixinResolvesInsideTheBody(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	topDx := writeRuby(t, dir, "dx.rb", "module Dx\nend\n")
@@ -346,6 +351,7 @@ end
 // must produce two candidate edges and a ledger entry rather than one confident
 // wrong edge (bug-class #1: fan out, never first-match).
 func TestLinkRubyTypeRelations_AmbiguousNameStaysAmbiguous(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	a := writeRuby(t, dir, "a_helper.rb", `

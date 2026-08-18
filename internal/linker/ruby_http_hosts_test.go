@@ -37,6 +37,7 @@ func writeRuby(t *testing.T, dir, name, body string) string {
 // TestResolveRubyHTTPHosts_LocalAssignment covers shape (2): a local variable
 // assigned from a cross-file host method (`url = server_api_url(...).to_s`).
 func TestResolveRubyHTTPHosts_LocalAssignment(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	conn := writeRuby(t, dir, "connection_info.rb", `
 module Server
@@ -96,6 +97,7 @@ end
 // to a *method parameter* whose value flows from a same-file caller passing a
 // host method (`def post_request(url); RestClient.post(url) ← post_request(server_api_uri.to_s)`).
 func TestResolveRubyHTTPHosts_ParamCaller(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	conn := writeRuby(t, dir, "connection_info.rb", `
 module Server
@@ -131,6 +133,7 @@ end
 // label plus an intra-class ivar chain (method → attr → @ivar → ENV): the
 // Connection singleton pattern from the real Lyra agent.
 func TestResolveRubyHTTPHosts_KeywordAndIvarChain(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	conn := writeRuby(t, dir, "connection.rb", `
 class Connection
@@ -179,6 +182,7 @@ end
 // ledger a named deploy-secret miss). Only nodes that gain a real path leave
 // that path.
 func TestResolveRubyHTTPHosts_HostOnlyKeepsDynamic(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	conn := writeRuby(t, dir, "conn.rb", `
 class Conn
@@ -215,6 +219,7 @@ end
 // at all rather than "*/*" — a template of nothing but wildcards would match
 // every route in every service.
 func TestResolveRubyHTTPHosts_UnfilledHoleIsNotAPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	conn := writeRuby(t, dir, "conn.rb", `
 module Conn
@@ -247,6 +252,7 @@ end
 // defined twice with the same env var but *different* routes keeps the
 // unambiguous host and drops the ambiguous path, rather than picking one.
 func TestResolveRubyHTTPHosts_PathConflictKeepsHost(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	a := writeRuby(t, dir, "a.rb", `
 module A
@@ -282,6 +288,7 @@ end
 // TestRubyClientPath covers the host-placeholder and concreteness rules of the
 // final path stamp directly.
 func TestRubyClientPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, in, want string
 	}{
@@ -306,6 +313,7 @@ func TestRubyClientPath(t *testing.T) {
 // nested-call and unbalanced cases where it must yield nothing rather than a
 // wrong split.
 func TestRubyCallArgs(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, in string
 		want     []string
@@ -337,6 +345,7 @@ func TestRubyCallArgs(t *testing.T) {
 // (no fabrication, #12) when the URL does not trace to an env-derived host
 // method: a non-host local (`path_from_trace(...)`) and a token method.
 func TestResolveRubyHTTPHosts_Abstains(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := writeRuby(t, dir, "parser.rb", `
 class TraceParser
@@ -365,6 +374,7 @@ end
 // files with *different* env vars is an ambiguous collision — dropped from the
 // registry, so neither resolves (honest miss, not a coin-flip guess).
 func TestResolveRubyHTTPHosts_Collision(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	a := writeRuby(t, dir, "a_conn.rb", `
 module A
@@ -399,6 +409,7 @@ end
 // TestResolveRubyHTTPHosts_NonRubyIgnored verifies non-Ruby http_client nodes
 // and already-resolved (ENV.-carrying) nodes are skipped.
 func TestResolveRubyHTTPHosts_NonRubyIgnored(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	conn := writeRuby(t, dir, "connection_info.rb", `
 def server_api_url(e)

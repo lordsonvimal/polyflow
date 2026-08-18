@@ -27,6 +27,7 @@ func classCallFuncNode(svc, file, owner, name string, line int) graph.Node {
 // different file. It declares a `self.` method by that name, so the edge
 // lands on the method, not just the class.
 func TestLinkRubyClassMethodCalls_ResolvesSelfMethod(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	controller := writeRuby(t, dir, "license_report_jobs_controller.rb", `
@@ -81,6 +82,7 @@ end
 // repository defines `find_by` — it's an ActiveRecord finder. The edge must
 // still land, at class granularity, so blast radius reaches the model.
 func TestLinkRubyClassMethodCalls_FrameworkCallFallsBackToClass(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	controller := writeRuby(t, dir, "license_report_jobs_controller.rb", `
@@ -120,6 +122,7 @@ end
 // TestLinkRubyClassMethodCalls_SameFileNotDuplicated guards against this
 // pass re-emitting an edge extractRubyVariables' same-file fix already owns.
 func TestLinkRubyClassMethodCalls_SameFileNotDuplicated(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	file := writeRuby(t, dir, "orders_controller.rb", `
@@ -158,6 +161,7 @@ end
 // `Rails.logger.info`. No edge, and critically no ledger noise either: this
 // pass isn't the owner of misses it can never explain.
 func TestLinkRubyClassMethodCalls_UnknownReceiverNotLedgered(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	controller := writeRuby(t, dir, "orders_controller.rb", `
@@ -188,6 +192,7 @@ end
 // call in service A must never resolve to a class in service B, even when B
 // vendors an identically-named/identically-shaped copy.
 func TestLinkRubyClassMethodCalls_NoCrossServiceBinding(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	consumer := writeRuby(t, dir, "jobs_controller.rb", `

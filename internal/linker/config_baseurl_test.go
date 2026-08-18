@@ -39,6 +39,7 @@ func clientNode(meta map[string]string) graph.Node {
 }
 
 func TestConfigURLPathPrefix(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ raw, want string }{
 		{"https://api.example.com/v2", "/v2"},
 		{"http://host/api/v1/", "/api/v1"},
@@ -63,6 +64,7 @@ func TestConfigURLPathPrefix(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_ComposesPrefix(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -88,6 +90,7 @@ func TestResolveConfigBaseURLPaths_ComposesPrefix(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_RubyHostEnvVarFallback(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "SERVICE_BASE_URL=https://svc-b.internal/api/v1\n",
 	})
@@ -105,6 +108,7 @@ func TestResolveConfigBaseURLPaths_RubyHostEnvVarFallback(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_Idempotent(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -125,6 +129,7 @@ func TestResolveConfigBaseURLPaths_Idempotent(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_PrefixAlreadyPresent(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -145,6 +150,7 @@ func TestResolveConfigBaseURLPaths_PrefixAlreadyPresent(t *testing.T) {
 // A prefix must match on a segment boundary: `/api` does not already prefix
 // `*/apiv2/x`.
 func TestResolveConfigBaseURLPaths_PrefixGuardIsSegmentWise(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api\n",
 	})
@@ -160,6 +166,7 @@ func TestResolveConfigBaseURLPaths_PrefixGuardIsSegmentWise(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_DisagreeingSourcesAbstain(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env":            "API_URL=https://svc-b.internal/api/v1\n",
 		".env.production": "API_URL=https://svc-b.internal/api/v2\n",
@@ -181,6 +188,7 @@ func TestResolveConfigBaseURLPaths_DisagreeingSourcesAbstain(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_NoPathComponentIsNoOp(t *testing.T) {
+	t.Parallel()
 	// The juniper fleet's shape: every checked-in value is a bare host.
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env.example": "TARGET_MANAGER_URL=http://localhost:3000\n",
@@ -199,6 +207,7 @@ func TestResolveConfigBaseURLPaths_NoPathComponentIsNoOp(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_SkipsIneligibleNodes(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -238,6 +247,7 @@ func TestResolveConfigBaseURLPaths_SkipsIneligibleNodes(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_SkipsNonHTTPClient(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -251,6 +261,7 @@ func TestResolveConfigBaseURLPaths_SkipsNonHTTPClient(t *testing.T) {
 }
 
 func TestResolveConfigBaseURLPaths_UnknownServiceIsSkipped(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-other", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -269,6 +280,7 @@ func TestResolveConfigBaseURLPaths_UnknownServiceIsSkipped(t *testing.T) {
 // and the ceiling that came with it — must go, or this tier suppresses the very
 // edge it exists to create.
 func TestResolveConfigBaseURLPaths_RegradesWeakEvidence(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/api/v2\n",
 	})
@@ -295,6 +307,7 @@ func TestResolveConfigBaseURLPaths_RegradesWeakEvidence(t *testing.T) {
 // A prefix that adds no literal segment leaves the grading alone: one literal
 // segment behind an opaque host is still weak evidence.
 func TestResolveConfigBaseURLPaths_KeepsWeakEvidenceWhenStillWeak(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		".env": "API_URL=https://svc-b.internal/:tenant\n",
 	})
@@ -316,6 +329,7 @@ func TestResolveConfigBaseURLPaths_KeepsWeakEvidenceWhenStillWeak(t *testing.T) 
 }
 
 func TestResolveConfigBaseURLPaths_ReadsK8sAndTerraform(t *testing.T) {
+	t.Parallel()
 	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
 		"k8s/deploy.yaml": "spec:\n  template:\n    spec:\n      containers:\n" +
 			"        - name: api\n          env:\n            - name: K8S_URL\n" +

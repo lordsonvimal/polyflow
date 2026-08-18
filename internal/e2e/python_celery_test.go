@@ -124,6 +124,7 @@ func indexPythonCelery(t *testing.T) *graph.SQLiteStore {
 // svc-api's send_email.delay() call links to the svc-worker's @app.task
 // def send_email() via a job_enqueue edge through the Celery contract rule.
 func TestPythonCelery_JobEnqueueEdge(t *testing.T) {
+	t.Parallel()
 	store := indexPythonCelery(t)
 	ctx := context.Background()
 
@@ -150,6 +151,7 @@ func TestPythonCelery_JobEnqueueEdge(t *testing.T) {
 // TestPythonCelery_TaskNodes verifies that the worker service produces
 // NodeTypeSubscriber nodes from @app.task and @shared_task decorators.
 func TestPythonCelery_TaskNodes(t *testing.T) {
+	t.Parallel()
 	store := indexPythonCelery(t)
 	ctx := context.Background()
 
@@ -169,6 +171,7 @@ func TestPythonCelery_TaskNodes(t *testing.T) {
 // TestPythonCelery_ProducerNodes verifies that the API service produces
 // NodeTypePublisher nodes from .delay() and .apply_async() calls.
 func TestPythonCelery_ProducerNodes(t *testing.T) {
+	t.Parallel()
 	store := indexPythonCelery(t)
 	ctx := context.Background()
 
@@ -188,6 +191,7 @@ func TestPythonCelery_ProducerNodes(t *testing.T) {
 // TestPythonCelery_Determinism runs the pipeline twice and confirms the
 // job_enqueue edge count is identical (rule 2: deterministic output).
 func TestPythonCelery_Determinism(t *testing.T) {
+	t.Parallel()
 	store1 := indexPythonCelery(t)
 	store2 := indexPythonCelery(t)
 	ctx := context.Background()

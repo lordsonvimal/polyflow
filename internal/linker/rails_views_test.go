@@ -28,6 +28,7 @@ func fileID(svc, file string) string { return svc + ":" + file + ":file" }
 // directory-relative one, a collection, and a layout — plus the three-level
 // nesting the phase asks for, which falls out because the edge is file→file.
 func TestLinkRailsViews_PartialGraph(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/views/studies/index.html.erb": `<h1>Studies</h1>
 <%= render "shared/nav_bar" %>
@@ -81,6 +82,7 @@ end`,
 // TestLinkRailsViews_ControllerConvention: the action names no template, so the
 // convention does. This is the edge that connects http_handler to view.
 func TestLinkRailsViews_ControllerConvention(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/controllers/studies_controller.rb": `class StudiesController < ApplicationController
   def index
@@ -138,6 +140,7 @@ end`,
 // app/views/layouts/x — in a view the same keyword means an ordinary partial —
 // and `render :edit` names a template in the controller's own directory.
 func TestLinkRailsViews_ControllerLayoutAndSymbol(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/controllers/execution_items_controller.rb": `class ExecutionItemsController < ApplicationController
   def index
@@ -181,6 +184,7 @@ end`,
 // authority: window.X, not the containers/ path convention. orion mounts two
 // components from app/javascript/components/, which the path rule cannot reach.
 func TestLinkRailsViews_ReactComponentRidesTheGlobalRegistry(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/views/container_types/index.html.erb": `<div>
   <%= react_component("ContainerTypesContainer", { container_types: @container_types }) %>
@@ -246,6 +250,7 @@ func TestLinkRailsViews_ReactComponentRidesTheGlobalRegistry(t *testing.T) {
 // template names both. Rails picks by request format; the graph cannot know
 // which request, and first-match would be the fan-out bug (phases.md #1).
 func TestLinkRailsViews_FormatFanout(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/views/agent_nodes/show.html.erb": `<%= render "row" %>`,
 		"app/views/agent_nodes/_row.html.erb": `<tr></tr>`,
@@ -264,6 +269,7 @@ func TestLinkRailsViews_FormatFanout(t *testing.T) {
 // no file node from containment, and it is exactly what this pass points at
 // (the K.5 / K.3 lesson, third recurrence).
 func TestLinkRailsViews_MintsEndpointNodes(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/views/studies/index.html.erb": `<%= render "shared/nav" %>`,
 		"app/views/shared/_nav.html.erb":   `<nav></nav>`,
@@ -297,6 +303,7 @@ func TestLinkRailsViews_MintsEndpointNodes(t *testing.T) {
 // TestLinkRailsViews_NoViewTree: a service with no app/views is not a Rails
 // app, and a `render` call in its JS must mint nothing.
 func TestLinkRailsViews_NoViewTree(t *testing.T) {
+	t.Parallel()
 	_, files := stylesheetFixture(t, map[string]string{
 		"src/App.jsx": `ReactDOM.render(<App />, root)`,
 	})
@@ -308,6 +315,7 @@ func TestLinkRailsViews_NoViewTree(t *testing.T) {
 }
 
 func TestLinkRailsViews_Deterministic(t *testing.T) {
+	t.Parallel()
 	_, aFiles := stylesheetFixture(t, map[string]string{
 		"app/views/a/index.html.erb":   "<%= render \"shared/x\" %>\n<%= render \"shared/y\" %>",
 		"app/views/shared/_x.html.erb": "<i></i>",

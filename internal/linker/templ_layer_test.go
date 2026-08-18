@@ -7,6 +7,7 @@ import (
 )
 
 func TestLinkTemplScripts(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		// A templ component loading two scripts; one resolves by path suffix,
 		// one only by basename (dir remapped), one resolves to nothing.
@@ -61,6 +62,7 @@ func TestLinkTemplScripts(t *testing.T) {
 }
 
 func TestLinkDOMDefinitions_Templ(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID: "app:room.templ:component:RoomPage:3", Type: graph.NodeTypeComponent,
@@ -123,6 +125,7 @@ func TestLinkDOMDefinitions_Templ(t *testing.T) {
 // with meta["id"]) are found by the generalized index and linked via defined_in edges
 // without minting new nodes.
 func TestLinkDOMDefinitions_HTMLSource(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		// HTML element node produced by html_element_id pattern.
 		{
@@ -168,6 +171,7 @@ func TestLinkDOMDefinitions_HTMLSource(t *testing.T) {
 // defined_in edges to ALL elements with that class (N edges for N matches,
 // rule 1 fan-out) with inferred confidence.
 func TestLinkDOMDefinitions_ClassFanOut(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		// Two HTML elements with the same class.
 		{
@@ -212,6 +216,7 @@ func TestLinkDOMDefinitions_ClassFanOut(t *testing.T) {
 // (descendant, pseudo, attribute, etc.) produce a selector_dynamic ledger entry
 // and no edges.
 func TestLinkDOMDefinitions_ComplexSelector(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID:      "app:assets/js/app.js:dom_target:query_selector:7",
@@ -235,6 +240,7 @@ func TestLinkDOMDefinitions_ComplexSelector(t *testing.T) {
 // TestLinkDOMDefinitions_Determinism verifies that two runs on the same input
 // produce byte-identical edge ordering (bug-class rule 2).
 func TestLinkDOMDefinitions_Determinism(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID: "app:views/page.html:element:#btn1:5", Type: graph.NodeTypeElement,
@@ -288,6 +294,7 @@ func TestLinkDOMDefinitions_Determinism(t *testing.T) {
 // answer must not depend on map iteration order — this used to flip between
 // runs, making the whole index nondeterministic.
 func TestLinkTemplScriptsIsServiceScopedAndDeterministic(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID: "svc-a:page.templ:component:Head:12", Type: graph.NodeTypeComponent,
@@ -322,6 +329,7 @@ func TestLinkTemplScriptsIsServiceScopedAndDeterministic(t *testing.T) {
 // With no in-service candidate the reference is a genuine blind spot: it must
 // be ledgered, not silently bound to another service's file.
 func TestLinkTemplScriptsLedgersCrossServiceOnlyMatch(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID: "svc-a:page.templ:component:Head:12", Type: graph.NodeTypeComponent,

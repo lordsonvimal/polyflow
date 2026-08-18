@@ -10,6 +10,7 @@ import (
 // createResource accessor (meta.resource_fn) is connected to the fetch its
 // loader function issues, resolved through the loader's fn→http_client calls edge.
 func TestLinkResourceSignals(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "web:d.tsx:function:loadNode:3", Type: graph.NodeTypeFunction, Label: "loadNode", Service: "web", File: "d.tsx"},
 		{ID: "web:d.tsx:http_client:GET:4", Type: graph.NodeTypeHTTPClient, Label: "GET /api/node", Service: "web", File: "d.tsx"},

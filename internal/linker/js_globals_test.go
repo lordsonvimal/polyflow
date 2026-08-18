@@ -13,6 +13,7 @@ import (
 // TestLinkJSGlobals_BasicResolution: call_ref for "save" resolves to window.save
 // defined in another file via global symbol table.
 func TestLinkJSGlobals_BasicResolution(t *testing.T) {
+	t.Parallel()
 	libFile := "/svc/lib.js"
 	mainFile := "/svc/main.js"
 
@@ -58,6 +59,7 @@ func TestLinkJSGlobals_BasicResolution(t *testing.T) {
 // TestLinkJSGlobals_Collision: same global name in two files →
 // two candidate edges + one global_collision ledger entry.
 func TestLinkJSGlobals_Collision(t *testing.T) {
+	t.Parallel()
 	fileA := "/svc/a.js"
 	fileB := "/svc/b.js"
 	mainFile := "/svc/main.js"
@@ -104,6 +106,7 @@ func TestLinkJSGlobals_Collision(t *testing.T) {
 // TestLinkJSGlobals_InlineHandler: dom_target with handler="save()" resolves
 // to a global function — the inline handler path.
 func TestLinkJSGlobals_InlineHandler(t *testing.T) {
+	t.Parallel()
 	libFile := "/svc/lib.js"
 	htmlFile := "/svc/index.html"
 
@@ -135,6 +138,7 @@ func TestLinkJSGlobals_InlineHandler(t *testing.T) {
 // TestLinkJSGlobals_ImportsFirst: a name explained by an import is NOT
 // resolved via globals even when a global with the same name exists.
 func TestLinkJSGlobals_ImportsFirst(t *testing.T) {
+	t.Parallel()
 	libFile := "/svc/lib.js"
 	mainFile := "/svc/main.js"
 
@@ -163,6 +167,7 @@ func TestLinkJSGlobals_ImportsFirst(t *testing.T) {
 
 // TestLinkJSGlobals_Determinism: two runs on identical input produce identical edge order.
 func TestLinkJSGlobals_Determinism(t *testing.T) {
+	t.Parallel()
 	fileA := "/svc/a.js"
 	fileB := "/svc/b.js"
 	mainFile := "/svc/main.js"
@@ -208,6 +213,7 @@ func TestLinkJSGlobals_Determinism(t *testing.T) {
 // TestExtractHandlerCandidates: unit tests for the inline handler candidate
 // extractor (most-specific first).
 func TestExtractHandlerCandidates(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input string
 		want  []string
@@ -230,6 +236,7 @@ func TestExtractHandlerCandidates(t *testing.T) {
 // TestLinkJSGlobals_NamespacedHandler: dom_target handler="window.maple.save()"
 // resolves to the global_path node via the full dotted key — exactly one edge.
 func TestLinkJSGlobals_NamespacedHandler(t *testing.T) {
+	t.Parallel()
 	libFile := "/svc/maple.js"
 	tmplFile := "/svc/modal.templ"
 
@@ -259,6 +266,7 @@ func TestLinkJSGlobals_NamespacedHandler(t *testing.T) {
 // unknown symbol produces zero edges and one dom_listen_unresolved ledger
 // entry (rule #12 — no silent drops).
 func TestLinkJSGlobals_UnresolvedHandlerLedgered(t *testing.T) {
+	t.Parallel()
 	tmplFile := "/svc/modal.templ"
 
 	listener := graph.Node{
