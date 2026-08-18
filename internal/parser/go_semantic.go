@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
@@ -94,6 +95,12 @@ func collapseTestVariants(pkgs []*packages.Package) []*packages.Package {
 // `func` keyword position). Edges where either endpoint is not in knownNodes are
 // dropped.
 func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.FileSet, knownNodes map[string]bool) SemanticResult {
+	// Reset the canonicalPath memoization for this service. AnalyzeService runs
+	// single-threaded per call (no concurrency within or across calls in the
+	// indexer's semantic pass), so replacing the map here is race-free and
+	// keeps the cache from serving another service's paths or growing without
+	// bound across a long-lived process that re-indexes repeatedly.
+	canonicalPathCache = sync.Map{}
 	cfg := &packages.Config{
 		Mode: packages.LoadAllSyntax,
 		Dir:  dir,
@@ -861,19 +868,34 @@ func collectPositiveTags(expr constraint.Expr, tagSet map[string]bool) {
 	}
 }
 
+// canonicalPathCache memoizes canonicalPath within a single AnalyzeService
+// call (reset at its start). Profiling a cold 10k-file index found
+// EvalSymlinks — a real Lstat per path component — was ~15% of total index
+// time: canonicalPath is called once per function during call-graph
+// resolution (resolveFunc, isServiceFunc) and from several extractor passes,
+// so the same handful of file paths get re-resolved thousands of times per
+// service. Scoped (not process-global) so a long-lived process re-indexing
+// the same workspace repeatedly never serves a stale symlink resolution.
+var canonicalPathCache sync.Map // path → canonical path
+
 // canonicalPath resolves a path to its absolute, symlink-evaluated form so
 // workspace-relative node paths and absolute go/packages positions compare
 // equal (filepath.Abs resolves relative paths against the indexer's cwd,
 // which is the workspace root).
 func canonicalPath(path string) string {
+	if v, ok := canonicalPathCache.Load(path); ok {
+		return v.(string)
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved
+	resolved := abs
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		resolved = r
 	}
-	return abs
+	canonicalPathCache.Store(path, resolved)
+	return resolved
 }
 
 // isServiceFunc returns true if fn is a non-synthetic function whose source file
