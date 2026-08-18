@@ -114,7 +114,7 @@ describe("Palette", () => {
     expect(layoutPrefs.activity()).toBe("explore"); // unchanged
   });
 
-  it("Enter on a symbol result builds its file scope, selects it, and reveals it in the tree (UN.2)", async () => {
+  it("Enter on a symbol result builds a depth-3 neighborhood scope, selects it, and reveals it in the tree", async () => {
     vi.useFakeTimers();
     const revealSpy = vi.spyOn(treeStore, "reveal").mockResolvedValue();
     type("createUser");
@@ -128,13 +128,13 @@ describe("Palette", () => {
 
     key("Enter");
 
-    expect(scopeStore.stack().at(-1)).toEqual({ kind: "file", service: "auth", path: "app/user.rb" });
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "neighborhood", nodeId: "auth:app/user.rb:method:createUser:10", depth: 3 });
     expect(selectionStore.selection()).toEqual({ kind: "node", id: "auth:app/user.rb:method:createUser:10" });
     expect(revealSpy).toHaveBeenCalledWith("auth:app/user.rb:method:createUser:10");
     expect(paletteStore.isOpen()).toBe(false);
   });
 
-  it("falls back to a neighborhood drill for a symbol with no known file (never a silent no-op)", async () => {
+  it("builds a depth-3 neighborhood scope for a symbol with no known file too (never a silent no-op)", async () => {
     vi.useFakeTimers();
     type("mystery");
     await vi.advanceTimersByTimeAsync(150);
@@ -147,7 +147,7 @@ describe("Palette", () => {
 
     key("Enter");
 
-    expect(scopeStore.stack().at(-1)).toEqual({ kind: "neighborhood", nodeId: "svc:synthetic:mystery", depth: 1 });
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "neighborhood", nodeId: "svc:synthetic:mystery", depth: 3 });
   });
 
   it("Enter on a service result pushes its service scope", async () => {

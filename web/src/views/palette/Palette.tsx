@@ -122,19 +122,18 @@ function matchCommands(parsed: ParsedQuery): Command[] {
   return all.filter(c => c.label.toLowerCase().includes(needle)).slice(0, RESULT_LIMIT);
 }
 
-// A symbol result's Enter/pick behavior (UN.2): land in its file scope with
-// it selected and revealed in the tree, in one action — replaces the old
-// generic neighborhood-drill. A symbol with no known file (synthetic node)
-// falls back to the neighborhood drill rather than silently no-opping.
-function openSymbol(id: string, service: string, file: string) {
-  if (file) {
-    scopeStore.push({ kind: "file", service, path: file });
-    selectionStore.setSelection({ kind: "node", id });
-    treeStore.reveal(id);
-  } else {
-    handleIntent({ type: "select", target: { kind: "node", id } });
-    handleIntent({ type: "drill", target: { kind: "node", id } });
-  }
+// A symbol result's Enter/pick behavior: land in a neighborhood scope
+// centered on the picked node (depth 3), selected and revealed in the file
+// tree, in one action. File scope (UN.2's original behavior) dumped every
+// symbol declared in the file — including hundreds of unrelated ones for a
+// large router/handlers file — and collapsed cross-service edges into a
+// single boundary stub, hiding the actual connected node. Neighborhood
+// scope shows only what's really connected, cross-service included, since
+// /api/graph/trace does a real BFS with no service filtering.
+function openSymbol(id: string, file: string) {
+  scopeStore.push({ kind: "neighborhood", nodeId: id, depth: 3 });
+  selectionStore.setSelection({ kind: "node", id });
+  if (file) treeStore.reveal(id);
 }
 
 // UF.8: "Explore links" — selects the symbol and leaves a one-shot request
@@ -203,7 +202,7 @@ export default function Palette() {
     switch (entry.group) {
       case "symbol": {
         const s = entry.item;
-        openSymbol(s.id, s.service, s.file);
+        openSymbol(s.id, s.file);
         paletteStore.addRecent({ id: s.id, kind: "symbol", label: s.label, sub: `${s.service} · ${s.file}` });
         break;
       }
@@ -228,8 +227,8 @@ export default function Palette() {
       case "recent": {
         const r = entry.item;
         if (r.kind === "symbol") {
-          const [service, file] = (r.sub ?? "").split(" · ");
-          openSymbol(r.id, service ?? "", file ?? "");
+          const [, file] = (r.sub ?? "").split(" · ");
+          openSymbol(r.id, file ?? "");
         } else if (r.kind === "file") {
           const [service, ...rest] = r.id.split(":");
           scopeStore.push({ kind: "file", service, path: rest.join(":") });
