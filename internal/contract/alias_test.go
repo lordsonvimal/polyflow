@@ -408,6 +408,109 @@ func TestEnrichAliases_EngineIntegration(t *testing.T) {
 	assert.Equal(t, "h1", result.Edges[0].To)
 }
 
+// ── WB.3: producer_alias_obj_call candidate resolution ─────────────────────────
+
+func objCallCandidateNode(service, file string, line int, viaAlias, key, url string) graph.Node {
+	return graph.Node{
+		// WB.2: every candidate at one call site shares this exact ID (http_client
+		// nodes are keyed by pattern name, not by which object key they captured) —
+		// intentional, verified tolerable since WB.3 always collapses the group to
+		// one node before anything is persisted.
+		ID: service + ":" + file + ":http_client:producer_alias_obj_call:" + string(rune('0'+line)),
+		Type: graph.NodeTypeHTTPClient, Service: service, File: file, Line: line,
+		Meta: map[string]string{
+			"pattern":   "producer_alias_obj_call",
+			"via_alias": viaAlias,
+			"key":       key,
+			"url":       url,
+			"path":      url,
+		},
+	}
+}
+
+func wrapperURLFactNode(service, file string, line int, wrapperName, urlKey string) graph.Node {
+	return graph.Node{
+		ID: service + ":" + file + ":variable:wrapper_url_key_member_fetch_decl:" + string(rune('0'+line)),
+		Type: graph.NodeTypeVariable, Service: service, File: file, Line: line,
+		Meta: map[string]string{
+			"pattern":     "wrapper_url_key_member_fetch_decl",
+			"wrapper_name": wrapperName,
+			"url_key":     urlKey,
+		},
+	}
+}
+
+// TestEnrichAliases_ObjCallSingleKey: a lone "url" key candidate resolves
+// exactly as before WB.2/WB.3 existed — no grouping ambiguity, no ledger entry.
+func TestEnrichAliases_ObjCallSingleKey(t *testing.T) {
+	nodes := []graph.Node{
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "url", "/items"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	require.Len(t, enriched, 1)
+	assert.Equal(t, "", enriched[0].Meta["key"], "obj_key stripped off the survivor")
+	assert.Equal(t, "/items", enriched[0].Meta["url"])
+}
+
+// TestEnrichAliases_ObjCallPriorityFallback: no wrapper fact for the callee →
+// falls back to the fixed priority list, picking "uri" over "method".
+func TestEnrichAliases_ObjCallPriorityFallback(t *testing.T) {
+	nodes := []graph.Node{
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "method", "GET"),
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "uri", "/a"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	require.Len(t, enriched, 1)
+	assert.Equal(t, "/a", enriched[0].Meta["url"], "priority list prefers uri over method")
+}
+
+// TestEnrichAliases_ObjCallWrapperResolved: a WB.1 wrapper_url_param_key fact
+// for the callee wins outright over the fixed priority list.
+func TestEnrichAliases_ObjCallWrapperResolved(t *testing.T) {
+	nodes := []graph.Node{
+		wrapperURLFactNode("svc-a", "a.js", 1, "apiFetch", "baseURL"),
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "url", "/wrong"),
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "baseURL", "/right"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	clients := findNodesByType(enriched, graph.NodeTypeHTTPClient)
+	require.Len(t, clients, 1)
+	assert.Equal(t, "/right", clients[0].Meta["url"], "wrapper fact overrides fixed priority order")
+}
+
+// TestEnrichAliases_ObjCallAmbiguous: no wrapper fact, no key in the priority
+// list on either candidate → first-by-source-order wins, plus a
+// wrapper_key_ambiguous ledger entry (recall preserved, nothing silently guessed).
+func TestEnrichAliases_ObjCallAmbiguous(t *testing.T) {
+	nodes := []graph.Node{
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "foo", "/first"),
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "bar", "/second"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "wrapper_key_ambiguous", unresolved[0].Kind)
+	assert.Equal(t, "apiFetch", unresolved[0].Name)
+	clients := findNodesByType(enriched, graph.NodeTypeHTTPClient)
+	require.Len(t, clients, 1)
+	assert.Equal(t, "/first", clients[0].Meta["url"], "first by source order wins when genuinely ambiguous")
+}
+
+// TestEnrichAliases_ObjCallDifferentSpansIndependent: two distinct call sites
+// (different lines) never cross-contaminate each other's grouping.
+func TestEnrichAliases_ObjCallDifferentSpansIndependent(t *testing.T) {
+	nodes := []graph.Node{
+		objCallCandidateNode("svc-a", "a.js", 10, "apiFetch", "url", "/a"),
+		objCallCandidateNode("svc-a", "a.js", 20, "apiFetch", "uri", "/b"),
+	}
+	enriched, unresolved := contract.EnrichAliases(nodes)
+	require.Empty(t, unresolved)
+	clients := findNodesByType(enriched, graph.NodeTypeHTTPClient)
+	require.Len(t, clients, 2)
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func findNodesByType(nodes []graph.Node, t graph.NodeType) []graph.Node {
