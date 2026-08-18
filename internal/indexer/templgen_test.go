@@ -9,6 +9,7 @@ import (
 )
 
 func TestTemplGenStale(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "page.templ")
 	gen := filepath.Join(dir, "page_templ.go")
@@ -47,6 +48,7 @@ func TestTemplGenStale(t *testing.T) {
 // TestEnsureTemplGenerated_NoTemplFiles: a service with no .templ sources is a
 // no-op with an empty note (no spurious warnings on non-templ Go services).
 func TestEnsureTemplGenerated_NoTemplFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644); err != nil {
 		t.Fatal(err)
@@ -60,6 +62,7 @@ func TestEnsureTemplGenerated_NoTemplFiles(t *testing.T) {
 // TestEnsureTemplGenerated_UpToDate: .templ files whose generated siblings are
 // fresh need no codegen and produce no note.
 func TestEnsureTemplGenerated_UpToDate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "page.templ")
 	gen := filepath.Join(dir, "page_templ.go")
@@ -86,6 +89,7 @@ func TestEnsureTemplGenerated_UpToDate(t *testing.T) {
 // templ is unavailable, the caller gets an actionable note rather than a silent
 // fallback. Only meaningful when `templ` is not installed on the test machine.
 func TestEnsureTemplGenerated_MissingBinaryActionableNote(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("templ"); err == nil {
 		t.Skip("templ is installed; missing-binary path not exercised")
 	}

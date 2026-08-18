@@ -31,6 +31,7 @@ func makeFileNode(service, file string) graph.Node {
 // TestLinkJSImportEdges_RelativeImport: a TS file that imports from a relative
 // module produces a static file→file imports edge between the file nodes.
 func TestLinkJSImportEdges_RelativeImport(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Create utils.ts
@@ -86,6 +87,7 @@ helper();
 // TestLinkJSImportEdges_CrossDir: a relative import using ../ resolves
 // correctly when the importing and imported files are in different directories.
 func TestLinkJSImportEdges_CrossDir(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	lib := filepath.Join(dir, "lib")
 	if err := os.MkdirAll(lib, 0o755); err != nil {
@@ -134,6 +136,7 @@ export class Widget extends Base {}
 // edges against any real index, though every synthetic same-representation
 // test above kept passing.
 func TestLinkJSImportEdges_AbsoluteWalkPaths_RelativeNodeFile(t *testing.T) {
+	t.Parallel()
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -189,6 +192,7 @@ helper();
 // bindings, pure side-effect) resolves to the stylesheet's file node like any
 // other relative import — CSS files aren't excluded from the target set.
 func TestLinkJSImportEdges_CSSSideEffectImport(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	cssFile := filepath.Join(dir, "index.css")
@@ -223,6 +227,7 @@ func TestLinkJSImportEdges_CSSSideEffectImport(t *testing.T) {
 // TestLinkJSImportEdges_ExtImportsNotEdge: npm bare-specifier imports produce
 // no edges and no unresolved refs; their count goes to file-node meta.
 func TestLinkJSImportEdges_ExtImportsNotEdge(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	appFile := filepath.Join(dir, "app.ts")
 	if err := os.WriteFile(appFile, []byte(`import React from "react";
@@ -259,6 +264,7 @@ import { createStore } from "redux";
 // imported file lists the importer via the file→file edge. This proves the
 // edge carries information that call edges don't.
 func TestLinkJSImportEdges_NoCallEdges_FileHopProves(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// types.ts has only type definitions (no callable functions).
@@ -295,6 +301,7 @@ const f: Foo = { x: 1 };
 // TestLinkJSImportEdges_GoFileNoEdge: Go files are not JS/TS and must not
 // produce any import edges (Go is deliberately descoped in I.3).
 func TestLinkJSImportEdges_GoFileNoEdge(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	goFile := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(goFile, []byte(`package main
@@ -324,6 +331,7 @@ func main() { fmt.Println("hi") }
 // TestLinkRubyImportEdges_RequireRelative: require_relative 'path' produces a
 // static file→file imports edge.
 func TestLinkRubyImportEdges_RequireRelative(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	helperFile := filepath.Join(dir, "helper.rb")
@@ -369,6 +377,7 @@ include Helper
 // TestLinkRubyImportEdges_MissingTarget: require_relative to a file that
 // doesn't exist in the indexed set goes to the import_unresolved ledger.
 func TestLinkRubyImportEdges_MissingTarget(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	mainFile := filepath.Join(dir, "main.rb")
 	if err := os.WriteFile(mainFile, []byte(`require_relative 'nonexistent'
@@ -399,6 +408,7 @@ func TestLinkRubyImportEdges_MissingTarget(t *testing.T) {
 // TestLinkRubyImportEdges_RequireRelativeSubdir: require_relative 'models/user'
 // resolves a file in a subdirectory.
 func TestLinkRubyImportEdges_RequireRelativeSubdir(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	models := filepath.Join(dir, "models")
 	if err := os.MkdirAll(models, 0o755); err != nil {
@@ -436,6 +446,7 @@ func TestLinkRubyImportEdges_RequireRelativeSubdir(t *testing.T) {
 // TestLinkRubyImportEdges_GoNegative: Go files in the service file list must
 // not produce any edges (Ruby pass is Ruby-only).
 func TestLinkRubyImportEdges_GoNegative(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	goFile := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(goFile, []byte(`package main`), 0o644); err != nil {

@@ -116,6 +116,7 @@ func indexQuickstart(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Wor
 
 // TestQuickstart_StepByStep mirrors what docs/quickstart.md asks the user to do.
 func TestQuickstart_StepByStep(t *testing.T) {
+	t.Parallel()
 	store, _ := indexQuickstart(t)
 	ctx := context.Background()
 
@@ -151,6 +152,7 @@ func TestQuickstart_StepByStep(t *testing.T) {
 // byte-identical node and edge sets (bug-class rule 2, required for every
 // phase that produces a set).
 func TestQuickstart_Determinism(t *testing.T) {
+	t.Parallel()
 	store1, _ := indexQuickstart(t)
 	store2, _ := indexQuickstart(t)
 

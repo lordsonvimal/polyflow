@@ -143,6 +143,7 @@ func indexPythonGo(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Works
 // to the Go gin service's GET /users handler via a cross-service http_call
 // edge, with only YAML pattern files added.
 func TestPythonGo_CrossServiceHTTPCall(t *testing.T) {
+	t.Parallel()
 	store, _ := indexPythonGo(t)
 	ctx := context.Background()
 
@@ -199,6 +200,7 @@ func TestPythonGo_CrossServiceHTTPCall(t *testing.T) {
 // TestPythonGo_PythonHandlerNodes verifies that the FastAPI handler decorators
 // produce http_handler nodes in the svc-python service.
 func TestPythonGo_PythonHandlerNodes(t *testing.T) {
+	t.Parallel()
 	store, _ := indexPythonGo(t)
 	ctx := context.Background()
 
@@ -218,6 +220,7 @@ func TestPythonGo_PythonHandlerNodes(t *testing.T) {
 // TestPythonGo_GoHandlerNodes verifies that gin routes produce http_handler
 // nodes in the svc-go service.
 func TestPythonGo_GoHandlerNodes(t *testing.T) {
+	t.Parallel()
 	store, _ := indexPythonGo(t)
 	ctx := context.Background()
 

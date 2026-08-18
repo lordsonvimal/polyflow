@@ -67,6 +67,7 @@ func callTargets(edges []graph.Edge, fromID string) []string {
 // ClientApi::V1::LrosController#update. Before this pass the chain ended at
 // config/routes.rb and `impact --file lros_controller.rb` reported one file.
 func TestLinkRailsRouteActions_WorkedExample(t *testing.T) {
+	t.Parallel()
 	const ctrl = "/repo/app/controllers/client_api/v1/lros_controller.rb"
 	h := railsHandler("nextGen", "PUT /client_api/v1/lros/:id", 592, map[string]string{
 		"action":   "update",
@@ -100,6 +101,7 @@ func TestLinkRailsRouteActions_WorkedExample(t *testing.T) {
 // Rails puts a nested child's controller at the namespace level, not under the
 // parent.
 func TestLinkRailsRouteActions_NamespaceDisambiguates(t *testing.T) {
+	t.Parallel()
 	const nsCtrl = "/repo/app/controllers/client_api/v1/files_controller.rb"
 	const rootCtrl = "/repo/app/controllers/files_controller.rb"
 
@@ -128,6 +130,7 @@ func TestLinkRailsRouteActions_NamespaceDisambiguates(t *testing.T) {
 // disguised 36 phantom edges as honest ambiguity. Two same-named controllers
 // in namespaces neither of which the route names must produce no edge at all.
 func TestLinkRailsRouteActions_AmbiguousRefuses(t *testing.T) {
+	t.Parallel()
 	h := railsHandler("nextGen", "GET /reports", 20, map[string]string{
 		"action":   "index",
 		"resource": "reports",
@@ -161,6 +164,7 @@ func TestLinkRailsRouteActions_AmbiguousRefuses(t *testing.T) {
 // The rule: if a controller exists at the derived namespace, the route
 // resolves there or not at all.
 func TestLinkRailsRouteActions_APIControllerWithoutNewStaysUnresolved(t *testing.T) {
+	t.Parallel()
 	const apiCtrl = "/repo/app/controllers/client_api/v1/users_controller.rb"
 	const rootCtrl = "/repo/app/controllers/users_controller.rb"
 
@@ -194,6 +198,7 @@ func TestLinkRailsRouteActions_APIControllerWithoutNewStaysUnresolved(t *testing
 //
 // A unique same-named controller elsewhere in the service is not evidence.
 func TestLinkRailsRouteActions_NoNameSimilarityFallback(t *testing.T) {
+	t.Parallel()
 	const elsewhere = "/repo/app/controllers/client_api/v1/studies_controller.rb"
 	h := railsHandler("nextGen", "GET /studies", 126, map[string]string{
 		"action":   "index",
@@ -215,6 +220,7 @@ func TestLinkRailsRouteActions_NoNameSimilarityFallback(t *testing.T) {
 // to be read back off the path — past the trailing action segment, and past
 // the `:id` for the member form.
 func TestLinkRailsRouteActions_VerbRoutes(t *testing.T) {
+	t.Parallel()
 	const workspaces = "/repo/app/controllers/workspaces_controller.rb"
 	const files = "/repo/app/controllers/client_api/v1/files_controller.rb"
 
@@ -250,6 +256,7 @@ func TestLinkRailsRouteActions_VerbRoutes(t *testing.T) {
 // node with no end_line is a call site — `before_action :restrict_access` —
 // and a route must never link to the filter invocation instead of the def.
 func TestLinkRailsRouteActions_BeforeActionIsNotAnAction(t *testing.T) {
+	t.Parallel()
 	const ctrl = "/repo/app/controllers/sessions_controller.rb"
 	callSite := graph.Node{
 		ID:       "nextGen:" + ctrl + ":function:destroy:3",
@@ -279,6 +286,7 @@ func TestLinkRailsRouteActions_BeforeActionIsNotAnAction(t *testing.T) {
 // LinkRouteHandlers: a Go route carries Meta["handler"] and is that pass's
 // business. Handling it here too would double-wire it.
 func TestLinkRailsRouteActions_GoRoutesUntouched(t *testing.T) {
+	t.Parallel()
 	goRoute := graph.Node{
 		ID:       "dsw-manager:router.go:http_handler:GET /config:12",
 		Type:     graph.NodeTypeHTTPHandler,
@@ -300,6 +308,7 @@ func TestLinkRailsRouteActions_GoRoutesUntouched(t *testing.T) {
 // a known parser gap 61 times per index and re-inflate the very footer the
 // ledger-hygiene phase exists to shrink.
 func TestLinkRailsRouteActions_HTTPVerbRouteIsSilent(t *testing.T) {
+	t.Parallel()
 	h := railsHandler("nextGen", "GET /async_operations/poll", 88, map[string]string{
 		"full_path": "/async_operations/poll",
 		"method":    "GET",
@@ -315,6 +324,7 @@ func TestLinkRailsRouteActions_HTTPVerbRouteIsSilent(t *testing.T) {
 // action. Two outgoing edges would mean the index collapsed distinct
 // controllers onto one label, the bug class 8d4f19d fixed on the Go side.
 func TestLinkRailsRouteActions_OneEdgePerRoute(t *testing.T) {
+	t.Parallel()
 	const ctrl = "/repo/app/controllers/lros_controller.rb"
 	h := railsHandler("nextGen", "GET /lros", 5, map[string]string{
 		"action":   "index",

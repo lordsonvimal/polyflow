@@ -87,6 +87,7 @@ func dxFixture(svc string) (nodes []graph.Node, edges []graph.Edge) {
 // TestMixinMethods_ResolvesThroughInclude is the base case: 2210 of the fleet's
 // 7941 call_ref entries are exactly this.
 func TestMixinMethods_ResolvesThroughInclude(t *testing.T) {
+	t.Parallel()
 	nodes, edges := dxFixture("nextGen")
 	refs := []graph.UnresolvedRef{
 		callRef("nextGen", "/repo/app/controllers/files_controller.rb", 12, "logger_context"),
@@ -114,6 +115,7 @@ func TestMixinMethods_ResolvesThroughInclude(t *testing.T) {
 // ship a lib/dx.rb defining logger_context; a name-keyed resolver would bind
 // nextGen's 2210 call sites to all four.
 func TestMixinMethods_NeverCrossesAServiceBoundary(t *testing.T) {
+	t.Parallel()
 	aNodes, aEdges := dxFixture("nextGen")
 	bNodes, bEdges := dxFixture("nextgen-cdr")
 	// Same file paths would collide in the index; give svc-b its own tree.
@@ -147,6 +149,7 @@ func TestMixinMethods_NeverCrossesAServiceBoundary(t *testing.T) {
 // down from the one that writes `include Dx` still calls the method; that is
 // where most of nextGen's call sites sit.
 func TestMixinMethods_ResolvesThroughTheSuperclassChain(t *testing.T) {
+	t.Parallel()
 	svc := "nextGen"
 	dx := mixinClass(svc, "/repo/lib/dx.rb", "Dx", 5, 80)
 	logger := mixinMethod(svc, "/repo/lib/dx.rb", "Dx", "logger_context", 31, 33)
@@ -175,6 +178,7 @@ func TestMixinMethods_ResolvesThroughTheSuperclassChain(t *testing.T) {
 // grandparent also defines is what actually runs, and depth is enough to say so
 // without needing the include order.
 func TestMixinMethods_NearestDefinitionWins(t *testing.T) {
+	t.Parallel()
 	svc := "nextGen"
 	far := mixinClass(svc, "/repo/lib/dx.rb", "Dx", 1, 50)
 	farM := mixinMethod(svc, "/repo/lib/dx.rb", "Dx", "log_it", 10, 12)
@@ -200,6 +204,7 @@ func TestMixinMethods_NearestDefinitionWins(t *testing.T) {
 // define the name. `inherits` edges carry no source order, so Ruby's
 // last-include-wins rule is unavailable — emit both and say so, rather than pick.
 func TestMixinMethods_TiedDefinitionsFanOut(t *testing.T) {
+	t.Parallel()
 	svc := "nextGen"
 	a := mixinClass(svc, "/repo/lib/a.rb", "A", 1, 20)
 	aM := mixinMethod(svc, "/repo/lib/a.rb", "A", "log_it", 5, 7)
@@ -228,6 +233,7 @@ func TestMixinMethods_TiedDefinitionsFanOut(t *testing.T) {
 // module in must keep its blind spot. This is the whole reason resolution walks
 // edges instead of looking a name up.
 func TestMixinMethods_UnrelatedClassStaysUnresolved(t *testing.T) {
+	t.Parallel()
 	nodes, edges := dxFixture("nextGen")
 	other := mixinClass("nextGen", "/repo/app/models/thing.rb", "Thing", 1, 30)
 	otherM := mixinMethod("nextGen", "/repo/app/models/thing.rb", "Thing", "save!", 4, 10)
@@ -242,6 +248,7 @@ func TestMixinMethods_UnrelatedClassStaysUnresolved(t *testing.T) {
 // TestMixinMethods_ClassBodyCallIsAttributedToTheClass. `include`d DSL runs at
 // load time, outside any method, and the class is where it runs.
 func TestMixinMethods_ClassBodyCallIsAttributedToTheClass(t *testing.T) {
+	t.Parallel()
 	nodes, edges := dxFixture("nextGen")
 	// Line 5 is inside FilesController (3..60) but before `show` (10..20).
 	refs := []graph.UnresolvedRef{
@@ -255,6 +262,7 @@ func TestMixinMethods_ClassBodyCallIsAttributedToTheClass(t *testing.T) {
 // TestMixinMethods_CyclicAncestorsTerminate. A reconstructed chain is not
 // guaranteed acyclic — two concerns that include each other are legal Ruby.
 func TestMixinMethods_CyclicAncestorsTerminate(t *testing.T) {
+	t.Parallel()
 	svc := "nextGen"
 	a := mixinClass(svc, "/repo/lib/a.rb", "A", 1, 20)
 	b := mixinClass(svc, "/repo/lib/b.rb", "B", 1, 20)
@@ -276,6 +284,7 @@ func TestMixinMethods_CyclicAncestorsTerminate(t *testing.T) {
 // TestMixinMethods_Deterministic. Rule 2: the same input must produce the same
 // edge list, including when the ancestor set comes out of a map.
 func TestMixinMethods_Deterministic(t *testing.T) {
+	t.Parallel()
 	nodes, edges := dxFixture("nextGen")
 	refs := []graph.UnresolvedRef{
 		callRef("nextGen", "/repo/app/controllers/files_controller.rb", 14, "lean_backtrace"),

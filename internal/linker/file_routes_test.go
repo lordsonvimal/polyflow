@@ -8,6 +8,7 @@ import (
 
 // TestNextPagesPath verifies the next-pages / nuxt path-mapping dialect.
 func TestNextPagesPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want string
@@ -30,6 +31,7 @@ func TestNextPagesPath(t *testing.T) {
 
 // TestNextSegmentPath verifies route-group stripping and ledger triggers.
 func TestNextSegmentPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want string
@@ -57,6 +59,7 @@ func TestNextSegmentPath(t *testing.T) {
 
 // TestNuxtServerPath verifies method extraction from filename suffix.
 func TestNuxtServerPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in     string
 		path   string
@@ -81,6 +84,7 @@ func TestNuxtServerPath(t *testing.T) {
 
 // TestRemixPath verifies the Remix dot-separator and $param conventions.
 func TestRemixPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want string
@@ -102,6 +106,7 @@ func TestRemixPath(t *testing.T) {
 
 // TestIsPageFile and TestIsHandlerFile verify per-framework file classification.
 func TestIsPageFile(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		framework string
 		file      string
@@ -126,6 +131,7 @@ func TestIsPageFile(t *testing.T) {
 }
 
 func TestIsHandlerFile(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		framework string
 		file      string

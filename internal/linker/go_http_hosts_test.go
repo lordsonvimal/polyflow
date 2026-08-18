@@ -86,6 +86,7 @@ func main() {
 }
 
 func TestResolveGoHTTPHosts_TwoHopConstructor(t *testing.T) {
+	t.Parallel()
 	dir, paths := writeGoFixture(t, twoHopFixture())
 
 	nodes := []graph.Node{
@@ -116,6 +117,7 @@ func TestResolveGoHTTPHosts_TwoHopConstructor(t *testing.T) {
 // A key-dynamic node (the matcher's `c.baseURL+path` shape) in the same method
 // resolves through the same chain.
 func TestResolveGoHTTPHosts_KeyDynamicNode(t *testing.T) {
+	t.Parallel()
 	dir, paths := writeGoFixture(t, twoHopFixture())
 
 	nodes := []graph.Node{
@@ -138,6 +140,7 @@ func TestResolveGoHTTPHosts_KeyDynamicNode(t *testing.T) {
 }
 
 func TestResolveGoHTTPHosts_AmbiguousBaseLeftUnstamped(t *testing.T) {
+	t.Parallel()
 	files := twoHopFixture()
 	// Two call sites wire the same constructor to two different env vars: the
 	// deployed target is genuinely unknown here, so nothing may be stamped.
@@ -194,6 +197,7 @@ func LoadConfig() *Config {
 // A request built from a hard-coded URL needs no attribution and must not
 // borrow the receiver's env var.
 func TestResolveGoHTTPHosts_LiteralURLNotAttributed(t *testing.T) {
+	t.Parallel()
 	dir, paths := writeGoFixture(t, twoHopFixture())
 
 	nodes := []graph.Node{
@@ -214,6 +218,7 @@ func TestResolveGoHTTPHosts_LiteralURLNotAttributed(t *testing.T) {
 }
 
 func TestResolveGoHTTPHosts_NoGoNodes_NoOp(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "r1", Service: "web", Type: graph.NodeTypeHTTPClient, Language: "ruby",
 			File: "/x/a.rb", Meta: map[string]string{"key_dynamic": "true"}},
@@ -226,6 +231,7 @@ func TestResolveGoHTTPHosts_NoGoNodes_NoOp(t *testing.T) {
 
 // A method that reads two env-derived base fields cannot be attributed to one.
 func TestResolveGoHTTPHosts_TwoBasesInOneMethodUnstamped(t *testing.T) {
+	t.Parallel()
 	files := map[string]string{
 		"config.go": `package main
 
@@ -373,6 +379,7 @@ func userAppNode(dir string) graph.Node {
 }
 
 func TestResolveGoHTTPHosts_ThreeHopConstructor(t *testing.T) {
+	t.Parallel()
 	dir, paths := writeGoFixture(t, threeHopFixture())
 	nodes := []graph.Node{userAppNode(dir)}
 
@@ -389,6 +396,7 @@ func TestResolveGoHTTPHosts_ThreeHopConstructor(t *testing.T) {
 // One more forwarding frame than the motivating case, to prove the fixed point
 // iterates rather than hard-coding a depth of three.
 func TestResolveGoHTTPHosts_FourHopConstructor(t *testing.T) {
+	t.Parallel()
 	files := threeHopFixture()
 	files["tile_publisher.go"] = `package main
 
@@ -440,6 +448,7 @@ func forwarderChain(n int) string {
 // is needed to reach the client's constructor — so n intermediate frames need
 // n+1 rounds and resolve exactly while n+1 <= maxHostHops.
 func TestResolveGoHTTPHosts_HopLimitBoundary(t *testing.T) {
+	t.Parallel()
 	for n := 1; n <= maxHostHops+2; n++ {
 		wantResolved := n+1 <= maxHostHops
 		t.Run(fmt.Sprintf("%d_frames", n), func(t *testing.T) {
@@ -464,6 +473,7 @@ func TestResolveGoHTTPHosts_HopLimitBoundary(t *testing.T) {
 // Positional agreement alone is not evidence across a frame: a forwarder that
 // hands a non-host-named parameter onward must not carry its env var.
 func TestResolveGoHTTPHosts_NonHostParamDoesNotForward(t *testing.T) {
+	t.Parallel()
 	files := threeHopFixture()
 	files["config.go"] = `package main
 
@@ -511,6 +521,7 @@ func main() {
 // two callers wire NewTilePublisher to different env vars, so nothing it
 // forwards has support any more.
 func TestResolveGoHTTPHosts_ForwardedConflictUnstamped(t *testing.T) {
+	t.Parallel()
 	files := threeHopFixture()
 	files["config.go"] = `package main
 
@@ -551,6 +562,7 @@ func main() {
 
 // Mutual recursion between forwarders must terminate, not spin.
 func TestResolveGoHTTPHosts_RecursiveForwarderTerminates(t *testing.T) {
+	t.Parallel()
 	files := threeHopFixture()
 	files["tile_publisher.go"] = `package main
 
@@ -585,6 +597,7 @@ func pongBaseURL(baseURL, authToken string) *TilePublisher {
 
 // Determinism: the fixed point must not depend on map iteration order.
 func TestResolveGoHTTPHosts_ForwardingDeterministic(t *testing.T) {
+	t.Parallel()
 	dir, paths := writeGoFixture(t, threeHopFixture())
 	for i := 0; i < 25; i++ {
 		nodes := []graph.Node{userAppNode(dir)}
