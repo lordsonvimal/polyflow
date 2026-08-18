@@ -115,6 +115,7 @@ func listenTo(nodes []graph.Node, edges []graph.Edge, elemID string) map[string]
 // bind, because only the request that rendered the page knows which were on it
 // (rule #1: fan out, never pick one).
 func TestDOMListen_DelegatedBindsToSelectorNotRoot(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := domListenFixture(t)
 
 	targets := elementIDs(nodes, "class", "js-remove-track")
@@ -142,6 +143,7 @@ func TestDOMListen_DelegatedBindsToSelectorNotRoot(t *testing.T) {
 // make that argument optional without dropping `$(document).on(evt, fn)` — so
 // these bound to nothing at all before this phase.
 func TestDOMListen_ReceiverSelectorAndShorthand(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := domListenFixture(t)
 
 	btn := elementIDs(nodes, "id", "approve-btn")
@@ -162,6 +164,7 @@ func TestDOMListen_ReceiverSelectorAndShorthand(t *testing.T) {
 // inline handler's `$.ajax` call must attribute to the handler, not to the
 // file-wide (module) node every listener used to share.
 func TestDOMListen_HandlerOwnsItsBody(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := domListenFixture(t)
 
 	var handlerID string
@@ -194,6 +197,7 @@ func TestDOMListen_HandlerOwnsItsBody(t *testing.T) {
 // listener with no delegated selector names no element at all — there is nothing
 // to resolve, so ledgering it would fabricate a clue (the K.2 rule).
 func TestDOMListen_LedgerDiscipline(t *testing.T) {
+	t.Parallel()
 	_, _, unresolved := domListenFixture(t)
 
 	var selectors []string
@@ -209,6 +213,7 @@ func TestDOMListen_LedgerDiscipline(t *testing.T) {
 }
 
 func TestDOMListen_Deterministic(t *testing.T) {
+	t.Parallel()
 	_, first, _ := domListenFixture(t)
 	for i := 0; i < 4; i++ {
 		_, again, _ := domListenFixture(t)

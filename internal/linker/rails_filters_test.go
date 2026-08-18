@@ -108,6 +108,7 @@ func filterTargets(nodes []graph.Node, edges []graph.Edge, fromID string) []stri
 // check that guards every request now sits on the path out of each action, and
 // on the class that registers it.
 func TestLinkRailsFilters_ActionReachesCallback(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "AgentsController")
@@ -125,6 +126,7 @@ func TestLinkRailsFilters_ActionReachesCallback(t *testing.T) {
 // TestLinkRailsFilters_OnlyAndExcept: the options are the reason action-scope
 // edges exist at all -- the chain genuinely differs per action.
 func TestLinkRailsFilters_OnlyAndExcept(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	// only: %i[show update]
@@ -149,6 +151,7 @@ func TestLinkRailsFilters_OnlyAndExcept(t *testing.T) {
 // to be able to tell an after_action from a before_action, and a conditional
 // filter from one that always runs.
 func TestLinkRailsFilters_MetaRecordsTheRegistration(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 	target := methodID(t, nodes, "AgentsController#with_timing")
 
@@ -182,6 +185,7 @@ func TestLinkRailsFilters_MetaRecordsTheRegistration(t *testing.T) {
 // an action from a helper. Without it every callback would appear to call every
 // other callback.
 func TestLinkRailsFilters_PrivateMethodsAreNotActions(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	for _, helper := range []string{"load_agent", "audit", "with_timing"} {
@@ -195,6 +199,7 @@ func TestLinkRailsFilters_PrivateMethodsAreNotActions(t *testing.T) {
 // declares a filter and defines no actions. The class-scope edge is what keeps
 // that registration from vanishing.
 func TestLinkRailsFilters_BaseControllerStillProducesAnEdge(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "ApplicationController")
@@ -206,6 +211,7 @@ func TestLinkRailsFilters_BaseControllerStillProducesAnEdge(t *testing.T) {
 // declares no authentication and its actions are authenticated, and an agent
 // asking "what runs before this request" has to be told so.
 func TestLinkRailsFilters_PropagatesToSubclasses(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	for _, action := range []string{"index", "show"} {
@@ -239,6 +245,7 @@ func TestLinkRailsFilters_PropagatesToSubclasses(t *testing.T) {
 // resolved into ClientApi::V1 and every action in the file lost
 // authenticate_user!.
 func TestLinkRailsFilters_SuperclassResolvesLexically(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	targets := filterTargets(nodes, edges, methodID(t, nodes, "DocumentsController#index"))
@@ -254,6 +261,7 @@ func TestLinkRailsFilters_SuperclassResolvesLexically(t *testing.T) {
 // session. Reading the registration and ignoring the retraction asserts exactly
 // the wrong thing about the endpoints that matter most.
 func TestLinkRailsFilters_SkipRetractsAnInheritedFilter(t *testing.T) {
+	t.Parallel()
 	nodes, edges, unresolved := filterFixture(t)
 
 	// A bare skip retracts it outright: ReportsController inherits nothing.
@@ -273,6 +281,7 @@ func TestLinkRailsFilters_SkipRetractsAnInheritedFilter(t *testing.T) {
 // Treating it as a whole-class retraction would drop the check from every other
 // endpoint in the file.
 func TestLinkRailsFilters_PartialSkipIsPerAction(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	assert.NotContains(t, filterTargets(nodes, edges, methodID(t, nodes, "PublicPagesController#landing")),
@@ -286,6 +295,7 @@ func TestLinkRailsFilters_PartialSkipIsPerAction(t *testing.T) {
 // concern's `included do` block, are both recorded rather than dropped or
 // guessed at.
 func TestLinkRailsFilters_UnresolvableIsLedgered(t *testing.T) {
+	t.Parallel()
 	_, _, unresolved := filterFixture(t)
 
 	kinds := map[string][]string{}
@@ -312,6 +322,7 @@ func TestLinkRailsFilters_UnresolvableIsLedgered(t *testing.T) {
 // names no symbol, and reading it as "unresolvable" would have written off more
 // than a third of orion's registrations. The lambda body names the method.
 func TestLinkRailsFilters_InlineBlockForm(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 
 	index := methodID(t, nodes, "CategoriesController#index")
@@ -348,6 +359,7 @@ func TestLinkRailsFilters_InlineBlockForm(t *testing.T) {
 // ancestors left six orion controllers reporting a callback the repo plainly
 // defines.
 func TestLinkRailsFilters_ResolvesThroughAModuleChain(t *testing.T) {
+	t.Parallel()
 	nodes, edges, unresolved := filterFixture(t)
 
 	assert.Contains(t, filterTargets(nodes, edges, methodID(t, nodes, "CategoriesController#index")),
@@ -362,6 +374,7 @@ func TestLinkRailsFilters_ResolvesThroughAModuleChain(t *testing.T) {
 // says nothing about the controller, and guessing `info` is a callback would be
 // a fabricated edge (bug-class #12).
 func TestLinkRailsFilters_BlockWithReceiverContributesNothing(t *testing.T) {
+	t.Parallel()
 	nodes, edges, unresolved := filterFixture(t)
 
 	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "CategoriesController")
@@ -377,6 +390,7 @@ func TestLinkRailsFilters_BlockWithReceiverContributesNothing(t *testing.T) {
 // TestLinkRailsFilters_NoDanglingEdges (bug-class #10): every endpoint is a node
 // that exists.
 func TestLinkRailsFilters_NoDanglingEdges(t *testing.T) {
+	t.Parallel()
 	nodes, edges, _ := filterFixture(t)
 	byID := map[string]bool{}
 	for i := range nodes {
@@ -393,6 +407,7 @@ func TestLinkRailsFilters_NoDanglingEdges(t *testing.T) {
 // TestLinkRailsFilters_Deterministic (bug-class #2): the pass is built on maps
 // keyed by service, file and qualified name.
 func TestLinkRailsFilters_Deterministic(t *testing.T) {
+	t.Parallel()
 	_, firstEdges, firstUnresolved := filterFixture(t)
 	for i := 0; i < 3; i++ {
 		_, edges, unresolved := filterFixture(t)

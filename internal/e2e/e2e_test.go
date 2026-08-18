@@ -126,6 +126,7 @@ func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Worksp
 }
 
 func TestIndex_NodeCount(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -135,6 +136,7 @@ func TestIndex_NodeCount(t *testing.T) {
 }
 
 func TestIndex_CrossServiceLinks(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -159,6 +161,7 @@ func TestIndex_CrossServiceLinks(t *testing.T) {
 }
 
 func TestIndex_TemplDatastar(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -177,6 +180,7 @@ func TestIndex_TemplDatastar(t *testing.T) {
 }
 
 func TestIndex_DatastarCrossServiceLink(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -213,6 +217,7 @@ func TestIndex_DatastarCrossServiceLink(t *testing.T) {
 }
 
 func TestIndex_DatastarSameServiceLink(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -248,6 +253,7 @@ func TestIndex_DatastarSameServiceLink(t *testing.T) {
 }
 
 func TestIndex_ParseErrors(t *testing.T) {
+	t.Parallel()
 	// The normal fixture files shouldn't have parse errors that cause panics.
 	// We verify the index completes without panic (test completing = success).
 	store, _ := indexFixture(t)
@@ -261,6 +267,7 @@ func TestIndex_ParseErrors(t *testing.T) {
 }
 
 func TestIndex_ExcludeGlobs(t *testing.T) {
+	t.Parallel()
 	// Create a temp workspace with a vendor dir that should be excluded
 	tmpWS := t.TempDir()
 	svcDir := filepath.Join(tmpWS, "svc-go")
@@ -338,6 +345,7 @@ func ActualFunc() {}`), 0o644))
 }
 
 func TestSearch_FindsFunction(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -357,6 +365,7 @@ func TestSearch_FindsFunction(t *testing.T) {
 }
 
 func TestTrace_Forward(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -384,6 +393,7 @@ func TestTrace_Forward(t *testing.T) {
 }
 
 func TestTrace_Backward(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -406,6 +416,7 @@ func TestTrace_Backward(t *testing.T) {
 }
 
 func TestServe_Graph(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -436,6 +447,7 @@ func TestServe_Graph(t *testing.T) {
 }
 
 func TestServe_Search(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -463,6 +475,7 @@ func TestServe_Search(t *testing.T) {
 }
 
 func TestServe_Trace(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -502,6 +515,7 @@ func TestServe_Trace(t *testing.T) {
 // during indexing: the JS fixture's module-level API_BASE const becomes a
 // variable node with reads edges from the functions using it.
 func TestIndex_VariableTracking(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 	ctx := context.Background()
 
@@ -530,6 +544,7 @@ func TestIndex_VariableTracking(t *testing.T) {
 }
 
 func TestServe_Files(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 
 	idx, err := store.BuildIndex(context.Background())
@@ -554,6 +569,7 @@ func TestServe_Files(t *testing.T) {
 }
 
 func TestServe_FileImpact(t *testing.T) {
+	t.Parallel()
 	store, _ := indexFixture(t)
 
 	idx, err := store.BuildIndex(context.Background())

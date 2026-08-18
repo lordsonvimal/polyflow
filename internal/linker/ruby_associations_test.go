@@ -10,6 +10,7 @@ import (
 // for: Category#has_many :deliverables, where Deliverable lives in a
 // different file. Confirms the naive pluralize-then-classify path.
 func TestLinkRubyAssociations_HasMany(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	category := writeRuby(t, dir, "category.rb", `
@@ -50,6 +51,7 @@ end
 // belongs_to (already-singular symbol) and has_one with an explicit
 // class_name: override, which must win over the derived name.
 func TestLinkRubyAssociations_BelongsToAndHasOneWithClassNameOverride(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	deliverable := writeRuby(t, dir, "deliverable.rb", `
@@ -97,6 +99,7 @@ end
 // belongs_to/has_many whose target class this service does not declare
 // (a Rails engine/gem model). No edge, no ledger noise.
 func TestLinkRubyAssociations_UnknownTargetNotLedgered(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	model := writeRuby(t, dir, "deliverable.rb", `
@@ -123,6 +126,7 @@ end
 // suppressed or crashing case), and a non-symbol first argument produces no
 // edge at all rather than a panic.
 func TestLinkRubyAssociations_DynamicAndPolymorphicShapes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	model := writeRuby(t, dir, "comment.rb", `
@@ -165,6 +169,7 @@ end
 // TestLinkRubyAssociations_NoHasAndBelongsToMany confirms
 // has_and_belongs_to_many is out of scope (Non-goals) and produces no edge.
 func TestLinkRubyAssociations_NoHasAndBelongsToMany(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	model := writeRuby(t, dir, "post.rb", `
@@ -192,6 +197,7 @@ end
 // that name must produce exactly one deduped UnresolvedRef, not one per
 // occurrence.
 func TestLinkRubyAssociations_CollisionLedgersOnce(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	owner1 := writeRuby(t, dir, "category.rb", `
@@ -242,6 +248,7 @@ end
 // Ruby constant lookup is process-local, so an association in service A must
 // never resolve to a class in service B.
 func TestLinkRubyAssociations_NoCrossServiceBinding(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	category := writeRuby(t, dir, "category.rb", `

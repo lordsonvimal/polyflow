@@ -17,6 +17,7 @@ import (
 // checkbox → collapseAllBoundaries), and must resolve member calls to
 // module-scope variable targets (Solid signal setters).
 func TestLinkJS_ContainmentAndVariableTargets(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "Filters.tsx")
 	src := `import { uiStore } from "./stores/ui";
@@ -78,6 +79,7 @@ const Filters = () => {
 // semantics (accessor → reads, signal setter → writes), and bare value uses
 // of imported constants produce reads edges.
 func TestLinkJS_ModuleLevelDerivationsAndVariableSemantics(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "derived.ts")
 	src := `import { uiStore } from "./ui";
@@ -161,6 +163,7 @@ export const levels = [...DEFAULT_CONFIDENCE];
 // ledger; external-package imports do not; all imported names are returned so
 // the indexer can suppress matcher-level candidates they explain.
 func TestLinkJS_UnresolvedImportRefs(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "app.tsx")
 	src := `import { createSignal } from "solid-js";

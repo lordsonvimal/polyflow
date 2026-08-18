@@ -28,6 +28,7 @@ func buildFixtureTree(t *testing.T) string {
 // TestWalkService_UnparsedCounts verifies that walkService counts blind-spot
 // files correctly: .sh and Dockerfile appear; logo.png is allowlisted.
 func TestWalkService_UnparsedCounts(t *testing.T) {
+	t.Parallel()
 	dir := buildFixtureTree(t)
 	_, unparsed, err := walkService(dir, nil)
 	require.NoError(t, err)
@@ -40,6 +41,7 @@ func TestWalkService_UnparsedCounts(t *testing.T) {
 // TestWalkService_AllowlistExcludes verifies that allowlisted asset extensions
 // do not appear in the unparsed output even when not parseable.
 func TestWalkService_AllowlistExcludes(t *testing.T) {
+	t.Parallel()
 	dir := buildFixtureTree(t)
 	_, unparsed, err := walkService(dir, nil)
 	require.NoError(t, err)
@@ -51,6 +53,7 @@ func TestWalkService_AllowlistExcludes(t *testing.T) {
 // TestWalkService_CleanService verifies that a service with only parseable
 // files returns an empty unparsed map ({}-when-clean).
 func TestWalkService_CleanService(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("const x = 1"), 0o644))
@@ -64,6 +67,7 @@ func TestWalkService_CleanService(t *testing.T) {
 // TestSerializeUnparsed_Determinism verifies that serializeUnparsed produces
 // byte-identical output on two calls with the same input (bug-class rule 2).
 func TestSerializeUnparsed_Determinism(t *testing.T) {
+	t.Parallel()
 	counts := map[string]map[string]int{
 		"api": {".sh": 3, "Dockerfile": 1},
 		"web": {".vue": 12, ".svelte": 4},
@@ -84,6 +88,7 @@ func TestSerializeUnparsed_Determinism(t *testing.T) {
 // TestSerializeUnparsed_EmptyIsClean verifies that an empty counts map
 // serializes to "{}" (the key is always written, absence ≠ certainty).
 func TestSerializeUnparsed_EmptyIsClean(t *testing.T) {
+	t.Parallel()
 	got := serializeUnparsed(map[string]map[string]int{})
 	assert.Equal(t, "{}", got, "empty unparsed map must serialize to {}")
 }
@@ -91,6 +96,7 @@ func TestSerializeUnparsed_EmptyIsClean(t *testing.T) {
 // TestUnparsedSummary_TopThree verifies that UnparsedSummary returns total
 // count and the top-3 extensions in alphabetical order (only first 3 of 4).
 func TestUnparsedSummary_TopThree(t *testing.T) {
+	t.Parallel()
 	exts := map[string]int{
 		".vue":       12,
 		".sh":        3,
@@ -110,6 +116,7 @@ func TestUnparsedSummary_TopThree(t *testing.T) {
 // TestUnparsedSummary_FewExtensions verifies that fewer than 3 extensions
 // works correctly.
 func TestUnparsedSummary_FewExtensions(t *testing.T) {
+	t.Parallel()
 	exts := map[string]int{".sh": 2}
 	total, parts := UnparsedSummary(exts)
 	assert.Equal(t, 2, total)
@@ -119,6 +126,7 @@ func TestUnparsedSummary_FewExtensions(t *testing.T) {
 // TestWalkService_TwoRunDeterminism verifies that two consecutive walkService
 // calls on the same tree produce byte-identical unparsed JSON (rule 2).
 func TestWalkService_TwoRunDeterminism(t *testing.T) {
+	t.Parallel()
 	dir := buildFixtureTree(t)
 	// Add more files to exercise ordering.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy2.sh"), []byte("#!/bin/sh"), 0o644))
@@ -137,6 +145,7 @@ func TestWalkService_TwoRunDeterminism(t *testing.T) {
 // TestWalkService_ParseableFilesNotCounted verifies that parseable files
 // (.go, .js, .rb, etc.) are not counted in the unparsed map.
 func TestWalkService_ParseableFilesNotCounted(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("const x = 1"), 0o644))

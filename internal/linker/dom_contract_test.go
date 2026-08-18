@@ -14,6 +14,7 @@ import (
 // selector with a matching ${…} prefix embedded in an unrelated compound
 // selector — the real board.js shape.
 func TestLinkDOMContracts_PrefixMatch(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID:   "chessleap:promotionbutton.templ:component:PromotionButtonForColor:18",
@@ -63,6 +64,7 @@ func TestLinkDOMContracts_PrefixMatch(t *testing.T) {
 // both sides: data-testid="promotion-overlay" (ConstantAttribute, no
 // interpolation) matched by a literal (no ${…}) JS selector.
 func TestLinkDOMContracts_ExactStaticMatch(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID:   "app:overlay.templ:component:PromotionOverlay:10",
@@ -95,6 +97,7 @@ func TestLinkDOMContracts_ExactStaticMatch(t *testing.T) {
 // silently because they failed both the resolve path and the "complex
 // selector" unresolved-ledger condition in LinkDOMDefinitions).
 func TestLinkDOMContracts_NoProducer_SurfacesUnresolved(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID:   "app:assets/js/x.js:dom_target:query_selector:1",
@@ -115,6 +118,7 @@ func TestLinkDOMContracts_NoProducer_SurfacesUnresolved(t *testing.T) {
 // static prefix at all (`[data-color="${c}"]`) must not fan out to every
 // producer for that attribute — it carries no signal.
 func TestLinkDOMContracts_FullyDynamicToken_SkippedNotMatched(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID: "app:x.templ:component:X:1", Type: graph.NodeTypeComponent,
@@ -140,6 +144,7 @@ func TestLinkDOMContracts_FullyDynamicToken_SkippedNotMatched(t *testing.T) {
 // (defined_in's producer index) as a dom_contract producer too, so
 // `[id="…"]`-shaped attribute selectors resolve without a separate capture.
 func TestLinkDOMContracts_IDAttribute(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID: "app:room.templ:component:RoomPage:3", Type: graph.NodeTypeComponent,
@@ -165,6 +170,7 @@ func TestLinkDOMContracts_IDAttribute(t *testing.T) {
 // `[attr="…"]` token (plain #id/.class or non-attribute compound selectors)
 // are LinkDOMDefinitions' job, not this pass's — no edge, no unresolved.
 func TestLinkDOMContracts_NoAttributeSelector_Ignored(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{
 			ID:   "app:assets/js/x.js:dom_target:query_selector:1",

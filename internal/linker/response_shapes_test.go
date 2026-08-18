@@ -11,6 +11,7 @@ import (
 // struct actually being a returns target, with untyped/ungated structs left
 // alone (#12) and the Jaccard threshold enforced.
 func TestLinkResponseShapes(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "svc:cyto.go:struct:CytoscapeGraph:1", Type: graph.NodeTypeStruct, Language: "go",
 			Meta: map[string]string{"fields": `[{"name":"Nodes","type":"[]X","tag":"json:\"nodes\""},{"name":"Edges","type":"[]Y","tag":"json:\"edges\""}]`}},
@@ -54,6 +55,7 @@ func TestLinkResponseShapes(t *testing.T) {
 // TestLinkResponseShapes_NoReturnsNoEdges verifies the pass is inert when no
 // struct is a declared response — nothing is fabricated from shape alone.
 func TestLinkResponseShapes_NoReturnsNoEdges(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "svc:s.go:struct:A:1", Type: graph.NodeTypeStruct, Language: "go",
 			Meta: map[string]string{"fields": `[{"name":"X","tag":"json:\"x\""},{"name":"Y","tag":"json:\"y\""}]`}},
@@ -68,6 +70,7 @@ func TestLinkResponseShapes_NoReturnsNoEdges(t *testing.T) {
 // TestGoStructJSONFields checks tag parsing (wire name, omitempty, json:"-",
 // and untagged field fallback).
 func TestGoStructJSONFields(t *testing.T) {
+	t.Parallel()
 	raw := `[{"name":"ID","tag":"json:\"id,omitempty\""},{"name":"Secret","tag":"json:\"-\""},{"name":"Plain","tag":""}]`
 	got := goStructJSONFields(raw)
 	if !got["id"] {

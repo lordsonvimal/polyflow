@@ -152,6 +152,7 @@ func crossHTTPCallEdges(t *testing.T, idx *graph.AdjacencyIndex, fromSvc, toSvc 
 // links to svc-node's app.get("/api/users/:id", getUser) via a cross-service
 // http_call edge, plus a two-run determinism check (rule 2).
 func TestExpressFetch_CrossServiceHTTPCall(t *testing.T) {
+	t.Parallel()
 	store, _ := indexExpressFetch(t)
 	ctx := context.Background()
 
@@ -174,6 +175,7 @@ func TestExpressFetch_CrossServiceHTTPCall(t *testing.T) {
 // TestExpressFetch_HandlerNodes verifies the express verb-route registrations
 // produce http_handler nodes in svc-node.
 func TestExpressFetch_HandlerNodes(t *testing.T) {
+	t.Parallel()
 	store, _ := indexExpressFetch(t)
 	ctx := context.Background()
 

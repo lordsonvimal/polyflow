@@ -153,6 +153,7 @@ func crossWSConnectEdges(idx *graph.AdjacencyIndex, fromSvc, toSvc string) []*gr
 // links to svc-a's `new WebSocketServer({path: "/terminal"})` via a
 // cross-service ws_connect edge, plus a two-run determinism check (rule 2).
 func TestWSConnect_CrossServiceEdge(t *testing.T) {
+	t.Parallel()
 	store, _ := indexWSConnect(t)
 	ctx := context.Background()
 
@@ -176,6 +177,7 @@ func TestWSConnect_CrossServiceEdge(t *testing.T) {
 // produces a subscriber node in svc-a, and the connection handler links via
 // LinkRouteHandlers.
 func TestWSConnect_ServerSubscriberNode(t *testing.T) {
+	t.Parallel()
 	store, _ := indexWSConnect(t)
 	ctx := context.Background()
 

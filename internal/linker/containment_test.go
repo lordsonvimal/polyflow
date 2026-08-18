@@ -10,6 +10,7 @@ import (
 // edges, resolving a method's receiver to the struct in its own package while
 // refusing to cross-link a same-named struct in a different package.
 func TestLinkContainment(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		// Package a: struct User + a method on it (different file, same dir).
 		{ID: "svc:a/user.go:struct:User:1", Type: graph.NodeTypeStruct, Label: "User", Service: "svc", File: "a/user.go"},
@@ -85,6 +86,7 @@ func TestLinkContainment(t *testing.T) {
 // nodes had no edge at all. JSX elements are excluded because the component
 // that renders them already claims them.
 func TestLinkContainment_MarkupElements(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "app:views/tasks/index.html.erb:element:.cell:18", Type: graph.NodeTypeElement, Label: ".cell",
 			Service: "app", File: "views/tasks/index.html.erb", Meta: map[string]string{"pattern": "html_element_class", "class": "cell"}},

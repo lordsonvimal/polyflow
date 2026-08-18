@@ -8,6 +8,7 @@ import (
 )
 
 func TestApplyHints_BaseURL(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "frontend", To: "backend", BaseURL: "/api"},
 	}
@@ -39,6 +40,7 @@ func TestApplyHints_BaseURL(t *testing.T) {
 }
 
 func TestApplyHints_EnvVarHint(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "frontend", To: "user-svc", Hint: "USER_SVC_URL=http://user-service:8080"},
 	}
@@ -60,6 +62,7 @@ func TestApplyHints_EnvVarHint(t *testing.T) {
 }
 
 func TestApplyHints_NilLinks(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "c1", Service: "svc", Type: graph.NodeTypeHTTPClient,
 			Meta: map[string]string{"path": "/foo"}},
@@ -74,6 +77,7 @@ func TestApplyHints_NilLinks(t *testing.T) {
 }
 
 func TestApplyHints_EmptyLinks(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "c1", Service: "svc", Type: graph.NodeTypeHTTPClient,
 			Meta: map[string]string{"path": "/foo"}},
@@ -85,6 +89,7 @@ func TestApplyHints_EmptyLinks(t *testing.T) {
 }
 
 func TestApplyHints_NonClientNodesUnchanged(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "svc-a", To: "svc-b", BaseURL: "/api"},
 	}
@@ -100,6 +105,7 @@ func TestApplyHints_NonClientNodesUnchanged(t *testing.T) {
 }
 
 func TestApplyHints_NilMetaWithMatchingURL(t *testing.T) {
+	t.Parallel()
 	// Client node with nil Meta but a URL that matches the hint — ensureMeta
 	// must initialise the map rather than panic on nil assignment.
 	links := []workspace.Link{
@@ -119,6 +125,7 @@ func TestApplyHints_NilMetaWithMatchingURL(t *testing.T) {
 }
 
 func TestApplyHints_NilMetaNoMatch(t *testing.T) {
+	t.Parallel()
 	// Node with nil Meta — no matching hint, must not panic.
 	links := []workspace.Link{
 		{From: "frontend", To: "backend", Hint: "SVC_URL=http://backend"},
@@ -133,6 +140,7 @@ func TestApplyHints_NilMetaNoMatch(t *testing.T) {
 }
 
 func TestApplyHints_BaseURLStripsToRoot(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "frontend", To: "backend", BaseURL: "/api"},
 	}
@@ -153,6 +161,7 @@ func TestApplyHints_BaseURLStripsToRoot(t *testing.T) {
 // J.2a/J.2c: `polyflow init` writes a value-less env-var hint. It must act as a
 // service allowlist for clients whose base URL was traced to that env var.
 func TestApplyHints_BareEnvVarName(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "migrator", To: "orion", Hint: "VEGA_API_BASE_URL"},
 	}
@@ -201,6 +210,7 @@ func TestApplyHints_BareEnvVarName(t *testing.T) {
 
 // Tier L stamps host_env_var on Ruby clients; it means the same thing.
 func TestApplyHints_BareEnvVarName_RubyHostEnvVar(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "web", To: "lyra", Hint: "LYRA_HOST"},
 	}
@@ -220,6 +230,7 @@ func TestApplyHints_BareEnvVarName_RubyHostEnvVar(t *testing.T) {
 // A base_url is direct evidence of the target; an env-var name is an inference
 // from deploy config. When both rules fire, base_url wins.
 func TestApplyHints_EnvVarDoesNotOverrideBaseURL(t *testing.T) {
+	t.Parallel()
 	links := []workspace.Link{
 		{From: "frontend", To: "backend", BaseURL: "/api"},
 		{From: "frontend", To: "other-svc", Hint: "OTHER_URL"},

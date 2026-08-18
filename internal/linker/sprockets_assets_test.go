@@ -29,6 +29,7 @@ func assetTargets(edges []graph.Edge, svc, from string) []string {
 // requires a sibling by logical path, another load path's asset by its
 // subdirectory, a relative path, and a tree.
 func TestLinkSprocketsAssets_DirectiveGraph(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/assets/javascripts/application.js": `// manifest
 //= require jquery/dist/jquery.min
@@ -76,6 +77,7 @@ func TestLinkSprocketsAssets_DirectiveGraph(t *testing.T) {
 // phase exists for: a layout names a manifest, and the manifest's own requires
 // carry the walk down to the leaf asset.
 func TestLinkSprocketsAssets_IncludeTagBindsPageToManifest(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/views/layouts/app.html.erb": `<head>
   <%= javascript_include_tag 'home' %>
@@ -120,6 +122,7 @@ func TestLinkSprocketsAssets_IncludeTagBindsPageToManifest(t *testing.T) {
 // manifest declares nothing and an ERB layout declares nothing, so containment
 // gives neither a file node — and both are endpoints here.
 func TestLinkSprocketsAssets_MintsEndpointNodes(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/views/layouts/app.html.erb":        `<%= javascript_include_tag 'application' %>`,
 		"app/assets/javascripts/application.js": "//= require studies\n",
@@ -165,6 +168,7 @@ func TestLinkSprocketsAssets_MintsEndpointNodes(t *testing.T) {
 // TestLinkSprocketsAssets_LinkDirectiveExtensionFilter: the precompile manifest
 // enumerates a directory, optionally filtered by extension.
 func TestLinkSprocketsAssets_LinkDirectiveExtensionFilter(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/assets/config/manifest.js": `//= link_directory ../javascripts .js
 //= link_tree ../images
@@ -190,6 +194,7 @@ func TestLinkSprocketsAssets_LinkDirectiveExtensionFilter(t *testing.T) {
 // TestLinkSprocketsAssets_NoAssetTree: a service with no app/assets tree is not
 // a Sprockets app, and a stray `//=` comment in its JS must not mint anything.
 func TestLinkSprocketsAssets_NoAssetTree(t *testing.T) {
+	t.Parallel()
 	_, files := stylesheetFixture(t, map[string]string{
 		"app/javascript/entry.js": "//= require ./other\n",
 		"app/javascript/other.js": "export const o = 1;",
@@ -202,6 +207,7 @@ func TestLinkSprocketsAssets_NoAssetTree(t *testing.T) {
 }
 
 func TestLinkSprocketsAssets_Deterministic(t *testing.T) {
+	t.Parallel()
 	_, aFiles := stylesheetFixture(t, map[string]string{
 		"app/assets/javascripts/application.js": "//= require_tree ./mod\n",
 		"app/assets/javascripts/mod/a.js":       "function a() {}",

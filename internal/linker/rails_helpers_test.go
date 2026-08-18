@@ -53,6 +53,7 @@ func makeNavHelperNode(id, svc, file string, line int, helper string) graph.Node
 // folder_path is /app/folders/:id, and no amount of inflection on "folders"
 // produces the "app" segment.
 func TestBuildRailsHelperMap_ReadsComposedRoutes(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("n1", "svc", "config/routes.rb", 2, "folders", "GET", "/app/folders"),
 		makeRouteNode("n2", "svc", "config/routes.rb", 2, "folders", "POST", "/app/folders"),
@@ -77,6 +78,7 @@ func TestBuildRailsHelperMap_ReadsComposedRoutes(t *testing.T) {
 // could not name contributes nothing. A nameless route is a gap the ledger
 // records; inventing a name for it would shadow a real helper.
 func TestBuildRailsHelperMap_UnnamedRouteIsSkipped(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("n1", "svc", "config/routes.rb", 2, "", "GET", "/app/*glob"),
 	}
@@ -90,6 +92,7 @@ func TestBuildRailsHelperMap_UnnamedRouteIsSkipped(t *testing.T) {
 // fanning out. Their *paths* differ and so do their Rails names, which is the
 // whole reason the name is recorded at declaration time.
 func TestBuildRailsHelperMap_ScopedNamesDoNotCollide(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("n1", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
 		makeRouteNode("n2", "svc", "routes.rb", 10, "client_api_v1_users", "GET", "/client_api/v1/users"),
@@ -106,6 +109,7 @@ func TestBuildRailsHelperMap_ScopedNamesDoNotCollide(t *testing.T) {
 // TestBuildRailsHelperMap_FanOutOnGenuineDuplicate verifies that when one name
 // really does map to two paths, both survive for the fan-out rule (rule 1).
 func TestBuildRailsHelperMap_FanOutOnGenuineDuplicate(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("n1", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
 		makeRouteNode("n2", "svc", "config/routes/admin.rb", 3, "users", "GET", "/admin/users"),
@@ -120,6 +124,7 @@ func TestBuildRailsHelperMap_FanOutOnGenuineDuplicate(t *testing.T) {
 // (name, method, path) recorded twice yields one entry, so a duplicate node
 // cannot masquerade as a collision and trigger candidate fan-out.
 func TestBuildRailsHelperMap_DedupesIdenticalRoutes(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("n1", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
 		makeRouteNode("n2", "svc", "routes.rb", 1, "users", "GET", "/app/users"),
@@ -132,6 +137,7 @@ func TestBuildRailsHelperMap_DedupesIdenticalRoutes(t *testing.T) {
 
 // TestBuildRailsHelperMap_Determinism verifies that running twice produces identical output (rule 2).
 func TestBuildRailsHelperMap_Determinism(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("n1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
 		makeRouteNode("n2", "svc", "routes.rb", 2, "archive_report", "GET", "/app/reports/:id/archive"),
@@ -164,6 +170,7 @@ func TestBuildRailsHelperMap_Determinism(t *testing.T) {
 
 // TestResolveRailsNavHelpers_Basic verifies path resolution for a simple link_to.
 func TestResolveRailsNavHelpers_Basic(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
 		makeNavHelperNode("c1", "svc", "views/index.erb", 5, "reports_path"),
@@ -189,6 +196,7 @@ func TestResolveRailsNavHelpers_Basic(t *testing.T) {
 
 // TestResolveRailsNavHelpers_Unresolved verifies that unknown helpers go to the ledger.
 func TestResolveRailsNavHelpers_Unresolved(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeNavHelperNode("c1", "svc", "views/index.erb", 5, "unknown_helper_path"),
 	}
@@ -211,6 +219,7 @@ func TestResolveRailsNavHelpers_Unresolved(t *testing.T) {
 // TestResolveRailsNavHelpers_HelperRemoved verifies that the 'helper' meta key
 // is removed from the updated node (the helper is now resolved into path/method).
 func TestResolveRailsNavHelpers_HelperRemoved(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
 		makeNavHelperNode("c1", "svc", "views/index.erb", 5, "reports_path"),
@@ -228,6 +237,7 @@ func TestResolveRailsNavHelpers_HelperRemoved(t *testing.T) {
 
 // TestResolveRailsNavHelpers_Determinism verifies two-run byte-identical output (rule 2).
 func TestResolveRailsNavHelpers_Determinism(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
 		makeRouteNode("r2", "svc", "routes.rb", 1, "report", "GET", "/app/reports/:id"),

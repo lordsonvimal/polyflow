@@ -73,6 +73,7 @@ func findNode(t *testing.T, nodes []graph.Node, pred func(*graph.Node) bool) *gr
 // publish site's queue name is knowable only by following the field symbol into
 // the other repo, and after this pass it carries the resolved name.
 func TestAMQPHandshake_ResolvesQueueAcrossRepos(t *testing.T) {
+	t.Parallel()
 	nodes, _, _ := handshakeFixture(t)
 
 	pub := findNode(t, nodes, func(n *graph.Node) bool {
@@ -96,6 +97,7 @@ func TestAMQPHandshake_ResolvesQueueAcrossRepos(t *testing.T) {
 // is expressed through the EXISTING queue_name contract rather than a second
 // queue matcher — and that the edge lands at partial, not static.
 func TestAMQPHandshake_ContractClosesPublisherToConsumer(t *testing.T) {
+	t.Parallel()
 	nodes, _, _ := handshakeFixture(t)
 
 	rules, err := contract.Load(contractdata.FS, "")
@@ -154,6 +156,7 @@ func TestAMQPHandshake_ContractClosesPublisherToConsumer(t *testing.T) {
 // clue this pass tried and failed to resolve. It must reach the ledger, and it
 // must not borrow the queue of the field next to it (bug-class #12).
 func TestAMQPHandshake_UndeclaredFieldIsLedgered(t *testing.T) {
+	t.Parallel()
 	nodes, unresolved, _ := handshakeFixture(t)
 
 	var kinds []string
@@ -177,6 +180,7 @@ func TestAMQPHandshake_UndeclaredFieldIsLedgered(t *testing.T) {
 // entry would have polyflow assert the edge and deny it in the same index, and
 // send a reader off to hand-verify a link it already has.
 func TestAMQPHandshake_RetractsStaleLedgerEntries(t *testing.T) {
+	t.Parallel()
 	nodes, _, resolved := handshakeFixture(t)
 
 	pub := findNode(t, nodes, func(n *graph.Node) bool {
@@ -212,6 +216,7 @@ func TestAMQPHandshake_RetractsStaleLedgerEntries(t *testing.T) {
 // in-file, which is Tier 2's job — accepting it here would hide a real
 // cross-repo link behind a local shortcut.
 func TestAMQPHandshake_SameServiceIsNotAHandshake(t *testing.T) {
+	t.Parallel()
 	nodes, _, _ := handshakeFixture(t)
 
 	// Re-run with everything in one service: the same evidence must now resolve
@@ -243,6 +248,7 @@ func TestAMQPHandshake_SameServiceIsNotAHandshake(t *testing.T) {
 }
 
 func TestAMQPHandshake_Deterministic(t *testing.T) {
+	t.Parallel()
 	firstNodes, firstUnresolved, _ := handshakeFixture(t)
 	for i := 0; i < 4; i++ {
 		gotNodes, gotUnresolved, _ := handshakeFixture(t)

@@ -20,6 +20,7 @@ import (
 )
 
 func TestERBElementLinksToJQuerySelector_RealParse(t *testing.T) {
+	t.Parallel()
 	reg, err := patterns.DefaultRegistry("../../patterns")
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)

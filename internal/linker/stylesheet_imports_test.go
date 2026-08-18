@@ -71,6 +71,7 @@ func edgeBetween(t *testing.T, edges []graph.Edge, svc, from, to string) graph.E
 // orion's application.scss: an explicit `.scss`, a `.css`, a partial
 // referenced without its underscore or extension, and a glob.
 func TestLinkStylesheetImports_SassResolution(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/assets/stylesheets/application.scss": `
 @import "vendor/bourbon.scss";
@@ -123,6 +124,7 @@ func TestLinkStylesheetImports_SassResolution(t *testing.T) {
 // `$variables` declares nothing — yet partials are most of what an import graph
 // points *at*. The pass must mint those file nodes itself.
 func TestLinkStylesheetImports_MintsFileNodesForSilentPartials(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/assets/stylesheets/application.scss":      `@import "settings/colors";`,
 		"app/assets/stylesheets/settings/_colors.scss": "$brand: #0055aa;",
@@ -162,6 +164,7 @@ func TestLinkStylesheetImports_MintsFileNodesForSilentPartials(t *testing.T) {
 // which is how `@import "settings/colors"` works from a file three directories
 // deep.
 func TestLinkStylesheetImports_LoadRootAndRelative(t *testing.T) {
+	t.Parallel()
 	root, files := stylesheetFixture(t, map[string]string{
 		"app/assets/stylesheets/modules/issues.scss": `
 @import "settings/colors";
@@ -186,6 +189,7 @@ func TestLinkStylesheetImports_LoadRootAndRelative(t *testing.T) {
 // target is recorded, never invented (phases.md #12). Protocol URLs get neither
 // an edge nor a ledger entry, matching the JS bare-specifier precedent.
 func TestLinkStylesheetImports_UnresolvedIsLedgered(t *testing.T) {
+	t.Parallel()
 	_, files := stylesheetFixture(t, map[string]string{
 		"app/assets/stylesheets/application.scss": `
 @import "bourbon";
@@ -208,6 +212,7 @@ func TestLinkStylesheetImports_UnresolvedIsLedgered(t *testing.T) {
 // other passes (JSX, ERB) are untouched — they have their own attribution, and
 // containing them by type here would move counts across the whole fleet.
 func TestLinkContainment_ContainsStylesheetSelectors(t *testing.T) {
+	t.Parallel()
 	const svc, sheet = "orion", "/app/assets/stylesheets/issues.scss"
 	nodes := []graph.Node{
 		{
@@ -254,6 +259,7 @@ func TestLinkContainment_ContainsStylesheetSelectors(t *testing.T) {
 // including across the service map whose iteration order Go randomises
 // (bug-class #2).
 func TestLinkStylesheetImports_Deterministic(t *testing.T) {
+	t.Parallel()
 	_, aFiles := stylesheetFixture(t, map[string]string{
 		"app/assets/stylesheets/application.scss": `@import "modules/*";`,
 		"app/assets/stylesheets/modules/a.scss":   ".a {}",

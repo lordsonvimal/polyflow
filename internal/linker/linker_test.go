@@ -11,6 +11,7 @@ import (
 )
 
 func TestLinkTemplComponents(t *testing.T) {
+	t.Parallel()
 	// A templ component and its generated Go twin in the sibling _templ.go file.
 	templComp := graph.Node{
 		ID:       "app:views/puzzles.templ:component:PuzzleRows:394",
@@ -60,6 +61,7 @@ func TestLinkTemplComponents(t *testing.T) {
 }
 
 func TestLinkTemplComponents_NoTwin(t *testing.T) {
+	t.Parallel()
 	// A generated function whose label differs from any component: no bridge.
 	nodes := []graph.Node{
 		{ID: "app:views/x.templ:component:Foo:1", Type: graph.NodeTypeComponent,
@@ -97,6 +99,7 @@ func handlerMethod(file, recv, label string) graph.Node {
 // handler with no caller (it then reads as dead code). The receiver qualifier
 // recorded on each side must pin them apart.
 func TestLinkRouteHandlers_DisambiguatesByReceiver(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		routeHandlerNode("app:routes:http_handler:1", "POST /app-configs/save", "appConfigHandler.SaveConfig"),
 		routeHandlerNode("app:routes:http_handler:2", "POST /base-images/save", "baseImageHandler.SaveConfig"),
@@ -119,6 +122,7 @@ func TestLinkRouteHandlers_DisambiguatesByReceiver(t *testing.T) {
 // Only the innermost segment names the value being called; a field path or a
 // package qualifier must not defeat the receiver match.
 func TestLinkRouteHandlers_ChainedQualifier(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		routeHandlerNode("app:routes:http_handler:1", "GET /x", "s.execConfigHandler.Show"),
 		handlerMethod("internal/views/app_config_handler.go", "AppConfigHandler", "Show"),
@@ -135,6 +139,7 @@ func TestLinkRouteHandlers_ChainedQualifier(t *testing.T) {
 // package — the label-only lookup still has to produce an edge, since a missing
 // route→handler hop breaks every downstream flow.
 func TestLinkRouteHandlers_UnresolvableQualifierFallsBack(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		routeHandlerNode("app:routes:http_handler:1", "GET /y", "h.List"),
 		handlerMethod("internal/views/base_image_handler.go", "BaseImageHandler", "List"),
@@ -151,6 +156,7 @@ func TestLinkRouteHandlers_UnresolvableQualifierFallsBack(t *testing.T) {
 // unique suffix relationship still identifies the struct — without it the
 // label-only fallback picked an unrelated `SessionStore.Create`.
 func TestLinkRouteHandlers_AbbreviatedQualifier(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		routeHandlerNode("app:routes:http_handler:1", "POST /apps", "appController.Create"),
 		handlerMethod("internal/auth/saml/session.go", "SessionStore", "Create"),
@@ -166,6 +172,7 @@ func TestLinkRouteHandlers_AbbreviatedQualifier(t *testing.T) {
 // Two structs fitting the same abbreviation is not evidence, so the guess is
 // declined and the existing fallback decides.
 func TestLinkRouteHandlers_AmbiguousAbbreviationDeclined(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		routeHandlerNode("app:routes:http_handler:1", "POST /x", "appController.Create"),
 		handlerMethod("a.go", "UserAppController", "Create"),
@@ -180,6 +187,7 @@ func TestLinkRouteHandlers_AmbiguousAbbreviationDeclined(t *testing.T) {
 
 // A receiver match must not reach across service boundaries.
 func TestLinkRouteHandlers_ReceiverMatchIsServiceScoped(t *testing.T) {
+	t.Parallel()
 	other := handlerMethod("internal/views/exec_config_handler.go", "ExecConfigHandler", "Save")
 	other.ID, other.Service = "other:exec:method:Save", "other"
 	nodes := []graph.Node{
@@ -191,6 +199,7 @@ func TestLinkRouteHandlers_ReceiverMatchIsServiceScoped(t *testing.T) {
 }
 
 func TestLinkRouteComponents(t *testing.T) {
+	t.Parallel()
 	route := graph.Node{
 		ID:      "app:src/App.tsx:route:%2Fsettings:10",
 		Type:    graph.NodeTypeRoute,
@@ -228,6 +237,7 @@ func TestLinkRouteComponents(t *testing.T) {
 }
 
 func TestLinkRouteComponents_MissLedgered(t *testing.T) {
+	t.Parallel()
 	route := graph.Node{
 		ID:      "app:src/App.tsx:route:%2Fmissing:20",
 		Type:    graph.NodeTypeRoute,
@@ -251,6 +261,7 @@ func TestLinkRouteComponents_MissLedgered(t *testing.T) {
 }
 
 func TestLinkDatastores(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "svc:datastore:sqlite", Type: graph.NodeTypeDatastore, Service: "svc",
 			Meta: map[string]string{"kind": "store", "engine": "sqlite"}},
@@ -275,6 +286,7 @@ func TestLinkDatastores(t *testing.T) {
 }
 
 func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "m:datastore:postgres", Type: graph.NodeTypeDatastore, Service: "m",
 			Meta: map[string]string{"kind": "store"}},
@@ -295,6 +307,7 @@ func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
 // terminates at that real entity (callNode → table). Statements with no
 // resolvable table (PRAGMA) mint nothing (#12 — never fabricate).
 func TestLinkTables(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "svc:sel", Type: graph.NodeTypeDatastore, Service: "svc",
 			Meta: map[string]string{"kind": "call", "op": "query",
@@ -343,6 +356,7 @@ func TestLinkTables(t *testing.T) {
 
 // TestParseSQLTable covers the table-name extraction edge cases directly.
 func TestParseSQLTable(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ sql, want string }{
 		{"`SELECT a, b FROM users WHERE id = ?`", "users"},
 		{"`INSERT INTO edges (id) VALUES (?)`", "edges"},
@@ -365,6 +379,7 @@ func TestParseSQLTable(t *testing.T) {
 // service publishing via bunny (exchange held in a variable — unresolvable
 // statically) reaching a Go amqp091 consumer, connected by a workspace hint.
 func TestLinkBrokerHints_CrossLanguage(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "main-svc:pub", Type: graph.NodeTypePublisher, Service: "main-svc",
 			Language: "ruby", Meta: map[string]string{"pattern": "bunny_publish"}},
@@ -395,6 +410,7 @@ func TestLinkBrokerHints_CrossLanguage(t *testing.T) {
 }
 
 func TestLinkBrokerHints_NoRabbitLinks(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{{ID: "a", Type: graph.NodeTypePublisher, Service: "svc"}}
 	n, e, u := LinkBrokerHints([]workspace.Link{{From: "a", To: "b", BaseURL: "/api"}}, nodes)
 	assert.Empty(t, n)
@@ -406,6 +422,7 @@ func TestLinkBrokerHints_NoRabbitLinks(t *testing.T) {
 // subscriber facing 5 hinted exchanges was joined to all 5 and stamped
 // `static`. It must now produce nothing, and say so in the ledger.
 func TestLinkBrokerHints_RequiresExchangeEvidence(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "agent:sub:dynamic", Label: "dynamic", Type: graph.NodeTypeSubscriber,
 			Service: "maple-agent", File: "amqp.go", Line: 238,
@@ -430,6 +447,7 @@ func TestLinkBrokerHints_RequiresExchangeEvidence(t *testing.T) {
 }
 
 func TestLinkBrokerHints_MatchingExchangeStillLinks(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "agent:sub:jobs", Type: graph.NodeTypeSubscriber, Service: "maple-agent",
 			Meta: map[string]string{"pattern": "amqp_consume", "exchange": `"build_jobs"`}},
@@ -451,6 +469,7 @@ func TestLinkBrokerHints_MatchingExchangeStillLinks(t *testing.T) {
 }
 
 func TestLinkBrokerHints_MultiCandidateStampsPartial(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "agent:sub:multi", Type: graph.NodeTypeSubscriber, Service: "maple-agent",
 			Meta: map[string]string{"pattern": "amqp_consume",
@@ -475,6 +494,7 @@ func TestLinkBrokerHints_MultiCandidateStampsPartial(t *testing.T) {
 // minting `broker:channel:<exchange>` beside `<svc>:channel:<exchange>/<key>`
 // is what created channel→channel publishes edges.
 func TestLinkBrokerHints_ReusesExistingChannelID(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "maple-agent:channel:build_logs/", Label: "build_logs/", Type: graph.NodeTypeChannel,
 			Service: "maple-agent", Meta: map[string]string{"exchange": "build_logs"}},
@@ -494,6 +514,7 @@ func TestLinkBrokerHints_ReusesExistingChannelID(t *testing.T) {
 // A queue name is exchange evidence when a resolved binding table (J.1) says
 // which exchange that queue is bound to.
 func TestLinkBrokerHints_QueueNameResolvesExchange(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "maple-manager:channel:build_logs/logs.build.*", Type: graph.NodeTypeChannel,
 			Service: "maple-manager", Meta: map[string]string{
@@ -517,6 +538,7 @@ func TestLinkBrokerHints_QueueNameResolvesExchange(t *testing.T) {
 // Publishers keep their pre-J.3 gate: one that resolved its own exchange has a
 // real channel already and must not collect a second, hint-borne one.
 func TestLinkBrokerHints_ResolvedPublisherSkipped(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "mgr:pub:resolved", Type: graph.NodeTypePublisher, Service: "maple-manager",
 			Meta: map[string]string{"pattern": "amqp_publish", "exchange": "build_jobs"}},
@@ -536,6 +558,7 @@ func TestLinkBrokerHints_ResolvedPublisherSkipped(t *testing.T) {
 // but templ components are declarations from the templ parser — removing
 // them severed every datastar action/bind chain at the root.
 func TestLinkJS_KeepsTemplComponents(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "ui:page.templ:component:GamePage:3", Type: graph.NodeTypeComponent,
 			Label: "GamePage", Service: "ui", Language: "templ"},
@@ -551,6 +574,7 @@ func TestLinkJS_KeepsTemplComponents(t *testing.T) {
 
 
 func TestLinkBrokerHints_SkipsNonBrokerPublishers(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "a:ws", Type: graph.NodeTypePublisher, Service: "a",
 			Meta: map[string]string{"pattern": "ws_send_typed", "message_type": "'x'"}},
@@ -566,6 +590,7 @@ func TestLinkBrokerHints_SkipsNonBrokerPublishers(t *testing.T) {
 
 
 func TestLinkSSEClients(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		{ID: "web:notif.tsx:http_client:eventsource_connect:23", Type: graph.NodeTypeHTTPClient,
 			Service: "web", File: "notif.tsx", Meta: map[string]string{"pattern": "eventsource_connect"}},
@@ -596,6 +621,7 @@ func grpcRegisterNode(id, impl string) graph.Node {
 // struct, since that struct (not the registration call) is where a request's
 // static flow actually continues.
 func TestLinkGRPCHandlers_StructLiteral(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		grpcRegisterNode("app:receiver.go:grpc_handler:grpc_server_register:80", "&grpcTraceHandler{session: r.session}"),
 		handlerMethod("receiver.go", "grpcTraceHandler", "Export"),
@@ -620,6 +646,7 @@ func TestLinkGRPCHandlers_StructLiteral(t *testing.T) {
 // A `New<Type>(...)` constructor call is the other common registration
 // shape — the type name is recoverable from the function name alone.
 func TestLinkGRPCHandlers_ConstructorCall(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		grpcRegisterNode("app:receiver.go:grpc_handler:grpc_server_register:12", "NewFooHandler(session)"),
 		handlerMethod("receiver.go", "FooHandler", "Export"),
@@ -635,6 +662,7 @@ func TestLinkGRPCHandlers_ConstructorCall(t *testing.T) {
 // A bare identifier (`impl`) names a local variable whose type isn't visible
 // from text alone — the pass must ledger it rather than guess.
 func TestLinkGRPCHandlers_BareIdentifierUnresolved(t *testing.T) {
+	t.Parallel()
 	nodes := []graph.Node{
 		grpcRegisterNode("app:receiver.go:grpc_handler:grpc_server_register:9", "impl"),
 	}
