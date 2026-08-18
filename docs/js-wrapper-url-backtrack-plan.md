@@ -159,6 +159,28 @@ for the renamed case; body match requires the call's argument identifier to
 equal `@local` (shorthand: equal `@key`). Captures `wrapper_name` + `key`
 (the **source key**, not the local rename) role `wrapper_url_param_key`.
 
+**Post-ship fix:** all 12 patterns match on `formal_parameters`' immediate
+child node type (bare `identifier`/`object_pattern`), which is only valid
+tree-sitter syntax against the plain `javascript` grammar — `typescript`/`tsx`
+wrap every parameter in `required_parameter` instead, and no single query
+text can satisfy both (confirmed empirically: alternating the two shapes, or
+using a generic `(_ (identifier))` wildcard, still fails to compile against
+whichever grammar doesn't structurally allow the other branch). Because
+`javascript`-language patterns are cross-compiled against `typescript`/`tsx`
+grammars too (`MatchWithGrammar`, so `.ts`/`.tsx` files can reuse JS-only
+patterns), all 12 were failing to compile — silently logged, never
+surfaced — every time a real repo with TS files was indexed. Fixed by adding
+a `Pattern.Grammars`/`PatternFile.grammars` allow-list
+(`internal/patterns/loader.go`, `registry.go`, `matcher.go`'s
+`getCompiledQueries`) and setting `grammars: [javascript]` on
+`producer_wrapper_body.yaml`: these patterns are scoped out of
+`typescript`/`tsx` compilation on purpose now, instead of failing it by
+accident. TS/TSX wrapper-body detection is out of scope (not a regression —
+it never worked). Verified: the "failed to compile query" log line no longer
+appears indexing chessleap; golden snapshot is byte-identical (these are
+inert bookkeeping nodes, so scoping them off ts/tsx changes nothing
+observable); full suite green (2295 tests).
+
 Wrapper-body detection recognizes a `fetch`/`axios.<method>` call directly, or a
 call to any identifier already known in the same file as an alias (via
 `fetch_alias_binding`/`axios_destructure`/etc.) — reuse the existing

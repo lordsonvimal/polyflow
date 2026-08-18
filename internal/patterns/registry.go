@@ -33,6 +33,7 @@ func (r *Registry) RegisterFile(pf *PatternFile) {
 	for i := range pf.Patterns {
 		pf.Patterns[i].Package = pf.Package
 		pf.Patterns[i].VersionRange = pf.VersionRange
+		pf.Patterns[i].Grammars = pf.Grammars
 		r.Register(pf.Language, &pf.Patterns[i])
 	}
 }
