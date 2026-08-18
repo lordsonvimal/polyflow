@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -170,6 +171,17 @@ func Run(ctx context.Context, opts RunOptions) (*Report, error) {
 	}
 
 	report := AggregateReport(m.Repo.Name, results)
+
+	// Surface the indexer's own "semantic call graph unavailable" notices
+	// (set at internal/indexer/indexer.go:568) so a degraded graph reads as
+	// what it is — an incomplete build — rather than a resolver regression.
+	if raw, mErr := store.GetMeta(ctx, "semantic_warnings"); mErr == nil && raw != "" {
+		var warnings []string
+		if json.Unmarshal([]byte(raw), &warnings) == nil {
+			report.SemanticWarnings = warnings
+		}
+	}
+
 	return &report, nil
 }
 
