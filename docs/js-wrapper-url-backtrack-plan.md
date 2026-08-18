@@ -175,7 +175,20 @@ already `fetch_call`'s job) and one where the forwarded identifier is a
 **Acceptance:** all three shapes produce exactly one wrapper-fact node each;
 existing `fetch_call`/`axios_request` fixtures unaffected.
 
-## Phase WB.2 — Generalize call-site key capture
+## Phase WB.2 — Generalize call-site key capture `done`
+
+**Shipped as written**, with one addition beyond the plan text: `key` is now
+also declared as a capture (`role: obj_key`) so the value survives into
+`Meta["key"]` for WB.3 to read (the query already captured `@key` for the old
+`#eq?` predicate — WB.2 just stopped throwing it away). Verified against the
+real chessleap corpus, not just fixtures: the golden diff
+(`internal/contract/testdata/golden/chessleap_contract_edges.json`) is exactly
+one new edge, additive-only — `room-controller.js`'s
+`createSignalingClient({ baseURL: \`/liveclass/sessions/${sessionID}/signal\` })`
+was silently invisible before (key named `baseURL`, not `url`) and is now
+correctly linked to its `gin_route` handler. No edges lost, no ID collisions
+observed (multi-key objects in the fixture didn't appear more than once in the
+real corpus at the same call site in a way that collided).
 
 **Problem:** `producer_alias_obj_call` only ever captures the `"url"` key;
 `producer_alias_url_call` only ever captures argument index 0. Neither leaves

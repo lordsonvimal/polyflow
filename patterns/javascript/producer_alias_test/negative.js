@@ -10,5 +10,8 @@ const q = query;
 f(dynamicUrl);
 a(computedPath);
 
-// Object call with non-url key
-a({ method: 'GET' });
+// WB.2 non-goal: spread + shorthand prop — not a `pair` node, no key/value to capture.
+a({ ...opts, url });
+
+// WB.2 non-goal: computed key — never matched, not a regression.
+a({ [k]: '/x' });
