@@ -209,6 +209,14 @@
     "confidence": "inferred"
   },
   {
+    "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:producer_alias_obj_call:72-\u003echessleap:/Users/lordson/projects/chessleap/liveclass/module.go:http_handler:gin_route:208",
+    "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/room-controller.js:http_client:producer_alias_obj_call:72",
+    "to": "chessleap:/Users/lordson/projects/chessleap/liveclass/module.go:http_handler:gin_route:208",
+    "type": "http_call",
+    "label": "get /liveclass/sessions/*/events",
+    "confidence": "inferred"
+  },
+  {
     "id": "link:chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/stage-controller.js:http_client:fetch_call:444-\u003echessleap:/Users/lordson/projects/chessleap/liveclass/module.go:http_handler:gin_route:211",
     "from": "chessleap:/Users/lordson/projects/chessleap/assets/js/liveclass/stage-controller.js:http_client:fetch_call:444",
     "to": "chessleap:/Users/lordson/projects/chessleap/liveclass/module.go:http_handler:gin_route:211",

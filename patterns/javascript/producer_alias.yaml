@@ -53,7 +53,7 @@ patterns:
         function: (identifier) @via_alias
         arguments: (arguments
           .
-          (string) @url))
+          [(string) (template_string)] @url))
     captures:
       - name: via_alias
         role: alias_caller
@@ -68,7 +68,7 @@ patterns:
             (pair
               key: (property_identifier) @key
               (#eq? @key "url")
-              value: (string) @url))))
+              value: [(string) (template_string)] @url))))
     captures:
       - name: via_alias
         role: alias_caller
