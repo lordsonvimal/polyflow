@@ -76,6 +76,19 @@ export default function Tree() {
   const win = createMemo(() => computeWindow(scrollTop(), viewportHeight(), ROW_HEIGHT, rows().length));
   const visibleRows = createMemo(() => rows().slice(win().start, win().end));
 
+  // Resync the scroller's real scrollTop (and our signal) when the row list
+  // shrinks below the current scroll position — e.g. collapsing a big
+  // expanded branch. Without this the DOM scrollbar keeps reporting a
+  // scrollHeight/thumb derived from content that no longer exists.
+  createEffect(() => {
+    const total = rows().length;
+    const maxTop = Math.max(0, total * ROW_HEIGHT - viewportHeight());
+    if (scrollTop() > maxTop) {
+      setScrollTop(maxTop);
+      if (scrollerRef) scrollerRef.scrollTop = maxTop;
+    }
+  });
+
   // Canvas → tree: a selection made anywhere (canvas tap, palette) reveals
   // and highlights the owning row, auto-expanding ancestors.
   createEffect(() => {
@@ -222,6 +235,16 @@ export default function Tree() {
               const handlers = makeClickHandler(targetFor(row), (i) => onIntent(row, i));
               const isLoading = row.kind === "__loading__";
               const isError = row.kind === "__error__";
+              // A hovered row can be virtualized away (scrolled or
+              // collapsed out of the window) without ever firing a
+              // pointerleave, which would otherwise leave HoverTooltip
+              // stuck showing a target that's no longer under the cursor.
+              onCleanup(() => {
+                const target = selectionStore.hoverTarget();
+                if (target && target.id === (row.nodeId ?? row.key)) {
+                  selectionStore.setHoverTarget(null);
+                }
+              });
               return (
                 <div
                   data-testid="tree-row"
