@@ -35,6 +35,17 @@ type Pattern struct {
 	// per-service filtering and match metadata don't need the file context.
 	Package      string `yaml:"-"`
 	VersionRange string `yaml:"-"`
+
+	// Grammar allow-list, copied down from the PatternFile at registration
+	// time. Empty means "compile against every grammar the pattern language
+	// is normally cross-compiled into" (existing behavior, e.g. javascript
+	// patterns also run against typescript/tsx source). Set it when a
+	// pattern's query shape is grammar-specific — e.g. it walks
+	// formal_parameters' immediate child node types, which differ between
+	// the plain javascript grammar (bare identifier/object_pattern) and
+	// typescript/tsx (identifier wrapped in required_parameter) such that no
+	// single query text is valid tree-sitter syntax in both.
+	Grammars []string `yaml:"-"`
 }
 
 // PatternFile is the top-level structure of a YAML pattern file.
@@ -50,6 +61,10 @@ type PatternFile struct {
 	// package but are skipped entirely if the service does not depend on it.
 	Package      string `yaml:"package"`
 	VersionRange string `yaml:"version_range"`
+
+	// Optional grammar allow-list restricting which grammars this file's
+	// patterns compile against; see Pattern.Grammars.
+	Grammars []string `yaml:"grammars"`
 }
 
 // Load reads and parses all *.yaml pattern files under dir (recursively).

@@ -189,9 +189,15 @@ func (m *TreeSitterMatcher) getCompiledQueries(patternLang, grammarLang string, 
 	patterns := m.registry.List(patternLang)
 	cqs := make([]compiledQuery, 0, len(patterns))
 	for _, p := range patterns {
+		if len(p.Grammars) > 0 && !slices.Contains(p.Grammars, grammarLang) {
+			// Grammar-restricted pattern (e.g. a formal_parameters shape
+			// that's only valid tree-sitter syntax in one grammar family) —
+			// scoped out on purpose, not a compile failure worth logging.
+			continue
+		}
 		q, err := sitter.NewQuery([]byte(p.Query), lang)
 		if err != nil {
-			log.Printf("patterns: failed to compile query %q for language %q: %v", p.Name, patternLang, err)
+			log.Printf("patterns: failed to compile query %q for language %q against grammar %q: %v", p.Name, patternLang, grammarLang, err)
 			continue
 		}
 		cqs = append(cqs, compiledQuery{query: q, pattern: p})
