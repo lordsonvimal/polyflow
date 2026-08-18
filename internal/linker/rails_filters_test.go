@@ -49,7 +49,7 @@ func filterFixture(t *testing.T) ([]graph.Node, []graph.Edge, []graph.Unresolved
 	for _, f := range filterFixtureFiles {
 		p := parser.ForFile(f)
 		require.NotNil(t, p, "no parser for %s", f)
-		ns, _, _, err := p.Parse(f, filterSvc, m)
+		ns, _, _, err := p.Parse(f, filterSvc, m, nil)
 		require.NoError(t, err)
 		nodes = append(nodes, ns...)
 	}

@@ -29,7 +29,7 @@ func TestGoParser_ReturnsNodesForKnownPatterns(t *testing.T) {
 	p := parser.ForFile("testdata/routes.go")
 	require.NotNil(t, p, "expected a parser for .go files")
 
-	nodes, _, _, err := p.Parse("testdata/routes.go", service, m)
+	nodes, _, _, err := p.Parse("testdata/routes.go", service, m, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, nodes, "expected nodes from routes.go")
 	for _, n := range nodes {
@@ -44,7 +44,7 @@ func TestGoParser_ContainsHTTPHandlerNode(t *testing.T) {
 	p := parser.ForFile("testdata/routes.go")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/routes.go", service, m)
+	nodes, _, _, err := p.Parse("testdata/routes.go", service, m, nil)
 	require.NoError(t, err)
 
 	hasHandler := false
@@ -63,7 +63,7 @@ func TestGoParser_FileNotFound(t *testing.T) {
 	p := parser.ForFile("testdata/nonexistent.go")
 	require.NotNil(t, p)
 
-	_, _, _, err := p.Parse("testdata/nonexistent.go", service, m)
+	_, _, _, err := p.Parse("testdata/nonexistent.go", service, m, nil)
 	assert.Error(t, err)
 }
 
@@ -75,7 +75,7 @@ func TestJavaScriptParser_ReturnsNodesForAxios(t *testing.T) {
 	p := parser.ForFile("testdata/client.js")
 	require.NotNil(t, p, "expected a parser for .js files")
 
-	nodes, _, _, err := p.Parse("testdata/client.js", service, m)
+	nodes, _, _, err := p.Parse("testdata/client.js", service, m, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, nodes)
 	for _, n := range nodes {
@@ -89,7 +89,7 @@ func TestJavaScriptParser_ContainsHTTPClientNodes(t *testing.T) {
 	p := parser.ForFile("testdata/client.js")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/client.js", service, m)
+	nodes, _, _, err := p.Parse("testdata/client.js", service, m, nil)
 	require.NoError(t, err)
 
 	hasClient := false
@@ -117,7 +117,7 @@ func TestRubyParser_ReturnsNodesOrEmpty(t *testing.T) {
 	p := parser.ForFile("testdata/app.rb")
 	require.NotNil(t, p, "expected a parser for .rb files")
 
-	nodes, edges, _, err := p.Parse("testdata/app.rb", service, m)
+	nodes, edges, _, err := p.Parse("testdata/app.rb", service, m, nil)
 	require.NoError(t, err)
 	// May return empty if no patterns match; just ensure it does not error.
 	t.Logf("ruby: %d nodes, %d edges", len(nodes), len(edges))
@@ -134,7 +134,7 @@ func TestTemplParser_DetectsComponents(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p, "expected a parser for .templ files")
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, nodes)
 
@@ -156,7 +156,7 @@ func TestTemplParser_NoFalsePositiveForGoFunc(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 
 	for _, n := range nodes {
@@ -173,7 +173,7 @@ func TestTemplParser_DetectsDatastarActions(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 
 	hasAction := false
@@ -192,7 +192,7 @@ func TestTemplParser_DetectsHrefLinks(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 
 	paths := make(map[string]bool)
@@ -212,7 +212,7 @@ func TestTemplParser_DetectsRootPath(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 
 	hasRoot := false
@@ -233,7 +233,7 @@ func TestTemplParser_MultiAttributeLine(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 
 	// The fixture line: `<a href="/home" data-on-click="@get('/api/home')">Home</a>`
@@ -257,7 +257,7 @@ func TestTemplParser_Language(t *testing.T) {
 	p := parser.ForFile("testdata/page.templ")
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse("testdata/page.templ", service, m)
+	nodes, _, _, err := p.Parse("testdata/page.templ", service, m, nil)
 	require.NoError(t, err)
 	for _, n := range nodes {
 		assert.Equal(t, "templ", n.Language)
@@ -375,7 +375,7 @@ func TestJavaScriptParser_TSX_JSXComponents(t *testing.T) {
 	p := parser.ForFile("testdata/app.tsx")
 	require.NotNil(t, p)
 
-	nodes, edges, _, err := p.Parse("testdata/app.tsx", service, m)
+	nodes, edges, _, err := p.Parse("testdata/app.tsx", service, m, nil)
 	require.NoError(t, err)
 
 	// Should detect function declarations for Layout and App
@@ -403,7 +403,7 @@ func TestJavaScriptParser_TSX_ImperativeCalls(t *testing.T) {
 	p := parser.ForFile("testdata/notification.tsx")
 	require.NotNil(t, p)
 
-	nodes, edges, _, err := p.Parse("testdata/notification.tsx", service, m)
+	nodes, edges, _, err := p.Parse("testdata/notification.tsx", service, m, nil)
 	require.NoError(t, err)
 
 	labels := make(map[string]bool)

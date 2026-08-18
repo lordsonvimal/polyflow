@@ -14,7 +14,7 @@ func parseStylesheet(t *testing.T, name, src string) ([]graph.Node, []graph.Unre
 	file := filepath.Join(t.TempDir(), name)
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
 	p := &StylesheetParser{}
-	nodes, edges, unresolved, err := p.Parse(file, "orion", nil)
+	nodes, edges, unresolved, err := p.Parse(file, "orion", nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, edges, "stylesheet edges are the linker's job (cross-file)")
 	return nodes, unresolved
@@ -121,9 +121,9 @@ func TestStylesheetParser_Deterministic(t *testing.T) {
 	file := filepath.Join(dir, "d.scss")
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o644))
 	p := &StylesheetParser{}
-	first, _, _, err := p.Parse(file, "svc", nil)
+	first, _, _, err := p.Parse(file, "svc", nil, nil)
 	require.NoError(t, err)
-	second, _, _, err := p.Parse(file, "svc", nil)
+	second, _, _, err := p.Parse(file, "svc", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
 	require.Len(t, first, 3)

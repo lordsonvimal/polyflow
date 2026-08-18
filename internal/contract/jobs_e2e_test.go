@@ -27,7 +27,7 @@ func parseJobsFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)
 	rp := &parser.RubyParser{}
-	nodes, edges, _, err := rp.Parse(jobsFixture, "app", m)
+	nodes, edges, _, err := rp.Parse(jobsFixture, "app", m, nil)
 	require.NoError(t, err)
 	return nodes, edges
 }

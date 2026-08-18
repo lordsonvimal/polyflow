@@ -22,7 +22,7 @@ func parseERBElements(t *testing.T, src string) map[string]graph.Node {
 
 	p := parser.ForFile(file)
 	require.NotNil(t, p)
-	nodes, _, _, err := p.Parse(file, "app", m)
+	nodes, _, _, err := p.Parse(file, "app", m, nil)
 	require.NoError(t, err)
 
 	out := map[string]graph.Node{}
@@ -85,7 +85,7 @@ func TestHTMLElementGate_StaticMarkupIsUnchanged(t *testing.T) {
 
 	p := parser.ForFile(file)
 	require.NotNil(t, p)
-	nodes, _, _, err := p.Parse(file, "app", m)
+	nodes, _, _, err := p.Parse(file, "app", m, nil)
 	require.NoError(t, err)
 
 	els := map[string]graph.Node{}

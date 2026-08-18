@@ -21,7 +21,7 @@ func parseJSSource(t *testing.T, name, src string) []graph.Node {
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)
 	p := &JavaScriptParser{}
-	nodes, _, _, err := p.Parse(file, "svc", m)
+	nodes, _, _, err := p.Parse(file, "svc", m, nil)
 	require.NoError(t, err)
 	return nodes
 }

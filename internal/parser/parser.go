@@ -52,8 +52,10 @@ type Parser interface {
 	Language() string
 	Extensions() []string
 	// Parse returns the file's nodes and edges plus any references it could
-	// not resolve (the recall gauge's per-file input).
-	Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error)
+	// not resolve (the recall gauge's per-file input). cache is the
+	// indexer's pre-read source cache (nil outside the main parse phase);
+	// implementations that read file bytes should prefer it via readSource.
+	Parse(file, service string, matcher *patterns.TreeSitterMatcher, cache SourceCache) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error)
 }
 
 // registry maps file extensions to parsers.
@@ -107,11 +109,16 @@ type WorkerPool struct {
 	matcher *patterns.TreeSitterMatcher
 	service string
 	route   RouteFunc // optional dispatch interceptor; nil → ForFile only
+	cache   SourceCache
 }
 
 // SetRoute installs a dispatch interceptor consulted before the extension
 // registry. Must be called before Run.
 func (wp *WorkerPool) SetRoute(route RouteFunc) { wp.route = route }
+
+// SetSourceCache installs the pre-read file cache passed to every Parse call
+// in the next Run. Must be called before Run.
+func (wp *WorkerPool) SetSourceCache(cache SourceCache) { wp.cache = cache }
 
 // NewWorkerPool creates a pool with the given concurrency, matcher, and service name.
 // service is used as a namespace prefix in generated node IDs.
@@ -157,7 +164,7 @@ func (wp *WorkerPool) Run(files []string) <-chan Result {
 				results[idx] = Result{File: path, Err: fmt.Errorf("no parser for %s", path)}
 				return
 			}
-			nodes, edges, unresolved, err := p.Parse(path, wp.service, wp.matcher)
+			nodes, edges, unresolved, err := p.Parse(path, wp.service, wp.matcher, wp.cache)
 			results[idx] = Result{File: path, Nodes: nodes, Edges: edges, Unresolved: unresolved, Err: err}
 		}(i, f)
 	}

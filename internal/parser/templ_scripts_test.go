@@ -12,7 +12,7 @@ import (
 func TestTemplParser_ScriptsAndIDs(t *testing.T) {
 	t.Parallel()
 	p := &TemplParser{}
-	nodes, _, _, err := p.Parse("testdata/scripts.templ", "app", nil)
+	nodes, _, _, err := p.Parse("testdata/scripts.templ", "app", nil, nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

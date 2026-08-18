@@ -85,7 +85,7 @@ func TestSvelteParser_BasicFixture_EventsAndNavLinks(t *testing.T) {
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, unresolved, err := p.Parse(svelteFixtureBasic, "myapp", m)
+	nodes, _, unresolved, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// Count dom_target nodes (event bindings).
@@ -136,7 +136,7 @@ func TestSvelteParser_FanOut_TwoClickHandlers(t *testing.T) {
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	clickCount := 0
@@ -157,7 +157,7 @@ func TestSvelteParser_ScriptFunctions(t *testing.T) {
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	funcLabels := map[string]bool{}
@@ -177,7 +177,7 @@ func TestSvelteParser_TSLang(t *testing.T) {
 	p := parser.ForFile(svelteFixtureTS)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureTS, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureTS, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// All nodes must have language="svelte".
@@ -203,7 +203,7 @@ func TestSvelteParser_LineOffset(t *testing.T) {
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// The script block occupies lines 1-8 in the basic fixture.
@@ -226,7 +226,7 @@ func TestSvelteParser_Determinism(t *testing.T) {
 	require.NotNil(t, p)
 
 	run := func() []string {
-		nodes, _, unresolved, err := p.Parse(svelteFixtureBasic, "myapp", m)
+		nodes, _, unresolved, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 		require.NoError(t, err)
 		var keys []string
 		for _, n := range nodes {
@@ -254,7 +254,7 @@ func TestSvelteParser_TernaryHrefCandidates(t *testing.T) {
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	var keyCandNode *graph.Node
@@ -280,7 +280,7 @@ func TestSvelteParser_MarkupOnly(t *testing.T) {
 	p := parser.ForFile(svelteFixtureMarkupOnly)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureMarkupOnly, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureMarkupOnly, "myapp", m, nil)
 	require.NoError(t, err)
 
 	// No function nodes (no script).
@@ -316,7 +316,7 @@ func TestSvelteParser_NegativeNoEventBindings(t *testing.T) {
 	p := parser.ForFile(tmpFile)
 	require.NotNil(t, p)
 
-	nodes, _, unresolved, err := p.Parse(tmpFile, "myapp", m)
+	nodes, _, unresolved, err := p.Parse(tmpFile, "myapp", m, nil)
 	require.NoError(t, err)
 
 	for _, n := range nodes {
@@ -346,7 +346,7 @@ export let targetPath
 	p := parser.ForFile(tmpFile)
 	require.NotNil(t, p)
 
-	_, _, unresolved, err := p.Parse(tmpFile, "myapp", m)
+	_, _, unresolved, err := p.Parse(tmpFile, "myapp", m, nil)
 	require.NoError(t, err)
 
 	hasDynamicURL := false
@@ -367,7 +367,7 @@ func TestSvelteParser_EventModifierStripped(t *testing.T) {
 	p := parser.ForFile(svelteFixtureBasic)
 	require.NotNil(t, p)
 
-	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m)
+	nodes, _, _, err := p.Parse(svelteFixtureBasic, "myapp", m, nil)
 	require.NoError(t, err)
 
 	hasSubmit := false

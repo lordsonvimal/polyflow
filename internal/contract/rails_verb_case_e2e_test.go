@@ -29,7 +29,7 @@ func parseRailsVerbCaseRoutes(t *testing.T) []graph.Node {
 	require.NoError(t, err)
 	m := patterns.NewTreeSitterMatcher(reg)
 	rp := &parser.RubyParser{}
-	nodes, _, _, err := rp.Parse("testdata/rails_verb_case/routes.rb", "atlas", m)
+	nodes, _, _, err := rp.Parse("testdata/rails_verb_case/routes.rb", "atlas", m, nil)
 	require.NoError(t, err)
 	return nodes
 }

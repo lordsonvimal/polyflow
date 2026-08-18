@@ -36,7 +36,7 @@ func domListenFixture(t *testing.T) ([]graph.Node, []graph.Edge, []graph.Unresol
 	} {
 		p := parser.ForFile(f)
 		require.NotNil(t, p, "no parser for %s", f)
-		ns, es, us, err := p.Parse(f, "app", m)
+		ns, es, us, err := p.Parse(f, "app", m, nil)
 		require.NoError(t, err)
 		nodes = append(nodes, ns...)
 		edges = append(edges, es...)
