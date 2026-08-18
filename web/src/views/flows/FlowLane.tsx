@@ -12,7 +12,7 @@ import { selectionStore } from "../../stores/selection";
 import { CANVAS_BG, LABEL_COLOR, DEFAULT_NODE_COLOR, NODE_TYPE_STYLES, LANG_COLORS } from "../../lib/styles";
 import { contextCopyStore } from "../../stores/contextCopy";
 import { flowRefToSource } from "../context/copy";
-import { displayLabel } from "../../lib/location";
+import { nodeDisplayLabel } from "../../lib/location";
 
 const LANE_HEIGHT = 140;
 const HOP_SPACING = 220;
@@ -111,7 +111,7 @@ function toElements(res: FlowResolution): any[] {
 
   const nodes = layout.nodes.map((n) => ({
     group: "nodes",
-    data: { id: n.id, label: displayLabel(n.label), service: n.service, verification_state: n.verificationState },
+    data: { id: n.id, label: nodeDisplayLabel(n), service: n.service, verification_state: n.verificationState },
     position: { x: LANE_LEFT_PAD + n.rank * HOP_SPACING, y: n.lane * LANE_HEIGHT + LANE_HEIGHT / 2 },
   }));
 

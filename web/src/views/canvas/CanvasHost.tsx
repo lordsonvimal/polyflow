@@ -19,7 +19,7 @@ import dagreFn from "cytoscape-dagre";
 import cySvg from "cytoscape-svg";
 
 import { scopeStore, Scope } from "../../stores/scope";
-import { displayLabel } from "../../lib/location";
+import { nodeDisplayLabel } from "../../lib/location";
 import { checkBudget, autoCluster, layoutOptions, BUDGET, BudgetOver } from "./budget";
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { registerMenuItems, openMenu } from "../../interaction/ContextMenu";
@@ -270,7 +270,7 @@ function toElements(d: GraphData): object[] {
       group: "nodes",
       data: {
         id: n.id,
-        label: displayLabel(n.label),
+        label: nodeDisplayLabel(n),
         type: n.type,
         service: n.service,
         file: n.file,
