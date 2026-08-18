@@ -22,3 +22,7 @@ apiFetch(`/api/flows/entrypoints`);
 
 // wrapper obj-style call with a template literal URL
 apiFetch({ url: `/api/jobs` });
+
+// WB.2: wrapper obj-style call with a non-"url" key — both keys are now
+// captured as candidates; the linker (WB.3) picks one.
+apiFetch({ uri: '/a', method: 'GET' });
