@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -47,12 +46,12 @@ func (p *SvelteParser) Language() string     { return "svelte" }
 func (p *SvelteParser) Extensions() []string { return []string{".svelte"} }
 
 func (p *SvelteParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	// `file` arrives absolute (needed for the os.ReadFile above); every node
+	// `file` arrives absolute (needed for readSource/os.ReadFile); every node
 	// this parser mints must carry the cwd-relative form instead, matching
 	// the Go semantic pass's convention — extractSvelteMarkupAttrs builds
 	// nodes directly (bypassing the matcher's own relativization).

@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"os"
-
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
@@ -15,7 +13,7 @@ func (p *HTMLParser) Language() string     { return "html" }
 func (p *HTMLParser) Extensions() []string { return []string{".html", ".htm"} }
 
 func (p *HTMLParser) Parse(file, service string, matcher *patterns.TreeSitterMatcher) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, error) {
-	src, err := os.ReadFile(file)
+	src, err := readSource(file)
 	if err != nil {
 		return nil, nil, nil, err
 	}

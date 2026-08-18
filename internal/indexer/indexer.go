@@ -289,6 +289,11 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 	jobHashes := make([]string, len(jobs)) // "" = unreadable, recorded as an error during the parse loop
+	// jobData retains each file's bytes alongside its hash so the parse phase
+	// below can reuse them instead of reading every file from disk a second
+	// time. Pruned to each service's changed-file subset as the parse loop
+	// consumes it (see fileData below) rather than held for the whole run.
+	jobData := make([][]byte, len(jobs))
 	{
 		g, _ := errgroup.WithContext(ctx)
 		g.SetLimit(opts.Workers)
@@ -301,12 +306,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				}
 				sum := sha256.Sum256(data)
 				jobHashes[i] = hex.EncodeToString(sum[:])
+				jobData[i] = data
 				return nil
 			})
 		}
 		_ = g.Wait()
 	}
 	hashes := map[string]string{}         // file → content hash
+	fileData := map[string][]byte{}       // file → pre-read bytes, consumed+pruned per service below
 	svcHashLines := map[string][]string{} // semantic cache key input
 	var fpLines []string
 	for i, j := range jobs {
@@ -315,6 +322,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			continue
 		}
 		hashes[j.file] = h
+		fileData[j.file] = jobData[i]
 		svcHashLines[j.svc] = append(svcHashLines[j.svc], j.file+":"+h)
 		fpLines = append(fpLines, j.svc+":"+j.file+":"+h)
 	}
@@ -477,6 +485,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			toParse = append(toParse, file)
 		}
 
+		// Hand the parse phase the bytes already read for these files during
+		// the hash pre-pass instead of making every parser re-read from disk.
+		svcSource := make(map[string][]byte, len(toParse))
+		for _, file := range toParse {
+			svcSource[file] = fileData[file]
+		}
+		parser.SetSourceCache(svcSource)
+
 		router := sidecar.NewRouter(sidecarMgr, tcReg, sf.svc.Name, svcToolchainVersions[sf.svc.Name])
 		pool := parser.NewWorkerPool(opts.Workers, matcher, sf.svc.Name)
 		pool.SetRoute(router.ParserFor)
@@ -519,6 +535,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				}
 				allEdges = append(allEdges, e)
 			}
+		}
+		parser.SetSourceCache(nil)
+		// This service's bytes (parsed or cache-hit) are no longer needed —
+		// drop them now rather than holding the whole workspace's file
+		// contents in memory for the entire parse loop.
+		for _, file := range sf.files {
+			delete(fileData, file)
 		}
 		// Sidecar routing outcomes (inferred selections, in-process fallbacks).
 		allToolchainNotes = append(allToolchainNotes, router.Notes()...)
