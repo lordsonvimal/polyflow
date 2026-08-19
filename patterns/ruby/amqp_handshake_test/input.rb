@@ -11,3 +11,7 @@ end
 def task_queue_name
   CONFIG[organization_name]&.dig(:amqp_queue_name)
 end
+
+def registration_queue_name
+  hash.dig("registration", "amqp_queue_name")
+end

@@ -6,3 +6,7 @@ config.dig(:database_url)
 # widened zero-middle-segment regex either.
 render json: { amqp_dequeue_name: some_value }
 config.dig(:amqp_dequeue_name)
+
+# Adversarial: two-string-arg dig whose second arg is not a handshake field —
+# must not match amqp_field_string_dig.
+hash.dig("registration", "user_id")
