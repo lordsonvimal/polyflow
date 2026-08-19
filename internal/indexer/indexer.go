@@ -962,6 +962,31 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			return nil, err
 		}
 	}
+	// Backbone completeness: mint a bare file node for every scanned file that
+	// LinkContainment skipped (barrel/re-export-only and enum-only files declare
+	// nothing containment-shaped). Runs before the JS import-edge pass so those
+	// files are already valid, persisted import targets rather than mint-on-miss
+	// fallbacks there.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		barrelNodes, barrelEdges := linker.EnsureAllScannedFiles(allNodes, svcFiles)
+		for i := range barrelNodes {
+			n := barrelNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(barrelEdges); err != nil {
+			return nil, err
+		}
+	}
 	// JS/TS + Ruby file-level import edges (file→file between NodeTypeFile nodes).
 	// Runs after LinkContainment so the file nodes are present in allNodes.
 	{
