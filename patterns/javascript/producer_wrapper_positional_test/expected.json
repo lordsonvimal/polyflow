@@ -1,0 +1,1 @@
+{"patterns": ["wrapper_url_positional_fetch_call", "wrapper_url_positional_axios_call", "wrapper_url_key_axios_config_call", "wrapper_url_shorthand_axios_config_call"], "node_types": ["variable", "variable", "variable", "variable"]}

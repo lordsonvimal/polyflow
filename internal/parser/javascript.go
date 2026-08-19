@@ -29,8 +29,12 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	// directly (bypassing the matcher's own relativization).
 	file = patterns.RelativizeToCwd(file)
 
-	grammarLang := grammarLanguage(file)
+	grammarLang := patterns.DetectJSGrammar(file, src, grammarLanguage(file))
 	// Language tag for nodes: tsx/jsx files are still "typescript"/"javascript" at the language level.
+	// Deliberately NOT re-derived from grammarLang: a Flow-typed .js file
+	// upgraded to the typescript grammar (DetectJSGrammar) is still
+	// JavaScript source, not TypeScript — the tag describes what the file
+	// IS, the grammar describes what parsed it.
 	langTag := tsLanguage(file)
 
 	// For TypeScript/TSX files, run both javascript patterns (fetch, axios, etc.)

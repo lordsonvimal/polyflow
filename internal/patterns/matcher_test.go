@@ -1046,3 +1046,25 @@ func TestX0_MatchToGraph_DemotesOnlyCommTypes(t *testing.T) {
 	assert.Equal(t, "svc:f_test.go:function:TestFoo:1", callerEdge.From)
 	assert.Equal(t, graph.EdgeTypeCalls, callerEdge.Type)
 }
+
+func TestDetectJSGrammar_FlowTypedJS_UpgradesToTypeScript(t *testing.T) {
+	src := []byte(`export const apiPut = (url: string, data: ?Object = {}): Promise<Object> =>
+  axios({ method: "PUT", url });
+`)
+	got := patterns.DetectJSGrammar("services/ApiServices.js", src, "javascript")
+	assert.Equal(t, "typescript", got, "a Flow-annotated .js file should upgrade to the typescript grammar")
+}
+
+func TestDetectJSGrammar_PlainJS_StaysJavaScript(t *testing.T) {
+	src := []byte(`export const apiPut = (url, data = {}) =>
+  axios({ method: "PUT", url });
+`)
+	got := patterns.DetectJSGrammar("services/ApiServices.js", src, "javascript")
+	assert.Equal(t, "javascript", got, "ordinary untyped JS must not pay the typescript-grammar cost")
+}
+
+func TestDetectJSGrammar_AlreadyTypeScript_Unchanged(t *testing.T) {
+	src := []byte(`export const apiPut = (url: string): Promise<Object> => axios({ method: "PUT", url });`)
+	got := patterns.DetectJSGrammar("services/ApiServices.tsx", src, "tsx")
+	assert.Equal(t, "tsx", got, "a .tsx file already uses a type-aware grammar and must not be re-routed")
+}
