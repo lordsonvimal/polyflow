@@ -450,6 +450,18 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 				}
 			}
 
+			// jquery_ajax_options_typed's @method captures a string/property-key
+			// value node directly (`type: "POST"`) rather than routing through
+			// the KeyWalker like @url does, so it keeps its raw quoted text
+			// ("POST" with the quote characters) unless stripped here — and an
+			// unstripped value never matches contracts/http.yaml's bare "POST"
+			// route meta, defeating the whole point of capturing it.
+			if cq.pattern.Name == "jquery_ajax_options_typed" {
+				if v, ok := captures["method"]; ok {
+					captures["method"] = strings.ToUpper(strings.Trim(v, `"'`+"`"))
+				}
+			}
+
 			// WB.4: these two patterns only capture the call site + argument
 			// identifier (tree-sitter queries can't do arithmetic to derive a
 			// positional index). Walk up from @arg_name to the nearest enclosing
