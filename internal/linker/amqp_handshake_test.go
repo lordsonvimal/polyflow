@@ -93,6 +93,59 @@ func TestAMQPHandshake_ResolvesQueueAcrossRepos(t *testing.T) {
 	assert.Equal(t, graph.ConfidencePartial, pub.Meta["confidence_ceiling"])
 }
 
+// TestAMQPHandshake_ResolvesZeroMiddleSegmentField is the Tier AH regression:
+// "amqp_queue_name" has no middle segment between "amqp_" and "queue_name",
+// which used to fall one character short of the match regex's minimum length
+// (prefix + suffix could not share the single separating underscore) and
+// silently produced no amqp_field_pair/amqp_field_symbol node at all — not a
+// resolution failure, an absence. This is the busiest handshake field in the
+// real fleet (orion's generic task queue).
+//
+// Isolated in its own two-file fixture rather than added as a third field to
+// testdata/amqp_handshake's shared publisher class: doing that tripped an
+// unrelated pre-existing contract-engine ambiguity (any third publish site
+// added to that file, even one reusing an already-resolved queue, made
+// TestAMQPHandshake_ContractClosesPublisherToConsumer's cross-repo edge
+// disappear) — a separate bug, out of Tier AH's scope.
+func TestAMQPHandshake_ResolvesZeroMiddleSegmentField(t *testing.T) {
+	t.Parallel()
+	reg, err := patterns.DefaultRegistry("../../patterns")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	files := map[string][]string{
+		"server": {
+			"testdata/amqp_handshake_zero_middle/server/queue_names.rb",
+			"testdata/amqp_handshake_zero_middle/server/agents_controller.rb",
+			"testdata/amqp_handshake_zero_middle/server/task_worker.rb",
+		},
+		"agent": {"testdata/amqp_handshake_zero_middle/agent/publisher.rb"},
+	}
+	var nodes []graph.Node
+	for _, svc := range []string{"agent", "server"} {
+		for _, f := range files[svc] {
+			p := parser.ForFile(f)
+			require.NotNil(t, p, "no parser for %s", f)
+			ns, _, _, err := p.Parse(f, svc, m, nil)
+			require.NoError(t, err)
+			nodes = append(nodes, ns...)
+		}
+	}
+	_, _ = linker.LinkAMQPHandshake(nodes)
+
+	pub := findNode(t, nodes, func(n *graph.Node) bool {
+		return n.Service == "agent" && n.Type == graph.NodeTypeChannel &&
+			n.Meta["broker_field"] == "amqp_queue_name" &&
+			n.Meta["pattern"] == "bunny_queue_declare"
+	})
+
+	assert.Equal(t, "generic_task", pub.Meta["queue_name"],
+		"zero-middle-segment field did not inherit the queue the server declares for it")
+	assert.Equal(t, "amqp_handshake", pub.Meta["key_resolved_via"])
+	assert.Empty(t, pub.Meta["key_dynamic"], "resolved key still marked dynamic")
+	assert.Equal(t, graph.ConfidencePartial, pub.Meta["confidence_ceiling"])
+}
+
 // TestAMQPHandshake_ContractClosesPublisherToConsumer pins that the resolution
 // is expressed through the EXISTING queue_name contract rather than a second
 // queue matcher — and that the edge lands at partial, not static.
