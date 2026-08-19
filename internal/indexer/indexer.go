@@ -855,6 +855,22 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 		}
 
+		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
+		// JS/TS client at all, so this is the only source of Meta["env_var"] /
+		// Meta["host_default_literal"] for JS/TS nodes — must also run before
+		// Tier CB, same as the Go/Ruby passes.
+		if hostNodes := linker.ResolveJSHTTPHosts(allNodes, svcFiles); len(hostNodes) > 0 {
+			for i := range hostNodes {
+				n := hostNodes[i]
+				if err := bw.AddNode(ctx, &n); err != nil {
+					return nil, err
+				}
+			}
+			if err := bw.Flush(ctx); err != nil {
+				return nil, err
+			}
+		}
+
 		// Tier CB: the two passes above recover *which* env var a client's base
 		// URL comes from; this one reads the path component out of that
 		// variable's checked-in value and composes it onto the node's own path,
