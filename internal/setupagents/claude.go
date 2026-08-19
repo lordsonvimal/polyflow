@@ -84,10 +84,14 @@ func claudeSettingsPath(scope string) (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-// mergeClaudeHooks wires command as a PostToolUse hook for the Bash and Read
-// matchers, matching this repo's own .claude/settings.json shape. Idempotent:
-// if a matcher group already contains a hook with this exact command, it's
-// left alone rather than duplicated.
+// mergeClaudeHooks wires command as a PostToolUse hook for the Bash, Read,
+// and Grep matchers, matching this repo's own .claude/settings.json shape.
+// Grep is the native Claude Code search tool — distinct from `Bash grep`,
+// which the Bash matcher already covers — and shares the same symbol-mode
+// dedupe key, so a Grep call and a shell-grep call for the same symbol in
+// one session only inject context once. Idempotent: if a matcher group
+// already contains a hook with this exact command, it's left alone rather
+// than duplicated.
 func mergeClaudeHooks(doc map[string]any, command string) (added bool) {
 	hooks, _ := doc["hooks"].(map[string]any)
 	if hooks == nil {
@@ -123,6 +127,7 @@ func mergeClaudeHooks(doc map[string]any, command string) (added bool) {
 	}
 	ensureMatcher("Bash")
 	ensureMatcher("Read")
+	ensureMatcher("Grep")
 
 	hooks["PostToolUse"] = postToolUse
 	return added
