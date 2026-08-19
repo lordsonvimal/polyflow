@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/jobs"
 	"github.com/lordsonvimal/polyflow/internal/ops"
@@ -199,5 +201,27 @@ func TestHandleCreateJob_SingleFlightConflict_409(t *testing.T) {
 	}
 	if okCount == 0 {
 		t.Fatalf("want at least one 202, got %v", codes)
+	}
+
+	// The accepted request(s) started a real goroutine (mgr.run) against
+	// dbPath, which lives under t.TempDir(). If that goroutine is still
+	// mid-reconcile (holding the sqlite file open) when the test returns,
+	// TempDir's RemoveAll cleanup races it and fails with "unlinkat: ...".
+	// Reconcile against this tiny fixture DB is fast, but not instant — wait
+	// for every accepted job to reach a terminal state before returning.
+	for _, w := range []*httptest.ResponseRecorder{w1, w2} {
+		if w.Code != http.StatusAccepted {
+			continue
+		}
+		var accepted struct {
+			Job struct {
+				ID string `json:"id"`
+			} `json:"job"`
+		}
+		decodeJSON(t, w.Body.Bytes(), &accepted)
+		require.Eventually(t, func() bool {
+			j, err := mgr.Get(accepted.Job.ID)
+			return err == nil && j.State != "running"
+		}, 5*time.Second, 5*time.Millisecond, "job %s did not finish", accepted.Job.ID)
 	}
 }
