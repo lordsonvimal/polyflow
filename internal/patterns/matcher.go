@@ -175,6 +175,53 @@ func languageFor(lang string) *sitter.Language {
 	}
 }
 
+// DetectJSGrammar upgrades a ".js"-family file's parsing grammar to
+// "typescript" when the plain JavaScript grammar can't cleanly parse it.
+//
+// The plain "javascript" tree-sitter grammar (used by default for every
+// .js/.mjs/.es6 file — see internal/parser/javascript.go's grammarLanguage)
+// implements standard ECMAScript only: it has no notion of Flow or
+// TypeScript type annotations. A Flow-typed .js file — common in codebases
+// that predate first-class TS adoption, or that use Flow specifically
+// instead of TS (Facebook/Meta-style tooling) — parses with real syntax
+// errors around every annotated parameter and return type
+// (`(url: string): Promise<Object> => ...`), and every pattern anchored on
+// formal_parameters' exact child shape (arrow_func_var, the wrapper-body
+// detection family, …) silently stops matching: the function registers as a
+// bare `variable` node instead of `function`, and everything downstream —
+// call resolution, HTTP client detection, impact/context — treats it as
+// inert.
+//
+// defaultGrammar is grammarLanguage(file)'s result; this only ever upgrades
+// away from "javascript" (a .ts/.tsx file already uses a type-aware grammar
+// and is returned unchanged). The check costs one extra parse of the file,
+// paid only for plain .js-family files — a one-time indexing cost, not per
+// pattern — and returns "javascript" unchanged for the overwhelming common
+// case (a real parse error is the signal, not a heuristic guess at Flow
+// syntax, so a file that merely looks unusual but parses fine is untouched).
+//
+// TypeScript's grammar is the practical fallback rather than a dedicated
+// Flow grammar: no tree-sitter-flow binding exists in this project's
+// dependency tree, and TypeScript's syntax for ordinary parameter/return
+// type annotations (`name: Type`, generics) is close enough to Flow's that
+// the parser recovers cleanly for the common annotation shapes; Flow-only
+// syntax (`?Type` nullable prefix, `%checks`) may still produce local error
+// nodes, but tree-sitter's error recovery keeps the surrounding function
+// structure — the part every pattern here actually anchors on — intact.
+func DetectJSGrammar(file string, src []byte, defaultGrammar string) string {
+	if defaultGrammar != "javascript" {
+		return defaultGrammar
+	}
+	root, err := sitter.ParseCtx(context.Background(), src, jssitter.GetLanguage())
+	if err != nil || root == nil {
+		return defaultGrammar
+	}
+	if root.HasError() {
+		return "typescript"
+	}
+	return defaultGrammar
+}
+
 // getCompiledQueries returns cached compiled queries for patternLang compiled against grammarLang.
 // The cache key includes both so jsx patterns compiled against tsx grammar don't collide with
 // the same patterns compiled against typescript grammar.
@@ -672,14 +719,38 @@ func jsWrapperParamIndex(argNode *sitter.Node, src []byte) (wrapperName string, 
 			return "", -1, false
 		}
 		for i := 0; i < int(params.NamedChildCount()); i++ {
-			p := params.NamedChild(i)
-			if p.Type() == "identifier" && p.Content(src) == argText {
+			p := jsParamIdentifier(params.NamedChild(i))
+			if p != nil && p.Content(src) == argText {
 				return name.Content(src), i, true
 			}
 		}
 		return "", -1, false
 	}
 	return "", -1, false
+}
+
+// jsParamIdentifier returns the plain identifier a formal_parameters child
+// resolves to, unwrapping the typescript/tsx grammar's required_parameter
+// (a type-annotated param, e.g. `url: string`) — which the plain javascript
+// grammar has no equivalent for; a bare (identifier) is returned unchanged.
+// Not handling this meant every WB.4 wrapper-call pattern silently stopped
+// resolving as soon as DetectJSGrammar upgraded a Flow-typed .js file to the
+// typescript grammar: the call site still matched, but this walk-up
+// dropped it anyway because p.Type() was "required_parameter", never
+// "identifier".
+func jsParamIdentifier(p *sitter.Node) *sitter.Node {
+	if p == nil {
+		return nil
+	}
+	if p.Type() == "identifier" {
+		return p
+	}
+	if p.Type() == "required_parameter" || p.Type() == "optional_parameter" {
+		if inner := p.ChildByFieldName("pattern"); inner != nil && inner.Type() == "identifier" {
+			return inner
+		}
+	}
+	return nil
 }
 
 // goInTestDSLScope reports true when the nearest enclosing function_declaration
