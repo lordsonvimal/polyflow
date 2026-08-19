@@ -68,3 +68,23 @@ func (x *fileNodeIndex) ensure(service, file string) string {
 	}
 	return id
 }
+
+// EnsureAllScannedFiles mints a bare NodeTypeFile node (plus its service→file
+// contains edge) for every file the workspace walk scanned, not just the ones
+// LinkContainment reached by way of a function/method/struct/component
+// declaration. A pure re-export barrel (`export * from './x'`) or an
+// enum-only file declares nothing containment-shaped, so without this pass it
+// produced zero graph output at all — not even a marker that polyflow saw the
+// file — while an import elsewhere in the same service could still point at
+// it. svcFiles is service name → every file that service's language walk
+// recognised (the same list the JS/TS import-edge and hashing passes use), so
+// this only covers real source files, not skipped/unparsed extensions.
+func EnsureAllScannedFiles(nodes []graph.Node, svcFiles map[string][]string) ([]graph.Node, []graph.Edge) {
+	x := newFileNodeIndex(nodes)
+	for service, files := range svcFiles {
+		for _, f := range files {
+			x.ensure(service, f)
+		}
+	}
+	return x.minted, x.mintedEdges
+}
