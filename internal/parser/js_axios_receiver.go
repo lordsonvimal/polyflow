@@ -37,6 +37,22 @@ func dropNonHTTPJSMatches(results []patterns.MatchResult) []patterns.MatchResult
 			if isContainerReceiverCall(r) {
 				continue
 			}
+			// jQuery's global `$`/`jQuery` is never an axios instance, but
+			// axios_instance_call's query is any-identifier-shaped
+			// (`identifier.get/post/...(url)`) and is gated only at the
+			// service-dependency level (patterns/javascript/axios_instance.
+			// yaml's `package: axios`), not per call site — a service that
+			// depends on axios anywhere still has jQuery elsewhere in its
+			// legacy asset pipeline. jquery.yaml's jquery_ajax pattern
+			// already matches `$.get(url)`/`$.post(url)` correctly with the
+			// real "jquery" package and a jquery_ajax_method role; without
+			// this drop, Pass 1b's same-file:line dedup keeps whichever
+			// pattern's match happened to land in `nodes` first (alphabetical
+			// file order put axios_instance.yaml before jquery.yaml), so the
+			// correct jQuery match silently lost to the wrong axios one.
+			if r.Captures["via_alias"] == "$" || r.Captures["via_alias"] == "jQuery" {
+				continue
+			}
 		case "producer_alias_url_call", "producer_alias_obj_call":
 			// An empty URL literal is not an address. The node could never
 			// match a route, so it is pure search and footer noise — and,
