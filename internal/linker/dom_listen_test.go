@@ -188,7 +188,7 @@ func TestDOMListen_HandlerOwnsItsBody(t *testing.T) {
 			reached = append(reached, n.Label)
 		}
 	}
-	assert.Contains(t, reached, "/approve",
+	assert.Contains(t, reached, "POST /approve",
 		"handler does not reach the endpoint its click fires; edges from %s: %v", handlerID, reached)
 }
 

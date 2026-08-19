@@ -1,6 +1,48 @@
 language: javascript
 version: "1"
 patterns:
+  # jQuery AJAX options-object form, WITH an explicit type/method key:
+  # $.ajax({url: "/save", type: "POST"}) / {url: "/save", method: "POST"}.
+  # Listed BEFORE jquery_ajax_options below so same-line dedup (Pass 1b in
+  # matcher.go) keeps this match over the url-only one when both apply.
+  #
+  # Without a captured method, the resulting http_client node's Meta["method"]
+  # is empty; contract/engine.go's candidateMethodOverrides then tries every
+  # verb in contracts/http.yaml's method_fallback list in turn against the
+  # path — so a POST-only route sharing a path *shape* with an unrelated GET
+  # route (e.g. a REST resource's `GET /x/:id` next to a custom
+  # `POST /x/delete_items` collection route, same segment count) could match
+  # the wrong one before the right verb was ever tried. A call that DOES
+  # specify a method should never be method-fallback material.
+  - name: jquery_ajax_options_typed
+    query: |
+      (call_expression
+        function: (member_expression
+          object: [
+            (identifier) @obj
+            (member_expression
+              object: (identifier) @_win
+              (#eq? @_win "window")
+              property: (property_identifier) @obj)
+          ]
+          (#match? @obj "^(\\$|jQuery)$")
+          property: (property_identifier) @fn
+          (#eq? @fn "ajax"))
+        arguments: (arguments
+          (object
+            (pair
+              key: [(property_identifier) (string)] @uk
+              (#eq? @uk "url")
+              value: (_) @url)
+            (pair
+              key: [(property_identifier) (string)] @mk
+              (#match? @mk "^(type|method)$")
+              value: (_) @method))))
+    captures:
+      - name: url
+        role: http_url
+      - name: method
+        role: http_method
   # jQuery AJAX options-object form: $.ajax({url: "/save", method: "POST"}).
   # Listed BEFORE the direct-arg form so file+line dedup keeps this result.
   - name: jquery_ajax_options
