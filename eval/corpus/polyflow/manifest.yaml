@@ -38,12 +38,15 @@ cases:
     kind: node
     target: filterEdgesByConfidence
     # filterEdgesByConfidence (web/src/lib/confidence.ts) is imported and called by
-    # web/src/stores/derived.ts.  Verified: derived.ts line 10 imports it; line 53
-    # calls it. This is a cross-file JavaScript link — the Phase 0.3 class of fix.
+    # web/src/lib/filters.ts (line 5 imports, line 32 calls). derived.ts no longer
+    # exists — this logic moved to filters.ts at some point after this case was
+    # authored and the fixture was never updated. This is a cross-file JS link —
+    # the Phase 0.3 class of fix. Verified: `polyflow impact --target
+    # filterEdgesByConfidence` shows filters.ts via an imports edge.
     expected_impacted:
-      - web/src/stores/derived.ts
+      - web/src/lib/filters.ts
     must_not_miss:
-      - web/src/stores/derived.ts
+      - web/src/lib/filters.ts
 
   # ── Semantic search cases (S.4) ───────────────────────────────────────────
   # Verified by running `polyflow search <query> --format json` on this repo
