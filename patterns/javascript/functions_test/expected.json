@@ -1,1 +1,1 @@
-{"patterns": ["function_decl", "arrow_func_var"], "node_types": ["function", "function"]}
+{"patterns": ["function_decl", "arrow_func_var", "object_method_pair", "object_method_pair", "object_method_shorthand", "object_method_shorthand"], "node_types": ["function", "function", "function", "function", "function", "function"]}
