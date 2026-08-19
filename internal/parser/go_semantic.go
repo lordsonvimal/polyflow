@@ -159,13 +159,6 @@ func loadServicePackages(dir, service string, fset *token.FileSet, mode packages
 // `func` keyword position). Edges where either endpoint is not in knownNodes are
 // dropped.
 func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.FileSet, knownNodes map[string]bool) SemanticResult {
-	// Reset the canonicalPath memoization for this service. AnalyzeService runs
-	// single-threaded per call (no concurrency within or across calls in the
-	// indexer's semantic pass), so replacing the map here is race-free and
-	// keeps the cache from serving another service's paths or growing without
-	// bound across a long-lived process that re-indexes repeatedly.
-	canonicalPathCache = sync.Map{}
-
 	// LoadSyntax (not LoadAllSyntax): full typed syntax for dir's own
 	// packages, but only type info via export data for dependencies — no
 	// parse, no type-check of their bodies. Safe because the SSA walk below
@@ -177,25 +170,59 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	//
 	// This does carry a correctness risk LoadAllSyntax doesn't have: the two
 	// modes have been observed to disagree on whether a `//go:embed` pattern
-	// matching zero files (e.g. a generated frontend-build directory that
-	// hasn't been built in this checkout) is a package error — LoadSyntax
-	// surfaces it, LoadAllSyntax silently tolerates it. Losing an entire
-	// service's semantic call graph to that one directive is a real recall
-	// loss (confirmed on gotify/server: 7213→3237 edges), so a build-error
-	// result gets one retry under LoadAllSyntax before falling back to
-	// tree-sitter-only. The retry only fires on the rarer error path, so it
-	// doesn't cost the common case anything.
-	pkgs, warning := loadServicePackages(dir, service, fset, packages.LoadSyntax, true)
-	if warning != "" {
-		if retried, retryWarning := loadServicePackages(dir, service, fset, packages.LoadAllSyntax, false); retryWarning == "" {
-			pkgs, warning = retried, ""
-		}
+	// matching zero files is a package error (LoadSyntax surfaces it,
+	// LoadAllSyntax tolerates it — confirmed on gotify/server: 7213→3237
+	// edges), and separately on whether a dependency's leaner type info is
+	// complete enough for golang.org/x/tools/go/ssa to build without panicking
+	// (confirmed indexing polyflow's own internal/sidecar package: "no type
+	// for *ast.CompositeLit", a crash LoadAllSyntax's fuller type-checking
+	// didn't hit). Both failure modes — a load/build error, or a panic
+	// recovered by analyzeServiceWithMode — get one retry under LoadAllSyntax
+	// before falling back to tree-sitter-only. The retry only fires on the
+	// rarer error/panic path, so it doesn't cost the common case anything.
+	if result, ok := a.analyzeServiceWithMode(dir, service, fset, knownNodes, packages.LoadSyntax, true); ok {
+		return result
 	}
+	result, _ := a.analyzeServiceWithMode(dir, service, fset, knownNodes, packages.LoadAllSyntax, false)
+	return result
+}
+
+// analyzeServiceWithMode loads dir under mode and runs the full semantic
+// analysis (SSA build + walk). ok is false on any failure the caller should
+// retry under a different mode: a load/build error, or a panic recovered
+// from the SSA builder (golang.org/x/tools/go/ssa can panic when a
+// dependency's type info is incomplete — see AnalyzeService's doc comment).
+// quiet suppresses stderr output for an attempt the caller may still retry.
+func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *token.FileSet, knownNodes map[string]bool, mode packages.LoadMode, quiet bool) (result SemanticResult, ok bool) {
+	// Reset the canonicalPath memoization for this attempt. AnalyzeService
+	// runs single-threaded per call (no concurrency within or across calls in
+	// the indexer's semantic pass), so replacing the map here is race-free
+	// and keeps the cache from serving another service's or another attempt's
+	// paths.
+	canonicalPathCache = sync.Map{}
+
+	pkgs, warning := loadServicePackages(dir, service, fset, mode, quiet)
 	if warning != "" {
-		return SemanticResult{Warning: warning}
+		return SemanticResult{Warning: warning}, false
 	}
 
-	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("service %q: SSA build panicked (%v) — falling back to tree-sitter call edges", service, r)
+			if !quiet {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+			result = SemanticResult{Warning: msg}
+			ok = false
+		}
+	}()
+
+	// BuildSerially: prog.Build() otherwise builds packages in worker
+	// goroutines it spawns internally, so a panic there (the SSA builder can
+	// panic on incomplete type info — see AnalyzeService's doc comment) would
+	// crash the process instead of landing in this function's goroutine,
+	// where the defer/recover below can catch it and let the caller retry.
+	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics|ssa.BuildSerially)
 	prog.Build()
 
 	// Build file+name → nodeID index from known tree-sitter nodes.
@@ -336,7 +363,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	if len(inService) > 0 && resolved == 0 {
 		return SemanticResult{
 			Warning: fmt.Sprintf("service %q: none of %d analyzed functions matched indexed nodes — call edges unavailable (path mismatch between analyzer and index?)", service, len(inService)),
-		}
+		}, false
 	}
 
 	// Two-pass edge collection: gather (caller, callee, isGo) triples from all
@@ -626,7 +653,7 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 
 	referenced := collectReferenced(prog, ssaPkgs, allFns, resolveFunc)
 
-	return SemanticResult{Nodes: allNodes, Edges: edges, Referenced: referenced}
+	return SemanticResult{Nodes: allNodes, Edges: edges, Referenced: referenced}, true
 }
 
 // collectReferenced finds functions that are referenced without being called
