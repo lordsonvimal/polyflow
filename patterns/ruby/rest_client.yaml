@@ -81,3 +81,22 @@ patterns:
     captures:
       - name: url
         role: http_url
+  # `RestClient.send(method, url, opts)` — a dynamic-verb dispatch shape none
+  # of the other patterns cover: `send` is not itself an HTTP verb, the real
+  # verb is the first positional argument's *value* (often a variable), and
+  # the URL is the second positional argument, not a keyword pair.
+  - name: rest_client_send
+    query: |
+      (call
+        receiver: (constant) @client
+        (#eq? @client "RestClient")
+        method: (identifier) @fn
+        (#eq? @fn "send")
+        arguments: (argument_list
+          . (_) @method
+          . (_) @url . _*))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
