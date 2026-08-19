@@ -2035,6 +2035,8 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "faraday_") || strings.HasPrefix(lower, "httparty_") ||
 		strings.HasPrefix(lower, "net_http_") || strings.HasPrefix(lower, "rest_client"):
 		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
+	case lower == "js_api_wrapper_call":
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
 	case strings.Contains(lower, "client") || strings.Contains(lower, "request") ||
 		strings.Contains(lower, "fetch") || strings.Contains(lower, "axios") ||
 		strings.HasPrefix(lower, "http_get") || strings.HasPrefix(lower, "http_post") ||

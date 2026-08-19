@@ -7,7 +7,13 @@ patterns:
     query: |
       (call_expression
         function: (member_expression
-          object: (identifier) @obj
+          object: [
+            (identifier) @obj
+            (member_expression
+              object: (identifier) @_win
+              (#eq? @_win "window")
+              property: (property_identifier) @obj)
+          ]
           (#match? @obj "^(\\$|jQuery)$")
           property: (property_identifier) @fn
           (#eq? @fn "ajax"))
@@ -21,11 +27,22 @@ patterns:
       - name: url
         role: http_url
   # Direct-arg form: $.ajax('/url'), $.get('/url'), $.post('/url'), $(el).load('/url').
+  # object also accepts window.$/window.jQuery: legacy code that explicitly
+  # qualifies the global (`window.$.ajax(...)`) has the same call shape but a
+  # nested member_expression object instead of a bare identifier — a bare
+  # `(identifier) @obj` never matches that node at all, so the call site was
+  # invisible to both this pattern and axios_instance_call's package gate.
   - name: jquery_ajax
     query: |
       (call_expression
         function: (member_expression
-          object: (identifier) @obj
+          object: [
+            (identifier) @obj
+            (member_expression
+              object: (identifier) @_win
+              (#eq? @_win "window")
+              property: (property_identifier) @obj)
+          ]
           (#match? @obj "^(\\$|jQuery)$")
           property: (property_identifier) @fn
           (#match? @fn "^(ajax|get|post|getJSON|load)$"))
