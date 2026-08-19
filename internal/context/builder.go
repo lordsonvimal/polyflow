@@ -35,6 +35,12 @@ type Result struct {
 	// Survives any token budget.
 	Trust graph.TrustStamp `json:"trust"`
 
+	// Epistemic is the single trust verdict derived from Unresolved,
+	// VerificationSummary and Trust (EE.0) — set by FinalizeEpistemic, called
+	// after Trust and AttachUnresolved. Always present; survives any token
+	// budget.
+	Epistemic graph.Epistemic `json:"epistemic"`
+
 	// TargetCandidates lists every exact-label match when >1 candidate exists,
 	// sorted by (service, file). Always present ([] when unambiguous). Agents
 	// should re-query with target_service/--target-service when non-empty.
@@ -140,6 +146,24 @@ func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
 	}
 	r.Unresolved = graph.UnresolvedInFiles(refs, files)
 	r.UnresolvedNote = graph.UnresolvedNote(len(r.Unresolved))
+}
+
+// FinalizeEpistemic computes the epistemic verdict (EE.0) from this result's
+// already-populated Unresolved, VerificationSummary and Trust sections, plus
+// the confidence of the traversed edges. Call after Trust is set and
+// AttachUnresolved has run — the order every call site already uses — and
+// before ApplyBudget, since epistemic must survive any token-budget cut, the
+// same as verification_summary/trust.
+func (r *Result) FinalizeEpistemic() *Result {
+	confidences := make([]string, 0, len(r.Upstream)+len(r.Downstream))
+	for _, n := range r.Upstream {
+		confidences = append(confidences, n.Confidence)
+	}
+	for _, n := range r.Downstream {
+		confidences = append(confidences, n.Confidence)
+	}
+	r.Epistemic = graph.BuildEpistemic(r.Unresolved, graph.HasWeakConfidence(confidences), r.VerificationSummary, r.Trust)
+	return r
 }
 
 // traverse runs BFS in the appropriate directions for the given task.

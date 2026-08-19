@@ -42,16 +42,19 @@ func investigateFixtureFiles(t *testing.T) {
 
 // investigateOut mirrors investigateOutput for decoding tool responses in tests.
 type investigateOut struct {
-	Root       graph.Node              `json:"root"`
-	Snippet    string                  `json:"snippet"`
-	Candidates []resolveCandidate      `json:"candidates"`
-	Ambiguous  []graph.TargetCandidate `json:"target_candidates"`
-	Callers    []investigateNode       `json:"callers"`
-	Callees    []investigateNode       `json:"callees"`
-	Flows      []investigateFlow       `json:"flows"`
-	Unresolved []graph.UnresolvedRef   `json:"coverage_unresolved"`
-	Note       string                  `json:"note"`
-	Budget     *struct {
+	Root                graph.Node                `json:"root"`
+	Snippet             string                    `json:"snippet"`
+	Candidates          []resolveCandidate        `json:"candidates"`
+	Ambiguous           []graph.TargetCandidate   `json:"target_candidates"`
+	Callers             []investigateNode         `json:"callers"`
+	Callees             []investigateNode         `json:"callees"`
+	Flows               []investigateFlow         `json:"flows"`
+	Unresolved          []graph.UnresolvedRef     `json:"coverage_unresolved"`
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	Trust               graph.TrustStamp          `json:"trust"`
+	Epistemic           graph.Epistemic           `json:"epistemic"`
+	Note                string                    `json:"note"`
+	Budget              *struct {
 		MaxTokens       int      `json:"max_tokens"`
 		EstimatedTokens int      `json:"estimated_tokens"`
 		Level           string   `json:"level"`
@@ -189,6 +192,27 @@ func TestInvestigateTool_BudgetCollapsesCandidatesThenFlowsThenSnippets(t *testi
 	// coverage_unresolved and the root snippet survive even the tightest budget.
 	assert.Equal(t, full.Unresolved, tight.Unresolved)
 	assert.NotEmpty(t, tight.Snippet)
+	// epistemic must survive the tightest budget too (EE.0), same as
+	// coverage_unresolved/verification_summary/trust.
+	assert.Equal(t, full.Epistemic, tight.Epistemic)
+}
+
+// TestInvestigateTool_CarriesEpistemic verifies the epistemic verdict (EE.0)
+// round-trips over MCP, derived from this call's own verification_summary/
+// trust/coverage_unresolved sections rather than recomputed independently.
+func TestInvestigateTool_CarriesEpistemic(t *testing.T) {
+	investigateFixtureFiles(t)
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out investigateOut
+	callJSON(t, cs, "investigate", map[string]any{"query": "getUser"}, &out)
+
+	require.NotEmpty(t, out.Unresolved, "precondition: fixture() has a dynDispatch unresolved ref in scope")
+	assert.False(t, out.Trust.Measured, "precondition: no trust stamp loaded in the test store")
+	assert.Equal(t, graph.EpistemicLowerBound, out.Epistemic.Verdict)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnresolvedReference)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnmeasuredTrust)
 }
 
 func TestInvestigateTool_QueryRequired(t *testing.T) {

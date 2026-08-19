@@ -227,3 +227,73 @@ func TestSummarize_TrustCarried(t *testing.T) {
 	s := out.Summarize()
 	assert.Equal(t, out.Trust, s.Trust)
 }
+
+// TestFinalizeEpistemic_Exact verifies a clean, fully-verified, measured
+// result reports epistemic.verdict "exact" with no causes (EE.0).
+func TestFinalizeEpistemic_Exact(t *testing.T) {
+	idx := fixtureIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
+	out.Trust = graph.TrustStamp{Measured: true}
+	out.AttachUnresolved(nil)
+	out.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicExact, out.Epistemic.Verdict)
+	assert.Empty(t, out.Epistemic.Causes)
+}
+
+// TestFinalizeEpistemic_CandidateEdge verifies out.Epistemic reflects this
+// result's own VerificationSummary.Candidate, not a recomputation.
+func TestFinalizeEpistemic_CandidateEdge(t *testing.T) {
+	idx := provenanceIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
+	out.Trust = graph.TrustStamp{Measured: true}
+	out.AttachUnresolved(nil)
+	out.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicLowerBound, out.Epistemic.Verdict)
+	assert.Equal(t, []string{graph.CauseCandidateEdge}, out.Epistemic.Causes)
+}
+
+// TestFinalizeEpistemic_DynamicDispatch verifies a partial/unknown confidence
+// caller edge surfaces as the dynamic_dispatch cause.
+func TestFinalizeEpistemic_DynamicDispatch(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "a", Type: graph.NodeTypeFunction, Label: "a", File: "a.go"})
+	idx.AddNode(&graph.Node{ID: "b", Type: graph.NodeTypeFunction, Label: "b", File: "b.go"})
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceUnknown})
+
+	out := impact.Build(idx, idx.Nodes["b"], impact.Options{Depth: 10})
+	out.Trust = graph.TrustStamp{Measured: true}
+	out.AttachUnresolved(nil)
+	out.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicLowerBound, out.Epistemic.Verdict)
+	assert.Equal(t, []string{graph.CauseDynamicDispatch}, out.Epistemic.Causes)
+}
+
+// TestBudgetFloor_EpistemicAlwaysPresent verifies a tiny max-tokens budget
+// still carries epistemic (EE.0), same as verification_summary/trust.
+func TestBudgetFloor_EpistemicAlwaysPresent(t *testing.T) {
+	idx := provenanceIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
+	out.Trust = graph.TrustStamp{Measured: false}
+	out.AttachUnresolved(nil)
+	out.FinalizeEpistemic()
+
+	budgeted := out.ApplyBudget(1, false)
+	data, err := json.Marshal(budgeted)
+	require.NoError(t, err)
+	s := string(data)
+
+	assert.Contains(t, s, `"epistemic"`, "epistemic must survive budget cut")
+	assert.Contains(t, s, `"lower_bound"`)
+}
+
+// TestSummarize_EpistemicCarried verifies epistemic survives file rollup,
+// mirroring TestSummarize_TrustCarried.
+func TestSummarize_EpistemicCarried(t *testing.T) {
+	idx := provenanceIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
+	out.Trust = graph.TrustStamp{Measured: true}
+	out.AttachUnresolved(nil)
+	out.FinalizeEpistemic()
+	s := out.Summarize()
+	assert.Equal(t, out.Epistemic, s.Epistemic)
+}

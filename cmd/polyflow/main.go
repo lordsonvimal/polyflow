@@ -1218,6 +1218,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	result.AttachUnresolved(unresolved)
+	result.FinalizeEpistemic()
 	result.InlineSnippets(".", contextSnippetLines)
 
 	out := result.ApplyBudget(contextMaxTokens, contextSummary)
@@ -1451,6 +1452,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	result.AttachUnresolved(unresolved)
+	result.FinalizeEpistemic()
 
 	if result.ResolutionNote != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
@@ -1658,6 +1660,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	out.AttachUnresolved(unresolved)
+	out.FinalizeEpistemic()
 	out.InlineSnippets(".", impactSnippetLines)
 
 	budgeted := out.ApplyBudget(impactMaxTokens, impactSummary)
