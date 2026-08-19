@@ -10,6 +10,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // LinkJSTypeRelations resolves cross-file inherits, implements, and
@@ -87,7 +88,13 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 			if !isJSFile(file) {
 				continue
 			}
-			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[file], existingEdges, seen)
+			// declsByFile is keyed by n.File, which is already cwd-relative
+			// (real written nodes) — file here is still the raw absolute
+			// walked path, so the lookup must use the same relativized form
+			// or it always misses (fileDecls silently empty on every call,
+			// meaning walkTypeRefs's nearestDecl below could never attribute
+			// a cross-file uses_type edge to anything).
+			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], existingEdges, seen)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -101,6 +108,15 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 		return nil, nil
 	}
 	lang := grammarLangForFile(file)
+	// file arrives absolute (serviceFiles carries the raw walked paths,
+	// never relativized — unlike the main per-file parse path, which applies
+	// this same conversion in javascript.go). Every node/ref ID this pass
+	// mints must use the cwd-relative form to match already-written nodes,
+	// or a cross-file edge like `instantiates` points at an ID nothing
+	// wrote — a FOREIGN KEY constraint failure at write time (confirmed
+	// indexing GitNexus's own repo: every cross-file new_expression hit
+	// this). os.ReadFile/grammarLangForFile above still need the real path.
+	relFile := patterns.RelativizeToCwd(file)
 	root, err := sitter.ParseCtx(context.Background(), src, lang)
 	if err != nil {
 		return nil, nil
@@ -239,11 +255,11 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 						targetID, found := classTable[exportedName]
 						if !found {
 							if relativeNames[parentLocal] {
-								missKey := fmt.Sprintf("%s:%s:inherits_unresolved", file, parentLocal)
+								missKey := fmt.Sprintf("%s:%s:inherits_unresolved", relFile, parentLocal)
 								if !seen[missKey] {
 									seen[missKey] = true
 									unresolved = append(unresolved, graph.UnresolvedRef{
-										Service: svcName, File: file,
+										Service: svcName, File: relFile,
 										Line: int(val.StartPoint().Row) + 1,
 										Name: exportedName, Kind: "inherits_unresolved",
 									})
@@ -282,11 +298,11 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 							targetID, found := classTable[exportedName]
 							if !found {
 								if relativeNames[ifaceLocal] {
-									missKey := fmt.Sprintf("%s:%s:implements_unresolved", file, ifaceLocal)
+									missKey := fmt.Sprintf("%s:%s:implements_unresolved", relFile, ifaceLocal)
 									if !seen[missKey] {
 										seen[missKey] = true
 										unresolved = append(unresolved, graph.UnresolvedRef{
-											Service: svcName, File: file,
+											Service: svcName, File: relFile,
 											Line: int(ti.StartPoint().Row) + 1,
 											Name: exportedName, Kind: "implements_unresolved",
 										})
@@ -345,11 +361,11 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 					targetID, found := classTable[exportedName]
 					if !found {
 						if relativeNames[parentLocal] {
-							missKey := fmt.Sprintf("%s:%s:inherits_unresolved_iface", file, parentLocal)
+							missKey := fmt.Sprintf("%s:%s:inherits_unresolved_iface", relFile, parentLocal)
 							if !seen[missKey] {
 								seen[missKey] = true
 								unresolved = append(unresolved, graph.UnresolvedRef{
-									Service: svcName, File: file,
+									Service: svcName, File: relFile,
 									Line: int(parent.StartPoint().Row) + 1,
 									Name: exportedName, Kind: "inherits_unresolved",
 								})
@@ -409,7 +425,7 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
 				fnName := nameNode.Content(src)
 				// Function node ID: service:file:function:name:line
-				newFnID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, file, fnName, int(n.StartPoint().Row)+1)
+				newFnID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, relFile, fnName, int(n.StartPoint().Row)+1)
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
