@@ -1296,6 +1296,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	handshakeUnresolved, handshakeResolved := linker.LinkAMQPHandshake(enrichedNodes)
 	allUnresolved = linker.DropResolvedRefs(allUnresolved, handshakeResolved)
 	allUnresolved = append(allUnresolved, handshakeUnresolved...)
+	// AH follow-up: the message-type dispatch join, distinct from and
+	// unblocked by the queue-name handshake above — it answers "what breaks
+	// if I change this message's shape" rather than "where does it go".
+	// Emits edges directly (not through the contract engine) since the join
+	// is on a bare constant name, not a structural role any contracts/*.yaml
+	// rule already models.
+	if mtEdges := linker.LinkAMQPMessageTypeDispatch(enrichedNodes); len(mtEdges) > 0 {
+		if err := writeEdges(mtEdges); err != nil {
+			return nil, err
+		}
+	}
 	eng := &contract.Engine{}
 	contractResult := eng.Link(enrichedNodes, contractRules, cfg.Links)
 

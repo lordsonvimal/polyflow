@@ -146,6 +146,59 @@ func TestAMQPHandshake_ResolvesZeroMiddleSegmentField(t *testing.T) {
 	assert.Equal(t, graph.ConfidencePartial, pub.Meta["confidence_ceiling"])
 }
 
+// TestAMQPHandshake_ResolvesStringKeyedTwoArgDig is the AH follow-up
+// regression: nextGen-CDR-Agent/lib/client/agent_node.rb reads
+// `amqp_queue_name` back out with `hash.dig("registration",
+// "amqp_queue_name")` — two positional string arguments, not one symbol —
+// which amqp_field_symbol's `(simple_symbol) @broker_field` capture was never
+// written to match, so the field had a declaration node and no consumer node
+// even after Tier AH's zero-middle-segment regex fix. amqp_field_string_dig
+// is the sibling pattern that closes this.
+func TestAMQPHandshake_ResolvesStringKeyedTwoArgDig(t *testing.T) {
+	t.Parallel()
+	reg, err := patterns.DefaultRegistry("../../patterns")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	files := map[string][]string{
+		"server": {
+			"testdata/amqp_handshake_string_dig/server/queue_names.rb",
+			"testdata/amqp_handshake_string_dig/server/agents_controller.rb",
+		},
+		"agent": {"testdata/amqp_handshake_string_dig/agent/publisher.rb"},
+	}
+	var nodes []graph.Node
+	for _, svc := range []string{"agent", "server"} {
+		for _, f := range files[svc] {
+			p := parser.ForFile(f)
+			require.NotNil(t, p, "no parser for %s", f)
+			ns, _, _, err := p.Parse(f, svc, m, nil)
+			require.NoError(t, err)
+			nodes = append(nodes, ns...)
+		}
+	}
+
+	consumer := findNode(t, nodes, func(n *graph.Node) bool {
+		return n.Service == "agent" && n.Meta["pattern"] == "amqp_field_string_dig"
+	})
+	assert.Equal(t, "amqp_queue_name", consumer.Meta["broker_field"],
+		"string-keyed two-arg dig field was not normalized like the symbol form")
+
+	_, _ = linker.LinkAMQPHandshake(nodes)
+
+	pub := findNode(t, nodes, func(n *graph.Node) bool {
+		return n.Service == "agent" && n.Type == graph.NodeTypeChannel &&
+			n.Meta["broker_field"] == "amqp_queue_name" &&
+			n.Meta["pattern"] == "bunny_queue_declare"
+	})
+
+	assert.Equal(t, "generic_task", pub.Meta["queue_name"],
+		"string-keyed dig field did not inherit the queue the server declares for it")
+	assert.Equal(t, "amqp_handshake", pub.Meta["key_resolved_via"])
+	assert.Empty(t, pub.Meta["key_dynamic"], "resolved key still marked dynamic")
+	assert.Equal(t, graph.ConfidencePartial, pub.Meta["confidence_ceiling"])
+}
+
 // TestAMQPHandshake_ContractClosesPublisherToConsumer pins that the resolution
 // is expressed through the EXISTING queue_name contract rather than a second
 // queue matcher — and that the edge lands at partial, not static.

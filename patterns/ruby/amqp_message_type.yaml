@@ -1,0 +1,57 @@
+# AMQP message-type dispatch — the payload-shape analogue of
+# amqp_handshake.yaml's queue-name handshake. A queue name says WHERE a
+# message goes; the message_type field says WHAT it is and which handler on
+# the consuming side processes it. Neither repo shares a literal here either:
+# the producer sets `message_type: MT_CREATE_USER` in the publish payload and
+# the consumer dispatches on `message_hash["message_type"]` against the SAME
+# constant name (`when MT_CREATE_USER`) — each repo defines its own
+# `MT_CREATE_USER = "mt_create_user"` in its own messaging-constants file, so
+# the constant *name* is the one static token both sides agree on, exactly
+# like amqp_handshake's broker_field symbol. Resolving that name to its
+# literal value isn't needed: the two repos' own constant tables are what
+# proves it's the same message, but the join only needs the shared name.
+#
+# Gated on bunny, matching amqp_handshake.yaml: message-type dispatch only
+# matters for services that actually speak AMQP, and both real dispatch sites
+# (nextGen's producer, nextGen-CDR-Agent's consumer) sit in bunny-dependent
+# code.
+language: ruby
+version: "1"
+package: bunny
+patterns:
+  # producer: `message_type: MT_CREATE_USER` inside a publish payload's
+  # keyword args or hash literal.
+  - name: amqp_message_type_pair
+    query: |
+      (pair
+        key: (hash_key_symbol) @_key
+        (#eq? @_key "message_type")
+        value: (constant) @message_type)
+    captures:
+      - name: message_type
+        role: amqp_message_type
+  # consumer: `case message_hash["message_type"] when MT_CREATE_USER, ...
+  # UserMessageHandler.new(message_hash) end`. One match per constant in a
+  # (possibly comma-separated) `when` clause, each paired with the same
+  # branch's handler — the class instantiated (or otherwise called) in the
+  # branch body. Anchored on the case subject's own index/key looking up
+  # "message_type" (string or symbol) so an unrelated case/when on some other
+  # hash key never matches.
+  - name: amqp_message_type_dispatch
+    query: |
+      (case
+        value: (element_reference
+          [
+            (string (string_content) @_key)
+            (simple_symbol) @_key
+          ]
+          (#match? @_key "^:?message_type$"))
+        (when
+          pattern: (pattern (constant) @message_type)
+          body: (then
+            (call receiver: (constant) @handler))))
+    captures:
+      - name: message_type
+        role: amqp_message_type
+      - name: handler
+        role: amqp_message_handler

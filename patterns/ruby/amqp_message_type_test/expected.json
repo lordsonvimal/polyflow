@@ -1,0 +1,1 @@
+{"patterns": ["amqp_message_type_pair", "amqp_message_type_dispatch", "amqp_message_type_dispatch", "amqp_message_type_dispatch", "amqp_message_type_dispatch"], "node_types": ["channel", "channel", "channel", "channel", "channel"]}

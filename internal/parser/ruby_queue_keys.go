@@ -236,7 +236,15 @@ func collectRubyQueueKeys(method *sitter.Node, src []byte, methodName string) []
 		}
 		switch n.Type() {
 		case "string":
-			if queueish {
+			// A string literal that is itself a `dig(...)` argument is a hash
+			// key into the registration config, not a queue-name literal —
+			// exactly the shape `dig("registration", "amqp_queue_name")`
+			// hands the handshake pass in stampRubyHandshakeDigRefs. Treating
+			// it as a candidate queue key here manufactured a second, bogus
+			// candidate ("registration") that always turned a real handshake
+			// field into an unresolved ambiguity, even though only one string
+			// in the pair is ever a plausible key.
+			if queueish && !rubyIsDigArgument(n, src) {
 				if lit, ok := rubyConcreteString(n, src); ok {
 					add(lit)
 				}
@@ -262,6 +270,21 @@ func collectRubyQueueKeys(method *sitter.Node, src []byte, methodName string) []
 
 // rubyQueueNameBuilderArg returns the second positional string argument of a
 // `queue_name(receiver, "name")` call, if present and concrete.
+// rubyIsDigArgument reports whether node is a positional argument of a `dig`
+// call — a hash-key lookup, not a value the enclosing method returns.
+func rubyIsDigArgument(node *sitter.Node, src []byte) bool {
+	args := node.Parent()
+	if args == nil || args.Type() != "argument_list" {
+		return false
+	}
+	call := args.Parent()
+	if call == nil {
+		return false
+	}
+	m := call.ChildByFieldName("method")
+	return m != nil && string(src[m.StartByte():m.EndByte()]) == "dig"
+}
+
 func rubyQueueNameBuilderArg(call *sitter.Node, src []byte) (string, bool) {
 	args := call.ChildByFieldName("arguments")
 	if args == nil {

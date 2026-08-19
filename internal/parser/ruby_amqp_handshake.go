@@ -251,10 +251,23 @@ func collectRubyDigFields(method *sitter.Node, src []byte) []string {
 			if args := n.ChildByFieldName("arguments"); args != nil {
 				for i := 0; i < int(args.ChildCount()); i++ {
 					c := args.Child(i)
-					if c == nil || c.Type() != "simple_symbol" {
+					if c == nil {
 						continue
 					}
-					sym := strings.TrimPrefix(string(src[c.StartByte():c.EndByte()]), ":")
+					var sym string
+					switch c.Type() {
+					case "simple_symbol":
+						sym = strings.TrimPrefix(string(src[c.StartByte():c.EndByte()]), ":")
+					case "string":
+						// The string-keyed two-arg form: `dig("registration",
+						// "amqp_queue_name")`. Only the field-name argument
+						// matters; a plain outer key like "registration" is
+						// harmless to test against the same suffix/prefix
+						// check below since it will simply never match.
+						sym = strings.Trim(string(src[c.StartByte():c.EndByte()]), `"'`)
+					default:
+						continue
+					}
 					if strings.HasPrefix(sym, "amqp_") && strings.HasSuffix(sym, "_queue_name") && !seen[sym] {
 						seen[sym] = true
 						out = append(out, sym)
