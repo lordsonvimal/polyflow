@@ -1125,6 +1125,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// RW.2: strip the leading `:` off the simple_symbol
+		// wrapper_url_key_hash_index_ruby captures for `payload[:url]`'s hash
+		// key, so internal/linker/ruby_wrapper_url_forward.go can compare it
+		// directly against a `pair`'s hash_key_symbol text (which never
+		// carries a colon) without every caller re-trimming it.
+		if r.PatternName == "wrapper_url_key_hash_index_ruby" {
+			meta["url_key"] = strings.TrimPrefix(meta["url_key"], ":")
+		}
+
 		// Version-gated patterns stamp which package version they matched
 		// against, so the graph/UI can show e.g. "this call uses SDK v1".
 		if r.Package != "" {

@@ -827,6 +827,30 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		for _, sf := range allSvcFiles {
 			svcFiles[sf.svc.Name] = sf.files
 		}
+
+		// RW.2: mint one http_client node per call site of a Level-1-detected
+		// Ruby wrapper (patterns/ruby/wrapper_url_target.yaml), instead of
+		// leaving every caller collapsed onto the wrapper's single shared,
+		// unresolvable key_dynamic node. Runs first in this block so an
+		// abstained call site's Meta["key_dynamic_raw"] gets the same shot at
+		// ResolveRubyHTTPHosts' host-method registry immediately below as any
+		// other dynamic Ruby http_client node.
+		if wrapperNodes, wrapperEdges := linker.ResolveRubyWrapperURLCallSites(allNodes, svcFiles); len(wrapperNodes) > 0 {
+			for i := range wrapperNodes {
+				n := wrapperNodes[i]
+				if err := bw.AddNode(ctx, &n); err != nil {
+					return nil, err
+				}
+				allNodes = append(allNodes, n)
+			}
+			if err := bw.Flush(ctx); err != nil {
+				return nil, err
+			}
+			if err := writeEdges(wrapperEdges); err != nil {
+				return nil, err
+			}
+		}
+
 		if hostNodes := linker.ResolveRubyHTTPHosts(allNodes, svcFiles); len(hostNodes) > 0 {
 			for i := range hostNodes {
 				n := hostNodes[i]
