@@ -45,10 +45,44 @@ func dropNonHTTPJSMatches(results []patterns.MatchResult) []patterns.MatchResult
 			if strings.Trim(r.Captures["url"], `"'`+"`") == "" {
 				continue
 			}
+			// producer_alias_url_call's query is `identifier(...string...)` —
+			// no gating on the callee name or the string's shape at all, so it
+			// matches any bare-identifier call with a string argument anywhere,
+			// not just producer/HTTP calls. Confirmed indexing GitNexus's own
+			// repo: it() test descriptions ("resolves user.save() in main()...")
+			// and plain call arguments (getRelationships(result, 'CALLS')) were
+			// captured and, once inside a recognised test-DSL wrapper (X.0),
+			// escaped EnrichAliases entirely — demoteTestDSL retypes the node to
+			// "function" before alias resolution ever runs, so the "unresolved
+			// alias" fallback that (per the empty-URL case above) already keeps
+			// bad candidates never gets a chance to drop these either. A real
+			// URL or producer topic is a single unspaced token with at least one
+			// structural separator (`/api/x`, `user.created`); a test
+			// description or bare identifier is not.
+			if isNonAddressJSString(r.Captures["url"]) {
+				continue
+			}
 		}
 		out = append(out, r)
 	}
 	return out
+}
+
+// isNonAddressJSString reports whether s (a producer_alias_url_call/obj_call
+// capture, quotes stripped) is too shapeless to be a URL or producer topic:
+// natural-language text (contains a space — every it()/describe() test
+// description does) or a bare token with no structural separator at all
+// (enum-like constants such as "CALLS", single words like "root"/"java").
+// Real addresses always have at least one of / . : and never a raw space.
+func isNonAddressJSString(raw string) bool {
+	s := strings.Trim(raw, `"'`+"`")
+	if s == "" {
+		return false // empty already handled by the caller
+	}
+	if strings.ContainsAny(s, " \t\n") {
+		return true
+	}
+	return !strings.ContainsAny(s, "/.:")
 }
 
 func isContainerReceiverCall(r patterns.MatchResult) bool {
