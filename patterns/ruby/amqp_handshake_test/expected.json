@@ -1,1 +1,1 @@
-{"patterns": ["amqp_field_pair", "amqp_field_pair", "amqp_field_symbol"], "node_types": ["channel", "channel", "channel"]}
+{"patterns": ["amqp_field_pair", "amqp_field_pair", "amqp_field_pair", "amqp_field_symbol", "amqp_field_symbol"], "node_types": ["channel", "channel", "channel", "channel", "channel"]}
