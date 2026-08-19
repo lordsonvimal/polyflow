@@ -59,8 +59,20 @@ type investigateOutput struct {
 	Callees    []investigateNode       `json:"callees"`
 	Flows      []investigateFlow       `json:"flows,omitempty"`
 	Unresolved []graph.UnresolvedRef   `json:"coverage_unresolved"`
-	Note       string                  `json:"note,omitempty"`
-	Budget     *budget.Info            `json:"budget,omitempty"`
+
+	// VerificationSummary and Trust mirror the equivalent context/impact/trace
+	// sections (T.0) — sourced from the same context.Build traversal this
+	// call already runs internally, not a second computation.
+	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
+	Trust               graph.TrustStamp          `json:"trust"`
+
+	// Epistemic is the single trust verdict derived from Unresolved,
+	// VerificationSummary and Trust (EE.0). Always present; survives any
+	// token budget.
+	Epistemic graph.Epistemic `json:"epistemic"`
+
+	Note   string       `json:"note,omitempty"`
+	Budget *budget.Info `json:"budget,omitempty"`
 }
 
 func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in investigateInput) (*mcp.CallToolResult, any, error) {
@@ -84,23 +96,28 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 	snippet := budget.Snippet(".", root.File, root.Line, lines)
 
 	ctxRes := pfcontext.Build(idx, root.ID, "debug", investigateContextDepth, false, s.staleAfter)
+	ctxRes.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolvedAll, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	ctxRes.AttachUnresolved(unresolvedAll)
+	ctxRes.FinalizeEpistemic()
 	ctxRes.InlineSnippets(".", investigateNeighborLines)
 
 	flowPaths, _, _ := walkFlows(idx, root.ID, "out", investigateFlowMaxDepth)
 
 	out := &investigateOutput{
-		Root:       root,
-		Snippet:    snippet,
-		Ambiguous:  targetCandidates,
-		Callers:    toInvestigateNodes(ctxRes.Upstream),
-		Callees:    toInvestigateNodes(ctxRes.Downstream),
-		Flows:      collapseFlows(idx, flowPaths, investigateMaxFlows),
-		Unresolved: ctxRes.Unresolved,
+		Root:                root,
+		Snippet:             snippet,
+		Ambiguous:           targetCandidates,
+		Callers:             toInvestigateNodes(ctxRes.Upstream),
+		Callees:             toInvestigateNodes(ctxRes.Downstream),
+		Flows:               collapseFlows(idx, flowPaths, investigateMaxFlows),
+		Unresolved:          ctxRes.Unresolved,
+		VerificationSummary: ctxRes.VerificationSummary,
+		Trust:               ctxRes.Trust,
+		Epistemic:           ctxRes.Epistemic,
 	}
 	switch {
 	case !exactMatch:

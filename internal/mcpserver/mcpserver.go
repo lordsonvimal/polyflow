@@ -32,7 +32,10 @@ const semanticsParagraph = "Edges carry verification_state: `verified` edges are
 	"unresolved sections are always present; empty means clean, absent means error. " +
 	"The trust section reports this workspace's last measured eval recall; " +
 	"measured=false or stale=true means answers here are unaudited — weigh the " +
-	"unresolved section more heavily."
+	"unresolved section more heavily. " +
+	"epistemic.verdict is `exact` or `lower_bound`; when `lower_bound`, epistemic.causes " +
+	"names which section below explains why — check that section instead of re-deriving " +
+	"the reason yourself."
 
 // minVerificationPasses reports whether an edge's VerificationState meets the
 // requested threshold. Default "any" passes all states including empty
@@ -143,7 +146,8 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"read when the task is \"understand X / find why X\" — it resolves and assembles the whole " +
 			"picture so you don't sequence those calls yourself. The returned edges are the resolved " +
 			"set; the only thing to verify by grep is coverage_unresolved. If target_candidates is " +
-			"non-empty, re-query with target_service/target_type to pin the intended node.",
+			"non-empty, re-query with target_service/target_type to pin the intended node. " +
+			semanticsParagraph,
 	}, auditTool(s, "investigate", s.investigate))
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -574,6 +578,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 	result.AttachUnresolved(unresolved)
+	result.FinalizeEpistemic()
 	if in.MinVerification != "" && in.MinVerification != "any" {
 		result.Upstream = filterTraceNodes(result.Upstream, in.MinVerification)
 		result.Downstream = filterTraceNodes(result.Downstream, in.MinVerification)
@@ -666,6 +671,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	out.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	out.AttachUnresolved(unresolved)
+	out.FinalizeEpistemic()
 	if in.MinVerification != "" && in.MinVerification != "any" {
 		out.Callers = filterCallers(out.Callers, in.MinVerification)
 		out.TotalCallers = len(out.Callers)
@@ -727,6 +733,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, err
 	}
 	result.AttachUnresolved(unresolved)
+	result.FinalizeEpistemic()
 	if in.MinVerification != "" && in.MinVerification != "any" {
 		result.Nodes = filterHops(result.Nodes, in.MinVerification)
 		result.Chains = filterChains(result.Chains, in.MinVerification)

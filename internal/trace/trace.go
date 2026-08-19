@@ -78,6 +78,12 @@ type Result struct {
 	// unaudited. Callers set this after Run (Run has no DB access).
 	Trust graph.TrustStamp `json:"trust"`
 
+	// Epistemic is the single trust verdict derived from Unresolved,
+	// VerificationSummary and Trust (EE.0) — set by FinalizeEpistemic, called
+	// after Trust and AttachUnresolved. Always present; survives any token
+	// budget.
+	Epistemic graph.Epistemic `json:"epistemic"`
+
 	// TargetCandidates lists every exact-label match when >1 candidate exists,
 	// sorted by (service, file). Always present ([] when unambiguous). Agents
 	// should re-query with target_service/--target-service when non-empty.
@@ -161,6 +167,21 @@ func (r *Result) AttachUnresolved(refs []graph.UnresolvedRef) {
 	r.UnresolvedNote = graph.UnresolvedNote(len(r.Unresolved))
 }
 
+// FinalizeEpistemic computes the epistemic verdict (EE.0) from this result's
+// already-populated Unresolved, VerificationSummary and Trust sections, plus
+// the confidence of the traversed edges. Call after Trust is set and
+// AttachUnresolved has run — the order every call site already uses — and
+// before ApplyBudget/Compact, since epistemic must survive any token-budget
+// cut, the same as verification_summary/trust.
+func (r *Result) FinalizeEpistemic() *Result {
+	confidences := make([]string, 0, len(r.Nodes))
+	for _, h := range r.Nodes {
+		confidences = append(confidences, h.Confidence)
+	}
+	r.Epistemic = graph.BuildEpistemic(r.Unresolved, graph.HasWeakConfidence(confidences), r.VerificationSummary, r.Trust)
+	return r
+}
+
 // CompactResult is Result's default wire shape: chains rendered as arrow-chain
 // text (file:line label -[edge_type]-> file:line label -> ...) and nodes as
 // one-line summaries, instead of a Hop object per node repeated once in Nodes
@@ -190,6 +211,7 @@ type CompactResult struct {
 
 	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 	Trust               graph.TrustStamp          `json:"trust"`
+	Epistemic           graph.Epistemic           `json:"epistemic"`
 	TargetCandidates    []graph.TargetCandidate   `json:"target_candidates"`
 	ResolutionNote      string                    `json:"resolution_note,omitempty"`
 	Budget              *budget.Info              `json:"budget,omitempty"`
@@ -225,6 +247,7 @@ func (r *Result) Compact() *CompactResult {
 		UnresolvedNote:      r.UnresolvedNote,
 		VerificationSummary: r.VerificationSummary,
 		Trust:               r.Trust,
+		Epistemic:           r.Epistemic,
 		TargetCandidates:    r.TargetCandidates,
 		ResolutionNote:      r.ResolutionNote,
 		Budget:              r.Budget,

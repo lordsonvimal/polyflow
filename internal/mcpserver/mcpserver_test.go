@@ -322,6 +322,22 @@ func TestContextTool_CarriesTrust(t *testing.T) {
 	assert.InDelta(t, 1.0, out.Trust.Recall, 1e-9)
 }
 
+func TestContextTool_CarriesEpistemic(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Epistemic graph.Epistemic `json:"epistemic"`
+	}
+	callJSON(t, cs, "context", map[string]any{"target": "getUser"}, &out)
+
+	// db.go's unresolved dynDispatch ref is in scope and no trust stamp was
+	// loaded, so this must read as a lower bound (EE.0), not exact.
+	assert.Equal(t, graph.EpistemicLowerBound, out.Epistemic.Verdict)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnresolvedReference)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnmeasuredTrust)
+}
+
 func TestContextTool_TrustUnmeasuredByDefault(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
@@ -415,6 +431,20 @@ func TestImpactTool_CarriesTrust(t *testing.T) {
 	assert.Equal(t, "chessleap", out.Trust.Corpus)
 }
 
+func TestImpactTool_CarriesEpistemic(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Epistemic graph.Epistemic `json:"epistemic"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
+
+	assert.Equal(t, graph.EpistemicLowerBound, out.Epistemic.Verdict)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnresolvedReference)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnmeasuredTrust)
+}
+
 func TestImpactTool_FileMode(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
@@ -474,6 +504,20 @@ func TestTraceTool_CarriesTrust(t *testing.T) {
 
 	assert.True(t, out.Trust.Measured)
 	assert.Equal(t, "chessleap", out.Trust.Corpus)
+}
+
+func TestTraceTool_CarriesEpistemic(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Epistemic graph.Epistemic `json:"epistemic"`
+	}
+	callJSON(t, cs, "trace", map[string]any{"root": "queryDB", "direction": "backward"}, &out)
+
+	assert.Equal(t, graph.EpistemicLowerBound, out.Epistemic.Verdict)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnresolvedReference)
+	assert.Contains(t, out.Epistemic.Causes, graph.CauseUnmeasuredTrust)
 }
 
 func TestContextTool_SummaryRollsUpPerFile(t *testing.T) {
