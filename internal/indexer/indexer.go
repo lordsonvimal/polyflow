@@ -1232,6 +1232,16 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := persistComposedRoutes(ctx, bw, enrichedNodes, allNodes); err != nil {
 		return nil, err
 	}
+	// Gin middleware chain: handler --calls--> the middleware guarding it
+	// (r.Use/group.Use), so `impact`/`context` on a route or a middleware
+	// function surfaces the other side without a separate tool.
+	{
+		mwEdges, mwUnresolved := linker.LinkGinMiddleware(enrichedNodes, allEdges)
+		if err := writeEdges(mwEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, mwUnresolved...)
+	}
 	// G.7 pre-engine enrichment: resolve alias/instance bindings and one-hop
 	// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name
 	// or instance_name meta) are removed from the working copy; their info feeds
