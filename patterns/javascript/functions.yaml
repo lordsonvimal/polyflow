@@ -19,3 +19,35 @@ patterns:
     captures:
       - name: name
         role: func_name
+
+  # foo: function() {} / foo: () => {} — a function assigned as an object
+  # property value. Covers the pre-ES6 "module pattern" (`var Foo = { bar:
+  # function() {...}, baz: function() {...} }`), the dominant declaration
+  # style in jQuery-era codebases with no class/module syntax at all, plus the
+  # equivalent arrow-function-as-property-value shape (`{ onSuccess: () =>
+  # {...} }`, e.g. an $.ajax callback config). Before this pattern, every
+  # method in an object-literal module was invisible: no node, so
+  # impact/context on the method name (a normal thing to search for — it's
+  # the only name that appears at the call site) returned "not found", and
+  # the file collapsed to one flat (module) node.
+  - name: object_method_pair
+    query: |
+      (pair
+        key: [(property_identifier) (string)] @name
+        value: [(function_expression) (arrow_function)]) @_def
+    captures:
+      - name: name
+        role: func_name
+
+  # foo() {} — ES6 method shorthand. tree-sitter uses the same
+  # method_definition node whether this sits in an object literal
+  # (`{ foo() {} }`) or a class body (`class X { foo() {} }`), so one pattern
+  # covers both; getters/setters/constructor are method_definition too and are
+  # real symbols worth a node same as any other method.
+  - name: object_method_shorthand
+    query: |
+      (method_definition
+        name: (property_identifier) @name) @_def
+    captures:
+      - name: name
+        role: func_name
