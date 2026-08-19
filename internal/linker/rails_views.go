@@ -399,18 +399,49 @@ func linkControllerActions(
 }
 
 func isControllerFile(file string) bool {
-	return strings.HasSuffix(file, "_controller.rb") && strings.Contains(filepath.ToSlash(file), "/app/controllers/")
+	s := filepath.ToSlash(file)
+	return strings.HasSuffix(s, "_controller.rb") && controllersMarkerIndex(s) >= 0
 }
 
 // controllerPath is the view directory an action's template lives in:
 // app/controllers/admin/users_controller.rb → "admin/users".
+//
+// Requiring a LEADING slash before "app/controllers/" only matches when the
+// Rails app is a sub-service in a multi-service workspace, where every file
+// carries a "<service-name>/" prefix (e.g. "dsw-manager/app/controllers/...").
+// A Rails app configured as the workspace ROOT service (`path: .`, the
+// common single-app layout — nextGen's setup) has no such prefix: its files
+// are literally "app/controllers/x_controller.rb", so the marker sits at
+// byte 0 with nothing before it to match a leading slash against. That
+// silently failed both of this function's callers — LinkRailsRouteActions
+// (773 http_handler nodes, 0 route→controller edges) and rails_views.go's
+// render→template resolution — for every single-app Rails workspace, not
+// just member/collection-block routes. controllersMarkerIndex accepts the
+// marker at the start of the path too, only requiring a '/' boundary when
+// something precedes it.
 func controllerPath(file string) (string, bool) {
 	s := filepath.ToSlash(file)
-	i := strings.LastIndex(s, "/app/controllers/")
+	i := controllersMarkerIndex(s)
 	if i < 0 {
 		return "", false
 	}
-	return strings.TrimSuffix(s[i+len("/app/controllers/"):], "_controller.rb"), true
+	return strings.TrimSuffix(s[i+len("app/controllers/"):], "_controller.rb"), true
+}
+
+// controllersMarkerIndex returns the byte offset of "app/controllers/" in s,
+// accepting it either at the start of the path or immediately after a '/'
+// (a real path-segment boundary, not a coincidental substring match like
+// "myapp/controllers/" or "webapp/controllers/"). Returns -1 if absent.
+func controllersMarkerIndex(s string) int {
+	const marker = "app/controllers/"
+	i := strings.LastIndex(s, marker)
+	if i < 0 {
+		return -1
+	}
+	if i > 0 && s[i-1] != '/' {
+		return -1
+	}
+	return i
 }
 
 // ---------------------------------------------------------------------------
