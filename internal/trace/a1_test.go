@@ -150,3 +150,72 @@ func TestTrace_DeterministicOutput(t *testing.T) {
 	}
 	assert.Equal(t, run(), run())
 }
+
+// TestFinalizeEpistemic_Exact verifies a clean, fully-verified, measured
+// result reports epistemic.verdict "exact" with no causes (EE.0).
+func TestFinalizeEpistemic_Exact(t *testing.T) {
+	r := Run(linearGraph(), "a", "forward", 0, false, 0)
+	require.NotNil(t, r)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicExact, r.Epistemic.Verdict)
+	assert.Empty(t, r.Epistemic.Causes)
+}
+
+// TestFinalizeEpistemic_CandidateEdge verifies r.Epistemic reflects this
+// result's own VerificationSummary.Candidate, not a recomputation.
+func TestFinalizeEpistemic_CandidateEdge(t *testing.T) {
+	r := Run(provenanceGraph(), "a", "forward", 0, false, 0)
+	require.NotNil(t, r)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicLowerBound, r.Epistemic.Verdict)
+	assert.Equal(t, []string{graph.CauseCandidateEdge}, r.Epistemic.Causes)
+}
+
+// TestFinalizeEpistemic_DynamicDispatch verifies a partial/unknown confidence
+// hop surfaces as the dynamic_dispatch cause.
+func TestFinalizeEpistemic_DynamicDispatch(t *testing.T) {
+	idx := buildIdx(
+		[]graph.Node{
+			{ID: "a", Label: "A", Type: graph.NodeTypeFunction, File: "a.go"},
+			{ID: "b", Label: "B", Type: graph.NodeTypeFunction, File: "b.go"},
+		},
+		[]graph.Edge{
+			{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceUnknown},
+		},
+	)
+	r := Run(idx, "a", "forward", 0, false, 0)
+	require.NotNil(t, r)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicLowerBound, r.Epistemic.Verdict)
+	assert.Equal(t, []string{graph.CauseDynamicDispatch}, r.Epistemic.Causes)
+}
+
+// TestFinalizeEpistemic_PresentInJSON verifies {}-never-absent, mirroring
+// TestTrace_VerificationSummaryPresentInJSON.
+func TestFinalizeEpistemic_PresentInJSON(t *testing.T) {
+	r := Run(linearGraph(), "a", "forward", 0, false, 0)
+	require.NotNil(t, r)
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	data, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"epistemic"`)
+}
+
+// TestCompact_EpistemicCarried verifies epistemic survives the compact wire
+// shape, mirroring the other always-present sections in Compact's contract.
+func TestCompact_EpistemicCarried(t *testing.T) {
+	r := Run(provenanceGraph(), "a", "forward", 0, false, 0)
+	require.NotNil(t, r)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	c := r.Compact()
+	assert.Equal(t, r.Epistemic, c.Epistemic)
+}

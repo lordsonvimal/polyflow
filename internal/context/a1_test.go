@@ -174,3 +174,74 @@ func TestContextSummarize_TrustCarried(t *testing.T) {
 	s := r.Summarize()
 	assert.Equal(t, r.Trust, s.Trust)
 }
+
+// TestContextFinalizeEpistemic_Exact verifies a clean, fully-verified,
+// measured result reports epistemic.verdict "exact" with no causes (EE.0).
+func TestContextFinalizeEpistemic_Exact(t *testing.T) {
+	idx := fixtureIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicExact, r.Epistemic.Verdict)
+	assert.Empty(t, r.Epistemic.Causes)
+}
+
+// TestContextFinalizeEpistemic_UnresolvedAndUnmeasuredTrust verifies the
+// epistemic verdict reflects this result's own unresolved/trust sections,
+// not a recomputation from scratch.
+func TestContextFinalizeEpistemic_UnresolvedAndUnmeasuredTrust(t *testing.T) {
+	idx := fixtureIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	// Trust left at the zero value (Measured: false).
+	r.AttachUnresolved([]graph.UnresolvedRef{{File: "handler.go", Kind: "call_ref"}})
+	r.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicLowerBound, r.Epistemic.Verdict)
+	assert.Equal(t, []string{graph.CauseUnmeasuredTrust, graph.CauseUnresolvedReference}, r.Epistemic.Causes)
+}
+
+// TestContextFinalizeEpistemic_DynamicDispatch verifies a partial/unknown
+// confidence edge in the traversal surfaces as the dynamic_dispatch cause.
+func TestContextFinalizeEpistemic_DynamicDispatch(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "a", Type: graph.NodeTypeFunction, Label: "a", File: "a.go"})
+	idx.AddNode(&graph.Node{ID: "b", Type: graph.NodeTypeFunction, Label: "b", File: "b.go"})
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceUnknown})
+
+	r := ctx.Build(idx, "b", "debug", 5, false, 0)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	assert.Equal(t, graph.EpistemicLowerBound, r.Epistemic.Verdict)
+	assert.Equal(t, []string{graph.CauseDynamicDispatch}, r.Epistemic.Causes)
+}
+
+// TestContextBudgetFloor_EpistemicAlwaysPresent verifies a tiny max-tokens
+// budget still carries epistemic (EE.0), same as verification_summary/trust.
+func TestContextBudgetFloor_EpistemicAlwaysPresent(t *testing.T) {
+	idx := provenanceIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r.Trust = graph.TrustStamp{Measured: false}
+	r.AttachUnresolved([]graph.UnresolvedRef{{File: "handler.go", Kind: "call_ref"}})
+	r.FinalizeEpistemic()
+
+	budgeted := r.ApplyBudget(1, false)
+	data, err := json.Marshal(budgeted)
+	require.NoError(t, err)
+	s := string(data)
+
+	assert.Contains(t, s, `"epistemic"`, "epistemic must survive budget cut")
+	assert.Contains(t, s, `"lower_bound"`)
+}
+
+// TestContextSummarize_EpistemicCarried verifies epistemic survives file
+// rollup, mirroring TestContextSummarize_TrustCarried.
+func TestContextSummarize_EpistemicCarried(t *testing.T) {
+	idx := provenanceIndex()
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r.Trust = graph.TrustStamp{Measured: true}
+	r.AttachUnresolved(nil)
+	r.FinalizeEpistemic()
+	s := r.Summarize()
+	assert.Equal(t, r.Epistemic, s.Epistemic)
+}

@@ -36,6 +36,7 @@ type Summary struct {
 	UnresolvedNote      string                    `json:"unresolved_note,omitempty"`
 	VerificationSummary graph.VerificationSummary `json:"verification_summary"`
 	Trust               graph.TrustStamp          `json:"trust"`
+	Epistemic           graph.Epistemic           `json:"epistemic"`
 	Budget              *budget.Info              `json:"budget,omitempty"`
 }
 
@@ -124,6 +125,7 @@ func (r *Result) Summarize() *Summary {
 		UnresolvedNote:      r.UnresolvedNote,
 		VerificationSummary: r.VerificationSummary,
 		Trust:               r.Trust,
+		Epistemic:           r.Epistemic,
 	}
 }
 
