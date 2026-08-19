@@ -14,6 +14,7 @@ import (
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
 // NewJSLinker creates a JSLinker.
@@ -203,8 +204,12 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 				u.Service = svcName
 				unresolved = append(unresolved, u)
 			}
+			// importedNames is keyed the way indexer.go looks it up: against
+			// call_ref.File, which is the parser's cwd-relative form — not
+			// whatever absoluteness svcFiles happened to use.
+			relFile := patterns.RelativizeToCwd(file)
 			for name := range fileImported {
-				importedNames[file+"\x00"+name] = true
+				importedNames[relFile+"\x00"+name] = true
 			}
 		}
 	}
@@ -249,6 +254,13 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	if err != nil {
 		return nil, nil, nil
 	}
+	// The caller may pass an absolute path (needed for os.ReadFile above), but
+	// every node's File field — and every lookup key below — uses the
+	// cwd-relative form the parser mints (patterns.RelativizeToCwd, see
+	// javascript.go). Without this, funcLinesByFile/funcByFileAndLabel/
+	// varByFileAndLabel lookups silently miss and every call site in the file
+	// resolves to no enclosing function, dropping the edge entirely.
+	file = patterns.RelativizeToCwd(file)
 
 	lang := grammarLangForFile(file)
 	root, err := sitter.ParseCtx(context.Background(), src, lang)
