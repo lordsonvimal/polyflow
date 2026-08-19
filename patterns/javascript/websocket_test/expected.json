@@ -1,4 +1,4 @@
 {
-  "patterns": ["ws_new_connection", "ws_onmessage_assign", "ws_dispatch_case", "ws_dispatch_case", "ws_send_typed", "ws_on_message"],
-  "node_types": ["http_client", "subscriber", "subscriber", "subscriber", "publisher", "subscriber"]
+  "patterns": ["ws_new_connection", "ws_onmessage_assign", "ws_dispatch_case", "ws_dispatch_case", "ws_send_typed", "ws_on_message", "ws_onmessage_assign", "ws_dispatch_if", "ws_dispatch_if", "ws_send_typed_direct"],
+  "node_types": ["http_client", "subscriber", "subscriber", "subscriber", "publisher", "subscriber", "subscriber", "subscriber", "subscriber", "publisher"]
 }
