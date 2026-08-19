@@ -1225,9 +1225,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		if result.ResolutionNote != "" {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
 		}
-		if len(candidates) > 0 {
-			fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, contextTarget)
-		}
+		printAmbiguousCandidates(os.Stderr, contextTarget, root.ID, candidates)
 		if s, ok := out.(*pfcontext.Summary); ok {
 			return printContextSummaryText(s)
 		}
@@ -1457,9 +1455,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	if result.ResolutionNote != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
 	}
-	if len(candidates) > 0 {
-		fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, traceRoot)
-	}
+	printAmbiguousCandidates(os.Stderr, traceRoot, root.ID, candidates)
 	switch traceFormat {
 	case "json":
 		return json.NewEncoder(os.Stdout).Encode(result)
@@ -1671,9 +1667,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	if out.ResolutionNote != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", out.ResolutionNote)
 	}
-	if len(candidates) > 0 {
-		fmt.Fprintf(os.Stderr, "%d other exact match(es) for %q — use --target-service to pin one\n", len(candidates)-1, impactTarget)
-	}
+	printAmbiguousCandidates(os.Stderr, impactTarget, root.ID, candidates)
 	if s, ok := budgeted.(*impact.Summary); ok {
 		return printImpactSummaryText(s)
 	}
@@ -1754,6 +1748,30 @@ func impactNoun(direction string) string {
 // chain (e.g. "constructs a struct that has this method"), so a reader
 // shouldn't treat the listed edge type as proof this node calls the target.
 // See graph.TraversalResult.Structural.
+// printAmbiguousCandidates lists every exact-label match a --target query
+// resolved to when there's more than one, so text-mode output carries the
+// same disambiguation signal --format json already exposes via
+// TargetCandidates instead of a bare count with no way to see or act on the
+// alternatives short of re-running with --format json. resolvedID marks
+// which candidate ResolveTarget actually picked (it is not always
+// candidates[0] — that slice is sorted by service/file, while the pick
+// itself follows SearchNodes' rank order with a non-test-file preference —
+// see graph.ResolveTarget), so a reader can tell which answer the rest of
+// the output is actually about.
+func printAmbiguousCandidates(w io.Writer, query, resolvedID string, candidates []graph.TargetCandidate) {
+	if len(candidates) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%d other exact match(es) for %q — use --target-service to pin one:\n", len(candidates)-1, query)
+	for _, c := range candidates {
+		marker := "  "
+		if c.ID == resolvedID {
+			marker = "→ "
+		}
+		fmt.Fprintf(w, "  %s%-9s %-40s %s\n", marker, c.Type, c.File, c.ID)
+	}
+}
+
 func structuralSuffix(c impact.Caller) string {
 	if !c.Structural {
 		return ""
