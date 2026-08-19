@@ -148,7 +148,7 @@ polyflow setup
 # 5. Query:
 polyflow impact --target handleCheckout
 polyflow trace  --target handleCheckout
-polyflow flows  "checkout order across services"
+polyflow search "checkout order across services"
 ```
 
 ## Configuration (`polyflow.yml`)
@@ -241,7 +241,7 @@ polyflow config link add --from web --to api --via http
 | `polyflow context --target <node>` | Callers, callees, and cross-service edges around a node. |
 | `polyflow trace --target <node>` | Multi-hop call chains (`A → B → C`), incl. cross-service hops. |
 | `polyflow impact --target <node>` | Blast radius: everything transitively affected. `--diff` scopes to the current git diff. |
-| `polyflow flows "<description>"` | Resolve an end-to-end flow across service boundaries. |
+| `polyflow flows [<file>]` | Debug view: print spans parsed from an OTLP trace dump or a capture session (`--session <name>`); `--coverage` compares them against the indexed static edge baseline. Not a natural-language flow resolver — for that, use the MCP `flows` tool below. |
 | `polyflow link --infer` | Propose cross-service links from indexed evidence. |
 | `polyflow deps` | Resolved dependency versions per service. |
 | `polyflow patterns list` / `add <file>` | List loaded pattern packs or register a custom one. |
