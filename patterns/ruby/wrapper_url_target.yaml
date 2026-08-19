@@ -1,0 +1,42 @@
+language: ruby
+version: "1"
+# RW.2 Level 1 — wrapper-body detection. A private helper like
+#   def rest_request(method, payload, headers: {})
+#     RestClient::Request.execute(..., url: payload[:url])
+#   end
+# forwards one of its own parameters' hash-index value straight into the
+# eventual RestClient::Request.execute url: keyword. This is Ruby's
+# positional-parameter, hash-index analogue of JS's Tier WB.1
+# (patterns/javascript/producer_wrapper_body.yaml). Bookkeeping-only:
+# classifyPattern types these NodeTypeVariable and suppresses their
+# calls-edges (matcher.go's generic wrapper_url_ prefix case), same
+# discipline as every other *_alias_binding-style marker. Consumed by
+# internal/linker/ruby_wrapper_url_forward.go, which also transitively
+# discovers plain relay wrappers (a method that forwards one of its own
+# params, unmodified, straight into an already-known wrapper's matching
+# param) on top of this file's directly-detected base case.
+patterns:
+  - name: wrapper_url_key_hash_index_ruby
+    query: |
+      (method
+        name: (identifier) @wrapper_name
+        parameters: (method_parameters (identifier) @param_name)
+        body: (_
+          (call
+            receiver: (scope_resolution scope: (constant) @ns (#eq? @ns "RestClient"))
+            arguments: (argument_list
+              (pair
+                key: (hash_key_symbol) @_ukey
+                (#eq? @_ukey "url")
+                value: (element_reference
+                  object: (identifier) @obj
+                  (#eq? @obj @param_name)
+                  (simple_symbol) @url_key
+                  (#eq? @url_key ":url")))))))
+    captures:
+      - name: wrapper_name
+        role: wrapper_url_target
+      - name: param_name
+        role: wrapper_url_param_name
+      - name: url_key
+        role: wrapper_url_param_key
