@@ -19,3 +19,16 @@ function reportBattery(level) {
 server.on('connection', (socket) => {
   socket.on('message', handleMessage);
 });
+
+statusSocket.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'battery') {
+    updateBattery(msg);
+  } else if (msg.type === 'charging' && msg.ready) {
+    updateCharging(msg);
+  }
+};
+
+function openTab(tabId) {
+  ws?.send({ type: 'create-tab', tabId });
+}

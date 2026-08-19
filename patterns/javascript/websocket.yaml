@@ -75,6 +75,41 @@ patterns:
       - name: message_type
         role: ws_message_type
 
+  # ws.send({type: 'create-tab', ...}) — typed outbound message passed as a
+  # plain object, where the actual JSON.stringify happens one layer down
+  # inside a shared factory wrapper (Tier WD.2; real shape confirmed at
+  # synergy's apps/tether/pwa/src/context/connection.tsx:52,
+  # `ws?.send({ type: "create-tab", tabId })`, stringified generically inside
+  # `lib/websocket.ts`'s `createWebSocket(...).send`). Tracing the factory
+  # indirection turned out to be unnecessary: the message's `type` is already
+  # a plain literal in the call-site's own argument object, whether or not
+  # the stringify call is inline — so this is a sibling pattern, not a
+  # wrapper-call trace, and reuses ws_send_typed's inner-object shape without
+  # requiring the JSON.stringify wrapper around it. Gated on the receiver's
+  # own name looking WebSocket-ish (`ws`/`socket`/`websocket`, case
+  # -insensitive) since, unlike ws_send_typed's JSON.stringify+type-key
+  # combination, "a `.send({type: ..., ...})` call" alone is common enough
+  # (analytics, mailers, generic pub/sub) to need a receiver-name guard to
+  # stay narrow — mirrors ws_new_connection/ws_dispatch_case relying on
+  # naming convention over full type inference elsewhere in this file.
+  - name: ws_send_typed_direct
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @socket
+          (#match? @socket "(?i)^(ws|socket|websocket)")
+          property: (property_identifier) @fn
+          (#eq? @fn "send"))
+        arguments: (arguments
+          (object
+            (pair
+              key: (property_identifier) @key
+              (#eq? @key "type")
+              value: (string) @message_type))))
+    captures:
+      - name: message_type
+        role: ws_message_type
+
   # switch (msg.type) { case 'battery': ... } — typed dispatch, one match per
   # case so each message type becomes a handler entry.
   - name: ws_dispatch_case
@@ -87,6 +122,45 @@ patterns:
         body: (switch_body
           (switch_case
             value: (string) @message_type)))
+    captures:
+      - name: message_type
+        role: ws_message_type
+
+  # if (msg.type === 'battery') { ... } else if (msg.type === 'location') {}
+  # — the if/else analogue of ws_dispatch_case above (Tier WD.1). As common an
+  # idiom as switch for a 1-2-message-type handler, and previously unmatched:
+  # a publisher node (ws_send_typed) with zero consumers looked like dead
+  # code to `polyflow impact`. Deliberately anchored on the comparison itself
+  # (`<expr>.type === "literal"`), not on an enclosing if/switch keyword —
+  # real handlers guard with compound conditions
+  # (`msg.type === "battery" && ready`), and the comparison alone is an
+  # unambiguous discriminator regardless of what else gates it. Uses `===`
+  # only (not `==`), matching this file's existing typed-dispatch convention
+  # (JS message-type checks in the fleet are always strict-equality).
+  #
+  # Gated on the receiver's own name (`msg`/`message`, case-insensitive) plus
+  # requiring it to be a bare identifier, not a nested member-access — an
+  # unanchored version of this query, tried first against synergy's real
+  # tether app, false-positived on every discriminated-union `.type` field in
+  # the codebase (`node.type === "leaf"`, `props.node.type === "branch"`,
+  # `state.root.type === "leaf"`, `e.type === "keydown"` on a DOM
+  # KeyboardEvent) — `.type` is too common a discriminator name on its own to
+  # anchor a WS-specific pattern. `object: (identifier)` alone already
+  # excludes the nested-access cases (`props.node.type`/`state.root.type`,
+  # whose immediate object is itself a member_expression); the name regex
+  # additionally excludes bare-identifier false positives (`node.type`,
+  # `e.type`) while keeping every real WS case observed in the fleet
+  # (`msg.type`, `message.type`).
+  - name: ws_dispatch_if
+    query: |
+      (binary_expression
+        left: (member_expression
+          object: (identifier) @obj
+          (#match? @obj "(?i)^(msg|message)$")
+          property: (property_identifier) @prop
+          (#eq? @prop "type"))
+        operator: "==="
+        right: (string) @message_type)
     captures:
       - name: message_type
         role: ws_message_type
