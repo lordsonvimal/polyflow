@@ -325,14 +325,18 @@ cases:
     kind: node
     target: useStores
     # useStores (ui/src/stores.tsx) is a React context hook consumed by UI
-    # components. At minimum imported by message, application, and client
-    # component directories.
-    # Verified: grep -rn "useStores" ui/src/ → multiple component files.
+    # components. At minimum imported by message and application component
+    # directories. AppStore.ts does NOT call useStores (it's the plain class
+    # useStores() returns an instance of, not a caller) — Applications.tsx is
+    # the real application-directory caller.
+    # Verified: grep -rn "useStores" ui/src/ → multiple component files;
+    # grep "useStores" ui/src/application/AppStore.ts → no match.
     expected_impacted:
       - ui/src/message/Messages.tsx
-      - ui/src/application/AppStore.ts
+      - ui/src/application/Applications.tsx
     must_not_miss:
       - ui/src/message/Messages.tsx
+      - ui/src/application/Applications.tsx
 
   # --- C.6 rank-1 identity -------------------------------------------------
 

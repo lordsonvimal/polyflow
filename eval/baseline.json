@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-19T10:44:59.192151Z",
+  "generated_at": "2026-08-19T12:06:25.407371Z",
   "repos": [
     {
       "repo": "gotify",
@@ -122,8 +122,8 @@
         },
         {
           "case_id": "use-stores-callers",
-          "recall": 0.5,
-          "honest_misses": 1,
+          "recall": 1,
+          "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
         },
@@ -188,7 +188,7 @@
           "rank2_score": 0.014
         }
       ],
-      "recall": 0.825,
+      "recall": 0.85,
       "precision": 1,
       "exhaustive_cases": 9,
       "rank1_accuracy": 0.4
@@ -372,10 +372,10 @@
         },
         {
           "case_id": "filter-edges-confidence-js",
-          "recall": 0,
+          "recall": 1,
           "honest_misses": 0,
-          "silent_misses": 1,
-          "hard_fail": true
+          "silent_misses": 0,
+          "hard_fail": false
         },
         {
           "case_id": "nl-unresolved-note",
@@ -466,7 +466,7 @@
           "rank2_score": 0.028
         }
       ],
-      "recall": 0.8333333333333334,
+      "recall": 0.9166666666666666,
       "semantic_recall": 1,
       "rank1_accuracy": 0.75,
       "rank1_min_gap": -0.003000000000000001
