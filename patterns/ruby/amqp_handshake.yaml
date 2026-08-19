@@ -22,7 +22,7 @@ patterns:
     query: |
       (pair
         key: (hash_key_symbol) @broker_field
-        (#match? @broker_field "amqp_[a-z0-9_]*_queue_name"))
+        (#match? @broker_field "amqp_([a-z0-9_]+_)?queue_name"))
     captures:
       - name: broker_field
         role: amqp_broker_field
@@ -37,7 +37,7 @@ patterns:
         (#eq? @_m "dig")
         arguments: (argument_list
           (simple_symbol) @broker_field
-          (#match? @broker_field "amqp_[a-z0-9_]*_queue_name")))
+          (#match? @broker_field "amqp_([a-z0-9_]+_)?queue_name")))
     captures:
       - name: broker_field
         role: amqp_broker_field
