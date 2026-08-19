@@ -410,7 +410,8 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 			// own parameters — if so inject wrapper_name/param_index; if not
 			// (an ordinary local variable passed to fetch/axios, not a forwarded
 			// param) drop the match entirely so no bookkeeping node is created.
-			if cq.pattern.Name == "wrapper_url_positional_fetch_call" || cq.pattern.Name == "wrapper_url_positional_axios_call" {
+			if cq.pattern.Name == "wrapper_url_positional_fetch_call" || cq.pattern.Name == "wrapper_url_positional_axios_call" ||
+				cq.pattern.Name == "wrapper_url_key_axios_config_call" || cq.pattern.Name == "wrapper_url_shorthand_axios_config_call" {
 				var argNode *sitter.Node
 				for _, cap := range matchCaps {
 					if cq.query.CaptureNameForId(cap.Index) == "arg_name" {
@@ -2034,8 +2035,6 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	// ── HTTP clients ──────────────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "faraday_") || strings.HasPrefix(lower, "httparty_") ||
 		strings.HasPrefix(lower, "net_http_") || strings.HasPrefix(lower, "rest_client"):
-		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
-	case lower == "js_api_wrapper_call":
 		return graph.NodeTypeHTTPClient, graph.EdgeTypeHTTPCall
 	case strings.Contains(lower, "client") || strings.Contains(lower, "request") ||
 		strings.Contains(lower, "fetch") || strings.Contains(lower, "axios") ||

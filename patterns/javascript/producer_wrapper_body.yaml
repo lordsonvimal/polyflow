@@ -487,3 +487,46 @@ patterns:
     captures:
       - name: arg_name
         role: wrapper_url_positional_probe
+
+  # ── axios(config-object) forward: axios's other calling convention is a
+  # single object argument (`axios({ method, url, ... })`) rather than
+  # axios.verb(url, config) above — common in wrapper libraries that build
+  # one config object per request kind. The url key is axios's own
+  # convention (hardcoded, same as producer_alias.yaml's obj_call "url" key
+  # match); the VALUE is whatever identifier the wrapper forwards, resolved
+  # generically the same WB.4 way (matcher.go walks up to the enclosing
+  # function and checks it's really one of its own parameters) — not gated
+  # on the wrapper's own name, so any axios(config) wrapper is caught
+  # regardless of what it's called.
+  - name: wrapper_url_key_axios_config_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#eq? @callee "axios")
+        arguments: (arguments
+          . (object
+              (pair
+                key: (property_identifier) @url_key
+                (#eq? @url_key "url")
+                value: (identifier) @arg_name))
+            .))
+    captures:
+      - name: arg_name
+        role: wrapper_url_positional_probe
+  # Shorthand form: `axios({ ..., url, ... })` — the property name IS the
+  # forwarded identifier's name (JS shorthand semantics), so the same node
+  # serves as both the "is this the url key" check and the identifier to
+  # resolve against the enclosing function's parameters.
+  - name: wrapper_url_shorthand_axios_config_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#eq? @callee "axios")
+        arguments: (arguments
+          . (object
+              (shorthand_property_identifier) @arg_name
+              (#eq? @arg_name "url"))
+            .))
+    captures:
+      - name: arg_name
+        role: wrapper_url_positional_probe

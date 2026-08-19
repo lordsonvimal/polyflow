@@ -1009,6 +1009,31 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, jsImportUnresolved...)
 	}
+	// JS/TS wrapped API-client calls (services/ApiServices.js-style shared
+	// axios/fetch wrappers): mints an http_client node for a call to a
+	// WB.1-detected wrapper even across files and even when the URL argument
+	// is a local variable, not a literal — producer_alias_url_call/obj_call
+	// require a literal at the call site and never fire otherwise.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		wrapperNodes, wrapperEdges := linker.LinkJSAPIWrapperCalls(allNodes, svcFiles)
+		for i := range wrapperNodes {
+			n := wrapperNodes[i]
+			if err := bw.AddNode(ctx, &n); err != nil {
+				return nil, err
+			}
+			allNodes = append(allNodes, n)
+		}
+		if err := bw.Flush(ctx); err != nil {
+			return nil, err
+		}
+		if err := writeEdges(wrapperEdges); err != nil {
+			return nil, err
+		}
+	}
 	// Tier K.5: stylesheet @import graph + containment for the selector and
 	// @font-face nodes the stylesheet parser mints.
 	{
