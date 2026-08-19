@@ -26,6 +26,19 @@
           }
         ],
         "matcher": "Read"
+      },
+      {
+        "hooks": [
+          {
+            "command": "polyflow hook-context-inject",
+            "type": "command"
+          },
+          {
+            "command": "/Users/lordson/Projects/polyflow/dist/polyflow hook-context-inject",
+            "type": "command"
+          }
+        ],
+        "matcher": "Grep"
       }
     ]
   }

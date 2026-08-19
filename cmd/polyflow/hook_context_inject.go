@@ -1,6 +1,6 @@
 package main
 
-// PostToolUse hook: auto-augment grep/cat/sed/head/tail/Read with graph
+// PostToolUse hook: auto-augment Grep/grep/cat/sed/head/tail/Read with graph
 // context, read directly out of the local .polyflow/graph.db.
 //
 // This is a Go port of the original cmd/polyflow/hookscripts/polyflow-context-inject.py
@@ -62,6 +62,7 @@ var hookAlternationRe = regexp.MustCompile(`\\\||\|`)
 var hookFileExtRe = regexp.MustCompile(`\.\w{1,6}$`)
 
 type hookPayload struct {
+	ToolName  string         `json:"tool_name"`
 	ToolInput map[string]any `json:"tool_input"`
 	Cwd       string         `json:"cwd"`
 	SessionID string         `json:"session_id"`
@@ -136,13 +137,44 @@ func commandSegments(command string) [][]string {
 	return segments
 }
 
+// grepPatternSymbols extracts candidate identifiers from a grep pattern,
+// shared by the native Grep tool (a "pattern" arg) and Bash-invoked
+// grep/rg (a positional arg after flags). Real usage skews heavily toward
+// alternation ("heartbeat\|Heartbeat\|RunnerHeartbeat") rather than a bare
+// identifier; split on \| or | and keep whichever alternatives are
+// themselves clean identifiers.
+func grepPatternSymbols(pattern string) []string {
+	if hookIdentifierRe.MatchString(pattern) {
+		return []string{pattern}
+	}
+	var candidates []string
+	for _, c := range hookAlternationRe.Split(pattern, -1) {
+		if hookIdentifierRe.MatchString(c) {
+			candidates = append(candidates, c)
+		}
+	}
+	return candidates
+}
+
 // extractTarget mirrors the Python hook's extract_target: returns mode
 // "file" (a single cat/sed/head/tail/Read target path) or "symbol" (a list
 // of candidate identifiers, tried in order), or "" if this call isn't one we
-// care about.
-func extractTarget(toolInput map[string]any) (mode, file string, symbols []string) {
+// care about. toolName disambiguates the native Grep tool (a "pattern" arg,
+// no shell command to parse) from Bash, whose tool_input shape it shares
+// (both have no file_path).
+func extractTarget(toolName string, toolInput map[string]any) (mode, file string, symbols []string) {
 	if fp, ok := toolInput["file_path"].(string); ok && fp != "" {
 		return "file", fp, nil
+	}
+	if toolName == "Grep" {
+		pattern, _ := toolInput["pattern"].(string)
+		if pattern == "" {
+			return "", "", nil
+		}
+		if candidates := grepPatternSymbols(pattern); len(candidates) > 0 {
+			return "symbol", "", candidates
+		}
+		return "", "", nil
 	}
 	command, _ := toolInput["command"].(string)
 	if command == "" {
@@ -160,21 +192,7 @@ func extractTarget(toolInput map[string]any) (mode, file string, symbols []strin
 			}
 		}
 		if hookGrepCmds[cmdName] && len(rest) > 0 {
-			pattern := rest[0]
-			if hookIdentifierRe.MatchString(pattern) {
-				return "symbol", "", []string{pattern}
-			}
-			// Real usage skews heavily toward alternation
-			// ("heartbeat\|Heartbeat\|RunnerHeartbeat") rather than a bare
-			// identifier; split on \| or | and keep whichever alternatives
-			// are themselves clean identifiers.
-			var candidates []string
-			for _, c := range hookAlternationRe.Split(pattern, -1) {
-				if hookIdentifierRe.MatchString(c) {
-					candidates = append(candidates, c)
-				}
-			}
-			if len(candidates) > 0 {
+			if candidates := grepPatternSymbols(rest[0]); len(candidates) > 0 {
 				return "symbol", "", candidates
 			}
 			continue
@@ -369,7 +387,7 @@ func runHookContextInject(in *os.File, out *os.File) {
 		return
 	}
 
-	mode, file, symbols := extractTarget(payload.ToolInput)
+	mode, file, symbols := extractTarget(payload.ToolName, payload.ToolInput)
 	if mode == "" {
 		return
 	}
