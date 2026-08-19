@@ -41,3 +41,21 @@ patterns:
     captures:
       - name: broker_field
         role: amqp_broker_field
+  # consumer, string-keyed two-arg form: `hash.dig("registration",
+  # "amqp_queue_name")`. Some handshake fields are threaded through a nested
+  # response hash by an outer string key rather than read directly by their
+  # own symbol, so `dig` takes two positional string arguments instead of one
+  # symbol. Only the second (field-name) argument is captured; the first is
+  # matched structurally but not constrained, so any outer key works.
+  - name: amqp_field_string_dig
+    query: |
+      (call
+        method: (identifier) @_m
+        (#eq? @_m "dig")
+        arguments: (argument_list
+          (string)
+          (string) @broker_field
+          (#match? @broker_field "amqp_([a-z0-9_]+_)?queue_name")))
+    captures:
+      - name: broker_field
+        role: amqp_broker_field

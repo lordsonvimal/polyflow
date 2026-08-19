@@ -82,6 +82,43 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 	if len(wrapperParamIndex) == 0 {
 		return nil, nil
 	}
+
+	// Discovered wrapperParamIndex above is single-hop: it only knows a
+	// function is a wrapper because its OWN body calls fetch/axios directly.
+	// A wrapper of a wrapper (`apiPost` forwards to `genericRequest`, which
+	// itself forwards to `fetch`) is common in real codebases that centralize
+	// retry/auth/logging behind one inner primitive, and was invisible before
+	// this loop: a service-wide re-scan discovers any function whose body
+	// forwards one of its own parameters into an ALREADY-known wrapper name,
+	// registers it too, and repeats until no new wrapper is found. Same-service
+	// only, for the same reason the base table is per-service (K.7a) — a
+	// wrapper chain that crosses a service/package boundary (e.g. into an
+	// imported library) is out of reach for a source-only parser and is left
+	// unresolved rather than guessed at.
+	for svc, files := range serviceFiles {
+		wrappers := wrapperParamIndex[svc]
+		if len(wrappers) == 0 {
+			continue
+		}
+		for hop := 0; hop < 5; hop++ {
+			added := false
+			for _, file := range files {
+				if !isJSFile(file) {
+					continue
+				}
+				for name, idx := range discoverJSTransitiveWrappers(file, wrappers) {
+					if _, exists := wrappers[name]; !exists {
+						wrappers[name] = idx
+						added = true
+					}
+				}
+			}
+			if !added {
+				break
+			}
+		}
+	}
+
 	enclosingFunc := func(file string, line int) string {
 		best, bestSpan := "", -1
 		for _, r := range fnRangesByFile[file] {
@@ -208,4 +245,120 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 		})
 	}
 	return out
+}
+
+// discoverJSTransitiveWrappers re-parses file and returns wrapper-name ->
+// forwarded-param-index for every function/arrow function defined in it whose
+// body calls an ALREADY-known wrapper (a key of wrappers), forwarding one of
+// its OWN parameters at that wrapper's expected argument position — i.e. one
+// more hop of the same forwarding shape jsWrapperParamIndex (matcher.go)
+// detects for a direct fetch/axios call, just against a dynamically-growing
+// name set instead of a hardcoded "fetch"/"axios" match. Mirrors
+// scanJSWrapperCallSites' re-parse rationale: the wrapper table two hops
+// out is only known after this same pass has already run once.
+func discoverJSTransitiveWrappers(file string, wrappers map[string]int) map[string]int {
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	lang := grammarLangForFile(file)
+	root, err := sitter.ParseCtx(context.Background(), src, lang)
+	if err != nil || root == nil {
+		return nil
+	}
+
+	out := map[string]int{}
+	var walkDefs func(n *sitter.Node)
+	walkDefs = func(n *sitter.Node) {
+		if n == nil {
+			return
+		}
+		var params, name *sitter.Node
+		switch n.Type() {
+		case "function_declaration":
+			params = n.ChildByFieldName("parameters")
+			name = n.ChildByFieldName("name")
+		case "arrow_function", "function_expression":
+			params = n.ChildByFieldName("parameters")
+			if decl := n.Parent(); decl != nil && decl.Type() == "variable_declarator" {
+				name = decl.ChildByFieldName("name")
+			}
+		}
+		if params != nil && name != nil {
+			if _, idx, ok := jsForwardedParamCall(n, params, wrappers, src); ok {
+				out[name.Content(src)] = idx
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			walkDefs(n.Child(i))
+		}
+	}
+	walkDefs(root)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// jsForwardedParamCall scans fnDef's body (not descending into a nested
+// function definition — a nested closure's own forwarding says nothing about
+// the outer function) for a call to one of wrappers whose argument at that
+// wrapper's own forwarded index is itself one of fnDef's own parameters.
+// Returns the wrapper name it called and fnDef's own matching parameter
+// index.
+func jsForwardedParamCall(fnDef, params *sitter.Node, wrappers map[string]int, src []byte) (calledWrapper string, ownParamIndex int, ok bool) {
+	var paramNames []string
+	for i := 0; i < int(params.NamedChildCount()); i++ {
+		p := params.NamedChild(i)
+		if p.Type() == "required_parameter" || p.Type() == "optional_parameter" {
+			if inner := p.ChildByFieldName("pattern"); inner != nil {
+				p = inner
+			}
+		}
+		if p.Type() == "identifier" {
+			paramNames = append(paramNames, p.Content(src))
+		} else {
+			paramNames = append(paramNames, "")
+		}
+	}
+
+	body := fnDef.ChildByFieldName("body")
+	if body == nil {
+		return "", -1, false
+	}
+
+	var found bool
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n == nil || found {
+			return
+		}
+		switch n.Type() {
+		case "function_declaration", "arrow_function", "function_expression":
+			return // do not descend into a nested closure
+		case "call_expression":
+			if fn := n.ChildByFieldName("function"); fn != nil && fn.Type() == "identifier" {
+				callee := fn.Content(src)
+				if wrapIdx, known := wrappers[callee]; known {
+					if args := n.ChildByFieldName("arguments"); args != nil && wrapIdx < int(args.NamedChildCount()) {
+						argText := args.NamedChild(wrapIdx).Content(src)
+						for pi, pname := range paramNames {
+							if pname != "" && pname == argText {
+								found, calledWrapper, ownParamIndex, ok = true, callee, pi, true
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			if found {
+				return
+			}
+			walk(n.Child(i))
+		}
+	}
+	walk(body)
+	return calledWrapper, ownParamIndex, ok
 }

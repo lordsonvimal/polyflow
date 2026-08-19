@@ -1138,7 +1138,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// G.7 base-URL captures, and L.W2 selector/element captures. Selector
 		// captures arrive as raw source (`'"#save-btn"'`); id and class values
 		// from HTML/JSX attribute patterns similarly carry surrounding quotes.
-		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url", "selector", "id", "class"} {
+		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url", "selector", "id", "class", "broker_field"} {
 			if v, ok := meta[key]; ok {
 				meta[key] = stripStringLiteral(v)
 			}
@@ -2053,7 +2053,8 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	// join it, cross-service, to the publisher's channel.queue(name) declaration
 	// on queue_name.
 	case strings.Contains(lower, "queue_declare") || strings.Contains(lower, "exchange_declare") ||
-		lower == "kicks_from_queue" || strings.HasPrefix(lower, "amqp_field"):
+		lower == "kicks_from_queue" || strings.HasPrefix(lower, "amqp_field") ||
+		strings.HasPrefix(lower, "amqp_message_type"):
 		return graph.NodeTypeChannel, graph.EdgeTypeCalls
 
 	// ── Legacy XHR / jQuery ───────────────────────────────────────────────────
