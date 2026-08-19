@@ -50,22 +50,37 @@ func ResolveConfigBaseURLPaths(nodes []graph.Node, svcPaths map[string]string) [
 
 	for i := range nodes {
 		n := &nodes[i]
-		envVar := configBaseURLEnvVar(n)
-		if envVar == "" {
+		envVar, literal := configBaseURLSource(n)
+		if envVar == "" && literal == "" {
 			continue
 		}
-		dir, ok := svcPaths[n.Service]
-		if !ok {
-			continue
-		}
-		vals, done := loaded[n.Service]
-		if !done {
-			vals = configsrc.Load(dir)
-			loaded[n.Service] = vals
-		}
-		prefix, ref, ok := configPathPrefix(vals[envVar])
-		if !ok || prefix == "" {
-			continue
+
+		var prefix, ref string
+		if literal != "" {
+			// Tier JH case 2: a module-level literal default, not a config file
+			// value — there is no configsrc.Load lookup, the value already is
+			// the "config". confidence_ceiling stays whatever ResolveJSHTTPHosts
+			// already stamped (partial); this pass only adds path evidence.
+			prefix = configURLPathPrefix(literal)
+			ref = "host_default_literal"
+			if prefix == "" {
+				continue
+			}
+		} else {
+			dir, ok := svcPaths[n.Service]
+			if !ok {
+				continue
+			}
+			vals, done := loaded[n.Service]
+			if !done {
+				vals = configsrc.Load(dir)
+				loaded[n.Service] = vals
+			}
+			var ok2 bool
+			prefix, ref, ok2 = configPathPrefix(vals[envVar])
+			if !ok2 || prefix == "" {
+				continue
+			}
 		}
 
 		path := n.Meta["path"]
@@ -79,7 +94,11 @@ func ResolveConfigBaseURLPaths(nodes []graph.Node, svcPaths map[string]string) [
 
 		composed := "*" + prefix + strings.TrimPrefix(path, "*")
 		n.Meta["path"] = composed
-		n.Meta["path_prefix_from"] = envVar
+		if envVar != "" {
+			n.Meta["path_prefix_from"] = envVar
+		} else {
+			n.Meta["path_prefix_from"] = literal
+		}
 		n.Meta["path_prefix_ref"] = ref
 
 		// Re-grade: a path graded `weak` (one literal segment behind an opaque
@@ -102,27 +121,32 @@ func ResolveConfigBaseURLPaths(nodes []graph.Node, svcPaths map[string]string) [
 	return changed
 }
 
-// configBaseURLEnvVar returns the environment variable n's base URL was traced
-// to, or "" when n is not a candidate for prefix composition.
-func configBaseURLEnvVar(n *graph.Node) string {
+// configBaseURLSource returns the environment variable, or (for Tier JH case
+// 2) the module-level literal default, n's base URL was traced to. Exactly
+// one of the two return values is non-empty, or both are "" when n is not a
+// candidate for prefix composition.
+func configBaseURLSource(n *graph.Node) (envVar, literal string) {
 	if n.Type != graph.NodeTypeHTTPClient {
-		return ""
+		return "", ""
 	}
 	// A node whose URL never resolved has no path to prefix; it is still
 	// config_resolve's to resolve or to ledger.
 	if n.Meta["key_dynamic"] == "true" {
-		return ""
+		return "", ""
 	}
 	// `*` marks "the host was opaque, this path was composed onto it". A client
 	// that named its host literally is not composing onto a configured base and
 	// must not be touched.
 	if !strings.HasPrefix(n.Meta["path"], "*") {
-		return ""
+		return "", ""
 	}
 	if env := n.Meta["env_var"]; env != "" {
-		return env
+		return env, ""
 	}
-	return n.Meta["host_env_var"]
+	if env := n.Meta["host_env_var"]; env != "" {
+		return env, ""
+	}
+	return "", n.Meta["host_default_literal"]
 }
 
 // configPathPrefix returns the single path component shared by every checked-in
