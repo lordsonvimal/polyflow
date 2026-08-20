@@ -1,0 +1,95 @@
+package graph
+
+import (
+	"fmt"
+	"slices"
+)
+
+// NoiseClass labels *why* an edge is structural/plumbing rather than a
+// direct behavioral hop. The empty class ("") is always visible; every
+// other class is hidden unless explicitly included.
+type NoiseClass string
+
+const (
+	NoiseNone        NoiseClass = ""             // default-visible: calls, reads, writes, http_call, publishes, navigates_to, flows_to, ...
+	NoiseFilterChain NoiseClass = "filter_chain" // Rails before_action/after_action wiring
+	NoiseMixin       NoiseClass = "mixin"        // include/extend/prepend — class-wide, not call-site-specific
+	NoiseContainment NoiseClass = "containment"  // "this file/class also declares..." — not a call at all
+	NoiseRenderTree  NoiseClass = "render_tree"  // JSX/DOM render target (CSS-selector `element` nodes)
+)
+
+// ClassifyEdgeNoise reports which class an edge belongs to, given its
+// destination node. Every signal below is already present in the graph —
+// no parser or linker change is required for classification itself.
+func ClassifyEdgeNoise(e *Edge, dst *Node) NoiseClass {
+	if e.Meta != nil && e.Meta["via"] == "rails_filter" {
+		return NoiseFilterChain // internal/linker/rails_filters.go:818, reused verbatim from Tier IR
+	}
+	if e.Type == EdgeTypeInherits {
+		return NoiseMixin // internal/linker/ruby_type_relations.go:233,266, reused verbatim from Tier IR
+	}
+	if structuralEdgeTypes[e.Type] { // query.go:33-38, existing map, same package
+		return NoiseContainment
+	}
+	if dst != nil && dst.Type == NodeTypeElement { // model.go:25
+		return NoiseRenderTree
+	}
+	return NoiseNone
+}
+
+// NoiseInclude is the set of noise classes a caller has opted into seeing.
+type NoiseInclude map[NoiseClass]bool
+
+// Allows reports whether c should be visible under this include-set.
+// NoiseNone is always visible.
+func (n NoiseInclude) Allows(c NoiseClass) bool {
+	if c == NoiseNone {
+		return true
+	}
+	return n[c]
+}
+
+var allNoiseClasses = []NoiseClass{NoiseFilterChain, NoiseMixin, NoiseContainment, NoiseRenderTree}
+
+// ParseNoiseInclude turns CLI/MCP keys into an include-set. "all" includes
+// every class (today's unfiltered behavior — the escape hatch). "none"
+// (or omitted with no intent) is the empty set. Unknown keys are a hard
+// error, not a silent no-op — an agent that mistypes a class name must be
+// told, not silently given unfiltered or over-filtered output.
+func ParseNoiseInclude(keys []string) (NoiseInclude, error) {
+	out := NoiseInclude{}
+	for _, k := range keys {
+		if k == "all" {
+			for _, c := range allNoiseClasses {
+				out[c] = true
+			}
+			return out, nil
+		}
+		if k == "none" || k == "" {
+			continue
+		}
+		c := NoiseClass(k)
+		if !slices.Contains(allNoiseClasses, c) {
+			return nil, fmt.Errorf("unknown noise class %q, want one of %v or \"all\"", k, allNoiseClasses)
+		}
+		out[c] = true
+	}
+	return out, nil
+}
+
+// DefaultNoiseInclude is where "everything depends on intent" is decided.
+// It is the ONLY place default visibility differs by task — every other
+// mechanism in this plan is intent-agnostic classification. Explicit
+// --include always overrides this table entirely (never merges with it).
+func DefaultNoiseInclude(intent string) NoiseInclude {
+	switch intent {
+	case "generate":
+		// Building/understanding UI structure: the render tree IS the
+		// signal here, not noise. Filter-chain/mixin/containment stay
+		// hidden — "generate" still means "what do I call", not "what
+		// classes does this file declare".
+		return NoiseInclude{NoiseRenderTree: true}
+	default: // "impact", "debug", "refactor", "" (trace's bare default)
+		return NoiseInclude{}
+	}
+}
