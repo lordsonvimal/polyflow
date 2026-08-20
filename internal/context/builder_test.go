@@ -40,7 +40,7 @@ func fixtureIndex() *graph.AdjacencyIndex {
 
 func TestBuild_Debug(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 
 	assert.Equal(t, "be:getUser", result.Target.ID)
@@ -59,7 +59,7 @@ func TestBuild_Debug(t *testing.T) {
 
 func TestBuild_Impact(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "impact", 0, false, 0)
+	result := ctx.Build(idx, "be:getUser", "impact", 0, false, 0, nil)
 	require.NotNil(t, result)
 
 	// impact = backward only
@@ -70,7 +70,7 @@ func TestBuild_Impact(t *testing.T) {
 
 func TestBuild_Generate(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "generate", 3, false, 0)
+	result := ctx.Build(idx, "be:getUser", "generate", 3, false, 0, nil)
 	require.NotNil(t, result)
 
 	// generate = forward only
@@ -81,7 +81,7 @@ func TestBuild_Generate(t *testing.T) {
 
 func TestBuild_CrossService(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 
 	// fe:fetchUser -> be:getUser is cross-service; should appear in cross_service
@@ -96,7 +96,7 @@ func TestBuild_CrossService(t *testing.T) {
 
 func TestBuild_UnknownNode(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
-	result := ctx.Build(idx, "nonexistent", "debug", 5, false, 0)
+	result := ctx.Build(idx, "nonexistent", "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 	assert.Nil(t, result.Target)
 	assert.Empty(t, result.Upstream)
@@ -105,7 +105,7 @@ func TestBuild_UnknownNode(t *testing.T) {
 
 func TestBuild_TotalCounts(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 
 	// 2 trace nodes (fetchUser + queryDB) + 1 target = 3
@@ -122,7 +122,7 @@ func TestBuild_JSONCarriesNodeAndEdgeMeta(t *testing.T) {
 	idx.AddEdge(&graph.Edge{ID: "e1", From: fn.ID, To: s3.ID, Type: graph.EdgeTypeCloudCall,
 		Confidence: graph.ConfidenceInferred, Meta: map[string]string{"via": "sdk"}})
 
-	result := ctx.Build(idx, fn.ID, "debug", 5, false, 0)
+	result := ctx.Build(idx, fn.ID, "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 	require.Len(t, result.Downstream, 1)
 
@@ -136,7 +136,7 @@ func TestBuild_JSONCarriesNodeAndEdgeMeta(t *testing.T) {
 
 func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 
 	result.AttachUnresolved([]graph.UnresolvedRef{
@@ -150,9 +150,90 @@ func TestAttachUnresolved_ScopedToTraversedFiles(t *testing.T) {
 	assert.Contains(t, result.UnresolvedNote, "verify this 1 unresolved reference manually")
 }
 
+// noiseFixture builds a root with 5 outgoing edges, one per Tier NV noise
+// class plus one plain behavioral edge: a -calls-> behavioral (NoiseNone),
+// a -calls(via=rails_filter)-> filtered, a -inherits-> mixin,
+// a -contains-> contained, a -calls-> rendered (an element node).
+func noiseFixture() *graph.AdjacencyIndex {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "a", Label: "A", Service: "s", Type: graph.NodeTypeFunction})
+	idx.AddNode(&graph.Node{ID: "behavioral", Label: "Behavioral", Service: "s", Type: graph.NodeTypeFunction})
+	idx.AddNode(&graph.Node{ID: "filtered", Label: "Filtered", Service: "s", Type: graph.NodeTypeFunction})
+	idx.AddNode(&graph.Node{ID: "mixin", Label: "Mixin", Service: "s", Type: graph.NodeTypeFunction})
+	idx.AddNode(&graph.Node{ID: "contained", Label: "Contained", Service: "s", Type: graph.NodeTypeFunction})
+	idx.AddNode(&graph.Node{ID: "rendered", Label: "Rendered", Service: "s", Type: graph.NodeTypeElement})
+
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "a", To: "behavioral", Type: graph.EdgeTypeCalls})
+	idx.AddEdge(&graph.Edge{ID: "e2", From: "a", To: "filtered", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}})
+	idx.AddEdge(&graph.Edge{ID: "e3", From: "a", To: "mixin", Type: graph.EdgeTypeInherits})
+	idx.AddEdge(&graph.Edge{ID: "e4", From: "a", To: "contained", Type: graph.EdgeTypeContains})
+	idx.AddEdge(&graph.Edge{ID: "e5", From: "a", To: "rendered", Type: graph.EdgeTypeCalls})
+	return idx
+}
+
+func TestBuild_NoiseFiltering_TaskDebugDefaultHidesAllFourClasses(t *testing.T) {
+	include := graph.DefaultNoiseInclude("debug")
+	result := ctx.Build(noiseFixture(), "a", "generate", 1, false, 0, include)
+	require.NotNil(t, result)
+
+	require.Len(t, result.Downstream, 1)
+	assert.Equal(t, "behavioral", result.Downstream[0].ID)
+
+	assert.Equal(t, map[graph.NoiseClass]int{
+		graph.NoiseFilterChain: 1,
+		graph.NoiseMixin:       1,
+		graph.NoiseContainment: 1,
+		graph.NoiseRenderTree:  1,
+	}, result.HiddenByClass)
+}
+
+func TestBuild_NoiseFiltering_TaskGenerateDefaultShowsRenderTreeOnly(t *testing.T) {
+	include := graph.DefaultNoiseInclude("generate")
+	result := ctx.Build(noiseFixture(), "a", "generate", 1, false, 0, include)
+	require.NotNil(t, result)
+
+	require.Len(t, result.Downstream, 2)
+	var ids []string
+	for _, n := range result.Downstream {
+		ids = append(ids, n.ID)
+	}
+	assert.Contains(t, ids, "behavioral")
+	assert.Contains(t, ids, "rendered")
+
+	assert.Equal(t, map[graph.NoiseClass]int{
+		graph.NoiseFilterChain: 1,
+		graph.NoiseMixin:       1,
+		graph.NoiseContainment: 1,
+	}, result.HiddenByClass)
+}
+
+func TestBuild_NoiseFiltering_ExplicitIncludeOverridesTaskDefaultBothDirections(t *testing.T) {
+	// task=generate would default to showing render_tree, but an explicit
+	// empty include-set must override that default entirely (never merge),
+	// hiding render_tree too.
+	result := ctx.Build(noiseFixture(), "a", "generate", 1, false, 0, graph.NoiseInclude{})
+	require.NotNil(t, result)
+	require.Len(t, result.Downstream, 1)
+	assert.Equal(t, "behavioral", result.Downstream[0].ID)
+	assert.Equal(t, 1, result.HiddenByClass[graph.NoiseRenderTree])
+
+	// task=debug would default to hiding everything, but an explicit include
+	// must still surface the requested class.
+	result2 := ctx.Build(noiseFixture(), "a", "debug", 1, false, 0, graph.NoiseInclude{graph.NoiseMixin: true})
+	require.NotNil(t, result2)
+	var ids []string
+	for _, n := range result2.Downstream {
+		ids = append(ids, n.ID)
+	}
+	assert.Contains(t, ids, "behavioral")
+	assert.Contains(t, ids, "mixin")
+	assert.Equal(t, 1, result2.HiddenByClass[graph.NoiseRenderTree])
+	assert.Equal(t, 0, result2.HiddenByClass[graph.NoiseMixin])
+}
+
 func TestBuild_UnresolvedDefaultsToEmptyNotNull(t *testing.T) {
 	idx := fixtureIndex()
-	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	result := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotNil(t, result)
 
 	data, err := json.Marshal(result)

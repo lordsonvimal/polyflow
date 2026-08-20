@@ -45,7 +45,7 @@ func provenanceIndex() *graph.AdjacencyIndex {
 // both traversed edges for a debug (upstream+downstream) call.
 func TestContext_VerificationSummaryPopulated(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotNil(t, r)
 
 	// upstream traversal hits e1 (verified); downstream hits e2 (candidate).
@@ -57,7 +57,7 @@ func TestContext_VerificationSummaryPopulated(t *testing.T) {
 // TestContext_VerificationSummaryPresentInJSON verifies {}-never-absent.
 func TestContext_VerificationSummaryPresentInJSON(t *testing.T) {
 	idx := fixtureIndex() // no fused edges
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	data, err := json.Marshal(r)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"verification_summary"`)
@@ -66,14 +66,14 @@ func TestContext_VerificationSummaryPresentInJSON(t *testing.T) {
 // TestContext_VerificationSummaryEmptyWhenNoFusedEdges checks all-zero struct.
 func TestContext_VerificationSummaryEmptyWhenNoFusedEdges(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	assert.Equal(t, graph.VerificationSummary{}, r.VerificationSummary)
 }
 
 // TestContext_PerNodeProvenance verifies per-TraceNode verification fields.
 func TestContext_PerNodeProvenance(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	require.NotEmpty(t, r.Upstream)
 
 	var fetchUserNode *ctx.TraceNode
@@ -92,7 +92,7 @@ func TestContext_PerNodeProvenance(t *testing.T) {
 // TestContext_SourcesCompactFormat verifies the compact "provider:ref" encoding.
 func TestContext_SourcesCompactFormat(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 
 	for _, n := range r.Upstream {
 		if n.ID == "fe:fetchUser" {
@@ -110,7 +110,7 @@ func TestContext_SourcesCompactFormat(t *testing.T) {
 // TestContext_SourcesVerboseFormat verifies full SourceRef structs.
 func TestContext_SourcesVerboseFormat(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, true, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, true, 0, nil)
 
 	for _, n := range r.Upstream {
 		if n.ID == "fe:fetchUser" {
@@ -129,7 +129,7 @@ func TestContext_SourcesVerboseFormat(t *testing.T) {
 func TestContext_DeterministicOutput(t *testing.T) {
 	idx := provenanceIndex()
 	run := func() string {
-		r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+		r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 		data, err := json.Marshal(r)
 		require.NoError(t, err)
 		return string(data)
@@ -142,7 +142,7 @@ func TestContext_DeterministicOutput(t *testing.T) {
 // the zero TrustStamp{Measured:false} until the caller populates it.
 func TestContext_TrustZeroStateInJSON(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	assert.Equal(t, graph.TrustStamp{Measured: false}, r.Trust)
 
 	data, err := json.Marshal(r)
@@ -154,7 +154,7 @@ func TestContext_TrustZeroStateInJSON(t *testing.T) {
 // still carries trust.
 func TestContextBudgetFloor_TrustAlwaysPresent(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	r.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0}
 
 	budgeted := r.ApplyBudget(1, false)
@@ -169,7 +169,7 @@ func TestContextBudgetFloor_TrustAlwaysPresent(t *testing.T) {
 // TestContextSummarize_TrustCarried verifies trust survives file rollup.
 func TestContextSummarize_TrustCarried(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	r.Trust = graph.TrustStamp{Measured: true, Corpus: "chessleap", Cases: 12, Recall: 1.0}
 	s := r.Summarize()
 	assert.Equal(t, r.Trust, s.Trust)
@@ -179,7 +179,7 @@ func TestContextSummarize_TrustCarried(t *testing.T) {
 // measured result reports epistemic.verdict "exact" with no causes (EE.0).
 func TestContextFinalizeEpistemic_Exact(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	r.Trust = graph.TrustStamp{Measured: true}
 	r.AttachUnresolved(nil)
 	r.FinalizeEpistemic()
@@ -192,7 +192,7 @@ func TestContextFinalizeEpistemic_Exact(t *testing.T) {
 // not a recomputation from scratch.
 func TestContextFinalizeEpistemic_UnresolvedAndUnmeasuredTrust(t *testing.T) {
 	idx := fixtureIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	// Trust left at the zero value (Measured: false).
 	r.AttachUnresolved([]graph.UnresolvedRef{{File: "handler.go", Kind: "call_ref"}})
 	r.FinalizeEpistemic()
@@ -208,7 +208,7 @@ func TestContextFinalizeEpistemic_DynamicDispatch(t *testing.T) {
 	idx.AddNode(&graph.Node{ID: "b", Type: graph.NodeTypeFunction, Label: "b", File: "b.go"})
 	idx.AddEdge(&graph.Edge{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceUnknown})
 
-	r := ctx.Build(idx, "b", "debug", 5, false, 0)
+	r := ctx.Build(idx, "b", "debug", 5, false, 0, nil)
 	r.Trust = graph.TrustStamp{Measured: true}
 	r.AttachUnresolved(nil)
 	r.FinalizeEpistemic()
@@ -220,7 +220,7 @@ func TestContextFinalizeEpistemic_DynamicDispatch(t *testing.T) {
 // budget still carries epistemic (EE.0), same as verification_summary/trust.
 func TestContextBudgetFloor_EpistemicAlwaysPresent(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	r.Trust = graph.TrustStamp{Measured: false}
 	r.AttachUnresolved([]graph.UnresolvedRef{{File: "handler.go", Kind: "call_ref"}})
 	r.FinalizeEpistemic()
@@ -238,7 +238,7 @@ func TestContextBudgetFloor_EpistemicAlwaysPresent(t *testing.T) {
 // rollup, mirroring TestContextSummarize_TrustCarried.
 func TestContextSummarize_EpistemicCarried(t *testing.T) {
 	idx := provenanceIndex()
-	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0)
+	r := ctx.Build(idx, "be:getUser", "debug", 5, false, 0, nil)
 	r.Trust = graph.TrustStamp{Measured: true}
 	r.AttachUnresolved(nil)
 	r.FinalizeEpistemic()
