@@ -69,8 +69,12 @@ func labels(cs []impact.Caller) map[string]int {
 func TestDepthIsHopCount(t *testing.T) {
 	idx := shapeIndex()
 	root := idx.Nodes["closure"]
+	// This test is about hop counting, not noise-class visibility (two of the
+	// five hops here — file:svc.go, svc — are containment edges, which Tier
+	// NV hides by default); include everything to isolate the depth question.
+	all := graph.AllNoiseInclude()
 
-	got := labels(impact.Build(idx, root, impact.Options{Depth: 10}).Callers)
+	got := labels(impact.Build(idx, root, impact.Options{Depth: 10, Include: all}).Callers)
 	assert.Equal(t, 1, got["leaf"], "leaf calls closure directly")
 	assert.Equal(t, 2, got["mid"])
 	assert.Equal(t, 3, got["handler"])
@@ -81,7 +85,7 @@ func TestDepthIsHopCount(t *testing.T) {
 	// each node keeps the same hop number it had in the uncapped walk, so a
 	// capped answer is a prefix of the full one rather than a reshuffle.
 	for depth := 1; depth <= 5; depth++ {
-		capped := labels(impact.Build(idx, root, impact.Options{Depth: depth}).Callers)
+		capped := labels(impact.Build(idx, root, impact.Options{Depth: depth, Include: all}).Callers)
 		want := 0
 		for label, d := range got {
 			if d > depth {
@@ -165,14 +169,22 @@ func TestContainmentTerminal_IsOptIn(t *testing.T) {
 	idx := shapeIndex()
 	root := idx.Nodes["leaf"]
 
+	// This test pins WALK behavior (does the traversal continue past a
+	// container), not DISPLAY behavior — Tier NV's noise-class filter (see
+	// TestBuild_ContainmentFanoutHiddenByDefault in summary_test.go) hides
+	// containment-only nodes from the default view at a later stage, but the
+	// walk itself must still visit them so an --include containment caller
+	// gets a real answer. Pass AllNoiseInclude to isolate the walk/policy
+	// question this test is actually about.
+	all := graph.AllNoiseInclude()
 	def := labels(impact.Build(idx, root, impact.Options{
-		Depth: 10, Policy: graph.BlastRadiusPolicy()}).Callers)
+		Depth: 10, Policy: graph.BlastRadiusPolicy(), Include: all}).Callers)
 	require.Contains(t, def, "Thing")
 	assert.Contains(t, def, "other",
 		"the default must keep the containment path — it is load-bearing where call resolution is weak")
 
 	tight := labels(impact.Build(idx, root, impact.Options{
-		Depth: 10, Policy: graph.ContainmentTerminal()}).Callers)
+		Depth: 10, Policy: graph.ContainmentTerminal(), Include: all}).Callers)
 	assert.Contains(t, tight, "Thing", "the container itself is useful context and is still reported")
 	assert.NotContains(t, tight, "other", "but the walk must not continue out of it")
 }
