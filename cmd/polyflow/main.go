@@ -1590,6 +1590,7 @@ var (
 	impactVerboseSources bool
 	impactIncludeLocals  bool
 	impactStopContainers bool
+	impactInclude        string
 )
 
 // impactPolicy turns the shape flags into a traversal policy.
@@ -1621,6 +1622,7 @@ func initImpactFlags() {
 	impactCmd.Flags().BoolVar(&impactStopContainers, "stop-at-containers", false, "stop at containment edges (contains, declares) instead of expanding the file/type — much tighter, but loses recall where call resolution is weak")
 	impactCmd.Flags().IntVar(&impactSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
 	impactCmd.Flags().BoolVar(&impactVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
+	impactCmd.Flags().StringVar(&impactInclude, "include", "", "noise classes to show, comma-separated (filter_chain, mixin, containment, render_tree, all, none); default hides all four (impact has no --task concept); independent of --stop-at-containers")
 	impactCmd.MarkFlagsOneRequired("target", "file", "diff")
 	impactCmd.MarkFlagsMutuallyExclusive("target", "file", "diff")
 }
@@ -1696,6 +1698,15 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	var includeKeys []string
+	if impactInclude != "" {
+		includeKeys = strings.Split(impactInclude, ",")
+	}
+	include, err := graph.ResolveNoiseInclude(includeKeys, "impact")
+	if err != nil {
+		return err
+	}
+
 	out := impact.Build(idx, root, impact.Options{
 		Depth:          impactDepth,
 		Service:        impactService,
@@ -1703,6 +1714,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		Policy:         impactPolicy(),
 		VerboseSources: impactVerboseSources,
 		StaleAfter:     loadStaleAfter(meta.ConfigFile),
+		Include:        include,
 	})
 	out.TargetCandidates = candidates
 	out.ResolutionNote = graph.ResolutionNote(impactTarget, exactMatch)
@@ -1724,6 +1736,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", out.ResolutionNote)
 	}
 	printAmbiguousCandidates(os.Stderr, impactTarget, root.ID, candidates)
+	if line := hiddenByClassLine(out.HiddenByClass); line != "" {
+		fmt.Fprintln(os.Stderr, line)
+	}
 	if s, ok := budgeted.(*impact.Summary); ok {
 		return printImpactSummaryText(s)
 	}

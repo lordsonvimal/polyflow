@@ -124,6 +124,11 @@ type Summary struct {
 	Trust               graph.TrustStamp          `json:"trust"`
 	Epistemic           graph.Epistemic           `json:"epistemic"`
 	Budget              *budget.Info              `json:"budget,omitempty"`
+
+	// HiddenByClass tallies callers excluded by noise-class filtering (Tier
+	// NV), keyed by graph.NoiseClass. Carried through from Result unchanged —
+	// filtering happens once, in assemble, before this rollup is built.
+	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
 }
 
 // rollupCallers groups blast-radius callers by file, the low-token
@@ -289,6 +294,7 @@ func (r *Result) Summarize() *Summary {
 		VerificationSummary:  r.VerificationSummary,
 		Trust:                r.Trust,
 		Epistemic:            r.Epistemic,
+		HiddenByClass:        r.HiddenByClass,
 	}
 }
 
