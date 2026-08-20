@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { applyFilters, type FilterableGraph } from "./filters";
+import { applyFilters, countHiddenByNoise, type FilterableGraph } from "./filters";
 import { GraphNode, GraphEdge } from "./types";
 
 function node(id: string, service: string): GraphNode {
   return { id, type: "function", label: id, service, file: `${id}.go`, line: 1, language: "go" };
 }
-function edge(id: string, from: string, to: string, type: string, confidence?: string): GraphEdge {
-  return { id, from, to, type, confidence };
+function edge(id: string, from: string, to: string, type: string, confidence?: string, meta?: Record<string, string>): GraphEdge {
+  return { id, from, to, type, confidence, meta };
 }
 
 const GRAPH: FilterableGraph = {
@@ -47,5 +47,53 @@ describe("applyFilters", () => {
     const before = JSON.stringify(GRAPH);
     applyFilters(GRAPH, { confidence: [], edgeTypes: ["dom"], services: ["svc1"] });
     expect(JSON.stringify(GRAPH)).toBe(before);
+  });
+});
+
+// Tier NV.7: noiseClasses is the one axis with inverted default polarity
+// ([] = hide noise-classified edges, not "show everything").
+describe("applyFilters — noiseClasses", () => {
+  const ALL_CONFIDENCE = ["static", "inferred", "partial", "unknown"];
+  const NOISE_GRAPH: FilterableGraph = {
+    nodes: [node("a", "svc1"), node("b", "svc1"), node("c", "svc1")],
+    edges: [
+      edge("e1", "a", "b", "calls"),
+      edge("e2", "b", "c", "contains", undefined, { noise_class: "containment" }),
+      edge("e3", "a", "c", "inherits", undefined, { noise_class: "mixin" }),
+    ],
+  };
+
+  it("hides every noise-classified edge by default (noiseClasses absent)", () => {
+    const out = applyFilters(NOISE_GRAPH, { confidence: ALL_CONFIDENCE, edgeTypes: [], services: [] });
+    expect(out.edges.map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("hides every noise-classified edge when noiseClasses is explicitly []", () => {
+    const out = applyFilters(NOISE_GRAPH, { confidence: ALL_CONFIDENCE, edgeTypes: [], services: [], noiseClasses: [] });
+    expect(out.edges.map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("shows only the included noise class", () => {
+    const out = applyFilters(NOISE_GRAPH, { confidence: ALL_CONFIDENCE, edgeTypes: [], services: [], noiseClasses: ["containment"] });
+    expect(out.edges.map((e) => e.id)).toEqual(["e1", "e2"]);
+  });
+
+  it("an unrelated axis's 'select all' convenience does not flip noise defaults to shown", () => {
+    const out = applyFilters(NOISE_GRAPH, { confidence: ALL_CONFIDENCE, edgeTypes: [], services: [] });
+    expect(out.edges.map((e) => e.id)).toEqual(["e1"]);
+  });
+});
+
+describe("countHiddenByNoise", () => {
+  const edges: GraphEdge[] = [
+    edge("e1", "a", "b", "calls"),
+    edge("e2", "b", "c", "contains", undefined, { noise_class: "containment" }),
+    edge("e3", "a", "c", "inherits", undefined, { noise_class: "mixin" }),
+  ];
+
+  it("counts noise-classified edges not in the active set", () => {
+    expect(countHiddenByNoise(edges, [])).toBe(2);
+    expect(countHiddenByNoise(edges, ["containment"])).toBe(1);
+    expect(countHiddenByNoise(edges, ["containment", "mixin"])).toBe(0);
   });
 });

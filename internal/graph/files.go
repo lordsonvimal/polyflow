@@ -96,6 +96,12 @@ type FileImpactEntry struct {
 	Nodes     int      `json:"nodes"`
 	MinDepth  int      `json:"min_depth"`
 	EdgeTypes []string `json:"edge_types"`
+	// NoiseClasses (Tier NV.7) — the set of graph.NoiseClass values seen
+	// among the edges that reached this file, e.g. "containment",
+	// "render_tree". Label-don't-filter: FileImpact keeps its historical
+	// unfiltered rollup (no --include lever here, unlike trace/context/
+	// impact); this is a UI hint only, same spirit as EdgeTypes above.
+	NoiseClasses []string `json:"noise_classes,omitempty"`
 }
 
 // FileImpact traverses from every node in the given file and groups the
@@ -160,6 +166,9 @@ func FileImpactWithPolicy(idx *AdjacencyIndex, service, path, direction string, 
 				}
 				if res.Via != nil {
 					e.EdgeTypes = appendUnique(e.EdgeTypes, string(res.Via.Type))
+					if class := ClassifyEdgeNoise(res.Via, res.Node); class != NoiseNone {
+						e.NoiseClasses = appendUnique(e.NoiseClasses, string(class))
+					}
 				}
 			}
 		}
@@ -168,6 +177,7 @@ func FileImpactWithPolicy(idx *AdjacencyIndex, service, path, direction string, 
 	out := make([]FileImpactEntry, 0, len(entries))
 	for _, e := range entries {
 		sort.Strings(e.EdgeTypes)
+		sort.Strings(e.NoiseClasses)
 		out = append(out, *e)
 	}
 	sort.Slice(out, func(i, j int) bool {
