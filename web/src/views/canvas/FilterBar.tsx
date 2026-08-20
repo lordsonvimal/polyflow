@@ -2,7 +2,7 @@ import { For, Show, createMemo, onMount } from "solid-js";
 import { scopeStore, type ViewState } from "../../stores/scope";
 import { treeStore } from "../../stores/tree";
 import { CONFIDENCE_LEVELS, DEFAULT_CONFIDENCE } from "../../lib/confidence";
-import { EDGE_GROUP_NAMES } from "../../lib/edgeGroups";
+import { EDGE_GROUP_NAMES, NOISE_CLASS_NAMES } from "../../lib/edgeGroups";
 import { canvasElementsStore } from "../../stores/canvasElements";
 import { multiSelectStore } from "../../stores/multiSelect";
 import { notificationsStore } from "../../stores/notifications";
@@ -51,6 +51,9 @@ export function computeActiveCount(filters: Filters, allServices: readonly strin
   if (filters.services.length > 0) {
     count += allServices.length - effectiveAllOn(filters.services, allServices).length;
   }
+  // Opposite polarity: noiseClasses defaults to [] = "off", so any entry
+  // present is itself a deviation from default, not a deviation-from-all-on.
+  count += (filters.noiseClasses ?? []).length;
   return count;
 }
 
@@ -92,8 +95,17 @@ export default function FilterBar() {
     scopeStore.setFilters({ ...filters(), services: toggled(eff, all, service) });
   }
 
+  // Tier NV.7: noiseClasses is the one axis where [] means "show nothing
+  // extra" (opposite of every axis above) — so toggling just adds/removes
+  // the name directly, no effectiveAllOn/canonicalize-to-[] dance.
+  function toggleNoiseClass(cls: string) {
+    const active = filters().noiseClasses ?? [];
+    const next = active.includes(cls) ? active.filter((x) => x !== cls) : [...active, cls];
+    scopeStore.setFilters({ ...filters(), noiseClasses: next });
+  }
+
   function reset() {
-    scopeStore.setFilters({ confidence: [], edgeTypes: [], services: [] });
+    scopeStore.setFilters({ confidence: [], edgeTypes: [], services: [], noiseClasses: [] });
   }
 
   // UF.4: "Add all matches" — unions every node currently on canvas
@@ -156,6 +168,24 @@ export default function FilterBar() {
           </For>
         </div>
       </Show>
+      <div class="w-px h-4 bg-neutral-800" />
+      <div class="flex items-center gap-1" data-testid="filter-noise-row">
+        <span class="text-neutral-500">
+          Noise
+          <Show when={canvasElementsStore.noiseHidden() > 0}>
+            {" "}({canvasElementsStore.noiseHidden()} hidden)
+          </Show>
+        </span>
+        <For each={Object.keys(NOISE_CLASS_NAMES)}>
+          {(cls) => (
+            <Chip
+              label={NOISE_CLASS_NAMES[cls]}
+              active={(filters().noiseClasses ?? []).includes(cls)}
+              onClick={() => toggleNoiseClass(cls)}
+            />
+          )}
+        </For>
+      </div>
       <div class="ml-auto flex items-center gap-2">
         <Chip
           label="Coverage"

@@ -41,7 +41,16 @@ export type Scope =
 export type ViewState = {
   stack: Scope[];
   isolation?: FlowRef;
-  filters: { confidence: string[]; edgeTypes: string[]; services: string[] };
+  // noiseClasses (Tier NV.7): deliberately the OPPOSITE default polarity
+  // from confidence/edgeTypes/services above. Every other axis treats []
+  // as "unrestricted, show everything"; here [] (or absent, e.g. a
+  // pre-NV.7 decoded URL) means "show nothing extra" — matching the
+  // agent-side default (trace/context/impact all hide noise-classified
+  // edges unless explicitly --include'd). Optional, like every filters
+  // axis added after the initial ViewState shape, so older encoded URLs
+  // still decode. Do not "normalize" this to match the other axes' []
+  // convention; see lib/filters.ts.
+  filters: { confidence: string[]; edgeTypes: string[]; services: string[]; noiseClasses?: string[] };
   selection?: { kind: "node" | "edge"; id: string };
   layout?: string;
   // UN.5 flow lens — independent of filters.edgeTypes (FilterBar's coarse
@@ -74,7 +83,7 @@ export type ViewState = {
 
 export const DEFAULT_STATE: ViewState = {
   stack: [{ kind: "overview" }],
-  filters: { confidence: [], edgeTypes: [], services: [] },
+  filters: { confidence: [], edgeTypes: [], services: [], noiseClasses: [] },
 };
 
 // Versioned URL codec

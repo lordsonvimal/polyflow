@@ -45,3 +45,15 @@ export function edgeGroupOf(type: string): string {
 export function edgeTypesForGroups(groups: readonly string[]): string[] {
   return groups.flatMap((g) => EDGE_GROUPS[g] ?? []);
 }
+
+// Tier NV.7: display names for graph.NoiseClass values (see
+// internal/graph/noiseclass.go), the server-computed `meta.noise_class`
+// FilterBar's "Noise" row toggles. Unlike EDGE_GROUPS above, this is not a
+// classification table — the server already decided the class; this only
+// maps its wire value to a human label.
+export const NOISE_CLASS_NAMES: Record<string, string> = {
+  filter_chain: "Filter chains",
+  mixin: "Mixins",
+  containment: "Containment",
+  render_tree: "Render tree",
+};

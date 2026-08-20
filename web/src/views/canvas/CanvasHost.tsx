@@ -39,7 +39,7 @@ import { expandedElementsStore } from "../../stores/expandedElements";
 import { resolvePinboard, filterChainsByLens, pinboardMemberIds } from "./scopes/pinboard";
 import { serviceFromNodeId } from "../../lib/aggregate";
 import { layoutPrefs } from "../../stores/layoutPrefs";
-import { applyFilters } from "../../lib/filters";
+import { applyFilters, countHiddenByNoise } from "../../lib/filters";
 import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
 import { applyFileGrouping, FILE_GROUP_TYPE } from "../../lib/filegroup";
 import { contextCopyStore } from "../../stores/contextCopy";
@@ -192,6 +192,11 @@ function buildStylesheet(): object[] {
     { selector: "edge[verification_state = 'candidate']", style: { "line-style": "dashed" } },
     { selector: "edge[verification_state = 'conflicting']", style: { "line-style": "dotted" } },
     { selector: "edge[verification_state = 'observed_only_gap']", style: { "line-style": "dashed", width: 3 } },
+    // Tier NV.7: an edge only ever reaches canvas with `noise_class` set
+    // when the Noise chip row was explicitly opted into (default is
+    // hidden, lib/filters.ts) — muted + dotted so it still reads as
+    // "structural plumbing," distinct from primary business-logic edges.
+    { selector: "edge[noise_class]", style: { "line-style": "dotted", opacity: 0.5 } },
     // UF.6: impact scope depth rings — target accented, direct dependents
     // strong, transitive fading. Set client-side (scopes/impact.ts's BFS
     // over the already-fetched edge set) since /api/graph/trace has no
@@ -665,6 +670,13 @@ export default function CanvasHost() {
   createEffect(() => {
     const d = renderData();
     canvasElementsStore.setIds(new Set(d ? d.nodes.map((n) => n.id) : []));
+
+    // Tier NV.7: publish the Noise chip's "N hidden" count, counted against
+    // the lensed-but-pre-chip edge set (lib/filters.ts's countHiddenByNoise).
+    const lensed = lensedData();
+    canvasElementsStore.setNoiseHidden(
+      lensed ? countHiddenByNoise(lensed.edges, scopeStore.viewState().filters.noiseClasses ?? []) : 0,
+    );
 
     // UF.5: when budget-forced clustering is active, resolve each rendered
     // `filegrp:` id back to its real member ids (against the *unclustered*

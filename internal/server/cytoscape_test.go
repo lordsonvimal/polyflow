@@ -67,3 +67,29 @@ func TestToCytoscapeJSON_EdgeSourceTarget(t *testing.T) {
 		t.Errorf("Label: want invoke, got %s", d.Label)
 	}
 }
+
+func TestToCytoscapeJSON_NoiseClassLabel(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "n1", Type: graph.NodeTypeFunction},
+		{ID: "n2", Type: graph.NodeTypeFunction},
+	}
+	edges := []*graph.Edge{
+		{ID: "e1", From: "n1", To: "n2", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}},
+		{ID: "e2", From: "n1", To: "n2", Type: graph.EdgeTypeCalls},
+	}
+	g := ToCytoscapeJSON(nodes, edges)
+	if got := g.Edges[0].Data.Meta["noise_class"]; got != "filter_chain" {
+		t.Errorf("noise_class: want filter_chain, got %q", got)
+	}
+	if _, ok := g.Edges[1].Data.Meta["noise_class"]; ok {
+		t.Errorf("expected no noise_class on a plain calls edge, got %v", g.Edges[1].Data.Meta)
+	}
+	// The tagged edge's original Meta must survive alongside the new key,
+	// and the source edge's own Meta map must not be mutated in place.
+	if g.Edges[0].Data.Meta["via"] != "rails_filter" {
+		t.Errorf("expected via=rails_filter preserved, got %v", g.Edges[0].Data.Meta)
+	}
+	if _, ok := edges[0].Meta["noise_class"]; ok {
+		t.Errorf("ToCytoscapeJSON must not mutate the source edge's Meta map")
+	}
+}

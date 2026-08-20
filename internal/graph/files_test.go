@@ -98,6 +98,33 @@ func TestFileImpactBoth(t *testing.T) {
 	assert.Len(t, entries, 2)
 }
 
+// TestFileImpactNoiseClasses (Tier NV.7): FileImpact labels, never filters —
+// a rails_filter-tagged edge still contributes its reached file to the
+// rollup, but the file's entry also carries which noise class(es) reached
+// it, so the web UI can flag "everything here arrived via structural
+// plumbing" without FileImpact losing any file from its historical output.
+func TestFileImpactNoiseClasses(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc-a", File: "svc-a/handlers.go", Line: 10})
+	idx.AddNode(&graph.Node{ID: "u1", Type: graph.NodeTypeFunction, Service: "svc-a", File: "svc-a/util.go", Line: 5})
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "h1", To: "u1", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}})
+
+	entries := graph.FileImpact(idx, "svc-a", "svc-a/handlers.go", "forward", 0)
+	assert.Len(t, entries, 1)
+	assert.Equal(t, []string{"filter_chain"}, entries[0].NoiseClasses)
+
+	// Same classification applies walking the edge backward.
+	backEntries := graph.FileImpact(idx, "svc-a", "svc-a/util.go", "backward", 0)
+	assert.Len(t, backEntries, 1)
+	assert.Equal(t, []string{"filter_chain"}, backEntries[0].NoiseClasses)
+
+	// A plain, unclassified edge carries no noise classes at all.
+	plain := buildFileIndex()
+	plainEntries := graph.FileImpact(plain, "svc-a", "svc-a/handlers.go", "forward", 0)
+	assert.Len(t, plainEntries, 1)
+	assert.Empty(t, plainEntries[0].NoiseClasses)
+}
+
 func TestFileImpactUnknownFile(t *testing.T) {
 	idx := buildFileIndex()
 	assert.Nil(t, graph.FileImpact(idx, "", "nope.go", "forward", 0))

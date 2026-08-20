@@ -18,11 +18,19 @@ const [ids, setIds] = createSignal<ReadonlySet<string>>(new Set());
 // for its members before the UB.6 request is built.
 const [clusters, setClusters] = createSignal<ReadonlyMap<string, string[]>>(new Map());
 
+// Tier NV.7: count of noise-classified edges in the active scope currently
+// hidden by FilterBar's Noise chip row (lib/filters.ts's
+// countHiddenByNoise), published here so FilterBar can render the "Noise
+// (N hidden)" badge without CanvasHost's raw pre-filter edge set.
+const [noiseHidden, setNoiseHidden] = createSignal(0);
+
 export const canvasElementsStore = {
   ids,
   setIds: (next: ReadonlySet<string>) => setIds(next),
   has: (id: string) => ids().has(id),
   setClusters: (next: ReadonlyMap<string, string[]>) => setClusters(next),
+  noiseHidden,
+  setNoiseHidden: (n: number) => setNoiseHidden(n),
   expand: (idList: readonly string[]): { ids: string[]; clusterCount: number } => {
     const clusterMap = clusters();
     const out = new Set<string>();

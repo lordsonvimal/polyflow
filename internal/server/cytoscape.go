@@ -52,13 +52,21 @@ type CytoscapeGraph struct {
 }
 
 // ToCytoscapeJSON converts polyflow nodes and edges to Cytoscape.js format.
+// Every edge is labeled with Tier NV's noise classification (Meta
+// ["noise_class"]) when applicable — a pure labeling pass over data the
+// caller's traversal already produced raw/unfiltered; see
+// graph.ClassifyEdgeNoise. This is label-don't-filter: FilterBar decides
+// client-side what to hide, mirroring trace/context/impact's
+// classify-then-partition but without dropping anything server-side.
 func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 	result := CytoscapeGraph{
 		Nodes: make([]CytoscapeNode, 0, len(nodes)),
 		Edges: make([]CytoscapeEdge, 0, len(edges)),
 	}
 
+	byID := make(map[string]*graph.Node, len(nodes))
 	for _, n := range nodes {
+		byID[n.ID] = n
 		result.Nodes = append(result.Nodes, CytoscapeNode{
 			Data: CytoscapeNodeData{
 				ID:       n.ID,
@@ -75,6 +83,14 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 	}
 
 	for _, e := range edges {
+		meta := e.Meta
+		if class := graph.ClassifyEdgeNoise(e, byID[e.To]); class != graph.NoiseNone {
+			meta = make(map[string]string, len(e.Meta)+1)
+			for k, v := range e.Meta {
+				meta[k] = v
+			}
+			meta["noise_class"] = string(class)
+		}
 		result.Edges = append(result.Edges, CytoscapeEdge{
 			Data: CytoscapeEdgeData{
 				ID:                e.ID,
@@ -86,7 +102,7 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 				Method:            e.Method,
 				Path:              e.Path,
 				VerificationState: e.VerificationState,
-				Meta:              e.Meta,
+				Meta:              meta,
 			},
 		})
 	}
