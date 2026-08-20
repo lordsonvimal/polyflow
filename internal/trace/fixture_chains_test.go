@@ -101,7 +101,7 @@ func TestChains_RabbitMQCrossRepo(t *testing.T) {
 	})
 	require.NotNil(t, root, "bunny exchange.publish call site must be matched")
 
-	r := Run(idx, root.ID, "forward", 0, false, 0)
+	r := Run(idx, root.ID, "forward", 0, false, 0, nil, 0)
 	require.NotNil(t, r)
 	require.NotEmpty(t, r.Chains)
 
@@ -145,7 +145,7 @@ func TestChains_SSEHubFanout(t *testing.T) {
 	})
 	require.NotNil(t, root)
 
-	r := Run(idx, root.ID, "forward", 0, false, 0)
+	r := Run(idx, root.ID, "forward", 0, false, 0, nil, 0)
 	require.NotNil(t, r)
 
 	var hit string
@@ -182,7 +182,7 @@ func TestChains_WebSocketTypedDispatch(t *testing.T) {
 	})
 	require.NotNil(t, root)
 
-	r := Run(idx, root.ID, "forward", 0, false, 0)
+	r := Run(idx, root.ID, "forward", 0, false, 0, nil, 0)
 	require.NotNil(t, r)
 
 	var hitChain *Chain

@@ -2,6 +2,7 @@ package trace
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,11 +41,11 @@ func linearGraph() *graph.AdjacencyIndex {
 }
 
 func TestRun_UnknownRoot(t *testing.T) {
-	assert.Nil(t, Run(linearGraph(), "nope", "forward", 5, false, 0))
+	assert.Nil(t, Run(linearGraph(), "nope", "forward", 5, false, 0, nil, 0))
 }
 
 func TestRun_ForwardChain(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 0, false, 0)
+	r := Run(linearGraph(), "a", "forward", 0, false, 0, nil, 0)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 	assert.Equal(t,
@@ -63,7 +64,7 @@ func TestRun_ForwardChain(t *testing.T) {
 }
 
 func TestRun_BackwardChainReadsInFlowOrder(t *testing.T) {
-	r := Run(linearGraph(), "d", "backward", 0, false, 0)
+	r := Run(linearGraph(), "d", "backward", 0, false, 0, nil, 0)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 1)
 	// Backward chains are reversed: they still read source → root.
@@ -73,7 +74,7 @@ func TestRun_BackwardChainReadsInFlowOrder(t *testing.T) {
 }
 
 func TestRun_BothDirections(t *testing.T) {
-	r := Run(linearGraph(), "b", "both", 0, false, 0)
+	r := Run(linearGraph(), "b", "both", 0, false, 0, nil, 0)
 	require.NotNil(t, r)
 	require.Len(t, r.Chains, 2)
 	assert.Equal(t, "(svc-1) A -[calls]-> B", r.Chains[0].Text)
@@ -81,7 +82,7 @@ func TestRun_BothDirections(t *testing.T) {
 }
 
 func TestRun_DepthLimitCutsChain(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 2, false, 0)
+	r := Run(linearGraph(), "a", "forward", 2, false, 0, nil, 0)
 	require.Len(t, r.Chains, 1)
 	assert.Equal(t, "(svc-1) A -[calls]-> B -[publishes]-> ‖svc-2‖ C", r.Chains[0].Text)
 }
@@ -97,7 +98,7 @@ func TestRun_CycleTerminates(t *testing.T) {
 			{ID: "e2", From: "b", To: "a", Type: graph.EdgeTypeCalls},
 		},
 	)
-	r := Run(idx, "a", "forward", 0, false, 0)
+	r := Run(idx, "a", "forward", 0, false, 0, nil, 0)
 	require.Len(t, r.Chains, 1, "cycle must not loop forever")
 	assert.Equal(t, "(s) A -[calls]-> B", r.Chains[0].Text)
 }
@@ -114,7 +115,7 @@ func TestRun_BranchingProducesOneChainPerLeaf(t *testing.T) {
 			{ID: "e2", From: "a", To: "c", Type: graph.EdgeTypeSpawns},
 		},
 	)
-	r := Run(idx, "a", "forward", 0, false, 0)
+	r := Run(idx, "a", "forward", 0, false, 0, nil, 0)
 	require.Len(t, r.Chains, 2)
 	// Deterministic order: edges sorted by (type, neighbor).
 	assert.Equal(t, "(s) A -[calls]-> B", r.Chains[0].Text)
@@ -130,7 +131,7 @@ func TestRun_TruncationCap(t *testing.T) {
 		nodes = append(nodes, graph.Node{ID: id, Label: id, Service: "s"})
 		edges = append(edges, graph.Edge{ID: "e" + id, From: "root", To: id, Type: graph.EdgeTypeCalls})
 	}
-	r := Run(buildIdx(nodes, edges), "root", "forward", 0, false, 0)
+	r := Run(buildIdx(nodes, edges), "root", "forward", 0, false, 0, nil, 0)
 	assert.Len(t, r.Chains, MaxChains)
 	assert.True(t, r.Truncated)
 }
@@ -145,7 +146,7 @@ func TestRun_PartialConfidenceMarked(t *testing.T) {
 			{ID: "e", From: "q", To: "store", Type: graph.EdgeTypeQueries, Confidence: graph.ConfidencePartial},
 		},
 	)
-	r := Run(idx, "q", "forward", 0, false, 0)
+	r := Run(idx, "q", "forward", 0, false, 0, nil, 0)
 	require.Len(t, r.Chains, 1)
 	assert.Equal(t, "(s) db.Find -[queries?]-> sqlite", r.Chains[0].Text,
 		"partial/unknown confidence edges carry a trailing ?")
@@ -167,7 +168,7 @@ func TestRun_JSONCarriesVersionAndEdgeMeta(t *testing.T) {
 				Meta: map[string]string{"via": "sdk"}},
 		},
 	)
-	r := Run(idx, "up", "forward", 0, false, 0)
+	r := Run(idx, "up", "forward", 0, false, 0, nil, 0)
 	data, err := json.Marshal(r)
 	require.NoError(t, err)
 	js := string(data)
@@ -190,7 +191,7 @@ func TestAttachUnresolved_ScopedToTracedFiles(t *testing.T) {
 		},
 		[]graph.Edge{{ID: "e1", From: "a", To: "b", Type: graph.EdgeTypeCalls}},
 	)
-	r := Run(idx, "a", "forward", 5, false, 0)
+	r := Run(idx, "a", "forward", 5, false, 0, nil, 0)
 	require.NotNil(t, r)
 
 	r.AttachUnresolved([]graph.UnresolvedRef{
@@ -203,8 +204,93 @@ func TestAttachUnresolved_ScopedToTracedFiles(t *testing.T) {
 	assert.Contains(t, r.UnresolvedNote, "verify this 1 unresolved reference manually")
 }
 
+// noiseFixture builds a root with 5 outgoing chains, one per Tier NV noise
+// class plus one plain behavioral edge: a -calls-> behavioral (NoiseNone),
+// a -calls(via=rails_filter)-> filterChain, a -inherits-> mixin,
+// a -contains-> containment, a -calls-> renderTree (an element node).
+func noiseFixture() *graph.AdjacencyIndex {
+	return buildIdx(
+		[]graph.Node{
+			{ID: "a", Label: "A", Service: "s", Type: graph.NodeTypeFunction},
+			{ID: "behavioral", Label: "Behavioral", Service: "s", Type: graph.NodeTypeFunction},
+			{ID: "filtered", Label: "Filtered", Service: "s", Type: graph.NodeTypeFunction},
+			{ID: "mixin", Label: "Mixin", Service: "s", Type: graph.NodeTypeFunction},
+			{ID: "contained", Label: "Contained", Service: "s", Type: graph.NodeTypeFunction},
+			{ID: "rendered", Label: "Rendered", Service: "s", Type: graph.NodeTypeElement},
+		},
+		[]graph.Edge{
+			{ID: "e1", From: "a", To: "behavioral", Type: graph.EdgeTypeCalls},
+			{ID: "e2", From: "a", To: "filtered", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}},
+			{ID: "e3", From: "a", To: "mixin", Type: graph.EdgeTypeInherits},
+			{ID: "e4", From: "a", To: "contained", Type: graph.EdgeTypeContains},
+			{ID: "e5", From: "a", To: "rendered", Type: graph.EdgeTypeCalls},
+		},
+	)
+}
+
+func TestRun_NoiseFiltering_DefaultHidesAllFourClasses(t *testing.T) {
+	r := Run(noiseFixture(), "a", "forward", 0, false, 0, nil, 0)
+	require.NotNil(t, r)
+	require.Len(t, r.Chains, 1)
+	assert.Contains(t, r.Chains[0].Text, "Behavioral")
+
+	assert.Equal(t, map[graph.NoiseClass]int{
+		graph.NoiseFilterChain: 1,
+		graph.NoiseMixin:       1,
+		graph.NoiseContainment: 1,
+		graph.NoiseRenderTree:  1,
+	}, r.HiddenByClass)
+}
+
+func TestRun_NoiseFiltering_ExplicitIncludeShowsRenderTree(t *testing.T) {
+	include := graph.NoiseInclude{graph.NoiseRenderTree: true}
+	r := Run(noiseFixture(), "a", "forward", 0, false, 0, include, 0)
+	require.NotNil(t, r)
+	require.Len(t, r.Chains, 2)
+
+	var texts []string
+	for _, c := range r.Chains {
+		texts = append(texts, c.Text)
+	}
+	assert.Contains(t, strings.Join(texts, "\n"), "Behavioral")
+	assert.Contains(t, strings.Join(texts, "\n"), "Rendered")
+
+	assert.Equal(t, map[graph.NoiseClass]int{
+		graph.NoiseFilterChain: 1,
+		graph.NoiseMixin:       1,
+		graph.NoiseContainment: 1,
+	}, r.HiddenByClass)
+}
+
+func TestRun_NoiseFiltering_HiddenTallyAccountsForAllExploredEvenPastDisplayCap(t *testing.T) {
+	nodes := []graph.Node{{ID: "root", Label: "R", Service: "s", Type: graph.NodeTypeFunction}}
+	var edges []graph.Edge
+	leafID := func(prefix string, i int) string {
+		return fmt.Sprintf("%s%d", prefix, i)
+	}
+	for i := 0; i < 150; i++ {
+		id := leafID("behavioral", i)
+		nodes = append(nodes, graph.Node{ID: id, Label: id, Service: "s", Type: graph.NodeTypeFunction})
+		edges = append(edges, graph.Edge{ID: "e-" + id, From: "root", To: id, Type: graph.EdgeTypeCalls})
+	}
+	for i := 0; i < 200; i++ {
+		id := leafID("noisy", i)
+		nodes = append(nodes, graph.Node{ID: id, Label: id, Service: "s", Type: graph.NodeTypeFunction})
+		edges = append(edges, graph.Edge{ID: "e-" + id, From: "root", To: id, Type: graph.EdgeTypeInherits})
+	}
+
+	r := Run(buildIdx(nodes, edges), "root", "forward", 0, false, 0, nil, 0)
+	require.NotNil(t, r)
+	assert.Len(t, r.Chains, MaxChains, "visible truncates to MaxChains behavioral chains, not a mix")
+	for _, c := range r.Chains {
+		assert.Contains(t, c.Text, "behavioral")
+	}
+	assert.Equal(t, 200, r.HiddenByClass[graph.NoiseMixin],
+		"hidden tally accounts for every noisy chain even though none were ever candidates for a display slot")
+}
+
 func TestAttachUnresolved_CleanTraceHasEmptySectionAndNoNote(t *testing.T) {
-	r := Run(linearGraph(), "a", "forward", 5, false, 0)
+	r := Run(linearGraph(), "a", "forward", 5, false, 0, nil, 0)
 	require.NotNil(t, r)
 
 	r.AttachUnresolved([]graph.UnresolvedRef{

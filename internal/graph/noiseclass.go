@@ -51,6 +51,18 @@ func (n NoiseInclude) Allows(c NoiseClass) bool {
 
 var allNoiseClasses = []NoiseClass{NoiseFilterChain, NoiseMixin, NoiseContainment, NoiseRenderTree}
 
+// AllNoiseInclude returns an include-set containing every noise class —
+// today's unfiltered behavior ("all"), for callers that predate Tier NV
+// (search-corpus generation, the web flows API) and still want every chain,
+// not just the agent-facing default view.
+func AllNoiseInclude() NoiseInclude {
+	out := NoiseInclude{}
+	for _, c := range allNoiseClasses {
+		out[c] = true
+	}
+	return out
+}
+
 // ParseNoiseInclude turns CLI/MCP keys into an include-set. "all" includes
 // every class (today's unfiltered behavior — the escape hatch). "none"
 // (or omitted with no intent) is the empty set. Unknown keys are a hard
@@ -75,6 +87,17 @@ func ParseNoiseInclude(keys []string) (NoiseInclude, error) {
 		out[c] = true
 	}
 	return out, nil
+}
+
+// ResolveNoiseInclude computes an include-set from an explicit CLI/MCP
+// --include value (rawInclude, possibly empty) and a task/intent string, per
+// the explicit-override model: a non-empty rawInclude always replaces the
+// intent-based default entirely rather than merging with it.
+func ResolveNoiseInclude(rawInclude []string, task string) (NoiseInclude, error) {
+	if len(rawInclude) > 0 {
+		return ParseNoiseInclude(rawInclude)
+	}
+	return DefaultNoiseInclude(task), nil
 }
 
 // DefaultNoiseInclude is where "everything depends on intent" is decided.

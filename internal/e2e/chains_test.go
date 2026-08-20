@@ -112,7 +112,7 @@ func TestChain_TemplDatastarGinHubSSE(t *testing.T) {
 	})
 	require.NotNil(t, root, "templ component node must exist in ui service")
 
-	r := trace.Run(idx, root.ID, "forward", 0, false, 0)
+	r := trace.Run(idx, root.ID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 	require.NotNil(t, r)
 
 	text, ok := chainWith(r,
@@ -148,7 +148,7 @@ func TestChain_RailsBunnyRabbitGoConsumer(t *testing.T) {
 	})
 	require.NotNil(t, root, "rails controller action node must exist")
 
-	r := trace.Run(idx, root.ID, "forward", 0, false, 0)
+	r := trace.Run(idx, root.ID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 	require.NotNil(t, r)
 
 	text, ok := chainWith(r,
@@ -175,7 +175,7 @@ func TestChain_WebSocketTypedRoundTrip(t *testing.T) {
 	})
 	require.NotNil(t, root, "reportBattery function node must exist")
 
-	r := trace.Run(idx, root.ID, "forward", 0, false, 0)
+	r := trace.Run(idx, root.ID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 	require.NotNil(t, r)
 	text, ok := chainWith(r, "-[ws_send]-> ‖tether-server‖")
 	require.True(t, ok, "expected client→server typed ws chain, got:\n%s", text)
@@ -188,7 +188,7 @@ func TestChain_WebSocketTypedRoundTrip(t *testing.T) {
 	})
 	require.NotNil(t, root, "readPump function node must exist")
 
-	r = trace.Run(idx, root.ID, "forward", 0, false, 0)
+	r = trace.Run(idx, root.ID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 	require.NotNil(t, r)
 	text, ok = chainWith(r, "-[ws_send]-> ‖tether-client‖")
 	require.True(t, ok, "expected server→client typed ack chain, got:\n%s", text)
