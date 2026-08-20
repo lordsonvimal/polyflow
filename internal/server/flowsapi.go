@@ -58,7 +58,7 @@ func (s *Server) handleFlowsThrough(w http.ResponseWriter, r *http.Request) {
 // reimplementing traversal.
 func flowsThrough(idx *graph.AdjacencyIndex, target *graph.Node, limit int) *graph.FlowsThroughResult {
 	rootIDs := map[string]bool{}
-	if back := trace.Run(idx, target.ID, "backward", 0, false, 0); back != nil {
+	if back := trace.Run(idx, target.ID, "backward", 0, false, 0, graph.AllNoiseInclude(), 0); back != nil {
 		for _, c := range back.Chains {
 			if len(c.Hops) > 0 {
 				rootIDs[c.Hops[0].ID] = true
@@ -83,7 +83,7 @@ func flowsThrough(idx *graph.AdjacencyIndex, target *graph.Node, limit int) *gra
 		if !ok {
 			continue
 		}
-		fwd := trace.Run(idx, rid, "forward", 0, false, 0)
+		fwd := trace.Run(idx, rid, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 		if fwd == nil {
 			continue
 		}

@@ -702,6 +702,10 @@ type traceInput struct {
 	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that trims chains then nodes to fit. direction=both with a deep depth on a busy hub node (e.g. a shared queue/exchange) can otherwise produce a result too large for your own tool-output limit to even return. Pass a negative value for unlimited detail"`
 	Detail          bool   `json:"detail,omitempty" jsonschema:"return full per-hop metadata (types, node_meta, sources) instead of the default compact arrow-chain text (file:line label -[edge_type]-> file:line label -> ...); costs substantially more tokens, use only when you need struct shapes, provenance, or exact line-level edge metadata"`
+
+	IncludeNoise  []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. Overrides the task-based default entirely (never merges with it). Default hides all four classes except when task=generate, which shows render_tree"`
+	Task          string   `json:"task,omitempty" jsonschema:"task type used ONLY to pick a noise-visibility default when include_noise is unset: impact, generate, debug, refactor (default debug)"`
+	ExploreChains int      `json:"explore_chains,omitempty" jsonschema:"how many candidate chains to enumerate before giving up (default 500 = 5x the 100-chain display cap). Raise this if a root gated by heavy filter_chain/mixin fan-out returns few or no visible chains even though a real behavioral chain exists further down the same subtree"`
 }
 
 func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceInput) (*mcp.CallToolResult, any, error) {
@@ -714,6 +718,18 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 	}
 	depth := effectiveDepth(in.Depth, 10)
 
+	task := in.Task
+	if task == "" {
+		task = "debug"
+	}
+	if task != "impact" && task != "generate" && task != "debug" && task != "refactor" {
+		return nil, nil, fmt.Errorf("unknown task type: %s (use: impact, generate, debug, refactor)", task)
+	}
+	include, err := graph.ResolveNoiseInclude(in.IncludeNoise, task)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	store, idx, searcher := s.snapshot()
 	_ = searcher
 	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Root, in.TargetService, in.TargetType)
@@ -721,7 +737,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, err
 	}
 
-	result := trace.Run(idx, root.ID, direction, depth, in.VerboseSources, s.staleAfter)
+	result := trace.Run(idx, root.ID, direction, depth, in.VerboseSources, s.staleAfter, include, in.ExploreChains)
 	if result == nil {
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}

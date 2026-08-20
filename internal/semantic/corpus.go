@@ -209,7 +209,7 @@ func BuildFlowChains(idx *graph.AdjacencyIndex) []Entity {
 	var out []Entity
 
 	for _, rootID := range entryIDs {
-		result := trace.Run(idx, rootID, "forward", 0, false, 0)
+		result := trace.Run(idx, rootID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 		if result == nil {
 			continue
 		}
