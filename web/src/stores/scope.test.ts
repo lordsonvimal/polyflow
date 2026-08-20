@@ -25,7 +25,7 @@ const SCOPES: Scope[] = [
 function makeState(scope: Scope): ViewState {
   return {
     stack: [{ kind: "search" }, scope],
-    filters: { confidence: ["static"], edgeTypes: ["calls"], services: ["rails-svc"] },
+    filters: { confidence: ["static"], edgeTypes: ["calls"], services: ["rails-svc"], noiseClasses: [] },
     selection: { kind: "node", id: "node-1" },
     layout: "dagre",
     lens: "Calls",
@@ -64,7 +64,7 @@ describe("URL codec", () => {
     const state: ViewState = {
       stack: [{ kind: "search" }],
       isolation: { kind: "seam", edgeId: "edge-42" },
-      filters: { confidence: [], edgeTypes: [], services: [] },
+      filters: { confidence: [], edgeTypes: [], services: [], noiseClasses: [] },
     };
     const result = decodeViewState(encodeViewState(state));
     expect(result!.state.isolation).toEqual(state.isolation);
@@ -76,7 +76,7 @@ describe("URL codec", () => {
   it("round-trips pinboard chips", () => {
     const state: ViewState = {
       stack: [{ kind: "search" }],
-      filters: { confidence: [], edgeTypes: [], services: [] },
+      filters: { confidence: [], edgeTypes: [], services: [], noiseClasses: [] },
       pins: [{ id: "node-1", label: "Publisher" }, { id: "node-2", label: "Consumer" }],
     };
     const result = decodeViewState(encodeViewState(state));
@@ -92,7 +92,7 @@ describe("Esc ordering", () => {
     const state0: ViewState = {
       stack: [{ kind: "search" }, { kind: "service", service: "rails-svc" }],
       isolation: { kind: "varflow", nodeId: "n1" },
-      filters: { confidence: [], edgeTypes: [], services: [] },
+      filters: { confidence: [], edgeTypes: [], services: [], noiseClasses: [] },
       selection: { kind: "node", id: "n1" },
     };
 

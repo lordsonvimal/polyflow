@@ -85,7 +85,54 @@ describe("FilterBar", () => {
     chip("svc1").click();
     const resetBtn = [...container.querySelectorAll("button")].find((b) => b.textContent === "reset")!;
     resetBtn.click();
-    expect(scopeStore.viewState().filters).toEqual({ confidence: [], edgeTypes: [], services: [] });
+    expect(scopeStore.viewState().filters).toEqual({ confidence: [], edgeTypes: [], services: [], noiseClasses: [] });
+  });
+});
+
+// Tier NV.7: the Noise row defaults every class off (opposite polarity from
+// confidence/edgeTypes/services), matching the agent-side hide-by-default.
+describe("FilterBar - Noise chip row", () => {
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    treeStore.reset();
+    scopeStore.reset();
+    scopeStore.setFilters({ confidence: [], edgeTypes: [], services: [] });
+    (globalThis as any).fetch = fakeFetch();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(() => <FilterBar />, container);
+    await vi.waitFor(() => expect(treeStore.services().length).toBe(2));
+  });
+
+  afterEach(() => container.remove());
+
+  function chip(label: string): HTMLElement {
+    return [...container.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement;
+  }
+
+  it("renders every noise-class chip inactive by default", () => {
+    for (const label of ["Filter chains", "Mixins", "Containment", "Render tree"]) {
+      const el = chip(label);
+      expect(el).toBeTruthy();
+      expect(el.className).not.toContain("bg-neutral-700");
+    }
+    expect(scopeStore.viewState().filters.noiseClasses ?? []).toEqual([]);
+  });
+
+  it("toggling a noise-class chip on adds just that class", () => {
+    chip("Containment").click();
+    expect(scopeStore.viewState().filters.noiseClasses).toEqual(["containment"]);
+    chip("Mixins").click();
+    expect(scopeStore.viewState().filters.noiseClasses).toEqual(["containment", "mixin"]);
+    chip("Containment").click();
+    expect(scopeStore.viewState().filters.noiseClasses).toEqual(["mixin"]);
+  });
+
+  it("shows a hidden-count badge sourced from canvasElementsStore.noiseHidden", () => {
+    canvasElementsStore.setNoiseHidden(42);
+    expect(container.textContent).toContain("Noise");
+    expect(container.textContent).toContain("42 hidden");
   });
 });
 
