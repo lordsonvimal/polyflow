@@ -154,12 +154,15 @@ func emitClassMethodCall(
 	}
 
 	// Same-file relations are extractRubyVariables' job (Tier: the same-file
-	// class-method-call fix). Filtering by the resolved target's file rather
-	// than by name keeps a reference that resolves out of the file even when
-	// a same-named class happens to sit in it.
+	// class-method-call fix) for a literal-constant receiver, so a literal
+	// ref resolving into its own file would just duplicate what the parser
+	// already emitted (or deliberately left unresolved). An inferred
+	// receiver (local var / memoized ivar / memo-reader method) is never
+	// handled by the parser regardless of file — same-file inferred refs are
+	// this pass's job too, so they skip the exclusion.
 	kept := targets[:0:0]
 	for _, id := range targets {
-		if ix.fileByID[id] != ref.file {
+		if ref.inferred || ix.fileByID[id] != ref.file {
 			kept = append(kept, id)
 		}
 	}
@@ -222,6 +225,11 @@ func emitClassMethodCall(
 // ---------------------------------------------------------------------------
 
 // classMethodCallRef is one `Constant.method_name(...)` call site to resolve.
+// receiver is always a constant NAME by the time it reaches emitClassMethodCall
+// — either written literally (`Product.find`) or, when inferred is true,
+// syntactically traced back from a local var / memoized ivar / memo-reader
+// method to the `Const.new(...)` it ultimately came from (see
+// ruby_receiver_types.go).
 type classMethodCallRef struct {
 	receiver string // constant as written: `Product`, `ClientApi::V1::Product`
 	ns       []string
@@ -229,6 +237,7 @@ type classMethodCallRef struct {
 	line     int
 	fromID   string // enclosing method node ID (the caller)
 	mname    string
+	inferred bool
 }
 
 // scanRubyClassMethodCalls walks file once for both class declarations (with
