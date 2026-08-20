@@ -765,6 +765,22 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, classCallUnresolved...)
 	}
+	// Receiver-typed calls (`x = Product.new; x.save`, a memoized ivar, or a
+	// memo-reader method like `def aws; @aws ||= AwsFacade.new_instance; end`
+	// then `aws.complete_multipart_upload`) — the syntactically recoverable
+	// slice of the "any other receiver needs static type inference" gap the
+	// two passes above explicitly leave alone.
+	{
+		svcFiles := make(map[string][]string, len(allSvcFiles))
+		for _, sf := range allSvcFiles {
+			svcFiles[sf.svc.Name] = sf.files
+		}
+		receiverTypeEdges, receiverTypeUnresolved := linker.LinkRubyReceiverTypeCalls(allNodes, svcFiles)
+		if err := writeEdges(receiverTypeEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, receiverTypeUnresolved...)
+	}
 	// ActiveRecord has_many/belongs_to/has_one associations — a
 	// class-granularity `calls` edge to the associated model, the same
 	// shape emitClassMethodCall uses for a call that lands on no method
