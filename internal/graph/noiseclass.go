@@ -12,7 +12,7 @@ type NoiseClass string
 
 const (
 	NoiseNone        NoiseClass = ""             // default-visible: calls, reads, writes, http_call, publishes, navigates_to, flows_to, ...
-	NoiseFilterChain NoiseClass = "filter_chain" // Rails before_action/after_action wiring
+	NoiseFilterChain NoiseClass = "filter_chain" // Rails before_action/after_action, Gin/Express middleware wiring
 	NoiseMixin       NoiseClass = "mixin"        // include/extend/prepend — class-wide, not call-site-specific
 	NoiseContainment NoiseClass = "containment"  // "this file/class also declares..." — not a call at all
 	NoiseRenderTree  NoiseClass = "render_tree"  // JSX/DOM render target (CSS-selector `element` nodes)
@@ -22,8 +22,15 @@ const (
 // destination node. Every signal below is already present in the graph —
 // no parser or linker change is required for classification itself.
 func ClassifyEdgeNoise(e *Edge, dst *Node) NoiseClass {
-	if e.Meta != nil && e.Meta["via"] == "rails_filter" {
-		return NoiseFilterChain // internal/linker/rails_filters.go:818, reused verbatim from Tier IR
+	if e.Meta != nil {
+		switch e.Meta["via"] {
+		case "rails_filter":
+			return NoiseFilterChain // internal/linker/rails_filters.go:818, reused verbatim from Tier IR
+		case "gin_middleware_use":
+			return NoiseFilterChain // internal/linker/gin_middleware.go:210 — Gin's own before_action equivalent
+		case "express_middleware_use":
+			return NoiseFilterChain // internal/linker/express_middleware.go — Express's own before_action equivalent
+		}
 	}
 	if e.Type == EdgeTypeInherits {
 		return NoiseMixin // internal/linker/ruby_type_relations.go:233,266, reused verbatim from Tier IR
