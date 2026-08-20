@@ -19,6 +19,18 @@ func TestClassifyEdgeNoise(t *testing.T) {
 			want: NoiseFilterChain,
 		},
 		{
+			name: "gin_middleware_use tagged calls edge",
+			e:    &Edge{Type: EdgeTypeCalls, Meta: map[string]string{"via": "gin_middleware_use"}},
+			dst:  plainDst,
+			want: NoiseFilterChain,
+		},
+		{
+			name: "express_middleware_use tagged calls edge",
+			e:    &Edge{Type: EdgeTypeCalls, Meta: map[string]string{"via": "express_middleware_use"}},
+			dst:  plainDst,
+			want: NoiseFilterChain,
+		},
+		{
 			name: "inherits edge",
 			e:    &Edge{Type: EdgeTypeInherits},
 			dst:  plainDst,

@@ -1323,6 +1323,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		allUnresolved = append(allUnresolved, mwUnresolved...)
 	}
+	// Express middleware chain: same handler-calls-guard modeling as Gin's,
+	// for `app.use(mw)`/`router.use(mw)` registrations (see
+	// internal/linker/express_middleware.go for the v1 same-file/
+	// same-receiver scope this covers).
+	{
+		mwEdges, mwUnresolved := linker.LinkExpressMiddleware(enrichedNodes, allEdges)
+		if err := writeEdges(mwEdges); err != nil {
+			return nil, err
+		}
+		allUnresolved = append(allUnresolved, mwUnresolved...)
+	}
 	// G.7 pre-engine enrichment: resolve alias/instance bindings and one-hop
 	// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name
 	// or instance_name meta) are removed from the working copy; their info feeds

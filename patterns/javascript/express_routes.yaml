@@ -80,3 +80,27 @@ patterns:
         role: http_path
       - name: handler
         role: handler_ref
+
+  # `app.use(authMiddleware)` / `router.use(cors())`: a BARE middleware
+  # registration, distinct from express_mount's `.use("/prefix", router)`
+  # two-arg mount above — anchored (`.` on both sides of the single
+  # argument) so a two-arg mount can never also match this pattern. Mirrors
+  # Gin's `r.Use(mw)` (gin_routes.yaml's gin_middleware_use): consumed by
+  # LinkExpressMiddleware (internal/linker/express_middleware.go) to turn
+  # this into handler --calls--> middleware edges, the same "guard modeled
+  # as a call, not a filter" shape rails_filter/gin_middleware_use already
+  # get Tier NV's noise classification for.
+  - name: express_middleware_use
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @recv
+          property: (property_identifier) @method
+          (#eq? @method "use"))
+        arguments: (arguments
+          .
+          (_) @middleware
+          .))
+    captures:
+      - name: middleware
+        role: middleware_ref
