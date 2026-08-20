@@ -1395,6 +1395,9 @@ var (
 	traceDepth          int
 	traceFormat         string
 	traceVerboseSources bool
+	traceInclude        string
+	traceTask           string
+	traceExploreChains  int
 )
 
 func initTraceFlags() {
@@ -1405,6 +1408,9 @@ func initTraceFlags() {
 	traceCmd.Flags().IntVar(&traceDepth, "depth", 10, "max traversal depth (0 = unlimited)")
 	traceCmd.Flags().StringVar(&traceFormat, "format", "text", "output format: json, text, or chain")
 	traceCmd.Flags().BoolVar(&traceVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
+	traceCmd.Flags().StringVar(&traceInclude, "include", "", "noise classes to show, comma-separated (filter_chain, mixin, containment, render_tree, all, none); overrides --task default")
+	traceCmd.Flags().StringVar(&traceTask, "task", "debug", "task type used for the noise-visibility default when --include is unset: impact, generate, debug, refactor")
+	traceCmd.Flags().IntVar(&traceExploreChains, "explore-chains", trace.ExploreChains, "how many candidate chains to enumerate before giving up; raise this if a root gated by heavy filter/mixin fan-out returns few or no visible chains")
 	_ = traceCmd.MarkFlagRequired("root")
 }
 
@@ -1439,7 +1445,16 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result := trace.Run(idx, root.ID, traceDirection, traceDepth, traceVerboseSources, loadStaleAfter(meta.ConfigFile))
+	var includeKeys []string
+	if traceInclude != "" {
+		includeKeys = strings.Split(traceInclude, ",")
+	}
+	include, err := graph.ResolveNoiseInclude(includeKeys, traceTask)
+	if err != nil {
+		return err
+	}
+
+	result := trace.Run(idx, root.ID, traceDirection, traceDepth, traceVerboseSources, loadStaleAfter(meta.ConfigFile), include, traceExploreChains)
 	if result == nil {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
@@ -1458,6 +1473,11 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
 	}
 	printAmbiguousCandidates(os.Stderr, traceRoot, root.ID, candidates)
+	if traceFormat != "json" {
+		if line := hiddenByClassLine(result.HiddenByClass); line != "" {
+			fmt.Fprintln(os.Stderr, line)
+		}
+	}
 	switch traceFormat {
 	case "json":
 		return json.NewEncoder(os.Stdout).Encode(result)
@@ -1477,6 +1497,25 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return printTraceText(result)
+}
+
+// hiddenByClassLine renders the noise-visibility tally (Tier NV) as a single
+// stderr line, sorted by class name for determinism. Returns "" when
+// nothing was hidden.
+func hiddenByClassLine(hidden map[graph.NoiseClass]int) string {
+	if len(hidden) == 0 {
+		return ""
+	}
+	classes := make([]string, 0, len(hidden))
+	for c := range hidden {
+		classes = append(classes, string(c))
+	}
+	sort.Strings(classes)
+	parts := make([]string, len(classes))
+	for i, c := range classes {
+		parts[i] = fmt.Sprintf("%s=%d", c, hidden[graph.NoiseClass(c)])
+	}
+	return fmt.Sprintf("hidden by class: %s (pass --include <class> to see)", strings.Join(parts, " "))
 }
 
 func printTraceText(r *trace.Result) error {

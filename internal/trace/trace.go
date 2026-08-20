@@ -19,6 +19,14 @@ import (
 // graphs, and past this point more chains stop being informative.
 const MaxChains = 100
 
+// ExploreChains caps how many leaf chains enumerateChains walks before
+// giving up, independent of MaxChains (the *display* cap). Noise-class
+// filtering means a chain can be explored and classified without ever
+// occupying a display slot, so the explore budget must exceed the display
+// cap or a root buried in noisy fan-out would show 0 chains instead of the
+// real signal a few hops further in.
+const ExploreChains = MaxChains * 5
+
 // Hop is one node in a trace, together with the edge that led to it.
 // The edge fields are empty on a chain's first hop.
 type Hop struct {
@@ -63,6 +71,11 @@ type Result struct {
 	Services  []string    `json:"services"`
 	Truncated bool        `json:"truncated,omitempty"`
 
+	// HiddenByClass tallies chains excluded by noise-class filtering (Tier
+	// NV), keyed by graph.NoiseClass. Empty when no include-set was applied
+	// or nothing was filtered.
+	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
+
 	// Unresolved lists references in the traced files that the indexer could
 	// not resolve — edges that may be missing from this answer. Always
 	// present ([] when clean) so its absence is never mistaken for certainty.
@@ -105,30 +118,41 @@ type Result struct {
 // is not in the index. verboseSources controls whether per-hop Sources
 // contains compact "provider:ref" strings (false, default) or full SourceRef
 // structs (true, --verbose-sources). staleAfter is the workspace-configured
-// freshness threshold (0 = no stale check).
-func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verboseSources bool, staleAfter time.Duration) *Result {
+// freshness threshold (0 = no stale check). include controls which
+// noise-classified chains (Tier NV) are visible; a nil/empty include hides
+// every noise class, matching graph.DefaultNoiseInclude's zero value.
+// exploreChains overrides ExploreChains's explore budget when > 0 (a
+// heavily filter-chain-gated root can exhaust the default 500-chain budget
+// on noise alone before ever reaching a behavioral chain further down the
+// same subtree — this is the caller's escape hatch, not a hidden constant).
+func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verboseSources bool, staleAfter time.Duration, include graph.NoiseInclude, exploreChains int) *Result {
 	root, ok := idx.Nodes[rootID]
 	if !ok {
 		return nil
 	}
+	if exploreChains <= 0 {
+		exploreChains = ExploreChains
+	}
 
-	r := &Result{Root: root, Direction: direction, Depth: depth, Unresolved: []graph.UnresolvedRef{}}
+	r := &Result{Root: root, Direction: direction, Depth: depth, Unresolved: []graph.UnresolvedRef{}, HiddenByClass: map[graph.NoiseClass]int{}}
 
 	var allEdges []graph.Edge
 	if direction == "backward" || direction == "both" {
 		hops, edges := toHops(idx, graph.Ancestors(idx, rootID, depth), verboseSources)
 		r.Nodes = append(r.Nodes, hops...)
 		allEdges = append(allEdges, edges...)
-		chains, truncated := enumerateChains(idx, rootID, "in", depth, MaxChains-len(r.Chains), verboseSources)
+		chains, hidden, truncated := enumerateChains(idx, rootID, "in", depth, MaxChains-len(r.Chains), exploreChains, include, verboseSources)
 		r.Chains = append(r.Chains, chains...)
+		mergeHidden(r.HiddenByClass, hidden)
 		r.Truncated = r.Truncated || truncated
 	}
 	if direction == "forward" || direction == "both" {
 		hops, edges := toHops(idx, graph.Descendants(idx, rootID, depth), verboseSources)
 		r.Nodes = append(r.Nodes, hops...)
 		allEdges = append(allEdges, edges...)
-		chains, truncated := enumerateChains(idx, rootID, "out", depth, MaxChains-len(r.Chains), verboseSources)
+		chains, hidden, truncated := enumerateChains(idx, rootID, "out", depth, MaxChains-len(r.Chains), exploreChains, include, verboseSources)
 		r.Chains = append(r.Chains, chains...)
+		mergeHidden(r.HiddenByClass, hidden)
 		r.Truncated = r.Truncated || truncated
 	}
 
@@ -206,6 +230,8 @@ type CompactResult struct {
 	Services  []string `json:"services"`
 	Truncated bool     `json:"truncated,omitempty"`
 
+	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
+
 	Unresolved     []graph.UnresolvedRef `json:"unresolved"`
 	UnresolvedNote string                `json:"unresolved_note,omitempty"`
 
@@ -243,6 +269,7 @@ func (r *Result) Compact() *CompactResult {
 		EdgeTypes:           r.EdgeTypes,
 		Services:            r.Services,
 		Truncated:           r.Truncated,
+		HiddenByClass:       r.HiddenByClass,
 		Unresolved:          r.Unresolved,
 		UnresolvedNote:      r.UnresolvedNote,
 		VerificationSummary: r.VerificationSummary,
@@ -330,14 +357,29 @@ func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 // has no further edges, all next nodes are already on the path (cycle), or
 // the depth limit is hit. Backward ("in") chains are reversed before
 // rendering so they read source → root. Enumeration is deterministic: edges
-// are visited sorted by (type, neighbor ID). Returns truncated=true when the
-// maxChains cap cut enumeration short.
-func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDepth, maxChains int, verboseSources bool) ([]Chain, bool) {
-	if maxChains <= 0 {
-		return nil, true
+// are visited sorted by (type, neighbor ID).
+//
+// Noise classification is monotonic — once a chain crosses one non-included
+// hop, no amount of further descent can make it visible again — so a noisy
+// edge is pruned the moment it's reached, before spending any explore budget
+// walking its subtree. This keeps a root gated by heavy filter_chain/mixin
+// fan-out (e.g. a Rails before_action chain whose target itself has
+// thousands of descendants) from exhausting maxExplore on one noisy branch
+// before ever reaching a sibling edge that leads to real signal. Each pruned
+// edge counts once against hidden, whatever its subtree's real size — an
+// undercount below the prune point is an acceptable trade for not paying to
+// enumerate a subtree that can never produce a visible chain.
+//
+// Returns truncated=true when maxExplore or maxDisplay cut enumeration
+// short.
+func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDepth, maxDisplay, maxExplore int, include graph.NoiseInclude, verboseSources bool) ([]Chain, map[graph.NoiseClass]int, bool) {
+	hidden := map[graph.NoiseClass]int{}
+	if maxDisplay <= 0 || maxExplore <= 0 {
+		return nil, hidden, true
 	}
 
 	var out []Chain
+	explored := 0
 	truncated := false
 
 	// path holds the node IDs on the current DFS path; vias[i] is the edge
@@ -348,7 +390,7 @@ func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDep
 
 	var walk func(nodeID string, via *graph.Edge, depth int)
 	walk = func(nodeID string, via *graph.Edge, depth int) {
-		if len(out) >= maxChains {
+		if explored >= maxExplore {
 			truncated = true
 			return
 		}
@@ -371,24 +413,46 @@ func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDep
 				if onPath[next] {
 					continue
 				}
-				if _, ok := idx.Nodes[next]; !ok {
+				dst, ok := idx.Nodes[next]
+				if !ok {
+					continue
+				}
+				if class := graph.ClassifyEdgeNoise(e, dst); !include.Allows(class) {
+					explored++
+					hidden[class]++
+					if explored >= maxExplore {
+						truncated = true
+						return
+					}
 					continue
 				}
 				extended = true
 				walk(next, e, depth+1)
-				if len(out) >= maxChains {
+				if explored >= maxExplore {
 					truncated = true
 					return
 				}
 			}
 		}
 		if !extended && len(path) > 1 {
-			out = append(out, buildChain(idx, path, vias, direction, verboseSources))
+			explored++
+			if len(out) < maxDisplay {
+				out = append(out, buildChain(idx, path, vias, direction, verboseSources))
+			} else {
+				truncated = true
+			}
 		}
 	}
 
 	walk(rootID, nil, 0)
-	return out, truncated
+	return out, hidden, truncated
+}
+
+// mergeHidden adds src's counts into dst in place.
+func mergeHidden(dst, src map[graph.NoiseClass]int) {
+	for k, v := range src {
+		dst[k] += v
+	}
 }
 
 // buildChain snapshots the current DFS path into a Chain. For backward
