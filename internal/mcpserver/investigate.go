@@ -95,7 +95,7 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 	}
 	snippet := budget.Snippet(".", root.File, root.Line, lines)
 
-	ctxRes := pfcontext.Build(idx, root.ID, "debug", investigateContextDepth, false, s.staleAfter)
+	ctxRes := pfcontext.Build(idx, root.ID, "debug", investigateContextDepth, false, s.staleAfter, graph.DefaultNoiseInclude("debug"))
 	ctxRes.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolvedAll, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {

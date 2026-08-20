@@ -1133,6 +1133,7 @@ var (
 	contextSummary        bool
 	contextSnippetLines   int
 	contextVerboseSources bool
+	contextInclude        string
 )
 
 func initContextFlags() {
@@ -1149,6 +1150,7 @@ func initContextFlags() {
 	contextCmd.Flags().BoolVar(&contextSummary, "summary", false, "emit the file-grouped rollup instead of per-node detail")
 	contextCmd.Flags().IntVar(&contextSnippetLines, "snippet-lines", 0, "inline N source lines per node in detail output (0 = off)")
 	contextCmd.Flags().BoolVar(&contextVerboseSources, "verbose-sources", false, "emit full SourceRef structs instead of compact provider:ref strings")
+	contextCmd.Flags().StringVar(&contextInclude, "include", "", "noise classes to show, comma-separated (filter_chain, mixin, containment, render_tree, all, none); overrides --task default")
 }
 
 var contextCmd = &cobra.Command{
@@ -1208,7 +1210,16 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile))
+	var includeKeys []string
+	if contextInclude != "" {
+		includeKeys = strings.Split(contextInclude, ",")
+	}
+	include, err := graph.ResolveNoiseInclude(includeKeys, contextTask)
+	if err != nil {
+		return err
+	}
+
+	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile), include)
 	result.TargetCandidates = candidates
 	result.ResolutionNote = graph.ResolutionNote(contextTarget, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
@@ -1227,6 +1238,9 @@ func runContext(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", result.ResolutionNote)
 		}
 		printAmbiguousCandidates(os.Stderr, contextTarget, root.ID, candidates)
+		if line := hiddenByClassLine(result.HiddenByClass); line != "" {
+			fmt.Fprintln(os.Stderr, line)
+		}
 		if s, ok := out.(*pfcontext.Summary); ok {
 			return printContextSummaryText(s)
 		}

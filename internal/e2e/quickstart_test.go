@@ -142,7 +142,7 @@ func TestQuickstart_StepByStep(t *testing.T) {
 	}
 	require.NotNil(t, targetNode, "step 3 (polyflow context listUsers): node must be indexed")
 
-	result := pfcontext.Build(idx, targetNode.ID, "callers", 2, false, 0)
+	result := pfcontext.Build(idx, targetNode.ID, "callers", 2, false, 0, nil)
 	// Even with no callers yet, context returns the target node itself.
 	require.NotNil(t, result.Target, "context query must find the target node")
 	assert.Equal(t, "listUsers", result.Target.Label, "target label must match")

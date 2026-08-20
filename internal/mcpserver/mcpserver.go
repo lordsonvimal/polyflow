@@ -524,6 +524,7 @@ type contextInput struct {
 	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
+	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. Overrides the task-based default entirely (never merges with it). Default hides all four classes except when task=generate, which shows render_tree"`
 }
 
 func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
@@ -563,13 +564,17 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, fmt.Errorf("unknown task type: %s (use: impact, generate, debug, refactor)", task)
 	}
 	depth := effectiveDepth(in.Depth, 5)
+	include, err := graph.ResolveNoiseInclude(in.IncludeNoise, task)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter)
+	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter, include)
 	result.TargetCandidates = candidates
 	result.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
