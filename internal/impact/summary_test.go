@@ -176,7 +176,12 @@ func TestSummarize_StructuralOnlyRanksAfterRealFilesRegardlessOfDepth(t *testing
 	idx.AddEdge(&graph.Edge{ID: "emid", From: "mid", To: "tgt", Type: graph.EdgeTypeCalls})
 	idx.AddEdge(&graph.Edge{ID: "edeep", From: "deep", To: "mid", Type: graph.EdgeTypeCalls})
 
-	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	// This test is about rank order among visible files, not Tier NV's
+	// separate hide-by-default filter (see
+	// TestBuild_DefaultIncludeHidesStructuralOnlyFileEntirely below) —
+	// include everything so the structural-only file still appears, just
+	// ranked last.
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10, Include: graph.AllNoiseInclude()})
 	s := out.Summarize()
 
 	require.Len(t, s.Files, 3)
@@ -217,11 +222,67 @@ func TestSummarize_InheritsEdgeIsStructural(t *testing.T) {
 
 	idx.AddEdge(&graph.Edge{ID: "e1", From: "mixin", To: "tgt", Type: graph.EdgeTypeInherits})
 
-	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	// Ranking test, not a visibility test — include everything.
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10, Include: graph.AllNoiseInclude()})
 	s := out.Summarize()
 
 	require.Len(t, s.Files, 1)
 	assert.True(t, s.Files[0].StructuralOnly)
+}
+
+// TestBuild_DefaultIncludeHidesStructuralOnlyFileEntirely is Tier NV.4: unlike
+// Tier IR's rank-demotion (still shown, just last), the noise-class filter
+// removes a filter_chain-only file from the default view outright, and
+// tallies it in HiddenByClass. Reusing Tier IR's own fixture shape from
+// TestSummarize_StructuralOnlyRanksAfterRealFilesRegardlessOfDepth.
+func TestBuild_DefaultIncludeHidesStructuralOnlyFileEntirely(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "filter", Type: graph.NodeTypeFunction, Label: "beforeAction", Service: "svc", File: "svc/concerns/security_checks.rb", Line: 5})
+	idx.AddNode(&graph.Node{ID: "mixin", Type: graph.NodeTypeClass, Label: "Mixin", Service: "svc", File: "svc/mixin.rb", Line: 1})
+	idx.AddNode(&graph.Node{ID: "mid", Type: graph.NodeTypeFunction, Label: "mid", Service: "svc", File: "svc/mid.go", Line: 5})
+
+	idx.AddEdge(&graph.Edge{ID: "efilter", From: "filter", To: "tgt", Type: graph.EdgeTypeCalls, Meta: map[string]string{"via": "rails_filter"}})
+	idx.AddEdge(&graph.Edge{ID: "emixin", From: "mixin", To: "tgt", Type: graph.EdgeTypeInherits})
+	idx.AddEdge(&graph.Edge{ID: "emid", From: "mid", To: "tgt", Type: graph.EdgeTypeCalls})
+
+	// Default (zero-value Include): both structural files hidden entirely.
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	s := out.Summarize()
+
+	require.Len(t, s.Files, 1, "default view must drop filter_chain/mixin files entirely, not just rank them last")
+	assert.Equal(t, "svc/mid.go", s.Files[0].File)
+	assert.Equal(t, 1, out.HiddenByClass[graph.NoiseFilterChain])
+	assert.Equal(t, 1, out.HiddenByClass[graph.NoiseMixin])
+	assert.Equal(t, 1, s.TotalCallers, "TotalCallers reflects the filtered set")
+
+	// --include filter_chain,mixin restores both.
+	include, err := graph.ParseNoiseInclude([]string{"filter_chain", "mixin"})
+	require.NoError(t, err)
+	out2 := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10, Include: include})
+	s2 := out2.Summarize()
+
+	require.Len(t, s2.Files, 3)
+	assert.Empty(t, out2.HiddenByClass[graph.NoiseFilterChain])
+	assert.Empty(t, out2.HiddenByClass[graph.NoiseMixin])
+}
+
+// TestBuild_ContainmentFanoutHiddenByDefault confirms the third noise class —
+// contains/declares fan-out — is filtered the same way as filter_chain/mixin.
+func TestBuild_ContainmentFanoutHiddenByDefault(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "tgt", Type: graph.NodeTypeFunction, Label: "tgt", Service: "svc", File: "svc/target.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "cls", Type: graph.NodeTypeClass, Label: "Cls", Service: "svc", File: "svc/cls.go", Line: 1})
+	idx.AddNode(&graph.Node{ID: "sibling", Type: graph.NodeTypeFunction, Label: "sibling", Service: "svc", File: "svc/sibling.go", Line: 1})
+
+	idx.AddEdge(&graph.Edge{ID: "ecall", From: "cls", To: "tgt", Type: graph.EdgeTypeCalls})
+	idx.AddEdge(&graph.Edge{ID: "econtains", From: "sibling", To: "cls", Type: graph.EdgeTypeContains})
+
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+
+	require.Len(t, out.Callers, 1, "the contains-reached sibling must be dropped by default")
+	assert.Equal(t, "cls", out.Callers[0].ID)
+	assert.Equal(t, 1, out.HiddenByClass[graph.NoiseContainment])
 }
 
 // TestSummarize_DirectAndContainedSplitInSameFile is the orion bench
@@ -239,7 +300,8 @@ func TestSummarize_DirectAndContainedSplitInSameFile(t *testing.T) {
 	idx.AddEdge(&graph.Edge{ID: "e1", From: "direct", To: "tgt", Type: graph.EdgeTypeCalls})
 	idx.AddEdge(&graph.Edge{ID: "e2", From: "cls", To: "tgt", Type: graph.EdgeTypeContains})
 
-	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	// Direct/contained split test, not a visibility test — include everything.
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10, Include: graph.AllNoiseInclude()})
 	s := out.Summarize()
 
 	require.Len(t, s.Files, 1)
@@ -267,7 +329,8 @@ func TestSummarize_ContainmentOnlyRanksAfterRealFiles(t *testing.T) {
 	idx.AddEdge(&graph.Edge{ID: "emid", From: "mid", To: "tgt", Type: graph.EdgeTypeCalls})
 	idx.AddEdge(&graph.Edge{ID: "edeep", From: "deep", To: "mid", Type: graph.EdgeTypeCalls})
 
-	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	// Ranking test, not a visibility test — include everything.
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10, Include: graph.AllNoiseInclude()})
 	s := out.Summarize()
 
 	require.Len(t, s.Files, 3)
@@ -292,7 +355,8 @@ func TestSummarize_SamplePrefersDirectOverContainmentOverStructural(t *testing.T
 	idx.AddEdge(&graph.Edge{ID: "e2", From: "b", To: "tgt", Type: graph.EdgeTypeContains})
 	idx.AddEdge(&graph.Edge{ID: "e3", From: "c", To: "tgt", Type: graph.EdgeTypeCalls})
 
-	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10})
+	// Sample/tier-ordering test, not a visibility test — include everything.
+	out := impact.Build(idx, idx.Nodes["tgt"], impact.Options{Depth: 10, Include: graph.AllNoiseInclude()})
 	s := out.Summarize()
 
 	require.Len(t, s.Files, 1)

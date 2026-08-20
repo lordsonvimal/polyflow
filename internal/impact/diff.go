@@ -129,7 +129,10 @@ func BuildDiff(idx *graph.AdjacencyIndex, changes []gitdiff.FileChange, opts Opt
 		return ancestors[i].Node.ID < ancestors[j].Node.ID
 	})
 
-	callers, entryPoints, services, triggers, edges := assemble(idx, ancestors, verboseSources)
+	// Diff's blast radius has no --include flag wired at any call site yet, so
+	// it stays unfiltered (all()) rather than silently applying Tier NV's
+	// default hide-everything behavior with no way to opt back in.
+	callers, entryPoints, services, triggers, edges, _ := assemble(idx, ancestors, verboseSources, graph.AllNoiseInclude())
 
 	// The changed nodes' own services are affected even with zero callers.
 	svcSet := make(map[string]bool, len(services))

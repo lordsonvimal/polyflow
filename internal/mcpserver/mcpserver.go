@@ -621,8 +621,9 @@ type impactInput struct {
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. A merged multi-service answer (query auto-merges when a name matches >1 service, e.g. a shared HTTP-contract symbol) honours your requested budget up to 15000 tokens even if you pass more or an unlimited negative value — one merged call at max_tokens 15000 is cheaper and more complete than splitting into one target_service call per candidate, and is the preferred way to call this. Only set target_service when you specifically want just one service's slice, or need more than 15000 tokens of detail for that one service"`
 	Summary         bool   `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
 	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
-	MinVerification string `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
-	VerboseSources  bool   `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
+	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
+	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
+	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. impact has no task concept, so the default (unset) always hides all four classes"`
 }
 
 func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impactInput) (*mcp.CallToolResult, any, error) {
@@ -630,6 +631,10 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		return nil, nil, fmt.Errorf("provide exactly one of target or file")
 	}
 	depth := effectiveDepth(in.Depth, 10)
+	include, err := graph.ResolveNoiseInclude(in.IncludeNoise, "impact")
+	if err != nil {
+		return nil, nil, err
+	}
 
 	store, idx, searcher := s.snapshot()
 	_ = searcher
@@ -665,6 +670,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		Policy:         graph.BlastRadiusPolicy(),
 		VerboseSources: in.VerboseSources,
 		StaleAfter:     s.staleAfter,
+		Include:        include,
 	}
 	var out *impact.Result
 	if len(roots) > 1 {

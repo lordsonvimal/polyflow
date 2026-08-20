@@ -104,6 +104,11 @@ type Result struct {
 	// Budget records the token-budgeting decision when a budget was set and
 	// the detail shape was emitted.
 	Budget *budget.Info `json:"budget,omitempty"`
+
+	// HiddenByClass tallies callers excluded by noise-class filtering (Tier
+	// NV), keyed by graph.NoiseClass. Empty when no include-set was applied
+	// or nothing was filtered.
+	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
 }
 
 // Options shapes a Build call. The zero value is the historical behaviour
@@ -122,6 +127,12 @@ type Options struct {
 
 	VerboseSources bool
 	StaleAfter     time.Duration
+
+	// Include controls which noise-classified callers (Tier NV) are visible
+	// in the assembled result. Nil/empty hides every noise class, matching
+	// graph.DefaultNoiseInclude's zero value. BuildDiff does not consult this
+	// field — see its own doc comment.
+	Include graph.NoiseInclude
 }
 
 // Build computes the blast radius of root under opts. verboseSources controls
@@ -135,7 +146,7 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, opts Options) *Result {
 	ancestors := traverseFrom(idx, root.ID, opts)
 	verboseSources := opts.VerboseSources
 
-	callers, entryPoints, servicesAffected, triggers, edges := assemble(idx, ancestors, verboseSources)
+	callers, entryPoints, servicesAffected, triggers, edges, hidden := assemble(idx, ancestors, verboseSources, opts.Include)
 
 	return &Result{
 		Target:               root,
@@ -148,6 +159,7 @@ func Build(idx *graph.AdjacencyIndex, root *graph.Node, opts Options) *Result {
 		TotalCallers:         len(callers),
 		Unresolved:           []graph.UnresolvedRef{},
 		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, opts.StaleAfter, time.Now()),
+		HiddenByClass:        hidden,
 	}
 }
 
@@ -189,7 +201,7 @@ func BuildMulti(idx *graph.AdjacencyIndex, roots []*graph.Node, opts Options) *R
 		return ancestors[i].Node.ID < ancestors[j].Node.ID
 	})
 
-	callers, entryPoints, servicesAffected, triggers, edges := assemble(idx, ancestors, opts.VerboseSources)
+	callers, entryPoints, servicesAffected, triggers, edges, hidden := assemble(idx, ancestors, opts.VerboseSources, opts.Include)
 
 	return &Result{
 		Target:               roots[0],
@@ -203,6 +215,7 @@ func BuildMulti(idx *graph.AdjacencyIndex, roots []*graph.Node, opts Options) *R
 		TotalCallers:         len(callers),
 		Unresolved:           []graph.UnresolvedRef{},
 		VerificationSummary:  graph.BuildVerificationSummaryAt(edges, opts.StaleAfter, time.Now()),
+		HiddenByClass:        hidden,
 	}
 }
 
@@ -254,9 +267,26 @@ func direction(d string) string {
 // assemble turns a traversed ancestor set into the shared output pieces:
 // callers with edge context and provenance, entry points (ancestors with no
 // incoming edges), the affected-service set, cross-service triggers (edges
-// arriving at any ancestor from a different service), and the collected edges
-// used to compute the VerificationSummary.
-func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verboseSources bool) ([]Caller, []*graph.Node, []string, []CrossServiceTrigger, []graph.Edge) {
+// arriving at any ancestor from a different service), the collected edges
+// used to compute the VerificationSummary, and a tally of ancestors excluded
+// by noise-class filtering (Tier NV), keyed by graph.NoiseClass. Filtering
+// happens here, before Tier IR's rank/budget-trim runs in Summarize/
+// ApplyBudget, so that pass sees a smaller, more relevant input rather than
+// re-ranking noise it will only demote.
+func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verboseSources bool, include graph.NoiseInclude) ([]Caller, []*graph.Node, []string, []CrossServiceTrigger, []graph.Edge, map[graph.NoiseClass]int) {
+	hidden := map[graph.NoiseClass]int{}
+	filtered := make([]graph.TraversalResult, 0, len(ancestors))
+	for _, a := range ancestors {
+		if a.Via != nil {
+			if class := graph.ClassifyEdgeNoise(a.Via, a.Node); !include.Allows(class) {
+				hidden[class]++
+				continue
+			}
+		}
+		filtered = append(filtered, a)
+	}
+	ancestors = filtered
+
 	callers := make([]Caller, 0, len(ancestors))
 	var edges []graph.Edge
 	for _, a := range ancestors {
@@ -316,7 +346,7 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verb
 	}
 	sort.Slice(triggers, func(i, j int) bool { return triggers[i].FromService < triggers[j].FromService })
 
-	return callers, entryPoints, servicesAffected, triggers, edges
+	return callers, entryPoints, servicesAffected, triggers, edges, hidden
 }
 
 // marshalSources serialises edge Sources as compact "provider:ref" strings
