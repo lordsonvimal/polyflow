@@ -168,6 +168,10 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"the code connected to X' without grep exploration. The unresolved section lists " +
 			"references in the traversed files the indexer could not resolve — verify those " +
 			"manually, edges may be missing. " +
+			"Structural plumbing (Rails filter-chain wiring, mixins, containment, JSX/DOM render-tree " +
+			"edges) is hidden by default, keyed off task (generate shows render_tree, others hide all " +
+			"four); pass include_noise to restore specific classes or 'all'. hidden_by_class in the " +
+			"response tallies what was hidden by class, present whenever anything was — never silently dropped. " +
 			"Set max_tokens to cap output size (over budget, per-node detail rolls up per file), " +
 			"summary to force the rollup, snippet_lines to inline source snippets per node. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
@@ -189,7 +193,11 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"unresolved section means the answer is complete as given. Output defaults to a compact budget: " +
 			"small blast radii return full per-node detail, large ones auto-roll-up per file, each " +
 			"line reporting direct_nodes/contained_nodes and a sample caller so you can tell a real " +
-			"hit from container fan-out. Set max_tokens to raise or lower that cap (negative = " +
+			"hit from container fan-out. Structural plumbing (Rails filter-chain wiring, mixins, " +
+			"containment, JSX/DOM render-tree edges) is hidden from the default result entirely " +
+			"(impact has no task concept, so this is unconditional); pass include_noise to restore " +
+			"specific classes or 'all'. hidden_by_class in the response tallies what was hidden by " +
+			"class, present whenever anything was — never silently dropped. Set max_tokens to raise or lower that cap (negative = " +
 			"unlimited), summary to force the rollup, snippet_lines to inline source snippets per " +
 			"node. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
@@ -207,6 +215,11 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"the call graph (e.g. a queue binding with no wired consumer in the source), not a gap in " +
 			"this tool — prefer that reading over spending many grep/Read calls hunting for code that " +
 			"may not exist. " +
+			"Chains containing structural plumbing (Rails filter-chain wiring, mixins, containment, " +
+			"JSX/DOM render-tree edges) are hidden by default, keyed off task (generate shows " +
+			"render_tree, others hide all four); pass include_noise to restore specific classes or " +
+			"'all'. hidden_by_class in the response tallies chains hidden by class, present whenever " +
+			"anything was — never silently dropped. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
 			semanticsParagraph,
 	}, auditTool(s, "trace", s.trace))
