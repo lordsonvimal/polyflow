@@ -169,7 +169,7 @@ func buildNodeBlock(idx *graph.AdjacencyIndex, id, mode string, depth int) bundl
 	n := idx.Nodes[id]
 	entries := []bundleEntry{{Node: n, Role: "target"}}
 	if mode == "expanded" {
-		res := pfcontext.Build(idx, id, "debug", depth, false, 0)
+		res := pfcontext.Build(idx, id, "debug", depth, false, 0, graph.DefaultNoiseInclude("debug"))
 		seen := map[string]bool{id: true}
 		for _, tn := range res.Upstream {
 			if seen[tn.ID] {

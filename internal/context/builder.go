@@ -19,6 +19,11 @@ type Result struct {
 	TotalNodes   int         `json:"total_nodes"`
 	TotalEdges   int         `json:"total_edges"`
 
+	// HiddenByClass tallies upstream/downstream nodes excluded by noise-class
+	// filtering (Tier NV), keyed by graph.NoiseClass. Empty when no
+	// include-set was applied or nothing was filtered.
+	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
+
 	// Unresolved lists references in the traversed files that the indexer
 	// could not resolve — edges that may be missing from this answer. Always
 	// present ([] when clean) so its absence is never mistaken for certainty.
@@ -96,9 +101,12 @@ type CrossEdge struct {
 // Depth <= 0 means unlimited traversal. verboseSources controls whether
 // per-node Sources contains compact "provider:ref" strings (false, default)
 // or full SourceRef structs (true, --verbose-sources). staleAfter is the
-// workspace-configured freshness threshold (0 = no stale check).
-func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool, staleAfter time.Duration) *Result {
-	upstream, downstream, edges := traverse(idx, targetID, task, depth, verboseSources)
+// workspace-configured freshness threshold (0 = no stale check). include
+// controls which noise-classified nodes (Tier NV) are visible; a nil/empty
+// include hides every noise class, matching graph.DefaultNoiseInclude's zero
+// value.
+func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool, staleAfter time.Duration, include graph.NoiseInclude) *Result {
+	upstream, downstream, edges, hidden := traverse(idx, targetID, task, depth, verboseSources, include)
 
 	crossService := extractCrossService(idx, upstream, downstream)
 
@@ -126,6 +134,7 @@ func Build(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseS
 		Depth:               depth,
 		TotalNodes:          len(nodeSet) + 1, // +1 for the target itself
 		TotalEdges:          len(edgeSet),
+		HiddenByClass:       hidden,
 		Unresolved:          []graph.UnresolvedRef{},
 		VerificationSummary: graph.BuildVerificationSummaryAt(edges, staleAfter, time.Now()),
 	}
@@ -167,23 +176,25 @@ func (r *Result) FinalizeEpistemic() *Result {
 }
 
 // traverse runs BFS in the appropriate directions for the given task.
-// Returns the upstream/downstream node lists and all traversed edges (for
-// computing the VerificationSummary).
-func traverse(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool) (upstream, downstream []TraceNode, edges []graph.Edge) {
+// Returns the upstream/downstream node lists, all traversed edges (for
+// computing the VerificationSummary), and a tally of nodes hidden by
+// noise-class filtering (Tier NV), keyed by graph.NoiseClass.
+func traverse(idx *graph.AdjacencyIndex, targetID, task string, depth int, verboseSources bool, include graph.NoiseInclude) (upstream, downstream []TraceNode, edges []graph.Edge, hidden map[graph.NoiseClass]int) {
+	hidden = map[graph.NoiseClass]int{}
 	switch task {
 	case "impact":
-		upstream, edges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources)
+		upstream, edges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
 	case "generate":
-		downstream, edges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources)
+		downstream, edges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
 	case "debug", "refactor":
 		var upEdges, downEdges []graph.Edge
-		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources)
-		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources)
+		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
+		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
 		edges = append(upEdges, downEdges...)
 	default:
 		var upEdges, downEdges []graph.Edge
-		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources)
-		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources)
+		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
+		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
 		edges = append(upEdges, downEdges...)
 	}
 	return
@@ -205,12 +216,18 @@ func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-func toTraceNodes(results []graph.TraversalResult, verboseSources bool) ([]TraceNode, []graph.Edge) {
+func toTraceNodes(results []graph.TraversalResult, verboseSources bool, include graph.NoiseInclude, hidden map[graph.NoiseClass]int) ([]TraceNode, []graph.Edge) {
 	out := make([]TraceNode, 0, len(results))
 	var edges []graph.Edge
 	for _, r := range results {
 		if r.Node == nil {
 			continue
+		}
+		if r.Via != nil {
+			if class := graph.ClassifyEdgeNoise(r.Via, r.Node); !include.Allows(class) {
+				hidden[class]++
+				continue
+			}
 		}
 		tn := TraceNode{
 			ID:       r.Node.ID,
