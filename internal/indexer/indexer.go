@@ -41,12 +41,17 @@ import (
 
 // Options configures an indexing run.
 type Options struct {
-	Config       *workspace.WorkspaceConfig
-	DBDir        string // default: meta.DBDir
-	PatternsDir  string // default: "" → built-in patterns embedded in the binary; set to load from disk instead
-	ContractsDir string // default: "" → no workspace-custom rules; set to the workspace root to load <dir>/contracts/*.yaml
-	Workers      int    // default: GOMAXPROCS
-	Full         bool   // force full re-parse, ignoring the incremental cache
+	Config *workspace.WorkspaceConfig
+	// ServiceFilter restricts indexing to these service names. nil (the
+	// default) means every service in Config.Services — today's behavior,
+	// unchanged. Used by single-service `polyflow index <service>` (FR.2) to
+	// point DBDir at that service's own DB without touching the others.
+	ServiceFilter []string
+	DBDir         string // default: meta.DBDir
+	PatternsDir   string // default: "" → built-in patterns embedded in the binary; set to load from disk instead
+	ContractsDir  string // default: "" → no workspace-custom rules; set to the workspace root to load <dir>/contracts/*.yaml
+	Workers       int    // default: GOMAXPROCS
+	Full          bool   // force full re-parse, ignoring the incremental cache
 	// NoEmbed skips the embedding pass entirely.  The next index without
 	// NoEmbed will re-embed all entities (no incremental delta).  The
 	// degradation reason is stamped in the "embed_status" meta key so
@@ -106,6 +111,25 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		return nil, fmt.Errorf("create %s: %w", opts.DBDir, err)
 	}
 
+	// services is the subset of cfg.Services this run actually parses/links.
+	// nil ServiceFilter (the default) means every service — today's behavior,
+	// unchanged. svcPaths (below) stays built from the FULL cfg.Services list
+	// regardless of the filter, since a filtered service's directory still
+	// needs to exclude any other service nested inside it.
+	services := cfg.Services
+	if len(opts.ServiceFilter) > 0 {
+		want := make(map[string]bool, len(opts.ServiceFilter))
+		for _, name := range opts.ServiceFilter {
+			want[name] = true
+		}
+		services = nil
+		for _, svc := range cfg.Services {
+			if want[svc.Name] {
+				services = append(services, svc)
+			}
+		}
+	}
+
 	// Load the incremental cache from the previous graph, if any. Only the
 	// workspace fingerprint (a single meta row) is fetched up front — it's
 	// all the no-change fast path below needs. The heavy per-file/per-service
@@ -148,7 +172,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if hs, err := oldStore.ListFileHashes(ctx); err == nil {
 			oldHashes = hs
 		}
-		for _, svc := range cfg.Services {
+		for _, svc := range services {
 			if fp, nodes, edges, referenced, err := oldStore.GetSemanticCache(ctx, svc.Name); err == nil && fp != "" {
 				oldSemantic[svc.Name] = [4]string{fp, nodes, edges, referenced}
 			}
@@ -204,7 +228,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 
 	tcReg := toolchain.DefaultRegistry()
 	// svcToolchainVersions: service name → tool → resolved version string.
-	svcToolchainVersions := make(map[string]map[toolchain.Tool]string, len(cfg.Services))
+	svcToolchainVersions := make(map[string]map[toolchain.Tool]string, len(services))
 	var allToolchainNotes []toolchain.CoverageNote
 	// svcToolchainProfiles: service → tool → profile stamp (V.2 labeling —
 	// which rule variant / sidecar backend interpreted each tool).
@@ -213,17 +237,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		Version  string `json:"version"`
 		Inferred bool   `json:"inferred,omitempty"`
 	}
-	svcToolchainProfiles := make(map[string]map[string]profileStamp, len(cfg.Services))
+	svcToolchainProfiles := make(map[string]map[string]profileStamp, len(services))
 
 	// B.0: unparsed-file-class ledger — counts per (service, extension).
 	allUnparsedFiles := map[string]map[string]int{}
 
 	var allSvcFiles []serviceFiles
-	for idx, svc := range cfg.Services {
+	for _, svc := range services {
 		absSvcPath, _ := filepath.Abs(svc.Path)
 		var extraExcludes []string
-		for i, other := range svcPaths {
-			if i == idx {
+		for _, other := range svcPaths {
+			if other == absSvcPath {
 				continue
 			}
 			rel, err := filepath.Rel(absSvcPath, other)
