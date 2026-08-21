@@ -25,6 +25,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/capture"
 	pfcontext "github.com/lordsonvimal/polyflow/internal/context"
 	"github.com/lordsonvimal/polyflow/internal/contract"
+	"github.com/lordsonvimal/polyflow/internal/deadcode"
 	"github.com/lordsonvimal/polyflow/internal/doctor"
 	"github.com/lordsonvimal/polyflow/internal/eval"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
@@ -73,6 +74,7 @@ func init() {
 		contextCmd,
 		impactCmd,
 		traceCmd,
+		deadcodeCmd,
 		configCmd,
 		depsCmd,
 		linkCmd,
@@ -93,6 +95,7 @@ func init() {
 	initContextFlags()
 	initImpactFlags()
 	initTraceFlags()
+	initDeadcodeFlags()
 	initConfigSubcmds()
 	initEvalFlags()
 	initLinkFlags()
@@ -1746,6 +1749,49 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return printImpactSummaryText(s)
 	}
 	return printImpactText(out)
+}
+
+// ─── deadcode ────────────────────────────────────────────────────────────────
+
+var (
+	deadcodeService string
+	deadcodeFile    string
+	deadcodeFormat  string
+)
+
+func initDeadcodeFlags() {
+	deadcodeCmd.Flags().StringVar(&deadcodeService, "service", "", "restrict the scan to a specific service")
+	deadcodeCmd.Flags().StringVar(&deadcodeFile, "file", "", "restrict the scan to a specific file")
+	deadcodeCmd.Flags().StringVar(&deadcodeFormat, "format", "text", "output format: text or json")
+}
+
+var deadcodeCmd = &cobra.Command{
+	Use:   "deadcode",
+	Short: "List function/method nodes with zero inbound calls edges",
+	RunE:  runDeadcode,
+}
+
+func runDeadcode(cmd *cobra.Command, args []string) error {
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	idx, err := store.BuildIndex(context.Background())
+	if err != nil {
+		return err
+	}
+
+	out := deadcode.Build(idx, deadcode.Options{Service: deadcodeService, File: deadcodeFile})
+	if deadcodeFormat == "json" {
+		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	for _, f := range out.Functions {
+		fmt.Fprintf(os.Stdout, "%-8s %-60s %s:%d\n", f.Type, f.Label, f.File, f.Line)
+	}
+	fmt.Fprintf(os.Stdout, "\nTotal: %d zero-caller functions/methods\n", out.Total)
+	return nil
 }
 
 // printFileRollupText renders one impact.FileRollup line, plus the Sample

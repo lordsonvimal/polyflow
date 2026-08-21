@@ -22,6 +22,7 @@ invisible to the other.
 | `polyflow context` | Context copy (right-click node → "Copy context") / `POST /api/context/bundle` |
 | `polyflow trace` | Flows activity — waypoint/path tracing between two nodes |
 | `polyflow impact` | Impact activity — blast-radius view for a node or file |
+| `polyflow deadcode` | Dead code activity — zero-caller function/method scan, filterable by service/file |
 | `polyflow deps` | Health activity → dependency list |
 | `polyflow link` | Config activity → `links:` section (form or YAML mode) |
 | `polyflow config` | Config activity |

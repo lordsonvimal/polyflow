@@ -1,12 +1,13 @@
 import { For } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
 
-type ActivityId = "explore" | "flows" | "impact" | "health" | "config" | "docs" | "settings";
+type ActivityId = "explore" | "flows" | "impact" | "deadcode" | "health" | "config" | "docs" | "settings";
 
 const ACTIVITIES: { id: ActivityId; icon: string; label: string }[] = [
   { id: "explore",  icon: "⬡", label: "Explore" },
   { id: "flows",    icon: "⇄", label: "Flows" },
   { id: "impact",   icon: "◎", label: "Impact" },
+  { id: "deadcode", icon: "☠", label: "Dead code" },
   { id: "health",   icon: "♥", label: "Health" },
   { id: "config",   icon: "⚙", label: "Config" },
   { id: "docs",     icon: "☰", label: "Docs" },

@@ -250,6 +250,17 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	}, auditTool(s, "entrypoints", s.entrypoints))
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "deadcode",
+		Description: "List function/method nodes with zero inbound calls edges, excluding nodes " +
+			"already classified as entry points (HTTP handlers, routes, workers, subscribers, gRPC/" +
+			"GraphQL handlers, and functions tagged as entrypoints). A candidate list for removal, not " +
+			"a certainty: dynamic dispatch, reflection, exported package-public API, and other call " +
+			"shapes the static graph can't see all show up here as false positives — verify a hit " +
+			"before deleting it, the same way you would with any other polyflow answer's unresolved " +
+			"section. Scope with service/file to narrow a large-fleet scan.",
+	}, auditTool(s, "deadcode", s.deadcode))
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "resolve",
 		Description: "Resolve a natural-language description or partial name to ranked candidate nodes, " +
 			"with the same target_service/target_type disambiguation context/impact/trace/flows use. Call " +
@@ -286,7 +297,7 @@ func (s *Server) disabledProbe(ctx context.Context, req *mcp.CallToolRequest, in
 	return jsonResult(map[string]string{
 		"status": "disabled",
 		"detail": "polyflow query tools are disabled for this session. Run `polyflow mcp on`, " +
-			"then reconnect/restart the session to re-enable search/context/impact/trace/flows/entrypoints/resolve.",
+			"then reconnect/restart the session to re-enable search/context/impact/trace/flows/entrypoints/resolve/deadcode.",
 	})
 }
 

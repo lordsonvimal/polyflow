@@ -1,6 +1,6 @@
 import { createSignal, createEffect } from "solid-js";
 
-export type Activity = "explore" | "flows" | "impact" | "health" | "config" | "docs" | "settings";
+export type Activity = "explore" | "flows" | "impact" | "deadcode" | "health" | "config" | "docs" | "settings";
 type Theme = "light" | "dark";
 
 function initTheme(): Theme {

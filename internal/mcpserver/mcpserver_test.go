@@ -112,7 +112,7 @@ func TestToolDiscovery(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	assert.ElementsMatch(t, []string{"investigate", "search", "context", "impact", "trace", "flows", "entrypoints", "resolve", "read", "hierarchy"}, names)
+	assert.ElementsMatch(t, []string{"investigate", "search", "context", "impact", "trace", "flows", "entrypoints", "deadcode", "resolve", "read", "hierarchy"}, names)
 }
 
 func TestToolDiscovery_Disabled(t *testing.T) {
