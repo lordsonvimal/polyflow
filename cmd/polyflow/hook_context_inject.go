@@ -29,7 +29,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -53,6 +55,65 @@ func init() {
 const hookSeenDir = "/tmp/polyflow-context-injected"
 const hookMaxContextChars = 600
 const hookCallsEdge = "calls"
+
+// hookDefaultDeadlineMS mirrors CBM's own postmortem (#858): their first
+// deadline (300ms) was too tight and silently zeroed out augmentation on
+// real cold starts, indistinguishable from "no matches" without a breadcrumb
+// log. Their corrected default was 2000ms — start there, not at 300ms, to
+// avoid repeating the same mistake.
+const hookDefaultDeadlineMS = 2000
+
+const hookDeadlineEnv = "POLYFLOW_HOOK_DEADLINE_MS"
+
+// hookTimeoutLogPath mirrors CBM's own hook-augment-timeouts.log convention,
+// under polyflow's existing ~/.cache/polyflow/ cache-dir root rather than a
+// new one.
+func hookTimeoutLogPath() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "polyflow", "logs", "hook-timeouts.log"), nil
+}
+
+func hookDeadline() time.Duration {
+	if v := os.Getenv(hookDeadlineEnv); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return hookDefaultDeadlineMS * time.Millisecond
+}
+
+// logHookTimeout appends a breadcrumb line so a too-tight deadline is
+// diagnosable instead of looking identical to "no matches found" — the
+// failure mode CBM's #858 postmortem documents.
+func logHookTimeout(reason string) {
+	path, err := hookTimeoutLogPath()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s deadline exceeded: %s\n", time.Now().UTC().Format(time.RFC3339), reason)
+}
+
+// truncateBlock cuts block to hookMaxContextChars bytes, then drops any
+// trailing partial UTF-8 sequence the raw byte cut may have produced —
+// cheaper than rune-by-rune scanning and correct since only the tail of an
+// otherwise-valid string can ever be invalid after a byte-index cut.
+func truncateBlock(block string) string {
+	if len(block) <= hookMaxContextChars {
+		return block
+	}
+	return strings.ToValidUTF8(block[:hookMaxContextChars], "") + "…"
+}
 
 var hookFileViewCmds = map[string]bool{"cat": true, "sed": true, "head": true, "tail": true}
 var hookGrepCmds = map[string]bool{"grep": true}
@@ -338,6 +399,18 @@ func fileContext(db *sql.DB, filePath, cwd string) []string {
 	return parts
 }
 
+// unresolvedRefCount reuses the existing blind-spot ledger
+// (internal/graph/store.go's unresolved_refs table, also surfaced by
+// `polyflow status --unresolved`) rather than inventing a parallel
+// coverage-check mechanism, scoped to the one file being viewed.
+func unresolvedRefCount(db *sql.DB, relFile string) int {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM unresolved_refs WHERE file = ?`, relFile).Scan(&n); err != nil {
+		return 0
+	}
+	return n
+}
+
 func scanHookNodeRows(rows *sql.Rows) []hookNodeRow {
 	defer rows.Close()
 	var out []hookNodeRow
@@ -417,21 +490,52 @@ func runHookContextInject(in *os.File, out *os.File) {
 		return
 	}
 
+	// The DB work below (open + queries) is the slow path a real incident
+	// (CBM #858) showed can hang or run long on cold starts; it must never
+	// be able to delay or block the real tool call it's piggybacking on, so
+	// it runs on its own goroutine against a deadline instead of inline.
+	resultCh := make(chan string, 1)
+	go func() { resultCh <- runHookQuery(dbPath, mode, file, symbols, cwd) }()
+
+	select {
+	case block := <-resultCh:
+		if block == "" {
+			return
+		}
+		data, err := json.Marshal(map[string]string{"additionalContext": block})
+		if err != nil {
+			return
+		}
+		fmt.Fprintln(out, string(data))
+	case <-time.After(hookDeadline()):
+		logHookTimeout(target)
+		return
+	}
+}
+
+// runHookQuery is a seam so tests can stub out DB access to simulate the
+// slow-query case without needing real lock contention. Returns "" if there
+// is nothing to inject (a query error is treated the same as "no matches" —
+// fail open).
+var runHookQuery = defaultHookQuery
+
+func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) string {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return
+		return ""
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec("PRAGMA busy_timeout=2000"); err != nil {
-		return
+		return ""
 	}
 	if _, err := db.Exec("PRAGMA query_only=1"); err != nil {
-		return
+		return ""
 	}
 
 	var parts []string
 	var label string
+	var unresolvedNote string
 	if mode == "symbol" {
 		for _, candidate := range symbols {
 			parts = symbolContext(db, candidate)
@@ -443,19 +547,14 @@ func runHookContextInject(in *os.File, out *os.File) {
 	} else {
 		parts = fileContext(db, file, cwd)
 		label = fmt.Sprintf("file '%s'", file)
+		if n := unresolvedRefCount(db, hookRelPath(file, cwd)); n > 0 {
+			unresolvedNote = fmt.Sprintf(" | %d unresolved refs in this file", n)
+		}
 	}
 	if len(parts) == 0 {
-		return
+		return ""
 	}
 
-	block := fmt.Sprintf("[polyflow graph — %s] %s", label, strings.Join(parts, "; "))
-	if len(block) > hookMaxContextChars {
-		block = block[:hookMaxContextChars] + "…"
-	}
-
-	data, err := json.Marshal(map[string]string{"additionalContext": block})
-	if err != nil {
-		return
-	}
-	fmt.Fprintln(out, string(data))
+	block := fmt.Sprintf("[polyflow graph — %s] %s%s", label, strings.Join(parts, "; "), unresolvedNote)
+	return truncateBlock(block)
 }

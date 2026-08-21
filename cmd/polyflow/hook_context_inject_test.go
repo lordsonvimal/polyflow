@@ -1,8 +1,19 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
 func TestExtractTarget_NativeGrepTool(t *testing.T) {
@@ -76,6 +87,167 @@ func TestExtractTarget_BashToolUnaffected(t *testing.T) {
 	mode, file, symbols := extractTarget("Bash", map[string]any{"command": "cat internal/graph/model.go"})
 	if mode != "file" || file != "internal/graph/model.go" || symbols != nil {
 		t.Fatalf("mode=%q file=%q symbols=%v", mode, file, symbols)
+	}
+}
+
+// runHookForTest feeds payload through a pipe, running runHookContextInject
+// synchronously, and returns whatever it wrote to stdout.
+func runHookForTest(t *testing.T, payload hookPayload) string {
+	t.Helper()
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		inW.Write(data)
+		inW.Close()
+	}()
+
+	done := make(chan struct{})
+	var out []byte
+	go func() {
+		out, _ = io.ReadAll(outR)
+		close(done)
+	}()
+
+	runHookContextInject(inR, outW)
+	outW.Close()
+	<-done
+	return string(out)
+}
+
+// TestRunHookContextInject_DeadlineExceeded proves a slow/blocking DB query
+// (stubbed here rather than induced via real lock contention, so the test is
+// deterministic) makes the hook exit cleanly within POLYFLOW_HOOK_DEADLINE_MS
+// with no stdout, and leaves a breadcrumb — CBM's #858 postmortem: a
+// too-tight deadline that silently zeroes output is indistinguishable from
+// "no matches" without one.
+func TestRunHookContextInject_DeadlineExceeded(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv(hookDeadlineEnv, "10")
+
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".polyflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".polyflow", "graph.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := runHookQuery
+	t.Cleanup(func() { runHookQuery = orig })
+	runHookQuery = func(dbPath, mode, file string, symbols []string, cwd string) string {
+		time.Sleep(200 * time.Millisecond)
+		return "[polyflow graph — should never be seen]"
+	}
+
+	sessionID := fmt.Sprintf("deadline-test-session-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, sessionID+".json")) })
+
+	out := runHookForTest(t, hookPayload{
+		ToolName:  "Grep",
+		ToolInput: map[string]any{"pattern": "sendHeartbeat"},
+		Cwd:       repoDir,
+		SessionID: sessionID,
+	})
+	if out != "" {
+		t.Fatalf("expected no stdout on deadline, got %q", out)
+	}
+
+	logPath, err := hookTimeoutLogPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("expected breadcrumb log at %s: %v", logPath, err)
+	}
+	if !strings.Contains(string(logData), "deadline exceeded") {
+		t.Fatalf("breadcrumb log missing expected content: %q", string(logData))
+	}
+}
+
+// TestTruncateBlock_UTF8Boundary asserts a multi-byte character straddling
+// the hookMaxContextChars boundary is dropped whole, not corrupted into
+// invalid UTF-8, per the fix for the raw byte-slice truncation bug.
+func TestTruncateBlock_UTF8Boundary(t *testing.T) {
+	var b strings.Builder
+	for b.Len() < hookMaxContextChars-1 {
+		b.WriteByte('a')
+	}
+	b.WriteRune('世') // 3-byte rune straddling the cut point
+
+	got := truncateBlock(b.String())
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateBlock produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected truncation marker, got %q", got)
+	}
+}
+
+func TestTruncateBlock_NoTruncationNeeded(t *testing.T) {
+	short := "short block"
+	if got := truncateBlock(short); got != short {
+		t.Fatalf("truncateBlock(%q) = %q, want unchanged", short, got)
+	}
+}
+
+// newHookTestDB builds a real polyflow graph.db with one function node in
+// relFile (so fileContext has something to report) plus any unresolved_refs
+// rows the caller supplies.
+func newHookTestDB(t *testing.T, relFile string, unresolvedCount int) string {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "graph.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(graph.Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO nodes (id, type, label, service, file, line, end_line, language) VALUES (?, 'function', 'DoThing', 'svc', ?, 1, 5, 'go')`,
+		"n1", relFile); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < unresolvedCount; i++ {
+		if _, err := db.Exec(
+			`INSERT INTO unresolved_refs (service, file, line, name, kind) VALUES ('svc', ?, ?, 'thing', 'call_ref')`,
+			relFile, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dbPath
+}
+
+func TestDefaultHookQuery_UnresolvedRefsNote(t *testing.T) {
+	dbPath := newHookTestDB(t, "app/foo.go", 3)
+	block := defaultHookQuery(dbPath, "file", "/repo/app/foo.go", nil, "/repo")
+	if !strings.Contains(block, "3 unresolved refs in this file") {
+		t.Fatalf("expected unresolved-refs note, got %q", block)
+	}
+}
+
+func TestDefaultHookQuery_CleanFileNoNote(t *testing.T) {
+	dbPath := newHookTestDB(t, "app/foo.go", 0)
+	block := defaultHookQuery(dbPath, "file", "/repo/app/foo.go", nil, "/repo")
+	if strings.Contains(block, "unresolved refs") {
+		t.Fatalf("expected no unresolved-refs note on a clean file, got %q", block)
+	}
+	if block == "" {
+		t.Fatalf("expected file context for a file with a declared node")
 	}
 }
 
