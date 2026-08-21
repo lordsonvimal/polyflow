@@ -841,6 +841,42 @@ func formatTrustLine(store graph.Store, ctx context.Context) string {
 	return line
 }
 
+// perServiceLastIndexed is FR.6's addition to `polyflow status`: a
+// "per-service last indexed" line sourced from each service's own
+// `services/<name>/graph.db` meta table (FR.2), independent of the merged
+// fleet DB's single timestamp. Only services with a per-service DB on disk
+// are reported — a workspace that has never used `polyflow index <service>`
+// or `polyflow link --relink` gets no section at all, since every service's
+// staleness is already covered by the merged DB's "Last indexed" line above.
+func perServiceLastIndexed(cfg *workspace.WorkspaceConfig, dbDir string) []string {
+	var lines []string
+	for _, svc := range cfg.Services {
+		svcDBPath := filepath.Join(dbDir, "services", svc.Name, meta.DBFile)
+		if _, err := os.Stat(svcDBPath); err != nil {
+			continue
+		}
+		store, err := graph.NewSQLiteStore(svcDBPath)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: error opening DB (%v)", svc.Name, err))
+			continue
+		}
+		ts, err := store.GetMeta(context.Background(), "last_indexed")
+		store.Close()
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: never", svc.Name))
+			continue
+		}
+		unix, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: never", svc.Name))
+			continue
+		}
+		t := time.Unix(unix, 0)
+		lines = append(lines, fmt.Sprintf("%s: %s (%s ago)", svc.Name, t.Format("2006-01-02 15:04:05"), time.Since(t).Round(time.Second)))
+	}
+	return lines
+}
+
 func runStatus(cmd *cobra.Command, args []string) error {
 	cfg, err := workspace.Load(statusWS)
 	if err != nil {
@@ -892,6 +928,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s\n", formatTrustLine(store, ctx))
 	if freshness := indexFreshness(cfg, lastIndexedAt); freshness != "" {
 		fmt.Printf("  Freshness: %s\n", freshness)
+	}
+	if perSvc := perServiceLastIndexed(cfg, meta.DBDir); len(perSvc) > 0 {
+		fmt.Printf("  Per-service last indexed:\n")
+		for _, line := range perSvc {
+			fmt.Printf("    %s\n", line)
+		}
 	}
 	fmt.Printf("  Files: N/A | Nodes: %d | Edges: %d\n", nodeCount, edgeCount)
 	if len(parseErrors) > 0 {
