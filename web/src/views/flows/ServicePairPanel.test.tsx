@@ -30,8 +30,8 @@ describe("ServicePairPanel", () => {
         from: "rails-svc",
         to: "cdr-svc",
         channels: [
-          { kind: "publishes", channel: "cdr_requests", edge_id: "e1", verification_state: "verified", producer_count: 1, consumer_count: 2 },
-          { kind: "http_call", channel: "GET /status", edge_id: "e2", verification_state: "candidate", producer_count: 3, consumer_count: 1 },
+          { kind: "publishes", channel: "cdr_requests", edge_id: "e1", from: "rails-svc", to: "cdr-svc", verification_state: "verified", producer_count: 1, consumer_count: 2 },
+          { kind: "http_call", channel: "GET /status", edge_id: "e2", from: "cdr-svc", to: "rails-svc", verification_state: "candidate", producer_count: 3, consumer_count: 1 },
         ],
       },
     });
@@ -47,7 +47,9 @@ describe("ServicePairPanel", () => {
     expect(rows[0].textContent).toContain("verified");
     expect(rows[0].textContent).toContain("1 producer");
     expect(rows[0].textContent).toContain("2 consumers");
+    expect(rows[0].textContent).toContain("rails-svc → cdr-svc");
     expect(rows[1].textContent).toContain("GET /status");
+    expect(rows[1].textContent).toContain("cdr-svc → rails-svc");
   });
 
   it("clicking a channel row pushes its seam isolation", async () => {
