@@ -519,11 +519,19 @@ func runHookContextInject(in *os.File, out *os.File) {
 		// "hookSpecificOutput.additionalContext". Emitting all three is cheap
 		// and lets one binary serve any of these clients' hook commands
 		// without a --client flag, since an unrecognized extra JSON key is
-		// ignored by all of them.
+		// ignored by all of them. Claude Code additionally requires
+		// hookSpecificOutput.hookEventName ("PostToolUse" — the only event
+		// this command runs under, per its hook registration in
+		// internal/setupagents/claude.go) — omitting it fails Claude Code's
+		// own schema validation ("hookSpecificOutput is missing required
+		// field \"hookEventName\"") even though additionalContext is present.
 		data, err := json.Marshal(map[string]any{
 			"additionalContext":  block,
 			"additional_context": block,
-			"hookSpecificOutput": map[string]string{"additionalContext": block},
+			"hookSpecificOutput": map[string]string{
+				"hookEventName":     "PostToolUse",
+				"additionalContext": block,
+			},
 		})
 		if err != nil {
 			return
