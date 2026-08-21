@@ -2209,7 +2209,10 @@ var depsCmd = &cobra.Command{
 
 // ─── link ────────────────────────────────────────────────────────────────────
 
-var linkInfer bool
+var (
+	linkInfer  bool
+	linkRelink string
+)
 
 var linkCmd = &cobra.Command{
 	Use:   "link",
@@ -2219,9 +2222,13 @@ var linkCmd = &cobra.Command{
 
 func initLinkFlags() {
 	linkCmd.Flags().BoolVar(&linkInfer, "infer", false, "propose cross-service links from HTTP env-var hints and broker exchange overlap; writes to links_proposed for review (never silently applied — promote via `polyflow config link add`)")
+	linkCmd.Flags().StringVar(&linkRelink, "relink", "", "merge <service>'s freshly-indexed per-service DB (`polyflow index <service>`) into the workspace graph and rerun only cross-service linking, scoped to that service — a faster alternative to a full `polyflow index` after changing one service (FR.5)")
 }
 
 func runLink(cmd *cobra.Command, args []string) error {
+	if linkRelink != "" {
+		return runRelink(cmd, linkRelink)
+	}
 	if !linkInfer {
 		return cmd.Help()
 	}
@@ -2261,6 +2268,29 @@ func runLink(cmd *cobra.Command, args []string) error {
 	if len(proposals) == 0 {
 		fmt.Println("  (none)")
 	}
+	return nil
+}
+
+func runRelink(cmd *cobra.Command, service string) error {
+	cfg, err := workspace.Load(meta.ConfigFile)
+	if err != nil {
+		return err
+	}
+	if !cfg.HasService(service) {
+		return fmt.Errorf("link --relink: no service %q in %s", service, meta.ConfigFile)
+	}
+
+	fmt.Printf("Relinking %s...\n", service)
+	stats, err := indexer.Relink(cmd.Context(), indexer.RelinkOptions{
+		Config:       cfg,
+		Service:      service,
+		ContractsDir: filepath.Dir(meta.ConfigFile),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Done in %s. Nodes: %d | Edges: %d | Contract links: %d (%d cross-service)\n",
+		stats.Elapsed.Truncate(time.Millisecond), stats.Nodes, stats.Edges, stats.ContractEdges, stats.CrossLinks)
 	return nil
 }
 
