@@ -6,12 +6,17 @@ import (
 )
 
 // ServiceChannel is one concrete channel crossing a service pair — a group
-// of edges sharing the same channel identity, all running from a node in
-// the "from" service to a node in the "to" service.
+// of edges sharing the same channel identity, all running the same
+// direction between the two requested services. From/To name that
+// direction explicitly (rather than always matching the request's own
+// from/to) since ServiceChannels now answers for the pair in either
+// direction — a single overview edge can represent traffic both ways.
 type ServiceChannel struct {
 	Kind              string `json:"kind"`
 	Channel           string `json:"channel"`
 	EdgeID            string `json:"edge_id"`
+	From              string `json:"from"`
+	To                string `json:"to"`
 	VerificationState string `json:"verification_state,omitempty"`
 	ProducerCount     int    `json:"producer_count"`
 	ConsumerCount     int    `json:"consumer_count"`
@@ -79,16 +84,18 @@ func channelIdentity(idx *AdjacencyIndex, e *Edge) string {
 	return string(e.Type)
 }
 
-// ServiceChannels lists every concrete channel whose edge runs from a node
-// in service "from" to a node in service "to" — the drill-in target for a
-// single-click on an aggregated overview service-pair edge (UF.3). Uses the
-// same direct-edge (fromSvc, toSvc) filter as the overview aggregation
-// (lib/aggregate.ts's aggregateServices, mirrored server-side by
-// MermaidService) so the listed channels always match what produced the
-// clicked pill — including channel-node-mediated pub/sub edges, since a
-// NodeTypeChannel node's Service is the publisher's service by construction
-// (see flows_test.go), making a channel->consumer edge already cross the
-// pair directly without extra channel-node hopping here.
+// ServiceChannels lists every concrete channel crossing the (from, to)
+// service pair in *either* direction — the drill-in target for a
+// single-click on an aggregated overview service-pair edge (UF.3/UN.8).
+// The overview now draws one edge per unordered pair regardless of how many
+// directions/types cross it (lib/aggregate.ts's aggregateServices), so this
+// answers for both directions and each returned channel names its own
+// direction explicitly (Kind/From/To), rather than assuming every row runs
+// the same way as the request's own from/to. Includes channel-node-mediated
+// pub/sub edges, since a NodeTypeChannel node's Service is the publisher's
+// service by construction (see flows_test.go), making a channel->consumer
+// edge already cross the pair directly without extra channel-node hopping
+// here.
 func ServiceChannels(idx *AdjacencyIndex, from, to string) (*ServiceChannelsResult, error) {
 	if from == "" || to == "" {
 		return nil, fmt.Errorf("missing from/to service")
@@ -98,6 +105,8 @@ func ServiceChannels(idx *AdjacencyIndex, from, to string) (*ServiceChannelsResu
 		kind      string
 		channel   string
 		edgeID    string
+		from      string
+		to        string
 		state     string
 		producers map[string]bool
 		consumers map[string]bool
@@ -110,14 +119,23 @@ func ServiceChannels(idx *AdjacencyIndex, from, to string) (*ServiceChannelsResu
 			continue
 		}
 		fn, tn := idx.Nodes[e.From], idx.Nodes[e.To]
-		if fn == nil || tn == nil || fn.Service != from || tn.Service != to {
+		if fn == nil || tn == nil {
+			continue
+		}
+		var dirFrom, dirTo string
+		switch {
+		case fn.Service == from && tn.Service == to:
+			dirFrom, dirTo = from, to
+		case fn.Service == to && tn.Service == from:
+			dirFrom, dirTo = to, from
+		default:
 			continue
 		}
 		identity := channelIdentity(idx, e)
-		key := string(e.Type) + "\x00" + identity
+		key := dirFrom + "\x00" + dirTo + "\x00" + string(e.Type) + "\x00" + identity
 		g := groups[key]
 		if g == nil {
-			g = &group{kind: string(e.Type), channel: identity, edgeID: e.ID, producers: map[string]bool{}, consumers: map[string]bool{}}
+			g = &group{kind: string(e.Type), channel: identity, edgeID: e.ID, from: dirFrom, to: dirTo, producers: map[string]bool{}, consumers: map[string]bool{}}
 			groups[key] = g
 		}
 		if e.ID < g.edgeID {
@@ -141,6 +159,8 @@ func ServiceChannels(idx *AdjacencyIndex, from, to string) (*ServiceChannelsResu
 			Kind:              g.kind,
 			Channel:           g.channel,
 			EdgeID:            g.edgeID,
+			From:              g.from,
+			To:                g.to,
 			VerificationState: g.state,
 			ProducerCount:     len(g.producers),
 			ConsumerCount:     len(g.consumers),

@@ -73,7 +73,15 @@ export async function resolveContainer(
     return (groupForFile(containerGroups, n.file) ?? groupForFile(rootGroups, n.file))?.id;
   }
 
-  const agg = new Map<string, { from: string; to: string; type: string; count: number }>();
+  // UN.8: one edge per *unordered* group pair, not per (direction, type) —
+  // same fix as lib/aggregate.ts's overview aggregation, for the same
+  // reason: a pair with traffic both ways (e.g. a folder's http_client
+  // calling out, and an sse push edge coming back the other way) drew as
+  // two near-parallel/overlapping lines that were impossible to tell apart
+  // and, worse, only left the topmost one clickable — the other's existence
+  // was invisible. types accumulates every distinct edge type crossing the
+  // pair so the merged edge's label stays informative.
+  const agg = new Map<string, { a: string; b: string; total: number; types: Set<string>; forward: number; backward: number }>();
   const stubIds = new Set<string>();
 
   for (const e of all.edges) {
@@ -88,10 +96,20 @@ export async function resolveContainer(
     if (!fromIn && !toIn) continue; // neither endpoint touches this container
     if (!fromIn) stubIds.add(fromGroup);
     if (!toIn) stubIds.add(toGroup);
-    const key = `${fromGroup} ${toGroup} ${e.type}`;
-    const cur = agg.get(key);
-    if (cur) cur.count++;
-    else agg.set(key, { from: fromGroup, to: toGroup, type: e.type, count: 1 });
+    // Dedupe key is order-independent, but a/b (the drawn edge's own
+    // from/to) keep whichever direction was observed *first* — a
+    // unidirectional pair must keep its real arrow direction rather than
+    // getting force-flipped to alphabetical order.
+    const key = fromGroup < toGroup ? `${fromGroup} ${toGroup}` : `${toGroup} ${fromGroup}`;
+    let g = agg.get(key);
+    if (!g) {
+      g = { a: fromGroup, b: toGroup, total: 0, types: new Set(), forward: 0, backward: 0 };
+      agg.set(key, g);
+    }
+    g.total++;
+    g.types.add(e.type);
+    if (fromGroup === g.a) g.forward++;
+    else g.backward++;
   }
 
   const nodes: GraphNode[] = containerGroups.map((g) => ({
@@ -125,13 +143,19 @@ export async function resolveContainer(
     if (raw) nodes.push(stubNode(id, raw.label, raw.service, "service", ""));
   }
 
-  const edges: GraphEdge[] = [...agg.values()].map((a) => ({
-    id: `agg:${a.from}->${a.to}:${a.type}`,
-    from: a.from,
-    to: a.to,
-    type: a.type,
-    label: a.count > 1 ? `${a.type} ×${a.count}` : a.type,
-  }));
+  const edges: GraphEdge[] = [...agg.values()].map((g) => {
+    const bidirectional = g.forward > 0 && g.backward > 0;
+    const types = [...g.types].sort();
+    const label = types.length > 1 ? `${g.total} edges` : g.total > 1 ? `${types[0]} ×${g.total}` : types[0];
+    return {
+      id: `agg:${g.a}-${g.b}`,
+      from: g.a,
+      to: g.b,
+      type: types.length === 1 ? types[0] : "cross_service",
+      label,
+      meta: { bidirectional: bidirectional ? "true" : "false" },
+    };
+  });
 
   return sortGraphData({ nodes, edges });
 }

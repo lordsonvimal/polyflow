@@ -119,22 +119,6 @@ async function fetchForScope(scope: Scope, signal?: AbortSignal): Promise<GraphD
   }
 }
 
-// Deterministic per-edge curvature so edges that happen to be collinear with
-// an unrelated third node (common in rank-based layouts like dagre, and in
-// force layouts when two same-shape siblings converge) bend around it
-// instead of visually passing through/behind it as a straight line.
-function edgeHash(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return h;
-}
-
-function edgeCurveDistance(ele: { id(): string }): number {
-  const h = edgeHash(ele.id());
-  const magnitude = 4 + (Math.abs(h) % 5); // 4-8px — just enough to break collinearity, not a visible arc
-  return h % 2 === 0 ? magnitude : -magnitude;
-}
-
 function buildStylesheet(): object[] {
   return [
     {
@@ -166,12 +150,13 @@ function buildStylesheet(): object[] {
     {
       selector: "edge",
       style: {
-        "line-color": "#374151",
-        "target-arrow-color": "#374151",
+        // #374151 read as barely-there against CANVAS_BG (#030712) once a
+        // brighter accent color (e.g. sse_endpoint's teal) sat right next to
+        // it — matches the edge label's existing #6b7280 for consistency.
+        "line-color": "#6b7280",
+        "target-arrow-color": "#6b7280",
         "target-arrow-shape": "triangle",
-        "curve-style": "unbundled-bezier",
-        "control-point-distances": edgeCurveDistance,
-        "control-point-weights": 0.5,
+        "curve-style": "straight",
         "font-size": "9px",
         color: "#6b7280",
         width: 1,
@@ -197,6 +182,28 @@ function buildStylesheet(): object[] {
     // hidden, lib/filters.ts) — muted + dotted so it still reads as
     // "structural plumbing," distinct from primary business-logic edges.
     { selector: "edge[noise_class]", style: { "line-style": "dotted", opacity: 0.5 } },
+    // sse_endpoint is the server→client push direction of a connection
+    // whose request/connect direction is drawn as a separate http_call
+    // edge — still relevant wherever a raw (non-aggregated) sse_endpoint
+    // edge reaches canvas, e.g. a neighborhood/service-internal scope.
+    {
+      selector: "edge[type = 'sse_endpoint']",
+      style: {
+        "line-color": "#2dd4bf",
+        "target-arrow-color": "#2dd4bf",
+        width: 2,
+      },
+    },
+    // UN.8: at the overview altitude, a service pair with traffic in both
+    // directions is one aggregated pill (lib/aggregate.ts), not two
+    // separate edges — styling two near-parallel lines apart never read
+    // clearly no matter the color/arrow/width combination tried. An arrow
+    // on both ends says "both ways" at a glance; the actual per-direction,
+    // per-type breakdown lives in ServicePairPanel behind a click.
+    {
+      selector: "edge[bidirectional = 'true']",
+      style: { "source-arrow-shape": "triangle", "source-arrow-color": "#6b7280" },
+    },
     // UF.6: impact scope depth rings — target accented, direct dependents
     // strong, transitive fading. Set client-side (scopes/impact.ts's BFS
     // over the already-fetched edge set) since /api/graph/trace has no
@@ -594,8 +601,17 @@ export default function CanvasHost() {
         const el = cy.getElementById(edgeId);
         const from = serviceFromNodeId((el.data("source") as string) ?? "");
         const to = serviceFromNodeId((el.data("target") as string) ?? "");
-        selectionStore.setSelection({ kind: "edge", id: edgeId });
+        selectionStore.setSelection({ kind: "edge", id: edgeId, label: el.data("label") as string | undefined });
         servicePairStore.open(from, to, edgeId);
+        return;
+      }
+      // Any other edge (including a non-overview `agg:` pill, e.g. a
+      // container-scope stub connector — those have no dedicated drill-in
+      // panel) carries its cytoscape `label` data along so DetailHost's
+      // generic fallback can show it instead of a bare id with no body.
+      if (intent.type === "select") {
+        const el = cy.getElementById(edgeId);
+        selectionStore.setSelection({ kind: "edge", id: edgeId, label: el.data("label") as string | undefined });
         return;
       }
     }

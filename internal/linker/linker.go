@@ -919,4 +919,40 @@ func LinkSSEClients(nodes []graph.Node) []graph.Edge {
 	return edges
 }
 
+// LinkSSEPush adds the server→client push-direction edge for a live SSE
+// connection. contracts/http.yaml's API-call variant already joins an
+// eventsource_connect node to its server-side handler with an http_call
+// edge shaped like a request (client→handler) — correct for "who does this
+// connection reach," but backwards for flow tracing: once the connection is
+// open, the handler keeps *writing* to it, so the real dataflow direction is
+// handler→client. Without this edge, `polyflow flows` starting from the
+// server entrypoint could never reach the client's onmessage handler (only
+// LinkSSEClients' subscribes edge exists, and it starts at the client node).
+// Must run after contract.Engine.Link since it depends on the http_call
+// edges the engine produces.
+func LinkSSEPush(nodes []graph.Node, edges []graph.Edge) []graph.Edge {
+	patternByID := make(map[string]string, len(nodes))
+	for i := range nodes {
+		patternByID[nodes[i].ID] = nodes[i].Meta["pattern"]
+	}
+	var out []graph.Edge
+	for _, e := range edges {
+		if e.Type != graph.EdgeTypeHTTPCall {
+			continue
+		}
+		if patternByID[e.From] != "eventsource_connect" {
+			continue
+		}
+		out = append(out, graph.Edge{
+			ID:         fmt.Sprintf("sse_push:%s->%s", e.To, e.From),
+			From:       e.To,
+			To:         e.From,
+			Type:       graph.EdgeTypeSSEEndpoint,
+			Confidence: graph.ConfidenceInferred,
+			Meta:       map[string]string{"via": "eventsource"},
+		})
+	}
+	return out
+}
+
 

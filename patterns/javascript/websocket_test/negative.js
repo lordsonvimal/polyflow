@@ -7,6 +7,11 @@ switch (record.kind) {
     run(record);
     break;
 }
+switch (intent.type) {
+  case 'select':
+    handleSelect(intent);
+    break;
+}
 if (msg.type !== 'battery') {
   ignore(msg);
 }
