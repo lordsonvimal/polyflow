@@ -158,6 +158,48 @@ func TestResolveTarget_Ambiguity(t *testing.T) {
 	}
 }
 
+func TestAmbiguityStatus_WithinServiceIsAmbiguous(t *testing.T) {
+	// Two exact-label matches, same service, different files: a genuine pick
+	// ResolveTarget had to make arbitrarily — status should flag it.
+	n1 := node("a1", "Authenticate", "server", "pkg/a.go", "function")
+	n2 := node("a2", "Authenticate", "server", "pkg/b.go", "function")
+	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
+	_, cands, _, err := graph.ResolveTarget(context.Background(), s, "Authenticate", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := graph.AmbiguityStatus(cands); got != graph.AmbiguityStatusAmbiguous {
+		t.Fatalf("want status %q, got %q", graph.AmbiguityStatusAmbiguous, got)
+	}
+}
+
+func TestAmbiguityStatus_CrossServiceIsNotAmbiguous(t *testing.T) {
+	// Same symbol matching in 2 different services (e.g. a shared HTTP-contract
+	// name on client and server) is impact's intentional cross-service union —
+	// must NOT be flagged ambiguous, or agents would be told to "pick one" for
+	// a case impact already answers correctly in one call.
+	n1 := node("cli", "Broadcast", "client", "src/api.ts", "function")
+	n2 := node("srv", "Broadcast", "server", "api/broadcast.go", "function")
+	s := &stubSearcher{nodes: []*graph.Node{n1, n2}}
+	_, cands, _, err := graph.ResolveTarget(context.Background(), s, "Broadcast", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := graph.AmbiguityStatus(cands); got != "" {
+		t.Fatalf("want no status (cross-service union), got %q", got)
+	}
+}
+
+func TestAmbiguityStatus_Unambiguous(t *testing.T) {
+	if got := graph.AmbiguityStatus(nil); got != "" {
+		t.Fatalf("want no status for nil candidates, got %q", got)
+	}
+	one := []graph.TargetCandidate{{ID: "x", Service: "server"}}
+	if got := graph.AmbiguityStatus(one); got != "" {
+		t.Fatalf("want no status for single candidate, got %q", got)
+	}
+}
+
 func TestResolveTarget_PrefersNonTestFileOnTie(t *testing.T) {
 	// Two exact-label matches, same service+type, no explicit disambiguating
 	// filter: a same-named mock/helper in a test file must not win over the

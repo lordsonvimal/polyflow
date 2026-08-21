@@ -477,7 +477,7 @@ func TestTraceTool_BackwardChain(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Chains     []string               `json:"chains"`
+		Chains     []string              `json:"chains"`
 		Unresolved []graph.UnresolvedRef `json:"unresolved"`
 	}
 	callJSON(t, cs, "trace", map[string]any{"root": "queryDB", "direction": "backward"}, &out)
@@ -936,6 +936,56 @@ func TestImpactTool_AmbiguityInResponse(t *testing.T) {
 	require.NotNil(t, out.Target)
 	// Two exact matches → candidates non-empty even without filter.
 	assert.Len(t, out.TargetCandidates, 2, "ambiguous result must have target_candidates")
+}
+
+// fixtureSameServiceAmbiguous creates a store with two exact-label matches
+// for "Authenticate" in the SAME service (two Go functions in different
+// files) — a genuine pick, unlike fixtureAmbiguous's cross-service case
+// which impact deliberately unions rather than treats as ambiguity.
+func fixtureSameServiceAmbiguous() (*fakeStore, *graph.AdjacencyIndex) {
+	a1 := &graph.Node{ID: "srv:Authenticate:a", Type: graph.NodeTypeFunction, Label: "Authenticate", Service: "server", File: "api/a.go", Line: 10, Language: "go"}
+	a2 := &graph.Node{ID: "srv:Authenticate:b", Type: graph.NodeTypeFunction, Label: "Authenticate", Service: "server", File: "api/b.go", Line: 20, Language: "go"}
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(a1)
+	idx.AddNode(a2)
+	store := &fakeStore{nodes: []*graph.Node{a1, a2}}
+	return store, idx
+}
+
+// TestImpactTool_StatusAmbiguousWithinService verifies CI.1: two exact
+// matches within one service set status: "ambiguous" — a genuine pick, not
+// impact's cross-service union.
+func TestImpactTool_StatusAmbiguousWithinService(t *testing.T) {
+	store, idx := fixtureSameServiceAmbiguous()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Status           string                  `json:"status"`
+		TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "Authenticate"}, &out)
+
+	assert.Equal(t, "ambiguous", out.Status, "two same-service exact matches must set status: ambiguous")
+	assert.Len(t, out.TargetCandidates, 2)
+}
+
+// TestImpactTool_StatusNotSetOnCrossServiceUnion guards CI.1's explicit
+// non-goal: impact's cross-service auto-merge (fixtureAmbiguous — the same
+// symbol matching in 2 different services) must NOT be flagged ambiguous,
+// since impact already unions the blast radius across both in this single
+// call rather than requiring the caller to pick one.
+func TestImpactTool_StatusNotSetOnCrossServiceUnion(t *testing.T) {
+	store, idx := fixtureAmbiguous()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Status  string        `json:"status"`
+		Targets []*graph.Node `json:"targets"`
+	}
+	callJSON(t, cs, "impact", map[string]any{"target": "Login"}, &out)
+
+	assert.Empty(t, out.Status, "cross-service union must not be flagged ambiguous")
+	assert.Len(t, out.Targets, 2, "cross-service query must still union both services' blast radii")
 }
 
 // TestImpactTool_UnambiguousEmptyCandidates verifies that a unique target has

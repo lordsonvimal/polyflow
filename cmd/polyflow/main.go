@@ -1221,6 +1221,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	result := pfcontext.Build(idx, root.ID, contextTask, contextDepth, contextVerboseSources, loadStaleAfter(meta.ConfigFile), include)
 	result.TargetCandidates = candidates
+	result.Status = graph.AmbiguityStatus(candidates)
 	result.ResolutionNote = graph.ResolutionNote(contextTarget, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
@@ -1473,6 +1474,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("root node %s not in graph", root.ID)
 	}
 	result.TargetCandidates = candidates
+	result.Status = graph.AmbiguityStatus(candidates)
 	result.ResolutionNote = graph.ResolutionNote(traceRoot, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
@@ -1717,6 +1719,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		Include:        include,
 	})
 	out.TargetCandidates = candidates
+	out.Status = graph.AmbiguityStatus(candidates)
 	out.ResolutionNote = graph.ResolutionNote(impactTarget, exactMatch)
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 
@@ -1832,6 +1835,9 @@ func impactNoun(direction string) string {
 func printAmbiguousCandidates(w io.Writer, query, resolvedID string, candidates []graph.TargetCandidate) {
 	if len(candidates) == 0 {
 		return
+	}
+	if graph.AmbiguityStatus(candidates) == graph.AmbiguityStatusAmbiguous {
+		fmt.Fprintf(w, "status: ambiguous\n")
 	}
 	fmt.Fprintf(w, "%d other exact match(es) for %q — use --target-service to pin one:\n", len(candidates)-1, query)
 	for _, c := range candidates {

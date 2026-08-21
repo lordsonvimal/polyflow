@@ -102,6 +102,12 @@ type Result struct {
 	// should re-query with target_service/--target-service when non-empty.
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 
+	// Status is "ambiguous" (graph.AmbiguityStatusAmbiguous) when
+	// TargetCandidates reflects a genuine multi-candidate pick within one
+	// service, as distinct from a cross-service name match — see
+	// graph.AmbiguityStatus. Empty (omitted) otherwise.
+	Status string `json:"status,omitempty"`
+
 	// ResolutionNote is set when Root came from a full-text-search guess
 	// rather than a confirmed exact-label match — see graph.ResolutionNote.
 	// Empty (omitted) on an ordinary exact resolution.

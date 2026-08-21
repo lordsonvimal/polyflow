@@ -87,6 +87,14 @@ type Result struct {
 	// should re-query with target_service/--target-service when non-empty.
 	TargetCandidates []graph.TargetCandidate `json:"target_candidates"`
 
+	// Status is "ambiguous" (graph.AmbiguityStatusAmbiguous) when
+	// TargetCandidates reflects a genuine multi-candidate pick within one
+	// service, as distinct from the cross-service name match Targets below
+	// represents — see graph.AmbiguityStatus. Empty (omitted) otherwise;
+	// always empty when Targets is set, since that's the union case, not
+	// ambiguity.
+	Status string `json:"status,omitempty"`
+
 	// Targets is set instead of a single Target when the query matched the
 	// same label in >1 service and target_service was left unspecified (e.g.
 	// a client-side call and its server-side handler sharing a name across an
