@@ -23,6 +23,25 @@ type serviceFiles struct {
 	deps  []deps.Dependency
 }
 
+// passScope classifies whether a pass's correctness depends on seeing nodes
+// from more than one service (FR.5b). scopeSameServiceOnly passes are fully
+// decided by FR.2's single-service index run — a future relink can skip
+// them entirely. scopeCrossService passes must be rerun against the merged
+// multi-service node set to produce correct results for a newly linked
+// service; among those, the ones that emit graph.Edge values also apply
+// linkPipelineState.filterByTargetServices before writing, so a scoped
+// relink only touches edges reachable from the target service(s) — the
+// invariant FR.3's MergeServiceDBs depends on (every other service's rows
+// stay untouched). This field only classifies passes today; nothing yet
+// sets targetServices to actually skip a same-service-only pass — that's
+// FR.5c's job (the `polyflow link --relink` command).
+type passScope int
+
+const (
+	scopeSameServiceOnly passScope = iota
+	scopeCrossService
+)
+
 // namedPass is one step of the linking pipeline (FR.5a). Extracted verbatim
 // from Run()'s previously-inline blocks so the pipeline is enumerable and
 // individually addressable — this file changes nothing about what gets
@@ -31,8 +50,9 @@ type serviceFiles struct {
 // no longer contains any linking logic of its own, only the loop that
 // drives this list plus the state it threads through it.
 type namedPass struct {
-	name string
-	exec func() error
+	name  string
+	scope passScope
+	exec  func() error
 }
 
 // linkPipelineState is the mutable state every pass reads and/or writes,
@@ -53,6 +73,13 @@ type linkPipelineState struct {
 	allNodes      []graph.Node
 	allEdges      []graph.Edge
 	allUnresolved []graph.UnresolvedRef
+
+	// targetServices restricts what a scopeCrossService pass's edge-emitting
+	// call persists to edges touching one of these services (see
+	// filterByTargetServices). nil/empty — Run()'s only setting today — is a
+	// no-op: every pass behaves exactly as it did before FR.5b. Set to a
+	// non-empty slice only by a future scoped relink (FR.5c).
+	targetServices []string
 
 	// jsImportedNames: set by the js_link pass, read by js_globals.
 	jsImportedNames map[string]bool
@@ -89,6 +116,41 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 	return bwE.Flush(st.ctx)
 }
 
+// filterEdgesByService keeps only edges where at least one endpoint's owning
+// service (looked up via nodeService) is in targets. Empty/nil targets is a
+// no-op — matching still needs every service's nodes present (narrowing
+// input would blind a match on another service's route), only what gets
+// *written* is restricted.
+func filterEdgesByService(edges []graph.Edge, nodeService map[string]string, targets []string) []graph.Edge {
+	if len(targets) == 0 {
+		return edges
+	}
+	want := make(map[string]bool, len(targets))
+	for _, s := range targets {
+		want[s] = true
+	}
+	kept := edges[:0]
+	for _, e := range edges {
+		if want[nodeService[e.From]] || want[nodeService[e.To]] {
+			kept = append(kept, e)
+		}
+	}
+	return kept
+}
+
+// filterByTargetServices applies filterEdgesByService using this pipeline's
+// current node set and targetServices.
+func (st *linkPipelineState) filterByTargetServices(edges []graph.Edge) []graph.Edge {
+	if len(st.targetServices) == 0 {
+		return edges
+	}
+	nodeService := make(map[string]string, len(st.allNodes))
+	for _, n := range st.allNodes {
+		nodeService[n.ID] = n.Service
+	}
+	return filterEdgesByService(edges, nodeService, st.targetServices)
+}
+
 // svcFilesOf builds the service-name → file-list map several passes need.
 // Recomputed per pass rather than hoisted onto the state, matching the
 // pattern the original inline blocks already used.
@@ -108,7 +170,7 @@ func (st *linkPipelineState) svcFilesOf() map[string][]string {
 func buildLinkPasses(st *linkPipelineState) []namedPass {
 	return []namedPass{
 		// JS/TS component + import-aware linking.
-		{"js_link", func() error {
+		{"js_link", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			jsLinker := linker.NewJSLinker()
 			jsEdges, removeIDs, linkerUnresolved, importedNames := jsLinker.LinkJS(st.allNodes, st.allEdges, svcFiles)
@@ -153,7 +215,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// L.W1: global/window symbol resolution + inline handler linking.
 		// Runs after LinkJS so imports-first ordering is enforced via jsImportedNames.
-		{"js_globals", func() error {
+		{"js_globals", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			globalEdges, globallyResolved, globalCollisions := linker.LinkJSGlobals(st.allNodes, st.allUnresolved, st.jsImportedNames, svcFiles)
 			filtered := st.allUnresolved[:0]
@@ -167,7 +229,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			return st.writeEdges(globalEdges)
 		}},
 		// JS/TS cross-file inherits/implements/instantiates edges.
-		{"js_type_relations", func() error {
+		{"js_type_relations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			jsTypeEdges, jsTypeUnresolved := linker.LinkJSTypeRelations(st.allNodes, svcFiles)
 			if err := st.writeEdges(jsTypeEdges); err != nil {
@@ -177,7 +239,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			return nil
 		}},
 		// Ruby cross-file inherits/implements/instantiates edges.
-		{"ruby_type_relations", func() error {
+		{"ruby_type_relations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			rubyTypeEdges, rubyTypeUnresolved := linker.LinkRubyTypeRelations(st.allNodes, svcFiles)
 			if err := st.writeEdges(rubyTypeEdges); err != nil {
@@ -190,7 +252,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// UserCategoryRuleSet.latest_for, LicenseReportJob.create!) — the
 		// same-file case is extractRubyVariables' job; this is the cross-file
 		// half, same split as the type-relations pass above.
-		{"ruby_class_method_calls", func() error {
+		{"ruby_class_method_calls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			classCallEdges, classCallUnresolved := linker.LinkRubyClassMethodCalls(st.allNodes, svcFiles)
 			if err := st.writeEdges(classCallEdges); err != nil {
@@ -204,7 +266,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// then `aws.complete_multipart_upload`) — the syntactically recoverable
 		// slice of the "any other receiver needs static type inference" gap the
 		// two passes above explicitly leave alone.
-		{"ruby_receiver_type_calls", func() error {
+		{"ruby_receiver_type_calls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			receiverTypeEdges, receiverTypeUnresolved := linker.LinkRubyReceiverTypeCalls(st.allNodes, svcFiles)
 			if err := st.writeEdges(receiverTypeEdges); err != nil {
@@ -217,7 +279,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// class-granularity `calls` edge to the associated model, the same
 		// shape emitClassMethodCall uses for a call that lands on no method
 		// node (an ActiveRecord finder, a `scope` macro).
-		{"ruby_associations", func() error {
+		{"ruby_associations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			assocEdges, assocUnresolved := linker.LinkRubyAssociations(st.allNodes, svcFiles)
 			if err := st.writeEdges(assocEdges); err != nil {
@@ -230,7 +292,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// the callback names, from the declaring class and from each action it
 		// guards. Needs the Ruby method nodes' qualified_name, so it runs after the
 		// parse phase; independent of the type-relation edges above.
-		{"rails_filters", func() error {
+		{"rails_filters", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			filterEdges, filterUnresolved := linker.LinkRailsFilters(st.allNodes, svcFiles)
 			if err := st.writeEdges(filterEdges); err != nil {
@@ -244,7 +306,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// LinkRubyTypeRelations, whose `inherits` edges are the ancestor chain this
 		// walks — and which is also what keeps it from binding a call to the copy of
 		// lib/dx.rb another service vendors.
-		{"ruby_mixin_methods", func() error {
+		{"ruby_mixin_methods", scopeSameServiceOnly, func() error {
 			mixinEdges, mixinResolved, mixinCollisions := linker.LinkRubyMixinMethods(st.allNodes, st.allEdges, st.allUnresolved)
 			filtered := st.allUnresolved[:0]
 			for _, u := range st.allUnresolved {
@@ -262,7 +324,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// unresolvable key_dynamic node. Runs before ResolveRubyHTTPHosts so an
 		// abstained call site's Meta["key_dynamic_raw"] gets the same shot at
 		// its host-method registry as any other dynamic Ruby http_client node.
-		{"ruby_wrapper_url_call_sites", func() error {
+		{"ruby_wrapper_url_call_sites", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			wrapperNodes, wrapperEdges := linker.ResolveRubyWrapperURLCallSites(st.allNodes, svcFiles)
 			if len(wrapperNodes) == 0 {
@@ -285,7 +347,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// the downstream config_resolve provider can bind them (or ledger a *named*
 		// deploy-secret miss) instead of an unactionable token. Runs before the
 		// contract engine + config_resolve so both see the upgraded key_dynamic_raw.
-		{"ruby_http_hosts", func() error {
+		{"ruby_http_hosts", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			hostNodes := linker.ResolveRubyHTTPHosts(st.allNodes, svcFiles)
 			if len(hostNodes) == 0 {
@@ -303,7 +365,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// whose base URL traces back to an os.Getenv read, so ApplyHints (J.2c)
 		// can turn a workspace `hint: SOME_URL` into a target_service allowlist.
 		// Must run before ApplyHints, like the Ruby pass.
-		{"go_http_hosts", func() error {
+		{"go_http_hosts", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			hostNodes := linker.ResolveGoHTTPHosts(st.allNodes, svcFiles)
 			if len(hostNodes) == 0 {
@@ -321,7 +383,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// JS/TS client at all, so this is the only source of Meta["env_var"] /
 		// Meta["host_default_literal"] for JS/TS nodes — must also run before
 		// Tier CB, same as the Go/Ruby passes.
-		{"js_http_hosts", func() error {
+		{"js_http_hosts", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			hostNodes := linker.ResolveJSHTTPHosts(st.allNodes, svcFiles)
 			if len(hostNodes) == 0 {
@@ -341,7 +403,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// so a client deployed behind `API_URL=https://host/api/v2` can join the
 		// `/api/v2/...` route it really calls. Runs here so it sees fresh stamps
 		// from all three, and well before ApplyHints.
-		{"config_baseurl", func() error {
+		{"config_baseurl", scopeSameServiceOnly, func() error {
 			svcDirs := make(map[string]string, len(st.allSvcFiles))
 			for _, sf := range st.allSvcFiles {
 				svcDirs[sf.svc.Name] = sf.svc.Path
@@ -358,10 +420,10 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
-		{"route_handlers", func() error {
+		{"route_handlers", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkRouteHandlers(st.allNodes))
 		}},
-		{"grpc_handlers", func() error {
+		{"grpc_handlers", scopeSameServiceOnly, func() error {
 			grpcEdges, grpcUnresolved := linker.LinkGRPCHandlers(st.allNodes)
 			if err := st.writeEdges(grpcEdges); err != nil {
 				return err
@@ -371,7 +433,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Rails routes name their action by convention, not by the Meta["handler"]
 		// receiver string LinkRouteHandlers keys on, so they need their own pass.
-		{"rails_route_actions", func() error {
+		{"rails_route_actions", scopeSameServiceOnly, func() error {
 			railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(st.allNodes)
 			if err := st.writeEdges(railsActionEdges); err != nil {
 				return err
@@ -379,7 +441,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, railsActionUnresolved...)
 			return nil
 		}},
-		{"route_components", func() error {
+		{"route_components", scopeSameServiceOnly, func() error {
 			routeCompEdges, routeCompUnresolved := linker.LinkRouteComponents(st.allNodes)
 			if err := st.writeEdges(routeCompEdges); err != nil {
 				return err
@@ -387,11 +449,11 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, routeCompUnresolved...)
 			return nil
 		}},
-		{"templ_components", func() error {
+		{"templ_components", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkTemplComponents(st.allNodes))
 		}},
 		// templ <script src> → JS file imports.
-		{"templ_scripts", func() error {
+		{"templ_scripts", scopeSameServiceOnly, func() error {
 			scriptEdges, scriptUnresolved := linker.LinkTemplScripts(st.allNodes)
 			if err := st.writeEdges(scriptEdges); err != nil {
 				return err
@@ -400,7 +462,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			return nil
 		}},
 		// JS DOM target → templ element `defined_in` (creates templ_element nodes).
-		{"dom_definitions", func() error {
+		{"dom_definitions", scopeSameServiceOnly, func() error {
 			domNodes, domEdges, domUnresolved := linker.LinkDOMDefinitions(st.allNodes)
 			for i := range domNodes {
 				n := domNodes[i]
@@ -421,7 +483,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// templ producer (data-testid/id) attribute -> JS attribute-selector
 		// consumer `dom_contract` (IA.5): component -> JS site directly, no
 		// intermediate node, so investigate/walkFlows reach it in one hop.
-		{"dom_contracts", func() error {
+		{"dom_contracts", scopeSameServiceOnly, func() error {
 			_, contractEdges, contractUnresolved := linker.LinkDOMContracts(st.allNodes)
 			if err := st.writeEdges(contractEdges); err != nil {
 				return err
@@ -431,7 +493,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Structural backbone: service→file→declaration + struct→method contains
 		// edges (mints synthetic service/file nodes, so persist them before wiring).
-		{"containment", func() error {
+		{"containment", scopeSameServiceOnly, func() error {
 			containNodes, containEdges := linker.LinkContainment(st.allNodes)
 			for i := range containNodes {
 				n := containNodes[i]
@@ -450,7 +512,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// nothing containment-shaped). Runs before the JS import-edge pass so those
 		// files are already valid, persisted import targets rather than mint-on-miss
 		// fallbacks there.
-		{"ensure_scanned_files", func() error {
+		{"ensure_scanned_files", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			barrelNodes, barrelEdges := linker.EnsureAllScannedFiles(st.allNodes, svcFiles)
 			for i := range barrelNodes {
@@ -467,7 +529,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// JS/TS + Ruby file-level import edges (file→file between NodeTypeFile nodes).
 		// Runs after LinkContainment so the file nodes are present in allNodes.
-		{"js_import_edges", func() error {
+		{"js_import_edges", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			jsImportEdges, updatedFileNodes, jsImportUnresolved := linker.LinkJSImportEdges(st.allNodes, svcFiles)
 			for i := range updatedFileNodes {
@@ -490,7 +552,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// WB.1-detected wrapper even across files and even when the URL argument
 		// is a local variable, not a literal — producer_alias_url_call/obj_call
 		// require a literal at the call site and never fire otherwise.
-		{"js_api_wrapper_calls", func() error {
+		{"js_api_wrapper_calls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			wrapperNodes, wrapperEdges := linker.LinkJSAPIWrapperCalls(st.allNodes, svcFiles)
 			for i := range wrapperNodes {
@@ -507,7 +569,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Tier K.5: stylesheet @import graph + containment for the selector and
 		// @font-face nodes the stylesheet parser mints.
-		{"stylesheet_imports", func() error {
+		{"stylesheet_imports", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			cssNodes, cssEdges, cssUnresolved := linker.LinkStylesheetImports(st.allNodes, svcFiles)
 			for i := range cssNodes {
@@ -528,7 +590,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Tier K.3: Rails asset pipeline — `//= require` directives plus the
 		// `javascript_include_tag` page bindings that sit on top of them.
-		{"sprockets_assets", func() error {
+		{"sprockets_assets", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			assetNodes, assetEdges, assetUnresolved := linker.LinkSprocketsAssets(st.allNodes, svcFiles)
 			for i := range assetNodes {
@@ -549,7 +611,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Tier K.2: Rails view layer — partial nesting, the controller→template
 		// convention, and the react_component mount seam.
-		{"rails_views", func() error {
+		{"rails_views", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			viewNodes, viewEdges, viewUnresolved := linker.LinkRailsViews(st.allNodes, svcFiles)
 			for i := range viewNodes {
@@ -568,7 +630,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, viewUnresolved...)
 			return nil
 		}},
-		{"ruby_import_edges", func() error {
+		{"ruby_import_edges", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			rubyImportEdges, rubyImportUnresolved := linker.LinkRubyImportEdges(st.allNodes, svcFiles)
 			if err := st.writeEdges(rubyImportEdges); err != nil {
@@ -577,12 +639,12 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, rubyImportUnresolved...)
 			return nil
 		}},
-		{"datastores", func() error {
+		{"datastores", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkDatastores(st.allNodes))
 		}},
 		// Y.3c: parse table names out of datastore call SQL and terminate each
 		// query/persist at a real table entity (mints table nodes).
-		{"tables", func() error {
+		{"tables", scopeSameServiceOnly, func() error {
 			tableNodes, tableEdges := linker.LinkTables(st.allNodes)
 			for i := range tableNodes {
 				n := tableNodes[i]
@@ -599,20 +661,20 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Y.4: join server response DTOs to the client interfaces that mirror their
 		// JSON shape (cross-language response_of). Runs after all returns/consumes
 		// edges are collected so it can gate on server-declared response structs.
-		{"response_shapes", func() error {
-			return st.writeEdges(linker.LinkResponseShapes(st.allNodes, st.allEdges))
+		{"response_shapes", scopeCrossService, func() error {
+			return st.writeEdges(st.filterByTargetServices(linker.LinkResponseShapes(st.allNodes, st.allEdges)))
 		}},
 		// Y.6: join a createResource loader's http_client to the reactive signal it
 		// feeds (http_client → signal flows_to). Needs the calls edges from Pass 2,
 		// so it runs after the bulk of edges are collected.
-		{"resource_signals", func() error {
+		{"resource_signals", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkResourceSignals(st.allNodes, st.allEdges))
 		}},
-		{"sse_clients", func() error {
+		{"sse_clients", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkSSEClients(st.allNodes))
 		}},
 		// Broker hint linking (via: rabbitmq + exchange).
-		{"broker_hints", func() error {
+		{"broker_hints", scopeCrossService, func() error {
 			hintNodes, hintEdges, hintUnresolved := linker.LinkBrokerHints(st.cfg.Links, st.allNodes)
 			st.allUnresolved = append(st.allUnresolved, hintUnresolved...)
 			for i := range hintNodes {
@@ -625,12 +687,12 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			return st.writeEdges(hintEdges)
+			return st.writeEdges(st.filterByTargetServices(hintEdges))
 		}},
 		// L.W0: resolve Rails route-helper names on nav_link_rails_helper nodes to
 		// real method+path so the http contract rule (G.1 nav variant) can match them.
 		// Must run before ApplyHints so the resolved path is visible to the engine.
-		{"rails_nav_helpers", func() error {
+		{"rails_nav_helpers", scopeSameServiceOnly, func() error {
 			railsUpdated, railsUnresolved := linker.ResolveRailsNavHelpers(st.allNodes)
 			// Build a quick ID→index map for O(1) in-place updates to allNodes.
 			nodeByID := make(map[string]int, len(st.allNodes))
@@ -659,7 +721,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Runs after per-file parsing and all linking passes above, before the
 		// contract engine, so synthesized http_handler nodes participate in
 		// cross-service linking.
-		{"file_route_synthesis", func() error {
+		{"file_route_synthesis", scopeSameServiceOnly, func() error {
 			fileNodeMap := make(map[string][]graph.Node, len(st.allNodes))
 			for _, n := range st.allNodes {
 				if n.File != "" {
@@ -694,7 +756,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
 		// opts.ContractsDir may add workspace-custom rules on top of the embedded defaults (G.5).
-		{"load_contract_rules", func() error {
+		{"load_contract_rules", scopeCrossService, func() error {
 			rules, err := contract.Load(contractdata.FS, st.opts.ContractsDir)
 			if err != nil {
 				return fmt.Errorf("contract rules: %w", err)
@@ -706,7 +768,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// router groups (gin r.Group / chi r.Route). This is a contextual node-join
 		// that normalizers cannot perform; it mutates only the working copy
 		// (hintedNodes/enrichedNodes), not the persisted allNodes.
-		{"apply_hints_and_enrich", func() error {
+		{"apply_hints_and_enrich", scopeCrossService, func() error {
 			st.hintedNodes = linker.ApplyHints(st.cfg.Links, st.allNodes, st.allEdges)
 			st.enrichedNodes = contract.EnrichRouteGroups(st.hintedNodes)
 			// The composition above is computed for matching, on a working copy. Agents
@@ -720,7 +782,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Gin middleware chain: handler --calls--> the middleware guarding it
 		// (r.Use/group.Use), so `impact`/`context` on a route or a middleware
 		// function surfaces the other side without a separate tool.
-		{"gin_middleware", func() error {
+		{"gin_middleware", scopeSameServiceOnly, func() error {
 			mwEdges, mwUnresolved := linker.LinkGinMiddleware(st.enrichedNodes, st.allEdges)
 			if err := st.writeEdges(mwEdges); err != nil {
 				return err
@@ -732,7 +794,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// for `app.use(mw)`/`router.use(mw)` registrations (see
 		// internal/linker/express_middleware.go for the v1 same-file/
 		// same-receiver scope this covers).
-		{"express_middleware", func() error {
+		{"express_middleware", scopeSameServiceOnly, func() error {
 			mwEdges, mwUnresolved := linker.LinkExpressMiddleware(st.enrichedNodes, st.allEdges)
 			if err := st.writeEdges(mwEdges); err != nil {
 				return err
@@ -744,7 +806,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name
 		// or instance_name meta) are removed from the working copy; their info feeds
 		// the alias table used to rewrite call nodes before Engine.Link.
-		{"enrich_aliases", func() error {
+		{"enrich_aliases", scopeCrossService, func() error {
 			enriched, aliasUnresolved := contract.EnrichAliases(st.enrichedNodes)
 			st.enrichedNodes = enriched
 			st.allUnresolved = append(st.allUnresolved, aliasUnresolved...)
@@ -754,7 +816,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// across the repo boundary on the registration handshake's field symbol, so
 		// the existing queue_name contract can join publisher to consumer. Resolves
 		// keys only — it emits no edges of its own.
-		{"amqp_handshake", func() error {
+		{"amqp_handshake", scopeCrossService, func() error {
 			handshakeUnresolved, handshakeResolved := linker.LinkAMQPHandshake(st.enrichedNodes)
 			st.handshakeResolved = handshakeResolved
 			st.allUnresolved = linker.DropResolvedRefs(st.allUnresolved, handshakeResolved)
@@ -767,16 +829,17 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Emits edges directly (not through the contract engine) since the join
 		// is on a bare constant name, not a structural role any contracts/*.yaml
 		// rule already models.
-		{"amqp_message_type_dispatch", func() error {
-			mtEdges := linker.LinkAMQPMessageTypeDispatch(st.enrichedNodes)
+		{"amqp_message_type_dispatch", scopeCrossService, func() error {
+			mtEdges := st.filterByTargetServices(linker.LinkAMQPMessageTypeDispatch(st.enrichedNodes))
 			if len(mtEdges) == 0 {
 				return nil
 			}
 			return st.writeEdges(mtEdges)
 		}},
-		{"contract_engine", func() error {
+		{"contract_engine", scopeCrossService, func() error {
 			eng := &contract.Engine{}
 			result := eng.Link(st.enrichedNodes, st.contractRules, st.cfg.Links)
+			result.Edges = st.filterByTargetServices(result.Edges)
 			st.contractResult = result
 
 			for i := range result.Nodes {
@@ -796,11 +859,11 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Server→client SSE push edge, mirroring the http_call connection edge
 		// the engine just produced for eventsource_connect nodes. Must run after
 		// contractResult.Edges exists (see linker.LinkSSEPush).
-		{"sse_push", func() error {
-			return st.writeEdges(linker.LinkSSEPush(st.enrichedNodes, st.contractResult.Edges))
+		{"sse_push", scopeCrossService, func() error {
+			return st.writeEdges(st.filterByTargetServices(linker.LinkSSEPush(st.enrichedNodes, st.contractResult.Edges)))
 		}},
 		// G.5: persist per-kind coverage so `polyflow doctor` can report matched/unresolved.
-		{"contract_coverage", func() error {
+		{"contract_coverage", scopeCrossService, func() error {
 			coverage := contract.ComputeCoverage(st.contractRules, st.contractResult)
 			if coverageJSON, marshalErr := json.Marshal(coverage); marshalErr == nil {
 				_ = st.store.SetMeta(st.ctx, "contract_coverage", string(coverageJSON))
