@@ -31,10 +31,10 @@ func LinkContainment(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 	var newNodes []graph.Node
 	var edges []graph.Edge
 
-	serviceID := map[string]string{}           // service -> service node ID
-	fileID := map[string]string{}              // service\x00file -> file node ID
-	structByKey := map[string]string{}         // service\x00dir\x00label -> struct node ID
-	svcFileSeen := map[string]bool{}           // service\x00file dedup for service→file edges
+	serviceID := map[string]string{}   // service -> service node ID
+	fileID := map[string]string{}      // service\x00file -> file node ID
+	structByKey := map[string]string{} // service\x00dir\x00label -> struct node ID
+	svcFileSeen := map[string]bool{}   // service\x00file dedup for service→file edges
 
 	// First pass: index structs by package (directory) so struct→method resolves
 	// even when the method lives in a different file of the same package.
@@ -52,10 +52,11 @@ func LinkContainment(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 		id := "service:" + service
 		serviceID[service] = id
 		newNodes = append(newNodes, graph.Node{
-			ID:    id,
-			Type:  graph.NodeTypeService,
-			Label: service,
-			Meta:  map[string]string{"kind": "service"},
+			ID:      id,
+			Type:    graph.NodeTypeService,
+			Label:   service,
+			Service: service,
+			Meta:    map[string]string{"kind": "service"},
 		})
 		return id
 	}
