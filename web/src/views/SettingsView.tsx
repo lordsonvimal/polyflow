@@ -1,12 +1,14 @@
 import { For, Show, createSignal } from "solid-js";
 import PatternsPanel from "./patterns/PatternsPanel";
 import AgentSetupPanel from "./setup/AgentSetupPanel";
+import FleetStatusPanel from "./fleet/FleetStatusPanel";
 
-type Section = "patterns" | "agents";
+type Section = "patterns" | "agents" | "fleet";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "patterns", label: "Patterns" },
   { id: "agents", label: "Agents" },
+  { id: "fleet", label: "Fleet" },
 ];
 
 export default function SettingsView() {
@@ -35,6 +37,9 @@ export default function SettingsView() {
         </Show>
         <Show when={section() === "agents"}>
           <AgentSetupPanel />
+        </Show>
+        <Show when={section() === "fleet"}>
+          <FleetStatusPanel />
         </Show>
       </div>
     </div>

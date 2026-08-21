@@ -211,6 +211,7 @@ func (s *Server) registerRoutes() {
 	s.handle("DELETE /api/views/{id}", s.handleDeleteView)
 	s.handle("GET /api/patterns", s.handleListPatterns)
 	s.handle("POST /api/patterns", s.handleAddPattern)
+	s.handle("GET /api/fleet/status", s.handleFleetStatus)
 	s.handle("GET /api/setup/status", s.handleSetupStatus)
 	s.handle("POST /api/setup/apply", s.handleSetupApply)
 	s.handle("GET /api/setup/agents", s.handleSetupAgents)
