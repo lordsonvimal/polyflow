@@ -27,18 +27,14 @@ import (
 // remain unresolved; those routes surface via the contract-engine's unmatched
 // policy on the consumer side (never a silent drop).
 func EnrichRouteGroups(nodes []graph.Node) []graph.Node {
-	// Deep-copy the slice so callers' Meta maps are not mutated.
+	// Shallow-copy the slice: each element's Meta map is cloned lazily by
+	// setPath, copy-on-write, only when a route actually needs composing.
+	// Most nodes in a large fleet are never inside a route group, so eagerly
+	// deep-copying every node's Meta here was pure waste — it dominated a
+	// scoped `link --relink`'s wall time (measured ~70% on a 9-service/50k-
+	// node fleet) despite touching only a small fraction of nodes.
 	enriched := make([]graph.Node, len(nodes))
-	for i, n := range nodes {
-		if n.Meta != nil {
-			copied := make(map[string]string, len(n.Meta))
-			for k, v := range n.Meta {
-				copied[k] = v
-			}
-			n.Meta = copied
-		}
-		enriched[i] = n
-	}
+	copy(enriched, nodes)
 
 	// ── Collect group descriptors grouped by file ──────────────────────────
 
@@ -339,14 +335,22 @@ func stripQuotes(s string) string {
 // route literal preserves the distinction between "what this call site writes"
 // and "where it actually routes", which is the pair a reader needs.
 func setPath(n *graph.Node, path string) {
-	if n.Meta == nil {
-		n.Meta = make(map[string]string)
+	old := ""
+	if n.Meta != nil {
+		old = n.Meta["path"]
 	}
-	old := n.Meta["path"]
-	n.Meta["path"] = path
 	if path == old {
 		return
 	}
+	// Copy-on-write: n.Meta may still be the map shared with the caller's
+	// original node slice (EnrichRouteGroups shallow-copies, not deep) — clone
+	// only now, for the minority of nodes that actually compose a path.
+	cloned := make(map[string]string, len(n.Meta)+2)
+	for k, v := range n.Meta {
+		cloned[k] = v
+	}
+	n.Meta = cloned
+	n.Meta["path"] = path
 	n.Meta["full_path"] = path
 	// Handler labels are minted as `method + " " + path` (including the
 	// trailing space when the route literal is empty, e.g. `camUsers.GET("")`).
