@@ -153,6 +153,35 @@ func ResolveTarget(ctx context.Context, store NodeSearcher, query, targetService
 	return root, candidates, exactMatch, nil
 }
 
+// AmbiguityStatusAmbiguous is the value AmbiguityStatus returns for a
+// genuine multi-candidate pick a caller must resolve before trusting the
+// result. Callers surface this verbatim as a JSON "status" field / CLI
+// status line so an agent can branch on it without inferring ambiguity from
+// target_candidates non-emptiness alone — that slice is also populated,
+// deliberately, for impact's intentional cross-service union (see
+// resolveAllServiceRoots in mcpserver.go), which is not this case.
+const AmbiguityStatusAmbiguous = "ambiguous"
+
+// AmbiguityStatus classifies a ResolveTarget candidates slice as genuinely
+// ambiguous or not. Candidates confined to a single service are a real
+// pick ResolveTarget made arbitrarily (e.g. two same-named helpers in
+// different files of one service) — "" otherwise: either unambiguous
+// (≤1 candidate) or a cross-service name match (e.g. a shared HTTP-contract
+// symbol on both client and server), which impact deliberately unions
+// rather than treating as ambiguity requiring disambiguation.
+func AmbiguityStatus(candidates []TargetCandidate) string {
+	if len(candidates) <= 1 {
+		return ""
+	}
+	service := candidates[0].Service
+	for _, c := range candidates[1:] {
+		if c.Service != service {
+			return ""
+		}
+	}
+	return AmbiguityStatusAmbiguous
+}
+
 // preferNonTestFile returns the first node in nodes whose file does not look
 // like a test file, or nodes[0] if every match is in a test file (or nodes
 // has no File set at all, e.g. service-level nodes).

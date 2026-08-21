@@ -589,6 +589,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 
 	result := pfcontext.Build(idx, root.ID, task, depth, in.VerboseSources, s.staleAfter, include)
 	result.TargetCandidates = candidates
+	result.Status = graph.AmbiguityStatus(candidates)
 	result.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
@@ -624,16 +625,16 @@ func defaultSnippetLines(n int) int {
 // ─── impact ──────────────────────────────────────────────────────────────────
 
 type impactInput struct {
-	Target          string `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
-	TargetService   string `json:"target_service,omitempty" jsonschema:"narrow to ONE service's blast radius. Leave unset even when target_candidates is non-empty: an unqualified query already unions the blast radius across every service where the symbol matches exactly (e.g. a shared HTTP-contract name on both the client and server side) in this single call — do not re-call once per candidate service, it is redundant. Only set this when you specifically want just one service's slice"`
-	TargetType      string `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
-	File            string `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
-	Direction       string `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read. Use both for a 'what else do I need to touch/change' question — backward alone will not surface things the target itself depends on"`
-	Depth           int    `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
-	Service         string `json:"service,omitempty" jsonschema:"filter results to a specific service"`
-	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. A merged multi-service answer (query auto-merges when a name matches >1 service, e.g. a shared HTTP-contract symbol) honours your requested budget up to 15000 tokens even if you pass more or an unlimited negative value — one merged call at max_tokens 15000 is cheaper and more complete than splitting into one target_service call per candidate, and is the preferred way to call this. Only set target_service when you specifically want just one service's slice, or need more than 15000 tokens of detail for that one service"`
-	Summary         bool   `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
-	SnippetLines    int    `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
+	Target          string   `json:"target,omitempty" jsonschema:"search query for the target node (use this or file)"`
+	TargetService   string   `json:"target_service,omitempty" jsonschema:"narrow to ONE service's blast radius. Leave unset even when target_candidates is non-empty: an unqualified query already unions the blast radius across every service where the symbol matches exactly (e.g. a shared HTTP-contract name on both the client and server side) in this single call — do not re-call once per candidate service, it is redundant. Only set this when you specifically want just one service's slice"`
+	TargetType      string   `json:"target_type,omitempty" jsonschema:"restrict target resolution to this node type (function, component, ...)"`
+	File            string   `json:"file,omitempty" jsonschema:"file path: report impact at file granularity instead of node granularity"`
+	Direction       string   `json:"direction,omitempty" jsonschema:"forward, backward, or both (default backward). backward answers 'what breaks if I change this'; forward answers 'what does this reach' — what you need to read. Use both for a 'what else do I need to touch/change' question — backward alone will not surface things the target itself depends on"`
+	Depth           int      `json:"depth,omitempty" jsonschema:"max traversal depth (default 10, -1 = unlimited)"`
+	Service         string   `json:"service,omitempty" jsonschema:"filter results to a specific service"`
+	MaxTokens       int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that rolls large blast radii up per file. Small results still return full per-node detail. A merged multi-service answer (query auto-merges when a name matches >1 service, e.g. a shared HTTP-contract symbol) honours your requested budget up to 15000 tokens even if you pass more or an unlimited negative value — one merged call at max_tokens 15000 is cheaper and more complete than splitting into one target_service call per candidate, and is the preferred way to call this. Only set target_service when you specifically want just one service's slice, or need more than 15000 tokens of detail for that one service"`
+	Summary         bool     `json:"summary,omitempty" jsonschema:"force the file-grouped rollup instead of per-node detail, regardless of size"`
+	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
 	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. impact has no task concept, so the default (unset) always hides all four classes"`
@@ -692,6 +693,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		out = impact.Build(idx, root, opts)
 	}
 	out.TargetCandidates = candidates
+	out.Status = graph.AmbiguityStatus(candidates)
 	out.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	out.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	out.AttachUnresolved(unresolved)
@@ -766,6 +768,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 		return nil, nil, fmt.Errorf("root node %s not in graph", root.ID)
 	}
 	result.TargetCandidates = candidates
+	result.Status = graph.AmbiguityStatus(candidates)
 	result.ResolutionNote = graph.ResolutionNote(in.Root, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
 	unresolved, err := store.ListUnresolvedRefs(ctx)
