@@ -25,6 +25,11 @@ type Service struct {
 	Language   string   `yaml:"language" json:"language"`
 	Frameworks []string `yaml:"frameworks,omitempty" json:"frameworks,omitempty"`
 	Port       int      `yaml:"port,omitempty" json:"port,omitempty"`
+	// DB overrides the per-service graph DB directory (default:
+	// .polyflow/services/<name>/ under the workspace root). Rarely needed — set only when
+	// two workspace.yml files intentionally share one already-indexed service's DB (e.g. a
+	// read-only "platform" service referenced by several product-team workspaces).
+	DB string `yaml:"db,omitempty" json:"db,omitempty"`
 }
 
 // Link declares a known dependency between two services (HTTP or broker).
@@ -254,6 +259,14 @@ func Load(path string) (*WorkspaceConfig, error) {
 		}
 		seenRoots[resolved] = svc.Name
 		svc.Path = resolved
+
+		if svc.DB != "" {
+			resolvedDB, err := resolveServicePath(svc.DB, wsDir)
+			if err != nil {
+				return nil, fmt.Errorf("service %s: db: %w", svc.Name, err)
+			}
+			svc.DB = resolvedDB
+		}
 	}
 
 	seenNames := make(map[string]bool, len(cfg.Services))
@@ -319,7 +332,8 @@ func Save(path string, cfg *WorkspaceConfig) error {
 // InitHeaderComment is the single comment line `polyflow init` prepends to
 // the polyflow.yml it generates (Z.0), documenting Load's path resolution
 // rules for hand-editors who add out-of-tree services later.
-const InitHeaderComment = "# paths may be absolute or ~/-prefixed; relative paths resolve against this file\n"
+const InitHeaderComment = "# paths may be absolute or ~/-prefixed; relative paths resolve against this file\n" +
+	"# commit this file to share the fleet topology across machines/people — .polyflow/ stays local (gitignored) and is rebuilt by `polyflow index`\n"
 
 // SaveInit writes cfg to path via Save, then prepends InitHeaderComment.
 // Used only by `polyflow init` — Save itself stays header-free so repeated
