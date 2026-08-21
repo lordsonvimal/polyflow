@@ -674,3 +674,44 @@ func TestRun_CrossLinksCountsOnlyBoundaryCrossings(t *testing.T) {
 		"cross-service edges are a subset of all contract edges")
 	assert.Greater(t, stats.ContractEdges, 0)
 }
+
+// FR.1: Options.ServiceFilter scopes a run to a subset of cfg.Services
+// without touching the others' cached state, and nil (default) still
+// indexes everything exactly as before this option existed.
+func TestRun_ServiceFilter(t *testing.T) {
+	cfg, dir := testWorkspace(t)
+	dbDir := filepath.Join(dir, ".polyflow")
+
+	stats, err := Run(context.Background(), Options{
+		Config:        cfg,
+		DBDir:         dbDir,
+		PatternsDir:   "../../patterns",
+		Workers:       2,
+		ServiceFilter: []string{"backend"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.ParsedFiles, "only backend's one file should be parsed")
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+
+	hashes, err := store.ListFileHashes(context.Background())
+	require.NoError(t, err)
+	for file, fh := range hashes {
+		assert.Equal(t, "backend", fh.Service, "file_hashes must contain only backend rows, got %s (service=%s)", file, fh.Service)
+	}
+
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+	for _, n := range idx.Nodes {
+		if n.Service != "" {
+			assert.Equal(t, "backend", n.Service, "no frontend node should have been written")
+		}
+	}
+
+	// ServiceFilter: nil must still index every service (unchanged default).
+	allDir := filepath.Join(dir, ".polyflow-all")
+	allStats := runIndexer(t, cfg, allDir, false)
+	assert.Equal(t, 2, allStats.ParsedFiles, "nil ServiceFilter must index every service")
+}
