@@ -185,21 +185,42 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 				gapByID[synthID] = gap
 				gapOrder = append(gapOrder, synthID)
 				// Mint endpoint nodes if they don't already exist, tagged with
-				// the provider that surfaced them.
+				// the provider that surfaced them and a real owning service
+				// (never "") — every current provider (contract, config)
+				// stamps the non-anonymous side of a gap edge with a literal
+				// service name (Edge.From/To = svc.Name, not a resolved node
+				// ID), so that side's minted node IS its own owning service;
+				// the anonymous gap-endpoint side inherits its sibling's
+				// service, since a service's own missing-route report is what
+				// produced it. An unowned ("") node here is never swept by
+				// MergeServiceDBs's per-service DELETE, so a later
+				// `link --relink` for any service re-mints and re-inserts the
+				// identical ID, colliding on the nodes primary key.
 				for _, nodeID := range []string{from, to} {
-					if !nodeByID[nodeID] {
-						label := nodeID
-						if pe.Label != "" && nodeID == endpointNodeID(pe) {
-							label = pe.Label
-						}
-						allNodes = append(allNodes, graph.Node{
-							ID:    nodeID,
-							Type:  graph.NodeTypeService,
-							Label: label,
-							Meta:  map[string]string{"source": c.name},
-						})
-						nodeByID[nodeID] = true
+					if nodeByID[nodeID] {
+						continue
 					}
+					label := nodeID
+					if pe.Label != "" && nodeID == endpointNodeID(pe) {
+						label = pe.Label
+					}
+					owner := nodeID
+					if nodeID == endpointNodeID(pe) {
+						owner = ""
+						if sibling := from; sibling != nodeID {
+							owner = sibling
+						} else if sibling := to; sibling != nodeID {
+							owner = sibling
+						}
+					}
+					allNodes = append(allNodes, graph.Node{
+						ID:      nodeID,
+						Type:    graph.NodeTypeService,
+						Label:   label,
+						Service: owner,
+						Meta:    map[string]string{"source": c.name},
+					})
+					nodeByID[nodeID] = true
 				}
 			}
 		}
