@@ -251,6 +251,123 @@ func TestDefaultHookQuery_CleanFileNoNote(t *testing.T) {
 	}
 }
 
+// runHookForTestRaw is runHookForTest's counterpart for feeding a raw JSON
+// stdin payload rather than a marshaled hookPayload — used to prove
+// hookPayload's json tags actually parse each client's real captured field
+// names, not just the Go struct's own round-trip.
+func runHookForTestRaw(t *testing.T, rawJSON string) string {
+	t.Helper()
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		inW.Write([]byte(rawJSON))
+		inW.Close()
+	}()
+
+	done := make(chan struct{})
+	var out []byte
+	go func() {
+		out, _ = io.ReadAll(outR)
+		close(done)
+	}()
+
+	runHookContextInject(inR, outW)
+	outW.Close()
+	<-done
+	return string(out)
+}
+
+// TestRunHookContextInject_CursorPayloadShape feeds a payload shaped exactly
+// like Cursor's real postToolUse hook input (cursor.com/docs/hooks,
+// verified at implementation time: tool_name/tool_input/cwd/conversation_id,
+// no session_id field at all) and asserts the response includes Cursor's
+// documented "additional_context" (snake_case) output key.
+func TestRunHookContextInject_CursorPayloadShape(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".polyflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := newHookTestDB(t, "app/foo.go", 0)
+	if err := os.Rename(dbPath, filepath.Join(repoDir, ".polyflow", "graph.db")); err != nil {
+		t.Fatal(err)
+	}
+
+	conversationID := fmt.Sprintf("cursor-conv-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, conversationID+".json")) })
+
+	raw := fmt.Sprintf(`{
+		"conversation_id": %q,
+		"generation_id": "gen-1",
+		"model": "test-model",
+		"hook_event_name": "postToolUse",
+		"cursor_version": "1.7.0",
+		"workspace_roots": [%q],
+		"user_email": null,
+		"transcript_path": null,
+		"tool_name": "Read",
+		"tool_input": {"file_path": %q},
+		"tool_output": "{}",
+		"tool_use_id": "tu-1",
+		"cwd": %q,
+		"duration": 12
+	}`, conversationID, repoDir, filepath.Join(repoDir, "app/foo.go"), repoDir)
+
+	out := runHookForTestRaw(t, raw)
+	if !strings.Contains(out, `"additional_context"`) {
+		t.Fatalf("expected Cursor's additional_context key in output, got %q", out)
+	}
+	if !strings.Contains(out, `"additionalContext"`) {
+		t.Fatalf("expected additionalContext key in output too (Claude compatibility), got %q", out)
+	}
+}
+
+// TestRunHookContextInject_GeminiCLIPayloadShape feeds a payload shaped
+// exactly like Gemini CLI's real AfterTool hook input
+// (geminicli.com/docs/hooks/reference, verified at implementation time:
+// tool_name/tool_input/tool_response/cwd/session_id) and asserts the
+// response nests context under the documented "hookSpecificOutput.
+// additionalContext" path.
+func TestRunHookContextInject_GeminiCLIPayloadShape(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".polyflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := newHookTestDB(t, "app/foo.go", 0)
+	if err := os.Rename(dbPath, filepath.Join(repoDir, ".polyflow", "graph.db")); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionID := fmt.Sprintf("gemini-session-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, sessionID+".json")) })
+
+	raw := fmt.Sprintf(`{
+		"session_id": %q,
+		"transcript_path": "/tmp/transcript.json",
+		"cwd": %q,
+		"hook_event_name": "AfterTool",
+		"timestamp": "2026-08-21T00:00:00Z",
+		"tool_name": "read_file",
+		"tool_input": {"file_path": %q},
+		"tool_response": {"llmContent": "...", "returnDisplay": "..."},
+		"mcp_context": {},
+		"original_request_name": "read_file"
+	}`, sessionID, repoDir, filepath.Join(repoDir, "app/foo.go"))
+
+	out := runHookForTestRaw(t, raw)
+	if !strings.Contains(out, `"hookSpecificOutput"`) {
+		t.Fatalf("expected Gemini CLI's hookSpecificOutput wrapper in output, got %q", out)
+	}
+	if !strings.Contains(out, `"additionalContext"`) {
+		t.Fatalf("expected nested additionalContext key in output, got %q", out)
+	}
+}
+
 func TestGrepPatternSymbols(t *testing.T) {
 	tests := []struct {
 		pattern string

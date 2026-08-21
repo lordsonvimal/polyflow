@@ -69,15 +69,15 @@ func TestHandleSetupAgentApply_CursorWritesConfigAndStatusFlips(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
 	}
 	var applyResp struct {
-		MCPResult    string `json:"mcp_result"`
-		HooksSkipped string `json:"hooks_skipped"`
+		MCPResult   string `json:"mcp_result"`
+		HooksResult string `json:"hooks_result"`
 	}
 	decodeJSON(t, w.Body.Bytes(), &applyResp)
 	if applyResp.MCPResult == "" {
 		t.Fatal("expected a non-empty mcp_result")
 	}
-	if applyResp.HooksSkipped == "" {
-		t.Fatal("expected hooks_skipped — cursor has no hook mechanism")
+	if applyResp.HooksResult == "" {
+		t.Fatal("expected a non-empty hooks_result — cursor now has a postToolUse hook mechanism")
 	}
 
 	// Status should now reflect the write this same handler just made.
@@ -87,14 +87,18 @@ func TestHandleSetupAgentApply_CursorWritesConfigAndStatusFlips(t *testing.T) {
 
 	var statusResp struct {
 		Agents []struct {
-			Name          string `json:"name"`
-			MCPConfigured bool   `json:"mcp_configured"`
+			Name            string `json:"name"`
+			MCPConfigured   bool   `json:"mcp_configured"`
+			HooksConfigured bool   `json:"hooks_configured"`
 		} `json:"agents"`
 	}
 	decodeJSON(t, statusW.Body.Bytes(), &statusResp)
 	for _, a := range statusResp.Agents {
 		if a.Name == "cursor" && !a.MCPConfigured {
 			t.Fatal("expected cursor to show mcp_configured=true after POST /api/setup/agent")
+		}
+		if a.Name == "cursor" && !a.HooksConfigured {
+			t.Fatal("expected cursor to show hooks_configured=true after POST /api/setup/agent")
 		}
 	}
 }
