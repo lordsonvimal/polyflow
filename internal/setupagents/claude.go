@@ -73,6 +73,36 @@ func (claudeAgent) SetupHooks(scope, polyflowBin string) (string, error) {
 	}
 }
 
+// MCPStatus shells out to `claude mcp list` since Claude Code's own config
+// storage (~/.claude.json plus possibly project-local state) isn't a file
+// format this package owns or wants to parse — the same reasoning SetupMCP
+// already applies by shelling to `claude mcp add` instead of hand-writing it.
+func (claudeAgent) MCPStatus(scope string) (bool, error) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return false, fmt.Errorf("claude CLI not found on PATH")
+	}
+	out, err := exec.Command("claude", "mcp", "list").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("%s: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.Contains(string(out), "polyflow"), nil
+}
+
+func (claudeAgent) HooksStatus(scope string) (bool, error) {
+	path, err := claudeSettingsPath(scope)
+	if err != nil {
+		return false, err
+	}
+	doc, existed, err := readJSONDoc(path)
+	if err != nil {
+		return false, err
+	}
+	if !existed {
+		return false, nil
+	}
+	return claudeHooksWired(doc), nil
+}
+
 func claudeSettingsPath(scope string) (string, error) {
 	if scope == "repo" {
 		return filepath.Join(".claude", "settings.json"), nil
@@ -131,4 +161,41 @@ func mergeClaudeHooks(doc map[string]any, command string) (added bool) {
 
 	hooks["PostToolUse"] = postToolUse
 	return added
+}
+
+// claudeHooksWired reports whether Bash, Read, and Grep are all already
+// wired to a context-injection hook command — matched by substring
+// ("hook-context-inject") rather than an exact command string, since the
+// polyflow binary path baked into the command can legitimately differ
+// between the machine that ran setup and the one checking status.
+func claudeHooksWired(doc map[string]any) bool {
+	hooks, _ := doc["hooks"].(map[string]any)
+	postToolUse, _ := hooks["PostToolUse"].([]any)
+	wired := map[string]bool{"Bash": false, "Read": false, "Grep": false}
+	for _, g := range postToolUse {
+		group, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		matcher, _ := group["matcher"].(string)
+		if _, tracked := wired[matcher]; !tracked {
+			continue
+		}
+		hookList, _ := group["hooks"].([]any)
+		for _, h := range hookList {
+			hm, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cmd, _ := hm["command"].(string); strings.Contains(cmd, "hook-context-inject") {
+				wired[matcher] = true
+			}
+		}
+	}
+	for _, ok := range wired {
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

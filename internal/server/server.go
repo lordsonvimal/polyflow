@@ -213,6 +213,8 @@ func (s *Server) registerRoutes() {
 	s.handle("POST /api/patterns", s.handleAddPattern)
 	s.handle("GET /api/setup/status", s.handleSetupStatus)
 	s.handle("POST /api/setup/apply", s.handleSetupApply)
+	s.handle("GET /api/setup/agents", s.handleSetupAgents)
+	s.handle("POST /api/setup/agent", s.handleSetupAgentApply)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Serve the built SolidJS frontend from the embedded FS so `serve` works
 	// from any working directory (not just the source-tree root).

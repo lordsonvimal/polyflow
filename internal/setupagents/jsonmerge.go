@@ -42,6 +42,22 @@ func writeJSONDoc(path string, doc map[string]any) error {
 	return nil
 }
 
+// mcpServerConfigured reports whether a top-level "mcpServers" entry named
+// name already exists in the JSON document at path. A missing file is not
+// configured, not an error — matches readJSONDoc's own "no file yet" case.
+func mcpServerConfigured(path, name string) (bool, error) {
+	doc, existed, err := readJSONDoc(path)
+	if err != nil {
+		return false, err
+	}
+	if !existed {
+		return false, nil
+	}
+	servers, _ := doc["mcpServers"].(map[string]any)
+	_, ok := servers[name]
+	return ok, nil
+}
+
 // mergeMCPServers merges a single `name: {command, args}` entry into the doc's
 // top-level "mcpServers" object — the shape shared by Claude Code's .mcp.json,
 // Cursor's mcp.json, and most other MCP-aware agents. Idempotent: re-running

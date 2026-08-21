@@ -31,6 +31,26 @@ export interface DiscoveredConfig {
   Settings?: Record<string, unknown>;
 }
 
+export type SetupScope = "repo" | "user" | "global";
+
+export interface SetupAgentInfo {
+  name: string;
+  display_name: string;
+  description: string;
+  supports_hooks: boolean;
+  supports_global_scope: boolean;
+  mcp_configured: boolean;
+  mcp_status_error?: string;
+  hooks_configured: boolean;
+  hooks_status_error?: string;
+}
+
+export interface SetupAgentApplyResult {
+  mcp_result: string;
+  hooks_result?: string;
+  hooks_skipped?: string;
+}
+
 const [status, setStatus] = createSignal<SetupStatus | null>(null);
 // Defaults false (not true) so the normal shell renders immediately on
 // first paint — matching every pre-UO.7 test/usage — and only swaps to the
@@ -44,6 +64,14 @@ const [discoverError, setDiscoverError] = createSignal<string | null>(null);
 const [discovered, setDiscovered] = createSignal<DiscoveredConfig | null>(null);
 const [applying, setApplying] = createSignal(false);
 const [applyError, setApplyError] = createSignal<string | null>(null);
+
+const [agentScope, setAgentScope] = createSignal<SetupScope>("repo");
+const [agents, setAgents] = createSignal<SetupAgentInfo[]>([]);
+const [agentsLoading, setAgentsLoading] = createSignal(false);
+const [agentsError, setAgentsError] = createSignal<string | null>(null);
+const [applyingAgent, setApplyingAgent] = createSignal<string | null>(null);
+const [agentApplyResults, setAgentApplyResults] = createSignal<Record<string, SetupAgentApplyResult>>({});
+const [agentApplyErrors, setAgentApplyErrors] = createSignal<Record<string, string>>({});
 
 function errMessage(err: unknown): string {
   if (err instanceof ApiError) return err.body || err.message;
@@ -125,6 +153,48 @@ async function apply(cfg: DiscoveredConfig): Promise<boolean> {
   }
 }
 
+// loadAgents reflects live filesystem status for the given scope — hits
+// GET /api/setup/agents fresh every call rather than caching, so switching
+// back to the UI after running `polyflow setup` from a terminal (or vice
+// versa) always shows the current on-disk state, not a stale snapshot.
+async function loadAgents(scope: SetupScope = agentScope()): Promise<void> {
+  setAgentScope(scope);
+  setAgentsLoading(true);
+  setAgentsError(null);
+  try {
+    const res = await apiFetchJSON<{ scope: string; agents: SetupAgentInfo[] }>(
+      `/api/setup/agents?scope=${encodeURIComponent(scope)}`,
+      { silent: true },
+    );
+    setAgents(res.agents);
+  } catch (err) {
+    setAgentsError(errMessage(err));
+  } finally {
+    setAgentsLoading(false);
+  }
+}
+
+async function applyAgent(name: string, scope: SetupScope = agentScope()): Promise<boolean> {
+  setApplyingAgent(name);
+  setAgentApplyErrors((prev) => ({ ...prev, [name]: "" }));
+  try {
+    const result = await apiFetchJSON<SetupAgentApplyResult>("/api/setup/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: name, scope }),
+      silent: true,
+    });
+    setAgentApplyResults((prev) => ({ ...prev, [name]: result }));
+    await loadAgents(scope);
+    return true;
+  } catch (err) {
+    setAgentApplyErrors((prev) => ({ ...prev, [name]: errMessage(err) }));
+    return false;
+  } finally {
+    setApplyingAgent(null);
+  }
+}
+
 export const setupStore = {
   status,
   checking,
@@ -137,6 +207,15 @@ export const setupStore = {
   discover,
   apply,
   pollJob,
+  agentScope,
+  agents,
+  agentsLoading,
+  agentsError,
+  applyingAgent,
+  agentApplyResults,
+  agentApplyErrors,
+  loadAgents,
+  applyAgent,
   reset: () => {
     setStatus(null);
     setChecking(true);
@@ -145,5 +224,10 @@ export const setupStore = {
     setDiscovered(null);
     setApplying(false);
     setApplyError(null);
+    setAgents([]);
+    setAgentsError(null);
+    setApplyingAgent(null);
+    setAgentApplyResults({});
+    setAgentApplyErrors({});
   },
 };
