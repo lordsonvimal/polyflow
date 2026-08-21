@@ -200,6 +200,12 @@ type FlowEntry struct {
 type FlowsThroughResult struct {
 	Flows     []FlowEntry `json:"flows"`
 	Truncated bool        `json:"truncated"`
+	// DeadEnd is true when target has zero outgoing flow edges (contains/
+	// declares excluded) — an empty Flows in that case means the node
+	// genuinely has nothing downstream (e.g. a goroutine whose body only
+	// calls stdlib/vendor code), not an unresolved link the linker missed.
+	// Lets the UI tell "nothing to find" apart from "something's unresolved".
+	DeadEnd bool `json:"dead_end"`
 }
 
 // flowEdgeTypes are edge types the UB.5 flow engine follows; EdgeTypeContains
@@ -207,6 +213,19 @@ type FlowsThroughResult struct {
 // from every flow/path/seam query in this file.
 func isFlowEdge(t EdgeType) bool {
 	return t != EdgeTypeContains && t != EdgeTypeDeclares
+}
+
+// HasOutgoingFlowEdge reports whether id has any outgoing edge the flow
+// engine follows (contains/declares excluded) — a cheap existence check for
+// callers (e.g. the flows/through empty-state message) that only need to
+// know whether a node is a genuine dead end, not the full edge list.
+func HasOutgoingFlowEdge(idx *AdjacencyIndex, id string) bool {
+	for _, e := range idx.OutEdges[id] {
+		if isFlowEdge(e.Type) {
+			return true
+		}
+	}
+	return false
 }
 
 // sortedFlowEdges returns id's outgoing flow edges (contains/declares

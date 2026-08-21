@@ -373,15 +373,135 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 	// to its parent's callerID) race with the parent function itself, flipping
 	// the edge type between runs when one uses `go f()` and the other uses
 	// `f()` for the same callee.
-	spawnPairs := make(map[string]bool)   // callerID+"->"+calleeID seen as ssa.Go
-	callPairs := make(map[string]bool)    // callerID+"->"+calleeID seen as regular call
-	funcArgCounts := make(map[string]int) // callerID+"->"+calleeID for func-arg references
+	spawnPairs := make(map[string]bool)        // callerID+"->"+calleeID seen as ssa.Go
+	callPairs := make(map[string]bool)         // callerID+"->"+calleeID seen as regular call
+	funcArgCounts := make(map[string]int)      // callerID+"->"+calleeID for func-arg references
+	closureParamCounts := make(map[string]int) // siteID+"->"+targetID for closure-param invocations (below)
 	var edges []graph.Edge
 
 	// WS.1: in-service forwarders that construct+return a datastar SSE generator,
 	// so a handler calling the wrapper (not datastar.NewSSE directly) is still
 	// flagged as an SSE streamer.
 	sseCtors := sseConstructors(inService)
+
+	// Closure-parameter call resolution: B.1 above links a call site's
+	// function-value argument straight to the passed function/closure, but
+	// that only helps when the *callee itself* invokes the parameter in its
+	// own body — resolveFunc collapses a plain (non-goroutine) closure
+	// literal's calls onto its enclosing function, so B.1's callerID==targetID
+	// guard silently drops the edge whenever the passed closure was declared
+	// inline in the same function that's making the call (the common case:
+	// `f(x, func(){ ... })` from inside f's own caller).
+	//
+	// The case this section covers is one layer indirect: a function F takes
+	// a func()-typed parameter and invokes it from somewhere *inside* F's own
+	// body (possibly from a nested closure or `go func(){...}()` literal that
+	// captures the parameter as a free variable) — not from the call site that
+	// handed the closure to F. Concretely: watchDB(dbPath, func(){ reloadDB(...) })
+	// hands a closure to watchDB; watchDB's own goroutine later calls that
+	// parameter as `onChange()`. Nothing links `onChange()`'s call site to the
+	// closure that ends up running, because the call and the argument that
+	// supplies it live in entirely different functions.
+	//
+	// invokedParams[F][paramIndex] collects the node ID of every place (F
+	// itself, or a nested closure/goroutine transitively capturing that
+	// parameter) that invokes the parameter. Once every in-service function's
+	// call sites are known, the main instruction walk below matches a direct
+	// call to F against invokedParams[F] and links each recorded invocation
+	// site to whatever function/closure the caller actually passed in that
+	// parameter's position (resolved the same way as B.1, via ssaArgFunc).
+	invokedParams := make(map[*ssa.Function]map[int]map[string]bool)
+	for fn := range inService {
+		var funcParamIdx map[*ssa.Parameter]int
+		for i, p := range fn.Params {
+			if _, ok := p.Type().Underlying().(*types.Signature); ok {
+				if funcParamIdx == nil {
+					funcParamIdx = make(map[*ssa.Parameter]int)
+				}
+				funcParamIdx[p] = i
+			}
+		}
+		if len(funcParamIdx) == 0 {
+			continue
+		}
+		watch := make(map[ssa.Value]int, len(funcParamIdx))
+		for p, idx := range funcParamIdx {
+			watch[p] = idx
+		}
+		// A parameter captured by any nested closure/goroutine is address-taken:
+		// the SSA builder allocates a stack cell for it (`t0 := new func();
+		// *t0 = onChange`) and the closure binds the cell's pointer, not the
+		// parameter value itself — so the cell must be tracked too, or the
+		// MakeClosure Bindings scan below never matches it.
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				store, ok := instr.(*ssa.Store)
+				if !ok {
+					continue
+				}
+				if idx, tracked := watch[store.Val]; tracked {
+					if _, isAlloc := store.Addr.(*ssa.Alloc); isAlloc {
+						watch[store.Addr] = idx
+					}
+				}
+			}
+		}
+
+		var walk func(walkFn *ssa.Function, watch map[ssa.Value]int)
+		walk = func(walkFn *ssa.Function, watch map[ssa.Value]int) {
+			siteID, siteOK := resolveFunc(walkFn)
+			for _, b := range walkFn.Blocks {
+				for _, instr := range b.Instrs {
+					switch v := instr.(type) {
+					case *ssa.MakeClosure:
+						// Propagate tracked parameter values (or their alloc
+						// cells) into a nested closure/goroutine literal via
+						// its FreeVar bindings, so `go func(){ onChange() }()`
+						// inside watchDB is walked too, not just watchDB's own
+						// top-level body.
+						nestedFn, ok := v.Fn.(*ssa.Function)
+						if !ok {
+							continue
+						}
+						var nested map[ssa.Value]int
+						for bi, bound := range v.Bindings {
+							if idx, tracked := watch[bound]; tracked && bi < len(nestedFn.FreeVars) {
+								if nested == nil {
+									nested = make(map[ssa.Value]int)
+								}
+								nested[nestedFn.FreeVars[bi]] = idx
+							}
+						}
+						if len(nested) > 0 {
+							walk(nestedFn, nested)
+						}
+					case ssa.CallInstruction:
+						common := v.Common()
+						if common.IsInvoke() || !siteOK {
+							continue
+						}
+						// An address-taken parameter is called through a Load
+						// off its cell (`t1 := *onChange; t1()`), so the call's
+						// value must be unwrapped one level before matching.
+						callVal := common.Value
+						if load, isLoad := callVal.(*ssa.UnOp); isLoad && load.Op == token.MUL {
+							callVal = load.X
+						}
+						if idx, tracked := watch[callVal]; tracked {
+							if invokedParams[fn] == nil {
+								invokedParams[fn] = make(map[int]map[string]bool)
+							}
+							if invokedParams[fn][idx] == nil {
+								invokedParams[fn][idx] = make(map[string]bool)
+							}
+							invokedParams[fn][idx][siteID] = true
+						}
+					}
+				}
+			}
+		}
+		walk(fn, watch)
+	}
 
 	for caller := range inService {
 		callerID, ok := resolveFunc(caller)
@@ -436,6 +556,33 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 						callees = append(callees, fn)
 						if isDatastarNewSSE(fn) || sseCtors[fn] {
 							callerIsSSE = true
+						}
+						// Closure-parameter resolution: this call site is
+						// handing fn one of its func()-typed arguments. If
+						// invokedParams recorded somewhere inside fn (or a
+						// closure/goroutine it spawns) that actually calls
+						// that parameter, link the invocation site straight
+						// to whatever was passed here.
+						if paramSites, tracked := invokedParams[fn]; tracked {
+							for idx, sites := range paramSites {
+								if idx >= len(common.Args) {
+									continue
+								}
+								targetFn := ssaArgFunc(common.Args[idx])
+								if targetFn == nil || !inService[targetFn] {
+									continue
+								}
+								targetID, ok3 := resolveFunc(targetFn)
+								if !ok3 {
+									continue
+								}
+								for siteID := range sites {
+									if siteID == targetID {
+										continue
+									}
+									closureParamCounts[siteID+"->"+targetID]++
+								}
+							}
 						}
 					}
 					// B.1: detect function values passed as arguments. Any *ssa.Function
@@ -561,6 +708,28 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 			Type:       graph.EdgeTypeCalls,
 			Confidence: graph.ConfidenceStatic,
 			Meta:       map[string]string{"via": "func_arg", "count": strconv.Itoa(funcArgCounts[key])},
+		})
+	}
+
+	// Emit closure-param edges: a func()-typed parameter invoked somewhere
+	// inside its owning function (see invokedParams above), linked to whatever
+	// function/closure was actually passed in at the call site. Sorted for
+	// determinism (bug-class rule 2); deduped via closureParamCounts.
+	closureParamKeys := make([]string, 0, len(closureParamCounts))
+	for key := range closureParamCounts {
+		closureParamKeys = append(closureParamKeys, key)
+	}
+	sort.Strings(closureParamKeys)
+	for _, key := range closureParamKeys {
+		sep := strings.Index(key, "->")
+		from, to := key[:sep], key[sep+2:]
+		edges = append(edges, graph.Edge{
+			ID:         "closureparam:calls:" + key,
+			From:       from,
+			To:         to,
+			Type:       graph.EdgeTypeCalls,
+			Confidence: graph.ConfidenceStatic,
+			Meta:       map[string]string{"via": "closure_param", "count": strconv.Itoa(closureParamCounts[key])},
 		})
 	}
 
