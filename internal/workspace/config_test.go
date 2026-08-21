@@ -230,6 +230,49 @@ services:
 	assert.Equal(t, filepath.Clean(svcDir), cfg.Services[0].Path)
 }
 
+// TestLoad_ServiceDBResolvesLikePath proves Service.DB, when set, resolves
+// against the workspace directory using the same rules as Service.Path
+// (FR.4) — the override exists so two polyflow.yml files can intentionally
+// share one already-indexed service's DB.
+func TestLoad_ServiceDBResolvesLikePath(t *testing.T) {
+	wsDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(wsDir, "svc-a"), 0o755))
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc-a
+    path: ./svc-a
+    language: go
+    db: ./shared-db/svc-a
+`)
+	cfg, err := workspace.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Services, 1)
+	assert.Equal(t, filepath.Join(wsDir, "shared-db", "svc-a"), cfg.Services[0].DB)
+}
+
+// TestLoad_ServiceDBEmptyByDefault proves a service without a db field
+// leaves Service.DB empty, so callers (FR.2's runIndex) fall back to the
+// default .polyflow/services/<name>/ location instead of an accidental
+// zero-value path.
+func TestLoad_ServiceDBEmptyByDefault(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "svc-a"), 0o755))
+	path := writeYAMLInDir(t, dir, `
+name: ws
+version: "1"
+services:
+  - name: svc-a
+    path: ./svc-a
+    language: go
+`)
+	cfg, err := workspace.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Services, 1)
+	assert.Empty(t, cfg.Services[0].DB)
+}
+
 // TestLoad_SymlinkedServiceRootDereferenced: X.5 fleet workspaces commonly
 // point Service.Path at a symlink (eval/.cache/<name> -> an out-of-tree
 // repo, the chessleap/Z.2 precedent). filepath.WalkDir treats a symlink
