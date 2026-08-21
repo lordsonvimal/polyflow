@@ -13,7 +13,11 @@ type windsurfAgent struct{}
 func (windsurfAgent) Name() string        { return "windsurf" }
 func (windsurfAgent) DisplayName() string { return "Windsurf" }
 func (windsurfAgent) Description() string {
-	return "MCP support via mcp_config.json (user scope only) — no post-tool-use hook mechanism"
+	// Windsurf does have a Cascade Hooks mechanism (docs.windsurf.com/windsurf/cascade/hooks,
+	// hooks.json in ~/.codeium/windsurf or .windsurf) — just not yet wired up
+	// here. Ship as its own increment once that contract is pinned, per this
+	// codebase's "one client at a time" convention.
+	return "MCP support via mcp_config.json (user scope only) — hook support not yet implemented"
 }
 func (windsurfAgent) SupportsHooks() bool       { return false }
 func (windsurfAgent) SupportsGlobalScope() bool { return false }
@@ -41,7 +45,7 @@ func (windsurfAgent) SetupMCP(scope, polyflowBin string) (string, error) {
 }
 
 func (windsurfAgent) SetupHooks(scope, polyflowBin string) (string, error) {
-	return "", fmt.Errorf("windsurf has no post-tool-use hook mechanism")
+	return "", fmt.Errorf("windsurf hook support is not yet implemented")
 }
 
 func (windsurfAgent) MCPStatus(scope string) (bool, error) {
@@ -56,7 +60,7 @@ func (windsurfAgent) MCPStatus(scope string) (bool, error) {
 }
 
 func (windsurfAgent) HooksStatus(scope string) (bool, error) {
-	return false, fmt.Errorf("windsurf has no post-tool-use hook mechanism")
+	return false, fmt.Errorf("windsurf hook support is not yet implemented")
 }
 
 func windsurfMCPPath() (string, error) {

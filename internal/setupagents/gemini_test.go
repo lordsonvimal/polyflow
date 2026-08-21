@@ -44,9 +44,67 @@ func TestGeminiCLI_MCPStatus_FalseThenTrueAfterSetup(t *testing.T) {
 	}
 }
 
-func TestGeminiCLI_HooksStatus_AlwaysErrors(t *testing.T) {
-	if _, err := (geminiCLIAgent{}).HooksStatus("repo"); err == nil {
-		t.Fatal("expected error — gemini cli has no hook mechanism")
+func TestGeminiCLI_HooksStatus_FalseThenTrueAfterSetup(t *testing.T) {
+	t.Chdir(t.TempDir())
+	agent := geminiCLIAgent{}
+
+	wired, err := agent.HooksStatus("repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wired {
+		t.Fatal("expected not wired before SetupHooks runs")
+	}
+
+	if _, err := agent.SetupHooks("repo", "polyflow"); err != nil {
+		t.Fatal(err)
+	}
+
+	wired, err = agent.HooksStatus("repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wired {
+		t.Fatal("expected wired after SetupHooks runs")
+	}
+}
+
+func TestGeminiCLI_SetupHooks_Idempotent(t *testing.T) {
+	t.Chdir(t.TempDir())
+	agent := geminiCLIAgent{}
+
+	if _, err := agent.SetupHooks("repo", "polyflow"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _, err := readJSONDoc(".gemini/settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := doc["hooks"].(map[string]any)
+	afterTool := hooks["AfterTool"].([]any)
+	if len(afterTool) != 1 {
+		t.Fatalf("expected 1 matcher group after first run, got %d", len(afterTool))
+	}
+	group := afterTool[0].(map[string]any)
+	if got := len(group["hooks"].([]any)); got != 1 {
+		t.Fatalf("expected 1 hook entry after first run, got %d", got)
+	}
+
+	if _, err := agent.SetupHooks("repo", "polyflow"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _, err = readJSONDoc(".gemini/settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks = doc["hooks"].(map[string]any)
+	afterTool = hooks["AfterTool"].([]any)
+	if len(afterTool) != 1 {
+		t.Fatalf("expected still 1 matcher group after second run (idempotent), got %d", len(afterTool))
+	}
+	group = afterTool[0].(map[string]any)
+	if got := len(group["hooks"].([]any)); got != 1 {
+		t.Fatalf("expected still 1 hook entry after second run (idempotent), got %d", got)
 	}
 }
 

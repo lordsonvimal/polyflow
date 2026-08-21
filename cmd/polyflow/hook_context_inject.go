@@ -127,6 +127,10 @@ type hookPayload struct {
 	ToolInput map[string]any `json:"tool_input"`
 	Cwd       string         `json:"cwd"`
 	SessionID string         `json:"session_id"`
+	// ConversationID is Cursor's postToolUse equivalent of SessionID —
+	// Cursor's hook payload (cursor.com/docs/hooks) has no session_id field
+	// at all, so this is the per-conversation dedupe key on that client.
+	ConversationID string `json:"conversation_id"`
 }
 
 // tokenizeShell splits a shell command into simple-command token lists,
@@ -478,6 +482,11 @@ func runHookContextInject(in *os.File, out *os.File) {
 		return
 	}
 
+	sessionID := payload.SessionID
+	if sessionID == "" {
+		sessionID = payload.ConversationID
+	}
+
 	// Normalize file-mode keys to a repo-relative path so `cat foo/bar.go`
 	// and a later Read of the absolute path dedupe against each other.
 	var dedupeKey string
@@ -486,7 +495,7 @@ func runHookContextInject(in *os.File, out *os.File) {
 	} else {
 		dedupeKey = "symbol:" + target
 	}
-	if hookAlreadySeen(payload.SessionID, dedupeKey) {
+	if hookAlreadySeen(sessionID, dedupeKey) {
 		return
 	}
 
@@ -502,7 +511,20 @@ func runHookContextInject(in *os.File, out *os.File) {
 		if block == "" {
 			return
 		}
-		data, err := json.Marshal(map[string]string{"additionalContext": block})
+		// Three shapes, not one: Claude Code's PostToolUse hook contract wants
+		// a flat "additionalContext" (camelCase); Cursor's postToolUse hook
+		// contract (cursor.com/docs/hooks) wants a flat "additional_context"
+		// (snake_case); Gemini CLI's AfterTool hook contract
+		// (geminicli.com/docs/hooks/reference) wants it nested under
+		// "hookSpecificOutput.additionalContext". Emitting all three is cheap
+		// and lets one binary serve any of these clients' hook commands
+		// without a --client flag, since an unrecognized extra JSON key is
+		// ignored by all of them.
+		data, err := json.Marshal(map[string]any{
+			"additionalContext":  block,
+			"additional_context": block,
+			"hookSpecificOutput": map[string]string{"additionalContext": block},
+		})
 		if err != nil {
 			return
 		}
