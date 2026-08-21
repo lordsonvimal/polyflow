@@ -50,6 +50,33 @@ func TestServiceChannels_MissingParams(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// UN.8: the overview now draws one edge per unordered service pair instead
+// of one per (direction, type) — a pair with traffic both ways must return
+// channels for both directions from a single (from, to) query, each row
+// naming its own actual direction rather than assuming the request's.
+func TestServiceChannels_BothDirections(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "polyflow"})
+	idx.AddNode(&graph.Node{ID: "client", Type: graph.NodeTypeHTTPClient, Label: "fetch", Service: "web"})
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "client", To: "handler", Type: graph.EdgeTypeHTTPCall, Label: "GET /x", VerificationState: graph.StateVerified})
+	idx.AddEdge(&graph.Edge{ID: "e2", From: "handler", To: "client", Type: graph.EdgeTypeSSEEndpoint, Label: "GET /x", VerificationState: graph.StateCandidate})
+
+	result, err := graph.ServiceChannels(idx, "web", "polyflow")
+	require.NoError(t, err)
+	require.Len(t, result.Channels, 2)
+
+	byKind := map[string]graph.ServiceChannel{}
+	for _, ch := range result.Channels {
+		byKind[ch.Kind] = ch
+	}
+	forward := byKind["http_call"]
+	assert.Equal(t, "web", forward.From)
+	assert.Equal(t, "polyflow", forward.To)
+	reverse := byKind["sse_endpoint"]
+	assert.Equal(t, "polyflow", reverse.From)
+	assert.Equal(t, "web", reverse.To)
+}
+
 // Two producer edges into the same channel identity (from distinct producer
 // nodes) must dedupe into one channel entry with producer_count reflecting
 // both — rule 1's fan-out, mirrored on the producer side this time.

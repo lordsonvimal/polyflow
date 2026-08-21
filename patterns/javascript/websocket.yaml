@@ -111,12 +111,20 @@ patterns:
         role: ws_message_type
 
   # switch (msg.type) { case 'battery': ... } — typed dispatch, one match per
-  # case so each message type becomes a handler entry.
+  # case so each message type becomes a handler entry. Gated on the switched
+  # value's own receiver name (`msg`/`message`, case-insensitive), mirroring
+  # ws_dispatch_if's guard below — an unguarded version matched *any*
+  # `switch (<expr>.type)` in the codebase, including plain discriminated-
+  # union dispatch unrelated to messaging (e.g. a UI `switch (intent.type)`
+  # over a click/drill/select Intent enum), which produced phantom
+  # "subscriber" entrypoints with no real producer to join against.
   - name: ws_dispatch_case
     query: |
       (switch_statement
         value: (parenthesized_expression
           (member_expression
+            object: (identifier) @obj
+            (#match? @obj "(?i)^(msg|message)$")
             property: (property_identifier) @prop
             (#eq? @prop "type")))
         body: (switch_body

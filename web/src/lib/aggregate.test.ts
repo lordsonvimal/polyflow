@@ -27,5 +27,19 @@ describe("aggregateServices (high-level view)", () => {
     expect(r.edges[0].from).toBe(serviceNodeId("svc-a"));
     expect(r.edges[0].to).toBe(serviceNodeId("svc-b"));
     expect(r.edges[0].label).toBe("http_call ×2");
+    expect(r.edges[0].meta?.bidirectional).toBe("false");
+  });
+
+  it("collapses both directions between a pair into one edge, flagged bidirectional", () => {
+    const biNodes = [node("w1", "web"), node("p1", "polyflow")];
+    const biEdges: GraphEdge[] = [
+      { id: "e1", from: "w1", to: "p1", type: "http_call" },
+      { id: "e2", from: "p1", to: "w1", type: "sse_endpoint" },
+    ];
+    const r = aggregateServices(biNodes, biEdges);
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0].meta?.bidirectional).toBe("true");
+    expect(r.edges[0].type).toBe("cross_service");
+    expect(r.edges[0].label).toBe("2 edges");
   });
 });

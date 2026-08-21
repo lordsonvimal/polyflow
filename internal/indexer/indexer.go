@@ -1374,6 +1374,13 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	allUnresolved = append(allUnresolved, contractResult.Unresolved...)
 	stats.ContractEdges, stats.CrossLinks = countContractEdges(contractResult.Edges, enrichedNodes)
 
+	// Server→client SSE push edge, mirroring the http_call connection edge
+	// the engine just produced for eventsource_connect nodes. Must run after
+	// contractResult.Edges exists (see linker.LinkSSEPush).
+	if err := writeEdges(linker.LinkSSEPush(enrichedNodes, contractResult.Edges)); err != nil {
+		return nil, err
+	}
+
 	// G.5: persist per-kind coverage so `polyflow doctor` can report matched/unresolved.
 	coverage := contract.ComputeCoverage(contractRules, contractResult)
 	if coverageJSON, marshalErr := json.Marshal(coverage); marshalErr == nil {

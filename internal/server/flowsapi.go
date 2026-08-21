@@ -56,12 +56,40 @@ func (s *Server) handleFlowsThrough(w http.ResponseWriter, r *http.Request) {
 // trace.Run for both the backward walk (to discover candidate entrypoint
 // roots) and the forward walk (to build the through-chain) rather than
 // reimplementing traversal.
+//
+// Both walks use the default (noise-filtered) include set rather than
+// AllNoiseInclude: unlike impact/corpus callers of trace.Run, which
+// deliberately want completeness, a flow chain is meant to read as one
+// causal path — containment/import/mixin/filter-chain edges aren't part of
+// that story, and left visible they dominate chain enumeration's fixed
+// 100-chain display cap (module-graph import fan-out in particular) before
+// enumeration ever reaches the real behavioral edge, so backward
+// root-discovery would silently miss real entrypoints.
 func flowsThrough(idx *graph.AdjacencyIndex, target *graph.Node, limit int) *graph.FlowsThroughResult {
+	noise := graph.DefaultNoiseInclude("debug")
 	rootIDs := map[string]bool{}
-	if back := trace.Run(idx, target.ID, "backward", 0, false, 0, graph.AllNoiseInclude(), 0); back != nil {
+	if back := trace.Run(idx, target.ID, "backward", 0, false, 0, noise, 0); back != nil {
+		// A type-based entrypoint (http_handler, subscriber, route, worker,
+		// grpc_handler, graphql_resolver) qualifies regardless of whether
+		// something else calls it — an HTTP route registered by a router
+		// setup function is still an entrypoint, not a mid-chain hop. So
+		// every hop that independently classifies as an entrypoint is a
+		// candidate root, not just the chain's terminal (zero-incoming-edge)
+		// node: requiring terminal-only meant a route several calls deep
+		// under main() was never recognized, and the walk kept going all the
+		// way up to main — whose own forward fan-out is too large to find
+		// its way back down to any single target within the chain-display
+		// cap. Terminal nodes are still covered: they're just Hops[0] of
+		// their own chain, included by classifying every hop here too.
 		for _, c := range back.Chains {
-			if len(c.Hops) > 0 {
-				rootIDs[c.Hops[0].ID] = true
+			for _, h := range c.Hops {
+				n, ok := idx.Nodes[h.ID]
+				if !ok {
+					continue
+				}
+				if _, _, ok := graph.ClassifyEntrypoint(n); ok {
+					rootIDs[h.ID] = true
+				}
 			}
 		}
 	}
@@ -83,7 +111,7 @@ func flowsThrough(idx *graph.AdjacencyIndex, target *graph.Node, limit int) *gra
 		if !ok {
 			continue
 		}
-		fwd := trace.Run(idx, rid, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
+		fwd := trace.Run(idx, rid, "forward", 0, false, 0, noise, 0)
 		if fwd == nil {
 			continue
 		}

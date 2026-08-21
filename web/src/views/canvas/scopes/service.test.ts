@@ -81,4 +81,21 @@ describe("resolveService", () => {
     const b = await resolveService({ kind: "service", service: "svcA" });
     expect(a).toEqual(b);
   });
+
+  // UN.8: a group pair with traffic both ways (e.g. an http_call out, an
+  // sse_endpoint push back) must collapse to one edge, not two overlapping
+  // ones — and keep the *first-observed* direction rather than force-
+  // flipping to alphabetical node-id order.
+  it("collapses a bidirectional group pair into one edge, keeping the first-observed direction", async () => {
+    const biGraph = {
+      nodes: [n("n1", "svcA", "app/a.go"), n("n2", "svcA", "top.go")],
+      edges: [e("e1", "n1", "n2", "http_call"), e("e2", "n2", "n1", "sse_endpoint")],
+    };
+    (globalThis as any).fetch = fakeFetch({ "/api/tree?service=svcA": TREE, "/api/graph?limit=2000&page=1": biGraph });
+    const d = await resolveService({ kind: "service", service: "svcA" });
+    const cross = d.edges.filter((x) => x.from === "folder:svcA:app" || x.to === "folder:svcA:app");
+    expect(cross).toHaveLength(1);
+    expect(cross[0]).toMatchObject({ from: "folder:svcA:app", to: "fileTop", type: "cross_service" });
+    expect(cross[0].meta?.bidirectional).toBe("true");
+  });
 });

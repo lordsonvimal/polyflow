@@ -228,6 +228,18 @@ export default function DetailHost() {
               >
                 <SeamSummary edgeId={sel().id} />
               </Show>
+              {/* UN.8: an `agg:` edge outside the overview scope (a
+                  container/folder-scope stub connector) has no dedicated
+                  drill-in panel — show its own aggregated label (e.g. "2
+                  edges", combining both directions/types crossing the pair)
+                  rather than rendering an empty body below the bare id. */}
+              <Show
+                when={
+                  sel().kind === "edge" && sel().id.startsWith("agg:") && servicePairStore.pair()?.edgeId !== sel().id && sel().label
+                }
+              >
+                <div class="text-xs text-neutral-400">{sel().label}</div>
+              </Show>
             </div>
           </div>
         )}

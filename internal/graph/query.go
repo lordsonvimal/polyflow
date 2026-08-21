@@ -35,6 +35,15 @@ var structuralEdgeTypes = map[EdgeType]bool{
 	EdgeTypeDeclares:     true,
 	EdgeTypeInstantiates: true,
 	EdgeTypeUsesType:     true,
+	// A file importing another only says the two are compiled/bundled
+	// together, not that anything in it runs — the same over-approximation
+	// as "this struct contains this method." Left unclassified, module-graph
+	// fan-out (one view file importing a dozen sibling views) drowns real
+	// behavioral chains in flow/trace enumeration before they're ever
+	// reached (observed on web/src/stores/connection.ts's SSE flow: import
+	// noise exhausted the 100-chain display cap before the real
+	// entrypoint→handler chain was enumerated).
+	EdgeTypeImports: true,
 }
 
 // TraversalPolicy shapes a walk for blast-radius use. The zero value is the

@@ -1,6 +1,11 @@
 import { createSignal } from "solid-js";
 
-export type Selection = { kind: "node" | "edge"; id: string } | null;
+// label is optional display metadata for an edge selection — populated by
+// CanvasHost from the clicked cytoscape element's own `label` data so a
+// generic detail-panel fallback (an `agg:` edge with no dedicated drill-in,
+// e.g. a container-scope stub connector) can show *something* beyond a bare
+// id, rather than silently rendering an empty body.
+export type Selection = { kind: "node" | "edge"; id: string; label?: string } | null;
 
 // Extends the base target with optional display metadata (populated by canvas in US.3)
 export type HoverTarget = {

@@ -9,7 +9,6 @@ import { paletteStore } from "../../stores/palette";
 import { scopeStore } from "../../stores/scope";
 import { exploreStore } from "../../stores/explore";
 import { fetchAllGraph } from "../canvas/scopes/common";
-import { aggregateServices } from "../../lib/aggregate";
 import { edgeGroupOf } from "../../lib/edgeGroups";
 import type { GraphNode, GraphEdge } from "../../lib/types";
 import { ListSkeleton } from "../../shell/Skeleton";
@@ -37,15 +36,21 @@ export function crossServiceChannelCounts(
   nodes: GraphNode[],
   edges: GraphEdge[],
 ): { group: string; count: number }[] {
-  const agg = aggregateServices(nodes, edges);
+  // UN.8: walks raw edges directly rather than reusing lib/aggregate.ts's
+  // overview edges — those now collapse a bidirectional service pair into
+  // one `cross_service`-typed pill (so canvas draws one line, not two
+  // near-duplicate ones), which would otherwise erase this panel's own
+  // per-type breakdown along with it.
+  const svcByNode = new Map<string, string>();
+  for (const n of nodes) if (n.service) svcByNode.set(n.id, n.service);
+
   const byGroup = new Map<string, number>();
-  for (const e of agg.edges) {
+  for (const e of edges) {
+    const from = svcByNode.get(e.from);
+    const to = svcByNode.get(e.to);
+    if (!from || !to || from === to) continue;
     const group = edgeGroupOf(e.type);
-    // aggregateServices' label is "type" (count 1) or "type ×N" — the count
-    // it already computed, parsed back out rather than re-walking raw edges.
-    const m = /×(\d+)$/.exec(e.label ?? "");
-    const n = m ? parseInt(m[1], 10) : 1;
-    byGroup.set(group, (byGroup.get(group) ?? 0) + n);
+    byGroup.set(group, (byGroup.get(group) ?? 0) + 1);
   }
   return [...byGroup.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
