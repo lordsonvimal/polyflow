@@ -25,6 +25,7 @@ const ACTIVITIES: { id: Activity; label: string }[] = [
   { id: "explore", label: "Explore" },
   { id: "flows", label: "Flows" },
   { id: "impact", label: "Impact" },
+  { id: "deadcode", label: "Dead code" },
   { id: "health", label: "Health" },
   { id: "config", label: "Config" },
   { id: "docs", label: "Docs" },

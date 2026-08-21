@@ -241,6 +241,7 @@ polyflow config link add --from web --to api --via http
 | `polyflow context --target <node>` | Callers, callees, and cross-service edges around a node. |
 | `polyflow trace --target <node>` | Multi-hop call chains (`A → B → C`), incl. cross-service hops. |
 | `polyflow impact --target <node>` | Blast radius: everything transitively affected. `--diff` scopes to the current git diff. |
+| `polyflow deadcode` | Function/method nodes with zero inbound `calls` edges, excluding recognized entry points. `--service`/`--file` scope a large fleet scan. |
 | `polyflow flows [<file>]` | Debug view: print spans parsed from an OTLP trace dump or a capture session (`--session <name>`); `--coverage` compares them against the indexed static edge baseline. Not a natural-language flow resolver — for that, use the MCP `flows` tool below. |
 | `polyflow link --infer` | Propose cross-service links from indexed evidence. |
 | `polyflow deps` | Resolved dependency versions per service. |
@@ -304,6 +305,7 @@ from the workspace root (one instance per workspace).
 | `trace` | Multi-hop call chains from a node as linear paths, including cross-service hops. |
 | `flows` | Full end-to-end flow from a starting point across services (HTTP, jobs, pub/sub, gRPC, renders). |
 | `entrypoints` | Catalog entry nodes (HTTP routes, subscribers, workers, gRPC/GraphQL handlers) by service/keyword. |
+| `deadcode` | Function/method nodes with zero inbound `calls` edges, excluding recognized entry points — a candidate list for removal, not a certainty (dynamic dispatch, reflection, and exported public API all show up as false positives). |
 | `read` | Return the exact source span of a symbol (function/method/struct/interface) by node id — its true `Line..end_line`, not a fixed window or the whole file. |
 | `hierarchy` | Structural shape of the workspace: service → directory → file → top-level symbols, with roll-up counts. One call to orient in an unfamiliar repo instead of `ls`/`find`/grep; symbol `id`s feed into `read`/`context`/`impact`. |
 

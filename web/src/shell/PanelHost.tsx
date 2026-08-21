@@ -4,6 +4,7 @@ import Resizer from "./Resizer";
 import ExploreView from "../views/ExploreView";
 import FlowsView from "../views/FlowsView";
 import ImpactView from "../views/ImpactView";
+import DeadcodeView from "../views/DeadcodeView";
 import HealthView from "../views/HealthView";
 import ConfigView from "../views/ConfigView";
 import DocsView from "../views/DocsView";
@@ -29,6 +30,7 @@ export default function PanelHost() {
               <Match when={layoutPrefs.activity() === "explore"}><ExploreView /></Match>
               <Match when={layoutPrefs.activity() === "flows"}><FlowsView /></Match>
               <Match when={layoutPrefs.activity() === "impact"}><ImpactView /></Match>
+              <Match when={layoutPrefs.activity() === "deadcode"}><DeadcodeView /></Match>
               <Match when={layoutPrefs.activity() === "health"}><HealthView /></Match>
               <Match when={layoutPrefs.activity() === "config"}><ConfigView /></Match>
               <Match when={layoutPrefs.activity() === "docs"}><DocsView /></Match>
