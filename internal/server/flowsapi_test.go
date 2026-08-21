@@ -88,6 +88,33 @@ func TestHandleFlowsThrough_OK(t *testing.T) {
 	}
 }
 
+// TestHandleFlowsThrough_DeadEnd verifies that a worker entrypoint with zero
+// outgoing flow edges (e.g. a goroutine whose body only calls stdlib code)
+// reports dead_end=true, distinguishing "genuinely nothing downstream" from
+// an unresolved link — the two states FlowLane's empty-state message needs
+// to tell apart.
+func TestHandleFlowsThrough_DeadEnd(t *testing.T) {
+	nodes := []*graph.Node{
+		{ID: "leaf", Type: graph.NodeTypeWorker, Label: "goroutine_anon", Service: "svc", File: "x.go", Line: 1, Language: "go"},
+	}
+	srv := buildTestServer(t, nodes, nil)
+	req := httptest.NewRequest("GET", "/api/flows/through/leaf", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+	var resp graph.FlowsThroughResult
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	if len(resp.Flows) != 0 {
+		t.Fatalf("want zero flows for a dead-end worker, got %+v", resp.Flows)
+	}
+	if !resp.DeadEnd {
+		t.Fatalf("want dead_end=true for a worker with no outgoing edges, got false")
+	}
+}
+
 func TestHandleFlowsThrough_NotFound(t *testing.T) {
 	srv := buildTestServer(t, testNodes(), testEdges())
 	req := httptest.NewRequest("GET", "/api/flows/through/nope", nil)

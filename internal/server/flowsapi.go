@@ -135,7 +135,8 @@ func flowsThrough(idx *graph.AdjacencyIndex, target *graph.Node, limit int) *gra
 	if flows == nil {
 		flows = []graph.FlowEntry{}
 	}
-	return &graph.FlowsThroughResult{Flows: flows, Truncated: truncated}
+	deadEnd := len(flows) == 0 && !graph.HasOutgoingFlowEdge(idx, target.ID)
+	return &graph.FlowsThroughResult{Flows: flows, Truncated: truncated, DeadEnd: deadEnd}
 }
 
 func chainContainsID(c trace.Chain, id string) bool {

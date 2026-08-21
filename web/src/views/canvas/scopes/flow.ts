@@ -37,6 +37,11 @@ export interface FlowResolution {
   // non-blocking note next to the (still-rendered) pair, per the "never an
   // error" rule for an edge kind the seam endpoint can't widen.
   note?: string;
+  // True when an unreachable "through" result is a genuine dead end — the
+  // node has zero outgoing flow edges (e.g. a goroutine whose body only
+  // calls stdlib/vendor code) — rather than a link the linker failed to
+  // resolve. FlowLane uses this to show a different empty-state message.
+  deadEnd?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -180,6 +185,7 @@ export async function resolveFlow(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         flows: { entrypoint: any; chain: any[] }[];
         truncated: boolean;
+        dead_end?: boolean;
       };
       const match = body.flows.find((f) => f.entrypoint?.node_id === ref.entrypointId);
       const picked = match ? [match] : body.flows;
@@ -190,6 +196,7 @@ export async function resolveFlow(
         truncated: body.truncated,
         reachable: chains.length > 0,
         label: chains[0] ? chainLabel(chains[0], entrypointLabel ?? "flow") : "flow",
+        deadEnd: chains.length === 0 && !!body.dead_end,
       };
     }
     case "path": {

@@ -267,8 +267,14 @@ export default function FlowLane() {
       </Show>
 
       <Show when={!resolution.loading && !resolution.error && resolution() && !resolution()!.reachable}>
-        <div class="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">
-          No static path — try Path finder (UF.2) or check /api/unresolved for a ledgered gap.
+        <div class="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm text-center px-8">
+          <Show
+            when={resolution()!.deadEnd}
+            fallback="No static path — try Path finder or check /api/unresolved for a ledgered gap."
+          >
+            Dead end: this node has no outgoing edges in the graph — its body likely only calls
+            external/stdlib code, or is a listener with nothing modeled downstream. Nothing to trace.
+          </Show>
         </div>
       </Show>
 
