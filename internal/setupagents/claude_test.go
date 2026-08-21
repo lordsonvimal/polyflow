@@ -42,3 +42,24 @@ func TestMergeClaudeHooks_IdempotentAcrossAllMatchers(t *testing.T) {
 		t.Fatal("expected added=false on second merge — hooks already wired")
 	}
 }
+
+func TestClaudeHooksWired_FalseUntilAllThreeMatchersWired(t *testing.T) {
+	doc := map[string]any{}
+	if claudeHooksWired(doc) {
+		t.Fatal("expected false on an empty doc")
+	}
+	mergeClaudeHooks(doc, "/usr/local/bin/polyflow hook-context-inject")
+	if !claudeHooksWired(doc) {
+		t.Fatal("expected true once all three matchers are wired")
+	}
+}
+
+func TestClaudeHooksWired_MatchesAcrossDifferentBinPaths(t *testing.T) {
+	// Status checks run on a possibly different machine than setup — the
+	// exact polyflow binary path baked into the command shouldn't matter.
+	doc := map[string]any{}
+	mergeClaudeHooks(doc, "/home/other-user/bin/polyflow hook-context-inject")
+	if !claudeHooksWired(doc) {
+		t.Fatal("expected true regardless of which machine's bin path was used to wire it")
+	}
+}

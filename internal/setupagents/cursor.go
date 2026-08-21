@@ -41,6 +41,18 @@ func (cursorAgent) SetupHooks(scope, polyflowBin string) (string, error) {
 	return "", fmt.Errorf("cursor has no post-tool-use hook mechanism")
 }
 
+func (cursorAgent) MCPStatus(scope string) (bool, error) {
+	path, err := cursorMCPPath(scope)
+	if err != nil {
+		return false, err
+	}
+	return mcpServerConfigured(path, "polyflow")
+}
+
+func (cursorAgent) HooksStatus(scope string) (bool, error) {
+	return false, fmt.Errorf("cursor has no post-tool-use hook mechanism")
+}
+
 func cursorMCPPath(scope string) (string, error) {
 	if scope == "repo" {
 		return filepath.Join(".cursor", "mcp.json"), nil

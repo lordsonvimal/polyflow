@@ -1,9 +1,13 @@
 import { For, Show, createSignal } from "solid-js";
 import PatternsPanel from "./patterns/PatternsPanel";
+import AgentSetupPanel from "./setup/AgentSetupPanel";
 
-type Section = "patterns";
+type Section = "patterns" | "agents";
 
-const SECTIONS: { id: Section; label: string }[] = [{ id: "patterns", label: "Patterns" }];
+const SECTIONS: { id: Section; label: string }[] = [
+  { id: "patterns", label: "Patterns" },
+  { id: "agents", label: "Agents" },
+];
 
 export default function SettingsView() {
   const [section, setSection] = createSignal<Section>("patterns");
@@ -25,9 +29,12 @@ export default function SettingsView() {
           )}
         </For>
       </nav>
-      <div class="flex-1 min-w-0 min-h-0">
+      <div class="flex-1 min-w-0 min-h-0 overflow-y-auto p-2">
         <Show when={section() === "patterns"}>
           <PatternsPanel />
+        </Show>
+        <Show when={section() === "agents"}>
+          <AgentSetupPanel />
         </Show>
       </div>
     </div>

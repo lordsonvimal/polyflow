@@ -28,6 +28,17 @@ type Agent interface {
 	// SetupHooks wires the context-injection hook for the given scope.
 	// Only called when SupportsHooks() is true.
 	SetupHooks(scope, polyflowBin string) (string, error)
+	// MCPStatus reports whether polyflow's MCP server already appears to be
+	// registered for the given scope, without writing anything. Used by both
+	// the CLI picker and the web setup wizard to show current state before
+	// the user chooses to (re-)run setup, so neither surface goes stale
+	// relative to config changes made by the other.
+	MCPStatus(scope string) (bool, error)
+	// HooksStatus reports whether the context-injection hook already appears
+	// to be wired for the given scope. Only called when SupportsHooks() is
+	// true; agents without a hook mechanism return (false, error) matching
+	// SetupHooks' own convention.
+	HooksStatus(scope string) (bool, error)
 }
 
 var registry []Agent
