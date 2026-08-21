@@ -123,14 +123,36 @@ func mergeOneService(ctx context.Context, db *sql.DB, name, path string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE service=?`, name); err != nil {
 		return fmt.Errorf("sweep nodes: %w", err)
 	}
+	// Scoped to service=name on both copies: srcdb is a per-service DB, but
+	// reconciliation (evidence.Reconcile) evaluates contract/config evidence
+	// workspace-wide and can mint nodes/edges owned by *other* services while
+	// indexing this one (e.g. a spec elsewhere in the workspace produces a
+	// gap-endpoint node). Those rows already exist in dst from a prior full
+	// index or another service's relink; only sweeping+copying name's own
+	// rows here (not srcdb's full contents) avoids re-inserting an ID dst
+	// already has and colliding on the nodes primary key.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO nodes (id, type, label, service, file, line, end_line, language, meta)
-		SELECT id, type, label, service, file, line, end_line, language, meta FROM srcdb.nodes`); err != nil {
+		SELECT id, type, label, service, file, line, end_line, language, meta FROM srcdb.nodes WHERE service=?`, name); err != nil {
 		return fmt.Errorf("copy nodes: %w", err)
+	}
+	// A handful of sink nodes (e.g. the contract engine's "unresolved" node,
+	// internal/contract/engine.go's applyUnmatched) are deliberately
+	// service="" — shared workspace-wide by every producer whose target
+	// service couldn't be resolved at all, so there is no single owner to
+	// scope them to. INSERT OR IGNORE: srcdb regenerates the same
+	// deterministic IDs every run, and dst (or an earlier service in this
+	// same merge) may already have inserted them.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO nodes (id, type, label, service, file, line, end_line, language, meta)
+		SELECT id, type, label, service, file, line, end_line, language, meta FROM srcdb.nodes WHERE service=''`); err != nil {
+		return fmt.Errorf("copy global sink nodes: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity)
-		SELECT id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity FROM srcdb.edges`); err != nil {
+		SELECT e.id, e."from", e."to", e.type, e.label, e.meta, e.confidence, e.method, e.path, e.sources_json, e.verification_state, e.verified_granularity
+		FROM srcdb.edges e
+		WHERE e."from" IN (SELECT id FROM srcdb.nodes WHERE service=?) OR e."to" IN (SELECT id FROM srcdb.nodes WHERE service=?)`, name, name); err != nil {
 		return fmt.Errorf("copy edges: %w", err)
 	}
 

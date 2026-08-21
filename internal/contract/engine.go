@@ -432,6 +432,15 @@ func applyUnmatched(prod *graph.Node, rule Rule, targetSvc string, result *Resul
 				ID:    synthID,
 				Type:  graph.NodeTypeService,
 				Label: synthID,
+				// targetSvc is the resolved consumer-side service the producer
+				// tried to reach (host/link resolution), so it's a real owning
+				// service when known — left "" only for the genuinely
+				// unqualified "unresolved" sink, a single node deliberately
+				// shared workspace-wide by every producer whose target service
+				// couldn't be resolved at all (see MergeServiceDBs, which copies
+				// service="" rows via INSERT OR IGNORE rather than scoping them
+				// to one service).
+				Service: targetSvc,
 			})
 		}
 		rawKey := strings.Join(buildRawFields(prod, rule.Producer, nil), " ")
