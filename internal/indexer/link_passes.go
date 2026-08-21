@@ -1,0 +1,811 @@
+package indexer
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+
+	contractdata "github.com/lordsonvimal/polyflow/contracts"
+	"github.com/lordsonvimal/polyflow/internal/contract"
+	"github.com/lordsonvimal/polyflow/internal/deps"
+	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/linker"
+	"github.com/lordsonvimal/polyflow/internal/workspace"
+)
+
+// serviceFiles pairs a workspace.Service with its scanned files and resolved
+// dependencies — Run()'s per-service scan result, hoisted from a Run()-local
+// type to package level so linkPipelineState can reference it.
+type serviceFiles struct {
+	svc   workspace.Service
+	files []string
+	deps  []deps.Dependency
+}
+
+// namedPass is one step of the linking pipeline (FR.5a). Extracted verbatim
+// from Run()'s previously-inline blocks so the pipeline is enumerable and
+// individually addressable — this file changes nothing about what gets
+// computed or written, only that it's a list instead of ~40 sequential
+// inline statements. buildLinkPasses' order is the execution order; Run()
+// no longer contains any linking logic of its own, only the loop that
+// drives this list plus the state it threads through it.
+type namedPass struct {
+	name string
+	exec func() error
+}
+
+// linkPipelineState is the mutable state every pass reads and/or writes,
+// mirroring exactly what used to be Run()'s local variables captured by
+// closure. Passes that are read-only w.r.t. a field (e.g. cfg) still go
+// through the pointer so a later phase (FR.5b) can swap in a differently
+// scoped state without touching this file's pass bodies.
+type linkPipelineState struct {
+	ctx   context.Context
+	store *graph.SQLiteStore
+	bw    *graph.BatchWriter
+	cfg   *workspace.WorkspaceConfig
+	opts  Options
+	stats *Stats
+
+	allSvcFiles []serviceFiles
+
+	allNodes      []graph.Node
+	allEdges      []graph.Edge
+	allUnresolved []graph.UnresolvedRef
+
+	// jsImportedNames: set by the js_link pass, read by js_globals.
+	jsImportedNames map[string]bool
+	// contractRules: set by load_contract_rules, read by contract_engine and
+	// contract_coverage.
+	contractRules []contract.Rule
+	// hintedNodes/enrichedNodes: the contract engine's working copy, built by
+	// apply_hints_and_enrich and further mutated by enrich_aliases; read by
+	// gin_middleware, express_middleware, amqp_handshake,
+	// amqp_message_type_dispatch, contract_engine and sse_push.
+	hintedNodes   []graph.Node
+	enrichedNodes []graph.Node
+	// contractResult: set by contract_engine, read by sse_push and
+	// contract_coverage.
+	contractResult contract.Result
+	// handshakeResolved: set by amqp_handshake, read after the pipeline by
+	// the evidence-fusion step (its config provider re-derives its ledger
+	// from the persisted nodes, which still read key_dynamic since handshake
+	// resolution lives only on the pre-engine working copy).
+	handshakeResolved map[string]bool
+}
+
+// writeEdges appends edges to the store and to allEdges — the same helper
+// every pass used inline as a closure before this extraction.
+func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
+	bwE := graph.NewBatchWriter(st.store)
+	for i := range edges {
+		e := edges[i]
+		if err := bwE.AddEdge(st.ctx, &e); err != nil {
+			return err
+		}
+		st.allEdges = append(st.allEdges, e)
+	}
+	return bwE.Flush(st.ctx)
+}
+
+// svcFilesOf builds the service-name → file-list map several passes need.
+// Recomputed per pass rather than hoisted onto the state, matching the
+// pattern the original inline blocks already used.
+func (st *linkPipelineState) svcFilesOf() map[string][]string {
+	svcFiles := make(map[string][]string, len(st.allSvcFiles))
+	for _, sf := range st.allSvcFiles {
+		svcFiles[sf.svc.Name] = sf.files
+	}
+	return svcFiles
+}
+
+// buildLinkPasses returns the linking pipeline in the exact order Run() used
+// to execute it inline. It only builds closures — nothing runs until the
+// caller executes each pass's exec function — so its length and name order
+// can be asserted in a test without performing a real index (see
+// link_passes_test.go).
+func buildLinkPasses(st *linkPipelineState) []namedPass {
+	return []namedPass{
+		// JS/TS component + import-aware linking.
+		{"js_link", func() error {
+			svcFiles := st.svcFilesOf()
+			jsLinker := linker.NewJSLinker()
+			jsEdges, removeIDs, linkerUnresolved, importedNames := jsLinker.LinkJS(st.allNodes, st.allEdges, svcFiles)
+			st.jsImportedNames = importedNames
+			// Parser-level call_ref candidates that an import statement explains
+			// are either resolved by the linker or point at external packages —
+			// both are accounted for; the rest are real blind spots.
+			filtered := st.allUnresolved[:0]
+			for _, u := range st.allUnresolved {
+				if u.Kind == "call_ref" && importedNames[u.File+"\x00"+u.Name] {
+					continue
+				}
+				filtered = append(filtered, u)
+			}
+			st.allUnresolved = append(filtered, linkerUnresolved...)
+			if err := st.writeEdges(jsEdges); err != nil {
+				return err
+			}
+			if len(removeIDs) > 0 {
+				if err := st.store.DeleteNodes(st.ctx, removeIDs); err != nil {
+					return fmt.Errorf("delete proxy nodes: %w", err)
+				}
+				filteredNodes := st.allNodes[:0]
+				for _, n := range st.allNodes {
+					if !removeIDs[n.ID] {
+						filteredNodes = append(filteredNodes, n)
+					}
+				}
+				st.allNodes = filteredNodes
+				// DeleteNodes cascades edge deletion in the store; the in-memory
+				// edge set must match, or the evidence reconciler re-upserts edges
+				// whose endpoints no longer exist (FK failure aborts the index).
+				filteredEdges := st.allEdges[:0]
+				for _, e := range st.allEdges {
+					if !removeIDs[e.From] && !removeIDs[e.To] {
+						filteredEdges = append(filteredEdges, e)
+					}
+				}
+				st.allEdges = filteredEdges
+			}
+			return nil
+		}},
+		// L.W1: global/window symbol resolution + inline handler linking.
+		// Runs after LinkJS so imports-first ordering is enforced via jsImportedNames.
+		{"js_globals", func() error {
+			svcFiles := st.svcFilesOf()
+			globalEdges, globallyResolved, globalCollisions := linker.LinkJSGlobals(st.allNodes, st.allUnresolved, st.jsImportedNames, svcFiles)
+			filtered := st.allUnresolved[:0]
+			for _, u := range st.allUnresolved {
+				if u.Kind == "call_ref" && globallyResolved[u.File+"\x00"+u.Name] {
+					continue
+				}
+				filtered = append(filtered, u)
+			}
+			st.allUnresolved = append(filtered, globalCollisions...)
+			return st.writeEdges(globalEdges)
+		}},
+		// JS/TS cross-file inherits/implements/instantiates edges.
+		{"js_type_relations", func() error {
+			svcFiles := st.svcFilesOf()
+			jsTypeEdges, jsTypeUnresolved := linker.LinkJSTypeRelations(st.allNodes, svcFiles)
+			if err := st.writeEdges(jsTypeEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, jsTypeUnresolved...)
+			return nil
+		}},
+		// Ruby cross-file inherits/implements/instantiates edges.
+		{"ruby_type_relations", func() error {
+			svcFiles := st.svcFilesOf()
+			rubyTypeEdges, rubyTypeUnresolved := linker.LinkRubyTypeRelations(st.allNodes, svcFiles)
+			if err := st.writeEdges(rubyTypeEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, rubyTypeUnresolved...)
+			return nil
+		}},
+		// Cross-file `ClassName.method_name` calls (Product.find_by,
+		// UserCategoryRuleSet.latest_for, LicenseReportJob.create!) — the
+		// same-file case is extractRubyVariables' job; this is the cross-file
+		// half, same split as the type-relations pass above.
+		{"ruby_class_method_calls", func() error {
+			svcFiles := st.svcFilesOf()
+			classCallEdges, classCallUnresolved := linker.LinkRubyClassMethodCalls(st.allNodes, svcFiles)
+			if err := st.writeEdges(classCallEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, classCallUnresolved...)
+			return nil
+		}},
+		// Receiver-typed calls (`x = Product.new; x.save`, a memoized ivar, or a
+		// memo-reader method like `def aws; @aws ||= AwsFacade.new_instance; end`
+		// then `aws.complete_multipart_upload`) — the syntactically recoverable
+		// slice of the "any other receiver needs static type inference" gap the
+		// two passes above explicitly leave alone.
+		{"ruby_receiver_type_calls", func() error {
+			svcFiles := st.svcFilesOf()
+			receiverTypeEdges, receiverTypeUnresolved := linker.LinkRubyReceiverTypeCalls(st.allNodes, svcFiles)
+			if err := st.writeEdges(receiverTypeEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, receiverTypeUnresolved...)
+			return nil
+		}},
+		// ActiveRecord has_many/belongs_to/has_one associations — a
+		// class-granularity `calls` edge to the associated model, the same
+		// shape emitClassMethodCall uses for a call that lands on no method
+		// node (an ActiveRecord finder, a `scope` macro).
+		{"ruby_associations", func() error {
+			svcFiles := st.svcFilesOf()
+			assocEdges, assocUnresolved := linker.LinkRubyAssociations(st.allNodes, svcFiles)
+			if err := st.writeEdges(assocEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, assocUnresolved...)
+			return nil
+		}},
+		// Rails filter chain: before_action/around_action/after_action → the method
+		// the callback names, from the declaring class and from each action it
+		// guards. Needs the Ruby method nodes' qualified_name, so it runs after the
+		// parse phase; independent of the type-relation edges above.
+		{"rails_filters", func() error {
+			svcFiles := st.svcFilesOf()
+			filterEdges, filterUnresolved := linker.LinkRailsFilters(st.allNodes, svcFiles)
+			if err := st.writeEdges(filterEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, filterUnresolved...)
+			return nil
+		}},
+		// C.4: a bare Ruby call the parser could not bind in its own file, resolved
+		// against the methods the calling class inherits or mixes in. Must run after
+		// LinkRubyTypeRelations, whose `inherits` edges are the ancestor chain this
+		// walks — and which is also what keeps it from binding a call to the copy of
+		// lib/dx.rb another service vendors.
+		{"ruby_mixin_methods", func() error {
+			mixinEdges, mixinResolved, mixinCollisions := linker.LinkRubyMixinMethods(st.allNodes, st.allEdges, st.allUnresolved)
+			filtered := st.allUnresolved[:0]
+			for _, u := range st.allUnresolved {
+				if u.Kind == "call_ref" && mixinResolved[linker.RubyCallRefKey(u.File, u.Line, u.Name)] {
+					continue
+				}
+				filtered = append(filtered, u)
+			}
+			st.allUnresolved = append(filtered, mixinCollisions...)
+			return st.writeEdges(mixinEdges)
+		}},
+		// RW.2: mint one http_client node per call site of a Level-1-detected
+		// Ruby wrapper (patterns/ruby/wrapper_url_target.yaml), instead of
+		// leaving every caller collapsed onto the wrapper's single shared,
+		// unresolvable key_dynamic node. Runs before ResolveRubyHTTPHosts so an
+		// abstained call site's Meta["key_dynamic_raw"] gets the same shot at
+		// its host-method registry as any other dynamic Ruby http_client node.
+		{"ruby_wrapper_url_call_sites", func() error {
+			svcFiles := st.svcFilesOf()
+			wrapperNodes, wrapperEdges := linker.ResolveRubyWrapperURLCallSites(st.allNodes, svcFiles)
+			if len(wrapperNodes) == 0 {
+				return nil
+			}
+			for i := range wrapperNodes {
+				n := wrapperNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(wrapperEdges)
+		}},
+		// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
+		// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
+		// the downstream config_resolve provider can bind them (or ledger a *named*
+		// deploy-secret miss) instead of an unactionable token. Runs before the
+		// contract engine + config_resolve so both see the upgraded key_dynamic_raw.
+		{"ruby_http_hosts", func() error {
+			svcFiles := st.svcFilesOf()
+			hostNodes := linker.ResolveRubyHTTPHosts(st.allNodes, svcFiles)
+			if len(hostNodes) == 0 {
+				return nil
+			}
+			for i := range hostNodes {
+				n := hostNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
+		// J.2b: the Go analogue — stamp Meta["env_var"] on Go http_client nodes
+		// whose base URL traces back to an os.Getenv read, so ApplyHints (J.2c)
+		// can turn a workspace `hint: SOME_URL` into a target_service allowlist.
+		// Must run before ApplyHints, like the Ruby pass.
+		{"go_http_hosts", func() error {
+			svcFiles := st.svcFilesOf()
+			hostNodes := linker.ResolveGoHTTPHosts(st.allNodes, svcFiles)
+			if len(hostNodes) == 0 {
+				return nil
+			}
+			for i := range hostNodes {
+				n := hostNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
+		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
+		// JS/TS client at all, so this is the only source of Meta["env_var"] /
+		// Meta["host_default_literal"] for JS/TS nodes — must also run before
+		// Tier CB, same as the Go/Ruby passes.
+		{"js_http_hosts", func() error {
+			svcFiles := st.svcFilesOf()
+			hostNodes := linker.ResolveJSHTTPHosts(st.allNodes, svcFiles)
+			if len(hostNodes) == 0 {
+				return nil
+			}
+			for i := range hostNodes {
+				n := hostNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
+		// Tier CB: the three passes above recover *which* env var a client's base
+		// URL comes from; this one reads the path component out of that
+		// variable's checked-in value and composes it onto the node's own path,
+		// so a client deployed behind `API_URL=https://host/api/v2` can join the
+		// `/api/v2/...` route it really calls. Runs here so it sees fresh stamps
+		// from all three, and well before ApplyHints.
+		{"config_baseurl", func() error {
+			svcDirs := make(map[string]string, len(st.allSvcFiles))
+			for _, sf := range st.allSvcFiles {
+				svcDirs[sf.svc.Name] = sf.svc.Path
+			}
+			prefixNodes := linker.ResolveConfigBaseURLPaths(st.allNodes, svcDirs)
+			if len(prefixNodes) == 0 {
+				return nil
+			}
+			for i := range prefixNodes {
+				n := prefixNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
+		{"route_handlers", func() error {
+			return st.writeEdges(linker.LinkRouteHandlers(st.allNodes))
+		}},
+		{"grpc_handlers", func() error {
+			grpcEdges, grpcUnresolved := linker.LinkGRPCHandlers(st.allNodes)
+			if err := st.writeEdges(grpcEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, grpcUnresolved...)
+			return nil
+		}},
+		// Rails routes name their action by convention, not by the Meta["handler"]
+		// receiver string LinkRouteHandlers keys on, so they need their own pass.
+		{"rails_route_actions", func() error {
+			railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(st.allNodes)
+			if err := st.writeEdges(railsActionEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, railsActionUnresolved...)
+			return nil
+		}},
+		{"route_components", func() error {
+			routeCompEdges, routeCompUnresolved := linker.LinkRouteComponents(st.allNodes)
+			if err := st.writeEdges(routeCompEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, routeCompUnresolved...)
+			return nil
+		}},
+		{"templ_components", func() error {
+			return st.writeEdges(linker.LinkTemplComponents(st.allNodes))
+		}},
+		// templ <script src> → JS file imports.
+		{"templ_scripts", func() error {
+			scriptEdges, scriptUnresolved := linker.LinkTemplScripts(st.allNodes)
+			if err := st.writeEdges(scriptEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, scriptUnresolved...)
+			return nil
+		}},
+		// JS DOM target → templ element `defined_in` (creates templ_element nodes).
+		{"dom_definitions", func() error {
+			domNodes, domEdges, domUnresolved := linker.LinkDOMDefinitions(st.allNodes)
+			for i := range domNodes {
+				n := domNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			if err := st.writeEdges(domEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, domUnresolved...)
+			return nil
+		}},
+		// templ producer (data-testid/id) attribute -> JS attribute-selector
+		// consumer `dom_contract` (IA.5): component -> JS site directly, no
+		// intermediate node, so investigate/walkFlows reach it in one hop.
+		{"dom_contracts", func() error {
+			_, contractEdges, contractUnresolved := linker.LinkDOMContracts(st.allNodes)
+			if err := st.writeEdges(contractEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, contractUnresolved...)
+			return nil
+		}},
+		// Structural backbone: service→file→declaration + struct→method contains
+		// edges (mints synthetic service/file nodes, so persist them before wiring).
+		{"containment", func() error {
+			containNodes, containEdges := linker.LinkContainment(st.allNodes)
+			for i := range containNodes {
+				n := containNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(containEdges)
+		}},
+		// Backbone completeness: mint a bare file node for every scanned file that
+		// LinkContainment skipped (barrel/re-export-only and enum-only files declare
+		// nothing containment-shaped). Runs before the JS import-edge pass so those
+		// files are already valid, persisted import targets rather than mint-on-miss
+		// fallbacks there.
+		{"ensure_scanned_files", func() error {
+			svcFiles := st.svcFilesOf()
+			barrelNodes, barrelEdges := linker.EnsureAllScannedFiles(st.allNodes, svcFiles)
+			for i := range barrelNodes {
+				n := barrelNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(barrelEdges)
+		}},
+		// JS/TS + Ruby file-level import edges (file→file between NodeTypeFile nodes).
+		// Runs after LinkContainment so the file nodes are present in allNodes.
+		{"js_import_edges", func() error {
+			svcFiles := st.svcFilesOf()
+			jsImportEdges, updatedFileNodes, jsImportUnresolved := linker.LinkJSImportEdges(st.allNodes, svcFiles)
+			for i := range updatedFileNodes {
+				n := updatedFileNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			if err := st.writeEdges(jsImportEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, jsImportUnresolved...)
+			return nil
+		}},
+		// JS/TS wrapped API-client calls (services/ApiServices.js-style shared
+		// axios/fetch wrappers): mints an http_client node for a call to a
+		// WB.1-detected wrapper even across files and even when the URL argument
+		// is a local variable, not a literal — producer_alias_url_call/obj_call
+		// require a literal at the call site and never fire otherwise.
+		{"js_api_wrapper_calls", func() error {
+			svcFiles := st.svcFilesOf()
+			wrapperNodes, wrapperEdges := linker.LinkJSAPIWrapperCalls(st.allNodes, svcFiles)
+			for i := range wrapperNodes {
+				n := wrapperNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(wrapperEdges)
+		}},
+		// Tier K.5: stylesheet @import graph + containment for the selector and
+		// @font-face nodes the stylesheet parser mints.
+		{"stylesheet_imports", func() error {
+			svcFiles := st.svcFilesOf()
+			cssNodes, cssEdges, cssUnresolved := linker.LinkStylesheetImports(st.allNodes, svcFiles)
+			for i := range cssNodes {
+				n := cssNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			if err := st.writeEdges(cssEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, cssUnresolved...)
+			return nil
+		}},
+		// Tier K.3: Rails asset pipeline — `//= require` directives plus the
+		// `javascript_include_tag` page bindings that sit on top of them.
+		{"sprockets_assets", func() error {
+			svcFiles := st.svcFilesOf()
+			assetNodes, assetEdges, assetUnresolved := linker.LinkSprocketsAssets(st.allNodes, svcFiles)
+			for i := range assetNodes {
+				n := assetNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			if err := st.writeEdges(assetEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, assetUnresolved...)
+			return nil
+		}},
+		// Tier K.2: Rails view layer — partial nesting, the controller→template
+		// convention, and the react_component mount seam.
+		{"rails_views", func() error {
+			svcFiles := st.svcFilesOf()
+			viewNodes, viewEdges, viewUnresolved := linker.LinkRailsViews(st.allNodes, svcFiles)
+			for i := range viewNodes {
+				n := viewNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			if err := st.writeEdges(viewEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, viewUnresolved...)
+			return nil
+		}},
+		{"ruby_import_edges", func() error {
+			svcFiles := st.svcFilesOf()
+			rubyImportEdges, rubyImportUnresolved := linker.LinkRubyImportEdges(st.allNodes, svcFiles)
+			if err := st.writeEdges(rubyImportEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, rubyImportUnresolved...)
+			return nil
+		}},
+		{"datastores", func() error {
+			return st.writeEdges(linker.LinkDatastores(st.allNodes))
+		}},
+		// Y.3c: parse table names out of datastore call SQL and terminate each
+		// query/persist at a real table entity (mints table nodes).
+		{"tables", func() error {
+			tableNodes, tableEdges := linker.LinkTables(st.allNodes)
+			for i := range tableNodes {
+				n := tableNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(tableEdges)
+		}},
+		// Y.4: join server response DTOs to the client interfaces that mirror their
+		// JSON shape (cross-language response_of). Runs after all returns/consumes
+		// edges are collected so it can gate on server-declared response structs.
+		{"response_shapes", func() error {
+			return st.writeEdges(linker.LinkResponseShapes(st.allNodes, st.allEdges))
+		}},
+		// Y.6: join a createResource loader's http_client to the reactive signal it
+		// feeds (http_client → signal flows_to). Needs the calls edges from Pass 2,
+		// so it runs after the bulk of edges are collected.
+		{"resource_signals", func() error {
+			return st.writeEdges(linker.LinkResourceSignals(st.allNodes, st.allEdges))
+		}},
+		{"sse_clients", func() error {
+			return st.writeEdges(linker.LinkSSEClients(st.allNodes))
+		}},
+		// Broker hint linking (via: rabbitmq + exchange).
+		{"broker_hints", func() error {
+			hintNodes, hintEdges, hintUnresolved := linker.LinkBrokerHints(st.cfg.Links, st.allNodes)
+			st.allUnresolved = append(st.allUnresolved, hintUnresolved...)
+			for i := range hintNodes {
+				n := hintNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(hintEdges)
+		}},
+		// L.W0: resolve Rails route-helper names on nav_link_rails_helper nodes to
+		// real method+path so the http contract rule (G.1 nav variant) can match them.
+		// Must run before ApplyHints so the resolved path is visible to the engine.
+		{"rails_nav_helpers", func() error {
+			railsUpdated, railsUnresolved := linker.ResolveRailsNavHelpers(st.allNodes)
+			// Build a quick ID→index map for O(1) in-place updates to allNodes.
+			nodeByID := make(map[string]int, len(st.allNodes))
+			for i, n := range st.allNodes {
+				nodeByID[n.ID] = i
+			}
+			for i := range railsUpdated {
+				n := railsUpdated[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				if idx, ok := nodeByID[n.ID]; ok {
+					st.allNodes[idx] = n
+				} else {
+					// Fan-out candidate: new node not in allNodes yet.
+					st.allNodes = append(st.allNodes, n)
+				}
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, railsUnresolved...)
+			return nil
+		}},
+		// M.0: file-based route synthesis (Next.js, SvelteKit, Nuxt, Remix).
+		// Runs after per-file parsing and all linking passes above, before the
+		// contract engine, so synthesized http_handler nodes participate in
+		// cross-service linking.
+		{"file_route_synthesis", func() error {
+			fileNodeMap := make(map[string][]graph.Node, len(st.allNodes))
+			for _, n := range st.allNodes {
+				if n.File != "" {
+					fileNodeMap[n.File] = append(fileNodeMap[n.File], n)
+				}
+			}
+			nodesInFile := func(absFile string) []graph.Node { return fileNodeMap[absFile] }
+
+			for _, sf := range st.allSvcFiles {
+				absSvcPath, _ := filepath.Abs(sf.svc.Path)
+				// Route synthesis needs ALL service files (including unparsed like .svelte, .vue),
+				// not just the parser-handled subset — file-based routers are identified by their
+				// filesystem paths, which exist regardless of whether a parser is registered.
+				allSvcFilesList := walkAllFiles(absSvcPath)
+				fr := linker.SynthesizeFileRoutes(absSvcPath, sf.svc.Name, allSvcFilesList, sf.deps, nodesInFile)
+				for i := range fr.Nodes {
+					n := fr.Nodes[i]
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+				}
+				if err := st.bw.Flush(st.ctx); err != nil {
+					return err
+				}
+				if err := st.writeEdges(fr.Edges); err != nil {
+					return err
+				}
+				st.allUnresolved = append(st.allUnresolved, fr.Unresolved...)
+			}
+			return nil
+		}},
+		// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
+		// opts.ContractsDir may add workspace-custom rules on top of the embedded defaults (G.5).
+		{"load_contract_rules", func() error {
+			rules, err := contract.Load(contractdata.FS, st.opts.ContractsDir)
+			if err != nil {
+				return fmt.Errorf("contract rules: %w", err)
+			}
+			st.contractRules = rules
+			return nil
+		}},
+		// G.3 pre-engine enrichment: reconstruct full route paths for nodes inside
+		// router groups (gin r.Group / chi r.Route). This is a contextual node-join
+		// that normalizers cannot perform; it mutates only the working copy
+		// (hintedNodes/enrichedNodes), not the persisted allNodes.
+		{"apply_hints_and_enrich", func() error {
+			st.hintedNodes = linker.ApplyHints(st.cfg.Links, st.allNodes, st.allEdges)
+			st.enrichedNodes = contract.EnrichRouteGroups(st.hintedNodes)
+			// The composition above is computed for matching, on a working copy. Agents
+			// query the *stored* graph, so the composed route has to reach it too —
+			// otherwise a gin handler declared inside `v1.Group("/api/v1")` is persisted
+			// reading `/users/:id`, which routes nowhere and which no search for the
+			// real path can find. Only label + meta["full_path"] are written back; see
+			// contract.setPath for why meta["path"] must stay raw.
+			return persistComposedRoutes(st.ctx, st.bw, st.enrichedNodes, st.allNodes)
+		}},
+		// Gin middleware chain: handler --calls--> the middleware guarding it
+		// (r.Use/group.Use), so `impact`/`context` on a route or a middleware
+		// function surfaces the other side without a separate tool.
+		{"gin_middleware", func() error {
+			mwEdges, mwUnresolved := linker.LinkGinMiddleware(st.enrichedNodes, st.allEdges)
+			if err := st.writeEdges(mwEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, mwUnresolved...)
+			return nil
+		}},
+		// Express middleware chain: same handler-calls-guard modeling as Gin's,
+		// for `app.use(mw)`/`router.use(mw)` registrations (see
+		// internal/linker/express_middleware.go for the v1 same-file/
+		// same-receiver scope this covers).
+		{"express_middleware", func() error {
+			mwEdges, mwUnresolved := linker.LinkExpressMiddleware(st.enrichedNodes, st.allEdges)
+			if err := st.writeEdges(mwEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, mwUnresolved...)
+			return nil
+		}},
+		// G.7 pre-engine enrichment: resolve alias/instance bindings and one-hop
+		// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name
+		// or instance_name meta) are removed from the working copy; their info feeds
+		// the alias table used to rewrite call nodes before Engine.Link.
+		{"enrich_aliases", func() error {
+			enriched, aliasUnresolved := contract.EnrichAliases(st.enrichedNodes)
+			st.enrichedNodes = enriched
+			st.allUnresolved = append(st.allUnresolved, aliasUnresolved...)
+			return nil
+		}},
+		// K.6 step 3 pre-engine enrichment: carry a runtime-negotiated queue name
+		// across the repo boundary on the registration handshake's field symbol, so
+		// the existing queue_name contract can join publisher to consumer. Resolves
+		// keys only — it emits no edges of its own.
+		{"amqp_handshake", func() error {
+			handshakeUnresolved, handshakeResolved := linker.LinkAMQPHandshake(st.enrichedNodes)
+			st.handshakeResolved = handshakeResolved
+			st.allUnresolved = linker.DropResolvedRefs(st.allUnresolved, handshakeResolved)
+			st.allUnresolved = append(st.allUnresolved, handshakeUnresolved...)
+			return nil
+		}},
+		// AH follow-up: the message-type dispatch join, distinct from and
+		// unblocked by the queue-name handshake above — it answers "what breaks
+		// if I change this message's shape" rather than "where does it go".
+		// Emits edges directly (not through the contract engine) since the join
+		// is on a bare constant name, not a structural role any contracts/*.yaml
+		// rule already models.
+		{"amqp_message_type_dispatch", func() error {
+			mtEdges := linker.LinkAMQPMessageTypeDispatch(st.enrichedNodes)
+			if len(mtEdges) == 0 {
+				return nil
+			}
+			return st.writeEdges(mtEdges)
+		}},
+		{"contract_engine", func() error {
+			eng := &contract.Engine{}
+			result := eng.Link(st.enrichedNodes, st.contractRules, st.cfg.Links)
+			st.contractResult = result
+
+			for i := range result.Nodes {
+				n := result.Nodes[i]
+				_ = st.bw.AddNode(st.ctx, &n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			if err := st.writeEdges(result.Edges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, result.Unresolved...)
+			st.stats.ContractEdges, st.stats.CrossLinks = countContractEdges(result.Edges, st.enrichedNodes)
+			return nil
+		}},
+		// Server→client SSE push edge, mirroring the http_call connection edge
+		// the engine just produced for eventsource_connect nodes. Must run after
+		// contractResult.Edges exists (see linker.LinkSSEPush).
+		{"sse_push", func() error {
+			return st.writeEdges(linker.LinkSSEPush(st.enrichedNodes, st.contractResult.Edges))
+		}},
+		// G.5: persist per-kind coverage so `polyflow doctor` can report matched/unresolved.
+		{"contract_coverage", func() error {
+			coverage := contract.ComputeCoverage(st.contractRules, st.contractResult)
+			if coverageJSON, marshalErr := json.Marshal(coverage); marshalErr == nil {
+				_ = st.store.SetMeta(st.ctx, "contract_coverage", string(coverageJSON))
+			}
+			return nil
+		}},
+	}
+}
