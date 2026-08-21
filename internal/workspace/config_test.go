@@ -163,6 +163,32 @@ services:
 // TestLoad_DuplicateResolvedRootsError proves two services resolving to the
 // same directory fail the load — duplicate service roots corrupt
 // same-service scoping.
+// TestLoad_DuplicateServiceNameError proves two services with the same name
+// but different (non-colliding) paths are rejected — name uniqueness was
+// previously only implicitly relied on (FR.2: HasService looks services up
+// by name).
+func TestLoad_DuplicateServiceNameError(t *testing.T) {
+	wsDir := t.TempDir()
+	dirA := filepath.Join(wsDir, "a")
+	dirB := filepath.Join(wsDir, "b")
+	require.NoError(t, os.MkdirAll(dirA, 0o755))
+	require.NoError(t, os.MkdirAll(dirB, 0o755))
+	path := writeYAMLInDir(t, wsDir, `
+name: ws
+version: "1"
+services:
+  - name: svc
+    path: ./a
+    language: go
+  - name: svc
+    path: ./b
+    language: go
+`)
+	_, err := workspace.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "svc")
+}
+
 func TestLoad_DuplicateResolvedRootsError(t *testing.T) {
 	wsDir := t.TempDir()
 	shared := filepath.Join(wsDir, "shared")
@@ -430,4 +456,13 @@ func TestLoadIgnoreFile_PatternsAndComments(t *testing.T) {
 
 	got := workspace.LoadIgnoreFile(dir)
 	assert.Equal(t, []string{"patterns", "patterns/**", "**/*.gen.go", "docs", "docs/**"}, got)
+}
+
+func TestHasService(t *testing.T) {
+	cfg := &workspace.WorkspaceConfig{
+		Services: []workspace.Service{{Name: "api"}, {Name: "web"}},
+	}
+	assert.True(t, cfg.HasService("api"))
+	assert.True(t, cfg.HasService("web"))
+	assert.False(t, cfg.HasService("missing"))
 }

@@ -715,3 +715,27 @@ func TestRun_ServiceFilter(t *testing.T) {
 	allStats := runIndexer(t, cfg, allDir, false)
 	assert.Equal(t, 2, allStats.ParsedFiles, "nil ServiceFilter must index every service")
 }
+
+// TestRun_SingleServiceCLILayout mirrors FR.2's `polyflow index <service>`
+// DBDir computation (workspace-root/.polyflow/services/<name>/) and asserts
+// it touches only that service's directory — the sibling service's directory
+// under services/ must not be created at all.
+func TestRun_SingleServiceCLILayout(t *testing.T) {
+	cfg, dir := testWorkspace(t)
+	rootDBDir := filepath.Join(dir, meta.DBDir)
+
+	svcDBDir := filepath.Join(rootDBDir, "services", "backend")
+	stats, err := Run(context.Background(), Options{
+		Config:        cfg,
+		DBDir:         svcDBDir,
+		PatternsDir:   "../../patterns",
+		Workers:       2,
+		ServiceFilter: []string{"backend"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.ParsedFiles)
+
+	assert.FileExists(t, filepath.Join(svcDBDir, meta.DBFile))
+	assert.NoDirExists(t, filepath.Join(rootDBDir, "services", "frontend"))
+	assert.NoFileExists(t, filepath.Join(rootDBDir, meta.DBFile), "single-service index must not write/merge into the fleet graph.db")
+}
