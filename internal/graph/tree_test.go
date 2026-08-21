@@ -3,6 +3,7 @@ package graph_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/stretchr/testify/assert"
@@ -105,6 +106,50 @@ func TestBuildTree_UnknownService(t *testing.T) {
 
 	_, err := graph.BuildTree(idx, "no-such-service")
 	assert.Error(t, err)
+}
+
+// TestBuildTree_ContainsCycleDoesNotStackOverflow guards against a
+// `contains` cycle (a duplicate/vendored symbol whose containment edges loop
+// back on themselves has been observed live on a real fleet) sending walk
+// into infinite recursion. A -> B -> A must terminate, cutting the cycle at
+// the node already on the current path rather than crashing the server.
+func TestBuildTree_ContainsCycleDoesNotStackOverflow(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "file:a.go", Type: graph.NodeTypeFile, Label: "a.go", Service: "svc", File: "a.go"})
+	idx.AddNode(&graph.Node{ID: "struct:A", Type: graph.NodeTypeStruct, Label: "A", Service: "svc", File: "a.go", Line: 3})
+	idx.AddNode(&graph.Node{ID: "struct:B", Type: graph.NodeTypeStruct, Label: "B", Service: "svc", File: "a.go", Line: 10})
+
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "file:a.go", To: "struct:A", Type: graph.EdgeTypeContains})
+	idx.AddEdge(&graph.Edge{ID: "e2", From: "struct:A", To: "struct:B", Type: graph.EdgeTypeContains})
+	idx.AddEdge(&graph.Edge{ID: "e3", From: "struct:B", To: "struct:A", Type: graph.EdgeTypeContains})
+
+	done := make(chan struct {
+		res *graph.TreeResult
+		err error
+	}, 1)
+	go func() {
+		res, err := graph.BuildTree(idx, "svc")
+		done <- struct {
+			res *graph.TreeResult
+			err error
+		}{res, err}
+	}()
+
+	select {
+	case out := <-done:
+		require.NoError(t, out.err)
+		require.Len(t, out.res.Tree, 1)
+		fileNode := out.res.Tree[0]
+		require.Len(t, fileNode.Children, 1)
+		structA := fileNode.Children[0]
+		assert.Equal(t, "A", structA.Name)
+		require.Len(t, structA.Children, 1)
+		structB := structA.Children[0]
+		assert.Equal(t, "B", structB.Name)
+		assert.Empty(t, structB.Children, "cycle back to A must be cut off, not re-descended")
+	case <-time.After(5 * time.Second):
+		t.Fatal("BuildTree did not terminate on a contains cycle (stack overflow / infinite recursion)")
+	}
 }
 
 func TestBuildTree_Determinism(t *testing.T) {

@@ -103,6 +103,12 @@ func BuildTree(idx *AdjacencyIndex, service string) (*TreeResult, error) {
 		}
 	}
 
+	// visiting guards against a `contains` cycle (e.g. a vendored/duplicate
+	// symbol whose containment edges loop back on themselves) — without it,
+	// walk recurses forever and crashes the server with a stack overflow
+	// instead of returning a (slightly incomplete) tree. A node already on
+	// the current path is cut off as a leaf rather than re-descended.
+	visiting := make(map[string]bool)
 	var walk func(parentID string) []*TreeNode
 	walk = func(parentID string) []*TreeNode {
 		out := make([]*TreeNode, 0)
@@ -111,9 +117,10 @@ func BuildTree(idx *AdjacencyIndex, service string) (*TreeResult, error) {
 				continue
 			}
 			n, ok := idx.Nodes[e.To]
-			if !ok {
+			if !ok || visiting[n.ID] {
 				continue
 			}
+			visiting[n.ID] = true
 			out = append(out, &TreeNode{
 				Kind:     treeKind(n.Type),
 				Name:     n.Label,
@@ -122,6 +129,7 @@ func BuildTree(idx *AdjacencyIndex, service string) (*TreeResult, error) {
 				EndLine:  n.EndLine,
 				Children: walk(n.ID),
 			})
+			delete(visiting, n.ID)
 		}
 		sortSymbols(out)
 		return out
