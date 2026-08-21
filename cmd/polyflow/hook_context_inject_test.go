@@ -366,6 +366,15 @@ func TestRunHookContextInject_GeminiCLIPayloadShape(t *testing.T) {
 	if !strings.Contains(out, `"additionalContext"`) {
 		t.Fatalf("expected nested additionalContext key in output, got %q", out)
 	}
+	// Claude Code's own PostToolUse hook schema requires hookEventName
+	// alongside additionalContext inside hookSpecificOutput — omitting it
+	// fails Claude Code's validation even though additionalContext is
+	// present ("hookSpecificOutput is missing required field
+	// \"hookEventName\""), so this must hold for every client, not just
+	// Gemini CLI's documented shape.
+	if !strings.Contains(out, `"hookEventName":"PostToolUse"`) {
+		t.Fatalf("expected hookSpecificOutput.hookEventName=PostToolUse in output, got %q", out)
+	}
 }
 
 func TestGrepPatternSymbols(t *testing.T) {
