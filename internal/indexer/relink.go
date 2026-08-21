@@ -78,6 +78,18 @@ func Relink(ctx context.Context, opts RelinkOptions) (*Stats, error) {
 	if _, err := MergeServiceDBs(ctx, dst, map[string]string{opts.Service: svcDBPath}); err != nil {
 		return nil, fmt.Errorf("relink: merge: %w", err)
 	}
+	// dst is opened via NewSQLiteStore (a pre-existing DB, not a known-empty
+	// build store), so without this its ftsJournal is nil and every node
+	// write below (persistComposedRoutes, contract_engine's minted nodes,
+	// ...) pays nodes_fts's O(n) id-scan delete — id is UNINDEXED on an FTS5
+	// table, so a delete-by-id can't use a real index. rebuildNodesFTS just
+	// ran inside MergeServiceDBs, so nodes_fts is known-correct right now:
+	// warm the journal from it so later same-content writes become no-ops
+	// instead of a full scan each (measured: this dominated a relink's wall
+	// time on a 9-service/50k-node fleet).
+	if err := dst.WarmFTSJournal(ctx); err != nil {
+		return nil, fmt.Errorf("relink: warm fts journal: %w", err)
+	}
 
 	idx, err := dst.BuildIndex(ctx)
 	if err != nil {

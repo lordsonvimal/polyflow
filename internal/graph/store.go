@@ -240,6 +240,39 @@ func (s *SQLiteStore) ftsPlan(n *Node) (del, ins bool) {
 	}
 }
 
+// WarmFTSJournal seeds ftsJournal from the store's current nodes_fts content,
+// so ftsPlan can skip the O(n) id-scan delete on a store opened over a
+// pre-existing DB (NewSQLiteStore otherwise leaves the journal nil, so every
+// write pays that scan — see ftsJournal's doc comment). Call this once, right
+// after the caller knows nodes_fts is in a known-correct state — e.g. a
+// scoped `link --relink` calls it right after MergeServiceDBs's
+// rebuildNodesFTS runs — so the pipeline's later per-node writes
+// (persistComposedRoutes, contract_engine's minted nodes, ...) skip the
+// delete+insert for every node whose content isn't actually changing, which
+// on a large fleet is nearly all of them.
+func (s *SQLiteStore) WarmFTSJournal(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, label, file, service, qualified FROM nodes_fts`)
+	if err != nil {
+		return fmt.Errorf("warm fts journal: %w", err)
+	}
+	defer rows.Close()
+	journal := make(map[string]string)
+	for rows.Next() {
+		var id, label, file, service, qualified string
+		if err := rows.Scan(&id, &label, &file, &service, &qualified); err != nil {
+			return fmt.Errorf("warm fts journal: scan: %w", err)
+		}
+		journal[id] = label + "\x00" + file + "\x00" + service + "\x00" + qualified
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("warm fts journal: %w", err)
+	}
+	s.ftsMu.Lock()
+	s.ftsJournal = journal
+	s.ftsMu.Unlock()
+	return nil
+}
+
 // NewSQLiteStore opens (or creates) the SQLite database at dsn and applies the schema.
 func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite", dsn)
