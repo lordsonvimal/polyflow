@@ -244,8 +244,9 @@ func initIndexFlags() {
 }
 
 var indexCmd = &cobra.Command{
-	Use:   "index",
-	Short: "Parse and index all services in the workspace",
+	Use:   "index [service]",
+	Short: "Parse and index all services in the workspace, or a single service",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runIndex,
 }
 
@@ -268,8 +269,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("Scanning services...")
-	stats, err := indexer.Run(context.Background(), indexer.Options{
+	opts := indexer.Options{
 		Config:       cfg,
 		Workers:      indexWorkers,
 		Full:         indexFull,
@@ -287,7 +287,21 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				fmt.Println()
 			}
 		},
-	})
+	}
+
+	if len(args) == 1 {
+		svc := args[0]
+		if !cfg.HasService(svc) {
+			return fmt.Errorf("index: no service %q in %s", svc, indexWorkspace)
+		}
+		opts.ServiceFilter = []string{svc}
+		opts.DBDir = filepath.Join(meta.DBDir, "services", svc)
+		fmt.Printf("Scanning %s...\n", svc)
+	} else {
+		fmt.Println("Scanning services...")
+	}
+
+	stats, err := indexer.Run(context.Background(), opts)
 	if err != nil {
 		return err
 	}

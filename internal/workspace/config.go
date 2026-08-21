@@ -256,7 +256,25 @@ func Load(path string) (*WorkspaceConfig, error) {
 		svc.Path = resolved
 	}
 
+	seenNames := make(map[string]bool, len(cfg.Services))
+	for _, svc := range cfg.Services {
+		if seenNames[svc.Name] {
+			return nil, fmt.Errorf("duplicate service name %q — service names must be unique", svc.Name)
+		}
+		seenNames[svc.Name] = true
+	}
+
 	return &cfg, nil
+}
+
+// HasService reports whether name matches a service in this workspace.
+func (c *WorkspaceConfig) HasService(name string) bool {
+	for _, svc := range c.Services {
+		if svc.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveServicePath applies the ~/-expansion and workspace-relative-join
