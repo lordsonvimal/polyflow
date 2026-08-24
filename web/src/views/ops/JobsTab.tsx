@@ -109,8 +109,15 @@ function RunningJobCard(props: { job: Job }) {
   );
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function HistoryRow(props: { job: Job }) {
   const [expanded, setExpanded] = createSignal(false);
+  const finished = () => props.job.state !== "running";
   return (
     <li data-testid="jobs-history-row" class="border-b border-neutral-900 py-1">
       <div class="flex items-center gap-2">
@@ -132,6 +139,23 @@ function HistoryRow(props: { job: Job }) {
         <pre data-testid="jobs-history-error" class="mt-1 whitespace-pre-wrap text-[10px] text-red-300 bg-neutral-900 rounded p-1.5">
           {props.job.error}
         </pre>
+      </Show>
+      <Show when={finished() && props.job.profile}>
+        <div data-testid="jobs-history-profile" class="flex items-center gap-3 text-neutral-600 mt-0.5">
+          <span title="heap in use at completion">alloc {formatBytes(props.job.profile.alloc_bytes)}</span>
+          <span title="cumulative bytes allocated during this job">total alloc {formatBytes(props.job.profile.total_alloc_bytes)}</span>
+          <span title="garbage-collector cycles run during this job">gc {props.job.profile.gc_count}</span>
+          <Show when={props.job.profile.has_cpu_profile}>
+            <a
+              data-testid="jobs-history-profile-download"
+              class="ml-auto text-indigo-300 hover:text-indigo-200 underline"
+              href={`/api/jobs/${props.job.id}/profile`}
+              download={`job-${props.job.id}.pprof`}
+            >
+              ↓ CPU profile
+            </a>
+          </Show>
+        </div>
       </Show>
     </li>
   );

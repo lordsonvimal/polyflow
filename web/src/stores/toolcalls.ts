@@ -9,6 +9,14 @@ import { downloadText } from "../lib/export";
 import { connectionStore } from "./connection";
 import { notificationsStore } from "./notifications";
 
+export interface ProfileStats {
+  alloc_bytes: number;
+  total_alloc_bytes: number;
+  heap_objects: number;
+  gc_count: number;
+  has_cpu_profile: boolean;
+}
+
 export interface ToolCallRow {
   id: number;
   ts: string;
@@ -21,6 +29,7 @@ export interface ToolCallRow {
   result: string; // JSON or raw text, full (capped at 64KiB — see result_truncated)
   result_bytes: number;
   result_truncated: boolean;
+  profile: ProfileStats;
 }
 
 export interface ToolCallFilters {

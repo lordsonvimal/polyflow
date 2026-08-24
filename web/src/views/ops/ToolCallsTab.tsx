@@ -192,6 +192,24 @@ function ToolCallRowView(props: { row: ToolCallRow; q: string; expanded: boolean
             </div>
           </Show>
 
+          <Show when={props.row.profile}>
+            <div data-testid="toolcalls-profile" class="flex items-center gap-3 text-neutral-500">
+              <span title="heap in use at completion">alloc {formatBytes(props.row.profile.alloc_bytes)}</span>
+              <span title="cumulative bytes allocated during this call">total alloc {formatBytes(props.row.profile.total_alloc_bytes)}</span>
+              <span title="garbage-collector cycles run during this call">gc {props.row.profile.gc_count}</span>
+              <Show when={props.row.profile.has_cpu_profile}>
+                <a
+                  data-testid="toolcalls-profile-download"
+                  class="ml-auto text-indigo-300 hover:text-indigo-200 underline"
+                  href={`/api/toolcalls/${props.row.id}/profile`}
+                  download={`toolcall-${props.row.id}.pprof`}
+                >
+                  ↓ CPU profile
+                </a>
+              </Show>
+            </div>
+          </Show>
+
           <div class="grid grid-cols-2 gap-2">
             <div data-testid="toolcalls-input-pane" class="min-w-0">
               <div class="flex items-center gap-2 text-neutral-400 mb-0.5">

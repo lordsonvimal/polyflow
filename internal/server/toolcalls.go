@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -39,6 +41,34 @@ func (s *Server) handleListToolCalls(w http.ResponseWriter, r *http.Request) {
 		"total": result.Total,
 		"page":  result.Page,
 	})
+}
+
+// handleGetToolCallProfile handles GET /api/toolcalls/{id}/profile — streams
+// the raw pprof-format CPU profile captured for this call (UO.8), for
+// opening in `go tool pprof` or the browser's pprof flamegraph viewer.
+func (s *Server) handleGetToolCallProfile(w http.ResponseWriter, r *http.Request) {
+	if s.ops == nil {
+		writeError(w, http.StatusServiceUnavailable, "tool-call audit log is not available")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	data, err := s.ops.GetToolCallProfile(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ops.ErrProfileNotFound) {
+			writeError(w, http.StatusNotFound, "no CPU profile captured for this call")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="toolcall-%d.pprof"`, id))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // handleDeleteToolCalls handles DELETE /api/toolcalls (the UI's "clear all logs").
