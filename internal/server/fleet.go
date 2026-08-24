@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -144,6 +145,37 @@ func (s *Server) handleFleetActive(w http.ResponseWriter, r *http.Request) {
 
 	s.Broadcast(`{"type":"graph_updated"}`)
 	writeJSON(w, http.StatusOK, map[string]any{"active": req.Service})
+}
+
+// getNodeWithFallback returns id's node from the live SQLite store first,
+// falling back to the in-memory idx. A bridge-merged cross-service node
+// (GR.2/GR.3's buildFleetAwareIndex) is only ever recorded in idx — the
+// bridge is unioned into it directly, never written into any member's own
+// graph.db — so a plain s.db.GetNode 404s for any node reached via a
+// cross-service edge, on the active member or not.
+func (s *Server) getNodeWithFallback(ctx context.Context, id string) (*graph.Node, bool) {
+	if node, err := s.db.GetNode(ctx, id); err == nil {
+		return node, true
+	}
+	s.idxMu.RLock()
+	defer s.idxMu.RUnlock()
+	n, ok := s.idx.Nodes[id]
+	return n, ok
+}
+
+// edgesWithFallback mirrors getNodeWithFallback for id's edges: the SQLite
+// store's own edges first, falling back to idx's adjacency lists when the
+// store has none (a bridge-merged node's edges live only in idx too).
+func (s *Server) edgesWithFallback(ctx context.Context, id string) (from, to []*graph.Edge) {
+	from, _ = s.db.ListEdgesFrom(ctx, id)
+	to, _ = s.db.ListEdgesTo(ctx, id)
+	if len(from) == 0 && len(to) == 0 {
+		s.idxMu.RLock()
+		defer s.idxMu.RUnlock()
+		from = s.idx.OutEdges[id]
+		to = s.idx.InEdges[id]
+	}
+	return from, to
 }
 
 // resolveSourcePath joins file with the active fleet member's checkout root

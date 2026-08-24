@@ -281,14 +281,13 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	node, err := s.db.GetNode(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	node, ok := s.getNodeWithFallback(r.Context(), id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found: "+id)
 		return
 	}
 
-	edgesFrom, _ := s.db.ListEdgesFrom(r.Context(), id)
-	edgesTo, _ := s.db.ListEdgesTo(r.Context(), id)
+	edgesFrom, edgesTo := s.edgesWithFallback(r.Context(), id)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"node":       node,
@@ -310,9 +309,9 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	node, err := s.db.GetNode(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	node, ok := s.getNodeWithFallback(r.Context(), id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found: "+id)
 		return
 	}
 
