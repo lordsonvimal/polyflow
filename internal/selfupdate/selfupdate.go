@@ -124,7 +124,32 @@ func Pull(ctx context.Context, repoDir string, out io.Writer) error {
 // path a human runs by hand (Makefile:26), so it rebuilds polyflow and its
 // polyflow-parse-templ sidecar and installs both onto PATH.
 func Build(ctx context.Context, repoDir string, out io.Writer) error {
+	if err := cleanWebDist(repoDir); err != nil {
+		return err
+	}
 	return runStreamed(ctx, repoDir, out, "make", "-C", repoDir, "install")
+}
+
+// cleanWebDist removes web/dist before the build. Vite's own emptyDir step
+// (run as part of `make install`'s `web` target) has been observed to throw
+// ENOTEMPTY on web/dist/assets when leftovers survive from a prior
+// interrupted/aborted build — rmdir and recreate ourselves first so a stale
+// dist/ never turns an unattended --update into a failure requiring a manual
+// rebuild. Recreated with .gitkeep (Makefile:9-11's placeholder) so
+// `//go:embed all:dist` (web/embed.go) still compiles even if the build
+// below fails partway through.
+func cleanWebDist(repoDir string) error {
+	distDir := filepath.Join(repoDir, "web", "dist")
+	if err := os.RemoveAll(distDir); err != nil {
+		return fmt.Errorf("clean %s: %w", distDir, err)
+	}
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		return fmt.Errorf("recreate %s: %w", distDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, ".gitkeep"), nil, 0o644); err != nil {
+		return fmt.Errorf("write %s/.gitkeep: %w", distDir, err)
+	}
+	return nil
 }
 
 func runStreamed(ctx context.Context, dir string, out io.Writer, name string, args ...string) error {
