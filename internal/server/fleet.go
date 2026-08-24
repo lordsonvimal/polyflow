@@ -26,10 +26,10 @@ type fleetServiceStatus struct {
 
 // handleFleetStatus handles GET /api/fleet/status — per-service staleness,
 // sourced from each services/<name>/graph.db this workspace has produced via
-// `polyflow index <service>` (FR.2) or `polyflow link --relink` (FR.5c). A
-// service with no per-service DB on disk still gets a row (Indexed:false)
-// rather than being silently omitted, since the UI needs to distinguish
-// "never indexed on its own" from "no services configured".
+// `polyflow index <service>` (FR.2). A service with no per-service DB on
+// disk still gets a row (Indexed:false) rather than being silently omitted,
+// since the UI needs to distinguish "never indexed on its own" from "no
+// services configured".
 func (s *Server) handleFleetStatus(w http.ResponseWriter, r *http.Request) {
 	cfg, err := workspace.Load(s.configPathOrDefault())
 	if err != nil {

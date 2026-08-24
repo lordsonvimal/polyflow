@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,6 +13,60 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
+
+// threeServiceFleet builds a fixture with a real cross-service HTTP edge
+// (web's fetch('/api/users') -> api's http.HandleFunc("/api/users"), the
+// same shape indexer_test.go's TestRun_CrossLinksCountsOnlyBoundaryCrossings
+// already proves produces CrossLinks > 0) plus a third, unrelated service
+// with no path to either — proving a bridge build recovers the former while
+// keeping the latter out entirely. Originally relink_test.go's fixture
+// (FR.5c); moved here when GR.2's bridge build superseded Relink.
+func threeServiceFleet(t *testing.T) (*workspace.WorkspaceConfig, string) {
+	t.Helper()
+	dir := t.TempDir()
+
+	apiSvc := filepath.Join(dir, "api")
+	require.NoError(t, os.MkdirAll(apiSvc, 0o755))
+	writeFile(t, apiSvc, "go.mod", "module example.com/api\n\ngo 1.22\n")
+	writeFile(t, apiSvc, "main.go", `package main
+
+import "net/http"
+
+func main() {
+	http.HandleFunc("/api/users", listUsers)
+}
+
+func listUsers(w http.ResponseWriter, r *http.Request) {}
+`)
+
+	webSvc := filepath.Join(dir, "web")
+	require.NoError(t, os.MkdirAll(webSvc, 0o755))
+	writeFile(t, webSvc, "app.js", `async function load() {
+  const res = await fetch('/api/users');
+  return res;
+}
+`)
+
+	workerSvc := filepath.Join(dir, "worker")
+	require.NoError(t, os.MkdirAll(workerSvc, 0o755))
+	writeFile(t, workerSvc, "go.mod", "module example.com/worker\n\ngo 1.22\n")
+	writeFile(t, workerSvc, "main.go", `package main
+
+func main() { run() }
+
+func run() {}
+`)
+
+	cfg := &workspace.WorkspaceConfig{
+		Name: "fleet", Version: "1",
+		Services: []workspace.Service{
+			{Name: "api", Path: apiSvc, Language: "go"},
+			{Name: "web", Path: webSvc, Language: "javascript"},
+			{Name: "worker", Path: workerSvc, Language: "go"},
+		},
+	}
+	return cfg, dir
+}
 
 // indexServiceStandalone runs FR.2's per-service pipeline for svc alone
 // (the same call shape `polyflow index <service>` makes) and returns its
