@@ -39,6 +39,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/registry"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/server"
 	"github.com/lordsonvimal/polyflow/internal/sidecar"
@@ -317,6 +318,23 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	if stats.ErrorFiles > 0 {
 		fmt.Printf("  Errors: %d files (run `polyflow status --errors` for details)\n", stats.ErrorFiles)
 	}
+
+	// GR.1: a standalone single-service repo (today's per-repo case, e.g.
+	// willow's own polyflow.yml) self-populates the local machine
+	// registry as a side effect of indexing — no separate register command
+	// to remember to run. Multi-service workspaces and single-service
+	// `polyflow index <service>` runs are not "this machine has a full
+	// fleet member checked out at this path" facts, so they don't sync.
+	if len(args) == 0 && len(cfg.Services) == 1 {
+		if wsRoot, err := filepath.Abs(filepath.Dir(indexWorkspace)); err == nil {
+			if regPath, err := registry.DefaultPath(); err == nil {
+				if err := registry.Sync(regPath, cfg.Services[0].Name, wsRoot); err != nil {
+					fmt.Printf("  Warning: local registry sync failed: %v\n", err)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

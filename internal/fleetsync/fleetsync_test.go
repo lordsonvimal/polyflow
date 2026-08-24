@@ -1,0 +1,211 @@
+package fleetsync_test
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/lordsonvimal/polyflow/internal/fleetconfig"
+	"github.com/lordsonvimal/polyflow/internal/fleetsync"
+	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/registry"
+)
+
+const polyflowYML = `
+name: svc
+version: "1"
+services:
+  - name: svc
+    path: .
+    language: go
+`
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %s: %s", strings.Join(args, " "), out)
+	return strings.TrimSpace(string(out))
+}
+
+// newBareRepo creates a bare remote and a first commit (polyflow.yml + a
+// trivial source file) on "main", pushed to the bare repo. Returns the bare
+// repo path (usable as a git URL) and the commit SHA.
+func newBareRepo(t *testing.T) (bareURL, sha string) {
+	t.Helper()
+	bareDir := t.TempDir()
+	runGit(t, "", "init", "--bare", bareDir)
+
+	workDir := t.TempDir()
+	runGit(t, workDir, "init")
+	runGit(t, workDir, "checkout", "-b", "main")
+	runGit(t, workDir, "config", "user.email", "test@example.com")
+	runGit(t, workDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "polyflow.yml"), []byte(polyflowYML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644))
+	runGit(t, workDir, "add", ".")
+	runGit(t, workDir, "commit", "-m", "init")
+	runGit(t, workDir, "remote", "add", "origin", bareDir)
+	runGit(t, workDir, "push", "origin", "main")
+
+	return bareDir, runGit(t, workDir, "rev-parse", "HEAD")
+}
+
+// pushNewCommit adds a second commit on top of an existing clone of bareURL
+// and pushes it, moving main's head. Returns the new SHA.
+func pushNewCommit(t *testing.T, bareURL string) string {
+	t.Helper()
+	workDir := t.TempDir()
+	runGit(t, "", "clone", bareURL, workDir)
+	runGit(t, workDir, "config", "user.email", "test@example.com")
+	runGit(t, workDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "extra.go"), []byte("package main\n"), 0o644))
+	runGit(t, workDir, "add", ".")
+	runGit(t, workDir, "commit", "-m", "second")
+	runGit(t, workDir, "push", "origin", "main")
+	return runGit(t, workDir, "rev-parse", "HEAD")
+}
+
+func cloneAt(t *testing.T, bareURL, dest string) {
+	t.Helper()
+	runGit(t, "", "clone", bareURL, dest)
+}
+
+func newRegistryPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "registry.yml")
+}
+
+func isEmptyDir(t *testing.T, dir string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	return len(entries) == 0
+}
+
+func TestResolveService_CleanLocalMatch_NoClone(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.Equal(t, filepath.Join(localDir, meta.DBDir, meta.DBFile), dbPath)
+	assert.True(t, isEmptyDir(t, scratch), "clean local match must not clone")
+
+	// Running it again performs no clone either — the acceptance bar for
+	// GR.1 (zero network beyond the one ls-remote on a clean checkout).
+	dbPath2, resolvedSHA2, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, dbPath, dbPath2)
+	assert.Equal(t, resolvedSHA, resolvedSHA2)
+	assert.True(t, isEmptyDir(t, scratch))
+}
+
+func TestResolveService_DirtyLocalMatch_Clones(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "main.go"), []byte("package main\n\nfunc main() { println(1) }\n"), 0o644))
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.False(t, isEmptyDir(t, scratch), "dirty local match must clone")
+	assert.FileExists(t, dbPath)
+	assert.Equal(t, filepath.Join(scratch, "svc", meta.DBDir, meta.DBFile), dbPath)
+}
+
+func TestResolveService_WrongSHALocalMatch_Clones(t *testing.T) {
+	bareURL, sha1 := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	sha2 := pushNewCommit(t, bareURL)
+	require.NotEqual(t, sha1, sha2)
+
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha2, resolvedSHA)
+	assert.False(t, isEmptyDir(t, scratch), "stale local SHA must clone")
+	assert.FileExists(t, dbPath)
+}
+
+func TestResolveService_NoLocalEntry_CacheHit_NoClone(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	cacheDir := t.TempDir()
+	cached := filepath.Join(cacheDir, "svc", sha, meta.DBFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0o755))
+	require.NoError(t, os.WriteFile(cached, []byte("cached-db"), 0o644))
+
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		CacheDir:     cacheDir,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.Equal(t, cached, dbPath)
+	assert.True(t, isEmptyDir(t, scratch), "a cache hit must not clone")
+}
+
+func TestResolveService_NoLocalEntry_CacheMiss_ClonesAndPopulatesCache(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	cacheDir := t.TempDir()
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		CacheDir:     cacheDir,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.False(t, isEmptyDir(t, scratch), "a cache miss must clone")
+
+	cachedPath := filepath.Join(cacheDir, "svc", sha, meta.DBFile)
+	assert.FileExists(t, cachedPath)
+	assert.NotEqual(t, dbPath, cachedPath)
+}
