@@ -7,11 +7,14 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"sync"
@@ -110,6 +113,14 @@ type Manager struct {
 
 	mu      sync.Mutex
 	running map[Kind]*runState // at most one entry per kind; index excludes all others
+
+	// profileMu serializes CPU profiling across concurrent job runs:
+	// runtime/pprof only supports one active CPU profile per process. index
+	// excludes every other kind, but eval+reconcile can run concurrently
+	// (conflictLocked), so a second job that can't acquire this lock simply
+	// runs unprofiled (CPU) rather than corrupting/aborting the first job's
+	// profile — memory stats are still captured either way.
+	profileMu sync.Mutex
 }
 
 // runState is the live, in-memory view of a running job — more current than
@@ -366,6 +377,17 @@ func lastN(lines []string, n int) []string {
 // run executes the work for kind and finalizes rs.job (state/error/result),
 // persists it, broadcasts job_done, and clears the single-flight slot.
 func (m *Manager) run(ctx context.Context, k Kind, rs *runState, argsJSON json.RawMessage, evalArgs EvalArgs) {
+	var cpuBuf bytes.Buffer
+	profiling := m.profileMu.TryLock()
+	if profiling {
+		if err := pprof.StartCPUProfile(&cpuBuf); err != nil {
+			profiling = false
+			m.profileMu.Unlock()
+		}
+	}
+	var memStart runtime.MemStats
+	runtime.ReadMemStats(&memStart)
+
 	var (
 		result string
 		runErr error
@@ -393,6 +415,21 @@ func (m *Manager) run(ctx context.Context, k Kind, rs *runState, argsJSON json.R
 		result, runErr = m.runInit(ctx, rs, args)
 	}
 
+	var cpuProfile []byte
+	if profiling {
+		pprof.StopCPUProfile()
+		m.profileMu.Unlock()
+		cpuProfile = cpuBuf.Bytes()
+	}
+	var memEnd runtime.MemStats
+	runtime.ReadMemStats(&memEnd)
+	profile := ops.ProfileStats{
+		AllocBytes:      int64(memEnd.Alloc),
+		TotalAllocBytes: int64(memEnd.TotalAlloc - memStart.TotalAlloc),
+		HeapObjects:     int64(memEnd.HeapObjects),
+		GCCount:         int64(memEnd.NumGC - memStart.NumGC),
+	}
+
 	state := "succeeded"
 	errMsg := ""
 	if runErr != nil {
@@ -410,6 +447,8 @@ func (m *Manager) run(ctx context.Context, k Kind, rs *runState, argsJSON json.R
 	rs.job.Error = errMsg
 	rs.job.Result = result
 	rs.job.EndedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	rs.job.Profile = profile
+	rs.job.CPUProfile = cpuProfile
 	job := rs.snapshotLocked()
 	delete(m.running, k)
 	m.mu.Unlock()

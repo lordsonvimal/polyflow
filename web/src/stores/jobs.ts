@@ -13,6 +13,14 @@ export interface JobProgress {
   total: number;
 }
 
+export interface ProfileStats {
+  alloc_bytes: number;
+  total_alloc_bytes: number;
+  heap_objects: number;
+  gc_count: number;
+  has_cpu_profile: boolean;
+}
+
 export interface Job {
   id: string;
   kind: string;
@@ -24,6 +32,7 @@ export interface Job {
   error?: string;
   result?: string;
   log_tail: string[];
+  profile: ProfileStats;
 }
 
 // The single running "index" job the top-bar button reflects — jobs of

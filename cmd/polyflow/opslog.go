@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -31,6 +33,42 @@ type opsRecording struct {
 	pipeW     *os.File
 	buf       *bytes.Buffer
 	copyDone  chan struct{}
+
+	// CPU/memory profiling (UO.8): a CLI process runs exactly one command, so
+	// wrapping the whole invocation in pprof.StartCPUProfile is safe — no
+	// concurrent second command can ever race it within one process.
+	cpuBuf    bytes.Buffer
+	profiling bool
+	memStart  runtime.MemStats
+}
+
+// startProfiling begins CPU profiling and takes the "before" memory
+// snapshot. Called for every recording path (piped stdout or the pipe-
+// unavailable fallback) so profiling coverage doesn't depend on os.Pipe
+// succeeding.
+func (rec *opsRecording) startProfiling() {
+	runtime.ReadMemStats(&rec.memStart)
+	if err := pprof.StartCPUProfile(&rec.cpuBuf); err == nil {
+		rec.profiling = true
+	}
+}
+
+// stopProfiling ends CPU profiling (if started) and returns the captured
+// profile bytes plus the memory-stats delta since startProfiling.
+func (rec *opsRecording) stopProfiling() ([]byte, ops.ProfileStats) {
+	var cpuProfile []byte
+	if rec.profiling {
+		pprof.StopCPUProfile()
+		cpuProfile = rec.cpuBuf.Bytes()
+	}
+	var memEnd runtime.MemStats
+	runtime.ReadMemStats(&memEnd)
+	return cpuProfile, ops.ProfileStats{
+		AllocBytes:      int64(memEnd.Alloc),
+		TotalAllocBytes: int64(memEnd.TotalAlloc - rec.memStart.TotalAlloc),
+		HeapObjects:     int64(memEnd.HeapObjects),
+		GCCount:         int64(memEnd.NumGC - rec.memStart.NumGC),
+	}
 }
 
 // current is set by opsPersistentPreRun and consumed by opsFinalize. A CLI
@@ -55,6 +93,15 @@ func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
 	}
 
 	tool := strings.TrimPrefix(cmd.CommandPath(), rootCmd.Name()+" ")
+	// longRunningTools never return until killed/interrupted (serve runs the
+	// web/API server, mcp runs the stdio MCP loop) — profiling "the whole
+	// process lifetime" isn't a meaningful per-operation measurement, and
+	// worse, holding the one process-wide CPU profile for as long as `serve`
+	// runs would starve every job UO.8 profiles inside it (jobs.Manager's
+	// own StartCPUProfile can never acquire the slot). Skip CPU profiling
+	// for these; duration/mem-stats/audit recording still happens.
+	longRunningTools := map[string]bool{"serve": true, "mcp": true}
+	skipCPUProfile := longRunningTools[tool]
 	flags := map[string]string{}
 	cmd.Flags().Visit(func(f *pflag.Flag) {
 		flags[f.Name] = f.Value.String()
@@ -67,7 +114,11 @@ func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
 	r, w, perr := os.Pipe()
 	if perr != nil {
 		// Tee unavailable — still record params/timing/status, just no result text.
-		current = &opsRecording{store: store, tool: tool, params: string(paramsJSON), start: time.Now()}
+		rec := &opsRecording{store: store, tool: tool, params: string(paramsJSON), start: time.Now()}
+		if !skipCPUProfile {
+			rec.startProfiling()
+		}
+		current = rec
 		return nil
 	}
 
@@ -80,6 +131,9 @@ func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
 		pipeW:     w,
 		buf:       &bytes.Buffer{},
 		copyDone:  make(chan struct{}),
+	}
+	if !skipCPUProfile {
+		rec.startProfiling()
 	}
 	os.Stdout = w
 	go func() {
@@ -106,6 +160,13 @@ func opsFinalize(cmdErr error) {
 	}
 	defer rec.store.Close()
 
+	// Stop profiling before restoring/closing stdout: StopCPUProfile flushes
+	// its buffer synchronously and doesn't touch stdout, but capturing the
+	// "after" MemStats snapshot as close to command completion as possible
+	// (before the pipe-drain/tee teardown below does its own allocation)
+	// keeps the numbers honest.
+	cpuProfile, profile := rec.stopProfiling()
+
 	if rec.pipeW != nil {
 		os.Stdout = rec.stdoutOld
 		rec.pipeW.Close()
@@ -129,6 +190,8 @@ func opsFinalize(cmdErr error) {
 		Status:     status,
 		Error:      errMsg,
 		Result:     result,
+		Profile:    profile,
+		CPUProfile: cpuProfile,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "polyflow: ops record failed: %v\n", err)
 	}

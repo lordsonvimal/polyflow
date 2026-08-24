@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -86,6 +87,32 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"job": job})
+}
+
+// handleGetJobProfile handles GET /api/jobs/{id}/profile — streams the raw
+// pprof-format CPU profile captured for this job (UO.8). Reads straight from
+// ops.db rather than through jobs.Manager: profile bytes only exist once a
+// job has finished (Manager.run's terminal UpsertJob), so there's nothing
+// Manager's in-memory running-job view could add here.
+func (s *Server) handleGetJobProfile(w http.ResponseWriter, r *http.Request) {
+	if s.ops == nil {
+		writeError(w, http.StatusServiceUnavailable, "jobs are not available")
+		return
+	}
+	id := r.PathValue("id")
+	data, err := s.ops.GetJobProfile(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ops.ErrProfileNotFound) {
+			writeError(w, http.StatusNotFound, "no CPU profile captured for this job")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="job-%s.pprof"`, id))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // handleCancelJob handles DELETE /api/jobs/{id} — requests cancellation via

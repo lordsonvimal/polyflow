@@ -35,7 +35,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 	error            TEXT NOT NULL DEFAULT '',
 	result           TEXT NOT NULL DEFAULT '',
 	result_bytes     INTEGER NOT NULL,
-	result_truncated INTEGER NOT NULL DEFAULT 0
+	result_truncated INTEGER NOT NULL DEFAULT 0,
+	alloc_bytes       INTEGER NOT NULL DEFAULT 0,
+	total_alloc_bytes INTEGER NOT NULL DEFAULT 0,
+	heap_objects      INTEGER NOT NULL DEFAULT 0,
+	gc_count          INTEGER NOT NULL DEFAULT 0,
+	cpu_profile       BLOB
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_ts     ON tool_calls(ts);
@@ -64,7 +69,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 	progress_total INTEGER NOT NULL DEFAULT 0,
 	error          TEXT NOT NULL DEFAULT '',
 	result         TEXT NOT NULL DEFAULT '',
-	log_tail       TEXT NOT NULL DEFAULT '[]'
+	log_tail       TEXT NOT NULL DEFAULT '[]',
+	alloc_bytes       INTEGER NOT NULL DEFAULT 0,
+	total_alloc_bytes INTEGER NOT NULL DEFAULT 0,
+	heap_objects      INTEGER NOT NULL DEFAULT 0,
+	gc_count          INTEGER NOT NULL DEFAULT 0,
+	cpu_profile       BLOB
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_started_at ON jobs(started_at);
@@ -96,6 +106,23 @@ const (
 	MaxRetention = 10000
 )
 
+// ProfileStats is the CPU/memory cost of one operation (tool call or job),
+// captured by wrapping the operation in runtime/pprof.StartCPUProfile plus a
+// runtime.MemStats delta. AllocBytes/HeapObjects are point-in-time snapshots
+// taken right after the operation finishes; TotalAllocBytes/GCCount are true
+// deltas (cumulative bytes allocated and GC cycles run during the operation),
+// since Alloc/HeapObjects have no meaningful "delta" — heap in use at any
+// moment reflects everything still live, not just what this operation did.
+// The raw CPU profile itself is not embedded here (it can be tens of KB) —
+// callers fetch it separately via GetToolCallProfile/GetJobProfile.
+type ProfileStats struct {
+	AllocBytes      int64 `json:"alloc_bytes"`
+	TotalAllocBytes int64 `json:"total_alloc_bytes"`
+	HeapObjects     int64 `json:"heap_objects"`
+	GCCount         int64 `json:"gc_count"`
+	HasCPUProfile   bool  `json:"has_cpu_profile"`
+}
+
 // Call is one recorded tool invocation, as supplied by a recording call
 // site (MCP tool wrapper, UI handler middleware, or the CLI hook).
 type Call struct {
@@ -106,21 +133,24 @@ type Call struct {
 	Status     string // "ok" | "error"
 	Error      string
 	Result     string // full output, before any capping
+	Profile    ProfileStats
+	CPUProfile []byte // pprof-format CPU profile; nil if profiling wasn't captured
 }
 
 // ToolCall is a persisted tool_calls row.
 type ToolCall struct {
-	ID              int64  `json:"id"`
-	TS              string `json:"ts"`
-	Source          string `json:"source"`
-	Tool            string `json:"tool"`
-	Params          string `json:"params"`
-	DurationMS      int64  `json:"duration_ms"`
-	Status          string `json:"status"`
-	Error           string `json:"error"`
-	Result          string `json:"result"`
-	ResultBytes     int64  `json:"result_bytes"`
-	ResultTruncated bool   `json:"result_truncated"`
+	ID              int64        `json:"id"`
+	TS              string       `json:"ts"`
+	Source          string       `json:"source"`
+	Tool            string       `json:"tool"`
+	Params          string       `json:"params"`
+	DurationMS      int64        `json:"duration_ms"`
+	Status          string       `json:"status"`
+	Error           string       `json:"error"`
+	Result          string       `json:"result"`
+	ResultBytes     int64        `json:"result_bytes"`
+	ResultTruncated bool         `json:"result_truncated"`
+	Profile         ProfileStats `json:"profile"`
 }
 
 // Store is the ops.db-backed persistence for tool calls and ops settings.
@@ -145,12 +175,69 @@ func Open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := migrateProfileColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	s := &Store{db: db}
 	if err := s.seed(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// profileColumns is added to both tool_calls and jobs to record the CPU/
+// memory cost of the operation each row represents. CREATE TABLE IF NOT
+// EXISTS (above) only applies to a fresh ops.db — an existing one predating
+// this feature needs these columns backfilled via ALTER TABLE, checked
+// column-by-column via PRAGMA table_info since SQLite has no
+// "ADD COLUMN IF NOT EXISTS".
+var profileColumns = []string{
+	"alloc_bytes INTEGER NOT NULL DEFAULT 0",
+	"total_alloc_bytes INTEGER NOT NULL DEFAULT 0",
+	"heap_objects INTEGER NOT NULL DEFAULT 0",
+	"gc_count INTEGER NOT NULL DEFAULT 0",
+	"cpu_profile BLOB",
+}
+
+func migrateProfileColumns(db *sql.DB) error {
+	for _, table := range []string{"tool_calls", "jobs"} {
+		existing, err := tableColumns(db, table)
+		if err != nil {
+			return fmt.Errorf("inspect %s columns: %w", table, err)
+		}
+		for _, decl := range profileColumns {
+			name := strings.SplitN(decl, " ", 2)[0]
+			if existing[name] {
+				continue
+			}
+			if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, decl)); err != nil {
+				return fmt.Errorf("add %s.%s: %w", table, name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 func (s *Store) seed() error {
@@ -193,10 +280,16 @@ func (s *Store) RecordCall(ctx context.Context, c Call) (ToolCall, []int64, erro
 	if truncated {
 		truncInt = 1
 	}
+	var cpuProfile any
+	if len(c.CPUProfile) > 0 {
+		cpuProfile = c.CPUProfile
+	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO tool_calls (ts, source, tool, params, duration_ms, status, error, result, result_bytes, result_truncated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ts, c.Source, c.Tool, c.Params, c.DurationMS, c.Status, c.Error, result, resultBytes, truncInt)
+		INSERT INTO tool_calls (ts, source, tool, params, duration_ms, status, error, result, result_bytes, result_truncated,
+			alloc_bytes, total_alloc_bytes, heap_objects, gc_count, cpu_profile)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ts, c.Source, c.Tool, c.Params, c.DurationMS, c.Status, c.Error, result, resultBytes, truncInt,
+		c.Profile.AllocBytes, c.Profile.TotalAllocBytes, c.Profile.HeapObjects, c.Profile.GCCount, cpuProfile)
 	if err != nil {
 		return ToolCall{}, nil, fmt.Errorf("insert tool_call: %w", err)
 	}
@@ -218,10 +311,13 @@ func (s *Store) RecordCall(ctx context.Context, c Call) (ToolCall, []int64, erro
 		return ToolCall{}, nil, fmt.Errorf("commit: %w", err)
 	}
 
+	profile := c.Profile
+	profile.HasCPUProfile = len(c.CPUProfile) > 0
 	return ToolCall{
 		ID: id, TS: ts, Source: c.Source, Tool: c.Tool, Params: c.Params,
 		DurationMS: c.DurationMS, Status: c.Status, Error: c.Error,
 		Result: result, ResultBytes: resultBytes, ResultTruncated: truncated,
+		Profile: profile,
 	}, evicted, nil
 }
 
@@ -291,7 +387,8 @@ func (s *Store) ListCalls(ctx context.Context, f ListFilter) (ListResult, error)
 		return ListResult{}, fmt.Errorf("count tool_calls: %w", err)
 	}
 
-	query := "SELECT id, ts, source, tool, params, duration_ms, status, error, result, result_bytes, result_truncated FROM tool_calls " +
+	query := `SELECT id, ts, source, tool, params, duration_ms, status, error, result, result_bytes, result_truncated,
+		alloc_bytes, total_alloc_bytes, heap_objects, gc_count, COALESCE(length(cpu_profile), 0) FROM tool_calls ` +
 		whereClause + " ORDER BY id DESC LIMIT ? OFFSET ?"
 	qargs := append(append([]any{}, args...), limit, (page-1)*limit)
 	rows, err := s.db.QueryContext(ctx, query, qargs...)
@@ -304,10 +401,13 @@ func (s *Store) ListCalls(ctx context.Context, f ListFilter) (ListResult, error)
 	for rows.Next() {
 		var c ToolCall
 		var truncInt int
-		if err := rows.Scan(&c.ID, &c.TS, &c.Source, &c.Tool, &c.Params, &c.DurationMS, &c.Status, &c.Error, &c.Result, &c.ResultBytes, &truncInt); err != nil {
+		var profileLen int64
+		if err := rows.Scan(&c.ID, &c.TS, &c.Source, &c.Tool, &c.Params, &c.DurationMS, &c.Status, &c.Error, &c.Result, &c.ResultBytes, &truncInt,
+			&c.Profile.AllocBytes, &c.Profile.TotalAllocBytes, &c.Profile.HeapObjects, &c.Profile.GCCount, &profileLen); err != nil {
 			return ListResult{}, fmt.Errorf("scan tool_call: %w", err)
 		}
 		c.ResultTruncated = truncInt != 0
+		c.Profile.HasCPUProfile = profileLen > 0
 		calls = append(calls, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -315,6 +415,29 @@ func (s *Store) ListCalls(ctx context.Context, f ListFilter) (ListResult, error)
 	}
 
 	return ListResult{Calls: calls, Total: total, Page: page}, nil
+}
+
+// ErrProfileNotFound is returned by GetToolCallProfile/GetJobProfile when the
+// row exists but no CPU profile was captured for it (or the row itself
+// doesn't exist — the two cases aren't distinguished; callers only need to
+// know "nothing to download").
+var ErrProfileNotFound = fmt.Errorf("profile not found")
+
+// GetToolCallProfile returns the raw pprof-format CPU profile for tool_calls
+// row id, or ErrProfileNotFound.
+func (s *Store) GetToolCallProfile(ctx context.Context, id int64) ([]byte, error) {
+	var b []byte
+	err := s.db.QueryRowContext(ctx, `SELECT cpu_profile FROM tool_calls WHERE id = ?`, id).Scan(&b)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrProfileNotFound
+		}
+		return nil, fmt.Errorf("get tool_call profile: %w", err)
+	}
+	if len(b) == 0 {
+		return nil, ErrProfileNotFound
+	}
+	return b, nil
 }
 
 // DeleteAll clears every tool_calls row and returns the count deleted.
@@ -453,45 +576,83 @@ type JobProgress struct {
 // Job is a persisted jobs row — the UB.3 background-job record (index/eval/
 // reconcile), independent of tool_calls (this is state, not an audit entry).
 type Job struct {
-	ID        string      `json:"id"`
-	Kind      string      `json:"kind"`
-	Args      string      `json:"args"`  // JSON
-	State     string      `json:"state"` // running|succeeded|failed|canceled
-	StartedAt string      `json:"started_at"`
-	EndedAt   string      `json:"ended_at,omitempty"`
-	Progress  JobProgress `json:"progress"`
-	Error     string      `json:"error,omitempty"`
-	Result    string      `json:"result,omitempty"` // JSON, non-index kinds
-	LogTail   []string    `json:"log_tail"`
+	ID        string       `json:"id"`
+	Kind      string       `json:"kind"`
+	Args      string       `json:"args"`  // JSON
+	State     string       `json:"state"` // running|succeeded|failed|canceled
+	StartedAt string       `json:"started_at"`
+	EndedAt   string       `json:"ended_at,omitempty"`
+	Progress  JobProgress  `json:"progress"`
+	Error     string       `json:"error,omitempty"`
+	Result    string       `json:"result,omitempty"` // JSON, non-index kinds
+	LogTail   []string     `json:"log_tail"`
+	Profile   ProfileStats `json:"profile"`
+
+	// CPUProfile is only ever set on the write path (Manager.run's terminal
+	// UpsertJob call, once the job's CPU profile has been captured) — never
+	// populated by GetJob/ListJobs, which report Profile.HasCPUProfile
+	// instead and leave fetching the (potentially large) blob to
+	// GetJobProfile. json:"-" so it never leaks into an API response.
+	CPUProfile []byte `json:"-"`
 }
 
 // UpsertJob inserts or fully replaces the jobs row for j.ID — the single
 // write path for both job creation and every progress/terminal-state update.
+// A progress-only call naturally carries a zero-value Profile/CPUProfile
+// (profiling only completes once the job does) — safe to write since it's
+// the same "full replace" every other column already gets.
 func (s *Store) UpsertJob(ctx context.Context, j Job) error {
 	logTail, err := json.Marshal(j.LogTail)
 	if err != nil {
 		return fmt.Errorf("marshal log_tail: %w", err)
 	}
+	var cpuProfile any
+	if len(j.CPUProfile) > 0 {
+		cpuProfile = j.CPUProfile
+	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO jobs (id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO jobs (id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail,
+			alloc_bytes, total_alloc_bytes, heap_objects, gc_count, cpu_profile)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			kind = excluded.kind, args = excluded.args, state = excluded.state,
 			started_at = excluded.started_at, ended_at = excluded.ended_at,
 			progress_done = excluded.progress_done, progress_total = excluded.progress_total,
-			error = excluded.error, result = excluded.result, log_tail = excluded.log_tail`,
+			error = excluded.error, result = excluded.result, log_tail = excluded.log_tail,
+			alloc_bytes = excluded.alloc_bytes, total_alloc_bytes = excluded.total_alloc_bytes,
+			heap_objects = excluded.heap_objects, gc_count = excluded.gc_count,
+			cpu_profile = CASE WHEN excluded.cpu_profile IS NOT NULL THEN excluded.cpu_profile ELSE jobs.cpu_profile END`,
 		j.ID, j.Kind, j.Args, j.State, j.StartedAt, j.EndedAt,
-		j.Progress.Done, j.Progress.Total, j.Error, j.Result, string(logTail))
+		j.Progress.Done, j.Progress.Total, j.Error, j.Result, string(logTail),
+		j.Profile.AllocBytes, j.Profile.TotalAllocBytes, j.Profile.HeapObjects, j.Profile.GCCount, cpuProfile)
 	if err != nil {
 		return fmt.Errorf("upsert job: %w", err)
 	}
 	return nil
 }
 
+// GetJobProfile returns the raw pprof-format CPU profile for jobs row id, or
+// ErrProfileNotFound.
+func (s *Store) GetJobProfile(ctx context.Context, id string) ([]byte, error) {
+	var b []byte
+	err := s.db.QueryRowContext(ctx, `SELECT cpu_profile FROM jobs WHERE id = ?`, id).Scan(&b)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrProfileNotFound
+		}
+		return nil, fmt.Errorf("get job profile: %w", err)
+	}
+	if len(b) == 0 {
+		return nil, ErrProfileNotFound
+	}
+	return b, nil
+}
+
 // GetJob returns the persisted job row for id, or ErrJobNotFound.
 func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail
+		SELECT id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail,
+			alloc_bytes, total_alloc_bytes, heap_objects, gc_count, COALESCE(length(cpu_profile), 0)
 		FROM jobs WHERE id = ?`, id)
 	j, err := scanJob(row)
 	if err == sql.ErrNoRows {
@@ -514,7 +675,8 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 		limit = 1000
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail
+		SELECT id, kind, args, state, started_at, ended_at, progress_done, progress_total, error, result, log_tail,
+			alloc_bytes, total_alloc_bytes, heap_objects, gc_count, COALESCE(length(cpu_profile), 0)
 		FROM jobs ORDER BY started_at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs: %w", err)
@@ -663,12 +825,15 @@ type rowScanner interface {
 func scanJob(row rowScanner) (Job, error) {
 	var j Job
 	var logTail string
+	var profileLen int64
 	if err := row.Scan(&j.ID, &j.Kind, &j.Args, &j.State, &j.StartedAt, &j.EndedAt,
-		&j.Progress.Done, &j.Progress.Total, &j.Error, &j.Result, &logTail); err != nil {
+		&j.Progress.Done, &j.Progress.Total, &j.Error, &j.Result, &logTail,
+		&j.Profile.AllocBytes, &j.Profile.TotalAllocBytes, &j.Profile.HeapObjects, &j.Profile.GCCount, &profileLen); err != nil {
 		return Job{}, err
 	}
 	if logTail != "" {
 		_ = json.Unmarshal([]byte(logTail), &j.LogTail)
 	}
+	j.Profile.HasCPUProfile = profileLen > 0
 	return j, nil
 }
