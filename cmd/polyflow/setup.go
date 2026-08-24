@@ -230,6 +230,15 @@ func runSetupUpdate(cmd *cobra.Command) error {
 
 	ctx := cmd.Context()
 
+	status, err := selfupdate.CheckOutdated(ctx, repoDir)
+	if err != nil {
+		return err
+	}
+	if !status.Outdated() {
+		fmt.Printf("Already up to date (%s)\n", status.LocalSHA)
+		return nil
+	}
+
 	fmt.Printf("Pulling %s...\n", repoDir)
 	if err := selfupdate.Pull(ctx, repoDir, os.Stdout); err != nil {
 		return err
