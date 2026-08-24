@@ -25,10 +25,10 @@ invisible to the other.
 | `polyflow deadcode` | Dead code activity — zero-caller function/method scan, filterable by service/file |
 | `polyflow deps` | Health activity → dependency list |
 | `polyflow link` | Config activity → `links:` section (form or YAML mode) |
-| `polyflow fleet` | **exception** — Tier GR operator surface; UI counterpart lands in GR.6 |
-| `polyflow fleet sync` | **exception** — Tier GR operator surface; UI counterpart lands in GR.6 |
-| `polyflow fleet status` | **exception** — Tier GR operator surface; UI counterpart lands in GR.6 |
-| `polyflow registry` | **exception** — Tier GR operator surface; UI counterpart lands in GR.6 |
+| `polyflow fleet` | **exception** — Tier GR operator surface; the UI's fleet-member switcher (Settings → Fleet, GR.6) covers the same ground via `GET /api/fleet/services`/`POST /api/fleet/active`, not a wrapper around this command |
+| `polyflow fleet sync` | **exception** — same as `polyflow fleet`; GR.6's switcher triggers an equivalent resolve/clone on member selection, not this command directly |
+| `polyflow fleet status` | **exception** — same as `polyflow fleet`; GR.6's Settings → Fleet panel is the UI's read-only view |
+| `polyflow registry` | **exception** — Tier GR operator surface; no UI counterpart (a machine-local index dump, not workspace state) |
 | `polyflow config` | Config activity |
 | `polyflow config show` | Config activity, YAML mode — `GET /api/config` |
 | `polyflow config set <key> <value>` | Config activity, form mode field edit — `PUT /api/config` |

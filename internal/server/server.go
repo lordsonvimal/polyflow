@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -30,6 +31,38 @@ type Server struct {
 	configPath string           // polyflow.yml path; "" → meta.ConfigFile (UB.4)
 	capture    *capture.Manager // nil → capture/runtime API disabled (UB.7)
 	dbPath     string           // graph.db path; used only by GET /api/setup/status (UO.7)
+
+	// Fleet mode (Tier GR.6): switching which registered fleet member's own
+	// graph.db backs db/idx/searcher, on top of GR.3's bridge-merged idx
+	// (which stays cross-service-edge-only regardless of which member is
+	// active). fleetSwitch is nil when this workspace isn't a fleet member.
+	fleetSwitch  FleetSwitchFunc
+	fleetMembers []string // every member of the fleet, not just locally-resolved ones
+	fleetActive  string
+	sourceRoot   string // root dir relative node.File paths resolve against; "" = process CWD
+}
+
+// FleetSwitchFunc resolves and opens the named fleet member — cloning it via
+// GR.1's resolver if this machine doesn't already have it — returning its
+// own store, a fleet-bridge-merged index (GR.3's buildFleetAwareIndex), a
+// hybrid searcher scoped to that store, and the member's checkout root (for
+// resolving relative node.File paths outside the workspace `serve` started
+// in). Constructed and owned by cmd/polyflow (which has fleetsync/
+// queryresolve/the embedder), not this package.
+type FleetSwitchFunc func(ctx context.Context, service string) (store graph.Store, idx *graph.AdjacencyIndex, searcher *semantic.Searcher, root string, err error)
+
+// SetFleet wires fleet-member switching into the server (GR.6). members is
+// the full membership list (including members never resolved on this
+// machine yet — selecting one triggers switchFn's on-demand clone); active
+// is the member the server is currently backed by (normally the workspace
+// `serve` was started in). Safe to call at any time; nil switchFn disables
+// the fleet endpoints (they report "not a fleet member" rather than 500).
+func (s *Server) SetFleet(switchFn FleetSwitchFunc, members []string, active string) {
+	s.idxMu.Lock()
+	s.fleetSwitch = switchFn
+	s.fleetMembers = members
+	s.fleetActive = active
+	s.idxMu.Unlock()
 }
 
 // New creates a Server backed by the given store and adjacency index.
@@ -214,6 +247,8 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/patterns", s.handleListPatterns)
 	s.handle("POST /api/patterns", s.handleAddPattern)
 	s.handle("GET /api/fleet/status", s.handleFleetStatus)
+	s.handle("GET /api/fleet/services", s.handleFleetServices)
+	s.handle("POST /api/fleet/active", s.handleFleetActive)
 	s.handle("GET /api/setup/status", s.handleSetupStatus)
 	s.handle("POST /api/setup/apply", s.handleSetupApply)
 	s.handle("GET /api/setup/agents", s.handleSetupAgents)

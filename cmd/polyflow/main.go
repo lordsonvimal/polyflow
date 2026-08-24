@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -420,7 +421,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("open store: %w", err)
 		}
 	}
-	idx, err := store.BuildIndex(ctx)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return fmt.Errorf("build index: %w", err)
 	}
@@ -447,6 +448,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		synonyms = cfg.Search.Synonyms
 	}
 	srv.SetSearcher(buildSearcher(store, emb, synonyms))
+
+	// GR.6: if this workspace is a registered fleet member, wire per-member
+	// store switching into the server so the UI can browse another member's
+	// own graph, not just this one's cross-service edges into it (already
+	// covered by buildFleetAwareIndex above regardless of fleet mode).
+	if cfgErr == nil && !dbMissing {
+		wireFleetServe(ctx, srv, serveWS, store, dbPath, emb, synonyms)
+	}
 
 	// UB.2: ops.db lives next to graph.db and is never touched by the
 	// indexer, so it survives graph.db's rebuild-then-atomic-rename. In
@@ -4000,6 +4009,134 @@ func mergeFleetBridge(ctx context.Context, idx *graph.AdjacencyIndex, startDir s
 		e := e
 		idx.AddEdge(&e)
 	}
+}
+
+// fleetServeState is wireFleetServe's per-process cache of opened fleet
+// member stores and their resolved db paths, shared by every
+// FleetSwitchFunc invocation for the life of the `serve` process — a member
+// switched to once (whether already local or freshly cloned) stays open, so
+// switching back to it is free, matching GR.6's "opened lazily on first
+// selection" deliverable.
+type fleetServeState struct {
+	mu      sync.Mutex
+	cfg     *fleetconfig.Config
+	regPath string
+	stores  map[string]*graph.SQLiteStore
+	dbPaths map[string]string
+}
+
+// wireFleetServe detects whether serveWS is a registered Tier-GR fleet
+// member and, if so, calls srv.SetFleet with a switcher that resolves
+// (cloning via fleetsync.ResolveService if needed) and opens any other
+// member on demand. Silent no-op (srv stays in non-fleet mode) on any
+// resolution failure — fleet browsing is a bonus, never a requirement for
+// `serve` to work.
+func wireFleetServe(ctx context.Context, srv *server.Server, serveWS string, initialStore *graph.SQLiteStore, initialDBPath string, emb semantic.Embedder, synonyms map[string][]string) {
+	res, err := queryresolve.Resolve(ctx, serveWS, queryresolve.Options{Fleet: fleetFlag})
+	if err != nil || res.FleetName == "" {
+		return
+	}
+
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return
+	}
+	reg, err := registry.Load(regPath)
+	if err != nil {
+		return
+	}
+	fleetConfigPath := reg.FleetConfigPaths[res.FleetName]
+	if fleetConfigPath == "" {
+		return
+	}
+	cfg, err := fleetconfig.Load(fleetConfigPath)
+	if err != nil {
+		return
+	}
+
+	active := ""
+	root := filepath.Clean(res.WorkspaceRoot)
+	members := make([]string, 0, len(cfg.Services))
+	for _, svc := range cfg.Services {
+		members = append(members, svc.Name)
+		if entry, ok := reg.Lookup(svc.Name); ok && filepath.Clean(entry.LocalPath) == root {
+			active = svc.Name
+		}
+	}
+	if active == "" {
+		return
+	}
+
+	st := &fleetServeState{
+		cfg:     cfg,
+		regPath: regPath,
+		stores:  map[string]*graph.SQLiteStore{active: initialStore},
+		dbPaths: map[string]string{active: initialDBPath},
+	}
+	srv.SetFleet(newFleetSwitcher(st, emb, synonyms), members, active)
+}
+
+// newFleetSwitcher builds the server.FleetSwitchFunc GR.6's POST
+// /api/fleet/active calls: resolve (clone/cache/local, GR.1's algorithm via
+// fleetsync.ResolveService) or reuse an already-open store for the member,
+// merge in the fleet's cross-service bridge (the same merge every CLI/MCP
+// query gets, GR.3), and build a searcher scoped to that member's own store.
+func newFleetSwitcher(st *fleetServeState, emb semantic.Embedder, synonyms map[string][]string) server.FleetSwitchFunc {
+	return func(ctx context.Context, service string) (graph.Store, *graph.AdjacencyIndex, *semantic.Searcher, string, error) {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+
+		var svc fleetconfig.Service
+		found := false
+		for _, s := range st.cfg.Services {
+			if s.Name == service {
+				svc = s
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, nil, nil, "", fmt.Errorf("unknown fleet member %q", service)
+		}
+
+		store, ok := st.stores[service]
+		if !ok {
+			dbPath, _, resolveErr := fleetsync.ResolveService(ctx, svc, "", fleetsync.ResolveOptions{RegistryPath: st.regPath})
+			if resolveErr != nil {
+				return nil, nil, nil, "", resolveErr
+			}
+			var openErr error
+			store, openErr = graph.NewSQLiteStore(dbPath)
+			if openErr != nil {
+				return nil, nil, nil, "", openErr
+			}
+			st.stores[service] = store
+			st.dbPaths[service] = dbPath
+		}
+
+		idx, err := buildFleetAwareIndex(ctx, store)
+		if err != nil {
+			return nil, nil, nil, "", err
+		}
+
+		return store, idx, buildSearcher(store, emb, synonyms), rootDirFromDBPath(st.dbPaths[service], svc), nil
+	}
+}
+
+// rootDirFromDBPath reverses fleetsync's unexported dbPathFor: a
+// Subpath-less service's db is <root>/.polyflow/graph.db (2 segments below
+// root); a Subpath (monorepo) service's is
+// <root>/.polyflow/services/<name>/graph.db (4 segments below root).
+func rootDirFromDBPath(dbPath string, svc fleetconfig.Service) string {
+	up := 2
+	if svc.Subpath != "" {
+		up = 4
+	}
+	dir := dbPath
+	for i := 0; i < up; i++ {
+		dir = filepath.Dir(dir)
+	}
+	return dir
 }
 
 // loadStaleAfter reads the workspace evidence.stale_after duration.
