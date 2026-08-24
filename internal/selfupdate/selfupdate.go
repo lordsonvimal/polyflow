@@ -108,11 +108,40 @@ func verifyModule(dir string) error {
 // IsDirty reports whether repoDir has uncommitted changes — an update must
 // never `git pull` over a user's in-progress work.
 func IsDirty(repoDir string) (bool, error) {
+	if err := restoreGitkeep(repoDir); err != nil {
+		return false, err
+	}
 	out, err := exec.Command("git", "-C", repoDir, "status", "--porcelain").Output()
 	if err != nil {
 		return false, fmt.Errorf("git status: %w", err)
 	}
 	return len(bytes.TrimSpace(out)) > 0, nil
+}
+
+// restoreGitkeep recreates web/dist/.gitkeep when it's missing. It's the
+// only tracked path under web/dist/ (everything else is .gitignore'd), kept
+// solely so `//go:embed all:dist` (web/embed.go) compiles on a fresh
+// checkout — every `make`/`make install` run (including a prior --update's
+// own Build, or a manual build a user ran outside this tool) empties
+// web/dist via vite and re-touches the placeholder, but that recreation can
+// be lost (e.g. a build that failed partway through, or one that ran under
+// sudo and left web/dist state a later non-root run can't clean up). Left
+// alone, a missing placeholder shows up as a real "uncommitted change" and
+// permanently blocks --update until a human runs `git checkout` by hand —
+// exactly the manual intervention this command exists to avoid. Recreating
+// it is always safe: its entire tracked content is an empty file.
+func restoreGitkeep(repoDir string) error {
+	gitkeep := filepath.Join(repoDir, "web", "dist", ".gitkeep")
+	if _, err := os.Stat(gitkeep); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(gitkeep), 0o755); err != nil {
+		return fmt.Errorf("recreate %s: %w", filepath.Dir(gitkeep), err)
+	}
+	if err := os.WriteFile(gitkeep, nil, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", gitkeep, err)
+	}
+	return nil
 }
 
 // Pull runs `git pull` in repoDir, streaming output to out.
