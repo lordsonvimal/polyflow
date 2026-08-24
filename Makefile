@@ -6,6 +6,12 @@ VERSION   := $(shell grep 'Version' internal/meta/meta.go | head -1 | cut -d'"' 
 PREFIX    ?= /usr/local/bin
 
 web:
+	# Pre-clean rather than let vite's own emptyDir do it: leftovers from a
+	# prior build run under sudo (see the install target below) are
+	# root-owned, and vite's emptyDir has been observed to fail with
+	# ENOTEMPTY rather than a clear permission error when it can't unlink
+	# them. `-f` on rm means this is a no-op on an already-clean tree.
+	rm -rf web/dist
 	cd web && npm install && npm run build
 	# vite empties dist on build; restore the committed embed placeholder so
 	# `//go:embed all:dist` stays satisfied and the working tree stays clean.
@@ -25,10 +31,22 @@ build: web
 # install — copy the just-built native binary + its sidecar onto PATH.
 # PREFIX defaults to /usr/local/bin (already on PATH on macOS); override with
 # `make install PREFIX=$$HOME/bin` for a user-local, no-sudo install.
+#
+# Only the copy step below escalates, and only if PREFIX isn't already
+# writable — `build` (npm install/vite/go build) always runs as the calling
+# user. Running the whole `make install` under sudo, instead of letting it
+# self-elevate just this step, is what leaves web/dist and the Go build
+# cache root-owned and breaks the next unprivileged build; don't do that
+# even though it still works.
 install: build
-	install -d $(PREFIX)
-	install -m 0755 $(BUILD_DIR)/$(BINARY) $(PREFIX)/$(BINARY)
-	install -m 0755 $(BUILD_DIR)/polyflow-parse-templ $(PREFIX)/polyflow-parse-templ
+	@if [ -w "$(PREFIX)" ] || [ -w "$$(dirname $(PREFIX))" ]; then \
+		SUDO=""; \
+	else \
+		SUDO="sudo"; \
+	fi; \
+	$$SUDO install -d $(PREFIX); \
+	$$SUDO install -m 0755 $(BUILD_DIR)/$(BINARY) $(PREFIX)/$(BINARY); \
+	$$SUDO install -m 0755 $(BUILD_DIR)/polyflow-parse-templ $(PREFIX)/polyflow-parse-templ
 	@echo "Installed $(BINARY) and polyflow-parse-templ to $(PREFIX)"
 
 test:
