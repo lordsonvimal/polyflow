@@ -176,6 +176,36 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verbose
 	return r
 }
 
+// ChainsOnly runs the same chain enumeration Run does but skips computing
+// Nodes/EdgeTypes/Services/VerificationSummary — Run's flat traversal-listing
+// half, built from toHops(Ancestors/Descendants(...)). BuildFlowChains (the
+// search/embedding corpus builder, internal/semantic/corpus.go) is called
+// once per entrypoint node on every index and only ever reads .Chains from
+// Run's result; toHops alone measured ~19% of total allocations on a real
+// fleet index because of this — a flat listing built and immediately
+// discarded, once per entrypoint. Returns nil if rootID is not in the index,
+// mirroring Run. verboseSources is fixed false: chain hops built here never
+// carry Sources (matches BuildFlowChains's only call site).
+func ChainsOnly(idx *graph.AdjacencyIndex, rootID, direction string, depth int, include graph.NoiseInclude, exploreChains int) []Chain {
+	if _, ok := idx.Nodes[rootID]; !ok {
+		return nil
+	}
+	if exploreChains <= 0 {
+		exploreChains = ExploreChains
+	}
+
+	var chains []Chain
+	if direction == "backward" || direction == "both" {
+		c, _, _ := enumerateChains(idx, rootID, "in", depth, MaxChains-len(chains), exploreChains, include, false)
+		chains = append(chains, c...)
+	}
+	if direction == "forward" || direction == "both" {
+		c, _, _ := enumerateChains(idx, rootID, "out", depth, MaxChains-len(chains), exploreChains, include, false)
+		chains = append(chains, c...)
+	}
+	return chains
+}
+
 // AttachUnresolved scopes the workspace's unresolved-reference ledger to the
 // files touched by this trace and records the matches on the result. Chain
 // hops are included alongside Nodes to keep the scope exact even if chain
