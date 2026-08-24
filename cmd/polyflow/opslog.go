@@ -111,9 +111,23 @@ func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
 		"args":  args,
 	})
 
-	r, w, perr := os.Pipe()
-	if perr != nil {
-		// Tee unavailable — still record params/timing/status, just no result text.
+	// longRunningTools never return, so opsFinalize (which restores os.Stdout
+	// and drains the tee pipe) never runs for them either — os.Stdout would
+	// stay silently swapped to the pipe's write end for the rest of the
+	// process's life. That's more than a missed observation: `serve` spawns
+	// its own child processes (workspace-switch restart, self-update, the
+	// templ sidecar) with cmd.Stdout = os.Stdout, so every one of them would
+	// inherit a pipe whose read end dies the moment this process exits or
+	// GCs the reader goroutine — the child's first stdout write then gets
+	// SIGPIPE and it dies silently before doing anything else. Skip the tee
+	// for these the same way CPU profiling already is.
+	var r, w *os.File
+	var perr error
+	if !skipCPUProfile {
+		r, w, perr = os.Pipe()
+	}
+	if skipCPUProfile || perr != nil {
+		// Tee unavailable/skipped — still record params/timing/status, just no result text.
 		rec := &opsRecording{store: store, tool: tool, params: string(paramsJSON), start: time.Now()}
 		if !skipCPUProfile {
 			rec.startProfiling()
