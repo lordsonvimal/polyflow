@@ -24,12 +24,18 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/lordsonvimal/polyflow/internal/registry"
+	"github.com/lordsonvimal/polyflow/internal/selfupdate"
 	"github.com/lordsonvimal/polyflow/internal/setupagents"
 )
 
 var (
-	setupScope string
-	setupAgent string
+	setupScope       string
+	setupAgent       string
+	setupUpdate      bool
+	setupCheck       bool
+	setupIncremental bool
+	setupRepoPath    string
 )
 
 var setupCmd = &cobra.Command{
@@ -38,17 +44,32 @@ var setupCmd = &cobra.Command{
 	Long: `Registers polyflow with a coding agent in two steps: how widely visible the
 config should be (repo/user/global), and which agent to configure. Answers
 can be supplied via --scope/--agent to skip the prompts (e.g. in CI or a
-setup script).`,
+setup script).
+
+--update and --check are a separate mode: they pull/rebuild polyflow itself
+(and, for --update, refresh every repo and fleet this machine knows about)
+instead of running the wizard.`,
 	RunE: runSetup,
 }
 
 func init() {
 	setupCmd.Flags().StringVar(&setupScope, "scope", "", "config scope: repo, user, or global (skips the prompt)")
 	setupCmd.Flags().StringVar(&setupAgent, "agent", "", "agent to configure: "+strings.Join(setupagents.Names(), ", ")+" (skips the prompt)")
+	setupCmd.Flags().BoolVar(&setupUpdate, "update", false, "pull polyflow's own source, rebuild it, then reindex every registry repo and re-sync every fleet")
+	setupCmd.Flags().BoolVar(&setupCheck, "check", false, "check whether polyflow's source is behind its remote, without pulling or rebuilding")
+	setupCmd.Flags().BoolVar(&setupIncremental, "incremental", false, "with --update, reindex incrementally instead of the default full re-parse")
+	setupCmd.Flags().StringVar(&setupRepoPath, "repo-path", "", "path to the polyflow source checkout (default: $POLYFLOW_REPO, else walk up from cwd for its go.mod)")
 	rootCmd.AddCommand(setupCmd)
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
+	if setupCheck {
+		return runSetupCheck(cmd)
+	}
+	if setupUpdate {
+		return runSetupUpdate(cmd)
+	}
+
 	polyflowBin, err := os.Executable()
 	if err != nil {
 		polyflowBin = "polyflow"
@@ -165,5 +186,99 @@ func readChoice(reader *bufio.Reader, max int) (int, error) {
 			continue
 		}
 		return n, nil
+	}
+}
+
+// runSetupCheck implements `polyflow setup --check`: is polyflow's own
+// source behind its remote? Fetch-and-compare only — no pull, no rebuild —
+// so it's safe to run at any time, dirty tree included.
+func runSetupCheck(cmd *cobra.Command) error {
+	repoDir, err := selfupdate.FindRepo(setupRepoPath)
+	if err != nil {
+		return err
+	}
+	status, err := selfupdate.CheckOutdated(cmd.Context(), repoDir)
+	if err != nil {
+		return err
+	}
+	if !status.Outdated() {
+		fmt.Printf("up to date (%s)\n", status.LocalSHA)
+		return nil
+	}
+	fmt.Printf("outdated: %d commit(s) behind — local %s, remote %s\n", status.Behind, status.LocalSHA, status.RemoteSHA)
+	fmt.Println("run `polyflow setup --update` to pull, rebuild, and reindex")
+	return nil
+}
+
+// runSetupUpdate implements `polyflow setup --update`: pull polyflow's own
+// source, rebuild it, then refresh every workspace this machine knows about
+// so the new parser/linker code is actually reflected in every graph.db —
+// not just the one someone happens to reindex next.
+func runSetupUpdate(cmd *cobra.Command) error {
+	repoDir, err := selfupdate.FindRepo(setupRepoPath)
+	if err != nil {
+		return err
+	}
+
+	dirty, err := selfupdate.IsDirty(repoDir)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("%s has uncommitted changes — commit or stash before --update", repoDir)
+	}
+
+	ctx := cmd.Context()
+
+	fmt.Printf("Pulling %s...\n", repoDir)
+	if err := selfupdate.Pull(ctx, repoDir, os.Stdout); err != nil {
+		return err
+	}
+
+	fmt.Println("\nBuilding (make install)...")
+	if err := selfupdate.Build(ctx, repoDir, os.Stdout); err != nil {
+		return err
+	}
+
+	polyflowBin, err := os.Executable()
+	if err != nil {
+		polyflowBin = "polyflow"
+	}
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return err
+	}
+
+	full := !setupIncremental
+	fmt.Println("\nReindexing registered repos...")
+	reindexResults, err := selfupdate.ReindexAll(ctx, polyflowBin, regPath, full, os.Stdout)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("\nSyncing fleets...")
+	fleetResults, err := selfupdate.SyncAllFleets(ctx, polyflowBin, regPath, os.Stdout)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("\n--- Summary ---")
+	printResultSummary("Repos reindexed", reindexResults)
+	printResultSummary("Fleets synced", fleetResults)
+	return nil
+}
+
+func printResultSummary(label string, results []selfupdate.RepoResult) {
+	failed := 0
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+		}
+	}
+	fmt.Printf("%s: %d ok, %d failed (of %d)\n", label, len(results)-failed, failed, len(results))
+	for _, r := range results {
+		if r.Err != nil {
+			fmt.Printf("  FAILED %s: %v\n", r.Name, r.Err)
+		}
 	}
 }

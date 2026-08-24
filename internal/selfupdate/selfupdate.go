@@ -1,0 +1,161 @@
+// Package selfupdate implements `polyflow setup --update` / `--check`: pull
+// polyflow's own source, rebuild it, and (in the update path) refresh every
+// workspace this machine knows about — the registry's indexed repos and the
+// fleets built from them — so a code change to polyflow's parsers/linkers
+// doesn't sit unused until someone remembers to reindex by hand.
+package selfupdate
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// modulePath identifies polyflow's own go.mod, so FindRepo doesn't mistake
+// some unrelated ancestor directory's go.mod for the polyflow checkout.
+const modulePath = "module github.com/lordsonvimal/polyflow"
+
+// repoPathEnv lets a non-standard checkout location be pointed at explicitly,
+// same reasoning as registry's POLYFLOW_HOME override.
+const repoPathEnv = "POLYFLOW_REPO"
+
+// FindRepo resolves the local polyflow source checkout: explicit (the
+// --repo-path flag) if set, else $POLYFLOW_REPO, else walking up from the
+// current directory looking for polyflow's own go.mod. It does not fall back
+// to a guessed path — an update that silently rebuilds the wrong repo is
+// worse than one that asks.
+func FindRepo(explicit string) (string, error) {
+	if explicit != "" {
+		if err := verifyModule(explicit); err != nil {
+			return "", err
+		}
+		return filepath.Abs(explicit)
+	}
+	if env := os.Getenv(repoPathEnv); env != "" {
+		if err := verifyModule(env); err != nil {
+			return "", err
+		}
+		return filepath.Abs(env)
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getwd: %w", err)
+	}
+	for {
+		if verifyModule(dir) == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("could not find polyflow's own go.mod above %s — pass --repo-path or set $%s", mustGetwd(), repoPathEnv)
+		}
+		dir = parent
+	}
+}
+
+func mustGetwd() string {
+	dir, _ := os.Getwd()
+	return dir
+}
+
+func verifyModule(dir string) error {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return err
+	}
+	firstLine, _, _ := strings.Cut(string(data), "\n")
+	if strings.TrimSpace(firstLine) != modulePath {
+		return fmt.Errorf("%s is not the polyflow repo (go.mod module mismatch)", dir)
+	}
+	return nil
+}
+
+// IsDirty reports whether repoDir has uncommitted changes — an update must
+// never `git pull` over a user's in-progress work.
+func IsDirty(repoDir string) (bool, error) {
+	out, err := exec.Command("git", "-C", repoDir, "status", "--porcelain").Output()
+	if err != nil {
+		return false, fmt.Errorf("git status: %w", err)
+	}
+	return len(bytes.TrimSpace(out)) > 0, nil
+}
+
+// Pull runs `git pull` in repoDir, streaming output to out.
+func Pull(ctx context.Context, repoDir string, out io.Writer) error {
+	return runStreamed(ctx, repoDir, out, "git", "-C", repoDir, "pull")
+}
+
+// Build runs `make install` in repoDir, streaming output to out — the same
+// path a human runs by hand (Makefile:26), so it rebuilds polyflow and its
+// polyflow-parse-templ sidecar and installs both onto PATH.
+func Build(ctx context.Context, repoDir string, out io.Writer) error {
+	return runStreamed(ctx, repoDir, out, "make", "-C", repoDir, "install")
+}
+
+func runStreamed(ctx context.Context, dir string, out io.Writer, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", strings.Join(append([]string{name}, args...), " "), err)
+	}
+	return nil
+}
+
+// Status is the result of CheckOutdated.
+type Status struct {
+	LocalSHA  string
+	RemoteSHA string
+	Behind    int
+}
+
+// Outdated reports whether the remote has commits the local checkout lacks.
+func (s *Status) Outdated() bool { return s.Behind > 0 }
+
+// CheckOutdated fetches repoDir's upstream and compares HEAD against it,
+// without pulling or rebuilding — so `polyflow setup --check` is safe to run
+// at any time, including with a dirty tree.
+func CheckOutdated(ctx context.Context, repoDir string) (*Status, error) {
+	if err := runStreamed(ctx, repoDir, io.Discard, "git", "-C", repoDir, "fetch", "--quiet"); err != nil {
+		return nil, fmt.Errorf("git fetch: %w", err)
+	}
+	localSHA, err := revParse(ctx, repoDir, "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	remoteSHA, err := revParse(ctx, repoDir, "@{u}")
+	if err != nil {
+		return nil, fmt.Errorf("resolve upstream (is a remote tracking branch configured?): %w", err)
+	}
+	behindOut, err := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-list", "--count", "HEAD..@{u}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git rev-list: %w", err)
+	}
+	behind, err := strconv.Atoi(strings.TrimSpace(string(behindOut)))
+	if err != nil {
+		return nil, fmt.Errorf("parse rev-list count: %w", err)
+	}
+	return &Status{LocalSHA: shortSHA(localSHA), RemoteSHA: shortSHA(remoteSHA), Behind: behind}, nil
+}
+
+func revParse(ctx context.Context, dir, ref string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", ref).Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse %s: %w", ref, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
