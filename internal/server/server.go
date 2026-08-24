@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lordsonvimal/polyflow/internal/capture"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -31,6 +34,9 @@ type Server struct {
 	configPath string           // polyflow.yml path; "" → meta.ConfigFile (UB.4)
 	capture    *capture.Manager // nil → capture/runtime API disabled (UB.7)
 	dbPath     string           // graph.db path; used only by GET /api/setup/status (UO.7)
+
+	ln         net.Listener // set once StartOn binds; nil before then
+	restarting atomic.Bool  // set by ReleaseForRestart so StartOn's returned net.ErrClosed isn't reported as a real failure
 
 	// selectWorkspace implements POST /api/setup/select (UO.8): given a
 	// known registry entry's local path, re-point this running server at
@@ -360,6 +366,30 @@ func (s *Server) Start(port int) error {
 // StartOn listens on an explicit host:port. Use "0.0.0.0" for LAN exposure.
 func (s *Server) StartOn(host string, port int) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	s.ln = ln
 	fmt.Printf("polyflow server listening on http://localhost:%d\n", port)
-	return http.ListenAndServe(addr, s)
+	err = http.Serve(ln, s)
+	if s.restarting.Load() && errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+// ReleaseForRestart closes this server's listening socket immediately,
+// ahead of a workspace-switch restart (UO.8) spawning a replacement
+// `polyflow serve` on the same host:port. Without this, the replacement's
+// bind races this process's still-open listener and reliably loses
+// (EADDRINUSE) — exiting the replacement instantly and leaving nothing
+// listening, which is indistinguishable in the browser from the process
+// simply being killed.
+func (s *Server) ReleaseForRestart() error {
+	s.restarting.Store(true)
+	if s.ln != nil {
+		return s.ln.Close()
+	}
+	return nil
 }

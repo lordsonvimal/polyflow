@@ -508,7 +508,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not start DB watcher: %v\n", err)
 	}
 
-	srv.SetSelectWorkspace(selectWorkspaceFunc(serveHost, port, serveDev))
+	srv.SetSelectWorkspace(selectWorkspaceFunc(serveHost, port, serveDev, srv.ReleaseForRestart))
 
 	if serveHost == "0.0.0.0" {
 		fmt.Fprintln(os.Stderr, "Warning: server exposed on all interfaces (0.0.0.0)")
@@ -532,7 +532,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 // triggered the switch just reconnects, then exits this process. See
 // SelectWorkspaceFunc's doc comment for why this restarts rather than
 // re-initializing every subsystem in place.
-func selectWorkspaceFunc(host string, port int, dev bool) server.SelectWorkspaceFunc {
+func selectWorkspaceFunc(host string, port int, dev bool, release func() error) server.SelectWorkspaceFunc {
 	return func(localPath string) error {
 		abs, err := filepath.Abs(localPath)
 		if err != nil {
@@ -556,6 +556,15 @@ func selectWorkspaceFunc(host string, port int, dev bool) server.SelectWorkspace
 		// delay in the background rather than inline.
 		go func() {
 			time.Sleep(300 * time.Millisecond)
+			// Release our own listener before spawning the replacement:
+			// otherwise the child's bind to the same host:port races this
+			// process's still-open socket and reliably loses (EADDRINUSE),
+			// which exits the child immediately and leaves nothing
+			// listening — this is what "Lost connection… / stuck Opening…"
+			// actually was, Setsid alone doesn't fix it (see 9e6d8c4).
+			if err := release(); err != nil {
+				fmt.Fprintf(os.Stderr, "restart: releasing %s:%d failed: %v\n", host, port, err)
+			}
 			cmd := exec.Command(exe, args...)
 			cmd.Dir = abs
 			cmd.Stdout = os.Stdout
