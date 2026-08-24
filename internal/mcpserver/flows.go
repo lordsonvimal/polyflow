@@ -558,7 +558,7 @@ func resolveFlowTarget(ctx context.Context, store Store, idx *graph.AdjacencyInd
 		if tt == "" {
 			tt = string(graph.NodeTypeHTTPHandler)
 		}
-		return graph.ResolveTarget(ctx, store, query, targetService, tt)
+		return graph.ResolveTarget(ctx, graph.FleetSearcher{Store: store, Idx: idx}, query, targetService, tt)
 	}
 
 	if looksLikeFilePath(query) {
@@ -585,7 +585,7 @@ func resolveFlowTarget(ctx context.Context, store Store, idx *graph.AdjacencyInd
 		}
 	}
 
-	return graph.ResolveTarget(ctx, store, query, targetService, targetType)
+	return graph.ResolveTarget(ctx, graph.FleetSearcher{Store: store, Idx: idx}, query, targetService, targetType)
 }
 
 func looksLikeFilePath(q string) bool {

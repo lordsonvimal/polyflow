@@ -54,6 +54,67 @@ type nodeByID interface {
 	GetNode(ctx context.Context, id string) (*Node, error)
 }
 
+// FleetSearcher combines a local store with a fleet-wide merged idx
+// (cmd/polyflow's buildFleetAwareIndex) so ResolveTarget can find an exact
+// node ID or label match that exists only in a sibling fleet member's own
+// store — bridge.db only ever carries a cross-service edge's specific
+// endpoint nodes, never a member's whole graph, so a plain store-only
+// lookup silently missed most of the fleet. Local matches are tried first
+// (SearchNodes' existing exact-label/ranking logic downstream doesn't care
+// which source a candidate came from, only that duplicates by ID are
+// removed).
+type FleetSearcher struct {
+	Store NodeSearcher // usually *SQLiteStore; also satisfies nodeByID
+	Idx   *AdjacencyIndex
+}
+
+// GetNode implements nodeByID: the local store's exact-ID lookup first,
+// falling back to the merged idx.
+func (f FleetSearcher) GetNode(ctx context.Context, id string) (*Node, error) {
+	if getter, ok := f.Store.(nodeByID); ok {
+		if n, err := getter.GetNode(ctx, id); err == nil && n != nil {
+			return n, nil
+		}
+	}
+	if f.Idx != nil {
+		if n, ok := f.Idx.Nodes[id]; ok {
+			return n, nil
+		}
+	}
+	return nil, fmt.Errorf("node not found: %s", id)
+}
+
+// SearchNodes merges the local store's own full-text search with a plain
+// case-insensitive label scan over the merged idx (no FTS index there —
+// idx is an in-memory adjacency structure, not a database), deduped by ID
+// with the store's ranking taking priority for anything found in both.
+func (f FleetSearcher) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
+	local, err := f.Store.SearchNodes(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	if f.Idx == nil {
+		return local, nil
+	}
+	seen := make(map[string]bool, len(local))
+	for _, n := range local {
+		seen[n.ID] = true
+	}
+	lower := strings.ToLower(query)
+	out := local
+	for _, n := range f.Idx.Nodes {
+		if len(out) >= limit*2 {
+			break // a generous cap — ResolveTarget re-limits/ranks downstream
+		}
+		if seen[n.ID] || !strings.Contains(strings.ToLower(n.Label), lower) {
+			continue
+		}
+		seen[n.ID] = true
+		out = append(out, n)
+	}
+	return out, nil
+}
+
 // ResolveTarget finds the best node for a search query with optional pre-filters
 // applied BEFORE ranking so service-level ambiguity is resolved intentionally.
 //

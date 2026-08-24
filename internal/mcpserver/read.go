@@ -55,7 +55,7 @@ func (s *Server) read(ctx context.Context, req *mcp.CallToolRequest, in readInpu
 	n := idx.Nodes[in.Target]
 	resolutionNote := ""
 	if n == nil {
-		resolved, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
+		resolved, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Target, in.TargetService, in.TargetType)
 		if err != nil {
 			return nil, nil, err
 		}

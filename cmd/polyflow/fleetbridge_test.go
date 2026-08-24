@@ -79,6 +79,71 @@ func TestBuildFleetAwareIndex_MergesBridgeNodesAndEdges(t *testing.T) {
 	require.Equal(t, "remote1", callers[0].From)
 }
 
+// TestBuildFleetAwareIndex_MergesSiblingMembersFullGraph proves the
+// federate-everywhere upgrade: a sibling fleet member's own local graph.db
+// (not just the cross-service edge endpoints copied into bridge.db) is
+// unioned into idx wholesale, so a node the sibling never exposed via any
+// cross-service edge — no meta.owner_service, nothing in bridge.db at all —
+// is still reachable from here. This is what makes `polyflow impact`/
+// `context`/`trace` from inside one member browse another member's whole
+// graph, not just its cross-service touchpoints.
+func TestBuildFleetAwareIndex_MergesSiblingMembersFullGraph(t *testing.T) {
+	repoA := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoA, ".polyflow"), 0o755))
+	dbA := filepath.Join(repoA, ".polyflow", "graph.db")
+	storeA, err := graph.NewSQLiteStore(dbA)
+	require.NoError(t, err)
+	bwA := graph.NewFreshBatchWriter(storeA)
+	require.NoError(t, bwA.AddNode(context.Background(), &graph.Node{ID: "a:n1", Type: "function", Label: "Local", Service: "svcA", File: "a.go", Line: 1, EndLine: 5, Language: "go"}))
+	require.NoError(t, bwA.Flush(context.Background()))
+	storeA.Close()
+
+	repoB := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoB, ".polyflow"), 0o755))
+	dbB := filepath.Join(repoB, ".polyflow", "graph.db")
+	storeB, err := graph.NewSQLiteStore(dbB)
+	require.NoError(t, err)
+	bwB := graph.NewFreshBatchWriter(storeB)
+	// This node has no meta.owner_service and is never referenced by any
+	// cross-service edge — bridge.db would never carry it. It must still
+	// show up in the merged idx purely because svcB is a locally-resolved
+	// fleet member.
+	require.NoError(t, bwB.AddNode(context.Background(), &graph.Node{ID: "b:n1", Type: "function", Label: "NeverBridged", Service: "svcB", File: "b.go", Line: 1, EndLine: 5, Language: "go"}))
+	require.NoError(t, bwB.Flush(context.Background()))
+	storeB.Close()
+
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoA))
+	t.Cleanup(func() { os.Chdir(origWD) })
+	resolvedRepoA, err := os.Getwd()
+	require.NoError(t, err)
+	resolvedRepoB, err := filepath.EvalSymlinks(repoB)
+	require.NoError(t, err)
+
+	home := t.TempDir()
+	t.Setenv("POLYFLOW_HOME", home)
+	regPath := filepath.Join(home, "registry.yml")
+	require.NoError(t, registry.Save(regPath, &registry.Registry{
+		Version: "1",
+		Entries: []registry.Entry{
+			{Service: "svcA", LocalPath: resolvedRepoA, Fleets: []string{"myfleet"}},
+			{Service: "svcB", LocalPath: resolvedRepoB, Fleets: []string{"myfleet"}},
+		},
+	}))
+
+	store, err := graph.NewSQLiteStore(dbA)
+	require.NoError(t, err)
+	defer store.Close()
+
+	idx, err := buildFleetAwareIndex(context.Background(), store)
+	require.NoError(t, err)
+
+	require.Contains(t, idx.Nodes, "a:n1")
+	require.Contains(t, idx.Nodes, "b:n1")
+	require.Equal(t, "svcB", idx.Nodes["b:n1"].Service)
+}
+
 // seedSearchableNode inserts a node plus the minimal entities_fts/embeddings
 // rows internal/semantic.Searcher needs to find and describe it via FTS —
 // mirrors internal/semantic's own (unexported) test helpers, reimplemented

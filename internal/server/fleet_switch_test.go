@@ -49,41 +49,48 @@ func TestHandleFleetActive_NoFleet_ReturnsUnavailable(t *testing.T) {
 	}
 }
 
-// TestFleetSwitch_ServicesListActiveFlagAndSourceResolution is GR.6's core
-// acceptance shape at the handler level (no real git/clone plumbing, which
-// cmd/polyflow owns via FleetSwitchFunc): the services list marks the
-// active member, POST /api/fleet/active swaps db/idx, and node-source reads
-// resolve against the switched-to member's checkout root rather than the
-// process CWD (the gap the plan calls out for a scratch-cloned member).
-func TestFleetSwitch_ServicesListActiveFlagAndSourceResolution(t *testing.T) {
-	apiNodes := []*graph.Node{
-		{ID: "api:n1", Type: graph.NodeTypeFunction, Label: "apiFn", Service: "api", File: "main.go", Line: 1},
-	}
-	srv := buildTestServer(t, apiNodes, nil)
+// TestFleetMerge_WidensNotSwitches is GR.6's (revised) core acceptance
+// shape at the handler level (no real git/clone plumbing, which
+// cmd/polyflow owns via FleetMergeFunc/FleetEnsureFunc): a member ensured
+// via POST /api/fleet/active is ADDED to the fleet-wide view, not swapped
+// in place of the one already there — the whole fleet stays browsable
+// together. Node-source reads for the newly-ensured member's node resolve
+// against its own checkout root, not the test process's CWD.
+func TestFleetMerge_WidensNotSwitches(t *testing.T) {
+	apiNode := &graph.Node{ID: "api:n1", Type: graph.NodeTypeFunction, Label: "apiFn", Service: "api", File: "main.go", Line: 1}
+	srv := buildTestServer(t, []*graph.Node{apiNode}, nil)
 
 	webRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(webRoot, "index.js"), []byte("console.log(1)\n"), 0o644); err != nil {
 		t.Fatalf("write source fixture: %v", err)
 	}
-	webStore, err := graph.NewSQLiteStore(":memory:")
-	if err != nil {
-		t.Fatalf("open web store: %v", err)
-	}
-	t.Cleanup(func() { webStore.Close() })
 	webNode := &graph.Node{ID: "web:n1", Type: graph.NodeTypeFunction, Label: "webFn", Service: "web", File: "index.js", Line: 1}
-	if err := webStore.UpsertNode(context.Background(), webNode); err != nil {
-		t.Fatalf("upsert web node: %v", err)
+
+	webResolved := false
+	mergeFn := func(ctx context.Context) (*graph.AdjacencyIndex, map[string]string, map[string]*semantic.Searcher, []string, error) {
+		idx := graph.NewAdjacencyIndex()
+		idx.AddNode(apiNode)
+		roots := map[string]string{"api": ""}
+		resolved := []string{"api"}
+		if webResolved {
+			idx.AddNode(webNode)
+			roots["web"] = webRoot
+			resolved = append(resolved, "web")
+		}
+		return idx, roots, nil, resolved, nil
 	}
-	webIdx := graph.NewAdjacencyIndex()
-	webIdx.AddNode(webNode)
+	ensureFn := func(ctx context.Context, service string) error {
+		if service == "web" {
+			webResolved = true
+		}
+		return nil
+	}
+	srv.SetFleet(mergeFn, ensureFn, []string{"api", "web"})
+	if err := srv.RefreshFleet(context.Background()); err != nil {
+		t.Fatalf("initial RefreshFleet: %v", err)
+	}
 
-	var switchedTo string
-	srv.SetFleet(func(ctx context.Context, service string) (graph.Store, *graph.AdjacencyIndex, *semantic.Searcher, string, error) {
-		switchedTo = service
-		return webStore, webIdx, nil, webRoot, nil
-	}, []string{"api", "web"}, "api")
-
-	// Services list: two members, "api" active.
+	// Services list: "api" already resolved (active), "web" not yet.
 	req := httptest.NewRequest("GET", "/api/fleet/services", nil)
 	w := httptest.NewRecorder()
 	srv.handleFleetServices(w, req)
@@ -93,45 +100,48 @@ func TestFleetSwitch_ServicesListActiveFlagAndSourceResolution(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode services: %v", err)
 	}
-	if len(body.Services) != 2 {
-		t.Fatalf("expected 2 members, got %+v", body.Services)
-	}
 	byName := map[string]bool{}
 	for _, s := range body.Services {
 		byName[s.Service] = s.Active
 	}
 	if !byName["api"] || byName["web"] {
-		t.Fatalf("expected api active, web inactive: %+v", body.Services)
+		t.Fatalf("expected api active, web not yet resolved: %+v", body.Services)
 	}
 
-	// Switch to "web".
+	// Ensure "web" via POST /api/fleet/active.
 	req = httptest.NewRequest("POST", "/api/fleet/active", strings.NewReader(`{"service":"web"}`))
 	w = httptest.NewRecorder()
 	srv.handleFleetActive(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("switch to web: %d: %s", w.Code, w.Body.String())
-	}
-	if switchedTo != "web" {
-		t.Fatalf("expected switcher called with web, got %q", switchedTo)
+		t.Fatalf("ensure web: %d: %s", w.Code, w.Body.String())
 	}
 
-	// Services list now reports "web" active.
+	// Both members are now active — widened, not switched.
 	req = httptest.NewRequest("GET", "/api/fleet/services", nil)
 	w = httptest.NewRecorder()
 	srv.handleFleetServices(w, req)
 	body.Services = nil
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode services after switch: %v", err)
+		t.Fatalf("decode services after ensure: %v", err)
 	}
 	byName = map[string]bool{}
 	for _, s := range body.Services {
 		byName[s.Service] = s.Active
 	}
-	if byName["api"] || !byName["web"] {
-		t.Fatalf("expected web active after switch: %+v", body.Services)
+	if !byName["api"] || !byName["web"] {
+		t.Fatalf("expected both api and web active after ensure: %+v", body.Services)
 	}
 
-	// Node source for the now-active "web" node resolves relative to
+	// api's node is still reachable — the merge widened, it didn't drop it.
+	req = httptest.NewRequest("GET", "/api/node/api:n1", nil)
+	req.SetPathValue("id", "api:n1")
+	w = httptest.NewRecorder()
+	srv.handleNode(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("api node still reachable: %d: %s", w.Code, w.Body.String())
+	}
+
+	// Node source for the newly-ensured "web" node resolves relative to
 	// webRoot, not the test process's CWD.
 	req = httptest.NewRequest("GET", "/api/node/web:n1/source", nil)
 	req.SetPathValue("id", "web:n1")

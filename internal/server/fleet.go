@@ -82,7 +82,10 @@ func (s *Server) handleFleetStatus(w http.ResponseWriter, r *http.Request) {
 // git-backed registry's membership list, distinct from handleFleetStatus's
 // FR.7-era services/<name>/graph.db model above. Unlike that endpoint this
 // list includes every fleet member regardless of whether this machine has
-// resolved it locally yet — selecting one is what triggers the clone.
+// resolved it locally yet. Active means "currently merged into idx" —
+// every locally-resolved member is active simultaneously (GR.6, revised:
+// the whole fleet is browsable by default, not one member at a time) —
+// POST /api/fleet/active on an unresolved one is what triggers its clone.
 type fleetMemberRow struct {
 	Service string `json:"service"`
 	Active  bool   `json:"active"`
@@ -94,12 +97,12 @@ type fleetMemberRow struct {
 func (s *Server) handleFleetServices(w http.ResponseWriter, r *http.Request) {
 	s.idxMu.RLock()
 	members := s.fleetMembers
-	active := s.fleetActive
+	resolved := s.fleetResolved
 	s.idxMu.RUnlock()
 
 	rows := make([]fleetMemberRow, 0, len(members))
 	for _, name := range members {
-		rows = append(rows, fleetMemberRow{Service: name, Active: name == active})
+		rows = append(rows, fleetMemberRow{Service: name, Active: resolved[name]})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"services": rows})
 }
@@ -109,11 +112,12 @@ type fleetActiveRequest struct {
 	Service string `json:"service"`
 }
 
-// handleFleetActive handles POST /api/fleet/active — swaps which fleet
-// member's own store backs db/idx/searcher (GR.6), via the FleetSwitchFunc
-// cmd/polyflow wired in at startup. The old store is left open (the
-// switcher owns and caches per-member stores across switches, so a repeat
-// selection is free) rather than closed here.
+// handleFleetActive handles POST /api/fleet/active — ensures the named
+// fleet member is resolved on this machine (cloning it via GR.1's resolver
+// if not already local), then re-runs the full-fleet merge (RefreshFleet)
+// so idx/roots/searchers pick it up. Every previously-resolved member stays
+// merged in too — this widens the fleet-wide view, it doesn't switch away
+// from anything.
 func (s *Server) handleFleetActive(w http.ResponseWriter, r *http.Request) {
 	var req fleetActiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Service == "" {
@@ -122,26 +126,21 @@ func (s *Server) handleFleetActive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.idxMu.RLock()
-	switchFn := s.fleetSwitch
+	ensureFn := s.fleetEnsure
 	s.idxMu.RUnlock()
-	if switchFn == nil {
+	if ensureFn == nil {
 		writeError(w, http.StatusServiceUnavailable, "this workspace is not a registered fleet member")
 		return
 	}
 
-	store, idx, searcher, root, err := switchFn(r.Context(), req.Service)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "switch fleet member: "+err.Error())
+	if err := ensureFn(r.Context(), req.Service); err != nil {
+		writeError(w, http.StatusInternalServerError, "resolve fleet member: "+err.Error())
 		return
 	}
-
-	s.idxMu.Lock()
-	s.db = store
-	s.idx = idx
-	s.searcher = searcher
-	s.sourceRoot = root
-	s.fleetActive = req.Service
-	s.idxMu.Unlock()
+	if err := s.RefreshFleet(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "refresh fleet merge: "+err.Error())
+		return
+	}
 
 	s.Broadcast(`{"type":"graph_updated"}`)
 	writeJSON(w, http.StatusOK, map[string]any{"active": req.Service})
@@ -178,17 +177,18 @@ func (s *Server) edgesWithFallback(ctx context.Context, id string) (from, to []*
 	return from, to
 }
 
-// resolveSourcePath joins file with the active fleet member's checkout root
-// (sourceRoot, set by handleFleetActive/SetFleet) when file is relative and
-// a root is known. An absolute file, or an empty sourceRoot (the workspace
-// `serve` started in — CWD-relative, unchanged from pre-GR.6 behavior), is
-// returned as-is.
-func (s *Server) resolveSourcePath(file string) string {
+// resolveSourcePath joins file with the checkout root of whichever fleet
+// member owns service (fleetRoots, built fresh on every RefreshFleet) when
+// file is relative and a root is known for that service. An absolute file,
+// or a service with no known root (a plain non-fleet workspace — every
+// node.File there is already CWD-relative, unchanged from pre-GR.6
+// behavior), is returned as-is.
+func (s *Server) resolveSourcePath(service, file string) string {
 	if filepath.IsAbs(file) {
 		return file
 	}
 	s.idxMu.RLock()
-	root := s.sourceRoot
+	root := s.fleetRoots[service]
 	s.idxMu.RUnlock()
 	if root == "" {
 		return file

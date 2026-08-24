@@ -440,11 +440,16 @@ func effectiveBudget(maxTokens int) int {
 
 // resolveNode finds the best node match for a search query with optional
 // pre-filters, mirroring the CLI's target resolution (graph.ResolveTarget).
+// idx is the server's fleet-aware merged index (s.snapshot(), already
+// unioning every locally-resolved fleet member's full graph) — wrapped
+// together with the local store via graph.FleetSearcher so a query can
+// resolve to an exact ID or label match that exists only in a sibling
+// fleet member's own store, not just this workspace's or the bridge's.
 // The bool return is exactMatch — false means query matched nothing by name
 // and the returned node is a full-text-search guess; see
 // graph.ResolutionNote for the caller-facing warning built from it.
-func resolveNode(ctx context.Context, store Store, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, bool, error) {
-	return graph.ResolveTarget(ctx, store, query, targetService, targetType)
+func resolveNode(ctx context.Context, store Store, idx *graph.AdjacencyIndex, query, targetService, targetType string) (*graph.Node, []graph.TargetCandidate, bool, error) {
+	return graph.ResolveTarget(ctx, graph.FleetSearcher{Store: store, Idx: idx}, query, targetService, targetType)
 }
 
 // resolveAllServiceRoots detects the case an exact-label query resolved
@@ -463,7 +468,7 @@ func resolveNode(ctx context.Context, store Store, query, targetService, targetT
 // Within-service ambiguity (candidates all in one service — a genuinely
 // different symbol, not a shared contract name) is left untouched; only
 // cross-service duplication is auto-merged.
-func resolveAllServiceRoots(ctx context.Context, store Store, query, targetType, targetService string, root *graph.Node, candidates []graph.TargetCandidate) []*graph.Node {
+func resolveAllServiceRoots(ctx context.Context, store Store, idx *graph.AdjacencyIndex, query, targetType, targetService string, root *graph.Node, candidates []graph.TargetCandidate) []*graph.Node {
 	if targetService != "" || len(candidates) <= 1 {
 		return []*graph.Node{root}
 	}
@@ -474,7 +479,7 @@ func resolveAllServiceRoots(ctx context.Context, store Store, query, targetType,
 			continue
 		}
 		seenService[c.Service] = true
-		r, _, _, err := resolveNode(ctx, store, query, c.Service, targetType)
+		r, _, _, err := resolveNode(ctx, store, idx, query, c.Service, targetType)
 		if err == nil && r != nil {
 			roots = append(roots, r)
 		}
@@ -640,7 +645,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 
-	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -730,11 +735,11 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		return jsonResult(out)
 	}
 
-	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
-	roots := resolveAllServiceRoots(ctx, store, in.Target, in.TargetType, in.TargetService, root, candidates)
+	roots := resolveAllServiceRoots(ctx, store, idx, in.Target, in.TargetType, in.TargetService, root, candidates)
 	opts := impact.Options{
 		Depth:          depth,
 		Service:        in.Service,
@@ -816,7 +821,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 
 	store, idx, searcher := s.snapshot()
 	_ = searcher
-	root, candidates, exactMatch, err := resolveNode(ctx, store, in.Root, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Root, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
