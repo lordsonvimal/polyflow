@@ -51,6 +51,10 @@ func newBareServiceRepoWithCheckout(t *testing.T) (bareURL, localDir, sha string
 	t.Helper()
 	bareDir := t.TempDir()
 	fsRunGit(t, "", "init", "--bare", bareDir)
+	// Pin HEAD to "main" regardless of the runner's init.defaultBranch —
+	// CI runners default to "master", which leaves clones in a detached
+	// state once we push only "main".
+	fsRunGit(t, bareDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	workDir := t.TempDir()
 	fsRunGit(t, workDir, "init")

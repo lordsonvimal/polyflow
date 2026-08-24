@@ -28,5 +28,9 @@ jobs:
       # them stat the path first and t.Skip when it's absent, so `go test
       # ./...` already runs everything that can run in this environment
       # without a manual exclude list.
+      # -p 2: the heavy packages (parser, linker, indexer, patterns, contract)
+      # each parse/index real fixture repos and peaked memory past the
+      # runner's limit when 4 ran concurrently, OOM-killing an unrelated
+      # package's sqlite open mid-run.
       - name: Run go test
-        run: CGO_ENABLED=1 go test ./...
+        run: CGO_ENABLED=1 go test -p 2 ./...
