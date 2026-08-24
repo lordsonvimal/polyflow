@@ -120,6 +120,58 @@ func TestSync_ResolvesClonesAndBuildsBridge(t *testing.T) {
 	assert.True(t, foundCross, "bridge.db must contain the api<->web cross-service edge")
 }
 
+// TestSync_CIDryRun_CacheOnlyNoLocalRegistry is GR.4's acceptance test: with
+// $POLYFLOW_HOME-shaped local-registry shortcuts unavailable (a fresh,
+// per-run RegistryPath, as a CI runner's checkout always is), the first Sync
+// clones+indexes+populates the cache and the second Sync — a stand-in for a
+// sibling CI job or a re-run against the same commit, restoring the same
+// actions/cache-shaped directory — resolves both members purely from
+// opts.CacheDir, performing zero clones, and still produces a bridge
+// matching the first run's edge count.
+func TestSync_CIDryRun_CacheOnlyNoLocalRegistry(t *testing.T) {
+	apiBareURL := newBareServiceRepo(t, apiPolyflowYML, "main.go", apiMainGo)
+	webBareURL := newBareServiceRepo(t, webPolyflowYML, "app.js", webAppJS)
+
+	cfg := &fleetconfig.Config{
+		Name:    "testfleet",
+		Version: "1",
+		Services: []fleetconfig.Service{
+			{Name: "api", Git: apiBareURL, Ref: "main", Language: "go"},
+			{Name: "web", Git: webBareURL, Ref: "main", Language: "javascript"},
+		},
+	}
+
+	cacheDir := t.TempDir()
+
+	firstBridge := filepath.Join(t.TempDir(), "bridge-1.db")
+	firstScratch := t.TempDir()
+	firstStats, err := fleetsync.Sync(context.Background(), cfg, fleetsync.SyncOptions{
+		// A fresh, never-before-seen registry path each run — the CI runner
+		// has no prior local checkout of any fleet member, so step 2 (local
+		// registry match) is always a miss and every resolution must come
+		// from step 3 (cache) or step 4 (clone).
+		RegistryPath: filepath.Join(t.TempDir(), "registry.yml"),
+		CacheDir:     cacheDir,
+		ScratchDir:   firstScratch,
+		BridgePath:   firstBridge,
+	})
+	require.NoError(t, err)
+	assert.False(t, isEmptyDir(t, firstScratch), "first run has no cache entries yet: must clone")
+
+	secondBridge := filepath.Join(t.TempDir(), "bridge-2.db")
+	secondScratch := t.TempDir()
+	secondStats, err := fleetsync.Sync(context.Background(), cfg, fleetsync.SyncOptions{
+		RegistryPath: filepath.Join(t.TempDir(), "registry.yml"),
+		CacheDir:     cacheDir,
+		ScratchDir:   secondScratch,
+		BridgePath:   secondBridge,
+	})
+	require.NoError(t, err)
+	assert.True(t, isEmptyDir(t, secondScratch), "second run must resolve both members from the cache alone, no clone")
+	assert.Equal(t, firstStats.Edges, secondStats.Edges)
+	assert.Greater(t, secondStats.Edges, 0, "must still recover the web -> api cross-service edge from cache-only resolution")
+}
+
 func nodeIDsOf(t *testing.T, dbPath string) map[string]bool {
 	t.Helper()
 	store, err := graph.NewSQLiteStore(dbPath)
