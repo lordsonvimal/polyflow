@@ -127,6 +127,9 @@ func railsRouteTarget(n *graph.Node) (action, resource, namespace string, ok boo
 	explicitModule, moduleKnown := n.Meta["controller_module"]
 
 	if resource = n.Meta["resource"]; resource != "" {
+		if moduleKnown {
+			return action, resource, explicitModule, true
+		}
 		// The resource segment can repeat (/files/:id/files); the route's own
 		// resource is the last one, everything before it is context.
 		cut := -1
@@ -138,9 +141,6 @@ func railsRouteTarget(n *graph.Node) (action, resource, namespace string, ok boo
 		}
 		if cut < 0 {
 			return "", "", "", false
-		}
-		if moduleKnown {
-			return action, resource, explicitModule, true
 		}
 		return action, resource, railsNamespace(segs[:cut]), true
 	}
