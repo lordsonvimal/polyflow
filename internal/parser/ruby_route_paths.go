@@ -595,6 +595,41 @@ func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names 
 		}
 	}
 
+	// An explicit `to: "controller#action"` (or hash-rocket `:to => "..."`)
+	// target decouples the URL from the controller name by design, so it can't
+	// be read back off the composed path the way rest_resource_route's resource
+	// can — capture it here, off the raw call, before the path-composition
+	// idempotency guard below can return early and skip it. Guarded on its own
+	// "done" check, same reasoning as route_helper above: a re-composed node
+	// still carrying Meta["action"] from its first pass must not fall through
+	// to a to:-less second parse (e.g. a re-walk with a different mod stack) and
+	// wipe it back to "".
+	if node.Meta["pattern"] == "http_verb_route" {
+		if _, done := node.Meta["action"]; !done {
+			if to := keywordSegment(call, src, "to"); to != "" {
+				if ctrl, action, ok := strings.Cut(to, "#"); ok {
+					node.Meta["action"] = action
+					if slash := strings.LastIndex(ctrl, "/"); slash >= 0 {
+						// "admin/db_status#index" — the portion before the last
+						// "/" is additional module nesting beyond whatever `mod`
+						// (the enclosing namespace/scope stack, already stamped
+						// unconditionally into Meta["controller_module"] above)
+						// already recorded.
+						extra := ctrl[:slash]
+						node.Meta["resource"] = ctrl[slash+1:]
+						if existing := node.Meta["controller_module"]; existing != "" {
+							node.Meta["controller_module"] = existing + "/" + extra
+						} else {
+							node.Meta["controller_module"] = extra
+						}
+					} else {
+						node.Meta["resource"] = ctrl
+					}
+				}
+			}
+		}
+	}
+
 	// Idempotency guard, same construction as setPath in
 	// internal/contract/routegroup.go: a node whose recorded full_path still
 	// equals its path has already been composed, and re-composing would treat

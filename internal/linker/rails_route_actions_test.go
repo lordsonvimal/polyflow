@@ -302,11 +302,14 @@ func TestLinkRailsRouteActions_GoRoutesUntouched(t *testing.T) {
 	assert.Empty(t, unresolved)
 }
 
-// TestLinkRailsRouteActions_HTTPVerbRouteIsSilent — http_verb_route records
-// neither action nor resource (its target lives in an unparsed `to:` argument,
-// deferred to A.5). It must not be reported as unresolved: that would restate
-// a known parser gap 61 times per index and re-inflate the very footer the
-// ledger-hygiene phase exists to shrink.
+// TestLinkRailsRouteActions_HTTPVerbRouteIsSilent — a genuinely target-less
+// http_verb_route (no `to:`, no `=>`, e.g. resolvable only by a lambda)
+// records neither action nor resource. It must not be reported as unresolved:
+// that would restate an unaddressable gap 61 times per index and re-inflate
+// the very footer the ledger-hygiene phase exists to shrink. Since
+// docs/rails-route-explicit-to-target-plan.md, a `to:`-carrying route no
+// longer takes this path — see
+// TestLinkRailsRouteActions_HTTPVerbRouteWithExplicitTarget.
 func TestLinkRailsRouteActions_HTTPVerbRouteIsSilent(t *testing.T) {
 	t.Parallel()
 	h := railsHandler("orion", "GET /async_operations/poll", 88, map[string]string{
@@ -318,6 +321,58 @@ func TestLinkRailsRouteActions_HTTPVerbRouteIsSilent(t *testing.T) {
 	edges, unresolved := LinkRailsRouteActions([]graph.Node{h})
 	assert.Empty(t, edges)
 	assert.Empty(t, unresolved)
+}
+
+// TestLinkRailsRouteActions_HTTPVerbRouteWithExplicitTarget is the worked
+// example from docs/rails-route-explicit-to-target-plan.md: an explicit
+// `to: "controller#action"` verb route, once the parser stamps
+// action/resource from the `to:` value instead of the URL, must resolve the
+// same way a rest_resource_route does.
+func TestLinkRailsRouteActions_HTTPVerbRouteWithExplicitTarget(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/lyra_job_items_controller.rb"
+	h := railsHandler("orion", "POST /queue_compute_dependencies", 378, map[string]string{
+		"action":            "queue_compute_dependencies",
+		"resource":          "lyra_job_items",
+		"controller_module": "",
+		"method":            "POST",
+		"path":              "/queue_compute_dependencies",
+		"pattern":           "http_verb_route",
+	})
+	target := railsAction("orion", ctrl, "queue_compute_dependencies", 63)
+	nodes := []graph.Node{h, target}
+
+	edges, unresolved := LinkRailsRouteActions(nodes)
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
+}
+
+// TestLinkRailsRouteActions_ExplicitTargetResourceNotInURL pins the
+// linker-side fix in docs/rails-route-explicit-to-target-plan.md: a `to:`
+// target's resource does not appear as a URL segment at all (that's the
+// point of `to:` — it decouples the URL from the controller), so
+// railsRouteTarget must check moduleKnown before searching the path for the
+// resource, not after. Every other existing fixture's resource is a URL
+// segment by construction, so this is the one case that pins the reorder.
+func TestLinkRailsRouteActions_ExplicitTargetResourceNotInURL(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/admin/db_status_controller.rb"
+	h := railsHandler("orion", "GET /x", 40, map[string]string{
+		"action":            "index",
+		"resource":          "db_status",
+		"controller_module": "admin",
+		"method":            "GET",
+		"path":              "/x",
+		"pattern":           "http_verb_route",
+	})
+	target := railsAction("orion", ctrl, "index", 5)
+	nodes := []graph.Node{h, target}
+
+	edges, unresolved := LinkRailsRouteActions(nodes)
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
 }
 
 // TestLinkRailsRouteActions_OneEdgePerRoute — a route serves exactly one

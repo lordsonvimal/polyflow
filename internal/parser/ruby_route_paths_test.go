@@ -473,6 +473,38 @@ end
 	require.Equal(t, before, snapshot())
 }
 
+// TestHTTPVerbRouteExplicitToTarget covers the explicit `to: "controller#action"`
+// form (docs/rails-route-explicit-to-target-plan.md): the parser must read the
+// target off the call directly, since it never appears in the composed URL.
+func TestHTTPVerbRouteExplicitToTarget(t *testing.T) {
+	t.Parallel()
+	src := `Rails.application.routes.draw do
+  post "queue_compute_dependencies", to: "lyra_job_items#queue_compute_dependencies"
+  get "/x", to: "admin/db_status#index"
+  namespace :api do
+    get "/y", to: "admin/db_status#index"
+  end
+end
+`
+	nodes := parseRubyRoutes(t, src)
+	verb := routeNode(nodes, "http_verb_route")
+	byLine := map[int]*graph.Node{}
+	for _, n := range verb {
+		byLine[n.Line] = n
+	}
+
+	require.Equal(t, "queue_compute_dependencies", byLine[2].Meta["action"])
+	require.Equal(t, "lyra_job_items", byLine[2].Meta["resource"])
+
+	require.Equal(t, "index", byLine[3].Meta["action"])
+	require.Equal(t, "db_status", byLine[3].Meta["resource"])
+	require.Equal(t, "admin", byLine[3].Meta["controller_module"])
+
+	require.Equal(t, "index", byLine[5].Meta["action"])
+	require.Equal(t, "db_status", byLine[5].Meta["resource"])
+	require.Equal(t, "api/admin", byLine[5].Meta["controller_module"])
+}
+
 // ─── Tier HH.3: route scaffolding is not an endpoint ────────────────────────
 
 // typedNodes returns every node of a given type, whatever its pattern.
