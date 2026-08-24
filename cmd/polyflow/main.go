@@ -90,6 +90,7 @@ func init() {
 		depsCmd,
 		linkCmd,
 		fleetCmd,
+		registryCmd,
 		mcpCmd,
 		evalCmd,
 		doctorCmd,
@@ -2426,7 +2427,13 @@ func initFleetSubcmds() {
 	syncCmd.Flags().IntVar(&fleetSyncWorkers, "workers", 0, "max fleet members resolved concurrently (0 = unlimited)")
 	syncCmd.Flags().StringVar(&fleetSyncCacheDir, "cache-dir", "", "GR.1 step-3 build-cache root, keyed by <dir>/<service>/<sha>/graph.db (CI: point this at an actions/cache-restored path; empty means step 3 is always a miss)")
 
-	fleetCmd.AddCommand(syncCmd)
+	fleetStatusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show this workspace's fleet: per-member resolution and bridge staleness (read-only)",
+		RunE:  runFleetStatus,
+	}
+
+	fleetCmd.AddCommand(syncCmd, fleetStatusCmd)
 }
 
 func runFleetSync(cmd *cobra.Command, args []string) error {
@@ -2478,6 +2485,150 @@ func runFleetSync(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Done in %s. %s\n  Services: %d | Bridge nodes: %d | Bridge edges: %d\n",
 		stats.Elapsed.Truncate(time.Millisecond), bridgePath, stats.Services, stats.Nodes, stats.Edges)
+	return nil
+}
+
+// runFleetStatus implements GR.5's `polyflow fleet status`: same fleet
+// selection queryresolve.Resolve already gives every query command
+// (upward-walk to the nearest local graph.db, then the registry's reverse
+// index), but with NoSync so a status view never triggers a build — only
+// fleetsync.ResolveStatus's read-only ref-resolve/registry/cache checks per
+// member, plus whatever bridge.db already exists on disk.
+func runFleetStatus(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+	res, err := queryresolve.Resolve(ctx, ".", queryresolve.Options{Fleet: fleetFlag, NoSync: true})
+	if err != nil {
+		return err
+	}
+	if res.FleetName == "" {
+		fmt.Println("not a registered fleet member — run `polyflow index` then `polyflow fleet sync` from a fleet member checkout first")
+		return nil
+	}
+
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return err
+	}
+	reg, err := registry.Load(regPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s:\n", res.FleetName)
+
+	fleetConfigPath := reg.FleetConfigPaths[res.FleetName]
+	if fleetConfigPath == "" {
+		fmt.Println("  (fleet definition location unknown — run `polyflow fleet sync` from a checkout of its fleet.yml first)")
+		fmt.Printf("  bridge: %s\n", fleetBridgeStatusLine(res.BridgePath))
+		return nil
+	}
+	cfg, err := fleetconfig.Load(fleetConfigPath)
+	if err != nil {
+		return err
+	}
+	refOverrides, err := fleetsync.LoadRefOverrides(res.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+
+	for _, svc := range cfg.Services {
+		st, err := fleetsync.ResolveStatus(ctx, svc, refOverrides[svc.Name], fleetsync.ResolveOptions{RegistryPath: regPath})
+		if err != nil {
+			fmt.Printf("  %-20s error: %v\n", svc.Name, err)
+			continue
+		}
+		fmt.Printf("  %-20s %s\n", svc.Name, fleetMemberStatusLine(st))
+	}
+	fmt.Printf("  bridge: %s\n", fleetBridgeStatusLine(res.BridgePath))
+	return nil
+}
+
+func fleetMemberStatusLine(st *fleetsync.MemberStatus) string {
+	sha := st.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	switch st.Source {
+	case "local":
+		return fmt.Sprintf("resolved %s@%s, local checkout matches (%s)", st.Ref, sha, st.LocalPath)
+	case "cache":
+		return fmt.Sprintf("resolved %s@%s, resolved from build cache", st.Ref, sha)
+	default:
+		return fmt.Sprintf("resolved %s@%s, not available locally (next sync will clone)", st.Ref, sha)
+	}
+}
+
+func fleetBridgeStatusLine(bridgePath string) string {
+	if bridgePath == "" {
+		return "not built yet (run `polyflow fleet sync`)"
+	}
+	info, err := os.Stat(bridgePath)
+	if err != nil {
+		return "not built yet (run `polyflow fleet sync`)"
+	}
+	return fmt.Sprintf("synced %s ago (%s)", time.Since(info.ModTime()).Truncate(time.Second), bridgePath)
+}
+
+// ─── registry ────────────────────────────────────────────────────────────────
+
+var registryAll bool
+
+var registryCmd = &cobra.Command{
+	Use:   "registry",
+	Short: "List this machine's local fleet-member checkouts and which fleets claim them (Tier GR)",
+	RunE:  runRegistry,
+}
+
+func init() {
+	registryCmd.Flags().BoolVar(&registryAll, "all", false, "also list registry entries not claimed by any fleet")
+}
+
+// runRegistry implements GR.5's `polyflow registry [--all]`: a read-only
+// dump of internal/registry's local machine registry — never hand-edits it,
+// keeping "the registry reflects an actual local index" an invariant
+// nothing but `polyflow index`/`fleet sync` can violate.
+func runRegistry(cmd *cobra.Command, args []string) error {
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return err
+	}
+	reg, err := registry.Load(regPath)
+	if err != nil {
+		return err
+	}
+
+	entries := reg.Entries
+	if !registryAll {
+		filtered := entries[:0:0]
+		for _, e := range entries {
+			if len(e.Fleets) > 0 {
+				filtered = append(filtered, e)
+			}
+		}
+		entries = filtered
+	}
+
+	if len(entries) == 0 {
+		if registryAll {
+			fmt.Println("(no local index entries — run `polyflow index` in a workspace first)")
+		} else {
+			fmt.Println("(no fleet-claimed local index entries — pass --all to see every indexed workspace, or run `polyflow fleet sync` first)")
+		}
+		return nil
+	}
+
+	fmt.Printf("%-24s %-24s %-12s %s\n", "SERVICE", "INDEXED", "FLEETS", "LOCAL PATH")
+	for _, e := range entries {
+		indexed := "-"
+		if !e.IndexedAt.IsZero() {
+			indexed = e.IndexedAt.Format("2006-01-02 15:04 MST")
+		}
+		fleets := "-"
+		if len(e.Fleets) > 0 {
+			fleets = strings.Join(e.Fleets, ",")
+		}
+		fmt.Printf("%-24s %-24s %-12s %s\n", e.Service, indexed, fleets, e.LocalPath)
+	}
 	return nil
 }
 

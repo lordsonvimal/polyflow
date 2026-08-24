@@ -190,6 +190,66 @@ func TestResolveService_NoLocalEntry_CacheHit_NoClone(t *testing.T) {
 	assert.True(t, isEmptyDir(t, scratch), "a cache hit must not clone")
 }
 
+// TestResolveStatus_CleanLocalMatch_ReportsLocalNoClone is GR.5's read-only
+// counterpart to TestResolveService_CleanLocalMatch_NoClone: same clean
+// checkout, but ResolveStatus must report it via Source=="local" without
+// ever touching ScratchDir — a status view has no step 4.
+func TestResolveStatus_CleanLocalMatch_ReportsLocalNoClone(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	st, err := fleetsync.ResolveStatus(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, st.SHA)
+	assert.Equal(t, "local", st.Source)
+	assert.Equal(t, localDir, st.LocalPath)
+}
+
+// TestResolveStatus_CacheHit_ReportsCache is GR.5's read-only counterpart to
+// TestResolveService_NoLocalEntry_CacheHit_NoClone.
+func TestResolveStatus_CacheHit_ReportsCache(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	cacheDir := t.TempDir()
+	cached := filepath.Join(cacheDir, "svc", sha, meta.DBFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0o755))
+	require.NoError(t, os.WriteFile(cached, []byte("cached-db"), 0o644))
+
+	st, err := fleetsync.ResolveStatus(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		CacheDir:     cacheDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, st.SHA)
+	assert.Equal(t, "cache", st.Source)
+}
+
+// TestResolveStatus_NoLocalNoCache_ReportsUnresolvedNoClone proves the whole
+// point of a status command versus a sync: a cold member (neither a local
+// checkout nor a cache hit) is reported as Source=="unresolved" rather than
+// falling through to a clone.
+func TestResolveStatus_NoLocalNoCache_ReportsUnresolvedNoClone(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	st, err := fleetsync.ResolveStatus(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		CacheDir:     t.TempDir(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, st.SHA)
+	assert.Equal(t, "unresolved", st.Source)
+}
+
 func TestResolveService_NoLocalEntry_CacheMiss_ClonesAndPopulatesCache(t *testing.T) {
 	bareURL, sha := newBareRepo(t)
 	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}

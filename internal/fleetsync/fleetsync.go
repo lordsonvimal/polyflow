@@ -95,6 +95,70 @@ func ResolveService(ctx context.Context, svc fleetconfig.Service, refOverride st
 	return dbPath, sha, nil
 }
 
+// MemberStatus is one fleet member's read-only resolution snapshot (GR.5's
+// `polyflow fleet status`): the same ref-resolve and lookup steps
+// ResolveService performs before step 4, but stopping there — a status
+// command must never clone, since "read-only, no side effects" is the whole
+// point of a status view versus a sync.
+type MemberStatus struct {
+	Service string
+	Ref     string
+	SHA     string
+	// Source is "local" (a clean checkout at SHA is already registered),
+	// "cache" (opts.CacheDir has a copy keyed by this SHA), or "unresolved"
+	// (neither hit — the next `fleet sync` would have to clone).
+	Source string
+	// LocalPath is set only when Source == "local".
+	LocalPath string
+}
+
+// ResolveStatus mirrors ResolveService's steps 1–3 (resolve ref to a SHA,
+// check the local registry, check the build cache) but never falls through
+// to step 4's clone.
+func ResolveStatus(ctx context.Context, svc fleetconfig.Service, refOverride string, opts ResolveOptions) (*MemberStatus, error) {
+	ref := svc.Ref
+	if refOverride != "" {
+		ref = refOverride
+	}
+
+	sha, err := lsRemoteSHA(ctx, svc.Git, ref)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ref %s@%s: %w", svc.Git, ref, err)
+	}
+	st := &MemberStatus{Service: svc.Name, Ref: ref, SHA: sha}
+
+	regPath := opts.RegistryPath
+	if regPath == "" {
+		regPath, err = registry.DefaultPath()
+		if err != nil {
+			return nil, err
+		}
+	}
+	reg, err := registry.Load(regPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if entry, ok := reg.Lookup(svc.Name); ok {
+		if clean, cleanErr := isCleanCheckoutAt(ctx, entry.LocalPath, sha); cleanErr == nil && clean {
+			st.Source = "local"
+			st.LocalPath = entry.LocalPath
+			return st, nil
+		}
+	}
+
+	if opts.CacheDir != "" {
+		cached := filepath.Join(opts.CacheDir, svc.Name, sha, meta.DBFile)
+		if _, statErr := os.Stat(cached); statErr == nil {
+			st.Source = "cache"
+			return st, nil
+		}
+	}
+
+	st.Source = "unresolved"
+	return st, nil
+}
+
 // lsRemoteSHA resolves ref on gitURL to a commit SHA without cloning. A ref
 // that is already a 40-char hex SHA (a ref override pinning an exact
 // commit) is accepted as-is when it doesn't match a branch head.
