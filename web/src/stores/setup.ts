@@ -15,20 +15,20 @@ export interface SetupStatus {
 }
 
 export interface DiscoveredService {
-  Name: string;
-  Path: string;
-  Language: string;
-  Frameworks?: string[];
-  Port?: number;
+  name: string;
+  path: string;
+  language: string;
+  frameworks?: string[];
+  port?: number;
 }
 
 export interface DiscoveredConfig {
-  Name: string;
-  Version: string;
-  Services: DiscoveredService[];
-  Links?: unknown[];
-  Index?: { Exclude: string[] };
-  Settings?: Record<string, unknown>;
+  name: string;
+  version: string;
+  services: DiscoveredService[];
+  links?: unknown[];
+  index?: { exclude: string[] };
+  settings?: Record<string, unknown>;
 }
 
 export type SetupScope = "repo" | "user" | "global";

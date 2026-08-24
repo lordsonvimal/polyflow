@@ -18,7 +18,7 @@ function fakeFetch(routes: Record<string, unknown | { status: number; body: stri
   });
 }
 
-const DISCOVERED = { Name: "ws", Version: "1", Services: [{ Name: "api", Path: "./api", Language: "go" }] };
+const DISCOVERED = { name: "ws", version: "1", services: [{ name: "api", path: "./api", language: "go" }] };
 
 describe("SetupView", () => {
   let container: HTMLElement;
