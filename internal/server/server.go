@@ -32,37 +32,80 @@ type Server struct {
 	capture    *capture.Manager // nil → capture/runtime API disabled (UB.7)
 	dbPath     string           // graph.db path; used only by GET /api/setup/status (UO.7)
 
-	// Fleet mode (Tier GR.6): switching which registered fleet member's own
-	// graph.db backs db/idx/searcher, on top of GR.3's bridge-merged idx
-	// (which stays cross-service-edge-only regardless of which member is
-	// active). fleetSwitch is nil when this workspace isn't a fleet member.
-	fleetSwitch  FleetSwitchFunc
-	fleetMembers []string // every member of the fleet, not just locally-resolved ones
-	fleetActive  string
-	sourceRoot   string // root dir relative node.File paths resolve against; "" = process CWD
+	// Fleet mode (Tier GR.6, revised): idx is the union of every locally-
+	// resolved fleet member's own full graph plus the fleet's bridge.db
+	// cross-service edges (not just the workspace `serve` started in) —
+	// browsing, search, impact, trace, and context all see the whole fleet
+	// by default, no "active member" switch required. fleetMerge is nil
+	// when this workspace isn't a registered fleet member.
+	fleetMerge     FleetMergeFunc
+	fleetEnsure    FleetEnsureFunc
+	fleetMembers   []string          // every member of the fleet, not just locally-resolved ones
+	fleetResolved  map[string]bool   // member -> currently merged into idx
+	fleetRoots     map[string]string // service -> checkout root, for relative node.File resolution
+	fleetSearchers map[string]*semantic.Searcher
 }
 
-// FleetSwitchFunc resolves and opens the named fleet member — cloning it via
-// GR.1's resolver if this machine doesn't already have it — returning its
-// own store, a fleet-bridge-merged index (GR.3's buildFleetAwareIndex), a
-// hybrid searcher scoped to that store, and the member's checkout root (for
-// resolving relative node.File paths outside the workspace `serve` started
-// in). Constructed and owned by cmd/polyflow (which has fleetsync/
-// queryresolve/the embedder), not this package.
-type FleetSwitchFunc func(ctx context.Context, service string) (store graph.Store, idx *graph.AdjacencyIndex, searcher *semantic.Searcher, root string, err error)
+// FleetMergeFunc (re)builds the full-fleet view from scratch: opens every
+// locally-resolved member's own store (registry.Load, GR.1), unions their
+// nodes/edges into one idx along with the fleet's bridge.db, opens one
+// Searcher per resolved member for federated search (GR.3's
+// semantic.FederatedSearch), and reports which internal service name maps
+// to which member's checkout root (for relative node.File resolution) and
+// which top-level fleet members ended up resolved. Constructed and owned by
+// cmd/polyflow (which has fleetsync/queryresolve/the embedder), not this
+// package. Called once at startup and again after FleetEnsureFunc resolves
+// a new member, so the merge always reflects the registry's current state
+// rather than being maintained incrementally.
+type FleetMergeFunc func(ctx context.Context) (idx *graph.AdjacencyIndex, roots map[string]string, searchers map[string]*semantic.Searcher, resolved []string, err error)
 
-// SetFleet wires fleet-member switching into the server (GR.6). members is
-// the full membership list (including members never resolved on this
-// machine yet — selecting one triggers switchFn's on-demand clone); active
-// is the member the server is currently backed by (normally the workspace
-// `serve` was started in). Safe to call at any time; nil switchFn disables
-// the fleet endpoints (they report "not a fleet member" rather than 500).
-func (s *Server) SetFleet(switchFn FleetSwitchFunc, members []string, active string) {
+// FleetEnsureFunc resolves the named fleet member onto this machine —
+// cloning it via GR.1's resolver if not already local — without itself
+// rebuilding the merge; the caller (handleFleetActive) calls FleetMergeFunc
+// again afterward so the merge picks it up.
+type FleetEnsureFunc func(ctx context.Context, service string) error
+
+// SetFleet wires fleet-wide browsing into the server (GR.6, revised).
+// members is the full fleet membership list (including members never
+// resolved on this machine yet — POST /api/fleet/active's ensure step
+// triggers an on-demand clone for one of those). Safe to call at any time;
+// a nil mergeFn disables the fleet endpoints (they report "not a fleet
+// member" rather than 500).
+func (s *Server) SetFleet(mergeFn FleetMergeFunc, ensureFn FleetEnsureFunc, members []string) {
 	s.idxMu.Lock()
-	s.fleetSwitch = switchFn
+	s.fleetMerge = mergeFn
+	s.fleetEnsure = ensureFn
 	s.fleetMembers = members
-	s.fleetActive = active
 	s.idxMu.Unlock()
+}
+
+// RefreshFleet re-runs FleetMergeFunc and swaps in the result — idx,
+// per-service checkout roots, and federated searchers all update together
+// so a request never sees roots/searchers out of sync with idx. Called once
+// at `serve` startup (the default full-fleet view) and again by
+// handleFleetActive after ensuring a new member is locally resolved. A nil
+// fleetMerge (not a fleet member) is a no-op, not an error.
+func (s *Server) RefreshFleet(ctx context.Context) error {
+	s.idxMu.RLock()
+	mergeFn := s.fleetMerge
+	s.idxMu.RUnlock()
+	if mergeFn == nil {
+		return nil
+	}
+	idx, roots, searchers, resolved, err := mergeFn(ctx)
+	if err != nil {
+		return err
+	}
+	s.idxMu.Lock()
+	s.idx = idx
+	s.fleetRoots = roots
+	s.fleetSearchers = searchers
+	s.fleetResolved = make(map[string]bool, len(resolved))
+	for _, svc := range resolved {
+		s.fleetResolved[svc] = true
+	}
+	s.idxMu.Unlock()
+	return nil
 }
 
 // New creates a Server backed by the given store and adjacency index.

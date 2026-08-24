@@ -1369,12 +1369,12 @@ func runContext(cmd *cobra.Command, args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
-	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, store, contextTarget, contextTargetService, contextTargetType)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return err
 	}
 
-	idx, err := buildFleetAwareIndex(ctx, store)
+	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, graph.FleetSearcher{Store: store, Idx: idx}, contextTarget, contextTargetService, contextTargetType)
 	if err != nil {
 		return err
 	}
@@ -1619,12 +1619,12 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
-	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, store, traceRoot, traceTargetService, traceTargetType)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return err
 	}
 
-	idx, err := buildFleetAwareIndex(ctx, store)
+	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, graph.FleetSearcher{Store: store, Idx: idx}, traceRoot, traceTargetService, traceTargetType)
 	if err != nil {
 		return err
 	}
@@ -1859,12 +1859,12 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, store, impactTarget, impactTargetService, impactTargetType)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return err
 	}
 
-	idx, err := buildFleetAwareIndex(ctx, store)
+	root, candidates, exactMatch, err := graph.ResolveTarget(ctx, graph.FleetSearcher{Store: store, Idx: idx}, impactTarget, impactTargetService, impactTargetType)
 	if err != nil {
 		return err
 	}
@@ -3971,21 +3971,58 @@ func openStore() (*graph.SQLiteStore, error) {
 }
 
 // buildFleetAwareIndex is store.BuildIndex, plus — when this workspace is a
-// registered fleet member (Tier GR, GR.3) — every cross-service edge and
-// endpoint node from that fleet's bridge.db (GR.2, built/refreshed on demand)
-// merged in. Node IDs are disjoint by construction (FR.0), so the merge is a
-// plain union: impact/context/trace/deadcode, and every MCP tool built on
-// the same idx, see cross-service reach without any code of their own
-// knowing a fleet exists. Any resolution failure (no fleet, ambiguous fleet
-// without --fleet, sync failure) degrades to local-only results rather than
-// erroring the query — cross-service data is a bonus, not a dependency.
+// registered fleet member (Tier GR) — every other locally-resolved fleet
+// member's own full graph (not just its cross-service edge endpoints)
+// unioned in, on top of the fleet's bridge.db (GR.2) for edges reaching a
+// member never resolved on this machine at all. Node IDs are disjoint by
+// construction (FR.0), so the merge is a plain union: impact/context/
+// trace/deadcode/investigate/entrypoints/hierarchy/flows, and every MCP
+// tool built on the same idx, see the whole fleet by default — the same
+// federation `polyflow serve` gives the web UI (GR.6, revised), not just
+// this one workspace's cross-service reach. Any resolution failure (no
+// fleet, ambiguous fleet without --fleet, sync failure) degrades to
+// local-only results rather than erroring the query — fleet-wide data is a
+// bonus, never a dependency.
 func buildFleetAwareIndex(ctx context.Context, store *graph.SQLiteStore) (*graph.AdjacencyIndex, error) {
 	idx, err := store.BuildIndex(ctx)
 	if err != nil {
 		return nil, err
 	}
-	mergeFleetBridge(ctx, idx, ".", false)
+	mergeFleetMembersFull(ctx, idx, ".", false)
 	return idx, nil
+}
+
+// mergeFleetMembersFull unions every locally-resolved member of the fleet
+// claiming startDir (queryresolve.FleetMembers, GR.3) into idx — each
+// member's own store is opened, its full graph merged in, and closed again
+// (a CLI/MCP process is short-lived; nothing is cached across calls the way
+// `polyflow serve`'s FleetMergeFunc caches open stores for its whole
+// lifetime). One member unreadable must not break the merge for the rest.
+// Finishes with mergeFleetBridge so cross-service edges still reach a
+// member this machine has never resolved at all.
+func mergeFleetMembersFull(ctx context.Context, idx *graph.AdjacencyIndex, startDir string, noSync bool) {
+	members, err := queryresolve.FleetMembers(startDir, queryresolve.Options{Fleet: fleetFlag, NoSync: noSync})
+	if err == nil {
+		for _, dbPath := range members {
+			memberStore, openErr := graph.NewSQLiteStore(dbPath)
+			if openErr != nil {
+				continue
+			}
+			memberIdx, buildErr := memberStore.BuildIndex(ctx)
+			memberStore.Close()
+			if buildErr != nil {
+				continue
+			}
+			for _, n := range memberIdx.Nodes {
+				idx.AddNode(n)
+			}
+			for _, e := range memberIdx.AllEdges() {
+				e := e
+				idx.AddEdge(&e)
+			}
+		}
+	}
+	mergeFleetBridge(ctx, idx, startDir, noSync)
 }
 
 // mergeFleetBridge resolves startDir's fleet bridge (queryresolve.Resolve)
@@ -4031,11 +4068,15 @@ type fleetServeState struct {
 }
 
 // wireFleetServe detects whether serveWS is a registered Tier-GR fleet
-// member and, if so, calls srv.SetFleet with a switcher that resolves
-// (cloning via fleetsync.ResolveService if needed) and opens any other
-// member on demand. Silent no-op (srv stays in non-fleet mode) on any
-// resolution failure — fleet browsing is a bonus, never a requirement for
-// `serve` to work.
+// member and, if so, wires srv.SetFleet with a merge function that unions
+// every locally-resolved member's own graph (not just this one's cross-
+// service bridge stubs) into idx and an ensure function that resolves one
+// more member on demand (POST /api/fleet/active), then runs the merge once
+// so the server starts in its full default fleet-wide view — the whole
+// fleet is browsable/searchable together, no "active member" switch
+// required (GR.6, revised: was originally one member at a time). Silent
+// no-op (srv stays in non-fleet mode) on any resolution failure — fleet
+// browsing is a bonus, never a requirement for `serve` to work.
 func wireFleetServe(ctx context.Context, srv *server.Server, serveWS string, initialStore *graph.SQLiteStore, initialDBPath string, emb semantic.Embedder, synonyms map[string][]string) {
 	res, err := queryresolve.Resolve(ctx, serveWS, queryresolve.Options{Fleet: fleetFlag})
 	if err != nil || res.FleetName == "" {
@@ -4078,18 +4119,102 @@ func wireFleetServe(ctx context.Context, srv *server.Server, serveWS string, ini
 		stores:  map[string]*graph.SQLiteStore{active: initialStore},
 		dbPaths: map[string]string{active: initialDBPath},
 	}
-	srv.SetFleet(newFleetSwitcher(st, emb, synonyms), members, active)
+	srv.SetFleet(newFleetMerge(st, emb, synonyms), newFleetEnsure(st), members)
+	if err := srv.RefreshFleet(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: fleet merge failed: %v\n", err)
+	}
 }
 
-// newFleetSwitcher builds the server.FleetSwitchFunc GR.6's POST
-// /api/fleet/active calls: resolve (clone/cache/local, GR.1's algorithm via
-// fleetsync.ResolveService) or reuse an already-open store for the member,
-// merge in the fleet's cross-service bridge (the same merge every CLI/MCP
-// query gets, GR.3), and build a searcher scoped to that member's own store.
-func newFleetSwitcher(st *fleetServeState, emb semantic.Embedder, synonyms map[string][]string) server.FleetSwitchFunc {
-	return func(ctx context.Context, service string) (graph.Store, *graph.AdjacencyIndex, *semantic.Searcher, string, error) {
+// fleetMemberDBPath mirrors fleetsync's unexported dbPathFor without
+// needing that package's ResolveService machinery: a Subpath-less service's
+// graph.db lives at <localPath>/.polyflow/graph.db; a Subpath (monorepo)
+// service's lives at <localPath>/.polyflow/services/<name>/graph.db.
+func fleetMemberDBPath(localPath string, svc fleetconfig.Service) string {
+	if svc.Subpath == "" {
+		return filepath.Join(localPath, meta.DBDir, meta.DBFile)
+	}
+	return filepath.Join(localPath, meta.DBDir, "services", svc.Name, meta.DBFile)
+}
+
+// newFleetMerge builds the server.FleetMergeFunc that (re)builds the full-
+// fleet view from scratch on every call: for each fleet member, reuse its
+// already-open store if cached (newFleetEnsure populates st.stores when it
+// resolves a new member) or open it straight from the local registry
+// (never cloning here — a mere merge/refresh must never block on network,
+// unlike POST /api/fleet/active's explicit ensure step); union every
+// resolved member's nodes/edges into one idx, record each node's checkout
+// root by its own Service value (a member's polyflow.yml may itself declare
+// more than one internal service, e.g. a monorepo), open one Searcher per
+// resolved member (GR.3's federation), and merge in the fleet's bridge.db
+// on top so cross-service edges reach members never resolved on this
+// machine at all.
+func newFleetMerge(st *fleetServeState, emb semantic.Embedder, synonyms map[string][]string) server.FleetMergeFunc {
+	return func(ctx context.Context) (*graph.AdjacencyIndex, map[string]string, map[string]*semantic.Searcher, []string, error) {
 		st.mu.Lock()
 		defer st.mu.Unlock()
+
+		reg, err := registry.Load(st.regPath)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+
+		idx := graph.NewAdjacencyIndex()
+		roots := make(map[string]string)
+		searchers := make(map[string]*semantic.Searcher)
+		var resolved []string
+
+		for _, svc := range st.cfg.Services {
+			store, ok := st.stores[svc.Name]
+			if !ok {
+				entry, regOK := reg.Lookup(svc.Name)
+				if !regOK || entry.LocalPath == "" {
+					continue // never resolved on this machine — skip, don't clone on a mere refresh
+				}
+				dbPath := fleetMemberDBPath(entry.LocalPath, svc)
+				var openErr error
+				store, openErr = graph.NewSQLiteStore(dbPath)
+				if openErr != nil {
+					continue // e.g. never actually indexed despite a registry entry
+				}
+				st.stores[svc.Name] = store
+				st.dbPaths[svc.Name] = dbPath
+			}
+
+			memberIdx, buildErr := store.BuildIndex(ctx)
+			if buildErr != nil {
+				continue
+			}
+			root := rootDirFromDBPath(st.dbPaths[svc.Name], svc)
+			for _, n := range memberIdx.Nodes {
+				idx.AddNode(n)
+				roots[n.Service] = root
+			}
+			for _, e := range memberIdx.AllEdges() {
+				e := e
+				idx.AddEdge(&e)
+			}
+			searchers[svc.Name] = buildSearcher(store, emb, synonyms)
+			resolved = append(resolved, svc.Name)
+		}
+
+		mergeFleetBridge(ctx, idx, ".", false)
+		return idx, roots, searchers, resolved, nil
+	}
+}
+
+// newFleetEnsure builds the server.FleetEnsureFunc POST /api/fleet/active
+// calls: resolve the named member via GR.1's algorithm (fleetsync.
+// ResolveService — clone if this machine doesn't have it yet) and cache the
+// opened store, so the FleetMergeFunc that runs right after picks it up
+// without re-resolving. A no-op if the member is already cached.
+func newFleetEnsure(st *fleetServeState) server.FleetEnsureFunc {
+	return func(ctx context.Context, service string) error {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+
+		if _, ok := st.stores[service]; ok {
+			return nil
+		}
 
 		var svc fleetconfig.Service
 		found := false
@@ -4101,30 +4226,20 @@ func newFleetSwitcher(st *fleetServeState, emb semantic.Embedder, synonyms map[s
 			}
 		}
 		if !found {
-			return nil, nil, nil, "", fmt.Errorf("unknown fleet member %q", service)
+			return fmt.Errorf("unknown fleet member %q", service)
 		}
 
-		store, ok := st.stores[service]
-		if !ok {
-			dbPath, _, resolveErr := fleetsync.ResolveService(ctx, svc, "", fleetsync.ResolveOptions{RegistryPath: st.regPath})
-			if resolveErr != nil {
-				return nil, nil, nil, "", resolveErr
-			}
-			var openErr error
-			store, openErr = graph.NewSQLiteStore(dbPath)
-			if openErr != nil {
-				return nil, nil, nil, "", openErr
-			}
-			st.stores[service] = store
-			st.dbPaths[service] = dbPath
-		}
-
-		idx, err := buildFleetAwareIndex(ctx, store)
+		dbPath, _, err := fleetsync.ResolveService(ctx, svc, "", fleetsync.ResolveOptions{RegistryPath: st.regPath})
 		if err != nil {
-			return nil, nil, nil, "", err
+			return err
 		}
-
-		return store, idx, buildSearcher(store, emb, synonyms), rootDirFromDBPath(st.dbPaths[service], svc), nil
+		store, err := graph.NewSQLiteStore(dbPath)
+		if err != nil {
+			return err
+		}
+		st.stores[service] = store
+		st.dbPaths[service] = dbPath
+		return nil
 	}
 }
 

@@ -46,13 +46,16 @@ async function load(): Promise<void> {
   }
 }
 
-// setActive switches which fleet member's graph backs every other view.
-// A member with no local checkout yet triggers an on-demand clone
-// server-side (GR.1), so this can take a few seconds the first time — the
-// caller should show switching() while it resolves. A successful switch's
-// graph_updated broadcast (handled by every other store's own onEvent
-// listener, e.g. stores/tree.ts) is what actually refreshes the rest of
-// the UI; this function only updates the switcher's own active flag.
+// setActive ensures one more fleet member is resolved (cloning it on demand
+// server-side, GR.1, if this machine doesn't have it yet) and merged into
+// the fleet-wide view — GR.6 revised: every resolved member stays merged
+// simultaneously, so this widens the view rather than switching away from
+// whichever member was previously active. Can take a few seconds on a first
+// clone — the caller should show switching() while it resolves. A
+// successful call's graph_updated broadcast (handled by every other
+// store's own onEvent listener, e.g. stores/tree.ts) is what actually
+// refreshes the rest of the UI; this function only flips the target
+// member's own active flag, leaving every other row untouched.
 async function setActive(service: string): Promise<void> {
   setSwitching(true);
   try {
@@ -61,12 +64,12 @@ async function setActive(service: string): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service }),
     });
-    setServices((rows) => rows.map((r) => ({ ...r, active: r.service === service })));
+    setServices((rows) => rows.map((r) => (r.service === service ? { ...r, active: true } : r)));
   } catch (err) {
     notificationsStore.add({
       id: `fleet-members-switch-err-${Date.now()}`,
       kind: "error",
-      message: `Failed to switch to ${service}`,
+      message: `Failed to load ${service}`,
       detail: parseErrorMessage(err),
     });
   } finally {

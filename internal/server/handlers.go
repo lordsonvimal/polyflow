@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,26 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
+
+// searchScoped is handleSearch's federation-scope decision, mirroring
+// cmd/polyflow's runFederatedOrLocalSearch and internal/mcpserver's search
+// tool exactly: service == "" federates across every locally-resolved
+// fleet member (GR.3's default), a non-empty service narrows to just that
+// one member (falling back to the local Searcher if it isn't a wired fleet
+// member), and no fleetSearchers at all (not a fleet member) is just the
+// local Searcher.
+func (s *Server) searchScoped(ctx context.Context, local *semantic.Searcher, fleet map[string]*semantic.Searcher, q, service string, limit int) (semantic.Response, error) {
+	if service != "" {
+		if sr, ok := fleet[service]; ok {
+			return sr.Search(ctx, q, limit)
+		}
+		return local.Search(ctx, q, limit)
+	}
+	if len(fleet) > 1 {
+		return semantic.FederatedSearch(ctx, fleet, q, limit)
+	}
+	return local.Search(ctx, q, limit)
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -157,11 +178,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	s.idxMu.RLock()
 	sr := s.searcher
+	fleet := s.fleetSearchers
 	s.idxMu.RUnlock()
 
 	// Use hybrid search when a Searcher is wired and no type filter is requested.
 	if sr != nil && kind == "" {
-		resp, err := sr.Search(r.Context(), q, limit)
+		resp, err := s.searchScoped(r.Context(), sr, fleet, q, service, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -315,7 +337,7 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	src, err := os.ReadFile(s.resolveSourcePath(node.File))
+	src, err := os.ReadFile(s.resolveSourcePath(node.Service, node.File))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read source file: %s", err))
 		return

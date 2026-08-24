@@ -443,3 +443,88 @@ func TestResolveTarget_FanOut(t *testing.T) {
 		t.Fatalf("want 5 candidates (all exact matches), got %d", len(cands))
 	}
 }
+
+// ── FleetSearcher (Tier GR federation) ──────────────────────────────────────
+
+// TestFleetSearcher_GetNode_FallsBackToIdx proves a node reachable only
+// through a sibling fleet member's own store (present in the merged idx,
+// never in the local store, since bridge.db only ever carries a cross-
+// service edge's specific endpoint nodes) still resolves by exact ID.
+func TestFleetSearcher_GetNode_FallsBackToIdx(t *testing.T) {
+	localOnly := node("local1", "LocalFn", "svcA", "a.go", "function")
+	store := &stubSearcherWithGetNode{byID: map[string]*graph.Node{"local1": localOnly}}
+
+	idx := graph.NewAdjacencyIndex()
+	fleetNode := node("fleet1", "FleetFn", "svcB", "b.go", "function")
+	idx.AddNode(fleetNode)
+
+	fs := graph.FleetSearcher{Store: store, Idx: idx}
+
+	n, err := fs.GetNode(context.Background(), "local1")
+	if err != nil || n.ID != "local1" {
+		t.Fatalf("expected local1 from the store, got %v, %v", n, err)
+	}
+	n, err = fs.GetNode(context.Background(), "fleet1")
+	if err != nil || n.ID != "fleet1" {
+		t.Fatalf("expected fleet1 from the idx fallback, got %v, %v", n, err)
+	}
+	_, err = fs.GetNode(context.Background(), "nope")
+	if err == nil {
+		t.Fatal("expected an error for a truly unknown id")
+	}
+}
+
+// TestFleetSearcher_SearchNodes_MergesStoreAndIdx proves the fuzzy-match
+// path also spans the fleet: a label that exists only on a sibling
+// member's node (idx-only, no meta.owner_service, never in bridge.db)
+// still surfaces as a search candidate.
+func TestFleetSearcher_SearchNodes_MergesStoreAndIdx(t *testing.T) {
+	localOnly := node("local1", "Health", "svcA", "a.go", "function")
+	store := &stubSearcher{nodes: []*graph.Node{localOnly}}
+
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(node("fleet1", "HealthCheck", "svcB", "b.go", "function"))
+	idx.AddNode(node("fleet2", "Unrelated", "svcB", "c.go", "function"))
+
+	fs := graph.FleetSearcher{Store: store, Idx: idx}
+	results, err := fs.SearchNodes(context.Background(), "health", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := map[string]bool{}
+	for _, n := range results {
+		byID[n.ID] = true
+	}
+	if !byID["local1"] {
+		t.Fatal("expected the local store's own hit")
+	}
+	if !byID["fleet1"] {
+		t.Fatal("expected the idx-only fleet hit (case-insensitive label match)")
+	}
+	if byID["fleet2"] {
+		t.Fatal("did not expect a non-matching label to surface")
+	}
+}
+
+// TestResolveTarget_WithFleetSearcher_ResolvesCrossFleetExactID is the
+// end-to-end shape: ResolveTarget itself, given a FleetSearcher, resolves a
+// literal node ID that only exists in the merged idx.
+func TestResolveTarget_WithFleetSearcher_ResolvesCrossFleetExactID(t *testing.T) {
+	store := &stubSearcherWithGetNode{byID: map[string]*graph.Node{}}
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(node("fleet1", "FleetFn", "svcB", "b.go", "function"))
+
+	root, cands, exactMatch, err := graph.ResolveTarget(context.Background(), graph.FleetSearcher{Store: store, Idx: idx}, "fleet1", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if root.ID != "fleet1" {
+		t.Fatalf("want fleet1, got %s", root.ID)
+	}
+	if !exactMatch {
+		t.Fatal("expected an exact ID match, not a fuzzy fallback")
+	}
+	if len(cands) != 0 {
+		t.Fatalf("want 0 candidates, got %d", len(cands))
+	}
+}

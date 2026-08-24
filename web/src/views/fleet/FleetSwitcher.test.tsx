@@ -40,7 +40,21 @@ describe("FleetSwitcher", () => {
     expect(container.querySelector('[data-testid="fleet-switcher"]')).toBeNull();
   });
 
-  it("lists every member with the active one selected, and switches on change", async () => {
+  it("lists every member, showing which are already resolved/merged", async () => {
+    const services: FleetMemberRow[] = [
+      { service: "api", active: true },
+      { service: "web", active: false },
+    ];
+    (globalThis as any).fetch = fakeFetch({ "/api/fleet/services": { services } });
+    render(() => <FleetSwitcher />, container);
+
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="fleet-switcher-row"]')).toHaveLength(2));
+
+    expect(container.querySelectorAll('[data-testid="fleet-switcher-loaded"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-testid="fleet-switcher-load"]')).toHaveLength(1);
+  });
+
+  it("loading an unresolved member widens the merge rather than switching away from others", async () => {
     const services: FleetMemberRow[] = [
       { service: "api", active: true },
       { service: "web", active: false },
@@ -49,16 +63,13 @@ describe("FleetSwitcher", () => {
     (globalThis as any).fetch = fakeFetch(routes);
     render(() => <FleetSwitcher />, container);
 
-    await vi.waitFor(() => expect(container.querySelectorAll("option")).toHaveLength(2));
-
-    const select = container.querySelector('[data-testid="fleet-switcher-select"]') as HTMLSelectElement;
-    expect(select.value).toBe("api");
-
-    select.value = "web";
-    select.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="fleet-switcher-load"]')).toHaveLength(1));
+    const loadBtn = container.querySelector('[data-testid="fleet-switcher-load"]') as HTMLButtonElement;
+    loadBtn.click();
 
     await vi.waitFor(() => expect(routes["__lastActive"]).toBe("web"));
     await vi.waitFor(() => expect(fleetMembersStore.services().find((s) => s.service === "web")?.active).toBe(true));
-    expect(fleetMembersStore.services().find((s) => s.service === "api")?.active).toBe(false);
+    // Loading "web" must not have deactivated "api" — the whole fleet stays merged.
+    expect(fleetMembersStore.services().find((s) => s.service === "api")?.active).toBe(true);
   });
 });

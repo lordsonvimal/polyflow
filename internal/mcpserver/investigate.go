@@ -81,7 +81,7 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 	}
 	store, idx, searcher := s.snapshot()
 
-	root, targetCandidates, exactMatch, err := resolveNode(ctx, store, in.Query, in.TargetService, in.TargetType)
+	root, targetCandidates, exactMatch, err := resolveNode(ctx, store, idx, in.Query, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
