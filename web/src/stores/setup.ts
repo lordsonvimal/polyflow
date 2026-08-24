@@ -31,6 +31,13 @@ export interface DiscoveredConfig {
   settings?: Record<string, unknown>;
 }
 
+export interface RegistryEntry {
+  service: string;
+  local_path: string;
+  indexed_at?: string;
+  fleets?: string[];
+}
+
 export type SetupScope = "repo" | "user" | "global";
 
 export interface SetupAgentInfo {
@@ -64,6 +71,12 @@ const [discoverError, setDiscoverError] = createSignal<string | null>(null);
 const [discovered, setDiscovered] = createSignal<DiscoveredConfig | null>(null);
 const [applying, setApplying] = createSignal(false);
 const [applyError, setApplyError] = createSignal<string | null>(null);
+
+const [registryEntries, setRegistryEntries] = createSignal<RegistryEntry[]>([]);
+const [registryLoading, setRegistryLoading] = createSignal(false);
+const [registryError, setRegistryError] = createSignal<string | null>(null);
+const [selecting, setSelecting] = createSignal<string | null>(null);
+const [selectError, setSelectError] = createSignal<string | null>(null);
 
 const [agentScope, setAgentScope] = createSignal<SetupScope>("repo");
 const [agents, setAgents] = createSignal<SetupAgentInfo[]>([]);
@@ -130,6 +143,72 @@ async function pollJob(id: string): Promise<JobPoll> {
     const job = await apiFetchJSON<JobPoll>(`/api/jobs/${id}`, { silent: true });
     if (job.state !== "running") return job;
     await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+// loadRegistry fetches this machine's known local workspaces (GET
+// /api/setup/registry) so the discover step can offer "open one of these"
+// instead of always requiring a fresh filesystem walk — most useful when
+// `polyflow serve` starts outside any of them (e.g. a parent directory of
+// several independently fleet-configured repos), since a plain path-based
+// discover from there finds nothing.
+async function loadRegistry(): Promise<void> {
+  setRegistryLoading(true);
+  setRegistryError(null);
+  try {
+    const res = await apiFetchJSON<{ entries: RegistryEntry[] }>("/api/setup/registry", { silent: true });
+    setRegistryEntries(res.entries);
+  } catch (err) {
+    setRegistryError(errMessage(err));
+  } finally {
+    setRegistryLoading(false);
+  }
+}
+
+// selectWorkspace hands a known registry path to POST /api/setup/select,
+// which restarts the server process pointed at it (SelectWorkspaceFunc,
+// UO.8) on the same host:port. This browser tab's server connection drops
+// for a moment as the old process exits and the new one comes up — poll
+// GET /api/setup/status until it answers again, then reload so the whole
+// app re-mounts against the new workspace from scratch rather than trying
+// to patch every store in place.
+async function selectWorkspace(localPath: string): Promise<void> {
+  setSelecting(localPath);
+  setSelectError(null);
+  try {
+    await apiFetch("/api/setup/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: localPath }),
+      silent: true,
+    });
+    await waitForRestart();
+    window.location.reload();
+  } catch (err) {
+    setSelectError(errMessage(err));
+    setSelecting(null);
+  }
+}
+
+// waitForRestart polls /api/setup/status until the server answers again
+// (the new process may take a moment to bind the port after the old one
+// exits) or gives up after a generous timeout, at which point the caller's
+// reload happens anyway — worst case the user sees the same "not ready
+// yet" state momentarily and can retry.
+async function waitForRestart(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  // The old process is still alive for ~300ms after responding to
+  // /api/setup/select (see selectWorkspaceFunc's restart delay), so the
+  // first few polls are expected to still hit it — keep polling regardless
+  // of individual failures until the deadline.
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400));
+    try {
+      await apiFetchJSON<SetupStatus>("/api/setup/status", { silent: true });
+      return;
+    } catch {
+      // still restarting
+    }
   }
 }
 
@@ -207,6 +286,13 @@ export const setupStore = {
   discover,
   apply,
   pollJob,
+  registryEntries,
+  registryLoading,
+  registryError,
+  selecting,
+  selectError,
+  loadRegistry,
+  selectWorkspace,
   agentScope,
   agents,
   agentsLoading,
@@ -224,6 +310,11 @@ export const setupStore = {
     setDiscovered(null);
     setApplying(false);
     setApplyError(null);
+    setRegistryEntries([]);
+    setRegistryLoading(false);
+    setRegistryError(null);
+    setSelecting(null);
+    setSelectError(null);
     setAgents([]);
     setAgentsError(null);
     setApplyingAgent(null);

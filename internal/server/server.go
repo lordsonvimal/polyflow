@@ -32,6 +32,13 @@ type Server struct {
 	capture    *capture.Manager // nil → capture/runtime API disabled (UB.7)
 	dbPath     string           // graph.db path; used only by GET /api/setup/status (UO.7)
 
+	// selectWorkspace implements POST /api/setup/select (UO.8): given a
+	// known registry entry's local path, re-point this running server at
+	// that workspace. nil → 501 (only wired by `polyflow serve`, which owns
+	// the process-restart mechanics; e.g. NewDev's Vite-CORS test harness
+	// leaves it unset).
+	selectWorkspace SelectWorkspaceFunc
+
 	// Fleet mode (Tier GR.6, revised): idx is the union of every locally-
 	// resolved fleet member's own full graph plus the fleet's bridge.db
 	// cross-service edges (not just the workspace `serve` started in) —
@@ -44,6 +51,32 @@ type Server struct {
 	fleetResolved  map[string]bool   // member -> currently merged into idx
 	fleetRoots     map[string]string // service -> checkout root, for relative node.File resolution
 	fleetSearchers map[string]*semantic.Searcher
+}
+
+// SelectWorkspaceFunc re-points the running `polyflow serve` process at a
+// different local workspace (UO.8). Every subsystem this server wires up
+// (store, index, searcher, jobs, capture, fleet merge, the graph.db
+// fsnotify watcher) is initialized once at startup keyed to the process's
+// working directory (meta.DBDir/meta.ConfigFile are relative paths by
+// design — see `polyflow index`'s own cwd-relative behavior), so
+// re-initializing all of it in place would mean duplicating `runServe`'s
+// entire wiring sequence and carefully tearing down the old one (open
+// SQLite handles, the embedder's sidecar process, the fsnotify goroutine)
+// without racing in-flight requests. Restarting the process is what
+// `runServe` already does correctly by construction — SelectWorkspaceFunc
+// hands off to a fresh `polyflow serve` on the same host:port and exits
+// this one, so the OS reclaims every resource instead of this package
+// re-deriving that cleanup by hand.
+type SelectWorkspaceFunc func(localPath string) error
+
+// SetSelectWorkspace wires POST /api/setup/select's implementation (UO.8).
+// Safe to call at any time; a nil fn (the default) makes that endpoint
+// report 501, e.g. under NewDev's Vite-dev harness which has no process to
+// restart.
+func (s *Server) SetSelectWorkspace(fn SelectWorkspaceFunc) {
+	s.idxMu.Lock()
+	s.selectWorkspace = fn
+	s.idxMu.Unlock()
 }
 
 // FleetMergeFunc (re)builds the full-fleet view from scratch: opens every
@@ -293,6 +326,8 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/fleet/services", s.handleFleetServices)
 	s.handle("POST /api/fleet/active", s.handleFleetActive)
 	s.handle("GET /api/setup/status", s.handleSetupStatus)
+	s.handle("GET /api/setup/registry", s.handleSetupRegistry)
+	s.handle("POST /api/setup/select", s.handleSetupSelect)
 	s.handle("POST /api/setup/apply", s.handleSetupApply)
 	s.handle("GET /api/setup/agents", s.handleSetupAgents)
 	s.handle("POST /api/setup/agent", s.handleSetupAgentApply)
