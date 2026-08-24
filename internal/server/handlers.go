@@ -316,7 +316,7 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	src, err := os.ReadFile(node.File)
+	src, err := os.ReadFile(s.resolveSourcePath(node.File))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read source file: %s", err))
 		return

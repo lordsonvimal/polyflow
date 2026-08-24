@@ -2,6 +2,7 @@ import { For, Show, createSignal } from "solid-js";
 import PatternsPanel from "./patterns/PatternsPanel";
 import AgentSetupPanel from "./setup/AgentSetupPanel";
 import FleetStatusPanel from "./fleet/FleetStatusPanel";
+import FleetSwitcher from "./fleet/FleetSwitcher";
 
 type Section = "patterns" | "agents" | "fleet";
 
@@ -39,6 +40,7 @@ export default function SettingsView() {
           <AgentSetupPanel />
         </Show>
         <Show when={section() === "fleet"}>
+          <FleetSwitcher />
           <FleetStatusPanel />
         </Show>
       </div>
