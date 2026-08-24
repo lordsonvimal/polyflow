@@ -8,7 +8,7 @@
 import { GraphNode, GraphEdge } from "../../../lib/types";
 import { apiFetchJSON } from "../../../lib/apiFetch";
 import { ApiTreeNode, ApiTreeResult } from "../../../stores/tree";
-import { serviceNodeId } from "../../../lib/aggregate";
+import { serviceNodeId, isBridgeOnlyService } from "../../../lib/aggregate";
 import { GraphData, fetchAllGraph, sortGraphData, stubNode } from "./common";
 
 interface Group {
@@ -129,7 +129,7 @@ export async function resolveContainer(
   for (const id of stubIds) {
     if (id.startsWith("service:")) {
       const svc = id.slice("service:".length);
-      nodes.push(stubNode(id, svc, svc, "service", ""));
+      nodes.push(stubNode(id, svc, svc, "service", "", undefined, isBridgeOnlyService(all.nodes, svc)));
       continue;
     }
     const rg = rootGroups.find((g) => g.id === id);

@@ -44,6 +44,7 @@ import { applyLens, aggregateImportsRollup, DEFAULT_LENS } from "./lenses";
 import { applyFileGrouping, FILE_GROUP_TYPE } from "../../lib/filegroup";
 import { contextCopyStore } from "../../stores/contextCopy";
 import { importRollupStore } from "../../stores/importRollup";
+import { fleetMembersStore } from "../../stores/fleetMembers";
 import { treeStore } from "../../stores/tree";
 import { drawerStore } from "../../stores/drawer";
 import { notificationsStore } from "../../stores/notifications";
@@ -473,6 +474,42 @@ export default function CanvasHost() {
     return null;
   }
 
+  // Tier GR: a "service" scope for a bridge_only/stub_bridge_only pill
+  // (lib/aggregate.ts's isBridgeOnlyService) has no local file/folder
+  // backbone — pushing it always lands on "This scope has no elements"
+  // (internal/graph/tree.go's BuildTree needs at least one NodeTypeFile
+  // node, which a bridge-copied cross-service-edge endpoint never has).
+  // Give real feedback instead of that dead end: if the service is a known,
+  // currently-inactive fleet member, offer the GR.6 switch (its full graph
+  // becomes locally available once active); otherwise it's a foreign
+  // sub-service with no switch target reachable from here (e.g. a
+  // monorepo's internal service seen only through one cross-service edge).
+  function enterServiceScope(el: ReturnType<NonNullable<typeof cy>["getElementById"]>, scope: Scope): boolean {
+    if (scope.kind !== "service") return false;
+    const bridgeOnly = el.data("bridge_only") === "true" || el.data("stub_bridge_only") === "true";
+    if (!bridgeOnly) return false;
+
+    const service = scope.service;
+    const member = fleetMembersStore.services().find((s) => s.service === service);
+    if (member && !member.active) {
+      notificationsStore.add({
+        id: `fleet-switch-drill-${Date.now()}`,
+        kind: "info",
+        message: `Switching to fleet member "${service}"…`,
+      });
+      fleetMembersStore.setActive(service).then(() => scopeStore.push({ kind: "service", service }));
+      return true;
+    }
+    notificationsStore.add({
+      id: `bridge-only-drill-${Date.now()}`,
+      kind: "info",
+      message: `"${service}" is only visible here via a cross-service link`,
+      detail:
+        "Its full graph isn't loaded from this workspace — run `polyflow serve` inside that repo directly, or switch to its fleet member under Settings → Fleet if it belongs to one.",
+    });
+    return true;
+  }
+
   function onCanvasIntent(intent: Intent) {
     // UF.4: shift-click on a canvas node already drives Cytoscape's own
     // native additive selection (gestures.ts's onTap fires this alongside
@@ -579,12 +616,14 @@ export default function CanvasHost() {
       const el = cy.getElementById(intent.target.id);
       const stubScope = scopeForStub(el);
       if (stubScope) {
+        if (enterServiceScope(el, stubScope)) return;
         scopeStore.push(stubScope);
         return;
       }
       if (intent.type === "drill") {
         const containerScope = scopeForContainer(el);
         if (containerScope) {
+          if (enterServiceScope(el, containerScope)) return;
           scopeStore.push(containerScope);
           return;
         }

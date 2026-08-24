@@ -76,6 +76,7 @@ export function stubNode(
   kind: StubKind,
   path: string,
   nodeCount?: number,
+  bridgeOnly?: boolean,
 ): GraphNode {
   return {
     id,
@@ -91,6 +92,10 @@ export function stubNode(
       stub_service: service,
       stub_path: path,
       ...(nodeCount !== undefined ? { node_count: String(nodeCount) } : {}),
+      // Tier GR: see lib/aggregate.ts's isBridgeOnlyService — a "service"
+      // stub with no local file/folder backbone dead-ends at an empty scope
+      // if drilled into, so CanvasHost needs to know before it tries.
+      ...(bridgeOnly ? { stub_bridge_only: "true" } : {}),
     },
   };
 }

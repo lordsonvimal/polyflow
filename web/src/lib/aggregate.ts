@@ -31,6 +31,26 @@ export function serviceFromNodeId(id: string): string {
   return id.slice(SERVICE_PREFIX.length);
 }
 
+// Tier GR: a fleet-aware idx unions a fleet's bridge.db nodes into whichever
+// member's own store is currently active (buildFleetAwareIndex) — every
+// bridge-copied node carries meta.owner_service (GR.2). A service with no
+// node lacking that tag has no local file/folder backbone at all (the
+// bridge only ever copies specific cross-service edge endpoints, never a
+// full contains tree — internal/graph/tree.go's BuildTree needs a
+// NodeTypeFile node to produce anything), so drilling into it always lands
+// on an empty scope. Shared by aggregate.ts's overview pills and
+// scopes/container.ts's foreign-service stub connectors so both know to
+// decline the drill instead of silently failing.
+export function isBridgeOnlyService(nodes: GraphNode[], service: string): boolean {
+  let sawAny = false;
+  for (const n of nodes) {
+    if (n.service !== service) continue;
+    sawAny = true;
+    if (!n.meta?.owner_service) return false;
+  }
+  return sawAny;
+}
+
 export function aggregateServices(
   nodes: GraphNode[],
   edges: GraphEdge[]
@@ -57,7 +77,10 @@ export function aggregateServices(
       file: "",
       line: 0,
       language: "",
-      meta: { node_count: String(count) },
+      meta: {
+        node_count: String(count),
+        ...(isBridgeOnlyService(nodes, service) ? { bridge_only: "true" } : {}),
+      },
     }));
 
   // UN.8: one edge per *unordered* service pair, not per (direction, type).
