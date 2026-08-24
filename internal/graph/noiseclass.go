@@ -30,6 +30,14 @@ func ClassifyEdgeNoise(e *Edge, dst *Node) NoiseClass {
 			return NoiseFilterChain // internal/linker/gin_middleware.go:210 — Gin's own before_action equivalent
 		case "express_middleware_use":
 			return NoiseFilterChain // internal/linker/express_middleware.go — Express's own before_action equivalent
+		case "closure_param":
+			// internal/parser/go_semantic.go: a generic wrapper (e.g.
+			// withID(ctx, name, func(id uint){...})) invoking a func-typed
+			// parameter. The wrapper is a single shared node reused across
+			// every call site, so the reverse edge fans backward-traversal
+			// out to every OTHER unrelated function that also passes the
+			// wrapper a callback — the same shape as Gin/Express middleware.
+			return NoiseFilterChain
 		}
 	}
 	if e.Type == EdgeTypeInherits {

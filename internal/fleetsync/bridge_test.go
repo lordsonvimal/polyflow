@@ -56,6 +56,10 @@ func newBareServiceRepo(t *testing.T, polyflowYML, srcName, srcContent string) s
 	t.Helper()
 	bareDir := t.TempDir()
 	runGit(t, "", "init", "--bare", bareDir)
+	// Pin HEAD to "main" regardless of the runner's init.defaultBranch —
+	// CI runners default to "master", which leaves clones in a detached
+	// state once we push only "main".
+	runGit(t, bareDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	workDir := t.TempDir()
 	runGit(t, workDir, "init")

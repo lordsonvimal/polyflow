@@ -716,13 +716,41 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 	// function/closure was actually passed in at the call site. Sorted for
 	// determinism (bug-class rule 2); deduped via closureParamCounts.
 	closureParamKeys := make([]string, 0, len(closureParamCounts))
+	closureParamTargets := make(map[string]map[string]bool) // from -> set of distinct to's
 	for key := range closureParamCounts {
 		closureParamKeys = append(closureParamKeys, key)
+		sep := strings.Index(key, "->")
+		from, to := key[:sep], key[sep+2:]
+		if closureParamTargets[from] == nil {
+			closureParamTargets[from] = make(map[string]bool)
+		}
+		closureParamTargets[from][to] = true
 	}
 	sort.Strings(closureParamKeys)
 	for _, key := range closureParamKeys {
 		sep := strings.Index(key, "->")
 		from, to := key[:sep], key[sep+2:]
+		// A generic wrapper (e.g. withID(ctx, name, func(id uint){...}) or
+		// Web(handler, level)) reused across many unrelated callers produces
+		// one closure-param edge per call site, all sharing the same `from`
+		// (the wrapper) but a different `to` per caller. Backward blast-radius
+		// traversal has no way to know the wrapper is generic: once it walks
+		// into the wrapper from any one `to`, it fans out to every OTHER `to`
+		// that also happens to share it — cross-contaminating unrelated
+		// handlers (see gotify's withID, writefreely's Web). Skip the whole
+		// group once a wrapper has more than one distinct target; keep it only
+		// for the genuinely single-purpose case the mechanism was built for
+		// (an async callback with no other caller of the wrapper at all).
+		if len(closureParamTargets[from]) > 1 {
+			continue
+		}
+		// Below this point `from` has exactly one target. Where `to` already
+		// calls `from` directly (the normal, synchronous case), the edge is
+		// additionally redundant: it closes a 2-cycle with the direct edge
+		// that already captures the real dependency.
+		if callPairs[to+"->"+from] {
+			continue
+		}
 		edges = append(edges, graph.Edge{
 			ID:         "closureparam:calls:" + key,
 			From:       from,
