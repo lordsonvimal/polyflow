@@ -99,13 +99,13 @@ export default function SetupView() {
         <Show when={step() === "confirm"}>
           <div data-testid="setup-step-confirm" class="space-y-3">
             <div class="text-sm text-neutral-300">
-              Discovered {setupStore.discovered()?.Services.length ?? 0} service(s):
+              Discovered {setupStore.discovered()?.services.length ?? 0} service(s):
             </div>
             <ul class="text-xs text-neutral-400 space-y-1 max-h-48 overflow-y-auto border border-neutral-800 rounded p-2">
-              <For each={setupStore.discovered()?.Services ?? []}>
+              <For each={setupStore.discovered()?.services ?? []}>
                 {(svc) => (
                   <li data-testid="setup-discovered-service">
-                    <span class="text-neutral-200 font-mono">{svc.Name}</span> — {svc.Path} ({svc.Language})
+                    <span class="text-neutral-200 font-mono">{svc.name}</span> — {svc.path} ({svc.language})
                   </li>
                 )}
               </For>
