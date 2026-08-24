@@ -4025,11 +4025,40 @@ func mergeFleetMembersFull(ctx context.Context, idx *graph.AdjacencyIndex, start
 	mergeFleetBridge(ctx, idx, startDir, noSync)
 }
 
+// bridgeDupKey identifies "the same declaration" independent of which file
+// path it was indexed under — see mergeFleetBridge's doc comment for why
+// that varies for the very same source line.
+type bridgeDupKey struct {
+	service, typ, label string
+	line                int
+}
+
+func bridgeDupKeyOf(n *graph.Node) bridgeDupKey {
+	return bridgeDupKey{n.Service, string(n.Type), n.Label, n.Line}
+}
+
 // mergeFleetBridge resolves startDir's fleet bridge (queryresolve.Resolve)
 // and merges its nodes/edges into idx in place. noSync forces
 // Options.NoSync (latency-sensitive callers, e.g. hook injection, must never
 // block on a clone or relink pass). Silent on any failure — see
 // buildFleetAwareIndex's doc comment.
+//
+// A bridge node can be a stale duplicate of a node idx already has from a
+// locally-resolved member's own full graph (mergeFleetMembersFull/
+// newFleetMerge's member loop, which always runs first): when GR.2's bridge
+// build resolved that member via a fresh clone (its local checkout wasn't
+// clean — real uncommitted work, common in active dev), every node the
+// bridge copied from it was indexed from inside that scratch clone, so its
+// File — and therefore its ID, which embeds File — is that scratch path,
+// permanently baked into bridge.db, not the workspace-relative path the
+// member's own real index uses for the identical source line. Naively
+// adding it produced a second, edge-less node for the same route/handler
+// next to the correct, edge-connected one — "dead end" on the stale twin.
+// bridgeDupKey identifies "the same declaration" by (service, type, label,
+// line) instead of by ID: when a bridge node matches an already-merged
+// node this way, it's skipped and its ID is remapped to the real one, so
+// any genuine cross-service edge referencing it still resolves correctly
+// rather than dangling or being dropped.
 func mergeFleetBridge(ctx context.Context, idx *graph.AdjacencyIndex, startDir string, noSync bool) {
 	res, err := queryresolve.Resolve(ctx, startDir, queryresolve.Options{Fleet: fleetFlag, NoSync: noSync})
 	if err != nil || res.BridgePath == "" {
@@ -4044,11 +4073,28 @@ func mergeFleetBridge(ctx context.Context, idx *graph.AdjacencyIndex, startDir s
 	if err != nil {
 		return
 	}
+
+	existing := make(map[bridgeDupKey]*graph.Node, len(idx.Nodes))
+	for _, n := range idx.Nodes {
+		existing[bridgeDupKeyOf(n)] = n
+	}
+
+	remap := make(map[string]string)
 	for _, n := range bridgeIdx.Nodes {
+		if real, ok := existing[bridgeDupKeyOf(n)]; ok && real.ID != n.ID {
+			remap[n.ID] = real.ID
+			continue
+		}
 		idx.AddNode(n)
 	}
 	for _, e := range bridgeIdx.AllEdges() {
 		e := e
+		if r, ok := remap[e.From]; ok {
+			e.From = r
+		}
+		if r, ok := remap[e.To]; ok {
+			e.To = r
+		}
 		idx.AddEdge(&e)
 	}
 }

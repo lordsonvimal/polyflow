@@ -79,6 +79,79 @@ func TestBuildFleetAwareIndex_MergesBridgeNodesAndEdges(t *testing.T) {
 	require.Equal(t, "remote1", callers[0].From)
 }
 
+// TestBuildFleetAwareIndex_StaleBridgeDuplicate_RemappedToRealNode
+// reproduces a real bug hit in practice: a fleet member with a dirty local
+// checkout resolves via a fresh scratch clone when the bridge is built
+// (GR.1's clean-checkout fast path misses), so the node the bridge copied
+// from it was indexed from inside that scratch clone — its File, and
+// therefore its ID (which embeds File), is a scratch path, not the
+// workspace-relative path that same member's own real local index uses for
+// the identical source line. Before the fix, idx ended up with two nodes
+// for the same route: the real one (from the local store, edge-connected)
+// and a second, differently-keyed, edge-less bridge copy that dead-ended
+// when clicked in the UI. bridgeDupKey matches by (service, type, label,
+// line) instead of ID, skips the stale duplicate, and remaps the
+// cross-service edge referencing it onto the real node instead.
+func TestBuildFleetAwareIndex_StaleBridgeDuplicate_RemappedToRealNode(t *testing.T) {
+	repoDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".polyflow"), 0o755))
+	localDBPath := filepath.Join(repoDir, ".polyflow", "graph.db")
+
+	localStore, err := graph.NewSQLiteStore(localDBPath)
+	require.NoError(t, err)
+	bw := graph.NewFreshBatchWriter(localStore)
+	realNode := &graph.Node{ID: "svc:config/routes.rb:http_handler:http_verb_route:378", Type: "http_handler", Label: "POST /app/queue_compute_dependencies", Service: "svc", File: "config/routes.rb", Line: 378, Language: "ruby"}
+	require.NoError(t, bw.AddNode(context.Background(), realNode))
+	require.NoError(t, bw.Flush(context.Background()))
+	localStore.Close()
+
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoDir))
+	t.Cleanup(func() { os.Chdir(origWD) })
+	resolvedRepoDir, err := os.Getwd()
+	require.NoError(t, err)
+
+	home := t.TempDir()
+	t.Setenv("POLYFLOW_HOME", home)
+	regPath := filepath.Join(home, "registry.yml")
+	require.NoError(t, registry.Save(regPath, &registry.Registry{
+		Version: "1",
+		Entries: []registry.Entry{{Service: "svc", LocalPath: resolvedRepoDir, Fleets: []string{"myfleet"}}},
+	}))
+
+	bridgePath, err := fleetsync.DefaultBridgePath("myfleet")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(bridgePath), 0o755))
+	bridgeStore, err := graph.NewSQLiteStore(bridgePath)
+	require.NoError(t, err)
+	bbw := graph.NewFreshBatchWriter(bridgeStore)
+	// Same declaration as realNode (service/type/label/line all match) but a
+	// scratch-clone absolute path baked into its File/ID, simulating a
+	// dirty member's bridge-sync clone.
+	staleNode := &graph.Node{ID: "svc:/tmp/scratch/svc/config/routes.rb:http_handler:http_verb_route:378", Type: "http_handler", Label: "POST /app/queue_compute_dependencies", Service: "svc", File: "/tmp/scratch/svc/config/routes.rb", Line: 378, Language: "ruby"}
+	callerNode := &graph.Node{ID: "caller1", Type: "http_client", Label: "call", Service: "other", File: "other/client.go", Line: 10, Language: "go"}
+	require.NoError(t, bbw.AddNode(context.Background(), staleNode))
+	require.NoError(t, bbw.AddNode(context.Background(), callerNode))
+	require.NoError(t, bbw.Flush(context.Background()))
+	require.NoError(t, bbw.AddEdge(context.Background(), &graph.Edge{ID: "e1", From: callerNode.ID, To: staleNode.ID, Type: "http_call"}))
+	require.NoError(t, bbw.Flush(context.Background()))
+	bridgeStore.Close()
+
+	store, err := graph.NewSQLiteStore(localDBPath)
+	require.NoError(t, err)
+	defer store.Close()
+
+	idx, err := buildFleetAwareIndex(context.Background(), store)
+	require.NoError(t, err)
+
+	require.NotContains(t, idx.Nodes, staleNode.ID, "the stale scratch-path duplicate must not be added")
+	require.Contains(t, idx.Nodes, realNode.ID)
+	inbound := idx.InEdges[realNode.ID]
+	require.Len(t, inbound, 1, "the cross-service edge must be remapped onto the real node, not dropped")
+	require.Equal(t, callerNode.ID, inbound[0].From)
+}
+
 // TestBuildFleetAwareIndex_MergesSiblingMembersFullGraph proves the
 // federate-everywhere upgrade: a sibling fleet member's own local graph.db
 // (not just the cross-service edge endpoints copied into bridge.db) is
