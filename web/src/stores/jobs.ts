@@ -109,7 +109,7 @@ async function fetchHistory(limit = 50): Promise<void> {
   setHistoryLoading(true);
   try {
     const data = await apiFetchJSON<{ jobs: Job[] }>(`/api/jobs?limit=${limit}`, { silent: true });
-    setHistory(data.jobs);
+    setHistory(data.jobs ?? []);
   } catch (err) {
     notificationsStore.add({
       id: `job-history-err-${Date.now()}`,
