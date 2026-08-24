@@ -93,6 +93,36 @@ func FindLocalDB(startDir string) string {
 	return ""
 }
 
+// selectFleet loads the registry and applies the shared candidate-selection
+// rule (one candidate wins outright, more than one requires opts.Fleet, zero
+// means "not a fleet member") used by both Resolve and FleetMembers.
+// fleetName is "" (no error) when workspaceRoot belongs to no fleet.
+func selectFleet(workspaceRoot string, opts Options) (fleetName string, reg *registry.Registry, regPath string, err error) {
+	regPath = opts.RegistryPath
+	if regPath == "" {
+		regPath, err = registry.DefaultPath()
+		if err != nil {
+			return "", nil, "", err
+		}
+	}
+	reg, err = registry.Load(regPath)
+	if err != nil {
+		return "", nil, "", err
+	}
+
+	candidates := reg.FleetsForPath(workspaceRoot)
+	switch {
+	case len(candidates) == 0:
+		return "", reg, regPath, nil
+	case len(candidates) == 1:
+		return candidates[0], reg, regPath, nil
+	case opts.Fleet != "":
+		return opts.Fleet, reg, regPath, nil
+	default:
+		return "", reg, regPath, &ErrAmbiguousFleet{Candidates: candidates}
+	}
+}
+
 // Resolve implements the four consumers' shared lookup: local DB, fleet
 // membership, bridge path.
 func Resolve(ctx context.Context, startDir string, opts Options) (*Result, error) {
@@ -102,30 +132,14 @@ func Resolve(ctx context.Context, startDir string, opts Options) (*Result, error
 	}
 	res.WorkspaceRoot = filepath.Dir(filepath.Dir(res.LocalDBPath))
 
-	regPath := opts.RegistryPath
-	if regPath == "" {
-		var err error
-		regPath, err = registry.DefaultPath()
-		if err != nil {
-			return res, err
-		}
-	}
-	reg, err := registry.Load(regPath)
+	fleetName, reg, regPath, err := selectFleet(res.WorkspaceRoot, opts)
 	if err != nil {
 		return res, err
 	}
-
-	candidates := reg.FleetsForPath(res.WorkspaceRoot)
-	switch {
-	case len(candidates) == 0:
+	if fleetName == "" {
 		return res, nil
-	case len(candidates) == 1:
-		res.FleetName = candidates[0]
-	case opts.Fleet != "":
-		res.FleetName = opts.Fleet
-	default:
-		return res, &ErrAmbiguousFleet{Candidates: candidates}
 	}
+	res.FleetName = fleetName
 
 	bridgePath, err := fleetsync.DefaultBridgePath(res.FleetName)
 	if err != nil {
@@ -155,6 +169,71 @@ func Resolve(ctx context.Context, startDir string, opts Options) (*Result, error
 		res.BridgePath = bridgePath
 	}
 	return res, nil
+}
+
+// FleetMembers resolves every locally-known member of the fleet claiming
+// startDir's workspace (same selection rule as Resolve, including
+// ErrAmbiguousFleet) and returns service name -> that member's own local
+// graph.db path, for every member this machine already has indexed. A
+// member registered but never indexed locally (no LocalPath, or a LocalPath
+// whose graph.db is missing — e.g. a sibling never cloned on this machine)
+// is silently omitted: GR.3's "search's federation scope" is every
+// currently-resolved member, not a network fetch triggered by a search
+// query. Returns a nil map (no error) when startDir is not a fleet member at
+// all.
+func FleetMembers(startDir string, opts Options) (map[string]string, error) {
+	localDB := FindLocalDB(startDir)
+	if localDB == "" {
+		return nil, nil
+	}
+	workspaceRoot := filepath.Dir(filepath.Dir(localDB))
+
+	fleetName, reg, _, err := selectFleet(workspaceRoot, opts)
+	if err != nil {
+		return nil, err
+	}
+	if fleetName == "" {
+		return nil, nil
+	}
+
+	members := make(map[string]string)
+	for _, e := range reg.Entries {
+		if e.LocalPath == "" || !containsString(e.Fleets, fleetName) {
+			continue
+		}
+		if dbPath := localDBPathFor(e.LocalPath, e.Service); dbPath != "" {
+			members[e.Service] = dbPath
+		}
+	}
+	return members, nil
+}
+
+// localDBPathFor mirrors internal/fleetsync's unexported dbPathFor (a
+// Subpath-less service's graph.db lives at <localPath>/.polyflow/graph.db;
+// a Subpath (monorepo) service's lives at
+// <localPath>/.polyflow/services/<name>/graph.db) without needing to load
+// the fleet definition just to learn Subpath — the registry only ever
+// records LocalPath, so this tries both and trusts whichever exists on
+// disk.
+func localDBPathFor(localPath, service string) string {
+	plain := filepath.Join(localPath, meta.DBDir, meta.DBFile)
+	if _, err := os.Stat(plain); err == nil {
+		return plain
+	}
+	scoped := filepath.Join(localPath, meta.DBDir, "services", service, meta.DBFile)
+	if _, err := os.Stat(scoped); err == nil {
+		return scoped
+	}
+	return ""
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // needsSync reports whether bridgePath is missing or older than

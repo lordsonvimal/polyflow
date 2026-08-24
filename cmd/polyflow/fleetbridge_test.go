@@ -11,6 +11,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/fleetsync"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/registry"
+	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
 
 // TestBuildFleetAwareIndex_MergesBridgeNodesAndEdges proves GR.3's core CLI/
@@ -76,4 +77,82 @@ func TestBuildFleetAwareIndex_MergesBridgeNodesAndEdges(t *testing.T) {
 	callers := idx.InEdges["n1"]
 	require.Len(t, callers, 1)
 	require.Equal(t, "remote1", callers[0].From)
+}
+
+// seedSearchableNode inserts a node plus the minimal entities_fts/embeddings
+// rows internal/semantic.Searcher needs to find and describe it via FTS —
+// mirrors internal/semantic's own (unexported) test helpers, reimplemented
+// here since cmd/polyflow can't import them.
+func seedSearchableNode(t *testing.T, dbPath, id, label, service, file string) {
+	t.Helper()
+	store, err := graph.NewSQLiteStore(dbPath)
+	require.NoError(t, err)
+	defer store.Close()
+	bw := graph.NewFreshBatchWriter(store)
+	require.NoError(t, bw.AddNode(context.Background(), &graph.Node{ID: id, Type: "function", Label: label, Service: service, File: file, Line: 1, EndLine: 5, Language: "go"}))
+	require.NoError(t, bw.Flush(context.Background()))
+
+	cardText := label + " function " + service + " " + file
+	_, err = store.DB().Exec(`INSERT INTO entities_fts (entity_id, entity_type, text) VALUES (?, 'node', ?)`, id, cardText)
+	require.NoError(t, err)
+	_, err = store.DB().Exec(
+		`INSERT INTO embeddings (entity_id, entity_type, content_hash, embedder_id, dims, vector, meta) VALUES (?, 'node', 'h', 'test', 0, x'', '{}')`,
+		id)
+	require.NoError(t, err)
+}
+
+// TestBuildFleetSearchers_FederatesAcrossLocallyKnownMembers proves the
+// deferred half of GR.3 (search's full multi-member federation): with two
+// registered fleet members' own local graph.dbs on disk, a search from
+// inside one of them returns hits from both, each tagged with the service
+// that produced it.
+func TestBuildFleetSearchers_FederatesAcrossLocallyKnownMembers(t *testing.T) {
+	repoA := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoA, ".polyflow"), 0o755))
+	dbA := filepath.Join(repoA, ".polyflow", "graph.db")
+	seedSearchableNode(t, dbA, "a:fn:getUser", "getUser", "svcA", "user.go")
+
+	repoB := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoB, ".polyflow"), 0o755))
+	dbB := filepath.Join(repoB, ".polyflow", "graph.db")
+	seedSearchableNode(t, dbB, "b:fn:getUserProfile", "getUserProfile", "svcB", "user.go")
+
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoA))
+	t.Cleanup(func() { os.Chdir(origWD) })
+	resolvedRepoA, err := os.Getwd()
+	require.NoError(t, err)
+	resolvedRepoB, err := filepath.EvalSymlinks(repoB)
+	require.NoError(t, err)
+
+	home := t.TempDir()
+	t.Setenv("POLYFLOW_HOME", home)
+	regPath := filepath.Join(home, "registry.yml")
+	require.NoError(t, registry.Save(regPath, &registry.Registry{
+		Version: "1",
+		Entries: []registry.Entry{
+			{Service: "svcA", LocalPath: resolvedRepoA, Fleets: []string{"myfleet"}},
+			{Service: "svcB", LocalPath: resolvedRepoB, Fleets: []string{"myfleet"}},
+		},
+	}))
+
+	fleet, closeFleet, err := buildFleetSearchers(nil, nil)
+	require.NoError(t, err)
+	defer closeFleet()
+	require.Len(t, fleet, 2)
+	require.Contains(t, fleet, "svcA")
+	require.Contains(t, fleet, "svcB")
+
+	resp, err := semantic.FederatedSearch(context.Background(), fleet, "user", 10)
+	require.NoError(t, err)
+
+	byID := map[string]semantic.Hit{}
+	for _, h := range resp.Nodes {
+		byID[h.Entity.ID] = h
+	}
+	require.Contains(t, byID, "a:fn:getUser")
+	require.Equal(t, "svcA", byID["a:fn:getUser"].Entity.Service)
+	require.Contains(t, byID, "b:fn:getUserProfile")
+	require.Equal(t, "svcB", byID["b:fn:getUserProfile"].Entity.Service)
 }
