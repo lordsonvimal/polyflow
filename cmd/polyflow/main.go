@@ -2412,6 +2412,7 @@ var (
 	fleetSyncFleetPath string
 	fleetSyncRefs      []string
 	fleetSyncWorkers   int
+	fleetSyncCacheDir  string
 )
 
 func initFleetSubcmds() {
@@ -2423,6 +2424,7 @@ func initFleetSubcmds() {
 	syncCmd.Flags().StringVar(&fleetSyncFleetPath, "fleet", "fleet.yml", "path to the git-tracked fleet definition file")
 	syncCmd.Flags().StringArrayVar(&fleetSyncRefs, "ref", nil, "override one service's ref for this sync, e.g. --ref willow=release/26.2 (repeatable; beats .polyflow-refs.yml and the fleet definition's default)")
 	syncCmd.Flags().IntVar(&fleetSyncWorkers, "workers", 0, "max fleet members resolved concurrently (0 = unlimited)")
+	syncCmd.Flags().StringVar(&fleetSyncCacheDir, "cache-dir", "", "GR.1 step-3 build-cache root, keyed by <dir>/<service>/<sha>/graph.db (CI: point this at an actions/cache-restored path; empty means step 3 is always a miss)")
 
 	fleetCmd.AddCommand(syncCmd)
 }
@@ -2464,6 +2466,7 @@ func runFleetSync(cmd *cobra.Command, args []string) error {
 		ContractsDir:    filepath.Dir(fleetSyncFleetPath),
 		Workers:         fleetSyncWorkers,
 		FleetConfigPath: absFleetPath,
+		CacheDir:        fleetSyncCacheDir,
 	})
 	if err != nil {
 		return err
