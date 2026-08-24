@@ -10,22 +10,22 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.3.2",
-    "cytoscape": "^3.30.2",
-    "cytoscape-dagre": "^2.5.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "cytoscape": "^3.34.1",
+    "cytoscape-dagre": "^4.0.0",
     "cytoscape-fcose": "^2.2.0",
     "cytoscape-svg": "^0.4.0",
-    "solid-js": "^1.8.18",
-    "tailwindcss": "^4.0.0",
+    "solid-js": "^1.9.15",
+    "tailwindcss": "^4.3.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "autoprefixer": "^10.5.2",
-    "jsdom": "^24.1.0",
-    "postcss": "^8.5.16",
-    "typescript": "^5.4.5",
-    "vite": "^5.3.1",
-    "vite-plugin-solid": "^2.10.2",
-    "vitest": "^1.6.0"
+    "autoprefixer": "^10.5.4",
+    "jsdom": "^30.0.1",
+    "postcss": "^8.5.26",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-solid": "^2.11.14",
+    "vitest": "^4.1.11"
   }
 }
