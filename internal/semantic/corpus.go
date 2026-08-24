@@ -209,8 +209,8 @@ func BuildFlowChains(idx *graph.AdjacencyIndex) []Entity {
 	var out []Entity
 
 	for _, rootID := range entryIDs {
-		result := trace.Run(idx, rootID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
-		if result == nil {
+		chains := trace.ChainsOnly(idx, rootID, "forward", 0, graph.AllNoiseInclude(), 0)
+		if chains == nil {
 			continue
 		}
 
@@ -220,7 +220,7 @@ func BuildFlowChains(idx *graph.AdjacencyIndex) []Entity {
 			launchPrefix, edgeIntoRoot = workerLaunchHops(idx, rootID, workerLaunchDepth)
 		}
 
-		for _, chain := range result.Chains {
+		for _, chain := range chains {
 			hops := chain.Hops
 			if len(hops) < 2 {
 				continue // single-hop = just the root; not a useful chain
