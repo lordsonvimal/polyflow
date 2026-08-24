@@ -133,7 +133,7 @@ func loadServicePackages(dir, service string, fset *token.FileSet, mode packages
 	// build errors having nothing to do with the test file that named it.
 	// Each candidate is trialed in isolation and kept only if it introduces no
 	// error beyond what the untagged baseline already has.
-	if widened, ok := widenWithTestBuildTags(dir, fset, pkgs); ok {
+	if widened, ok := widenWithTestBuildTags(dir, fset, pkgs, mode); ok {
 		pkgs = widened
 	}
 	pkgs = collapseTestVariants(pkgs)
@@ -961,7 +961,20 @@ const maxTestBuildTagCandidates = 20
 // untagged load, used both as the error baseline and as the safe fallback.
 // Returns (nil, false) when no candidate widens the build cleanly, in which
 // case the caller keeps using basePkgs.
-func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*packages.Package) ([]*packages.Package, bool) {
+//
+// mode must match the mode basePkgs was loaded under (AnalyzeService's
+// LoadSyntax fast path or its LoadAllSyntax retry) for two reasons, not just
+// one: it was hardcoded to LoadAllSyntax here regardless of the caller's
+// mode, which (a) silently defeated LoadSyntax's whole point — a service
+// with any test build tag paid for up to three full transitive
+// parse-and-type-check passes (baseline + one trial per candidate tag +
+// final) instead of one lean load, measured as ~14% of total allocations on
+// a real fleet index — and (b) compared baseErrs (computed under mode)
+// against trial errors always computed under LoadAllSyntax, which the
+// LoadSyntax-vs-LoadAllSyntax divergence documented on AnalyzeService means
+// could misjudge a tag as unsafe (or safe) due to the mode mismatch alone,
+// not the tag itself.
+func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*packages.Package, mode packages.LoadMode) ([]*packages.Package, bool) {
 	candidates := discoverTestBuildTags(dir)
 	if len(candidates) == 0 || len(candidates) > maxTestBuildTagCandidates {
 		return nil, false
@@ -971,7 +984,7 @@ func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*package
 	var safe []string
 	for _, tag := range candidates {
 		trialCfg := &packages.Config{
-			Mode:       packages.LoadAllSyntax,
+			Mode:       mode,
 			Dir:        dir,
 			Fset:       token.NewFileSet(), // throwaway: only error text is inspected
 			Tests:      true,
@@ -990,7 +1003,7 @@ func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*package
 	}
 
 	finalCfg := &packages.Config{
-		Mode:       packages.LoadAllSyntax,
+		Mode:       mode,
 		Dir:        dir,
 		Fset:       fset,
 		Tests:      true,
