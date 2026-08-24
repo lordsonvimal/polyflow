@@ -71,6 +71,14 @@ type Server struct {
 	searcher   *semantic.Searcher // optional; nil → FTS-only fallback
 	staleAfter time.Duration      // workspace evidence.stale_after (0 = no stale check)
 	ops        *ops.Store         // nil → tool-call audit logging disabled (UB.2)
+
+	// fleetSearchers holds one Searcher per locally-resolved fleet member
+	// (GR.3's search federation), keyed by service name — nil/empty when
+	// this workspace is not a fleet member, or has only itself as a
+	// "member". The search tool federates across all of them by default
+	// (docs/global-fleet-registry-plan.md's federation-scope decision) and
+	// narrows to one via searchInput.Service.
+	fleetSearchers map[string]*semantic.Searcher
 }
 
 // SetSearcher wires a hybrid Searcher. Call after New; safe to call while
@@ -78,6 +86,16 @@ type Server struct {
 func (s *Server) SetSearcher(sr *semantic.Searcher) {
 	s.mu.Lock()
 	s.searcher = sr
+	s.mu.Unlock()
+}
+
+// SetFleetSearchers wires one Searcher per locally-resolved fleet member
+// (GR.3), keyed by service name, for the search tool to federate across.
+// Pass nil or an empty map to disable federation (search falls back to the
+// single Searcher set via SetSearcher).
+func (s *Server) SetFleetSearchers(searchers map[string]*semantic.Searcher) {
+	s.mu.Lock()
+	s.fleetSearchers = searchers
 	s.mu.Unlock()
 }
 
@@ -113,6 +131,14 @@ func (s *Server) snapshot() (Store, *graph.AdjacencyIndex, *semantic.Searcher) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.store, s.idx, s.searcher
+}
+
+// fleetSearchersSnapshot returns the fleet-member searcher map wired via
+// SetFleetSearchers, for the search tool's federation path.
+func (s *Server) fleetSearchersSnapshot() map[string]*semantic.Searcher {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.fleetSearchers
 }
 
 // New builds an MCP server exposing the polyflow query tools. The returned
@@ -459,14 +485,35 @@ func resolveAllServiceRoots(ctx context.Context, store Store, query, targetType,
 // ─── search ──────────────────────────────────────────────────────────────────
 
 type searchInput struct {
-	Query string `json:"query" jsonschema:"search query (matches node labels and file paths)"`
-	Limit int    `json:"limit,omitempty" jsonschema:"max results (default 20)"`
-	Kind  string `json:"kind,omitempty" jsonschema:"restrict results: 'file' for file search, or a node type (function, method, variable, http_handler, ...)"`
+	Query   string `json:"query" jsonschema:"search query (matches node labels and file paths)"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"max results (default 20)"`
+	Kind    string `json:"kind,omitempty" jsonschema:"restrict results: 'file' for file search, or a node type (function, method, variable, http_handler, ...)"`
+	Service string `json:"service,omitempty" jsonschema:"when this workspace is a fleet member (Tier GR): narrow search to just this one member instead of federating across the whole fleet"`
 }
 
 type searchOutput struct {
 	Nodes []*graph.Node       `json:"nodes,omitempty"`
 	Files []graph.FileSummary `json:"files,omitempty"`
+}
+
+// runSearch is the search tool's retrieval step, factored out so it can
+// choose between a single Searcher and GR.3's fleet federation: default
+// (service == "") federates across every locally-resolved fleet member via
+// semantic.FederatedSearch when more than one is wired; service narrows to
+// just that one member (falling back to the local Searcher if service isn't
+// a wired fleet member, e.g. a plain non-fleet workspace).
+func (s *Server) runSearch(ctx context.Context, searcher *semantic.Searcher, query, service string, limit int) (semantic.Response, error) {
+	fleet := s.fleetSearchersSnapshot()
+	if service != "" {
+		if sr, ok := fleet[service]; ok {
+			return sr.Search(ctx, query, limit)
+		}
+		return searcher.Search(ctx, query, limit)
+	}
+	if len(fleet) > 1 {
+		return semantic.FederatedSearch(ctx, fleet, query, limit)
+	}
+	return searcher.Search(ctx, query, limit)
 }
 
 func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
@@ -484,7 +531,7 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 	// kind filtering is handled post-fusion for unfiltered queries;
 	// explicit kind requests fall through to FTS SearchNodes for type precision.
 	if searcher != nil && in.Kind == "" {
-		resp, err := searcher.Search(ctx, in.Query, limit)
+		resp, err := s.runSearch(ctx, searcher, in.Query, in.Service, limit)
 		if err != nil {
 			return nil, nil, err
 		}

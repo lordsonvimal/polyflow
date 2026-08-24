@@ -32,6 +32,11 @@ type Entity struct {
 	Members []string // flow only: ordered member node ids (≤ 12)
 	File    string
 	Line    int
+	// Service is which fleet member produced this hit — set only by
+	// FederatedSearch (Tier GR, GR.3), which is the only caller that ever
+	// queries more than one member's own store in one call; empty for an
+	// ordinary single-store Search.
+	Service string
 }
 
 // EmbeddingMeta holds the stored metadata for one entity, used to decide

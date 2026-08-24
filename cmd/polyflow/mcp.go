@@ -118,6 +118,18 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile), enabled)
 	handle.SetSearcher(buildSearcher(store, emb, synonyms))
 
+	// GR.3: search federates across every locally-resolved fleet member by
+	// default. closeFleetSearchers is deferred to the end of the session
+	// (runMCP is long-lived), not closed early like the CLI's one-shot
+	// equivalent.
+	fleetSearchers, closeFleetSearchers, err := buildFleetSearchers(emb, synonyms)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: fleet search federation disabled: %v\n", err)
+	} else {
+		defer closeFleetSearchers()
+		handle.SetFleetSearchers(fleetSearchers)
+	}
+
 	// UB.2: ops.db lives next to graph.db and is never touched by the
 	// indexer, so it survives graph.db's rebuild-then-atomic-rename.
 	opsPath := filepath.Join(meta.DBDir, meta.OpsFile)

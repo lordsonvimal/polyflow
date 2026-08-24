@@ -584,15 +584,17 @@ func openBrowser(url string) {
 // ─── search ──────────────────────────────────────────────────────────────────
 
 var (
-	searchFormat string
-	searchLimit  int
-	searchKind   string
+	searchFormat  string
+	searchLimit   int
+	searchKind    string
+	searchService string
 )
 
 func initSearchFlags() {
 	searchCmd.Flags().StringVar(&searchFormat, "format", "table", "output format: table or json")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "max results")
 	searchCmd.Flags().StringVar(&searchKind, "kind", "", "restrict results: 'file' or a node type (function, variable, http_handler, …)")
+	searchCmd.Flags().StringVar(&searchService, "service", "", "when this workspace is a fleet member (Tier GR): narrow search to just this one member instead of federating across the whole fleet")
 }
 
 var searchCmd = &cobra.Command{
@@ -673,7 +675,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 	sr := buildSearcher(store, emb, synonyms)
 
-	resp, err := sr.Search(ctx, args[0], searchLimit)
+	resp, err := runFederatedOrLocalSearch(ctx, sr, emb, synonyms, args[0], searchService, searchLimit)
 	if err != nil {
 		return err
 	}
@@ -746,6 +748,69 @@ func runSearch(cmd *cobra.Command, args []string) error {
 func buildSearcher(store *graph.SQLiteStore, emb semantic.Embedder, synonyms map[string][]string) *semantic.Searcher {
 	sem := semantic.NewStore(store.DB())
 	return semantic.NewSearcher(sem, emb, synonyms)
+}
+
+// buildFleetSearchers opens one Searcher per locally-resolved member of the
+// fleet claiming the current workspace (queryresolve.FleetMembers, GR.3),
+// sharing emb/synonyms across all of them, for search's default federation.
+// Returns a nil map (no error) when the workspace isn't a fleet member — the
+// caller falls back to its single local Searcher in that case. The returned
+// close func closes every store this function opened; safe to call even
+// when the map is nil.
+func buildFleetSearchers(emb semantic.Embedder, synonyms map[string][]string) (map[string]*semantic.Searcher, func(), error) {
+	members, err := queryresolve.FleetMembers(".", queryresolve.Options{Fleet: fleetFlag})
+	if err != nil || len(members) == 0 {
+		// Ambiguous-fleet or lookup errors degrade to "no federation" here —
+		// search still works against the single local store either way.
+		return nil, func() {}, nil
+	}
+
+	searchers := make(map[string]*semantic.Searcher, len(members))
+	var stores []*graph.SQLiteStore
+	closeAll := func() {
+		for _, st := range stores {
+			st.Close()
+		}
+	}
+	for svc, dbPath := range members {
+		store, openErr := graph.NewSQLiteStore(dbPath)
+		if openErr != nil {
+			// One member's local DB being unreadable must not break search
+			// against the rest — skip it.
+			continue
+		}
+		stores = append(stores, store)
+		searchers[svc] = buildSearcher(store, emb, synonyms)
+	}
+	if len(searchers) == 0 {
+		closeAll()
+		return nil, func() {}, nil
+	}
+	return searchers, closeAll, nil
+}
+
+// runFederatedOrLocalSearch is the CLI search command's retrieval step,
+// mirroring internal/mcpserver's runSearch: service == "" federates across
+// every locally-resolved fleet member by default (GR.3's federation-scope
+// decision); a non-empty service narrows to just that one member, falling
+// back to the local Searcher if it isn't a wired fleet member.
+func runFederatedOrLocalSearch(ctx context.Context, local *semantic.Searcher, emb semantic.Embedder, synonyms map[string][]string, query, service string, limit int) (semantic.Response, error) {
+	fleet, closeFleet, err := buildFleetSearchers(emb, synonyms)
+	if err != nil {
+		return semantic.Response{}, err
+	}
+	defer closeFleet()
+
+	if service != "" {
+		if sr, ok := fleet[service]; ok {
+			return sr.Search(ctx, query, limit)
+		}
+		return local.Search(ctx, query, limit)
+	}
+	if len(fleet) > 1 {
+		return semantic.FederatedSearch(ctx, fleet, query, limit)
+	}
+	return local.Search(ctx, query, limit)
 }
 
 // resolveEmbedder builds the Embedder from a workspace config.
