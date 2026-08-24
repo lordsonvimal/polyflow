@@ -74,7 +74,15 @@ export default function SetupView() {
       <div class="max-w-xl w-full space-y-6">
         <div>
           <div class="text-lg font-semibold text-white">Welcome to polyflow</div>
-          <div class="text-sm text-neutral-400">No workspace found yet — let's set one up.</div>
+          <div class="text-sm text-neutral-400">
+            <Show
+              when={setupStore.registryEntries().length > 0}
+              fallback="No workspace found yet — let's set one up."
+            >
+              No workspace configured here yet — open one of this machine's known workspaces below, or set up a new
+              one.
+            </Show>
+          </div>
         </div>
 
         <Show when={step() === "discover"}>
