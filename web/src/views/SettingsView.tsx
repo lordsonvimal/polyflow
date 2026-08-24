@@ -3,13 +3,15 @@ import PatternsPanel from "./patterns/PatternsPanel";
 import AgentSetupPanel from "./setup/AgentSetupPanel";
 import FleetStatusPanel from "./fleet/FleetStatusPanel";
 import FleetSwitcher from "./fleet/FleetSwitcher";
+import WorkspaceSwitcher from "./workspace/WorkspaceSwitcher";
 
-type Section = "patterns" | "agents" | "fleet";
+type Section = "patterns" | "agents" | "fleet" | "workspace";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "patterns", label: "Patterns" },
   { id: "agents", label: "Agents" },
   { id: "fleet", label: "Fleet" },
+  { id: "workspace", label: "Workspace" },
 ];
 
 export default function SettingsView() {
@@ -42,6 +44,9 @@ export default function SettingsView() {
         <Show when={section() === "fleet"}>
           <FleetSwitcher />
           <FleetStatusPanel />
+        </Show>
+        <Show when={section() === "workspace"}>
+          <WorkspaceSwitcher />
         </Show>
       </div>
     </div>
