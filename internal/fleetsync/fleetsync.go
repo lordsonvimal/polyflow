@@ -230,11 +230,18 @@ func dbPathFor(localPath string, svc fleetconfig.Service) string {
 }
 
 // cloneAndIndex shallow-clones svc at ref into a scratch directory, runs the
-// existing FR.2 indexing pipeline against it, syncs the result into the
-// local registry (so the next resolution hits step 2), and returns the
-// resulting graph.db path.
+// existing FR.2 indexing pipeline against it, and returns the resulting
+// graph.db path. It syncs the clone into the local registry only when
+// opts.ScratchDir was explicitly given (a caller-controlled, presumably
+// persistent location, e.g. CI's own workspace) — an auto-generated
+// os.MkdirTemp scratch dir is ephemeral (may be gone by the next process
+// run, or even by the end of this one on some OSes' temp-cleanup policies),
+// so registering it would silently clobber a real, durable registry entry
+// for this service with a dangling path. A caller that wants the clone
+// registered can always pass its own ScratchDir.
 func cloneAndIndex(ctx context.Context, svc fleetconfig.Service, ref, regPath string, opts ResolveOptions) (string, error) {
 	scratchParent := opts.ScratchDir
+	persistentScratch := scratchParent != ""
 	if scratchParent == "" {
 		var err error
 		scratchParent, err = os.MkdirTemp("", "polyflow-fleetsync-*")
@@ -278,8 +285,10 @@ func cloneAndIndex(ctx context.Context, svc fleetconfig.Service, ref, regPath st
 		return "", fmt.Errorf("index %s: %w", svc.Name, err)
 	}
 
-	if err := registry.Sync(regPath, svc.Name, wsRoot); err != nil {
-		return "", fmt.Errorf("sync registry: %w", err)
+	if persistentScratch {
+		if err := registry.Sync(regPath, svc.Name, wsRoot); err != nil {
+			return "", fmt.Errorf("sync registry: %w", err)
+		}
 	}
 
 	return filepath.Join(dbDir, meta.DBFile), nil

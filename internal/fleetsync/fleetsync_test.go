@@ -169,6 +169,37 @@ func TestResolveService_WrongSHALocalMatch_Clones(t *testing.T) {
 	assert.FileExists(t, dbPath)
 }
 
+// TestResolveService_DirtyLocalMatch_EphemeralScratch_DoesNotClobberRegistry
+// proves cloneAndIndex's fix: an auto-generated (ScratchDir == "") temp
+// clone must never overwrite a real, durable registry entry with its own
+// ephemeral path — that path is gone by the next process, so registering it
+// would turn a working "local checkout matches" resolution into a
+// permanently dangling one.
+func TestResolveService_DirtyLocalMatch_EphemeralScratch_DoesNotClobberRegistry(t *testing.T) {
+	bareURL, _ := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "main.go"), []byte("package main\n\nfunc main() { println(1) }\n"), 0o644))
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	// No ScratchDir set: cloneAndIndex must fall back to its own
+	// os.MkdirTemp, which this test never sees or controls.
+	_, _, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+	})
+	require.NoError(t, err)
+
+	reg, err := registry.Load(regPath)
+	require.NoError(t, err)
+	entry, ok := reg.Lookup("svc")
+	require.True(t, ok)
+	assert.Equal(t, localDir, entry.LocalPath, "registry entry must still point at the real durable checkout, not an ephemeral scratch clone")
+}
+
 func TestResolveService_NoLocalEntry_CacheHit_NoClone(t *testing.T) {
 	bareURL, sha := newBareRepo(t)
 	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
