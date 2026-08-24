@@ -15,6 +15,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/lordsonvimal/polyflow/internal/meta"
+	"github.com/lordsonvimal/polyflow/internal/registry"
 )
 
 // modulePath identifies polyflow's own go.mod, so FindRepo doesn't mistake
@@ -25,11 +28,16 @@ const modulePath = "module github.com/lordsonvimal/polyflow"
 // same reasoning as registry's POLYFLOW_HOME override.
 const repoPathEnv = "POLYFLOW_REPO"
 
-// FindRepo resolves the local polyflow source checkout: explicit (the
-// --repo-path flag) if set, else $POLYFLOW_REPO, else walking up from the
-// current directory looking for polyflow's own go.mod. It does not fall back
-// to a guessed path — an update that silently rebuilds the wrong repo is
-// worse than one that asks.
+// FindRepo resolves the local polyflow source checkout, in order: explicit
+// (the --repo-path flag), $POLYFLOW_REPO, the machine registry's own entry
+// for polyflow (GR.1 self-registers it the same as any other workspace,
+// under polyflow.yml's `name: polyflow`, whenever `polyflow index` runs
+// standalone from this repo), and finally walking up from the current
+// directory for polyflow's own go.mod. The registry lookup is what lets
+// `polyflow setup --update`/`--check` work from any directory once this
+// repo has been indexed once — no env var or flag required. It never falls
+// back to a guessed path — an update that silently rebuilds the wrong repo
+// is worse than one that asks.
 func FindRepo(explicit string) (string, error) {
 	if explicit != "" {
 		if err := verifyModule(explicit); err != nil {
@@ -43,6 +51,9 @@ func FindRepo(explicit string) (string, error) {
 		}
 		return filepath.Abs(env)
 	}
+	if dir, ok := findFromRegistry(); ok {
+		return dir, nil
+	}
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getwd: %w", err)
@@ -53,15 +64,33 @@ func FindRepo(explicit string) (string, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("could not find polyflow's own go.mod above %s — pass --repo-path or set $%s", mustGetwd(), repoPathEnv)
+			return "", fmt.Errorf("could not find polyflow's own checkout — pass --repo-path, set $%s, or run `polyflow index` from it once to register it", repoPathEnv)
 		}
 		dir = parent
 	}
 }
 
-func mustGetwd() string {
-	dir, _ := os.Getwd()
-	return dir
+// findFromRegistry looks up polyflow's own entry in registry.yml. A stale or
+// wrong entry (moved checkout, module mismatch) is treated as absent rather
+// than an error — the caller's other discovery methods, or a clear final
+// error, are safer than trusting a registry entry that no longer checks out.
+func findFromRegistry() (string, bool) {
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return "", false
+	}
+	reg, err := registry.Load(regPath)
+	if err != nil {
+		return "", false
+	}
+	e, ok := reg.Lookup(meta.Name)
+	if !ok || e.LocalPath == "" {
+		return "", false
+	}
+	if err := verifyModule(e.LocalPath); err != nil {
+		return "", false
+	}
+	return e.LocalPath, true
 }
 
 func verifyModule(dir string) error {
