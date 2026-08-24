@@ -28,6 +28,11 @@ export default function SetupView() {
     if (s && !s.needs_config) {
       setStep("index");
     }
+    // Known-workspaces check (UO.8): most useful right here, since
+    // needs_config commonly means `polyflow serve` started outside any of
+    // this machine's already-configured repos (e.g. their shared parent
+    // directory) rather than "nothing has ever been set up."
+    setupStore.loadRegistry();
   });
 
   async function runDiscover() {
@@ -73,7 +78,35 @@ export default function SetupView() {
         </div>
 
         <Show when={step() === "discover"}>
-          <div data-testid="setup-step-discover" class="space-y-3">
+          <div data-testid="setup-step-discover" class="space-y-6">
+            <Show when={setupStore.registryEntries().length > 0}>
+              <div data-testid="setup-known-workspaces" class="space-y-2">
+                <div class="text-sm text-neutral-300">Known workspaces on this machine</div>
+                <Show when={setupStore.selectError()}>
+                  <div data-testid="setup-select-error" class="text-red-400 text-xs">{setupStore.selectError()}</div>
+                </Show>
+                <ul class="text-xs text-neutral-400 space-y-1 max-h-48 overflow-y-auto border border-neutral-800 rounded p-2">
+                  <For each={setupStore.registryEntries()}>
+                    {(entry) => (
+                      <li data-testid="setup-registry-entry" class="flex items-center justify-between gap-2 py-0.5">
+                        <span class="truncate">
+                          <span class="text-neutral-200 font-mono">{entry.service}</span> — {entry.local_path}
+                        </span>
+                        <button
+                          data-testid="setup-registry-open-button"
+                          class="shrink-0 px-2 py-1 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-xs"
+                          disabled={setupStore.selecting() !== null}
+                          onClick={() => setupStore.selectWorkspace(entry.local_path)}
+                        >
+                          {setupStore.selecting() === entry.local_path ? "Opening…" : "Open"}
+                        </button>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </div>
+              <div class="text-xs text-neutral-500">— or discover a new workspace —</div>
+            </Show>
             <div class="text-sm text-neutral-300">Step 1 — discover services</div>
             <input
               data-testid="setup-root-input"

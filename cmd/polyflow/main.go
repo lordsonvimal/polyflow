@@ -508,6 +508,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not start DB watcher: %v\n", err)
 	}
 
+	srv.SetSelectWorkspace(selectWorkspaceFunc(serveHost, port, serveDev))
+
 	if serveHost == "0.0.0.0" {
 		fmt.Fprintln(os.Stderr, "Warning: server exposed on all interfaces (0.0.0.0)")
 	}
@@ -522,6 +524,50 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	return srv.StartOn(serveHost, port)
+}
+
+// selectWorkspaceFunc implements SelectWorkspaceFunc (UO.8) for
+// `polyflow serve`: it hands off to a freshly spawned `polyflow serve`
+// pointed at localPath, on the same host:port so the browser tab that
+// triggered the switch just reconnects, then exits this process. See
+// SelectWorkspaceFunc's doc comment for why this restarts rather than
+// re-initializing every subsystem in place.
+func selectWorkspaceFunc(host string, port int, dev bool) server.SelectWorkspaceFunc {
+	return func(localPath string) error {
+		abs, err := filepath.Abs(localPath)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", localPath, err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("%s is not a local directory", abs)
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve own executable: %w", err)
+		}
+		args := []string{"serve", "--host", host, "--port", strconv.Itoa(port), "--no-open"}
+		if dev {
+			args = append(args, "--dev")
+		}
+
+		// The response to POST /api/setup/select must reach the browser
+		// before this process exits, so the restart happens on a short
+		// delay in the background rather than inline.
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			cmd := exec.Command(exe, args...)
+			cmd.Dir = abs
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "restart into %s failed: %v\n", abs, err)
+				return
+			}
+			os.Exit(0)
+		}()
+		return nil
+	}
 }
 
 // watchDB starts a background goroutine that watches dbPath for changes and

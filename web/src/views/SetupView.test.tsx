@@ -68,4 +68,40 @@ describe("SetupView", () => {
 
     await vi.waitFor(() => expect(container.querySelector('[data-testid="setup-step-index"]')).toBeTruthy());
   });
+
+  it("lists known registry workspaces and reloads after selecting one", async () => {
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", { value: { ...window.location, reload }, writable: true });
+
+    mount({
+      "GET /api/setup/registry": {
+        entries: [{ service: "api", local_path: "/repos/api", indexed_at: "2026-08-20T00:00:00Z" }],
+      },
+      "POST /api/setup/select": { restarting: true },
+      "GET /api/setup/status": { needs_config: false, needs_index: false },
+    });
+
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="setup-registry-entry"]')).toBeTruthy());
+    expect(container.textContent).toContain("/repos/api");
+
+    (container.querySelector('[data-testid="setup-registry-open-button"]') as HTMLElement).click();
+
+    await vi.waitFor(() => expect(reload).toHaveBeenCalled(), { timeout: 3000 });
+  });
+
+  it("surfaces a select error without reloading", async () => {
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", { value: { ...window.location, reload }, writable: true });
+
+    mount({
+      "GET /api/setup/registry": { entries: [{ service: "api", local_path: "/repos/api" }] },
+      "POST /api/setup/select": { status: 500, body: "boom" },
+    });
+
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="setup-registry-entry"]')).toBeTruthy());
+    (container.querySelector('[data-testid="setup-registry-open-button"]') as HTMLElement).click();
+
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="setup-select-error"]')).toBeTruthy());
+    expect(reload).not.toHaveBeenCalled();
+  });
 });
