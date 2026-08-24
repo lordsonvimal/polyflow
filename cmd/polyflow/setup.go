@@ -58,7 +58,7 @@ func init() {
 	setupCmd.Flags().BoolVar(&setupUpdate, "update", false, "pull polyflow's own source, rebuild it, then reindex every registry repo and re-sync every fleet")
 	setupCmd.Flags().BoolVar(&setupCheck, "check", false, "check whether polyflow's source is behind its remote, without pulling or rebuilding")
 	setupCmd.Flags().BoolVar(&setupIncremental, "incremental", false, "with --update, reindex incrementally instead of the default full re-parse")
-	setupCmd.Flags().StringVar(&setupRepoPath, "repo-path", "", "path to the polyflow source checkout (default: $POLYFLOW_REPO, else walk up from cwd for its go.mod)")
+	setupCmd.Flags().StringVar(&setupRepoPath, "repo-path", "", "path to the polyflow source checkout (default: $POLYFLOW_REPO, else the machine registry, else walk up from cwd for its go.mod)")
 	rootCmd.AddCommand(setupCmd)
 }
 
