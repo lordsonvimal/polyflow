@@ -29,9 +29,10 @@ func Discover(root string) (*WorkspaceConfig, error) {
 	}
 
 	cfg := &WorkspaceConfig{
-		Name:    filepath.Base(absRoot),
-		Version: "1",
-		Index: IndexConfig{Exclude: DefaultExcludes()},
+		Name:     filepath.Base(absRoot),
+		Version:  "1",
+		Services: []Service{},
+		Index:    IndexConfig{Exclude: DefaultExcludes()},
 	}
 
 	seen := map[string]bool{} // relative service path → already added
