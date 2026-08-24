@@ -26,7 +26,7 @@ ledger anything it cannot resolve, rather than inventing edges.
 - [Supported languages & frameworks](#supported-languages--frameworks)
 - [What the graph captures](#what-the-graph-captures)
 - [Runtime evidence (optional)](#runtime-evidence-optional)
-- [Multi-repo workspaces](#multi-repo-workspaces)
+- [Fleets (multi-repo workspaces)](#fleets-multi-repo-workspaces)
 - [Limitations & honest gaps](#limitations--honest-gaps)
 - [Development](#development)
 
@@ -245,6 +245,9 @@ polyflow config link add --from web --to api --via http
 | `polyflow flows [<file>]` | Debug view: print spans parsed from an OTLP trace dump or a capture session (`--session <name>`); `--coverage` compares them against the indexed static edge baseline. Not a natural-language flow resolver — for that, use the MCP `flows` tool below. |
 | `polyflow link --infer` | Propose cross-service links from indexed evidence. |
 | `polyflow deps` | Resolved dependency versions per service. |
+| `polyflow fleet sync` | Resolve every member of a git-backed fleet definition (clone/reuse a local checkout/build cache) and rebuild the fleet's `bridge.db` of cross-service edges. |
+| `polyflow fleet status` | Read-only: per-member resolved `ref@sha` and whether it's a local checkout/build-cache hit/unresolved, plus bridge staleness. |
+| `polyflow registry` | List this machine's locally indexed workspaces and which fleets claim them. `--all` includes standalone (non-fleet) workspaces too. |
 | `polyflow patterns list` / `add <file>` | List loaded pattern packs or register a custom one. |
 | `polyflow config …` | View/edit `polyflow.yml` (`show`, `set`, `service`, `link`, `exclude`). |
 | `polyflow setup` | Interactive wizard: registers the MCP server (and context hook, where supported) with a coding agent. `--scope`/`--agent` skip the prompts. |
@@ -403,13 +406,56 @@ Map raw OTel `service.name` values to workspace service ids under
 stale captures (older than `evidence.stale_after`, default 30 days) are flagged
 without downgrading the edge.
 
-## Multi-repo workspaces
+## Fleets (multi-repo workspaces)
 
-A `polyflow.yml` can list services that live in different repositories (by
-path). Cross-service links are inferred across all of them, so an agent can
-trace a request from a frontend repo through an API into a background worker in a
-third repo. Because the MCP/CLI reads the DB from the current directory, run the
-server from the directory holding the multi-service `polyflow.yml`.
+Each repository keeps its own independent `polyflow.yml` and its own
+`.polyflow/graph.db`, indexed on its own schedule. A **fleet definition**
+(a small git-tracked YAML file, typically its own tiny repo so any
+developer or CI runner can clone it) lists the member repos by git URL and
+ties them together:
+
+```yaml
+# fleet.yml
+name: my-fleet
+version: "1"
+services:
+  - name: api
+    git: https://github.com/org/api.git
+    ref: main
+    language: go
+  - name: web
+    git: https://github.com/org/web.git
+    ref: main
+    language: typescript
+    subpath: apps/web       # set only for a monorepo member; empty when the repo IS the service
+links:
+  - from: web
+    to: api
+    via: http
+```
+
+`polyflow fleet sync --fleet path/to/fleet.yml` resolves every member —
+reusing a clean local checkout if you already have one on this machine,
+falling back to a build cache, and only cloning as a last resort — then
+builds `bridge.db`, the fleet's cross-service edge graph. Any query command
+(`impact`, `trace`, `context`, `search`, the MCP tools) run from inside a
+registered member automatically pulls in that fleet's cross-service edges,
+rebuilding the bridge on demand if it's stale; no manual sync step is
+required day to day. A workspace claimed by more than one fleet requires an
+explicit `--fleet <name>` to pick one.
+
+Two read-only commands make fleet state visible without hand-reading YAML
+or SQLite:
+
+```sh
+polyflow fleet status     # per-member: resolved ref@sha, local/cached/unresolved, bridge staleness
+polyflow registry         # this machine's indexed workspaces and which fleets claim them (--all for every workspace)
+```
+
+`polyflow serve`, run from inside a registered member, also lists every
+fleet member in the web UI (Settings → Fleet) with a dropdown to switch
+which member's own graph backs search/impact/context/trace — cross-service
+edges from `bridge.db` stay visible regardless of which member is active.
 
 ## Limitations & honest gaps
 
@@ -423,8 +469,12 @@ Stated plainly so you can judge fit:
   from an env var (e.g. `LYRA_HOST`) links only when the workspace/config exposes
   a matching service id or alias; otherwise it is an honest `config_not_found`
   ledger entry rather than a fabricated edge.
-- **Single-workspace server** — one `.polyflow/graph.db` per working directory;
-  no multi-workspace multiplexing in a single server process.
+- **One workspace's own graph at a time, per process** — the MCP/CLI reads the
+  `.polyflow/graph.db` in its working directory; a fleet's `bridge.db` adds
+  cross-service edges on top regardless of which member you're in, but
+  browsing a *different* member's own full graph means running polyflow
+  there (or, for the web UI, switching the active member under Settings →
+  Fleet — see [Fleets](#fleets-multi-repo-workspaces)).
 - **stdio transport only** — no SSE/HTTP MCP transport, so it targets local
   agents, not remote/hosted hosts.
 - **Savings are task-dependent** — large wins on caller/blast-radius/
