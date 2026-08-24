@@ -32,12 +32,23 @@ type Entry struct {
 	Service   string    `yaml:"service" json:"service"`
 	LocalPath string    `yaml:"local_path" json:"local_path"`
 	IndexedAt time.Time `yaml:"indexed_at" json:"indexed_at"`
+	// Fleets lists the fleet(s), if any, whose definition names this
+	// service as a member — GR.3's reverse index, populated by
+	// RecordFleetMembership (called from `polyflow fleet sync`, the only
+	// command that ever reads a fleet definition, never by a standalone
+	// `polyflow index`).
+	Fleets []string `yaml:"fleets,omitempty" json:"fleets,omitempty"`
 }
 
 // Registry is the parsed representation of registry.yml.
 type Registry struct {
 	Version string  `yaml:"version" json:"version"`
 	Entries []Entry `yaml:"entries" json:"entries"`
+	// FleetConfigPaths maps a fleet name to the local path of its git-tracked
+	// definition file last used to sync it — recorded alongside Fleets so
+	// GR.3's query-time resolver can find and reload that file to rebuild a
+	// stale bridge without the caller having to know or pass it again.
+	FleetConfigPaths map[string]string `yaml:"fleet_config_paths,omitempty" json:"fleet_config_paths,omitempty"`
 }
 
 // DefaultPath returns the path to this machine's registry.yml, honoring
@@ -126,4 +137,65 @@ func Sync(path, service, localPath string) error {
 		reg.Version = "1"
 	}
 	return Save(path, reg)
+}
+
+// RecordFleetMembership upserts fleetName into service's Fleets list (no
+// duplicates across repeat calls) and records fleetConfigPath as that
+// fleet's last-known local definition-file location. Called by `polyflow
+// fleet sync` for every member it resolves — the only place a fleet
+// definition is ever read, so it is also the only place that can populate
+// this reverse index. A service with no existing entry gets a bare one
+// created (LocalPath/IndexedAt left zero) rather than erroring, since a
+// build-cache-resolved member never goes through registry.Sync itself.
+func RecordFleetMembership(path, service, fleetName, fleetConfigPath string) error {
+	reg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	e, ok := reg.Lookup(service)
+	if !ok {
+		reg.Entries = append(reg.Entries, Entry{Service: service})
+		e, _ = reg.Lookup(service)
+	}
+	if !containsString(e.Fleets, fleetName) {
+		e.Fleets = append(e.Fleets, fleetName)
+	}
+	if fleetConfigPath != "" {
+		if reg.FleetConfigPaths == nil {
+			reg.FleetConfigPaths = make(map[string]string)
+		}
+		reg.FleetConfigPaths[fleetName] = fleetConfigPath
+	}
+	if reg.Version == "" {
+		reg.Version = "1"
+	}
+	return Save(path, reg)
+}
+
+// FleetsForPath returns the fleet names, if any, that claim the service
+// whose local checkout is at absPath (matched by exact LocalPath equality —
+// registry.Sync always writes a workspace root, never a subdirectory of
+// one).
+func (r *Registry) FleetsForPath(absPath string) []string {
+	var fleets []string
+	for _, e := range r.Entries {
+		if e.LocalPath != absPath {
+			continue
+		}
+		for _, f := range e.Fleets {
+			if !containsString(fleets, f) {
+				fleets = append(fleets, f)
+			}
+		}
+	}
+	return fleets
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

@@ -13,7 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/lordsonvimal/polyflow/internal/fleetsync"
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/registry"
 )
 
 func TestExtractTarget_NativeGrepTool(t *testing.T) {
@@ -248,6 +250,79 @@ func TestDefaultHookQuery_CleanFileNoNote(t *testing.T) {
 	}
 	if block == "" {
 		t.Fatalf("expected file context for a file with a declared node")
+	}
+}
+
+// TestDefaultHookQuery_CrossServiceCallerFromBridge proves GR.3's hook-
+// injection wiring: a workspace registered (via internal/registry) as a
+// member of a fleet whose bridge.db already contains a cross-service edge
+// into a locally-declared symbol gets that edge's far endpoint surfaced as a
+// "callers:" entry, sourced entirely from the ATTACHed bridge — no fleet
+// sync is triggered (NoSync is always true for hook injection).
+func TestDefaultHookQuery_CrossServiceCallerFromBridge(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".polyflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(repoDir, ".polyflow", "graph.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(graph.Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO nodes (id, type, label, service, file, line, end_line, language) VALUES ('n1', 'function', 'DoThing', 'svc', 'app/foo.go', 1, 5, 'go')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	home := t.TempDir()
+	t.Setenv("POLYFLOW_HOME", home)
+
+	regPath := filepath.Join(home, "registry.yml")
+	if err := registry.Save(regPath, &registry.Registry{
+		Version: "1",
+		Entries: []registry.Entry{{Service: "svc", LocalPath: repoDir, Fleets: []string{"myfleet"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bridgePath, err := fleetsync.DefaultBridgePath("myfleet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(bridgePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bdb, err := sql.Open("sqlite", bridgePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bdb.Exec(graph.Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bdb.Exec(
+		`INSERT INTO nodes (id, type, label, service, file, line, end_line, language) VALUES ('remote1', 'function', 'RemoteCaller', 'other', 'other/bar.go', 1, 5, 'go')`); err != nil {
+		t.Fatal(err)
+	}
+	// A bridge always carries a stub node for BOTH edge endpoints
+	// (internal/indexer.BuildBridge), even though n1's real content lives
+	// in the local graph.db above.
+	if _, err := bdb.Exec(
+		`INSERT INTO nodes (id, type, label, service, file, line, end_line, language) VALUES ('n1', 'function', 'DoThing', 'svc', 'app/foo.go', 1, 5, 'go')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bdb.Exec(
+		`INSERT INTO edges (id, "from", "to", type) VALUES ('e1', 'remote1', 'n1', 'http_call')`); err != nil {
+		t.Fatal(err)
+	}
+	bdb.Close()
+
+	block := defaultHookQuery(dbPath, "symbol", "", []string{"DoThing"}, repoDir)
+	if !strings.Contains(block, "RemoteCaller") {
+		t.Fatalf("expected cross-service caller RemoteCaller from bridge.db, got %q", block)
 	}
 }
 

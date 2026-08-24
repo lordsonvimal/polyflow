@@ -41,6 +41,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/queryresolve"
 	"github.com/lordsonvimal/polyflow/internal/registry"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/server"
@@ -66,7 +67,14 @@ var rootCmd = &cobra.Command{
 	Version: meta.Version,
 }
 
+// fleetFlag picks which fleet's bridge.db (GR.3) to stitch into query
+// results when the current workspace is claimed by more than one fleet — a
+// persistent flag rather than per-command, since every query command shares
+// the same resolution (queryresolve.Resolve).
+var fleetFlag string
+
 func init() {
+	rootCmd.PersistentFlags().StringVar(&fleetFlag, "fleet", "", "which fleet's bridge.db to use for cross-service results, when this workspace is claimed by more than one (Tier GR)")
 	rootCmd.AddCommand(
 		initCmd,
 		indexCmd,
@@ -606,7 +614,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	// --kind file searches file paths and prints per-file aggregates.
 	if searchKind == "file" {
-		idx, err := store.BuildIndex(ctx)
+		idx, err := buildFleetAwareIndex(ctx, store)
 		if err != nil {
 			return err
 		}
@@ -1258,7 +1266,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	// File mode: rank the files related to the seed file(s).
 	if len(contextFiles) > 0 {
-		idx, err := store.BuildIndex(ctx)
+		idx, err := buildFleetAwareIndex(ctx, store)
 		if err != nil {
 			return err
 		}
@@ -1286,7 +1294,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	idx, err := store.BuildIndex(ctx)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return err
 	}
@@ -1536,7 +1544,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	idx, err := store.BuildIndex(ctx)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return err
 	}
@@ -1733,7 +1741,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	if impactFile != "" {
-		idx, err := store.BuildIndex(ctx)
+		idx, err := buildFleetAwareIndex(ctx, store)
 		if err != nil {
 			return err
 		}
@@ -1776,7 +1784,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	idx, err := store.BuildIndex(ctx)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return err
 	}
@@ -1856,7 +1864,7 @@ func runDeadcode(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	idx, err := store.BuildIndex(context.Background())
+	idx, err := buildFleetAwareIndex(context.Background(), store)
 	if err != nil {
 		return err
 	}
@@ -2381,11 +2389,16 @@ func runFleetSync(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Syncing fleet %q (%d service(s))...\n", cfg.Name, len(cfg.Services))
+	absFleetPath, err := filepath.Abs(fleetSyncFleetPath)
+	if err != nil {
+		return err
+	}
 	stats, err := fleetsync.Sync(cmd.Context(), cfg, fleetsync.SyncOptions{
-		RegistryPath: regPath,
-		RefOverrides: refOverrides,
-		ContractsDir: filepath.Dir(fleetSyncFleetPath),
-		Workers:      fleetSyncWorkers,
+		RegistryPath:    regPath,
+		RefOverrides:    refOverrides,
+		ContractsDir:    filepath.Dir(fleetSyncFleetPath),
+		Workers:         fleetSyncWorkers,
+		FleetConfigPath: absFleetPath,
 	})
 	if err != nil {
 		return err
@@ -3722,6 +3735,52 @@ func openStore() (*graph.SQLiteStore, error) {
 		return nil, fmt.Errorf("open store (run `polyflow index` first): %w", err)
 	}
 	return store, nil
+}
+
+// buildFleetAwareIndex is store.BuildIndex, plus — when this workspace is a
+// registered fleet member (Tier GR, GR.3) — every cross-service edge and
+// endpoint node from that fleet's bridge.db (GR.2, built/refreshed on demand)
+// merged in. Node IDs are disjoint by construction (FR.0), so the merge is a
+// plain union: impact/context/trace/deadcode, and every MCP tool built on
+// the same idx, see cross-service reach without any code of their own
+// knowing a fleet exists. Any resolution failure (no fleet, ambiguous fleet
+// without --fleet, sync failure) degrades to local-only results rather than
+// erroring the query — cross-service data is a bonus, not a dependency.
+func buildFleetAwareIndex(ctx context.Context, store *graph.SQLiteStore) (*graph.AdjacencyIndex, error) {
+	idx, err := store.BuildIndex(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mergeFleetBridge(ctx, idx, ".", false)
+	return idx, nil
+}
+
+// mergeFleetBridge resolves startDir's fleet bridge (queryresolve.Resolve)
+// and merges its nodes/edges into idx in place. noSync forces
+// Options.NoSync (latency-sensitive callers, e.g. hook injection, must never
+// block on a clone or relink pass). Silent on any failure — see
+// buildFleetAwareIndex's doc comment.
+func mergeFleetBridge(ctx context.Context, idx *graph.AdjacencyIndex, startDir string, noSync bool) {
+	res, err := queryresolve.Resolve(ctx, startDir, queryresolve.Options{Fleet: fleetFlag, NoSync: noSync})
+	if err != nil || res.BridgePath == "" {
+		return
+	}
+	bridgeStore, err := graph.NewSQLiteStore(res.BridgePath)
+	if err != nil {
+		return
+	}
+	defer bridgeStore.Close()
+	bridgeIdx, err := bridgeStore.BuildIndex(ctx)
+	if err != nil {
+		return
+	}
+	for _, n := range bridgeIdx.Nodes {
+		idx.AddNode(n)
+	}
+	for _, e := range bridgeIdx.AllEdges() {
+		e := e
+		idx.AddEdge(&e)
+	}
 }
 
 // loadStaleAfter reads the workspace evidence.stale_after duration.

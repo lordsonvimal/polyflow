@@ -22,6 +22,7 @@ package main
 // able to break a tool call's real output.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/lordsonvimal/polyflow/internal/queryresolve"
 
 	_ "modernc.org/sqlite"
 )
@@ -274,22 +277,20 @@ func extractTarget(toolName string, toolInput map[string]any) (mode, file string
 }
 
 func findPolyflowDB(startDir string) string {
-	d, err := filepath.Abs(startDir)
+	return queryresolve.FindLocalDB(startDir)
+}
+
+// findFleetBridgeDB resolves startDir's fleet bridge.db (GR.3), if any,
+// without ever building or refreshing one — hook injection runs on a hard
+// deadline (hookDeadline) piggybacking on a real tool call and must never
+// block on a clone or a cross-service relink pass, so it only reports a
+// bridge that already exists on disk.
+func findFleetBridgeDB(startDir string) string {
+	res, err := queryresolve.Resolve(context.Background(), startDir, queryresolve.Options{NoSync: true})
 	if err != nil {
 		return ""
 	}
-	for i := 0; i < 6; i++ {
-		cand := filepath.Join(d, ".polyflow", "graph.db")
-		if _, err := os.Stat(cand); err == nil {
-			return cand
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
-	}
-	return ""
+	return res.BridgePath
 }
 
 func hookRelPath(filePath, cwd string) string {
@@ -299,14 +300,40 @@ func hookRelPath(filePath, cwd string) string {
 	return filePath
 }
 
-func relatedLabels(db *sql.DB, nodeID, direction string, limit int) []string {
+// relatedLabels returns callers/callees of nodeID. When hasBridge is true
+// (GR.3: a fleet bridge.db is ATTACHed as "bridge" on this connection), it
+// also unions in cross-service callers/callees from the bridge's own
+// edges/nodes tables — a cross-service edge's far endpoint is a full node
+// copy there (internal/indexer.BuildBridge), so no separate store needs
+// opening.
+func relatedLabels(db *sql.DB, nodeID, direction string, limit int, hasBridge bool) []string {
 	var query string
 	if direction == "in" {
-		query = `SELECT n.label FROM edges e JOIN nodes n ON e."from"=n.id WHERE e."to"=? AND e.type=? LIMIT ?`
+		query = `SELECT n.label FROM edges e JOIN nodes n ON e."from"=n.id WHERE e."to"=? AND e.type=?`
 	} else {
-		query = `SELECT n.label FROM edges e JOIN nodes n ON e."to"=n.id WHERE e."from"=? AND e.type=? LIMIT ?`
+		query = `SELECT n.label FROM edges e JOIN nodes n ON e."to"=n.id WHERE e."from"=? AND e.type=?`
 	}
-	rows, err := db.Query(query, nodeID, hookCallsEdge, limit)
+	args := []any{nodeID, hookCallsEdge}
+	if hasBridge {
+		// The bridge only ever contains cross-service edges (GR.2's
+		// BuildBridge filters same-service edges out before persisting), so
+		// unlike the local query above there is no "calls"-only filter here
+		// — a cross-service edge is essentially never type "calls" (that's
+		// reserved for same-repo function/method calls), so filtering on it
+		// would make this union always empty.
+		var bridgeQuery string
+		if direction == "in" {
+			bridgeQuery = `SELECT n.label FROM bridge.edges e JOIN bridge.nodes n ON e."from"=n.id WHERE e."to"=?`
+		} else {
+			bridgeQuery = `SELECT n.label FROM bridge.edges e JOIN bridge.nodes n ON e."to"=n.id WHERE e."from"=?`
+		}
+		query += " UNION " + bridgeQuery
+		args = append(args, nodeID)
+	}
+	query += " LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil
 	}
@@ -326,7 +353,7 @@ type hookNodeRow struct {
 	line                   int
 }
 
-func symbolContext(db *sql.DB, term string) []string {
+func symbolContext(db *sql.DB, term string, hasBridge bool) []string {
 	rows, err := db.Query(
 		`SELECT id, type, label, file, line FROM nodes WHERE label = ? COLLATE NOCASE LIMIT 3`, term)
 	if err != nil {
@@ -354,10 +381,10 @@ func symbolContext(db *sql.DB, term string) []string {
 			loc = fmt.Sprintf("%s:%d", n.file, n.line)
 		}
 		seg := strings.TrimSpace(fmt.Sprintf("%s (%s) %s", n.label, n.ntype, loc))
-		if callers := relatedLabels(db, n.id, "in", 4); len(callers) > 0 {
+		if callers := relatedLabels(db, n.id, "in", 4, hasBridge); len(callers) > 0 {
 			seg += " | callers: " + strings.Join(callers, ", ")
 		}
-		if callees := relatedLabels(db, n.id, "out", 4); len(callees) > 0 {
+		if callees := relatedLabels(db, n.id, "out", 4, hasBridge); len(callees) > 0 {
 			seg += " | calls: " + strings.Join(callees, ", ")
 		}
 		parts = append(parts, seg)
@@ -368,7 +395,7 @@ func symbolContext(db *sql.DB, term string) []string {
 // fileContext returns every node declared in the file except the file node
 // itself — not filtered to function/method/etc, since a file whose top-level
 // declarations are struct/variable/http_client/etc still deserves context.
-func fileContext(db *sql.DB, filePath, cwd string) []string {
+func fileContext(db *sql.DB, filePath, cwd string, hasBridge bool) []string {
 	rel := hookRelPath(filePath, cwd)
 	rows, err := db.Query(
 		`SELECT id, type, label, line FROM nodes WHERE file = ? AND type != 'file' ORDER BY line LIMIT 8`, rel)
@@ -395,7 +422,7 @@ func fileContext(db *sql.DB, filePath, cwd string) []string {
 	var parts []string
 	for _, d := range decls {
 		seg := fmt.Sprintf("%s(%s):%d", d.label, d.ntype, d.line)
-		if callers := relatedLabels(db, d.id, "in", 3); len(callers) > 0 {
+		if callers := relatedLabels(db, d.id, "in", 3, hasBridge); len(callers) > 0 {
 			seg += " <- " + strings.Join(callers, ", ")
 		}
 		parts = append(parts, seg)
@@ -559,6 +586,20 @@ func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) s
 	if _, err := db.Exec("PRAGMA busy_timeout=2000"); err != nil {
 		return ""
 	}
+
+	// GR.3: if this workspace is a registered fleet member with an
+	// already-built bridge.db (never built here — see findFleetBridgeDB),
+	// ATTACH it under one connection so relatedLabels' queries can UNION in
+	// cross-service callers/callees for free. Best-effort: an attach
+	// failure just means no cross-service augmentation this call, not a
+	// broken hook.
+	hasBridge := false
+	if bridgePath := findFleetBridgeDB(cwd); bridgePath != "" {
+		if _, err := db.Exec("ATTACH DATABASE ? AS bridge", bridgePath); err == nil {
+			hasBridge = true
+		}
+	}
+
 	if _, err := db.Exec("PRAGMA query_only=1"); err != nil {
 		return ""
 	}
@@ -568,14 +609,14 @@ func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) s
 	var unresolvedNote string
 	if mode == "symbol" {
 		for _, candidate := range symbols {
-			parts = symbolContext(db, candidate)
+			parts = symbolContext(db, candidate, hasBridge)
 			if len(parts) > 0 {
 				label = fmt.Sprintf("symbol '%s'", candidate)
 				break
 			}
 		}
 	} else {
-		parts = fileContext(db, file, cwd)
+		parts = fileContext(db, file, cwd, hasBridge)
 		label = fmt.Sprintf("file '%s'", file)
 		if n := unresolvedRefCount(db, hookRelPath(file, cwd)); n > 0 {
 			unresolvedNote = fmt.Sprintf(" | %d unresolved refs in this file", n)

@@ -22,6 +22,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/fleetconfig"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/indexer"
+	"github.com/lordsonvimal/polyflow/internal/registry"
 )
 
 // fleetsDirName mirrors the local-registry home-dir convention
@@ -60,6 +61,13 @@ type SyncOptions struct {
 	// Workers bounds how many members are resolved concurrently. 0 means
 	// errgroup's default (no limit).
 	Workers int
+	// FleetConfigPath is the local path to the fleet definition file this
+	// Sync call loaded cfg from (e.g. the --fleet flag's value). Recorded
+	// into the registry's reverse index (GR.3) alongside each member's
+	// fleet membership so a later query-time resolver can find and reload
+	// it without being told again. Empty disables recording (membership
+	// stays whatever it already was).
+	FleetConfigPath string
 }
 
 // BridgeStats summarizes one fleet sync run.
@@ -143,6 +151,22 @@ func Sync(ctx context.Context, cfg *fleetconfig.Config, opts SyncOptions) (*Brid
 		}
 		if err := g.Wait(); err != nil {
 			return nil, err
+		}
+	}
+
+	if opts.FleetConfigPath != "" {
+		regPath := opts.RegistryPath
+		if regPath == "" {
+			var err error
+			regPath, err = registry.DefaultPath()
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, svc := range cfg.Services {
+			if err := registry.RecordFleetMembership(regPath, svc.Name, cfg.Name, opts.FleetConfigPath); err != nil {
+				return nil, fmt.Errorf("record fleet membership for %s: %w", svc.Name, err)
+			}
 		}
 	}
 

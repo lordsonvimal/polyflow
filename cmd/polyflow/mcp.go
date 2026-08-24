@@ -95,7 +95,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	ctx := context.Background()
-	idx, err := store.BuildIndex(ctx)
+	idx, err := buildFleetAwareIndex(ctx, store)
 	if err != nil {
 		return fmt.Errorf("build index: %w", err)
 	}
@@ -138,7 +138,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "mcp reload: open store: %v\n", err)
 			return
 		}
-		newIdx, err := newStore.BuildIndex(context.Background())
+		newIdx, err := buildFleetAwareIndex(context.Background(), newStore)
 		if err != nil {
 			newStore.Close()
 			fmt.Fprintf(os.Stderr, "mcp reload: build index: %v\n", err)
