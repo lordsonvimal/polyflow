@@ -560,6 +560,7 @@ func selectWorkspaceFunc(host string, port int, dev bool) server.SelectWorkspace
 			cmd.Dir = abs
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
+			detachForRestart(cmd)
 			if err := cmd.Start(); err != nil {
 				fmt.Fprintf(os.Stderr, "restart into %s failed: %v\n", abs, err)
 				return
