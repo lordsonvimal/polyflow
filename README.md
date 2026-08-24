@@ -439,9 +439,10 @@ reusing a clean local checkout if you already have one on this machine,
 falling back to a build cache, and only cloning as a last resort — then
 builds `bridge.db`, the fleet's cross-service edge graph. Any query command
 (`impact`, `trace`, `context`, `search`, the MCP tools) run from inside a
-registered member automatically pulls in that fleet's cross-service edges,
-rebuilding the bridge on demand if it's stale; no manual sync step is
-required day to day. A workspace claimed by more than one fleet requires an
+registered member automatically federates across **every locally-resolved
+member's own full graph**, not just this one's cross-service edges into
+them — no manual sync step, and no need to `cd` into a sibling repo to
+browse or search it. A workspace claimed by more than one fleet requires an
 explicit `--fleet <name>` to pick one.
 
 Two read-only commands make fleet state visible without hand-reading YAML
@@ -452,10 +453,11 @@ polyflow fleet status     # per-member: resolved ref@sha, local/cached/unresolve
 polyflow registry         # this machine's indexed workspaces and which fleets claim them (--all for every workspace)
 ```
 
-`polyflow serve`, run from inside a registered member, also lists every
-fleet member in the web UI (Settings → Fleet) with a dropdown to switch
-which member's own graph backs search/impact/context/trace — cross-service
-edges from `bridge.db` stay visible regardless of which member is active.
+`polyflow serve`, run from inside a registered member, merges every
+locally-resolved fleet member's own graph into the web UI by default —
+search/impact/context/trace/browsing span the whole fleet with no switch
+required. Settings → Fleet lists every member with a "Load" button for one
+not yet resolved on this machine (triggers an on-demand clone).
 
 ## Limitations & honest gaps
 
@@ -469,12 +471,13 @@ Stated plainly so you can judge fit:
   from an env var (e.g. `LYRA_HOST`) links only when the workspace/config exposes
   a matching service id or alias; otherwise it is an honest `config_not_found`
   ledger entry rather than a fabricated edge.
-- **One workspace's own graph at a time, per process** — the MCP/CLI reads the
-  `.polyflow/graph.db` in its working directory; a fleet's `bridge.db` adds
-  cross-service edges on top regardless of which member you're in, but
-  browsing a *different* member's own full graph means running polyflow
-  there (or, for the web UI, switching the active member under Settings →
-  Fleet — see [Fleets](#fleets-multi-repo-workspaces)).
+- **Fleet federation only reaches members already indexed on this machine** —
+  `impact`/`context`/`trace`/`search`/the web UI merge every *locally-
+  resolved* fleet member's graph automatically (see
+  [Fleets](#fleets-multi-repo-workspaces)); a member never indexed here at
+  all needs `polyflow fleet sync`, `polyflow index` in that repo, or a
+  Settings → Fleet "Load" click first — it is never cloned just to answer a
+  query.
 - **stdio transport only** — no SSE/HTTP MCP transport, so it targets local
   agents, not remote/hosted hosts.
 - **Savings are task-dependent** — large wins on caller/blast-radius/
