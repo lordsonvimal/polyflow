@@ -25,6 +25,8 @@ invisible to the other.
 | `polyflow deadcode` | Dead code activity — zero-caller function/method scan, filterable by service/file |
 | `polyflow deps` | Health activity → dependency list |
 | `polyflow link` | Config activity → `links:` section (form or YAML mode) |
+| `polyflow fleet` | **exception** — Tier GR operator surface; UI counterpart lands in GR.6 |
+| `polyflow fleet sync` | **exception** — Tier GR operator surface; UI counterpart lands in GR.6 |
 | `polyflow config` | Config activity |
 | `polyflow config show` | Config activity, YAML mode — `GET /api/config` |
 | `polyflow config set <key> <value>` | Config activity, form mode field edit — `PUT /api/config` |

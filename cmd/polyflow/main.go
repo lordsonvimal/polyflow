@@ -30,6 +30,8 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/eval"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/evidence/trace_ingest"
+	"github.com/lordsonvimal/polyflow/internal/fleetconfig"
+	"github.com/lordsonvimal/polyflow/internal/fleetsync"
 	"github.com/lordsonvimal/polyflow/internal/gitdiff"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/impact"
@@ -79,6 +81,7 @@ func init() {
 		configCmd,
 		depsCmd,
 		linkCmd,
+		fleetCmd,
 		mcpCmd,
 		evalCmd,
 		doctorCmd,
@@ -100,6 +103,7 @@ func init() {
 	initConfigSubcmds()
 	initEvalFlags()
 	initLinkFlags()
+	initFleetSubcmds()
 }
 
 // ─── init ────────────────────────────────────────────────────────────────────
@@ -2351,6 +2355,78 @@ func runRelink(cmd *cobra.Command, service string) error {
 	}
 	fmt.Printf("Done in %s. Nodes: %d | Edges: %d | Contract links: %d (%d cross-service)\n",
 		stats.Elapsed.Truncate(time.Millisecond), stats.Nodes, stats.Edges, stats.ContractEdges, stats.CrossLinks)
+	return nil
+}
+
+// ─── fleet ───────────────────────────────────────────────────────────────────
+
+var fleetCmd = &cobra.Command{
+	Use:   "fleet",
+	Short: "Operate on a git-backed fleet definition (Tier GR)",
+}
+
+var (
+	fleetSyncFleetPath string
+	fleetSyncRefs      []string
+	fleetSyncWorkers   int
+)
+
+func initFleetSubcmds() {
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Resolve every fleet member and rebuild the fleet's bridge.db of cross-service edges",
+		RunE:  runFleetSync,
+	}
+	syncCmd.Flags().StringVar(&fleetSyncFleetPath, "fleet", "fleet.yml", "path to the git-tracked fleet definition file")
+	syncCmd.Flags().StringArrayVar(&fleetSyncRefs, "ref", nil, "override one service's ref for this sync, e.g. --ref willow=release/26.2 (repeatable; beats .polyflow-refs.yml and the fleet definition's default)")
+	syncCmd.Flags().IntVar(&fleetSyncWorkers, "workers", 0, "max fleet members resolved concurrently (0 = unlimited)")
+
+	fleetCmd.AddCommand(syncCmd)
+}
+
+func runFleetSync(cmd *cobra.Command, args []string) error {
+	cfg, err := fleetconfig.Load(fleetSyncFleetPath)
+	if err != nil {
+		return err
+	}
+
+	// Precedence: --ref flag beats .polyflow-refs.yml (found in the current
+	// directory's checkout, the branch being built) beats the fleet
+	// definition's default ref.
+	refOverrides, err := fleetsync.LoadRefOverrides(".")
+	if err != nil {
+		return err
+	}
+	for _, r := range fleetSyncRefs {
+		svc, ref, ok := strings.Cut(r, "=")
+		if !ok {
+			return fmt.Errorf("--ref %q: expected <service>=<ref>", r)
+		}
+		refOverrides[svc] = ref
+	}
+
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Syncing fleet %q (%d service(s))...\n", cfg.Name, len(cfg.Services))
+	stats, err := fleetsync.Sync(cmd.Context(), cfg, fleetsync.SyncOptions{
+		RegistryPath: regPath,
+		RefOverrides: refOverrides,
+		ContractsDir: filepath.Dir(fleetSyncFleetPath),
+		Workers:      fleetSyncWorkers,
+	})
+	if err != nil {
+		return err
+	}
+
+	bridgePath, err := fleetsync.DefaultBridgePath(cfg.Name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Done in %s. %s\n  Services: %d | Bridge nodes: %d | Bridge edges: %d\n",
+		stats.Elapsed.Truncate(time.Millisecond), bridgePath, stats.Services, stats.Nodes, stats.Edges)
 	return nil
 }
 
