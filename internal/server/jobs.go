@@ -68,6 +68,9 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if list == nil {
+		list = []ops.Job{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": list})
 }
 
