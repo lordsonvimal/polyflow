@@ -86,12 +86,27 @@ func BuildBridge(ctx context.Context, links []workspace.Link, contractsDir strin
 		}
 	}
 
-	newEdges := append([]graph.Edge(nil), st.allEdges[origEdgeCount:]...)
-
 	nodeByID := make(map[string]graph.Node, len(st.allNodes))
 	for _, n := range st.allNodes {
 		nodeByID[n.ID] = n
 	}
+
+	// The scopeCrossService passes are the ones whose *correctness* depends
+	// on multi-service visibility, not ones that exclusively emit
+	// cross-service edges — several (e.g. the contract engine's route
+	// matching) also derive same-service edges (a same-repo frontend
+	// navigating its own backend) as a side effect. Those are already in
+	// that member's own local graph.db; keep only edges that actually cross
+	// a service boundary, so a bridge stays the few-hundred-row artifact
+	// the plan doc promises instead of ballooning back toward a full merge.
+	var newEdges []graph.Edge
+	for _, e := range st.allEdges[origEdgeCount:] {
+		from, to := nodeByID[e.From], nodeByID[e.To]
+		if from.Service != to.Service {
+			newEdges = append(newEdges, e)
+		}
+	}
+
 	referenced := make(map[string]bool)
 	for _, e := range newEdges {
 		referenced[e.From] = true
