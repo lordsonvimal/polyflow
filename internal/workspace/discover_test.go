@@ -116,4 +116,8 @@ func TestDiscover_Empty(t *testing.T) {
 	cfg, err := Discover(t.TempDir())
 	require.NoError(t, err)
 	assert.Empty(t, cfg.Services)
+	// Must be a non-nil empty slice, not nil — json.Marshal renders a nil
+	// slice as `null`, and the setup wizard UI does discovered.services.length
+	// without a null guard (it's meant to always be an array).
+	require.NotNil(t, cfg.Services)
 }

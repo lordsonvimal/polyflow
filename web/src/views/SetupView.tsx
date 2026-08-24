@@ -99,7 +99,7 @@ export default function SetupView() {
         <Show when={step() === "confirm"}>
           <div data-testid="setup-step-confirm" class="space-y-3">
             <div class="text-sm text-neutral-300">
-              Discovered {setupStore.discovered()?.services.length ?? 0} service(s):
+              Discovered {setupStore.discovered()?.services?.length ?? 0} service(s):
             </div>
             <ul class="text-xs text-neutral-400 space-y-1 max-h-48 overflow-y-auto border border-neutral-800 rounded p-2">
               <For each={setupStore.discovered()?.services ?? []}>
