@@ -25,9 +25,19 @@ type Agent interface {
 	// ("repo" or "user"; "global" is resolved to one of these by the caller
 	// before this is invoked) and returns a human-readable result line.
 	SetupMCP(scope, polyflowBin string) (string, error)
+	// RemoveMCP unregisters the polyflow MCP server for the given scope and
+	// returns a human-readable result line. Removing an entry that was never
+	// registered is a no-op, not an error — mirrors SetupMCP's own
+	// idempotency.
+	RemoveMCP(scope string) (string, error)
 	// SetupHooks wires the context-injection hook for the given scope.
 	// Only called when SupportsHooks() is true.
 	SetupHooks(scope, polyflowBin string) (string, error)
+	// RemoveHooks unwires the context-injection hook for the given scope,
+	// touching only polyflow's own hook entries and leaving any other hooks
+	// the user has configured untouched. Only called when SupportsHooks()
+	// is true.
+	RemoveHooks(scope string) (string, error)
 	// MCPStatus reports whether polyflow's MCP server already appears to be
 	// registered for the given scope, without writing anything. Used by both
 	// the CLI picker and the web setup wizard to show current state before
@@ -39,6 +49,13 @@ type Agent interface {
 	// true; agents without a hook mechanism return (false, error) matching
 	// SetupHooks' own convention.
 	HooksStatus(scope string) (bool, error)
+	// SupportsNudge reports whether this agent has a persistent, user-owned
+	// instructions file (CLAUDE.md, AGENTS.md, ...) that setup can steer via
+	// a marked block. When false, NudgeFile is never called.
+	SupportsNudge() bool
+	// NudgeFile returns the path to that instructions file for the given
+	// scope. Only called when SupportsNudge() is true.
+	NudgeFile(scope string) (string, error)
 }
 
 var registry []Agent

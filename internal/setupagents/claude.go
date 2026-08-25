@@ -15,7 +15,7 @@ type claudeAgent struct{}
 func (claudeAgent) Name() string        { return "claude" }
 func (claudeAgent) DisplayName() string { return "Claude Code" }
 func (claudeAgent) Description() string {
-	return "Anthropic's CLI agent — full MCP + post-tool-use hook support"
+	return "Anthropic's CLI agent — full MCP + post-tool-use hook support, plus a CLAUDE.md tool-preference nudge"
 }
 func (claudeAgent) SupportsHooks() bool       { return true }
 func (claudeAgent) SupportsGlobalScope() bool { return false }
@@ -50,6 +50,32 @@ func (claudeAgent) SetupMCP(scope, polyflowBin string) (string, error) {
 	return fmt.Sprintf("MCP server registered (%s scope). %s", claudeScope, strings.TrimSpace(string(out))), nil
 }
 
+// RemoveMCP is SetupMCP's inverse, shelling out to `claude mcp remove` for
+// the same reason SetupMCP shells to `claude mcp add`: this package doesn't
+// own Claude Code's config storage format.
+func (claudeAgent) RemoveMCP(scope string) (string, error) {
+	claudeScope := "user"
+	if scope == "repo" {
+		claudeScope = "project"
+	}
+	manual := fmt.Sprintf("claude mcp remove --scope %s polyflow", claudeScope)
+
+	if _, err := exec.LookPath("claude"); err != nil {
+		return fmt.Sprintf("claude CLI not found on PATH — run this yourself:\n      %s", manual), nil
+	}
+	cmd := exec.Command("claude", "mcp", "remove", "--scope", claudeScope, "polyflow")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Removing an entry that isn't there errors instead of no-op'ing,
+		// same asymmetry SetupMCP already works around for `add`.
+		if strings.Contains(string(out), "not found") || strings.Contains(string(out), "No MCP server") {
+			return fmt.Sprintf("MCP server was not registered (%s scope).", claudeScope), nil
+		}
+		return "", fmt.Errorf("%s\n%s\nrun it manually:\n      %s", err, strings.TrimSpace(string(out)), manual)
+	}
+	return fmt.Sprintf("MCP server unregistered (%s scope).", claudeScope), nil
+}
+
 func (claudeAgent) SetupHooks(scope, polyflowBin string) (string, error) {
 	path, err := claudeSettingsPath(scope)
 	if err != nil {
@@ -77,6 +103,48 @@ func (claudeAgent) SetupHooks(scope, polyflowBin string) (string, error) {
 // storage (~/.claude.json plus possibly project-local state) isn't a file
 // format this package owns or wants to parse — the same reasoning SetupMCP
 // already applies by shelling to `claude mcp add` instead of hand-writing it.
+// RemoveHooks strips only polyflow's own context-injection entries from
+// settings.json, leaving any other hooks the user has configured (and the
+// file itself) untouched.
+func (claudeAgent) RemoveHooks(scope string) (string, error) {
+	path, err := claudeSettingsPath(scope)
+	if err != nil {
+		return "", err
+	}
+	doc, existed, err := readJSONDoc(path)
+	if err != nil {
+		return "", err
+	}
+	if !existed {
+		return fmt.Sprintf("No %s file present — nothing to remove.", path), nil
+	}
+	if !unmergeClaudeHooks(doc) {
+		return fmt.Sprintf("No context-injection hook found in %s.", path), nil
+	}
+	if err := writeJSONDoc(path, doc); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Removed the context-injection hook from %s.", path), nil
+}
+
+func (claudeAgent) SupportsNudge() bool { return true }
+
+// NudgeFile returns CLAUDE.md's path for scope: repo-scoped setup writes to
+// the project root (checked into version control, same as this repo's own
+// CLAUDE.md), user-scoped setup writes to ~/.claude/CLAUDE.md — Claude
+// Code's documented global instructions file, loaded for every project
+// regardless of which repo is open.
+func (claudeAgent) NudgeFile(scope string) (string, error) {
+	if scope == "repo" {
+		return "CLAUDE.md", nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".claude", "CLAUDE.md"), nil
+}
+
 func (claudeAgent) MCPStatus(scope string) (bool, error) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		return false, fmt.Errorf("claude CLI not found on PATH")
@@ -166,6 +234,50 @@ func mergeClaudeHooks(doc map[string]any, command string) (added bool) {
 
 	hooks["PostToolUse"] = postToolUse
 	return added
+}
+
+// unmergeClaudeHooks removes any hook entry whose command contains
+// "hook-context-inject" from every PostToolUse matcher group, matching
+// claudeHooksWired's own substring reasoning. Matcher groups and the
+// PostToolUse list itself are pruned once empty so removal doesn't leave
+// dangling scaffolding behind; every other hook the user configured is
+// left exactly as it was.
+func unmergeClaudeHooks(doc map[string]any) (removed bool) {
+	hooks, _ := doc["hooks"].(map[string]any)
+	if hooks == nil {
+		return false
+	}
+	postToolUse, _ := hooks["PostToolUse"].([]any)
+	kept := postToolUse[:0:0]
+	for _, g := range postToolUse {
+		group, ok := g.(map[string]any)
+		if !ok {
+			kept = append(kept, g)
+			continue
+		}
+		hookList, _ := group["hooks"].([]any)
+		keptHooks := hookList[:0:0]
+		for _, h := range hookList {
+			if hm, ok := h.(map[string]any); ok {
+				if cmd, _ := hm["command"].(string); strings.Contains(cmd, "hook-context-inject") {
+					removed = true
+					continue
+				}
+			}
+			keptHooks = append(keptHooks, h)
+		}
+		if len(keptHooks) == 0 {
+			continue // drop the now-empty matcher group entirely
+		}
+		group["hooks"] = keptHooks
+		kept = append(kept, group)
+	}
+	if len(kept) == 0 {
+		delete(hooks, "PostToolUse")
+	} else {
+		hooks["PostToolUse"] = kept
+	}
+	return removed
 }
 
 // claudeHooksWired reports whether Bash, Read, Grep, and Edit are all
