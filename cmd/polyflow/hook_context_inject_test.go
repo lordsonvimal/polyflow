@@ -92,6 +92,20 @@ func TestExtractTarget_BashToolUnaffected(t *testing.T) {
 	}
 }
 
+func TestExtractTarget_FindConcreteName(t *testing.T) {
+	mode, file, symbols := extractTarget("Bash", map[string]any{"command": `find . -name "model.go"`})
+	if mode != "filename" || file != "model.go" || symbols != nil {
+		t.Fatalf("mode=%q file=%q symbols=%v", mode, file, symbols)
+	}
+}
+
+func TestExtractTarget_FindWildcardIgnored(t *testing.T) {
+	mode, _, _ := extractTarget("Bash", map[string]any{"command": "find . -name *.go"})
+	if mode != "" {
+		t.Fatalf("expected wildcard find pattern to be ignored, got mode=%q", mode)
+	}
+}
+
 // runHookForTest feeds payload through a pipe, running runHookContextInject
 // synchronously, and returns whatever it wrote to stdout.
 func runHookForTest(t *testing.T, payload hookPayload) string {
@@ -192,15 +206,15 @@ func TestTruncateBlock_UTF8Boundary(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncateBlock produced invalid UTF-8: %q", got)
 	}
-	if !strings.HasSuffix(got, "…") {
-		t.Fatalf("expected truncation marker, got %q", got)
+	if !strings.Contains(got, "…"+hookToolHint) {
+		t.Fatalf("expected truncation marker followed by the intact tool hint, got %q", got)
 	}
 }
 
 func TestTruncateBlock_NoTruncationNeeded(t *testing.T) {
 	short := "short block"
-	if got := truncateBlock(short); got != short {
-		t.Fatalf("truncateBlock(%q) = %q, want unchanged", short, got)
+	if got := truncateBlock(short); got != short+hookToolHint {
+		t.Fatalf("truncateBlock(%q) = %q, want unchanged block + tool hint", short, got)
 	}
 }
 

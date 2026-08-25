@@ -59,6 +59,12 @@ const hookSeenDir = "/tmp/polyflow-context-injected"
 const hookMaxContextChars = 600
 const hookCallsEdge = "calls"
 
+// hookToolHint is appended to every injected block so an agent reading it
+// knows this is a live, queryable graph — not just inert grep-shaped text —
+// and can follow up with the MCP tool instead of falling back to more
+// grep/Read calls to explore the same neighborhood.
+const hookToolHint = " (deeper: mcp__polyflow__trace/impact/investigate)"
+
 // hookDefaultDeadlineMS mirrors CBM's own postmortem (#858): their first
 // deadline (300ms) was too tight and silently zeroed out augmentation on
 // real cold starts, indistinguishable from "no matches" without a breadcrumb
@@ -110,20 +116,29 @@ func logHookTimeout(reason string) {
 // truncateBlock cuts block to hookMaxContextChars bytes, then drops any
 // trailing partial UTF-8 sequence the raw byte cut may have produced —
 // cheaper than rune-by-rune scanning and correct since only the tail of an
-// otherwise-valid string can ever be invalid after a byte-index cut.
+// otherwise-valid string can ever be invalid after a byte-index cut. The
+// hookToolHint is reserved out of the budget and always appended intact —
+// a hint truncated mid-word ("mcp__polyfl…") is worse than a slightly
+// shorter graph block.
 func truncateBlock(block string) string {
-	if len(block) <= hookMaxContextChars {
-		return block
+	budget := hookMaxContextChars - len(hookToolHint)
+	if len(block) <= budget {
+		return block + hookToolHint
 	}
-	return strings.ToValidUTF8(block[:hookMaxContextChars], "") + "…"
+	return strings.ToValidUTF8(block[:budget], "") + "…" + hookToolHint
 }
 
-var hookFileViewCmds = map[string]bool{"cat": true, "sed": true, "head": true, "tail": true, "less": true, "more": true, "bat": true}
+var hookFileViewCmds = map[string]bool{"cat": true, "sed": true, "awk": true, "head": true, "tail": true, "less": true, "more": true, "bat": true}
 var hookGrepCmds = map[string]bool{"grep": true, "rg": true, "ag": true}
 var hookShellOperators = map[string]bool{"|": true, "||": true, ";": true, "&&": true, "&": true}
 var hookIdentifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var hookAlternationRe = regexp.MustCompile(`\\\||\|`)
 var hookFileExtRe = regexp.MustCompile(`\.\w{1,6}$`)
+
+// hookGlobRe flags a `find -name`/`-iname` pattern as a wildcard search
+// ("*.go", "test_*") rather than a concrete filename — a wildcard has no
+// single node to inject context for, so it's left alone.
+var hookGlobRe = regexp.MustCompile(`[*?\[\]]`)
 
 type hookPayload struct {
 	ToolName  string         `json:"tool_name"`
@@ -253,6 +268,22 @@ func extractTarget(toolName string, toolInput map[string]any) (mode, file string
 			continue
 		}
 		cmdName := filepath.Base(seg[0])
+		if cmdName == "find" {
+			// `find <path> -name "foo.go"` names a target file to locate
+			// rather than viewing/grepping one already in hand — a wildcard
+			// pattern ("*.go") has no single node to inject context for, so
+			// only a concrete filename is worth resolving.
+			for i := 1; i+1 < len(seg); i++ {
+				if seg[i] != "-name" && seg[i] != "-iname" {
+					continue
+				}
+				pattern := strings.Trim(seg[i+1], `"'`)
+				if pattern != "" && !hookGlobRe.MatchString(pattern) {
+					return "filename", pattern, nil
+				}
+			}
+			continue
+		}
 		var rest []string
 		for _, t := range seg[1:] {
 			if !strings.HasPrefix(t, "-") {
@@ -306,12 +337,17 @@ func hookRelPath(filePath, cwd string) string {
 // edges/nodes tables — a cross-service edge's far endpoint is a full node
 // copy there (internal/indexer.BuildBridge), so no separate store needs
 // opening.
+// relatedLabels tags every label with the empty string in the local branch
+// and the bridge node's real service in the bridge branch, so a UNION row
+// can't be mistaken for a same-repo caller/callee — a plain flat list gave
+// an agent no way to tell "callers: X, Y" apart from "one of those is in a
+// different service, in a different repo, and grep won't find it."
 func relatedLabels(db *sql.DB, nodeID, direction string, limit int, hasBridge bool) []string {
 	var query string
 	if direction == "in" {
-		query = `SELECT n.label FROM edges e JOIN nodes n ON e."from"=n.id WHERE e."to"=? AND e.type=?`
+		query = `SELECT n.label, '' AS svc FROM edges e JOIN nodes n ON e."from"=n.id WHERE e."to"=? AND e.type=?`
 	} else {
-		query = `SELECT n.label FROM edges e JOIN nodes n ON e."to"=n.id WHERE e."from"=? AND e.type=?`
+		query = `SELECT n.label, '' AS svc FROM edges e JOIN nodes n ON e."to"=n.id WHERE e."from"=? AND e.type=?`
 	}
 	args := []any{nodeID, hookCallsEdge}
 	if hasBridge {
@@ -323,9 +359,9 @@ func relatedLabels(db *sql.DB, nodeID, direction string, limit int, hasBridge bo
 		// would make this union always empty.
 		var bridgeQuery string
 		if direction == "in" {
-			bridgeQuery = `SELECT n.label FROM bridge.edges e JOIN bridge.nodes n ON e."from"=n.id WHERE e."to"=?`
+			bridgeQuery = `SELECT n.label, n.service AS svc FROM bridge.edges e JOIN bridge.nodes n ON e."from"=n.id WHERE e."to"=?`
 		} else {
-			bridgeQuery = `SELECT n.label FROM bridge.edges e JOIN bridge.nodes n ON e."to"=n.id WHERE e."from"=?`
+			bridgeQuery = `SELECT n.label, n.service AS svc FROM bridge.edges e JOIN bridge.nodes n ON e."to"=n.id WHERE e."from"=?`
 		}
 		query += " UNION " + bridgeQuery
 		args = append(args, nodeID)
@@ -340,8 +376,11 @@ func relatedLabels(db *sql.DB, nodeID, direction string, limit int, hasBridge bo
 	defer rows.Close()
 	var labels []string
 	for rows.Next() {
-		var l string
-		if rows.Scan(&l) == nil && l != "" {
+		var l, svc string
+		if rows.Scan(&l, &svc) == nil && l != "" {
+			if svc != "" {
+				l = fmt.Sprintf("%s (cross-svc:%s)", l, svc)
+			}
 			labels = append(labels, l)
 		}
 	}
@@ -428,6 +467,21 @@ func fileContext(db *sql.DB, filePath, cwd string, hasBridge bool) []string {
 		parts = append(parts, seg)
 	}
 	return parts
+}
+
+// resolveFilenameToPath finds the indexed repo-relative path for a bare
+// filename (from `find -name`), preferring an exact match — a file at repo
+// root — before falling back to a suffix match for a nested file, since
+// `find` gives no directory hint to disambiguate multiple same-named files.
+func resolveFilenameToPath(db *sql.DB, pattern string) string {
+	var path string
+	if err := db.QueryRow(`SELECT DISTINCT file FROM nodes WHERE file = ? LIMIT 1`, pattern).Scan(&path); err == nil {
+		return path
+	}
+	if err := db.QueryRow(`SELECT DISTINCT file FROM nodes WHERE file LIKE ? LIMIT 1`, "%/"+pattern).Scan(&path); err == nil {
+		return path
+	}
+	return ""
 }
 
 // unresolvedRefCount reuses the existing blind-spot ledger
@@ -517,9 +571,12 @@ func runHookContextInject(in *os.File, out *os.File) {
 	// Normalize file-mode keys to a repo-relative path so `cat foo/bar.go`
 	// and a later Read of the absolute path dedupe against each other.
 	var dedupeKey string
-	if mode == "file" {
+	switch mode {
+	case "file":
 		dedupeKey = "file:" + hookRelPath(file, cwd)
-	} else {
+	case "filename":
+		dedupeKey = "filename:" + target
+	default:
 		dedupeKey = "symbol:" + target
 	}
 	if hookAlreadySeen(sessionID, dedupeKey) {
@@ -607,7 +664,8 @@ func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) s
 	var parts []string
 	var label string
 	var unresolvedNote string
-	if mode == "symbol" {
+	switch mode {
+	case "symbol":
 		for _, candidate := range symbols {
 			parts = symbolContext(db, candidate, hasBridge)
 			if len(parts) > 0 {
@@ -615,7 +673,20 @@ func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) s
 				break
 			}
 		}
-	} else {
+	case "filename":
+		// `find -name` gives a filename, not a path — resolve it against the
+		// index before reusing fileContext, which needs an exact indexed
+		// path.
+		resolved := resolveFilenameToPath(db, file)
+		if resolved == "" {
+			return ""
+		}
+		parts = fileContext(db, resolved, "", hasBridge)
+		label = fmt.Sprintf("file '%s' (via find -name %s)", resolved, file)
+		if n := unresolvedRefCount(db, resolved); n > 0 {
+			unresolvedNote = fmt.Sprintf(" | %d unresolved refs in this file", n)
+		}
+	default:
 		parts = fileContext(db, file, cwd, hasBridge)
 		label = fmt.Sprintf("file '%s'", file)
 		if n := unresolvedRefCount(db, hookRelPath(file, cwd)); n > 0 {
