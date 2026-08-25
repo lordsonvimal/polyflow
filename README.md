@@ -251,6 +251,7 @@ polyflow config link add --from web --to api --via http
 | `polyflow patterns list` / `add <file>` | List loaded pattern packs or register a custom one. |
 | `polyflow config …` | View/edit `polyflow.yml` (`show`, `set`, `service`, `link`, `exclude`). |
 | `polyflow setup` | Interactive wizard: registers the MCP server (and context hook, where supported) with a coding agent. `--scope`/`--agent` skip the prompts. |
+| `polyflow update` | Pull, rebuild, and reindex polyflow itself: pulls the source checkout, `make install`s it, then reindexes every registered repo and re-syncs every fleet. `--check` reports whether the source is behind its remote without pulling/rebuilding; `--incremental` reindexes incrementally instead of a full re-parse. |
 | `polyflow mcp` | Start the MCP stdio server (used by agents). Subcommands: `on` / `off` / `status` toggle the query tools for the next session (A/B token measurement). |
 | `polyflow serve` | Start the web UI + HTTP API. |
 | `polyflow capture start\|stop\|run` | Runtime OTLP trace capture (see below). |

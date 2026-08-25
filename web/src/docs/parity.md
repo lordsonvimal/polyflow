@@ -12,6 +12,7 @@ invisible to the other.
 |---|---|
 | `polyflow init` | Setup wizard, step 1 (Overview activity, first-run) — `POST /api/jobs {kind:"init"}` discovers services, `POST /api/setup/apply` writes polyflow.yml via `workspace.SaveInit`, same as this command |
 | `polyflow setup` | Setup wizard (interactive terminal wizard's UI counterpart) — same three steps, browser-driven |
+| `polyflow update` | **exception** — Tier GR operator surface; pulls/rebuilds the polyflow binary itself and refreshes every registered repo/fleet, not workspace state the UI models |
 | `polyflow index` | Top bar "Index" button / Jobs tab — `POST /api/jobs {kind:"index"}` |
 | `polyflow serve` | **exception** — bootstrapping; starts the process the UI runs in |
 | `polyflow search <query>` | Explore activity search box |
