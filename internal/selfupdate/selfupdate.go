@@ -1,4 +1,4 @@
-// Package selfupdate implements `polyflow setup --update` / `--check`: pull
+// Package selfupdate implements `polyflow update` / `--check`: pull
 // polyflow's own source, rebuild it, and (in the update path) refresh every
 // workspace this machine knows about — the registry's indexed repos and the
 // fleets built from them — so a code change to polyflow's parsers/linkers
@@ -34,7 +34,7 @@ const repoPathEnv = "POLYFLOW_REPO"
 // under polyflow.yml's `name: polyflow`, whenever `polyflow index` runs
 // standalone from this repo), and finally walking up from the current
 // directory for polyflow's own go.mod. The registry lookup is what lets
-// `polyflow setup --update`/`--check` work from any directory once this
+// `polyflow update`/`--check` work from any directory once this
 // repo has been indexed once — no env var or flag required. It never falls
 // back to a guessed path — an update that silently rebuilds the wrong repo
 // is worse than one that asks.
@@ -203,7 +203,7 @@ type Status struct {
 func (s *Status) Outdated() bool { return s.Behind > 0 }
 
 // CheckOutdated fetches repoDir's upstream and compares HEAD against it,
-// without pulling or rebuilding — so `polyflow setup --check` is safe to run
+// without pulling or rebuilding — so `polyflow update --check` is safe to run
 // at any time, including with a dirty tree.
 func CheckOutdated(ctx context.Context, repoDir string) (*Status, error) {
 	if err := runStreamed(ctx, repoDir, io.Discard, "git", "-C", repoDir, "fetch", "--quiet"); err != nil {
