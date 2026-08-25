@@ -61,7 +61,10 @@ describe("Breadcrumbs", () => {
     )!;
     toggle.click();
 
-    const hidden = [...container.querySelectorAll("button")].find((b) => b.textContent === "svc-b")!;
+    // The menu portals to <body> (outside `container`) so it isn't clipped
+    // by the breadcrumb strip's overflow-x-auto.
+    const menu = document.querySelector('[data-testid="breadcrumb-collapsed-menu"]')!;
+    const hidden = [...menu.querySelectorAll("button")].find((b) => b.textContent === "svc-b")!;
     hidden.click();
 
     expect(scopeStore.stack().map((s) => (s as { service?: string }).service ?? s.kind)).toEqual([

@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
+import { Portal } from "solid-js/web";
 import { scopeStore, type Scope } from "../stores/scope";
 import { flowRefLabel } from "../views/canvas/scopes/flow";
 import { contextCopyStore } from "../stores/contextCopy";
@@ -58,33 +59,60 @@ function buildEntries(stack: readonly Scope[]): Entry[] {
 
 function CollapsedCrumb(props: { hidden: Scope[]; fromIndex: number }) {
   const [open, setOpen] = createSignal(false);
+  const [pos, setPos] = createSignal({ top: 0, left: 0 });
+  let toggleRef: HTMLButtonElement | undefined;
+
+  // The breadcrumb strip is overflow-x-auto (Breadcrumbs.tsx), and per the
+  // CSS spec setting overflow-x forces overflow-y to auto too — so an
+  // absolutely-positioned menu nested inside it gets clipped instead of
+  // floating above the page. Portal it to <body> and position it from the
+  // toggle button's own rect instead of relying on CSS containment.
+  function toggle() {
+    if (!open() && toggleRef) {
+      const rect = toggleRef.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen((v) => !v);
+  }
+
   return (
-    <div class="relative shrink-0">
+    <div class="shrink-0">
       <button
+        ref={toggleRef}
         data-testid="breadcrumb-collapsed"
         class="hover:text-white px-0.5"
         title={`${props.hidden.length} hidden`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       >
         …
       </button>
       <Show when={open()}>
-        <div class="absolute top-full left-0 mt-1 z-20 bg-neutral-900 border border-neutral-700 rounded shadow-lg text-xs whitespace-nowrap py-1">
-          <For each={props.hidden}>
-            {(scope, i) => (
-              <button
-                class="block w-full text-left px-3 py-1 text-neutral-300 hover:bg-neutral-800 hover:text-white truncate max-w-[280px]"
-                title={crumbTitle(scope)}
-                onClick={() => {
-                  setOpen(false);
-                  scopeStore.popTo(props.fromIndex + i());
-                }}
-              >
-                {crumbLabel(scope)}
-              </button>
-            )}
-          </For>
-        </div>
+        <Portal>
+          {/* Full-viewport backdrop closes the menu on outside click without
+              a global document listener (consistent with this being the
+              only always-open-until-dismissed popover in the header). */}
+          <div class="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div
+            data-testid="breadcrumb-collapsed-menu"
+            class="fixed z-20 bg-neutral-900 border border-neutral-700 rounded shadow-lg text-xs whitespace-nowrap py-1"
+            style={{ top: `${pos().top}px`, left: `${pos().left}px` }}
+          >
+            <For each={props.hidden}>
+              {(scope, i) => (
+                <button
+                  class="block w-full text-left px-3 py-1 text-neutral-300 hover:bg-neutral-800 hover:text-white truncate max-w-[280px]"
+                  title={crumbTitle(scope)}
+                  onClick={() => {
+                    setOpen(false);
+                    scopeStore.popTo(props.fromIndex + i());
+                  }}
+                >
+                  {crumbLabel(scope)}
+                </button>
+              )}
+            </For>
+          </div>
+        </Portal>
       </Show>
     </div>
   );
