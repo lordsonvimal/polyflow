@@ -149,6 +149,16 @@ func resolveAssetFile(src, svc string, reps map[string]jsFileRep, repFiles []str
 
 var reSimpleID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// maxClassFanout caps how many definition sites a single .class selector may
+// fan out to before the edges are suppressed in favor of one ledger entry
+// (DS.3's noise filter). Adding CSS-only producers to classDefs only grows an
+// already-uncapped fan-out set; a utility-class-style name shared by dozens of
+// elements carries no real signal about which one a given consumer means.
+// Picked as a round number pending measurement against a utility-class-heavy
+// corpus (juniper has no class used more than once) — revisit if a real
+// corpus shows the cap firing too eagerly or not eagerly enough.
+const maxClassFanout = 20
+
 // elemDef records one definition site for a DOM element (by id or class).
 // When nodeID is non-empty the element node already exists (from HTML/JSX
 // parsing) and no new node needs to be minted. When nodeID is empty the
@@ -191,6 +201,24 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 	for i := range nodes {
 		n := &nodes[i]
 		switch {
+		case n.Type == graph.NodeTypeElement && n.Meta["pattern"] == "stylesheet_selector":
+			// DS.3: a top-level CSS/SCSS `.class`/`#id` rule (internal/css/scan.go)
+			// is a real definition site for a JS selector consumer, exactly like a
+			// templ/HTML class= or id= attribute — a class toggled purely by
+			// addClass/classList with no literal class="…" anywhere in markup
+			// otherwise resolves to nothing even though the stylesheet defines it.
+			sel := n.Meta["selector"]
+			name := strings.TrimPrefix(strings.TrimPrefix(sel, "."), "#")
+			if name == "" {
+				continue
+			}
+			key := n.Service + "\x00" + name
+			def := elemDef{nodeID: n.ID, file: n.File, line: n.Line, lang: n.Language}
+			if n.Meta["selector_kind"] == "id" {
+				idDefs[key] = append(idDefs[key], def)
+			} else {
+				classDefs[key] = append(classDefs[key], def)
+			}
 		case n.Type == graph.NodeTypeComponent && n.Language == "templ":
 			// Existing templ convention: dom_ids meta carries "id@line\n…".
 			for _, entry := range strings.Split(n.Meta["dom_ids"], "\n") {
@@ -380,6 +408,13 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 
 		if cls != "" {
 			defs := classDefs[n.Service+"\x00"+cls]
+			if len(defs) > maxClassFanout {
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: n.Service, File: n.File, Line: n.Line,
+					Name: "." + cls, Kind: "dom_class_high_fanout",
+				})
+				continue
+			}
 			// No unresolved on class miss — classes may be defined externally in CSS.
 			for _, d := range defs {
 				elemID, _ := elemNodeFor(n.Service, d, cls, ".")
