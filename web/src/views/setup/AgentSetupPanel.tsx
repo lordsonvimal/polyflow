@@ -54,8 +54,12 @@ export default function AgentSetupPanel() {
         <For each={setupStore.agents()}>
           {(agent) => {
             const applying = createMemo(() => setupStore.applyingAgent() === agent.name);
+            const removing = createMemo(() => setupStore.removingAgent() === agent.name);
+            const busy = createMemo(() => applying() || removing());
             const result = createMemo(() => setupStore.agentApplyResults()[agent.name]);
             const error = createMemo(() => setupStore.agentApplyErrors()[agent.name]);
+            const removeResult = createMemo(() => setupStore.agentRemoveResults()[agent.name]);
+            const removeError = createMemo(() => setupStore.agentRemoveErrors()[agent.name]);
             const effectiveScope = createMemo(() => (scope() === "global" && !agent.supports_global_scope ? "user" : scope()));
 
             return (
@@ -91,14 +95,41 @@ export default function AgentSetupPanel() {
                       Hooks {agent.hooks_configured ? "configured" : "not configured"}
                     </span>
                   </Show>
-                  <button
-                    data-testid="agent-setup-apply-button"
-                    class="ml-auto px-2 py-0.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-xs"
-                    disabled={applying()}
-                    onClick={() => void setupStore.applyAgent(agent.name, effectiveScope())}
+                  <Show
+                    when={agent.supports_nudge}
+                    fallback={
+                      <span data-testid="agent-setup-nudge-badge-unsupported" class="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-500">
+                        Nudge not supported
+                      </span>
+                    }
                   >
-                    {applying() ? "Configuring…" : "Configure"}
-                  </button>
+                    <span
+                      data-testid="agent-setup-nudge-badge"
+                      class={`text-[10px] px-1.5 py-0.5 rounded ${
+                        agent.nudge_configured ? "bg-emerald-900/50 text-emerald-300" : "bg-neutral-800 text-neutral-400"
+                      }`}
+                    >
+                      Nudge {agent.nudge_configured ? "configured" : "not configured"}
+                    </span>
+                  </Show>
+                  <div class="ml-auto flex gap-1.5">
+                    <button
+                      data-testid="agent-setup-apply-button"
+                      class="px-2 py-0.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-xs"
+                      disabled={busy()}
+                      onClick={() => void setupStore.applyAgent(agent.name, effectiveScope())}
+                    >
+                      {applying() ? "Configuring…" : "Configure"}
+                    </button>
+                    <button
+                      data-testid="agent-setup-remove-button"
+                      class="px-2 py-0.5 rounded bg-neutral-800 hover:bg-red-900/60 disabled:opacity-50 text-neutral-300 hover:text-red-300 text-xs"
+                      disabled={busy()}
+                      onClick={() => void setupStore.removeAgent(agent.name, effectiveScope())}
+                    >
+                      {removing() ? "Removing…" : "Remove"}
+                    </button>
+                  </div>
                 </div>
                 <div class="text-neutral-500 text-xs">{agent.description}</div>
                 <Show when={effectiveScope() !== scope()}>
@@ -115,10 +146,30 @@ export default function AgentSetupPanel() {
                     <Show when={result()!.hooks_skipped}>
                       <div class="text-neutral-500">{result()!.hooks_skipped}</div>
                     </Show>
+                    <Show when={result()!.nudge_result}>
+                      <div>{result()!.nudge_result}</div>
+                    </Show>
+                    <Show when={result()!.nudge_skipped}>
+                      <div class="text-neutral-500">{result()!.nudge_skipped}</div>
+                    </Show>
                   </div>
                 </Show>
                 <Show when={error()}>
                   <div data-testid="agent-setup-error" class="text-red-400 text-[10px]">{error()}</div>
+                </Show>
+                <Show when={removeResult()}>
+                  <div data-testid="agent-setup-remove-result" class="text-neutral-400 text-[10px] space-y-0.5">
+                    <div>{removeResult()!.mcp_result}</div>
+                    <Show when={removeResult()!.hooks_result}>
+                      <div>{removeResult()!.hooks_result}</div>
+                    </Show>
+                    <Show when={removeResult()!.nudge_result}>
+                      <div>{removeResult()!.nudge_result}</div>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={removeError()}>
+                  <div data-testid="agent-setup-remove-error" class="text-red-400 text-[10px]">{removeError()}</div>
                 </Show>
               </li>
             );

@@ -25,6 +25,8 @@ const AGENTS_REPO = {
       supports_global_scope: false,
       mcp_configured: false,
       hooks_configured: false,
+      supports_nudge: true,
+      nudge_configured: false,
     },
   ],
 };
@@ -52,6 +54,7 @@ describe("AgentSetupPanel", () => {
     await vi.waitFor(() => expect(container.querySelector('[data-testid="agent-setup-row"]')).toBeTruthy());
     expect(container.textContent).toContain("Cursor");
     expect(container.textContent).toContain("MCP not configured");
+    expect(container.textContent).toContain("Nudge not configured");
   });
 
   it("configures an agent and reflects the new status without a page reload", async () => {
@@ -74,5 +77,32 @@ describe("AgentSetupPanel", () => {
     await vi.waitFor(() => expect(container.querySelector('[data-testid="agent-setup-result"]')).toBeTruthy());
     expect(container.textContent).toContain("Created .cursor/mcp.json");
     await vi.waitFor(() => expect(container.textContent).toContain("MCP configured"));
+  });
+
+  it("removes an agent's setup and reflects the reverted status without a page reload", async () => {
+    const configuredBefore = {
+      scope: "repo",
+      agents: [{ ...AGENTS_REPO.agents[0], mcp_configured: true, nudge_configured: true }],
+    };
+    let getCallCount = 0;
+    mount({
+      "GET /api/setup/agents": () => {
+        getCallCount += 1;
+        return getCallCount === 1 ? configuredBefore : AGENTS_REPO;
+      },
+      "DELETE /api/setup/agent": {
+        mcp_result: "Unregistered the polyflow MCP server from .cursor/mcp.json.",
+        nudge_result: "Removed polyflow's tool-preference nudge from AGENTS.md.",
+      },
+    });
+
+    await vi.waitFor(() => expect(container.textContent).toContain("MCP configured"));
+    (container.querySelector('[data-testid="agent-setup-remove-button"]') as HTMLElement).click();
+
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="agent-setup-remove-result"]')).toBeTruthy());
+    expect(container.textContent).toContain("Unregistered the polyflow MCP server");
+    expect(container.textContent).toContain("Removed polyflow's tool-preference nudge");
+    await vi.waitFor(() => expect(container.textContent).toContain("MCP not configured"));
+    expect(container.textContent).toContain("Nudge not configured");
   });
 });
