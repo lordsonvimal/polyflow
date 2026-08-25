@@ -99,13 +99,14 @@ func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
 
 	tool := strings.TrimPrefix(cmd.CommandPath(), rootCmd.Name()+" ")
 	// longRunningTools never return until killed/interrupted (serve runs the
-	// web/API server, mcp runs the stdio MCP loop) — profiling "the whole
-	// process lifetime" isn't a meaningful per-operation measurement, and
-	// worse, holding the one process-wide CPU profile for as long as `serve`
-	// runs would starve every job UO.8 profiles inside it (jobs.Manager's
-	// own StartCPUProfile can never acquire the slot). Skip CPU profiling
-	// for these; duration/mem-stats/audit recording still happens.
-	longRunningTools := map[string]bool{"serve": true, "mcp": true}
+	// web/API server, mcp runs the stdio MCP loop, capture start runs an
+	// OTLP receiver until SIGINT/SIGTERM) — profiling "the whole process
+	// lifetime" isn't a meaningful per-operation measurement, and worse,
+	// holding the one process-wide CPU profile for as long as `serve` runs
+	// would starve every job UO.8 profiles inside it (jobs.Manager's own
+	// StartCPUProfile can never acquire the slot). Skip CPU profiling for
+	// these; duration/mem-stats/audit recording still happens.
+	longRunningTools := map[string]bool{"serve": true, "mcp": true, "capture start": true}
 	skipCPUProfile := longRunningTools[tool]
 	flags := map[string]string{}
 	cmd.Flags().Visit(func(f *pflag.Flag) {

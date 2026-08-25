@@ -273,9 +273,16 @@ func (s *Server) fanOut() {
 }
 
 func (s *Server) registerRoutes() {
-	// s.handle wraps every /api/* route (except /api/events and the static
-	// SPA below) with UB.2 tool-call audit recording; /api/events is
-	// excluded per the plan (an SSE stream, not a request/response call).
+	// s.handle wraps every /api/* route (except /api/events, the two
+	// .../profile downloads, and the static SPA below) with UB.2 tool-call
+	// audit recording. /api/events is excluded per the plan (an SSE stream,
+	// not a request/response call). The profile routes are excluded because
+	// their body is raw pprof binary, not JSON/text: s.audit would coerce
+	// those bytes into the row's Result string, duplicating data already
+	// captured properly in tool_calls.cpu_profile for CLI-recorded calls and
+	// getting silently corrupted (invalid UTF-8 replaced with U+FFFD)
+	// whenever that row is later JSON-marshaled for the toolcalls API or the
+	// live-tail SSE broadcast.
 	s.handle("GET /api/graph", s.handleGraph)
 	s.handle("GET /api/graph/search", s.handleSearch)
 	s.handle("GET /api/graph/trace", s.handleTrace)
@@ -293,13 +300,13 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/export/mermaid", s.handleExportMermaid)
 	s.handle("GET /api/toolcalls", s.handleListToolCalls)
 	s.handle("DELETE /api/toolcalls", s.handleDeleteToolCalls)
-	s.handle("GET /api/toolcalls/{id}/profile", s.handleGetToolCallProfile)
+	s.mux.HandleFunc("GET /api/toolcalls/{id}/profile", s.handleGetToolCallProfile)
 	s.handle("GET /api/settings", s.handleGetSettings)
 	s.handle("PUT /api/settings", s.handlePutSettings)
 	s.handle("POST /api/jobs", s.handleCreateJob)
 	s.handle("GET /api/jobs", s.handleListJobs)
 	s.handle("GET /api/jobs/{id}", s.handleGetJob)
-	s.handle("GET /api/jobs/{id}/profile", s.handleGetJobProfile)
+	s.mux.HandleFunc("GET /api/jobs/{id}/profile", s.handleGetJobProfile)
 	s.handle("DELETE /api/jobs/{id}", s.handleCancelJob)
 	s.handle("GET /api/config", s.handleGetConfig)
 	s.handle("PUT /api/config", s.handlePutConfig)
