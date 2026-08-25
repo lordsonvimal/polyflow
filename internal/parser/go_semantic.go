@@ -117,6 +117,9 @@ func loadServicePackages(dir, service string, fset *token.FileSet, mode packages
 		// (recall over precision). Edges still resolve against knownNodes, so
 		// workspaces that exclude test files from the walk are unaffected.
 		Tests: true,
+		// Let go list switch to the toolchain declared in go.mod so polyflow
+		// built with an older Go can still analyse newer-version projects.
+		Env: append(os.Environ(), "GOTOOLCHAIN=auto"),
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
@@ -1017,6 +1020,7 @@ func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*package
 			Fset:       token.NewFileSet(), // throwaway: only error text is inspected
 			Tests:      true,
 			BuildFlags: []string{"-tags=" + tag},
+			Env:        append(os.Environ(), "GOTOOLCHAIN=auto"),
 		}
 		trialPkgs, err := packages.Load(trialCfg, "./...")
 		if err != nil {
@@ -1036,6 +1040,7 @@ func widenWithTestBuildTags(dir string, fset *token.FileSet, basePkgs []*package
 		Fset:       fset,
 		Tests:      true,
 		BuildFlags: []string{"-tags=" + strings.Join(safe, ",")},
+		Env:        append(os.Environ(), "GOTOOLCHAIN=auto"),
 	}
 	finalPkgs, err := packages.Load(finalCfg, "./...")
 	if err != nil || !isErrorSubset(packageErrorSet(finalPkgs), baseErrs) {
