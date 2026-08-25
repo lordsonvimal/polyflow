@@ -314,12 +314,39 @@ export default function BottomDrawer() {
   const open = drawerStore.open;
   const setOpen = drawerStore.setOpen;
 
+  // Drags from the handle strip above the header; dragging up (a smaller
+  // clientY) should grow the drawer since it's anchored to the bottom edge,
+  // so the height delta is startY - clientY rather than the other way round.
+  function startResize(e: MouseEvent) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = drawerStore.height();
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(startHeight + (startY - ev.clientY), window.innerHeight - 80);
+      drawerStore.setHeight(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   return (
     <div
       data-testid="bottom-drawer"
-      class="shrink-0 border-t border-neutral-800 dark:border-neutral-700 bg-neutral-950 transition-all flex flex-col"
-      style={{ height: open() ? "260px" : "28px" }}
+      class="shrink-0 border-t border-neutral-800 dark:border-neutral-700 bg-neutral-950 flex flex-col"
+      classList={{ "transition-all": !open() }}
+      style={{ height: open() ? `${drawerStore.height()}px` : "28px" }}
     >
+      <Show when={open()}>
+        <div
+          data-testid="drawer-resize-handle"
+          class="h-1 shrink-0 cursor-row-resize hover:bg-indigo-600/60 active:bg-indigo-600"
+          onMouseDown={startResize}
+        />
+      </Show>
       <div class="flex items-center px-2 h-7 gap-2 text-xs text-neutral-400 shrink-0">
         <button onClick={() => setOpen(!open())} class="hover:text-white">
           {open() ? "▼" : "▲"} Drawer

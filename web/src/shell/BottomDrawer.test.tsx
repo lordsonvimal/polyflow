@@ -42,6 +42,26 @@ describe("BottomDrawer / Context tab", () => {
     expect(container.textContent).toContain("No context copied yet");
   });
 
+  it("resizes by dragging the resize handle", () => {
+    drawerStore.setOpen(true);
+    drawerStore.setHeight(260);
+    const handle = container.querySelector('[data-testid="drawer-resize-handle"]') as HTMLElement;
+    const outer = container.querySelector('[data-testid="bottom-drawer"]') as HTMLElement;
+    expect(handle).toBeTruthy();
+
+    handle.dispatchEvent(new MouseEvent("mousedown", { clientY: 500, bubbles: true }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientY: 400 })); // dragged up 100px -> grows
+    expect(drawerStore.height()).toBe(360);
+    expect(outer.style.height).toBe("360px");
+
+    window.dispatchEvent(new MouseEvent("mousemove", { clientY: 550 })); // dragged down past start -> shrinks, clamped
+    expect(drawerStore.height()).toBe(210);
+
+    window.dispatchEvent(new MouseEvent("mouseup"));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientY: 100 }));
+    expect(drawerStore.height()).toBe(210); // no longer tracking after mouseup
+  });
+
   it("renders truncation warnings with the omitted list prominently", async () => {
     (globalThis as any).fetch = fakeFetch({
       "/api/context/bundle": {
