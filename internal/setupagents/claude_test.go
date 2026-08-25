@@ -21,13 +21,13 @@ func matcherHooked(doc map[string]any, matcher, command string) bool {
 	return false
 }
 
-func TestMergeClaudeHooks_WiresBashReadAndGrep(t *testing.T) {
+func TestMergeClaudeHooks_WiresBashReadGrepAndEdit(t *testing.T) {
 	doc := map[string]any{}
 	command := "polyflow hook-context-inject"
 	if !mergeClaudeHooks(doc, command) {
 		t.Fatal("expected added=true on first merge")
 	}
-	for _, matcher := range []string{"Bash", "Read", "Grep"} {
+	for _, matcher := range []string{"Bash", "Read", "Grep", "Edit"} {
 		if !matcherHooked(doc, matcher, command) {
 			t.Errorf("matcher %q not wired with command %q", matcher, command)
 		}
@@ -43,14 +43,14 @@ func TestMergeClaudeHooks_IdempotentAcrossAllMatchers(t *testing.T) {
 	}
 }
 
-func TestClaudeHooksWired_FalseUntilAllThreeMatchersWired(t *testing.T) {
+func TestClaudeHooksWired_FalseUntilAllMatchersWired(t *testing.T) {
 	doc := map[string]any{}
 	if claudeHooksWired(doc) {
 		t.Fatal("expected false on an empty doc")
 	}
 	mergeClaudeHooks(doc, "/usr/local/bin/polyflow hook-context-inject")
 	if !claudeHooksWired(doc) {
-		t.Fatal("expected true once all three matchers are wired")
+		t.Fatal("expected true once all matchers are wired")
 	}
 }
 

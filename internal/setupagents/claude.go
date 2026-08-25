@@ -115,11 +115,15 @@ func claudeSettingsPath(scope string) (string, error) {
 }
 
 // mergeClaudeHooks wires command as a PostToolUse hook for the Bash, Read,
-// and Grep matchers, matching this repo's own .claude/settings.json shape.
-// Grep is the native Claude Code search tool — distinct from `Bash grep`,
-// which the Bash matcher already covers — and shares the same symbol-mode
-// dedupe key, so a Grep call and a shell-grep call for the same symbol in
-// one session only inject context once. Idempotent: if a matcher group
+// Grep, and Edit matchers, matching this repo's own .claude/settings.json
+// shape. Grep is the native Claude Code search tool — distinct from `Bash
+// grep`, which the Bash matcher already covers — and shares the same
+// symbol-mode dedupe key, so a Grep call and a shell-grep call for the same
+// symbol in one session only inject context once. Edit shares extractTarget's
+// existing file_path handling (the same code path Read already uses) — an
+// edit's target file already carries a file_path in tool_input, so wiring
+// the matcher is the only change needed to surface a symbol's callers/
+// callees right as the agent edits it. Idempotent: if a matcher group
 // already contains a hook with this exact command, it's left alone rather
 // than duplicated.
 func mergeClaudeHooks(doc map[string]any, command string) (added bool) {
@@ -158,20 +162,21 @@ func mergeClaudeHooks(doc map[string]any, command string) (added bool) {
 	ensureMatcher("Bash")
 	ensureMatcher("Read")
 	ensureMatcher("Grep")
+	ensureMatcher("Edit")
 
 	hooks["PostToolUse"] = postToolUse
 	return added
 }
 
-// claudeHooksWired reports whether Bash, Read, and Grep are all already
-// wired to a context-injection hook command — matched by substring
+// claudeHooksWired reports whether Bash, Read, Grep, and Edit are all
+// already wired to a context-injection hook command — matched by substring
 // ("hook-context-inject") rather than an exact command string, since the
 // polyflow binary path baked into the command can legitimately differ
 // between the machine that ran setup and the one checking status.
 func claudeHooksWired(doc map[string]any) bool {
 	hooks, _ := doc["hooks"].(map[string]any)
 	postToolUse, _ := hooks["PostToolUse"].([]any)
-	wired := map[string]bool{"Bash": false, "Read": false, "Grep": false}
+	wired := map[string]bool{"Bash": false, "Read": false, "Grep": false, "Edit": false}
 	for _, g := range postToolUse {
 		group, ok := g.(map[string]any)
 		if !ok {

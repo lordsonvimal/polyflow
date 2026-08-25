@@ -118,8 +118,8 @@ func truncateBlock(block string) string {
 	return strings.ToValidUTF8(block[:hookMaxContextChars], "") + "…"
 }
 
-var hookFileViewCmds = map[string]bool{"cat": true, "sed": true, "head": true, "tail": true}
-var hookGrepCmds = map[string]bool{"grep": true}
+var hookFileViewCmds = map[string]bool{"cat": true, "sed": true, "head": true, "tail": true, "less": true, "more": true, "bat": true}
+var hookGrepCmds = map[string]bool{"grep": true, "rg": true, "ag": true}
 var hookShellOperators = map[string]bool{"|": true, "||": true, ";": true, "&&": true, "&": true}
 var hookIdentifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var hookAlternationRe = regexp.MustCompile(`\\\||\|`)
