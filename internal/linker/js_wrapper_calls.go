@@ -9,6 +9,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
@@ -229,19 +230,44 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 		}
 		line := int(callNode.StartPoint().Row) + 1
 		id := fmt.Sprintf("%s:%s:http_client:js_api_wrapper_call:%s:%d", service, relFile, callee, line)
+		label := urlText
+		meta := map[string]string{
+			"pattern":  "js_api_wrapper_call_site",
+			"wrapper":  callee,
+			"url_expr": urlText,
+		}
+		// The raw urlText above is the argument's verbatim source span — fine
+		// as a bare string/template literal, but a `+`-concatenation or a
+		// local `var url = ...` reference needs the same reconstruction the
+		// direct-fetch/axios patterns get via the javascript KeyWalker
+		// (contract/keywalk_javascript.go), or it never carries a Meta["url"]
+		// the http.yaml contract's [method, path] key can match against —
+		// every wrapper-forwarded call site fell to the synthetic `unresolved`
+		// node regardless of how resolvable its URL actually was.
+		if walker := contract.KeyWalkerFor("javascript"); walker != nil {
+			noConsts := func(string) (string, bool) { return "", false }
+			switch cands, dynamic := walker.WalkKey(urlArg, src, noConsts); {
+			case dynamic:
+				meta["key_dynamic"] = "true"
+				meta["key_dynamic_raw"] = urlText
+				label = "dynamic"
+			case len(cands) == 1:
+				meta["url"] = cands[0]
+				label = cands[0]
+			case len(cands) >= 2:
+				meta["key_candidates"] = contract.MarshalKeyCandidates(cands)
+				label = "branch_enum"
+			}
+		}
 		out = append(out, graph.Node{
 			ID:       id,
 			Type:     graph.NodeTypeHTTPClient,
-			Label:    urlText,
+			Label:    label,
 			Service:  service,
 			File:     relFile,
 			Line:     line,
 			Language: "javascript",
-			Meta: map[string]string{
-				"pattern":  "js_api_wrapper_call_site",
-				"wrapper":  callee,
-				"url_expr": urlText,
-			},
+			Meta:     meta,
 		})
 	}
 	return out
