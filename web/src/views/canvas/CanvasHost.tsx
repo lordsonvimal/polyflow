@@ -235,8 +235,16 @@ function buildStylesheet(): object[] {
     },
     // UN.5: nodes with no visible edge under the active lens dim to 30%
     // rather than disappear (lenses.ts's applyLens) — orientation is kept
-    // until the user opts into "hide unlinked".
-    { selector: "node[lens_dim = 'true']", style: { opacity: 0.3 } },
+    // until the user opts into "hide unlinked". Opacity alone read as
+    // indistinguishable from a genuinely edgeless/orphaned node in a dense,
+    // already-muted canvas (reported: dozens of real, linked functions
+    // looked like linker gaps at a glance) — the dashed gray border matches
+    // the same "filtered, not missing" language already used for stub and
+    // coverage-unresolved nodes below.
+    {
+      selector: "node[lens_dim = 'true']",
+      style: { opacity: 0.3, "border-width": 1, "border-style": "dashed", "border-color": "#6b7280" },
+    },
     // UF.1: ThroughPanel row hover — cheap dim of everything outside the
     // hovered flow's member set, classes only (no layout call).
     { selector: ".flow-highlight-dim", style: { opacity: 0.15 } },
