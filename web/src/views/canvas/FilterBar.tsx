@@ -8,7 +8,7 @@ import { multiSelectStore } from "../../stores/multiSelect";
 import { notificationsStore } from "../../stores/notifications";
 import { BUDGET } from "./budget";
 import { Chip } from "./Chip";
-import OverflowChipGroup from "./OverflowChipGroup";
+import Popover from "./Popover";
 
 type Filters = ViewState["filters"];
 
@@ -115,88 +115,109 @@ export default function FilterBar() {
   return (
     <div
       data-testid="filter-bar"
-      class="flex items-center gap-3 px-2 py-1 border-b border-neutral-800 bg-neutral-900 text-xs overflow-x-auto shrink-0"
+      class="flex items-center gap-2 px-2 py-1 border-b border-neutral-800 bg-neutral-900 text-xs shrink-0"
     >
-      <div class="flex items-center gap-1">
-        <For each={CONFIDENCE_LEVELS}>
-          {(tier) => (
-            <Chip
-              label={tier}
-              active={effectiveConfidence(filters().confidence).includes(tier)}
-              dashed={OPT_IN_CONFIDENCE.includes(tier)}
-              onClick={() => toggleConfidence(tier)}
-            />
-          )}
-        </For>
-      </div>
-      <div class="w-px h-4 bg-neutral-800" />
-      <div class="flex items-center gap-1">
-        <For each={EDGE_GROUP_NAMES}>
-          {(group) => (
-            <Chip
-              label={group}
-              active={effectiveAllOn(filters().edgeTypes, EDGE_GROUP_NAMES).includes(group)}
-              onClick={() => toggleEdgeGroup(group)}
-            />
-          )}
-        </For>
-      </div>
-      <Show when={services().length > 0}>
-        <div class="w-px h-4 bg-neutral-800" />
-        <OverflowChipGroup
-          testId="filter-services"
-          groupLabel="Services"
-          items={services()}
-          isActive={(svc) => effectiveAllOn(filters().services, services()).includes(svc)}
-          onToggle={toggleService}
-          activeCount={effectiveAllOn(filters().services, services()).length}
-        />
-      </Show>
-      <div class="w-px h-4 bg-neutral-800" />
-      <div class="flex items-center gap-1" data-testid="filter-noise-row">
-        <span class="text-neutral-500">
-          Noise
-          <Show when={canvasElementsStore.noiseHidden() > 0}>
-            {" "}({canvasElementsStore.noiseHidden()} hidden)
-          </Show>
-        </span>
-        <For each={Object.keys(NOISE_CLASS_NAMES)}>
-          {(cls) => (
-            <Chip
-              label={NOISE_CLASS_NAMES[cls]}
-              active={(filters().noiseClasses ?? []).includes(cls)}
-              onClick={() => toggleNoiseClass(cls)}
-            />
-          )}
-        </For>
-      </div>
-      <div class="ml-auto flex items-center gap-2">
-        <Chip
-          label="Coverage"
-          active={scopeStore.viewState().coverageOverlay !== false}
-          onClick={() => scopeStore.setCoverageOverlay(scopeStore.viewState().coverageOverlay === false)}
-        />
-        <Show when={canvasElementsStore.ids().size > 0}>
-          <button
-            data-testid="filter-add-all-matches"
-            class="text-neutral-400 hover:text-white"
-            onClick={addAllMatches}
-          >
-            Add all matches
-          </button>
+      <Popover
+        testId="filter-bar"
+        label={
+          activeCount() > 0 ? `Filters (${activeCount()}) ▾` : "Filters ▾"
+        }
+        triggerClass={`px-2 py-0.5 rounded text-xs border transition-colors ${
+          activeCount() > 0
+            ? "bg-neutral-700 text-white border-neutral-600"
+            : "bg-transparent text-neutral-400 border-neutral-800 hover:text-neutral-300"
+        }`}
+      >
+        <div class="flex flex-col gap-1.5">
+          <span class="text-neutral-500">Confidence</span>
+          <div class="flex flex-wrap items-center gap-1">
+            <For each={CONFIDENCE_LEVELS}>
+              {(tier) => (
+                <Chip
+                  label={tier}
+                  active={effectiveConfidence(filters().confidence).includes(tier)}
+                  dashed={OPT_IN_CONFIDENCE.includes(tier)}
+                  onClick={() => toggleConfidence(tier)}
+                />
+              )}
+            </For>
+          </div>
+        </div>
+        <div class="h-px bg-neutral-800" />
+        <div class="flex flex-col gap-1.5">
+          <span class="text-neutral-500">Edge types</span>
+          <div class="flex flex-wrap items-center gap-1">
+            <For each={EDGE_GROUP_NAMES}>
+              {(group) => (
+                <Chip
+                  label={group}
+                  active={effectiveAllOn(filters().edgeTypes, EDGE_GROUP_NAMES).includes(group)}
+                  onClick={() => toggleEdgeGroup(group)}
+                />
+              )}
+            </For>
+          </div>
+        </div>
+        <Show when={services().length > 0}>
+          <div class="h-px bg-neutral-800" />
+          <div class="flex flex-col gap-1.5" data-testid="filter-services">
+            <span class="text-neutral-500">Services</span>
+            <div class="flex flex-wrap items-center gap-1">
+              <For each={services()}>
+                {(svc) => (
+                  <Chip
+                    label={svc}
+                    active={effectiveAllOn(filters().services, services()).includes(svc)}
+                    onClick={() => toggleService(svc)}
+                  />
+                )}
+              </For>
+            </div>
+          </div>
         </Show>
-        <Show when={activeCount() > 0}>
-          <span
-            data-testid="filter-active-count"
-            class="px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] leading-none"
-          >
-            {activeCount()}
+        <div class="h-px bg-neutral-800" />
+        <div class="flex flex-col gap-1.5" data-testid="filter-noise-row">
+          <span class="text-neutral-500">
+            Noise
+            <Show when={canvasElementsStore.noiseHidden() > 0}>
+              {" "}({canvasElementsStore.noiseHidden()} hidden)
+            </Show>
           </span>
-          <button class="text-neutral-400 hover:text-white" onClick={reset}>
-            reset
-          </button>
-        </Show>
-      </div>
+          <div class="flex flex-wrap items-center gap-1">
+            <For each={Object.keys(NOISE_CLASS_NAMES)}>
+              {(cls) => (
+                <Chip
+                  label={NOISE_CLASS_NAMES[cls]}
+                  active={(filters().noiseClasses ?? []).includes(cls)}
+                  onClick={() => toggleNoiseClass(cls)}
+                />
+              )}
+            </For>
+          </div>
+        </div>
+        <div class="h-px bg-neutral-800" />
+        <div class="flex items-center gap-2">
+          <Chip
+            label="Coverage"
+            active={scopeStore.viewState().coverageOverlay !== false}
+            onClick={() => scopeStore.setCoverageOverlay(scopeStore.viewState().coverageOverlay === false)}
+          />
+          <Show when={activeCount() > 0}>
+            <button class="text-neutral-400 hover:text-white" onClick={reset}>
+              reset
+            </button>
+          </Show>
+        </div>
+      </Popover>
+      <Show when={canvasElementsStore.ids().size > 0}>
+        <button
+          data-testid="filter-add-all-matches"
+          class="text-neutral-400 hover:text-white"
+          onClick={addAllMatches}
+        >
+          Add all matches
+        </button>
+      </Show>
     </div>
   );
 }
