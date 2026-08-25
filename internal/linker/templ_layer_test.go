@@ -212,6 +212,45 @@ func TestLinkDOMDefinitions_ClassFanOut(t *testing.T) {
 	}
 }
 
+// TestLinkDOMDefinitions_TemplClassSelector verifies that a .class selector
+// resolves against a templ component's class= attribute, minting an element
+// node the same way an id= attribute already did. Before this fix, a templ
+// producer had no class index at all — every class-selector consumer against
+// a templ-only codebase silently fell through with no edge.
+func TestLinkDOMDefinitions_TemplClassSelector(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{
+			ID: "app:list.templ:component:ListPage:3", Type: graph.NodeTypeComponent,
+			Label: "ListPage", Service: "app", File: "list.templ", Language: "templ",
+			Meta: map[string]string{"dom_classes": "item@6\nactive@6"},
+		},
+		// querySelector(".item") → resolves against the templ class= token.
+		{
+			ID: "app:assets/js/list.js:dom_target:query_selector:9", Type: graph.NodeTypeDOMTarget,
+			Service: "app", File: "assets/js/list.js", Line: 9,
+			Meta: map[string]string{"fn": "querySelector", "selector": `".item"`},
+		},
+	}
+
+	newNodes, edges, unresolved := LinkDOMDefinitions(nodes)
+	if len(newNodes) != 1 {
+		t.Fatalf("element nodes = %d, want 1 (minted from templ class=): %+v", len(newNodes), newNodes)
+	}
+	if newNodes[0].Label != ".item" || newNodes[0].Meta["dom_class"] != "item" {
+		t.Errorf("minted node = %+v, want label .item and dom_class=item", newNodes[0])
+	}
+	if newNodes[0].Meta["component"] != "app:list.templ:component:ListPage:3" {
+		t.Errorf("minted node missing component meta: %+v", newNodes[0])
+	}
+	if len(edges) != 1 || edges[0].Type != graph.EdgeTypeDefinedIn || edges[0].Confidence != graph.ConfidenceInferred {
+		t.Errorf("edges = %+v, want one inferred-confidence defined_in edge", edges)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unexpected unresolved: %+v", unresolved)
+	}
+}
+
 // TestLinkDOMDefinitions_ComplexSelector verifies that complex CSS selectors
 // (descendant, pseudo, attribute, etc.) produce a selector_dynamic ledger entry
 // and no edges.

@@ -201,6 +201,18 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 				key := n.Service + "\x00" + id
 				idDefs[key] = append(idDefs[key], elemDef{compID: n.ID, file: n.File, line: line, lang: "templ"})
 			}
+			// dom_classes meta carries "class@line\n…", one entry per
+			// space-separated class= token (parser/templ.go). Same shape as
+			// dom_ids, so a class selector consumer gets a real templ-side
+			// index instead of the previous unconditional "unresolvable".
+			for _, entry := range strings.Split(n.Meta["dom_classes"], "\n") {
+				cls, line := splitIDLine(entry)
+				if cls == "" {
+					continue
+				}
+				key := n.Service + "\x00" + cls
+				classDefs[key] = append(classDefs[key], elemDef{compID: n.ID, file: n.File, line: line, lang: "templ"})
+			}
 		case n.Type == graph.NodeTypeElement:
 			// HTML/JSX element nodes emitted by the parser-level patterns.
 			if id := n.Meta["id"]; id != "" {
@@ -238,28 +250,36 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 	var unresolved []graph.UnresolvedRef
 
 	// elemNodeFor returns (or mints) the element node ID for a definition.
+	// marker distinguishes an id definition ("#") from a class definition
+	// (".") in the minted node's ID/label — both share the same templ
+	// component-backed minting path, an id/class pair on the same tag mints
+	// two distinct element nodes rather than colliding on elemName alone.
 	elemNodes := map[string]string{} // uniqueKey → element nodeID
-	elemNodeFor := func(svc string, d elemDef, elemName string) (string, bool) {
+	elemNodeFor := func(svc string, d elemDef, elemName string, marker string) (string, bool) {
 		if d.nodeID != "" {
 			return d.nodeID, false // already exists
 		}
 		// Mint a new element node from templ component data.
-		ekey := d.compID + "\x00" + elemName
+		ekey := d.compID + "\x00" + marker + elemName
 		if id, ok := elemNodes[ekey]; ok {
 			return id, false
 		}
-		elemID := fmt.Sprintf("%s:%s:%s:%s:%d", svc, d.file, string(graph.NodeTypeElement), "#"+elemName, d.line)
+		metaKey := "dom_id"
+		if marker == "." {
+			metaKey = "dom_class"
+		}
+		elemID := fmt.Sprintf("%s:%s:%s:%s:%d", svc, d.file, string(graph.NodeTypeElement), marker+elemName, d.line)
 		elemNodes[ekey] = elemID
 		newNodes = append(newNodes, graph.Node{
 			ID:       elemID,
 			Type:     graph.NodeTypeElement,
-			Label:    "#" + elemName,
+			Label:    marker + elemName,
 			Service:  svc,
 			File:     d.file,
 			Line:     d.line,
 			EndLine:  d.line,
 			Language: d.lang,
-			Meta:     map[string]string{"dom_id": elemName, "component": d.compID},
+			Meta:     map[string]string{metaKey: elemName, "component": d.compID},
 		})
 		return elemID, true
 	}
@@ -351,7 +371,7 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 				continue
 			}
 			for _, d := range defs {
-				elemID, _ := elemNodeFor(n.Service, d, id)
+				elemID, _ := elemNodeFor(n.Service, d, id, "#")
 				addEdge(n.ID, elemID, graph.ConfidenceStatic)
 				listenEdge(n, elemID)
 			}
@@ -362,14 +382,7 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 			defs := classDefs[n.Service+"\x00"+cls]
 			// No unresolved on class miss — classes may be defined externally in CSS.
 			for _, d := range defs {
-				var elemID string
-				if d.nodeID != "" {
-					elemID = d.nodeID
-				} else {
-					// Templ components don't track dom_classes in this phase;
-					// treat as unresolvable without minting a ghost node.
-					continue
-				}
+				elemID, _ := elemNodeFor(n.Service, d, cls, ".")
 				addEdge(n.ID, elemID, graph.ConfidenceInferred)
 				listenEdge(n, elemID)
 			}
