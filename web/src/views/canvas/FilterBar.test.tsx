@@ -135,7 +135,9 @@ describe("FilterBar - services overflow", () => {
 
   it("opens a popover listing every service on click", () => {
     byTestId("filter-services-toggle").click();
-    const menu = byTestId("filter-services-menu");
+    // The menu portals to <body> (outside `container`) so it isn't clipped
+    // by the filter row's overflow-x-auto.
+    const menu = document.querySelector('[data-testid="filter-services-menu"]')!;
     expect(menu).toBeTruthy();
     for (const name of ["svc1", "svc2", "svc3", "svc4", "svc5", "svc6"]) {
       expect([...menu.querySelectorAll("button")].some((b) => b.textContent === name)).toBe(true);
@@ -144,7 +146,7 @@ describe("FilterBar - services overflow", () => {
 
   it("toggling a service from the popover restricts the filter and updates the count", () => {
     byTestId("filter-services-toggle").click();
-    const menu = byTestId("filter-services-menu");
+    const menu = document.querySelector('[data-testid="filter-services-menu"]')!;
     const svc1 = [...menu.querySelectorAll("button")].find((b) => b.textContent === "svc1")!;
     svc1.click();
     expect(scopeStore.viewState().filters.services).toEqual(["svc2", "svc3", "svc4", "svc5", "svc6"]);
