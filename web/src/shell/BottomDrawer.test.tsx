@@ -195,4 +195,44 @@ describe("BottomDrawer / Unresolved tab", () => {
     (container.querySelector('[data-testid="unresolved-row"]') as HTMLElement).click();
     expect(scopeStore.stack().at(-1)).toEqual({ kind: "file", service: "auth", path: "auth/a.go" });
   });
+
+  // DS.3 follow-up: dom_class_high_fanout refs carry a `targets` list of what
+  // the fan-out cap dropped; the drawer must let a user expand it without
+  // triggering the row's own click-to-open-file behavior.
+  it("expands a suppressed ref's dropped targets and shows why, without opening the file", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unresolved": {
+        refs: [
+          {
+            service: "app",
+            file: "assets/js/list.js",
+            line: 1,
+            name: ".item",
+            kind: "dom_class_high_fanout",
+            targets: "views/list.html:10\nviews/list.html:20\n+3 more",
+          },
+        ],
+        total: 1,
+      },
+    });
+    drawerStore.openUnresolvedFor("app", "");
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unresolved-row"]')).toBeTruthy());
+
+    expect(container.querySelector('[data-testid="unresolved-targets"]')).toBeFalsy();
+
+    const stackBefore = scopeStore.stack();
+    (container.querySelector('[data-testid="unresolved-expand-toggle"]') as HTMLElement).click();
+    expect(scopeStore.stack()).toEqual(stackBefore); // toggle must not also open the file
+
+    const targetsPanel = container.querySelector('[data-testid="unresolved-targets"]') as HTMLElement;
+    expect(targetsPanel).toBeTruthy();
+    expect(targetsPanel.textContent).toContain("fan-out cap");
+    const rows = container.querySelectorAll('[data-testid="unresolved-target-row"]');
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toBe("views/list.html:10");
+    expect(rows[2].textContent).toBe("+3 more");
+
+    (container.querySelector('[data-testid="unresolved-expand-toggle"]') as HTMLElement).click();
+    expect(container.querySelector('[data-testid="unresolved-targets"]')).toBeFalsy();
+  });
 });

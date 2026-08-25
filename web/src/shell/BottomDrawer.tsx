@@ -199,12 +199,39 @@ function ContextTab() {
 // service, but this tab is the one place that actually browses the ledger.
 const UNRESOLVED_KINDS = ["import", "call", "route", "component"];
 
+// unresolvedReason gives a human-readable one-liner for why a ref with a
+// non-empty targets list was dropped rather than emitted as edges — the kind
+// string alone (e.g. "dom_class_high_fanout") isn't self-explanatory. Falls
+// back to a generic phrasing for any future kind that starts populating
+// targets without a dedicated entry here.
+function unresolvedReason(kind: string): string {
+  switch (kind) {
+    case "dom_class_high_fanout":
+      return "Suppressed: this class name has more definition sites than the fan-out cap, so no edges were drawn to avoid noise.";
+    default:
+      return "Suppressed: candidates were dropped rather than drawn as edges.";
+  }
+}
+
+function rowKey(ref: UnresolvedRef): string {
+  return `${ref.service}\x00${ref.file}\x00${ref.line}\x00${ref.name}\x00${ref.kind}`;
+}
+
 function UnresolvedTab() {
   const filter = drawerStore.unresolvedFilter;
   const kindFilter = drawerStore.unresolvedKindFilter;
   const [service, setService] = createSignal("");
   const [kind, setKind] = createSignal("");
   const [q, setQ] = createSignal("");
+  const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
+
+  function toggleExpanded(key: string, e: MouseEvent) {
+    e.stopPropagation();
+    const next = new Set(expanded());
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setExpanded(next);
+  }
 
   // A fresh "open pre-filtered to this file" request seeds service + a
   // free-text query for the file path (the server has no dedicated `file`
@@ -287,19 +314,52 @@ function UnresolvedTab() {
               <div class="text-neutral-400 mb-1">{r().total} unresolved ref{r().total === 1 ? "" : "s"}</div>
               <ul data-testid="unresolved-list" class="space-y-0.5">
                 <For each={r().refs}>
-                  {(ref) => (
-                    <li
-                      data-testid="unresolved-row"
-                      class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-neutral-800 cursor-pointer"
-                      onClick={() => openFile(ref)}
-                    >
-                      <span class="text-neutral-400 shrink-0">{ref.kind}</span>
-                      <span class="text-neutral-200 truncate">{ref.name}</span>
-                      <span class="text-neutral-500 truncate ml-auto">
-                        {ref.file}:{ref.line}
-                      </span>
-                    </li>
-                  )}
+                  {(ref) => {
+                    const key = rowKey(ref);
+                    const hasTargets = () => !!ref.targets;
+                    const isOpen = () => expanded().has(key);
+                    return (
+                      <li>
+                        <div
+                          data-testid="unresolved-row"
+                          class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-neutral-800 cursor-pointer"
+                          onClick={() => openFile(ref)}
+                        >
+                          <Show when={hasTargets()}>
+                            <button
+                              data-testid="unresolved-expand-toggle"
+                              class="text-neutral-500 hover:text-white shrink-0 w-3"
+                              onClick={(e) => toggleExpanded(key, e)}
+                            >
+                              {isOpen() ? "▾" : "▸"}
+                            </button>
+                          </Show>
+                          <span class="text-neutral-400 shrink-0">{ref.kind}</span>
+                          <span class="text-neutral-200 truncate">{ref.name}</span>
+                          <span class="text-neutral-500 truncate ml-auto">
+                            {ref.file}:{ref.line}
+                          </span>
+                        </div>
+                        <Show when={hasTargets() && isOpen()}>
+                          <div
+                            data-testid="unresolved-targets"
+                            class="ml-5 mb-1 px-1.5 py-1 rounded bg-neutral-900 text-neutral-400"
+                          >
+                            <div class="text-amber-400/80 mb-0.5">{unresolvedReason(ref.kind)}</div>
+                            <ul class="space-y-0.5">
+                              <For each={ref.targets!.split("\n")}>
+                                {(t) => (
+                                  <li data-testid="unresolved-target-row" class="truncate">
+                                    {t}
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                          </div>
+                        </Show>
+                      </li>
+                    );
+                  }}
                 </For>
               </ul>
             </>

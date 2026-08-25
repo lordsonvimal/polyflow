@@ -60,6 +60,11 @@ export interface UnresolvedRef {
   line: number;
   name: string;
   kind: string;
+  // Newline-separated "file:line" entries a suppression decision dropped
+  // rather than emitted as edges (e.g. dom_class_high_fanout's definitions
+  // beyond the fan-out cap), possibly ending in a "+N more" marker. Absent
+  // for ledger kinds that never had candidates to begin with.
+  targets?: string;
 }
 
 const UNRESOLVED_PAGE_LIMIT = 1000;
