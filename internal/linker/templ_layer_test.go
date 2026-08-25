@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -248,6 +249,79 @@ func TestLinkDOMDefinitions_TemplClassSelector(t *testing.T) {
 	}
 	if len(unresolved) != 0 {
 		t.Errorf("unexpected unresolved: %+v", unresolved)
+	}
+}
+
+// TestLinkDOMDefinitions_StylesheetClassSelector (DS.3) verifies a CSS/SCSS
+// top-level `.class` rule (internal/css/scan.go's stylesheet_selector element
+// node) resolves a JS selector consumer with no templ/HTML producer at all —
+// the join scss.go's own doc comment described but that was never wired into
+// LinkDOMDefinitions' idDefs/classDefs indexes.
+func TestLinkDOMDefinitions_StylesheetClassSelector(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{
+			ID: "app:assets/css/app.scss:element:.btn:8", Type: graph.NodeTypeElement,
+			Label: ".btn", Service: "app", File: "assets/css/app.scss", Line: 8, Language: "scss",
+			Meta: map[string]string{"pattern": "stylesheet_selector", "selector": ".btn", "selector_kind": "class"},
+		},
+		{
+			ID: "app:assets/js/app.js:dom_target:query_selector:4", Type: graph.NodeTypeDOMTarget,
+			Service: "app", File: "assets/js/app.js", Line: 4,
+			Meta: map[string]string{"fn": "querySelector", "selector": `".btn"`},
+		},
+	}
+
+	newNodes, edges, unresolved := LinkDOMDefinitions(nodes)
+	if len(newNodes) != 0 {
+		t.Fatalf("expected no new nodes (stylesheet node already exists), got %+v", newNodes)
+	}
+	if len(edges) != 1 || edges[0].Type != graph.EdgeTypeDefinedIn {
+		t.Fatalf("edges = %+v, want one defined_in edge", edges)
+	}
+	if edges[0].To != nodes[0].ID {
+		t.Errorf("edge To = %q, want the stylesheet selector node %q", edges[0].To, nodes[0].ID)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unexpected unresolved: %+v", unresolved)
+	}
+}
+
+// TestLinkDOMDefinitions_ClassHighFanout (DS.3 noise filter) verifies that a
+// class name with more definition sites than maxClassFanout is suppressed —
+// no edges sprayed to every match — and surfaces exactly one
+// dom_class_high_fanout ledger entry instead.
+func TestLinkDOMDefinitions_ClassHighFanout(t *testing.T) {
+	t.Parallel()
+	var nodes []graph.Node
+	for i := 0; i < maxClassFanout+1; i++ {
+		nodes = append(nodes, graph.Node{
+			ID:      fmt.Sprintf("app:views/list.html:element:.item:%d", i),
+			Type:    graph.NodeTypeElement,
+			Label:   ".item",
+			Service: "app", File: "views/list.html", Line: i, Language: "html",
+			Meta: map[string]string{"class": "item"},
+		})
+	}
+	nodes = append(nodes, graph.Node{
+		ID:      "app:assets/js/list.js:dom_target:query_selector:1",
+		Type:    graph.NodeTypeDOMTarget,
+		Service: "app", File: "assets/js/list.js", Line: 1,
+		Meta: map[string]string{"fn": "querySelector", "selector": `".item"`},
+	})
+
+	newNodes, edges, unresolved := LinkDOMDefinitions(nodes)
+	if len(newNodes) != 0 {
+		t.Fatalf("expected no new nodes, got %+v", newNodes)
+	}
+	if len(edges) != 0 {
+		t.Fatalf("edges = %+v, want none (fan-out cap must suppress, not spray)", edges)
+	}
+	if len(unresolved) != 1 || unresolved[0].Kind != "dom_class_high_fanout" {
+		t.Fatalf("unresolved = %+v, want one dom_class_high_fanout entry", unresolved)
+	}
+	if unresolved[0].Name != ".item" {
+		t.Errorf("unresolved name = %q, want .item", unresolved[0].Name)
 	}
 }
 
