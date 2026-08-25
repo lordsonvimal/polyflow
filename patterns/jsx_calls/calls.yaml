@@ -9,7 +9,7 @@ patterns:
     query: |
       (call_expression
         function: (identifier) @callee
-        (#match? @callee "^[a-z]"))
+        (#match? @callee "^[a-z_$]"))
     captures:
       - name: callee
         role: func_ref
