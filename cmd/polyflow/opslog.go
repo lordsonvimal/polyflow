@@ -71,6 +71,11 @@ func (rec *opsRecording) stopProfiling() ([]byte, ops.ProfileStats) {
 	}
 }
 
+// stdinCapturingTools opts in commands whose real input arrives over stdin
+// as a single JSON payload rather than as flags/args, so opsPersistentPreRun
+// knows it's safe to read stdin to completion upfront and record it.
+var stdinCapturingTools = map[string]bool{"hook-context-inject": true}
+
 // current is set by opsPersistentPreRun and consumed by opsFinalize. A CLI
 // process runs exactly one command per invocation, so a single package-level
 // slot (no concurrency) is sufficient.
@@ -106,10 +111,34 @@ func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
 	cmd.Flags().Visit(func(f *pflag.Flag) {
 		flags[f.Name] = f.Value.String()
 	})
-	paramsJSON, _ := json.Marshal(map[string]any{
+	paramsMap := map[string]any{
 		"flags": flags,
 		"args":  args,
-	})
+	}
+	// stdinCapturingTools' real input arrives as a JSON payload piped over
+	// stdin (e.g. hook-context-inject's PostToolUse payload — see
+	// hook_context_inject.go), not as flags/args, so "Input" in the tool-call
+	// log would otherwise always serialize to {"args":[],"flags":{}} and never
+	// show what the caller actually sent. Only opt in commands known to read
+	// stdin exactly once and to completion (a single JSON object, then EOF) —
+	// unlike `init --interactive`'s line-by-line prompts or `capture`'s
+	// pass-through streaming to a child process, reading it fully upfront
+	// here is safe for those.
+	if stdinCapturingTools[tool] {
+		if data, err := io.ReadAll(os.Stdin); err == nil {
+			paramsMap["stdin"] = string(data)
+			// Replace stdin with a fresh pipe fed from the bytes just
+			// consumed, so the command's own Run still sees the same input.
+			if pr, pw, perr := os.Pipe(); perr == nil {
+				go func() {
+					pw.Write(data)
+					pw.Close()
+				}()
+				os.Stdin = pr
+			}
+		}
+	}
+	paramsJSON, _ := json.Marshal(paramsMap)
 
 	// longRunningTools never return, so opsFinalize (which restores os.Stdout
 	// and drains the tee pipe) never runs for them either — os.Stdout would
