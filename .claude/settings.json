@@ -6,10 +6,6 @@
           {
             "command": "polyflow hook-context-inject",
             "type": "command"
-          },
-          {
-            "command": "/Users/lordson/Projects/polyflow/dist/polyflow hook-context-inject",
-            "type": "command"
           }
         ],
         "matcher": "Bash"
@@ -18,10 +14,6 @@
         "hooks": [
           {
             "command": "polyflow hook-context-inject",
-            "type": "command"
-          },
-          {
-            "command": "/Users/lordson/Projects/polyflow/dist/polyflow hook-context-inject",
             "type": "command"
           }
         ],
@@ -34,11 +26,20 @@
             "type": "command"
           },
           {
-            "command": "/Users/lordson/Projects/polyflow/dist/polyflow hook-context-inject",
+            "command": "/usr/local/bin/polyflow hook-context-inject",
             "type": "command"
           }
         ],
         "matcher": "Grep"
+      },
+      {
+        "hooks": [
+          {
+            "command": "/usr/local/bin/polyflow hook-context-inject",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit"
       }
     ]
   }
