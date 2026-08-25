@@ -21,6 +21,17 @@ function fakeFetch() {
   });
 }
 
+// FilterBar's chip groups live behind a single "Filters ▾" toggle + popover
+// (portaled to <body>) regardless of screen size, so every test opens it
+// first and then looks chips up on `document`, not the render `container`.
+function openFilters(container: HTMLElement): void {
+  (container.querySelector('[data-testid="filter-bar-toggle"]') as HTMLElement).click();
+}
+
+function chip(label: string): HTMLElement {
+  return [...document.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement;
+}
+
 describe("FilterBar", () => {
   let container: HTMLElement;
 
@@ -33,13 +44,10 @@ describe("FilterBar", () => {
     document.body.appendChild(container);
     render(() => <FilterBar />, container);
     await vi.waitFor(() => expect(treeStore.services().length).toBe(2));
+    openFilters(container);
   });
 
   afterEach(() => container.remove());
-
-  function chip(label: string): HTMLElement {
-    return [...container.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement;
-  }
 
   it("renders confidence, edge-group, and service chips", () => {
     expect(chip("static")).toBeTruthy();
@@ -83,17 +91,15 @@ describe("FilterBar", () => {
     chip("partial").click();
     chip("calls").click();
     chip("svc1").click();
-    const resetBtn = [...container.querySelectorAll("button")].find((b) => b.textContent === "reset")!;
-    resetBtn.click();
+    chip("reset").click();
     expect(scopeStore.viewState().filters).toEqual({ confidence: [], edgeTypes: [], services: [], noiseClasses: [] });
   });
 });
 
-// Fleets with more than a handful of services collapse the services row
-// into a single "Services (n/total) ▾" toggle + popover instead of one chip
-// per service, so it can't crowd the fixed-size confidence/edge-type groups
-// out of FilterBar's shared scroll strip.
-describe("FilterBar - services overflow", () => {
+// Fleets with any number of services all render inside the same Filters
+// popover — there's no separate collapse threshold, since the popover
+// itself already scrolls rather than crowding a chip strip.
+describe("FilterBar - many services", () => {
   let container: HTMLElement;
 
   function manyServicesFetch() {
@@ -119,38 +125,22 @@ describe("FilterBar - services overflow", () => {
     document.body.appendChild(container);
     render(() => <FilterBar />, container);
     await vi.waitFor(() => expect(treeStore.services().length).toBe(6));
+    openFilters(container);
   });
 
   afterEach(() => container.remove());
 
-  function byTestId(id: string): HTMLElement {
-    return container.querySelector(`[data-testid="${id}"]`) as HTMLElement;
-  }
-
-  it("collapses services into a toggle instead of one chip each", () => {
-    expect(byTestId("filter-services-toggle")).toBeTruthy();
-    expect(byTestId("filter-services-toggle").textContent).toBe("Services (6/6) ▾");
-    expect(byTestId("filter-services-menu")).toBeFalsy();
-  });
-
-  it("opens a popover listing every service on click", () => {
-    byTestId("filter-services-toggle").click();
-    // The menu portals to <body> (outside `container`) so it isn't clipped
-    // by the filter row's overflow-x-auto.
-    const menu = document.querySelector('[data-testid="filter-services-menu"]')!;
-    expect(menu).toBeTruthy();
+  it("renders a chip for every service", () => {
     for (const name of ["svc1", "svc2", "svc3", "svc4", "svc5", "svc6"]) {
-      expect([...menu.querySelectorAll("button")].some((b) => b.textContent === name)).toBe(true);
+      expect(chip(name)).toBeTruthy();
     }
   });
 
-  it("toggling a service from the popover restricts the filter and updates the count", () => {
-    byTestId("filter-services-toggle").click();
-    const menu = document.querySelector('[data-testid="filter-services-menu"]')!;
-    const svc1 = [...menu.querySelectorAll("button")].find((b) => b.textContent === "svc1")!;
-    svc1.click();
+  it("toggling a service restricts the filter and reflects in the trigger's active count", () => {
+    chip("svc1").click();
     expect(scopeStore.viewState().filters.services).toEqual(["svc2", "svc3", "svc4", "svc5", "svc6"]);
-    expect(byTestId("filter-services-toggle").textContent).toBe("Services (5/6) ▾");
+    const toggle = container.querySelector('[data-testid="filter-bar-toggle"]') as HTMLElement;
+    expect(toggle.textContent).toBe("Filters (1) ▾");
   });
 });
 
@@ -168,13 +158,10 @@ describe("FilterBar - Noise chip row", () => {
     document.body.appendChild(container);
     render(() => <FilterBar />, container);
     await vi.waitFor(() => expect(treeStore.services().length).toBe(2));
+    openFilters(container);
   });
 
   afterEach(() => container.remove());
-
-  function chip(label: string): HTMLElement {
-    return [...container.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement;
-  }
 
   it("renders every noise-class chip inactive by default", () => {
     for (const label of ["Filter chains", "Mixins", "Containment", "Render tree"]) {
@@ -196,13 +183,16 @@ describe("FilterBar - Noise chip row", () => {
 
   it("shows a hidden-count badge sourced from canvasElementsStore.noiseHidden", () => {
     canvasElementsStore.setNoiseHidden(42);
-    expect(container.textContent).toContain("Noise");
-    expect(container.textContent).toContain("42 hidden");
+    const menu = document.querySelector('[data-testid="filter-bar-menu"]')!;
+    expect(menu.textContent).toContain("Noise");
+    expect(menu.textContent).toContain("42 hidden");
   });
 });
 
 // UF.4: "Add all matches" unions the current on-canvas node set into the
 // multi-selection (budget-checked), so it composes with the marquee HUD.
+// It sits next to the Filters toggle, outside the popover, since it isn't a
+// filter itself.
 describe("FilterBar - Add all matches", () => {
   let container: HTMLElement;
 
@@ -256,13 +246,10 @@ describe("FilterBar - Coverage overlay toggle", () => {
     document.body.appendChild(container);
     render(() => <FilterBar />, container);
     await vi.waitFor(() => expect(treeStore.services().length).toBe(2));
+    openFilters(container);
   });
 
   afterEach(() => container.remove());
-
-  function chip(label: string): HTMLElement {
-    return [...container.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLElement;
-  }
 
   it("is on by default", () => {
     expect(scopeStore.viewState().coverageOverlay).not.toBe(false);

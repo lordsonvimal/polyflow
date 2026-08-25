@@ -47,29 +47,37 @@ describe("LensBar", () => {
 
   afterEach(() => container.remove());
 
-  it("renders every lens name as a button", () => {
+  function openLens(): void {
+    (container.querySelector('[data-testid="lens-bar-toggle"]') as HTMLElement).click();
+  }
+
+  it("renders every lens name as a button behind the Lens toggle", () => {
     render(() => <LensBar />, container);
-    const labels = [...container.querySelectorAll("button")].map((b) => b.textContent);
+    openLens();
+    const labels = [...document.querySelectorAll("button")].map((b) => b.textContent);
     for (const name of LENS_NAMES) expect(labels).toContain(name);
   });
 
   it("clicking a lens button switches the active lens", () => {
     render(() => <LensBar />, container);
-    const btn = [...container.querySelectorAll("button")].find((b) => b.textContent === "Messaging")!;
+    openLens();
+    const btn = [...document.querySelectorAll("button")].find((b) => b.textContent === "Messaging")!;
     (btn as HTMLElement).click();
     expect(scopeStore.viewState().lens).toBe("Messaging");
   });
 
   it("only shows the rollup toggle under the Imports lens", () => {
     render(() => <LensBar />, container);
-    expect(container.querySelector('[data-testid="lens-rollup"]')).toBeNull();
+    openLens();
+    expect(document.querySelector('[data-testid="lens-rollup"]')).toBeNull();
     scopeStore.setLens("Imports");
-    expect(container.querySelector('[data-testid="lens-rollup"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="lens-rollup"]')).toBeTruthy();
   });
 
   it("toggling hide-unlinked flips ViewState.lensHideUnlinked", () => {
     render(() => <LensBar />, container);
-    const btn = container.querySelector('[data-testid="lens-hide-unlinked"]') as HTMLElement;
+    openLens();
+    const btn = document.querySelector('[data-testid="lens-hide-unlinked"]') as HTMLElement;
     btn.click();
     expect(scopeStore.viewState().lensHideUnlinked).toBe(true);
     btn.click();
