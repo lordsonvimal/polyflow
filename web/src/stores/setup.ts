@@ -50,12 +50,23 @@ export interface SetupAgentInfo {
   mcp_status_error?: string;
   hooks_configured: boolean;
   hooks_status_error?: string;
+  supports_nudge: boolean;
+  nudge_configured: boolean;
+  nudge_status_error?: string;
 }
 
 export interface SetupAgentApplyResult {
   mcp_result: string;
   hooks_result?: string;
   hooks_skipped?: string;
+  nudge_result?: string;
+  nudge_skipped?: string;
+}
+
+export interface SetupAgentRemoveResult {
+  mcp_result: string;
+  hooks_result?: string;
+  nudge_result?: string;
 }
 
 const [status, setStatus] = createSignal<SetupStatus | null>(null);
@@ -85,6 +96,9 @@ const [agentsError, setAgentsError] = createSignal<string | null>(null);
 const [applyingAgent, setApplyingAgent] = createSignal<string | null>(null);
 const [agentApplyResults, setAgentApplyResults] = createSignal<Record<string, SetupAgentApplyResult>>({});
 const [agentApplyErrors, setAgentApplyErrors] = createSignal<Record<string, string>>({});
+const [removingAgent, setRemovingAgent] = createSignal<string | null>(null);
+const [agentRemoveResults, setAgentRemoveResults] = createSignal<Record<string, SetupAgentRemoveResult>>({});
+const [agentRemoveErrors, setAgentRemoveErrors] = createSignal<Record<string, string>>({});
 
 function errMessage(err: unknown): string {
   if (err instanceof ApiError) return err.body || err.message;
@@ -253,9 +267,18 @@ async function loadAgents(scope: SetupScope = agentScope()): Promise<void> {
   }
 }
 
+// omitKey returns a shallow copy of rec without key — used to clear a
+// stale result from the *other* action's map when apply/remove flips state
+// (e.g. a lingering "removed" message shouldn't survive a fresh apply).
+function omitKey<T>(rec: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _omitted, ...rest } = rec;
+  return rest;
+}
+
 async function applyAgent(name: string, scope: SetupScope = agentScope()): Promise<boolean> {
   setApplyingAgent(name);
   setAgentApplyErrors((prev) => ({ ...prev, [name]: "" }));
+  setAgentRemoveResults((prev) => omitKey(prev, name));
   try {
     const result = await apiFetchJSON<SetupAgentApplyResult>("/api/setup/agent", {
       method: "POST",
@@ -271,6 +294,31 @@ async function applyAgent(name: string, scope: SetupScope = agentScope()): Promi
     return false;
   } finally {
     setApplyingAgent(null);
+  }
+}
+
+// removeAgent is applyAgent's inverse: DELETE /api/setup/agent unregisters
+// the MCP server, unwires polyflow's hook entries, and strips the
+// CLAUDE.md/AGENTS.md nudge block, mirroring `polyflow setup --remove`.
+async function removeAgent(name: string, scope: SetupScope = agentScope()): Promise<boolean> {
+  setRemovingAgent(name);
+  setAgentRemoveErrors((prev) => ({ ...prev, [name]: "" }));
+  setAgentApplyResults((prev) => omitKey(prev, name));
+  try {
+    const result = await apiFetchJSON<SetupAgentRemoveResult>("/api/setup/agent", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: name, scope }),
+      silent: true,
+    });
+    setAgentRemoveResults((prev) => ({ ...prev, [name]: result }));
+    await loadAgents(scope);
+    return true;
+  } catch (err) {
+    setAgentRemoveErrors((prev) => ({ ...prev, [name]: errMessage(err) }));
+    return false;
+  } finally {
+    setRemovingAgent(null);
   }
 }
 
@@ -300,8 +348,12 @@ export const setupStore = {
   applyingAgent,
   agentApplyResults,
   agentApplyErrors,
+  removingAgent,
+  agentRemoveResults,
+  agentRemoveErrors,
   loadAgents,
   applyAgent,
+  removeAgent,
   reset: () => {
     setStatus(null);
     setChecking(true);
@@ -320,5 +372,8 @@ export const setupStore = {
     setApplyingAgent(null);
     setAgentApplyResults({});
     setAgentApplyErrors({});
+    setRemovingAgent(null);
+    setAgentRemoveResults({});
+    setAgentRemoveErrors({});
   },
 };
