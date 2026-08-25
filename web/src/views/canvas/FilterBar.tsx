@@ -7,6 +7,8 @@ import { canvasElementsStore } from "../../stores/canvasElements";
 import { multiSelectStore } from "../../stores/multiSelect";
 import { notificationsStore } from "../../stores/notifications";
 import { BUDGET } from "./budget";
+import { Chip } from "./Chip";
+import OverflowChipGroup from "./OverflowChipGroup";
 
 type Filters = ViewState["filters"];
 
@@ -55,21 +57,6 @@ export function computeActiveCount(filters: Filters, allServices: readonly strin
   // present is itself a deviation from default, not a deviation-from-all-on.
   count += (filters.noiseClasses ?? []).length;
   return count;
-}
-
-function Chip(props: { label: string; active: boolean; dashed?: boolean; onClick: () => void }) {
-  return (
-    <button
-      class={`px-2 py-0.5 rounded text-xs border transition-colors ${
-        props.active
-          ? "bg-neutral-700 text-white border-neutral-600"
-          : "bg-transparent text-neutral-400 border-neutral-800 hover:text-neutral-300"
-      } ${props.dashed ? "border-dashed" : ""}`}
-      onClick={props.onClick}
-    >
-      {props.label}
-    </button>
-  );
 }
 
 export default function FilterBar() {
@@ -156,17 +143,14 @@ export default function FilterBar() {
       </div>
       <Show when={services().length > 0}>
         <div class="w-px h-4 bg-neutral-800" />
-        <div class="flex items-center gap-1">
-          <For each={services()}>
-            {(svc) => (
-              <Chip
-                label={svc}
-                active={effectiveAllOn(filters().services, services()).includes(svc)}
-                onClick={() => toggleService(svc)}
-              />
-            )}
-          </For>
-        </div>
+        <OverflowChipGroup
+          testId="filter-services"
+          groupLabel="Services"
+          items={services()}
+          isActive={(svc) => effectiveAllOn(filters().services, services()).includes(svc)}
+          onToggle={toggleService}
+          activeCount={effectiveAllOn(filters().services, services()).length}
+        />
       </Show>
       <div class="w-px h-4 bg-neutral-800" />
       <div class="flex items-center gap-1" data-testid="filter-noise-row">

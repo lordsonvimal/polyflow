@@ -1,8 +1,8 @@
 import { createSignal, onMount, onCleanup, createEffect, Show, createMemo, For } from "solid-js";
 import { layoutPrefs } from "../stores/layoutPrefs";
 import { paletteStore } from "../stores/palette";
-import { apiFetchJSON } from "../lib/apiFetch";
 import Breadcrumbs from "./Breadcrumbs";
+import GraphStats from "./GraphStats";
 import LensBar from "../views/canvas/LensBar";
 import { NO_CANVAS } from "../views/canvas/CanvasHost";
 import { scopeStore, encodeViewState } from "../stores/scope";
@@ -30,7 +30,6 @@ import {
 } from "../lib/export";
 
 export default function TopBar() {
-  const [stats, setStats] = createSignal("--n/--e");
   const [indexMenuOpen, setIndexMenuOpen] = createSignal(false);
   const [shareMenuOpen, setShareMenuOpen] = createSignal(false);
   const [saveDialogOpen, setSaveDialogOpen] = createSignal(false);
@@ -156,15 +155,6 @@ export default function TopBar() {
     return parts.join(" · ");
   }
 
-  onMount(async () => {
-    try {
-      const d = await apiFetchJSON<{ nodes: number; edges: number }>("/api/stats", { silent: true });
-      setStats(`${d.nodes}n/${d.edges}e`);
-    } catch {
-      setStats("--n/--e");
-    }
-  });
-
   // UO.6: light status polling so a CLI-started `polyflow capture start`
   // shows live in this tab too (mirrored, not just SSE-pushed for
   // sessions this tab itself started).
@@ -270,7 +260,7 @@ export default function TopBar() {
         )}
       </Show>
       <div class="ml-auto flex items-center gap-2">
-        <span class="text-xs text-neutral-400 font-mono">{stats()}</span>
+        <GraphStats />
         <div class="relative flex items-center">
           <Show
             when={captureStore.activeSessions().length > 0}

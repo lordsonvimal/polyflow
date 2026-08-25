@@ -89,6 +89,69 @@ describe("FilterBar", () => {
   });
 });
 
+// Fleets with more than a handful of services collapse the services row
+// into a single "Services (n/total) ▾" toggle + popover instead of one chip
+// per service, so it can't crowd the fixed-size confidence/edge-type groups
+// out of FilterBar's shared scroll strip.
+describe("FilterBar - services overflow", () => {
+  let container: HTMLElement;
+
+  function manyServicesFetch() {
+    return vi.fn((url: string) => {
+      const u = new URL(url, "http://localhost");
+      if (u.pathname === "/api/stack") {
+        const names = ["svc1", "svc2", "svc3", "svc4", "svc5", "svc6"];
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ services: names.map((name) => ({ name, language: "go", frameworks: [], files: 1 })) }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, text: async () => "not found" } as Response);
+    });
+  }
+
+  beforeEach(async () => {
+    treeStore.reset();
+    scopeStore.reset();
+    scopeStore.setFilters({ confidence: [], edgeTypes: [], services: [] });
+    (globalThis as any).fetch = manyServicesFetch();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(() => <FilterBar />, container);
+    await vi.waitFor(() => expect(treeStore.services().length).toBe(6));
+  });
+
+  afterEach(() => container.remove());
+
+  function byTestId(id: string): HTMLElement {
+    return container.querySelector(`[data-testid="${id}"]`) as HTMLElement;
+  }
+
+  it("collapses services into a toggle instead of one chip each", () => {
+    expect(byTestId("filter-services-toggle")).toBeTruthy();
+    expect(byTestId("filter-services-toggle").textContent).toBe("Services (6/6) ▾");
+    expect(byTestId("filter-services-menu")).toBeFalsy();
+  });
+
+  it("opens a popover listing every service on click", () => {
+    byTestId("filter-services-toggle").click();
+    const menu = byTestId("filter-services-menu");
+    expect(menu).toBeTruthy();
+    for (const name of ["svc1", "svc2", "svc3", "svc4", "svc5", "svc6"]) {
+      expect([...menu.querySelectorAll("button")].some((b) => b.textContent === name)).toBe(true);
+    }
+  });
+
+  it("toggling a service from the popover restricts the filter and updates the count", () => {
+    byTestId("filter-services-toggle").click();
+    const menu = byTestId("filter-services-menu");
+    const svc1 = [...menu.querySelectorAll("button")].find((b) => b.textContent === "svc1")!;
+    svc1.click();
+    expect(scopeStore.viewState().filters.services).toEqual(["svc2", "svc3", "svc4", "svc5", "svc6"]);
+    expect(byTestId("filter-services-toggle").textContent).toBe("Services (5/6) ▾");
+  });
+});
+
 // Tier NV.7: the Noise row defaults every class off (opposite polarity from
 // confidence/edgeTypes/services), matching the agent-side hide-by-default.
 describe("FilterBar - Noise chip row", () => {
