@@ -285,3 +285,104 @@ func TestLinkJSGlobals_UnresolvedHandlerLedgered(t *testing.T) {
 	assert.Equal(t, tmplFile, unresolved[0].File)
 	assert.Equal(t, 9, unresolved[0].Line)
 }
+
+// TestLinkJSGlobals_LocalFunctionFallback: a handler callee that is a plain
+// module-scope function (never assigned to window[.ns], so it has no
+// global_symbol meta) still resolves, via the funcByLabel fallback.
+func TestLinkJSGlobals_LocalFunctionFallback(t *testing.T) {
+	t.Parallel()
+	libFile := "/svc/config-list.js"
+	tmplFile := "/svc/pdv_dashboard.templ"
+
+	handlerFn := graph.Node{
+		ID: "svc:" + libFile + ":function:depsPopupOnClick:40", Type: graph.NodeTypeFunction,
+		Label: "depsPopupOnClick", Service: "svc", File: libFile, Line: 40,
+	}
+	listener := graph.Node{
+		ID: "svc:" + tmplFile + ":dom_target:dom_event_attr:1521", Type: graph.NodeTypeDOMTarget,
+		Label: "onclick handler", Service: "svc", File: tmplFile, Line: 1521,
+		Meta: map[string]string{"handler": "depsPopupOnClick(pkg)", "prop": "onclick", "pattern": "dom_event_attr"},
+	}
+	svcFiles := map[string][]string{"svc": {libFile, tmplFile}}
+
+	edges, _, unresolved := LinkJSGlobals([]graph.Node{handlerFn, listener}, nil, nil, svcFiles)
+
+	require.Len(t, edges, 1, "listener → module-scope function")
+	assert.Equal(t, listener.ID, edges[0].From)
+	assert.Equal(t, handlerFn.ID, edges[0].To)
+	assert.Equal(t, "local_function", edges[0].Meta["via"])
+	assert.Empty(t, unresolved, "resolved handler must not be ledgered")
+}
+
+// TestLinkJSGlobals_LocalFunctionAmbiguous: same-named module-scope
+// functions in two files fan out to both, tagged local_function_ambiguous,
+// without ledgering a collision (unlike the global-symbol collision rule —
+// plain function name collisions across files are routine, not notable).
+func TestLinkJSGlobals_LocalFunctionAmbiguous(t *testing.T) {
+	t.Parallel()
+	fileA := "/svc/a.js"
+	fileB := "/svc/b.js"
+	tmplFile := "/svc/modal.templ"
+
+	fnA := graph.Node{
+		ID: "svc:" + fileA + ":function:render:1", Type: graph.NodeTypeFunction,
+		Label: "render", Service: "svc", File: fileA, Line: 1,
+	}
+	fnB := graph.Node{
+		ID: "svc:" + fileB + ":function:render:1", Type: graph.NodeTypeFunction,
+		Label: "render", Service: "svc", File: fileB, Line: 1,
+	}
+	listener := graph.Node{
+		ID: "svc:" + tmplFile + ":dom_target:dom_event_attr:3", Type: graph.NodeTypeDOMTarget,
+		Label: "onclick handler", Service: "svc", File: tmplFile, Line: 3,
+		Meta: map[string]string{"handler": "render(row)", "prop": "onclick", "pattern": "dom_event_attr"},
+	}
+	svcFiles := map[string][]string{"svc": {fileA, fileB, tmplFile}}
+
+	edges, _, unresolved := LinkJSGlobals([]graph.Node{fnA, fnB, listener}, nil, nil, svcFiles)
+
+	require.Len(t, edges, 2, "fans out to both same-named definitions")
+	for _, e := range edges {
+		assert.Equal(t, "local_function_ambiguous", e.Meta["via"])
+	}
+	assert.Empty(t, unresolved, "no collision ledger for local-function fan-out")
+}
+
+// TestLinkJSGlobals_CompoundHandlerStatements: a handler attribute with
+// multiple ';'-separated statements resolves each independently instead of
+// collapsing to whatever precedes the first '(' in the whole string.
+func TestLinkJSGlobals_CompoundHandlerStatements(t *testing.T) {
+	t.Parallel()
+	libFile := "/svc/config-list.js"
+	tmplFile := "/svc/pdv_dashboard.templ"
+
+	handlerFn := graph.Node{
+		ID: "svc:" + libFile + ":function:depsPopupOnClick:40", Type: graph.NodeTypeFunction,
+		Label: "depsPopupOnClick", Service: "svc", File: libFile, Line: 40,
+	}
+	listener := graph.Node{
+		ID: "svc:" + tmplFile + ":dom_target:dom_event_attr:1521", Type: graph.NodeTypeDOMTarget,
+		Label: "onclick handler", Service: "svc", File: tmplFile, Line: 1521,
+		Meta: map[string]string{
+			"handler": "event.stopPropagation(); depsPopupOnClick(pkg)",
+			"prop":    "onclick", "pattern": "dom_event_attr",
+		},
+	}
+	svcFiles := map[string][]string{"svc": {libFile, tmplFile}}
+
+	edges, _, unresolved := LinkJSGlobals([]graph.Node{handlerFn, listener}, nil, nil, svcFiles)
+
+	require.Len(t, edges, 1, "second statement's callee must still resolve")
+	assert.Equal(t, listener.ID, edges[0].From)
+	assert.Equal(t, handlerFn.ID, edges[0].To)
+	assert.Empty(t, unresolved, "resolved handler must not be ledgered")
+}
+
+func TestSplitHandlerStatements(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"save()"}, splitHandlerStatements("save()"))
+	assert.Equal(t, []string{"event.stopPropagation()", "depsPopupOnClick(pkg)"},
+		splitHandlerStatements("event.stopPropagation(); depsPopupOnClick(pkg)"))
+	assert.Equal(t, []string{"a()", "b()"}, splitHandlerStatements(" a() ; b() ; "))
+	assert.Empty(t, splitHandlerStatements(""))
+}

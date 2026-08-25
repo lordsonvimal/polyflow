@@ -77,26 +77,10 @@ func LinkJSGlobals(
 	seenEdge := make(map[string]bool)
 	seenCollision := make(map[string]bool)
 
-	emitGlobalEdges := func(fromID, callee, svc string) {
-		tbl, ok := svcGlobals[svc]
-		if !ok {
-			return
-		}
-		entries, ok := tbl[callee]
-		if !ok {
-			return
-		}
-		via := "global"
-		if len(entries) > 1 {
-			via = "global_ambiguous"
-			key := svc + "\x00" + callee
-			if !seenCollision[key] {
-				seenCollision[key] = true
-				unresolvedOut = append(unresolvedOut, graph.UnresolvedRef{
-					Service: svc, Name: callee, Kind: "global_collision",
-				})
-			}
-		}
+	// emitEdgesFromEntries mints calls edges from fromID to every entry,
+	// tagging via/via_ambiguous depending on fan-out. Shared by the global
+	// symbol table and the module-local function fallback below.
+	emitEdgesFromEntries := func(fromID string, entries []globalEntry, via string) {
 		for _, e := range entries {
 			if fromID == e.nodeID {
 				continue
@@ -117,18 +101,74 @@ func LinkJSGlobals(
 		}
 	}
 
+	emitGlobalEdges := func(fromID, callee, svc string) {
+		tbl, ok := svcGlobals[svc]
+		if !ok {
+			return
+		}
+		entries, ok := tbl[callee]
+		if !ok {
+			return
+		}
+		via := "global"
+		if len(entries) > 1 {
+			via = "global_ambiguous"
+			key := svc + "\x00" + callee
+			if !seenCollision[key] {
+				seenCollision[key] = true
+				unresolvedOut = append(unresolvedOut, graph.UnresolvedRef{
+					Service: svc, Name: callee, Kind: "global_collision",
+				})
+			}
+		}
+		emitEdgesFromEntries(fromID, entries, via)
+	}
+
 	// Per-service attribution structures (same logic as LinkJS.resolveImportCalls).
 	// We build funcLinesByFile and funcByFileAndLabel per service to reconstruct
 	// the from-node for call_ref resolution.
 	type attrInfo struct {
 		funcLinesByFile    map[string][]lineNode
 		funcByFileAndLabel map[string]string
+		// funcByLabel indexes every named function/method in the service by
+		// label alone (not scoped to a file), sorted below for determinism.
+		// It backs emitLocalEdges: the fallback lookup for inline handler
+		// callees that are ordinary module-scope functions never assigned
+		// to window[.ns] (so they never got global_symbol/global_path meta
+		// and never entered svcGlobals).
+		funcByLabel map[string][]globalEntry
 	}
+
+	// emitLocalEdges resolves a handler callee against the service's
+	// module-scope function label index (funcByLabel) — the fallback used
+	// when a handler callee is a plain top-level function that was never
+	// assigned to window[.ns] (so it never entered svcGlobals; see
+	// stampGlobalSymbols's isModule gate in js_variables.go). Name
+	// collisions across files are common for ordinary function names, so
+	// unlike emitGlobalEdges this never ledgers a collision — it just fans
+	// out candidate edges to every same-named definition in the service.
+	emitLocalEdges := func(fromID, callee string, attr *attrInfo) bool {
+		if attr == nil {
+			return false
+		}
+		entries, ok := attr.funcByLabel[callee]
+		if !ok {
+			return false
+		}
+		via := "local_function"
+		if len(entries) > 1 {
+			via = "local_function_ambiguous"
+		}
+		emitEdgesFromEntries(fromID, entries, via)
+		return true
+	}
+
 	svcAttr := make(map[string]*attrInfo)
 	for svcName := range svcFiles {
 		a := &attrInfo{
 			funcLinesByFile:    make(map[string][]lineNode),
 			funcByFileAndLabel: make(map[string]string),
+			funcByLabel:        make(map[string][]globalEntry),
 		}
 		for _, n := range nodes {
 			if n.Service != svcName {
@@ -144,11 +184,21 @@ func LinkJSGlobals(
 			if n.Label == "(module)" {
 				continue
 			}
+			a.funcByLabel[n.Label] = append(a.funcByLabel[n.Label], globalEntry{nodeID: n.ID, file: n.File})
 			end := 0
 			if v, ok := n.Meta["end_line"]; ok {
 				fmt.Sscanf(v, "%d", &end)
 			}
 			a.funcLinesByFile[n.File] = append(a.funcLinesByFile[n.File], lineNode{n.Line, end, n.ID})
+		}
+		for name := range a.funcByLabel {
+			sort.Slice(a.funcByLabel[name], func(i, j int) bool {
+				es := a.funcByLabel[name]
+				if es[i].file != es[j].file {
+					return es[i].file < es[j].file
+				}
+				return es[i].nodeID < es[j].nodeID
+			})
 		}
 		svcAttr[svcName] = a
 	}
@@ -237,16 +287,29 @@ func LinkJSGlobals(
 	for _, n := range domTargets {
 		handler := n.Meta["handler"]
 		tbl := svcGlobals[n.Service]
+		attr := svcAttr[n.Service]
 		resolved := false
-		// Most-specific first: full dotted path, then leaf, then first identifier.
-		for _, cand := range extractHandlerCandidates(handler) {
-			if tbl == nil {
-				break
-			}
-			if _, ok := tbl[cand]; ok {
-				emitGlobalEdges(n.ID, cand, n.Service)
-				resolved = true
-				break
+		// A handler attribute may hold multiple statements
+		// ("event.stopPropagation(); depsPopupOnClick(pkg)") — resolve each
+		// independently instead of collapsing the whole string to whatever
+		// precedes the first '(', which silently discarded every statement
+		// after the first.
+		for _, stmt := range splitHandlerStatements(handler) {
+			// Most-specific first: full dotted path, then leaf, then first identifier.
+			for _, cand := range extractHandlerCandidates(stmt) {
+				if tbl != nil {
+					if _, ok := tbl[cand]; ok {
+						emitGlobalEdges(n.ID, cand, n.Service)
+						resolved = true
+						break
+					}
+				}
+				// Fallback: plain module-scope function, never assigned to
+				// window[.ns], so it never entered svcGlobals.
+				if emitLocalEdges(n.ID, cand, attr) {
+					resolved = true
+					break
+				}
 			}
 		}
 		// Rule #12: an unresolved native on* handler never silently drops — it
@@ -282,6 +345,22 @@ func LinkJSGlobals(
 		return a.Line < b.Line
 	})
 	return newEdges, globallyResolved, unresolvedOut
+}
+
+// splitHandlerStatements splits a raw inline handler attribute into its
+// individual statements ("a(); b(x)" → ["a()", "b(x)"]), trimming whitespace
+// and dropping empties. Inline handlers are plain JS statement lists, not
+// expressions, so ';' is a safe, unambiguous split point.
+func splitHandlerStatements(handler string) []string {
+	parts := strings.Split(handler, ";")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // extractHandlerCandidates returns lookup keys for an inline handler, most
