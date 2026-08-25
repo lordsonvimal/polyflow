@@ -91,6 +91,39 @@ func TestLinkDOMContracts_ExactStaticMatch(t *testing.T) {
 	}
 }
 
+// TestLinkDOMContracts_NonDataAttribute: DS.1 widened templ attribute capture
+// beyond data-*/id, so a plain `name=` attribute must resolve a `[name="…"]`
+// JS selector exactly like data-testid already does — the dom_contract.go
+// index was already attribute-name-generic; only the templ-side capture was
+// data-*-only before this fix.
+func TestLinkDOMContracts_NonDataAttribute(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{
+			ID:   "app:form.templ:component:LoginForm:4",
+			Type: graph.NodeTypeComponent, Label: "LoginForm",
+			Service: "app", File: "form.templ", Line: 4, Language: "templ",
+			Meta: map[string]string{"dom_data_attrs": "name=email@9"},
+		},
+		{
+			ID:   "app:assets/js/form.js:dom_target:query_selector:3",
+			Type: graph.NodeTypeDOMTarget, Service: "app", File: "assets/js/form.js", Line: 3,
+			Meta: map[string]string{"fn": "querySelector", "selector": `'[name="email"]'`},
+		},
+	}
+
+	_, edges, unresolved := LinkDOMContracts(nodes)
+	if len(edges) != 1 || edges[0].Confidence != graph.ConfidenceStatic {
+		t.Fatalf("edges = %+v, want one static-confidence edge", edges)
+	}
+	if edges[0].From != nodes[0].ID {
+		t.Errorf("edge From = %q, want the component %q", edges[0].From, nodes[0].ID)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %+v, want none", unresolved)
+	}
+}
+
 // TestLinkDOMContracts_NoProducer_SurfacesUnresolved: a selector token with a
 // real static prefix that matches no known producer is surfaced, not dropped
 // (the bug this feature fixes: dynamic-interpolated selectors used to vanish

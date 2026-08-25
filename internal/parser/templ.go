@@ -266,18 +266,46 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 			v.addComponentMeta("dom_classes", fmt.Sprintf("%s@%d", cls, lineNo))
 		}
 
-	// Any other data-* attribute (data-testid, data-role, …) not already a
-	// datastar/reactive binding is a stable selector hook a JS attribute
-	// selector may target (`[data-testid="…"]`). Recorded per attribute so
-	// LinkDOMContracts can resolve the templ→JS `dom_contract` seam (IA.5).
-	case strings.HasPrefix(strings.ToLower(key), "data-") && val != "":
-		v.addComponentMeta("dom_data_attrs", fmt.Sprintf("%s=%s@%d", strings.ToLower(key), val, lineNo))
-
 	// Native DOM event attributes: onclick="save()" etc.
 	case reOnEventAttr.MatchString(key):
 		v.addEventAttr(key, val, lineNo)
+
+	// Any other constant attribute (data-testid, name, type, value,
+	// aria-*, …) not already a datastar/reactive binding, event handler, or
+	// verb/asset attribute consumed elsewhere (method/data-method by
+	// elementMethod, src by scriptSrc) is a stable selector hook a JS
+	// attribute selector may target (`[name="…"]`, `[data-testid="…"]`).
+	// Recorded per attribute so LinkDOMContracts can resolve the templ→JS
+	// `dom_contract` seam (IA.5) — data-* was the original scope (Tier
+	// IA.5); DS.1 widened it to any attribute name once dom_contract.go's
+	// index proved to already be attribute-name-generic.
+	case isSelectorHookAttr(key) && val != "":
+		v.addComponentMeta("dom_data_attrs", fmt.Sprintf("%s=%s@%d", strings.ToLower(key), val, lineNo))
 	}
 	return nil
+}
+
+// selectorHookExclusions holds attribute names that reach the default case in
+// VisitConstantAttribute/VisitExpressionAttribute but must not be recorded as
+// selector hooks: method/data-method are the form-verb attributes elementMethod
+// already reads for a different purpose, src is scriptSrc's own asset-path
+// input (script tags never reach this switch, but img/other elements' src
+// would, and it's a file path — not a selector-hook attribute), and style is
+// inline CSS, effectively unique per element and never used as a JS selector
+// target.
+var selectorHookExclusions = map[string]bool{
+	"method":      true,
+	"data-method": true,
+	"src":         true,
+	"style":       true,
+}
+
+// isSelectorHookAttr reports whether a constant attribute not already routed
+// to a dedicated case (id, class, href/action, datastar/reactive bindings,
+// on* events) is a plausible JS selector-hook attribute — i.e. everything
+// except the small exclusion list above (Tier DS.1).
+func isSelectorHookAttr(key string) bool {
+	return !selectorHookExclusions[strings.ToLower(key)]
 }
 
 // addEventAttr emits a dom_target node for a native on<event> attribute and
@@ -323,12 +351,13 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 		return nil
 	}
 
-	// data-* attribute with a computed value, e.g.
-	// data-testid={ "promotion-button-" + strings.ToLower(x) } — only the
-	// leading string-literal segment is knowable statically; recorded as a
-	// prefix (trailing "*") so LinkDOMContracts can prefix-match it against a
-	// JS template-literal selector's static prefix (IA.5).
-	if strings.HasPrefix(strings.ToLower(key), "data-") {
+	// Any other attribute with a computed value, e.g.
+	// data-testid={ "promotion-button-" + strings.ToLower(x) } or
+	// name={ "field-" + fieldID } — only the leading string-literal segment is
+	// knowable statically; recorded as a prefix (trailing "*") so
+	// LinkDOMContracts can prefix-match it against a JS template-literal
+	// selector's static prefix (IA.5; widened from data-*-only in DS.1).
+	if isSelectorHookAttr(key) {
 		if prefix, ok := leadingStringLiteralPrefix(raw); ok && prefix != "" {
 			v.addComponentMeta("dom_data_attrs", fmt.Sprintf("%s=%s*@%d", strings.ToLower(key), prefix, lineNo))
 		}
