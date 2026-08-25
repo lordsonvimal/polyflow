@@ -159,6 +159,33 @@ var reSimpleID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // corpus shows the cap firing too eagerly or not eagerly enough.
 const maxClassFanout = 20
 
+// maxFanoutTargetsListed caps how many definition sites formatFanoutTargets
+// writes into a suppressed ref's Targets field, so a single ledger entry for
+// an extreme case (hundreds of matches) doesn't itself become a token dump —
+// an agent asking "what got dropped" needs a representative sample and a
+// count, not the entire list.
+const maxFanoutTargetsListed = 15
+
+// formatFanoutTargets renders the definition sites a fan-out cap suppressed,
+// as newline-separated "file:line" entries (truncated with a "+N more"
+// marker) — so an agent can locate what was dropped and, if it matters for
+// the question at hand, use search/read on it directly instead of the
+// suppressed edges polyflow declined to spray.
+func formatFanoutTargets(defs []elemDef) string {
+	n := len(defs)
+	if n > maxFanoutTargetsListed {
+		n = maxFanoutTargetsListed
+	}
+	lines := make([]string, 0, n+1)
+	for _, d := range defs[:n] {
+		lines = append(lines, fmt.Sprintf("%s:%d", d.file, d.line))
+	}
+	if rest := len(defs) - n; rest > 0 {
+		lines = append(lines, fmt.Sprintf("+%d more", rest))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // elemDef records one definition site for a DOM element (by id or class).
 // When nodeID is non-empty the element node already exists (from HTML/JSX
 // parsing) and no new node needs to be minted. When nodeID is empty the
@@ -412,6 +439,7 @@ func LinkDOMDefinitions(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph
 				unresolved = append(unresolved, graph.UnresolvedRef{
 					Service: n.Service, File: n.File, Line: n.Line,
 					Name: "." + cls, Kind: "dom_class_high_fanout",
+					Targets: formatFanoutTargets(defs),
 				})
 				continue
 			}

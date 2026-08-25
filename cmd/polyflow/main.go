@@ -1171,6 +1171,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		for _, u := range unresolvedRefs {
 			fmt.Printf("  UNRESOLVED  %-10s %s:%d  %s (%s)\n", u.Service, u.File, u.Line, u.Name, u.Kind)
+			if u.Targets != "" {
+				for _, t := range strings.Split(u.Targets, "\n") {
+					fmt.Printf("      dropped: %s\n", t)
+				}
+			}
 		}
 	}
 	if statusTrend {
