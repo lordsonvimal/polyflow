@@ -255,6 +255,17 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 	case strings.ToLower(key) == "id" && val != "":
 		v.addComponentMeta("dom_ids", fmt.Sprintf("%s@%d", val, lineNo))
 
+	// class="a b c" — each space-separated token is a DOM definition a JS
+	// querySelector(".foo")/jQuery selector may target, same as id= above.
+	// One dom_classes entry per token so LinkDOMDefinitions can mint (or
+	// fan out to) an element node per class instead of treating every
+	// class-selector consumer as unresolvable (it previously had no templ-side
+	// class index to check at all).
+	case strings.ToLower(key) == "class" && val != "":
+		for _, cls := range strings.Fields(val) {
+			v.addComponentMeta("dom_classes", fmt.Sprintf("%s@%d", cls, lineNo))
+		}
+
 	// Any other data-* attribute (data-testid, data-role, …) not already a
 	// datastar/reactive binding is a stable selector hook a JS attribute
 	// selector may target (`[data-testid="…"]`). Recorded per attribute so

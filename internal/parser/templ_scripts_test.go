@@ -58,4 +58,18 @@ func TestTemplParser_ScriptsAndIDs(t *testing.T) {
 	if len(gotIDs) != 2 {
 		t.Errorf("dom_ids = %q, want exactly 2 (class-only element excluded)", comp.Meta["dom_ids"])
 	}
+
+	classes := strings.Split(comp.Meta["dom_classes"], "\n")
+	gotClasses := map[string]bool{}
+	for _, entry := range classes {
+		if i := strings.LastIndexByte(entry, '@'); i >= 0 {
+			gotClasses[entry[:i]] = true
+		}
+	}
+	if !gotClasses["board"] || !gotClasses["hint"] {
+		t.Errorf("expected classes board and hint; got %q", comp.Meta["dom_classes"])
+	}
+	if len(gotClasses) != 2 {
+		t.Errorf("dom_classes = %q, want exactly 2", comp.Meta["dom_classes"])
+	}
 }
