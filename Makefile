@@ -12,7 +12,7 @@ web:
 	# ENOTEMPTY rather than a clear permission error when it can't unlink
 	# them. `-f` on rm means this is a no-op on an already-clean tree.
 	rm -rf web/dist
-	cd web && npm install && npm run build
+	cd web && npm ci && npm run build
 	# vite empties dist on build; restore the committed embed placeholder so
 	# `//go:embed all:dist` stays satisfied and the working tree stays clean.
 	touch web/dist/.gitkeep
