@@ -304,7 +304,8 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	if len(args) == 1 {
+	scopedToService := len(args) == 1
+	if scopedToService {
 		svc := args[0]
 		if !cfg.HasService(svc) {
 			return fmt.Errorf("index: no service %q in %s", svc, indexWorkspace)
@@ -312,6 +313,14 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		opts.ServiceFilter = []string{svc}
 		opts.DBDir = filepath.Join(meta.DBDir, "services", svc)
 		fmt.Printf("Scanning %s...\n", svc)
+		// This writes only the fleet-sync shard (services/<svc>/graph.db), never
+		// the unified graph.db that search/context/mcp/impact all read — so a
+		// scoped reindex looks complete (correct node/edge counts, no errors)
+		// while the queryable graph silently stays on whatever it last had.
+		// `polyflow status` does surface the gap (compare "Last indexed" against
+		// "Per-service last indexed"), but nothing in a scoped run's own output
+		// says so, and that's an easy thing to miss.
+		fmt.Printf("Note: this updates only the %q fleet-sync shard, not the unified graph — run `polyflow index` (no service argument) so search/context/mcp see these changes.\n", svc)
 	} else {
 		fmt.Println("Scanning services...")
 	}
@@ -331,6 +340,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		stats.Nodes, stats.Edges, stats.ContractEdges, stats.CrossLinks)
 	if stats.ErrorFiles > 0 {
 		fmt.Printf("  Errors: %d files (run `polyflow status --errors` for details)\n", stats.ErrorFiles)
+	}
+	if scopedToService {
+		fmt.Printf("  Reminder: the unified graph.db was not updated by this run — run `polyflow index` (no service argument) before querying.\n")
 	}
 
 	// GR.1: a standalone repo's own polyflow.yml (today's per-repo case,
