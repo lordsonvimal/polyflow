@@ -553,3 +553,31 @@ func TestBuildIndex(t *testing.T) {
 	assert.Len(t, idx.InEdges["n2"], 1)
 	assert.Empty(t, idx.OutEdges["n2"])
 }
+
+// TestUnresolvedRefs_TargetsRoundTrip verifies the Targets field (added so a
+// suppressed fan-out's dropped definition sites survive to a later `polyflow
+// status --unresolved` or `investigate` call, not just the in-process return
+// value from the linker pass that produced it) persists through the SQLite
+// store, not just in memory.
+func TestUnresolvedRefs_TargetsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	refs := []graph.UnresolvedRef{
+		{Service: "app", File: "x.js", Line: 1, Name: ".item", Kind: "dom_class_high_fanout",
+			Targets: "views/list.html:10\nviews/list.html:20\n+3 more"},
+		{Service: "app", File: "y.js", Line: 2, Name: "plainMiss", Kind: "call_ref"},
+	}
+	require.NoError(t, s.ReplaceUnresolvedRefs(ctx, refs))
+
+	got, err := s.ListUnresolvedRefs(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	byName := map[string]graph.UnresolvedRef{}
+	for _, r := range got {
+		byName[r.Name] = r
+	}
+	assert.Equal(t, "views/list.html:10\nviews/list.html:20\n+3 more", byName[".item"].Targets)
+	assert.Empty(t, byName["plainMiss"].Targets)
+}

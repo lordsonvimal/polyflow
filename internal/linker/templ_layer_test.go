@@ -2,6 +2,7 @@ package linker
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -322,6 +323,18 @@ func TestLinkDOMDefinitions_ClassHighFanout(t *testing.T) {
 	}
 	if unresolved[0].Name != ".item" {
 		t.Errorf("unresolved name = %q, want .item", unresolved[0].Name)
+	}
+	wantTargets := maxFanoutTargetsListed + 1 // maxClassFanout+1 defs, one truncation marker
+	gotTargets := strings.Split(unresolved[0].Targets, "\n")
+	if len(gotTargets) != wantTargets {
+		t.Fatalf("targets = %q (%d lines), want %d", unresolved[0].Targets, len(gotTargets), wantTargets)
+	}
+	if !strings.HasPrefix(gotTargets[0], "views/list.html:") {
+		t.Errorf("first target = %q, want a views/list.html:<line> entry", gotTargets[0])
+	}
+	if last := gotTargets[len(gotTargets)-1]; last != "+6 more" {
+		t.Errorf("last target = %q, want the truncation marker (%d defs - %d listed = 6 more)",
+			last, maxClassFanout+1, maxFanoutTargetsListed)
 	}
 }
 

@@ -411,6 +411,12 @@ type UnresolvedRef struct {
 	Line    int    `json:"line"`
 	Name    string `json:"name"`
 	Kind    string `json:"kind"`
+	// Targets optionally lists what a suppression decision dropped rather than
+	// surfaced as edges — e.g. dom_class_high_fanout's definition-site node IDs
+	// that exceeded the fan-out cap. Newline-separated, capped by the writer;
+	// empty for ledger kinds that never had candidates to begin with (a plain
+	// miss has nothing to list).
+	Targets string `json:"targets,omitempty"`
 }
 
 // UnresolvedHistoryRow is one row of the per-index-run unresolved count log.

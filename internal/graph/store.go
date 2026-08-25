@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS unresolved_refs (
 	line    INTEGER NOT NULL,
 	name    TEXT NOT NULL,
 	kind    TEXT NOT NULL,
+	targets TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (service, file, line, name, kind)
 );
 
@@ -301,6 +302,7 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		{`ALTER TABLE edges ADD COLUMN verification_state TEXT NOT NULL DEFAULT ''`, "verification_state"},
 		{`ALTER TABLE edges ADD COLUMN verified_granularity TEXT NOT NULL DEFAULT ''`, "verified_granularity"},
 		{`ALTER TABLE nodes ADD COLUMN end_line INTEGER NOT NULL DEFAULT 0`, "end_line"},
+		{`ALTER TABLE unresolved_refs ADD COLUMN targets TEXT NOT NULL DEFAULT ''`, "targets"},
 	} {
 		if _, merr := db.Exec(col.stmt); merr != nil {
 			// "duplicate column name" is the expected error when the column
@@ -714,15 +716,15 @@ func (s *SQLiteStore) UpsertUnresolvedRefs(ctx context.Context, refs []Unresolve
 	}
 	return s.WithTx(ctx, func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
-			INSERT INTO unresolved_refs (service, file, line, name, kind)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO unresolved_refs (service, file, line, name, kind, targets)
+			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(service, file, line, name, kind) DO NOTHING`)
 		if err != nil {
 			return fmt.Errorf("prepare unresolved-ref upsert: %w", err)
 		}
 		defer stmt.Close()
 		for _, r := range refs {
-			if _, err := stmt.ExecContext(ctx, r.Service, r.File, r.Line, r.Name, r.Kind); err != nil {
+			if _, err := stmt.ExecContext(ctx, r.Service, r.File, r.Line, r.Name, r.Kind, r.Targets); err != nil {
 				return fmt.Errorf("upsert unresolved ref %s:%d %s: %w", r.File, r.Line, r.Name, err)
 			}
 		}
@@ -734,7 +736,7 @@ func (s *SQLiteStore) UpsertUnresolvedRefs(ctx context.Context, refs []Unresolve
 // stable reporting.
 func (s *SQLiteStore) ListUnresolvedRefs(ctx context.Context) ([]UnresolvedRef, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT service, file, line, name, kind FROM unresolved_refs ORDER BY service, file, line, name`)
+		`SELECT service, file, line, name, kind, targets FROM unresolved_refs ORDER BY service, file, line, name`)
 	if err != nil {
 		return nil, fmt.Errorf("list unresolved refs: %w", err)
 	}
@@ -743,7 +745,7 @@ func (s *SQLiteStore) ListUnresolvedRefs(ctx context.Context) ([]UnresolvedRef, 
 	var out []UnresolvedRef
 	for rows.Next() {
 		var r UnresolvedRef
-		if err := rows.Scan(&r.Service, &r.File, &r.Line, &r.Name, &r.Kind); err != nil {
+		if err := rows.Scan(&r.Service, &r.File, &r.Line, &r.Name, &r.Kind, &r.Targets); err != nil {
 			return nil, fmt.Errorf("scan unresolved ref: %w", err)
 		}
 		out = append(out, r)
