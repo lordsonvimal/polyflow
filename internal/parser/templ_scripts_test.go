@@ -72,4 +72,22 @@ func TestTemplParser_ScriptsAndIDs(t *testing.T) {
 	if len(gotClasses) != 2 {
 		t.Errorf("dom_classes = %q, want exactly 2", comp.Meta["dom_classes"])
 	}
+
+	// DS.1: a non-data-*, non-id/class attribute (name=) must now also surface
+	// as a selector-hook attribute for LinkDOMContracts, not just data-*.
+	attrs := strings.Split(comp.Meta["dom_data_attrs"], "\n")
+	gotAttrs := map[string]bool{}
+	for _, entry := range attrs {
+		if i := strings.LastIndexByte(entry, '@'); i >= 0 {
+			gotAttrs[entry[:i]] = true
+		}
+	}
+	if !gotAttrs["name=room-board"] {
+		t.Errorf("expected dom_data_attrs to include name=room-board; got %q", comp.Meta["dom_data_attrs"])
+	}
+	for attr := range gotAttrs {
+		if strings.HasPrefix(attr, "src=") {
+			t.Errorf("script src must stay excluded from dom_data_attrs; got %q", comp.Meta["dom_data_attrs"])
+		}
+	}
 }
