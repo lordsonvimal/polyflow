@@ -25,6 +25,9 @@ type setupAgentInfo struct {
 	MCPStatusError      string `json:"mcp_status_error,omitempty"`
 	HooksConfigured     bool   `json:"hooks_configured"`
 	HooksStatusError    string `json:"hooks_status_error,omitempty"`
+	SupportsNudge       bool   `json:"supports_nudge"`
+	NudgeConfigured     bool   `json:"nudge_configured"`
+	NudgeStatusError    string `json:"nudge_status_error,omitempty"`
 }
 
 // handleSetupAgents handles GET /api/setup/agents?scope=repo|user|global —
@@ -70,6 +73,15 @@ func (s *Server) handleSetupAgents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		info.SupportsNudge = a.SupportsNudge()
+		if a.SupportsNudge() {
+			if configured, err := setupagents.NudgeStatus(a, effectiveScope); err != nil {
+				info.NudgeStatusError = err.Error()
+			} else {
+				info.NudgeConfigured = configured
+			}
+		}
+
 		out = append(out, info)
 	}
 
@@ -88,32 +100,46 @@ type setupAgentApplyResult struct {
 	MCPResult    string `json:"mcp_result"`
 	HooksResult  string `json:"hooks_result,omitempty"`
 	HooksSkipped string `json:"hooks_skipped,omitempty"`
+	NudgeResult  string `json:"nudge_result,omitempty"`
+	NudgeSkipped string `json:"nudge_skipped,omitempty"`
 }
 
-// handleSetupAgentApply handles POST /api/setup/agent — the web wizard's
-// counterpart to running `polyflow setup --agent <name> --scope <scope>`.
-// Runs the exact same setupagents.Agent methods the CLI calls
-// (cmd/polyflow/setup.go's runSetup), so both surfaces write identical
-// config files.
-func (s *Server) handleSetupAgentApply(w http.ResponseWriter, r *http.Request) {
+// decodeSetupAgentRequest parses and validates the shared {agent, scope}
+// body POST /api/setup/agent and DELETE /api/setup/agent both take,
+// resolving "global" to "user" for agents without a real global scope the
+// same way handleSetupAgents and the CLI's runSetup already do.
+func decodeSetupAgentRequest(w http.ResponseWriter, r *http.Request) (setupagents.Agent, string, bool) {
 	var req setupAgentApplyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
-		return
+		return nil, "", false
 	}
 	if !isValidSetupScope(req.Scope) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid scope %q: must be repo, user, or global", req.Scope))
-		return
+		return nil, "", false
 	}
 	agent, ok := setupagents.Get(req.Agent)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown agent %q", req.Agent))
-		return
+		return nil, "", false
 	}
 
 	scope := req.Scope
 	if scope == "global" && !agent.SupportsGlobalScope() {
 		scope = "user"
+	}
+	return agent, scope, true
+}
+
+// handleSetupAgentApply handles POST /api/setup/agent — the web wizard's
+// counterpart to running `polyflow setup --agent <name> --scope <scope>`.
+// Runs the exact same setupagents.Agent methods the CLI calls
+// (cmd/polyflow/setup.go's runSetupAdd), so both surfaces write identical
+// config files.
+func (s *Server) handleSetupAgentApply(w http.ResponseWriter, r *http.Request) {
+	agent, scope, ok := decodeSetupAgentRequest(w, r)
+	if !ok {
+		return
 	}
 
 	polyflowBin, err := os.Executable()
@@ -137,6 +163,64 @@ func (s *Server) handleSetupAgentApply(w http.ResponseWriter, r *http.Request) {
 		result.HooksResult = hooksResult
 	} else {
 		result.HooksSkipped = agent.DisplayName() + " has no post-tool-use hook mechanism"
+	}
+
+	if agent.SupportsNudge() {
+		nudgeResult, err := setupagents.SetupNudge(agent, scope)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "nudge setup: "+err.Error())
+			return
+		}
+		result.NudgeResult = nudgeResult
+	} else {
+		result.NudgeSkipped = agent.DisplayName() + " has no persistent instructions file polyflow knows how to steer yet"
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// setupAgentRemoveResult mirrors `polyflow setup --remove`'s CLI output.
+type setupAgentRemoveResult struct {
+	MCPResult   string `json:"mcp_result"`
+	HooksResult string `json:"hooks_result,omitempty"`
+	NudgeResult string `json:"nudge_result,omitempty"`
+}
+
+// handleSetupAgentRemove handles DELETE /api/setup/agent — the web wizard's
+// counterpart to `polyflow setup --agent <name> --scope <scope> --remove`.
+// Runs the exact same setupagents.Agent Remove* methods the CLI calls
+// (cmd/polyflow/setup.go's runSetupRemove): unregisters the MCP server,
+// unwires just polyflow's hook entries, and removes the nudge block, each
+// step a no-op rather than an error when there's nothing to remove.
+func (s *Server) handleSetupAgentRemove(w http.ResponseWriter, r *http.Request) {
+	agent, scope, ok := decodeSetupAgentRequest(w, r)
+	if !ok {
+		return
+	}
+
+	mcpResult, err := agent.RemoveMCP(scope)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "mcp removal: "+err.Error())
+		return
+	}
+	result := setupAgentRemoveResult{MCPResult: mcpResult}
+
+	if agent.SupportsHooks() {
+		hooksResult, err := agent.RemoveHooks(scope)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "hook removal: "+err.Error())
+			return
+		}
+		result.HooksResult = hooksResult
+	}
+
+	if agent.SupportsNudge() {
+		nudgeResult, err := setupagents.RemoveNudge(agent, scope)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "nudge removal: "+err.Error())
+			return
+		}
+		result.NudgeResult = nudgeResult
 	}
 
 	writeJSON(w, http.StatusOK, result)

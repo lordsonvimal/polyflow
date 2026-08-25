@@ -28,8 +28,9 @@ import (
 )
 
 var (
-	setupScope string
-	setupAgent string
+	setupScope  string
+	setupAgent  string
+	setupRemove bool
 )
 
 var setupCmd = &cobra.Command{
@@ -40,6 +41,12 @@ config should be (repo/user/global), and which agent to configure. Answers
 can be supplied via --scope/--agent to skip the prompts (e.g. in CI or a
 setup script).
 
+Pass --remove to reverse setup instead: unregisters the MCP server, unwires
+the context-injection hook, and removes polyflow's tool-preference nudge
+from CLAUDE.md/AGENTS.md (only the marked block polyflow owns — nothing
+else in the file is touched). Running setup again afterwards re-adds all
+three.
+
 To update polyflow itself, use ` + "`polyflow update`" + ` instead.`,
 	RunE: runSetup,
 }
@@ -47,6 +54,7 @@ To update polyflow itself, use ` + "`polyflow update`" + ` instead.`,
 func init() {
 	setupCmd.Flags().StringVar(&setupScope, "scope", "", "config scope: repo, user, or global (skips the prompt)")
 	setupCmd.Flags().StringVar(&setupAgent, "agent", "", "agent to configure: "+strings.Join(setupagents.Names(), ", ")+" (skips the prompt)")
+	setupCmd.Flags().BoolVar(&setupRemove, "remove", false, "reverse setup: unregister the MCP server, hooks, and CLAUDE.md/AGENTS.md nudge instead of adding them")
 	rootCmd.AddCommand(setupCmd)
 }
 
@@ -86,6 +94,13 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		scope = "user"
 	}
 
+	if setupRemove {
+		return runSetupRemove(agent, scope)
+	}
+	return runSetupAdd(agent, scope, polyflowBin)
+}
+
+func runSetupAdd(agent setupagents.Agent, scope, polyflowBin string) error {
 	fmt.Printf("\nConfiguring %s (%s scope)...\n", agent.DisplayName(), scope)
 
 	mcpResult, err := agent.SetupMCP(scope, polyflowBin)
@@ -104,7 +119,51 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s has no post-tool-use hook mechanism — skipping the context-injection hook (MCP tools are still fully available).\n", agent.DisplayName())
 	}
 
+	if agent.SupportsNudge() {
+		nudgeResult, err := setupagents.SetupNudge(agent, scope)
+		if err != nil {
+			return fmt.Errorf("nudge setup: %w", err)
+		}
+		fmt.Println("  " + nudgeResult)
+	} else {
+		fmt.Printf("  %s has no persistent instructions file polyflow knows how to steer yet — skipping the tool-preference nudge.\n", agent.DisplayName())
+	}
+
 	fmt.Println("\nDone. Restart your agent session for this to take effect.")
+	return nil
+}
+
+// runSetupRemove reverses runSetupAdd: unregisters the MCP server, unwires
+// the context-injection hook, and removes polyflow's nudge block — each
+// step is independently idempotent (a no-op result line, not an error, when
+// there's nothing to remove), so `setup --remove` is safe to run even if a
+// previous setup only partially completed.
+func runSetupRemove(agent setupagents.Agent, scope string) error {
+	fmt.Printf("\nRemoving %s (%s scope) configuration...\n", agent.DisplayName(), scope)
+
+	mcpResult, err := agent.RemoveMCP(scope)
+	if err != nil {
+		return fmt.Errorf("mcp removal: %w", err)
+	}
+	fmt.Println("  " + mcpResult)
+
+	if agent.SupportsHooks() {
+		hookResult, err := agent.RemoveHooks(scope)
+		if err != nil {
+			return fmt.Errorf("hook removal: %w", err)
+		}
+		fmt.Println("  " + hookResult)
+	}
+
+	if agent.SupportsNudge() {
+		nudgeResult, err := setupagents.RemoveNudge(agent, scope)
+		if err != nil {
+			return fmt.Errorf("nudge removal: %w", err)
+		}
+		fmt.Println("  " + nudgeResult)
+	}
+
+	fmt.Println("\nDone.")
 	return nil
 }
 

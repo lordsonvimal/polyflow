@@ -73,3 +73,18 @@ func mergeMCPServers(doc map[string]any, name, command string, args []string) {
 	}
 	doc["mcpServers"] = servers
 }
+
+// removeMCPServer deletes a top-level "mcpServers" entry named name from
+// doc, if present. Reports whether anything was removed, mirroring
+// mergeMCPServers' own idempotent shape.
+func removeMCPServer(doc map[string]any, name string) bool {
+	servers, _ := doc["mcpServers"].(map[string]any)
+	if servers == nil {
+		return false
+	}
+	if _, ok := servers[name]; !ok {
+		return false
+	}
+	delete(servers, name)
+	return true
+}

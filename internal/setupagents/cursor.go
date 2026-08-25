@@ -14,7 +14,7 @@ type cursorAgent struct{}
 func (cursorAgent) Name() string        { return "cursor" }
 func (cursorAgent) DisplayName() string { return "Cursor" }
 func (cursorAgent) Description() string {
-	return "MCP support via mcp.json, plus a postToolUse context-injection hook"
+	return "MCP support via mcp.json, a postToolUse context-injection hook, and an AGENTS.md tool-preference nudge"
 }
 func (cursorAgent) SupportsHooks() bool       { return true }
 func (cursorAgent) SupportsGlobalScope() bool { return false }
@@ -36,6 +36,39 @@ func (cursorAgent) SetupMCP(scope, polyflowBin string) (string, error) {
 		return fmt.Sprintf("Created %s with the polyflow MCP server.", path), nil
 	}
 	return fmt.Sprintf("Registered the polyflow MCP server in %s.", path), nil
+}
+
+func (cursorAgent) RemoveMCP(scope string) (string, error) {
+	path, err := cursorMCPPath(scope)
+	if err != nil {
+		return "", err
+	}
+	doc, existed, err := readJSONDoc(path)
+	if err != nil {
+		return "", err
+	}
+	if !existed || !removeMCPServer(doc, "polyflow") {
+		return fmt.Sprintf("MCP server was not registered in %s.", path), nil
+	}
+	if err := writeJSONDoc(path, doc); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Unregistered the polyflow MCP server from %s.", path), nil
+}
+
+func (cursorAgent) SupportsNudge() bool { return true }
+
+// NudgeFile returns AGENTS.md's path for scope. Confirmed against
+// cursor.com/docs/context/rules (fetched at implementation time): Cursor
+// reads a plain AGENTS.md at the project root as an alternative to
+// .cursor/rules, with no frontmatter and no user/global-level equivalent —
+// user-level instructions go through Cursor's own Settings > Rules UI
+// instead, which this package doesn't have a file to write to.
+func (cursorAgent) NudgeFile(scope string) (string, error) {
+	if scope != "repo" {
+		return "", fmt.Errorf("cursor has no file-based user/global instructions equivalent to AGENTS.md — only Settings > Rules (not scriptable), use --scope repo")
+	}
+	return "AGENTS.md", nil
 }
 
 // SetupHooks wires polyflow's context-injection binary as a Cursor
@@ -68,6 +101,27 @@ func (cursorAgent) SetupHooks(scope, polyflowBin string) (string, error) {
 	default:
 		return fmt.Sprintf("Context-injection hook already present in %s.", path), nil
 	}
+}
+
+func (cursorAgent) RemoveHooks(scope string) (string, error) {
+	path, err := cursorHooksPath(scope)
+	if err != nil {
+		return "", err
+	}
+	doc, existed, err := readJSONDoc(path)
+	if err != nil {
+		return "", err
+	}
+	if !existed {
+		return fmt.Sprintf("No %s file present — nothing to remove.", path), nil
+	}
+	if !unmergeCursorHooks(doc) {
+		return fmt.Sprintf("No context-injection hook found in %s.", path), nil
+	}
+	if err := writeJSONDoc(path, doc); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Removed the context-injection hook from %s.", path), nil
 }
 
 func (cursorAgent) MCPStatus(scope string) (bool, error) {
@@ -140,6 +194,29 @@ func mergeCursorHooks(doc map[string]any, command string) (added bool) {
 	}
 	hooks["postToolUse"] = append(postToolUse, map[string]any{"command": command})
 	return true
+}
+
+// unmergeCursorHooks removes any hook entry whose command contains
+// "hook-context-inject" from postToolUse. No matcher grouping to prune here
+// (unlike Claude/Gemini) — postToolUse is a flat list.
+func unmergeCursorHooks(doc map[string]any) (removed bool) {
+	hooks, _ := doc["hooks"].(map[string]any)
+	if hooks == nil {
+		return false
+	}
+	postToolUse, _ := hooks["postToolUse"].([]any)
+	kept := postToolUse[:0:0]
+	for _, h := range postToolUse {
+		if hm, ok := h.(map[string]any); ok {
+			if cmd, _ := hm["command"].(string); strings.Contains(cmd, "hook-context-inject") {
+				removed = true
+				continue
+			}
+		}
+		kept = append(kept, h)
+	}
+	hooks["postToolUse"] = kept
+	return removed
 }
 
 // cursorHooksWired matches by substring ("hook-context-inject") rather than
