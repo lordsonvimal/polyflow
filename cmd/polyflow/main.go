@@ -438,7 +438,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("open store: %w", err)
 		}
 	}
-	idx, err := buildFleetAwareIndex(ctx, store)
+	// Local-only load, not a fleet merge: `polyflow index` already parsed
+	// source into dbPath, so this is one SQLite read of this workspace's own
+	// graph into memory (graph.SQLiteStore.BuildIndex). Deliberately not
+	// buildFleetAwareIndex here — when this workspace is a fleet member,
+	// wireFleetServe below replaces this with a full fleet merge anyway, and
+	// backgrounding that (rather than blocking startup on it, twice) is the
+	// whole point: the browser opens against this cheap local idx immediately,
+	// then RefreshFleet's graph_updated broadcast upgrades it in place.
+	idx, err := store.BuildIndex(ctx)
 	if err != nil {
 		return fmt.Errorf("build index: %w", err)
 	}
@@ -468,10 +476,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// GR.6: if this workspace is a registered fleet member, wire per-member
 	// store switching into the server so the UI can browse another member's
-	// own graph, not just this one's cross-service edges into it (already
-	// covered by buildFleetAwareIndex above regardless of fleet mode).
+	// own graph, not just this one's cross-service edges into it. Backgrounded:
+	// wireFleetServe's RefreshFleet call opens and indexes every fleet member's
+	// graph.db, which used to block the browser opening for as long as the
+	// slowest member took. It now runs after the local-only idx above is
+	// already serving, and RefreshFleet broadcasts graph_updated when the
+	// full fleet view is ready so any open tab picks it up automatically.
 	if cfgErr == nil && !dbMissing {
-		wireFleetServe(ctx, srv, serveWS, store, dbPath, emb, synonyms)
+		go wireFleetServe(ctx, srv, serveWS, store, dbPath, emb, synonyms)
 	}
 
 	// UB.2: ops.db lives next to graph.db and is never touched by the
