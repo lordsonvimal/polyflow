@@ -703,6 +703,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
+	// RefreshFleet's fleet_syncing/graph_updated broadcasts are best-effort —
+	// dropped if this client connects after the merge already started (or
+	// finished), since `serve` kicks the merge off before the HTTP listener
+	// even binds. Replay the current status so a late-connecting client's
+	// banner reflects reality instead of assuming "not syncing" by default.
+	if s.FleetSyncing() {
+		fmt.Fprintf(w, "data: {\"type\":\"fleet_syncing\"}\n\n")
+	}
 	flusher.Flush()
 
 	ch := make(chan string, 8)

@@ -15,6 +15,7 @@ import { registerKeys } from "./interaction/keys";
 import { connectionStore } from "./stores/connection";
 import { jobsStore } from "./stores/jobs";
 import { setupStore } from "./stores/setup";
+import { fleetMembersStore } from "./stores/fleetMembers";
 import SetupView from "./views/SetupView";
 
 const App: Component = () => {
@@ -22,9 +23,15 @@ const App: Component = () => {
     const cleanup = registerKeys(window);
     connectionStore.start();
     setupStore.checkStatus();
+    // Drives the "Syncing fleet data…" banner below — must be app-wide, not
+    // tied to FleetSwitcher's own mount (Settings > Fleet), since the banner
+    // needs to show on any view, including the overview graph most users
+    // land on.
+    const unsubscribeFleet = fleetMembersStore.subscribe();
     onCleanup(() => {
       cleanup();
       connectionStore.stop();
+      unsubscribeFleet();
     });
   });
 
@@ -55,6 +62,11 @@ const AppShell: Component = () => {
         <div class="flex items-center gap-2 px-3 py-1 bg-neutral-800 text-neutral-400 text-xs shrink-0">
           <span>A node from the saved view no longer exists after reindex — view reset to overview.</span>
           <button class="ml-auto hover:text-white" onClick={scopeStore.dismissStaleIdNotice}>×</button>
+        </div>
+      </Show>
+      <Show when={fleetMembersStore.syncing()}>
+        <div data-testid="fleet-syncing-banner" class="flex items-center gap-2 px-3 py-1 bg-neutral-800 text-neutral-300 text-xs shrink-0">
+          <span class="animate-pulse">Syncing fleet data…</span>
         </div>
       </Show>
       <Show when={jobsStore.reloadBanner()}>

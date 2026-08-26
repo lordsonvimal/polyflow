@@ -57,6 +57,7 @@ type Server struct {
 	fleetResolved  map[string]bool   // member -> currently merged into idx
 	fleetRoots     map[string]string // service -> checkout root, for relative node.File resolution
 	fleetSearchers map[string]*semantic.Searcher
+	fleetSyncing   bool // true from RefreshFleet's start until it returns; see handleEvents
 }
 
 // SelectWorkspaceFunc re-points the running `polyflow serve` process at a
@@ -125,9 +126,17 @@ func (s *Server) SetFleet(mergeFn FleetMergeFunc, ensureFn FleetEnsureFunc, memb
 // can't delay the browser opening against the cheap local-only idx `serve`
 // starts with) and again by handleFleetActive after ensuring a new member
 // is locally resolved. A nil fleetMerge (not a fleet member) is a no-op,
-// not an error. Broadcasts graph_updated like Reload so a browser tab
-// already open against the local-only idx picks up the fleet-wide merge
-// once it lands, instead of needing a manual refresh.
+// not an error. Broadcasts fleet_syncing before the merge starts and
+// graph_updated like Reload once it lands, so an already-open tab can show a
+// "syncing" indicator for what can take several seconds on a first clone and
+// then picks up the fleet-wide merge automatically. Both broadcasts are
+// best-effort (dropped if no /api/events client is connected yet — very
+// possible here, since `serve` calls this in a goroutine launched before its
+// HTTP listener even binds, let alone before a browser tab's EventSource
+// connects) — fleetSyncing is also recorded as durable state so handleEvents
+// can tell a client connecting mid-merge (or one that missed the
+// fleet_syncing broadcast entirely) the correct current status instead of
+// relying solely on the transient broadcast.
 func (s *Server) RefreshFleet(ctx context.Context) error {
 	s.idxMu.RLock()
 	mergeFn := s.fleetMerge
@@ -135,8 +144,18 @@ func (s *Server) RefreshFleet(ctx context.Context) error {
 	if mergeFn == nil {
 		return nil
 	}
+	s.idxMu.Lock()
+	s.fleetSyncing = true
+	s.idxMu.Unlock()
+	select {
+	case s.broadcast <- `{"type":"fleet_syncing"}`:
+	default:
+	}
 	idx, roots, searchers, resolved, err := mergeFn(ctx)
 	if err != nil {
+		s.idxMu.Lock()
+		s.fleetSyncing = false
+		s.idxMu.Unlock()
 		return err
 	}
 	s.idxMu.Lock()
@@ -147,12 +166,36 @@ func (s *Server) RefreshFleet(ctx context.Context) error {
 	for _, svc := range resolved {
 		s.fleetResolved[svc] = true
 	}
+	s.fleetSyncing = false
 	s.idxMu.Unlock()
 	select {
 	case s.broadcast <- `{"type":"graph_updated"}`:
 	default:
 	}
+	// Distinct from graph_updated (also broadcast by Reload on a plain
+	// reindex, which intentionally only surfaces a manual "Reload view"
+	// banner rather than force-refreshing the canvas out from under the
+	// user's current pan/zoom/selection): fleet_synced is fleet-merge-
+	// specific, so the frontend can safely auto-refresh the canvas on this
+	// one without also hijacking the reindex path's deliberately manual
+	// reload.
+	select {
+	case s.broadcast <- `{"type":"fleet_synced"}`:
+	default:
+	}
 	return nil
+}
+
+// FleetSyncing reports whether RefreshFleet is currently running — true from
+// the point it records fleet_syncing until the merge lands (or fails). Used
+// by handleEvents to tell a newly-connecting SSE client the current status
+// even if it connected after the transient fleet_syncing broadcast fired (or
+// missed it because no client was connected yet, e.g. the merge kicked off
+// before the browser tab even opened).
+func (s *Server) FleetSyncing() bool {
+	s.idxMu.RLock()
+	defer s.idxMu.RUnlock()
+	return s.fleetSyncing
 }
 
 // New creates a Server backed by the given store and adjacency index.
