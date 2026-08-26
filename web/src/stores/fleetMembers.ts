@@ -7,6 +7,7 @@ import { createSignal } from "solid-js";
 import { apiFetchJSON, ApiError } from "../lib/apiFetch";
 import { notificationsStore } from "../stores/notifications";
 import { connectionStore } from "./connection";
+import { scopeStore } from "./scope";
 
 export interface FleetMemberRow {
   service: string;
@@ -16,6 +17,14 @@ export interface FleetMemberRow {
 const [services, setServices] = createSignal<FleetMemberRow[]>([]);
 const [loading, setLoading] = createSignal(false);
 const [switching, setSwitching] = createSignal(false);
+// Set true on the server's fleet_syncing event (RefreshFleet started — can
+// take several seconds on a first clone) and cleared on fleet_synced (the
+// merge landed) — a distinct event from graph_updated (also broadcast on a
+// plain reindex) so this doesn't flip on an unrelated event. Distinct from
+// switching(), which only covers the POST /api/fleet/active call itself,
+// not the background merge `serve` kicks off at startup before any switch
+// has happened.
+const [syncing, setSyncing] = createSignal(false);
 
 function parseErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -83,12 +92,14 @@ export const fleetMembersStore = {
   services,
   loading,
   switching,
+  syncing,
   load,
   setActive,
   reset: () => {
     setServices([]);
     setLoading(false);
     setSwitching(false);
+    setSyncing(false);
   },
   // Called once at app startup (mirrors stores/tree.ts's own subscription)
   // so a fleet switch triggered from another tab/session is reflected here
@@ -96,8 +107,21 @@ export const fleetMembersStore = {
   subscribe: () => {
     unsubscribe?.();
     unsubscribe = connectionStore.onEvent((ev) => {
-      if (ev.type !== "graph_updated") return;
+      if (ev.type === "fleet_syncing") {
+        setSyncing(true);
+        return;
+      }
+      if (ev.type !== "fleet_synced") return;
+      setSyncing(false);
       load();
+      // The canvas (CanvasHost) only refetches on scopeStore.reloadNonce, not
+      // on every graph_updated — a plain reindex deliberately surfaces a
+      // manual "Reload view" banner instead (stores/jobs.ts) rather than
+      // yanking the view out from under an in-progress pan/zoom/selection.
+      // A fleet merge landing is different: the user's current view was
+      // already scoped to whatever was resolved so far, so silently
+      // widening it here is the whole point of this feature.
+      scopeStore.requestReload();
     });
     return unsubscribe;
   },

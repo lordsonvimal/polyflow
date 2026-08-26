@@ -322,6 +322,15 @@ function start(): void {
     // Cache until graph_updated: invalidate every loaded service so the
     // next expand/reveal re-fetches instead of showing stale structure.
     setEntries({});
+    // services() (the root /api/stack list, e.g. the fleet-serve case where
+    // this starts as just the local workspace and later merges in every
+    // other resolved fleet member) is guarded by "already loaded, skip" in
+    // loadServices — reset it too and re-trigger the fetch here, or a
+    // fleet merge landing after this panel already mounted would leave the
+    // root tree/canvas showing only the original single-service snapshot
+    // forever, even though entries and everything else picks up the merge.
+    setServices([]);
+    void loadServices();
   });
 }
 

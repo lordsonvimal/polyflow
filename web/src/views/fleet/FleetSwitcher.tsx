@@ -1,4 +1,4 @@
-import { For, Show, onMount, onCleanup } from "solid-js";
+import { For, Show, onMount } from "solid-js";
 import { fleetMembersStore } from "../../stores/fleetMembers";
 
 // GR.6 (revised): every locally-resolved fleet member is merged into one
@@ -11,10 +11,11 @@ import { fleetMembersStore } from "../../stores/fleetMembers";
 // this workspace isn't a registered Tier-GR fleet member (an empty services
 // list), same "bonus, not a requirement" contract the backend follows.
 export default function FleetSwitcher() {
+  // The graph_updated/fleet_syncing subscription itself is app-wide (wired
+  // once in App.tsx, driving the "Syncing fleet data…" banner regardless of
+  // which panel is open) — this only needs its own initial load.
   onMount(() => {
     fleetMembersStore.load();
-    const unsubscribe = fleetMembersStore.subscribe();
-    onCleanup(unsubscribe);
   });
 
   return (
