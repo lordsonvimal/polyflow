@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -153,10 +154,16 @@ func Save(path string, reg *Registry) error {
 	return nil
 }
 
-// Lookup returns the entry for service, if any.
+// Lookup returns the entry for service, if any. Matching is
+// case-insensitive: a service auto-named from a directory's on-disk case
+// (workspace.Discover, filepath.Base) must resolve to the same entry as one
+// named by a fleet.yml definition using different casing for the same
+// service, or Sync/RecordFleetMembership fork it into a duplicate entry
+// pointing at the same local_path (this is what happened to orion-atlas /
+// orion-atlas before this fix).
 func (r *Registry) Lookup(service string) (*Entry, bool) {
 	for i := range r.Entries {
-		if r.Entries[i].Service == service {
+		if strings.EqualFold(r.Entries[i].Service, service) {
 			return &r.Entries[i], true
 		}
 	}
