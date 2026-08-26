@@ -37,6 +37,8 @@ var filterFixtureFiles = []string{
 	"testdata/rails_filters/app/controllers/concerns/token_authenticatable.rb",
 	"testdata/rails_filters/app/controllers/public_pages_controller.rb",
 	"testdata/rails_filters/app/controllers/reports_controller.rb",
+	"testdata/rails_filters/app/models/application_record.rb",
+	"testdata/rails_filters/app/models/user.rb",
 }
 
 func filterFixture(t *testing.T) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
@@ -401,6 +403,48 @@ func TestLinkRailsFilters_NoDanglingEdges(t *testing.T) {
 		assert.True(t, byID[e.From], "edge from a node that does not exist: %s", e.From)
 		assert.True(t, byID[e.To], "edge to a node that does not exist: %s", e.To)
 		assert.NotEqual(t, e.From, e.To, "self-loop")
+	}
+}
+
+// TestLinkRailsFilters_ModelCallbacksReachTheMethod: `validate`/`before_validation`
+// on an ActiveRecord model register a callback the same way `before_action`
+// does on a controller, and must resolve the same way.
+func TestLinkRailsFilters_ModelCallbacksReachTheMethod(t *testing.T) {
+	t.Parallel()
+	nodes, edges, _ := filterFixture(t)
+
+	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "User")
+	targets := filterTargets(nodes, edges, classID)
+	assert.Contains(t, targets, "set_username/class")
+	assert.Contains(t, targets, "cro_user_must_be_sso/class")
+	assert.Contains(t, targets, "normalize_email/class")
+
+	for _, e := range edges {
+		if e.To == methodID(t, nodes, "User#cro_user_must_be_sso") && e.Meta["scope"] == "class" {
+			assert.Equal(t, "validate", e.Meta["filter"])
+		}
+	}
+}
+
+// TestLinkRailsFilters_ModelHasNoActionScopeEdges: a model has no actions, so
+// no method of it -- public or private -- should gain an action-scope edge the
+// way a controller action does. Without collectActions gated to
+// app/controllers, `full_name` would wrongly appear to call every callback the
+// class registers.
+func TestLinkRailsFilters_ModelHasNoActionScopeEdges(t *testing.T) {
+	t.Parallel()
+	nodes, edges, _ := filterFixture(t)
+
+	byID := map[string]*graph.Node{}
+	for i := range nodes {
+		byID[nodes[i].ID] = &nodes[i]
+	}
+	for _, e := range edges {
+		if n := byID[e.From]; n != nil && n.Type == graph.NodeTypeMethod &&
+			strings.HasPrefix(n.Meta["qualified_name"], "User#") {
+			assert.NotEqual(t, "action", e.Meta["scope"],
+				"%s should not carry an action-scope edge, models have no actions", n.Meta["qualified_name"])
+		}
 	}
 }
 
