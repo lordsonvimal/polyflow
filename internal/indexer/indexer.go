@@ -451,6 +451,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			dsSel := tcReg.Select(toolchain.ToolDatastar, dsVersion)
 			matcher.DatastarVariant = dsSel.Backend.RuleVariant
 		}
+		// Package/version-gated per this service (see stampReflectDispatched):
+		// method declarations land here as NodeTypeMethod nodes straight out
+		// of the tree-sitter matcher (functions.yaml's method_decl and
+		// friends), not out of the later Go SSA semantic pass, so this must
+		// be applied in this loop, against these nodes.
+		reflectMethods := reg.ForService(sf.deps).ReflectDispatchedMethods(sf.svc.Language)
 
 		var toParse []string
 		for _, file := range sf.files {
@@ -473,6 +479,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 					if json.Unmarshal([]byte(old.UnresolvedJSON), &cachedUnresolved) == nil {
 						allUnresolved = append(allUnresolved, cachedUnresolved...)
 					}
+					stampReflectDispatched(nodes, reflectMethods)
 					for i := range nodes {
 						if err := bw.AddNode(ctx, &nodes[i]); err != nil {
 							return nil, err
@@ -532,6 +539,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				fhBatch = append(fhBatch, fh)
 				continue
 			}
+			stampReflectDispatched(result.Nodes, reflectMethods)
 			nodesJSON, _ := json.Marshal(result.Nodes)
 			edgesJSON, _ := json.Marshal(result.Edges)
 			unresolvedJSON, _ := json.Marshal(result.Unresolved)
@@ -621,15 +629,6 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		for _, id := range semReferenced {
 			referencedIDs[id] = true
 		}
-
-		// Stamp graph.MetaReflectDispatched on methods the pattern registry's
-		// package/version-gated reflect_dispatched_methods declares (GORM
-		// hooks, Go stdlib interface methods, ...) — done here, once per
-		// service and before caching, so it survives the semantic cache and
-		// deadcode can exclude these with one generic Meta check instead of a
-		// hardcoded name list. Applied unconditionally (cached or fresh path)
-		// since it's a pure function of already-in-memory data, not source.
-		stampReflectDispatched(semNodes, reg.ForService(sf.deps).ReflectDispatchedMethods(sf.svc.Language))
 
 		nodesJSON, _ := json.Marshal(semNodes)
 		edgesJSON, _ := json.Marshal(semEdges)
