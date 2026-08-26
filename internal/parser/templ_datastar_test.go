@@ -32,9 +32,9 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 		}
 	}
 
-	// Five @verb actions.
-	if len(actions) != 5 {
-		t.Fatalf("datastar actions = %d, want 5: %v", len(actions), keys(actions))
+	// Six @verb actions.
+	if len(actions) != 6 {
+		t.Fatalf("datastar actions = %d, want 6: %v", len(actions), keys(actions))
 	}
 	if n, ok := actions["/play/*/draw"]; !ok {
 		t.Errorf("missing /play/*/draw action; got %v", keys(actions))
@@ -59,6 +59,9 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 	if _, ok := actions["/app-configs/save"]; !ok {
 		t.Errorf("missing /app-configs/save action from the guarded if(){} clause; got %v", keys(actions))
 	}
+	if _, ok := actions["/exec-configs/save"]; !ok {
+		t.Errorf("missing /exec-configs/save action from the single-clause guard-then-action shape; got %v", keys(actions))
+	}
 
 	// data-text/data-bind become signal nodes, not component junk.
 	if signalNodes != 2 {
@@ -78,8 +81,8 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 			}
 		}
 	}
-	if actionEdges != 5 {
-		t.Errorf("datastar_action edges = %d, want 5", actionEdges)
+	if actionEdges != 6 {
+		t.Errorf("datastar_action edges = %d, want 6", actionEdges)
 	}
 }
 
@@ -103,8 +106,8 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 			targets = append(targets, n)
 		}
 	}
-	if len(targets) != 5 {
-		t.Fatalf("dom_target nodes = %d, want 5 (signal-only handler must produce none): %+v", len(targets), targets)
+	if len(targets) != 7 {
+		t.Fatalf("dom_target nodes = %d, want 7 (signal-only handler must produce none): %+v", len(targets), targets)
 	}
 	byHandler := map[string]graph.Node{}
 	for _, n := range targets {
@@ -151,14 +154,31 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 		t.Errorf("guarded clause handler pattern = %q, want dom_event_attr", guarded.Meta["pattern"])
 	}
 
+	// A single clause with no ';' where the client call gates the @post as
+	// an if-condition — this must not be swallowed whole by addDatastarAction
+	// matching the @post nested inside the same clause.
+	singleClauseGuard, ok := byHandler["window.maple.prepareExecConfigSubmit()"]
+	if !ok {
+		t.Fatalf("missing dom_target for a single-clause if(guard()){@post()} shape; got handlers %v", byHandler)
+	}
+
+	// A data-on:click EXPRESSION attribute whose Go expression embeds the
+	// window.maple.X( literal directly via fmt.Sprintf, no separate helper
+	// function — addDatastarClientHandler must isolate it, not mint the raw
+	// fmt.Sprintf(...) expression text as the handler.
+	inlineSprintf, ok := byHandler["window.maple.snapshotDiff()"]
+	if !ok {
+		t.Fatalf("missing dom_target for an inline fmt.Sprintf-embedded window.maple.X() call; got handlers %v", byHandler)
+	}
+
 	var listenEdges int
 	for _, e := range edges {
-		if e.Type == graph.EdgeTypeDOMListen && (e.To == got.ID || e.To == indirect.ID || e.To == mixed.ID || e.To == guarded.ID) {
+		if e.Type == graph.EdgeTypeDOMListen && (e.To == got.ID || e.To == indirect.ID || e.To == mixed.ID || e.To == guarded.ID || e.To == singleClauseGuard.ID || e.To == inlineSprintf.ID) {
 			listenEdges++
 		}
 	}
-	if listenEdges != 4 {
-		t.Errorf("dom_listen edges to the four handlers = %d, want 4", listenEdges)
+	if listenEdges != 6 {
+		t.Errorf("dom_listen edges to the six handlers = %d, want 6", listenEdges)
 	}
 }
 

@@ -284,18 +284,27 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 	// attribute gets, so LinkJSGlobals' existing window.maple.X / bare-
 	// identifier resolution picks it up with no separate linker pass.
 	//
-	// The two are not mutually exclusive within one attribute:
+	// The two are not mutually exclusive within one attribute — not even
+	// within a single ';'-delimited clause:
 	// `data-on:submit__prevent="window.maple.prepareCreateAppSubmit(); @post(...)"`
-	// runs a client-side prep call THEN a backend action. val is already a
+	// runs a client-side prep call THEN a backend action (two clauses), but
+	// `data-on:submit__prevent="if (window.maple.prepareExecConfigSubmit()) { @post(...) }"`
+	// packs a client-side guard call and a backend action into ONE clause
+	// (no ';' — the guard's return value gates the @post). val is already a
 	// dequoted plain string here (unlike VisitExpressionAttribute's raw Go
 	// expression, where a ';' can sit inside a concatenation chain), so a
-	// bare split is safe — evaluate every clause independently instead of
-	// stopping at the first one that matches, which used to silently drop
-	// whichever half lost the race (prepareCreateAppSubmit/
-	// prepareAppConfigSubmit read as dead code because of exactly this).
+	// bare split is safe — evaluate every clause independently, and within
+	// each clause try BOTH the backend-action and client-handler paths
+	// (addDatastarClientHandler's own "{"-wrapped-clause branch isolates
+	// just the embedded window.X(...) call, so a @post(...) alongside it
+	// doesn't get mistaken for part of the handler). Stopping at whichever
+	// matched first used to silently drop the other half
+	// (prepareCreateAppSubmit/prepareAppConfigSubmit/prepareExecConfigSubmit
+	// all read as dead code because of exactly this).
 	case v.isDataOnKey(key):
 		for _, stmt := range splitOnSemicolons(val) {
-			if !v.addDatastarAction(stmt, lineNo) {
+			isAction := v.addDatastarAction(stmt, lineNo)
+			if !isAction || reWindowCallName.MatchString(stmt) {
 				v.addDatastarClientHandler(key, stmt, lineNo)
 			}
 		}
@@ -429,13 +438,16 @@ func (v *templVisitor) addDatastarClientHandler(key, val string, lineNo int) {
 	// handler is the linkable JS call, not raw Go expression text.
 	if resolved := v.resolveHelperHandler(val); resolved != "" {
 		val = resolved
-	} else if strings.Contains(val, "{") {
-		// A control-flow-wrapped clause
-		// (`if (window.maple.guard()) { window.maple.action() }`) isn't itself a
-		// clean handler call — isolate the LAST embedded window.X(...) call
-		// (the guard condition, if any, is checked first and matches first;
-		// the actual conditionally-invoked action comes after it) rather than
-		// minting the raw control-flow text as an unresolvable handler.
+	} else if !strings.HasPrefix(val, "window.") {
+		// Not already a clean window.X(...) call on its own — either a
+		// control-flow-wrapped clause (`if (window.maple.guard()) { window.maple.
+		// action() }`, isolate the LAST embedded call: the guard condition,
+		// if any, is checked first and matches first, but the actual
+		// conditionally-invoked action comes after it) or a Go expression
+		// embedding the literal inline (`fmt.Sprintf("window.maple.X(%d)", id)`,
+		// exactly one match). Either way, isolate the embedded window.X(...)
+		// call rather than minting the raw wrapper text as an unresolvable
+		// handler.
 		if matches := reWindowCallName.FindAllString(val, -1); len(matches) > 0 {
 			val = strings.TrimSuffix(matches[len(matches)-1], "(") + "()"
 		}
