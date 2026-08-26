@@ -50,7 +50,15 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 		if opts.File != "" && n.File != opts.File {
 			continue
 		}
-		if _, _, ok := graph.ClassifyEntrypoint(n); ok {
+		// meta.root_kind=callback (referenced as a value / satisfies an
+		// external interface — invoked by a framework, not by a literal call
+		// site) is a distinct bucket from entrypoint but the same "not
+		// actionable dead code" verdict: Go's SSA-referenced functions and a
+		// JS object-literal callback value (`{ onProceed: function(){...} }`)
+		// both land here. ClassifyEntrypoint already computes this as
+		// skippedRootKind; check it alongside ok rather than duplicating the
+		// meta read.
+		if _, skippedRootKind, ok := graph.ClassifyEntrypoint(n); ok || skippedRootKind == "callback" {
 			continue
 		}
 		// Test functions are invoked by the test runner, not by a static

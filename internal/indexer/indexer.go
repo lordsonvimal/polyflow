@@ -715,23 +715,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		bwR := graph.NewBatchWriter(store)
 		for i := range allNodes {
 			n := &allNodes[i]
-			if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
+			if !classifyRoot(n, incoming, referencedIDs) {
 				continue
 			}
-			if incoming[n.ID] {
-				continue
-			}
-			kind := "unreachable"
-			switch {
-			case n.Label == "main" || n.Label == "init" || n.Label == "(module)":
-				kind = "entrypoint"
-			case referencedIDs[n.ID]:
-				kind = "callback"
-			}
-			if n.Meta == nil {
-				n.Meta = map[string]string{}
-			}
-			n.Meta["root_kind"] = kind
 			if err := bwR.AddNode(ctx, n); err != nil {
 				return nil, err
 			}
@@ -1242,6 +1228,61 @@ func CountFilesModifiedSince(root string, excludes []string, since time.Time, ca
 		return nil
 	})
 	return count, capped
+}
+
+// stampRootKind nil-inits n.Meta if needed and sets root_kind.
+func stampRootKind(n *graph.Node, kind string) {
+	if n.Meta == nil {
+		n.Meta = map[string]string{}
+	}
+	n.Meta["root_kind"] = kind
+}
+
+// classifyRoot stamps n's root_kind meta (entrypoint / callback /
+// unreachable) if n is a function/method root worth classifying, and reports
+// whether it did. incoming is keyed by node ID, true for any inbound edge
+// except EdgeTypeContains (structural, not a reference — see caller).
+func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[string]bool) bool {
+	if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
+		return false
+	}
+	// main/init/(module) are unconditional runtime entry points, checked
+	// before the incoming-edge skip below. A synthetic (module) wrapper picks
+	// up ordinary non-Contains edges from unrelated passes (e.g.
+	// LinkTemplScripts' `imports` edge from the templ component whose
+	// <script src> loads the file) that are not a "something calls this"
+	// signal the way EdgeTypeCalls/Spawns is. Gating this case on incoming
+	// would silently skip stamping root_kind whenever such an edge exists —
+	// and deadcode, which only recognizes Calls/Spawns as a caller, would
+	// then flag the module wrapper of every <script>-included JS file as
+	// dead code (verified: exactly this shape on the juniper corpus).
+	if n.Label == "main" || n.Label == "init" || n.Label == "(module)" {
+		stampRootKind(n, "entrypoint")
+		return true
+	}
+	if incoming[n.ID] {
+		return false
+	}
+	kind := "unreachable"
+	switch {
+	case referencedIDs[n.ID]:
+		kind = "callback"
+	// object_method_pair (`{ onProceed: function(){...} }`) is only ever
+	// reachable via a property/variable read, never a literal call using the
+	// property name as an identifier — the exact shape referencedIDs already
+	// captures for Go, but referencedIDs itself only comes from the Go SSA
+	// analyzer (parser.ServiceAnalyzerFor returns nil for JS/Ruby/Python), so
+	// JS callback-shaped object-literal values had no equivalent signal and
+	// fell to the "unreachable" default. Safe to treat unconditionally as
+	// callback: the `pair` grammar node this pattern matches only ever occurs
+	// inside an object literal, never a class body, so it can't misclassify
+	// a genuinely dead class method the way object_method_shorthand's shared
+	// method_definition query would.
+	case n.Meta["pattern"] == "object_method_pair":
+		kind = "callback"
+	}
+	stampRootKind(n, kind)
+	return true
 }
 
 // stampReflectDispatched sets graph.MetaReflectDispatched on every
