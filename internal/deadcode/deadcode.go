@@ -32,12 +32,12 @@ type Options struct {
 	File    string // "" = every file
 }
 
-// Build scans idx for function/method nodes with no inbound `calls` edge,
-// excluding nodes graph.ClassifyEntrypoint already recognises as an entry
-// point (HTTP handlers, routes, workers, subscribers, gRPC/GraphQL handlers,
-// and functions tagged meta.root_kind=entrypoint) — those are meant to have
-// zero static callers. Structural edges (contains, declares, ...) never
-// count as a caller: only graph.EdgeTypeCalls does.
+// Build scans idx for function/method nodes with no inbound invoking edge
+// (see invokingEdgeTypes), excluding nodes graph.ClassifyEntrypoint already
+// recognises as an entry point (HTTP handlers, routes, workers, subscribers,
+// gRPC/GraphQL handlers, and functions tagged meta.root_kind=entrypoint) —
+// those are meant to have zero static callers. Structural edges (contains,
+// declares, ...) never count as a caller.
 func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 	var items []Item
 	for _, n := range idx.Nodes {
@@ -135,11 +135,21 @@ var reflectDispatchedMethod = map[string]bool{
 	"ServeHTTP":     true,
 }
 
-// hasCaller reports whether n has at least one inbound graph.EdgeTypeCalls
-// edge — the only edge type that represents a real caller for this scan.
+// invokingEdgeTypes are the edge types that represent a real invocation of
+// their target for deadcode's purposes. EdgeTypeSpawns (`go f()`) is a
+// genuine caller the same way a direct call is — a goroutine target with no
+// inbound EdgeTypeCalls was a systematic false positive (every function only
+// ever launched via `go x.method()`, e.g. a scheduler's background loop,
+// qualified as zero-caller by construction).
+var invokingEdgeTypes = map[graph.EdgeType]bool{
+	graph.EdgeTypeCalls:  true,
+	graph.EdgeTypeSpawns: true,
+}
+
+// hasCaller reports whether n has at least one inbound invoking edge.
 func hasCaller(idx *graph.AdjacencyIndex, id string) bool {
 	for _, e := range idx.InEdges[id] {
-		if e.Type == graph.EdgeTypeCalls {
+		if invokingEdgeTypes[e.Type] {
 			return true
 		}
 	}
