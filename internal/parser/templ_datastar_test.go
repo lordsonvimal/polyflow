@@ -93,12 +93,16 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 			targets = append(targets, n)
 		}
 	}
-	if len(targets) != 1 {
-		t.Fatalf("dom_target nodes = %d, want 1 (signal-only handler must produce none): %+v", len(targets), targets)
+	if len(targets) != 2 {
+		t.Fatalf("dom_target nodes = %d, want 2 (signal-only handler must produce none): %+v", len(targets), targets)
 	}
-	got := targets[0]
-	if got.Meta["handler"] != "window.maple.syncAllBaseImages()" {
-		t.Errorf("handler = %q, want the plain JS call", got.Meta["handler"])
+	byHandler := map[string]graph.Node{}
+	for _, n := range targets {
+		byHandler[n.Meta["handler"]] = n
+	}
+	got, ok := byHandler["window.maple.syncAllBaseImages()"]
+	if !ok {
+		t.Fatalf("missing direct-call dom_target; got handlers %v", byHandler)
 	}
 	if got.Meta["event_type"] != "click" {
 		t.Errorf("event_type = %q, want %q", got.Meta["event_type"], "click")
@@ -107,14 +111,43 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 		t.Errorf("pattern = %q, want dom_event_attr (must match LinkJSGlobals' scoping check)", got.Meta["pattern"])
 	}
 
+	indirect, ok := byHandler["window.maple.openAppConfigForEdit()"]
+	if !ok {
+		t.Fatalf("missing indirect-helper dom_target; got handlers %v", byHandler)
+	}
+	if indirect.Meta["pattern"] != "dom_event_attr" {
+		t.Errorf("indirect handler pattern = %q, want dom_event_attr", indirect.Meta["pattern"])
+	}
+
 	var listenEdges int
 	for _, e := range edges {
-		if e.Type == graph.EdgeTypeDOMListen && e.To == got.ID {
+		if e.Type == graph.EdgeTypeDOMListen && (e.To == got.ID || e.To == indirect.ID) {
 			listenEdges++
 		}
 	}
-	if listenEdges != 1 {
-		t.Errorf("dom_listen edges to %s = %d, want 1", got.ID, listenEdges)
+	if listenEdges != 2 {
+		t.Errorf("dom_listen edges to the two handlers = %d, want 2", listenEdges)
+	}
+}
+
+func TestExtractHelperHandlers(t *testing.T) {
+	t.Parallel()
+	content := []byte(`package testdata
+
+func appConfigEditScript(id string) string {
+	return fmt.Sprintf("window.maple.openAppConfigForEdit('%s')", id)
+}
+
+func unrelated() string {
+	return "not a handler"
+}
+`)
+	got := extractHelperHandlers(content)
+	if got["appConfigEditScript"] != "window.maple.openAppConfigForEdit()" {
+		t.Errorf("appConfigEditScript = %q, want window.maple.openAppConfigForEdit()", got["appConfigEditScript"])
+	}
+	if _, ok := got["unrelated"]; ok {
+		t.Errorf("unrelated() has no window.maple call and must not be captured")
 	}
 }
 

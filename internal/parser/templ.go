@@ -71,6 +71,7 @@ func (p *TemplParser) ParseSource(file, service string, content []byte, datastar
 		service:             service,
 		currentComponentIdx: -1,
 		vocab:               toolchain.DefaultDatastarVocab(datastarVariant),
+		helperHandlers:      extractHelperHandlers(content),
 	}
 	if err := tf.Visit(v); err != nil {
 		return v.nodes, v.edges, nil, err
@@ -88,6 +89,57 @@ type templVisitor struct {
 	currentComponentIdx int                     // index of the enclosing component in v.nodes, -1 outside one
 	formMethod          string                  // method attr of the enclosing <form> (upper-case), "" outside forms
 	vocab               toolchain.DatastarVocab // version-selected attribute vocabulary
+	helperHandlers      map[string]string       // Go helper func name -> "window.maple.X()" it returns, see extractHelperHandlers
+}
+
+// reHelperFunc matches a package-level Go helper function in a .templ file
+// whose entire body is `return fmt.Sprintf("<literal>", ...)` — the
+// maple-manager idiom for building a data-on:click handler string out-of-line
+// (`func appConfigEditScript(c Config) string { return fmt.Sprintf("window.maple.openAppConfigForEdit('%s')", c.ID) }`),
+// then referenced indirectly from the markup (`data-on:click={ fmt.Sprintf("...; %s", appConfigEditScript(config)) }`).
+// Without resolving this indirection the attribute's raw Go expression text
+// never contains a `window.maple.X(` substring, so the handler stays
+// unlinkable and the JS function it names reads as zero-caller dead code.
+var reHelperFunc = regexp.MustCompile(`func\s+(\w+)\s*\([^)]*\)\s*string\s*\{\s*return\s+fmt\.Sprintf\(\s*"([^"]*)"`)
+
+// reWindowCallName matches a `window.a.b.c(` callee; the trailing `(` is
+// trimmed off by the caller (RE2 has no lookahead) to isolate the dotted path.
+var reWindowCallName = regexp.MustCompile(`window(?:\.[A-Za-z_]\w*)+\(`)
+
+// reCallIdent finds `name(` occurrences to check against helperHandlers.
+var reCallIdent = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*\(`)
+
+// extractHelperHandlers scans a .templ file's raw source (its Go code
+// regions, not the HTML/templ markup the typed AST already covers) for
+// single-statement helper functions of the reHelperFunc shape and returns a
+// map from helper function name to the literal `window.maple.X()` call it
+// builds.
+func extractHelperHandlers(content []byte) map[string]string {
+	var out map[string]string
+	for _, m := range reHelperFunc.FindAllSubmatch(content, -1) {
+		call := reWindowCallName.FindString(string(m[2]))
+		if call == "" {
+			continue
+		}
+		call = strings.TrimSuffix(call, "(")
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[string(m[1])] = call + "()"
+	}
+	return out
+}
+
+// resolveHelperHandler reports the `window.maple.X()` call a data-on value
+// resolves to when it calls one of the file's extractHelperHandlers
+// functions instead of naming the handler literally, or "" if none matches.
+func (v *templVisitor) resolveHelperHandler(val string) string {
+	for _, m := range reCallIdent.FindAllStringSubmatch(val, -1) {
+		if handler, ok := v.helperHandlers[m[1]]; ok {
+			return handler
+		}
+	}
+	return ""
 }
 
 // reFirstStringLit matches the first double-quoted string literal in a Go
@@ -330,6 +382,13 @@ func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
 // LinkJSGlobals' existing window.maple.X / bare-identifier resolution picks
 // this up for free — no separate linker pass needed.
 func (v *templVisitor) addDatastarClientHandler(key, val string, lineNo int) {
+	// The value may itself just call a local Go helper that builds the real
+	// `window.maple.X()` string (see extractHelperHandlers) rather than naming
+	// the handler literally — resolve that indirection first so the minted
+	// handler is the linkable JS call, not raw Go expression text.
+	if resolved := v.resolveHelperHandler(val); resolved != "" {
+		val = resolved
+	}
 	// A pure signal mutation (data-on:click="$flipped = !$flipped") is not a
 	// callable and must stay "produces nothing", same as before this method
 	// existed: extractHandlerCandidates already returns nil for anything

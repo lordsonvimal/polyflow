@@ -13,3 +13,21 @@ patterns:
     captures:
       - name: callee
         role: func_ref
+  # Global-namespace member calls: window.maple.queueToast(...) — the plain
+  # <script src> idiom (no ES modules) multi-file JS apps use to share
+  # functions via a window-rooted namespace object. resolveImportCalls'
+  # memberCallQuery only fires for import-bound objects, so this shape was
+  # previously invisible to the graph entirely (no unresolved ref, no calls
+  # edge) — every window.maple.X function called only this way read as
+  # zero-caller dead code. Captures the whole dotted callee text; matcher.go
+  # filters to the window.* prefix and leaves everything else (array.push(),
+  # Math.floor(), this.foo(), jQuery chains, …) untouched, since those aren't
+  # global_symbol-stamped and would otherwise flood the unresolved ledger.
+  - name: global_member_call
+    query: |
+      (call_expression
+        function: (member_expression) @callee
+        (#match? @callee "^window\\."))
+    captures:
+      - name: callee
+        role: func_ref
