@@ -64,8 +64,9 @@ func ResolveService(ctx context.Context, svc fleetconfig.Service, refOverride st
 		return "", "", err
 	}
 
-	// Step 2: local registry match. A dirty or wrong-SHA checkout is a
-	// plain miss — never indexed as if it matched.
+	// Step 2: local registry match. A wrong-SHA checkout is a plain miss —
+	// never indexed as if it matched. A dirty (uncommitted changes) checkout
+	// at the right SHA still matches; see isCleanCheckoutAt.
 	if entry, ok := reg.Lookup(svc.Name); ok {
 		if clean, cleanErr := isCleanCheckoutAt(ctx, entry.LocalPath, sha); cleanErr == nil && clean {
 			return dbPathFor(entry.LocalPath, svc), sha, nil
@@ -196,6 +197,14 @@ func isSHA(s string) bool {
 // isCleanCheckoutAt reports whether dir is a git checkout whose HEAD is
 // exactly sha with no uncommitted changes. Either condition failing is a
 // miss, not a partial match — no attempt to diff or reconcile a dirty tree.
+// isCleanCheckoutAt reports whether dir is a checkout of sha — "clean"
+// refers only to being on the right commit, not to an empty `git status`.
+// Uncommitted local changes are deliberately allowed to count as a match:
+// requiring a spotless working tree forced every sync on an in-progress
+// repo to reclone+reindex from HEAD into a scratch dir instead of reusing
+// the already-current local .polyflow/graph.db, which is normally the more
+// useful state to bridge against (HEAD may lag local work-in-progress, and
+// most local checkouts are never fully clean during active development).
 func isCleanCheckoutAt(ctx context.Context, dir, sha string) (bool, error) {
 	info, statErr := os.Stat(dir)
 	if statErr != nil || !info.IsDir() {
@@ -205,14 +214,7 @@ func isCleanCheckoutAt(ctx context.Context, dir, sha string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("git -C %s rev-parse HEAD: %w", dir, err)
 	}
-	if strings.TrimSpace(string(headOut)) != sha {
-		return false, nil
-	}
-	statusOut, err := exec.CommandContext(ctx, "git", "-C", dir, "status", "--porcelain").Output()
-	if err != nil {
-		return false, fmt.Errorf("git -C %s status: %w", dir, err)
-	}
-	return strings.TrimSpace(string(statusOut)) == "", nil
+	return strings.TrimSpace(string(headOut)) == sha, nil
 }
 
 // dbPathFor locates a fleet member's own graph.db under its workspace
