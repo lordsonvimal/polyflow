@@ -162,6 +162,32 @@ func tsLine(n *sitter.Node) int { return int(n.StartPoint().Row) + 1 }
 
 func tsEndLine(n *sitter.Node) int { return int(n.EndPoint().Row) + 1 }
 
+// isAccessorMethod reports whether a method_definition is a `get`/`set`
+// accessor (`get value() {...}`) — invoked by property read/write syntax
+// (`obj.value`, `obj.value = x`), never by a call expression. No pattern in
+// the graph can ever produce a `calls` edge to one (there is no `.value()`
+// call syntax), so without a distinct signal it reads as permanently
+// zero-caller dead code regardless of how many times its property is
+// actually accessed — the same "invoked without a literal call site" shape
+// as GORM's reflect-dispatched TableName or a JS object-literal callback
+// value, stamped so indexer.go's classifyRoot can route it to root_kind=
+// callback instead of unreachable.
+func isAccessorMethod(node *sitter.Node) bool {
+	if node.Type() != "method_definition" {
+		return false
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		c := node.Child(i)
+		switch c.Type() {
+		case "get", "set":
+			return true
+		case "property_identifier", "computed_property_name", "string", "number", "private_property_identifier":
+			return false // reached the name; get/set would have preceded it
+		}
+	}
+	return false
+}
+
 // isFunctionNode reports whether the AST node opens a new function scope.
 func isFunctionNode(t string) bool {
 	switch t {
@@ -871,13 +897,17 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		// edges."from" FK. addNode dedups, so this is a no-op for the cases
 		// the matcher already covers.
 		if selfAttributed {
-			ex.addNode(graph.Node{
+			n := graph.Node{
 				ID:      ex.fnNodeID(frame.fnName, frame.fnLine),
 				Type:    graph.NodeTypeFunction,
 				Label:   frame.fnName,
 				Service: ex.service, File: ex.file, Line: frame.fnLine, EndLine: frame.fnLine,
 				Language: ex.langTag,
-			})
+			}
+			if isAccessorMethod(node) {
+				n.Meta = map[string]string{"js_accessor": "true"}
+			}
+			ex.addNode(n)
 		}
 		if frame.fnName == "" {
 			// inherit attribution from nearest named ancestor frame

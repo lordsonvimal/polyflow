@@ -1280,6 +1280,12 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 	// method_definition query would.
 	case n.Meta["pattern"] == "object_method_pair":
 		kind = "callback"
+	// A `get`/`set` accessor (`get value() {...}`) is invoked by property
+	// read/write syntax (`obj.value`), never a call expression — no pattern
+	// in the graph can produce a `calls` edge to one, so without this it's
+	// zero-caller by construction regardless of real property access.
+	case n.Meta["js_accessor"] == "true":
+		kind = "callback"
 	}
 	stampRootKind(n, kind)
 	return true
