@@ -32,9 +32,9 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 		}
 	}
 
-	// Three @verb actions, one static + two partial.
-	if len(actions) != 3 {
-		t.Fatalf("datastar actions = %d, want 3: %v", len(actions), keys(actions))
+	// Five @verb actions.
+	if len(actions) != 5 {
+		t.Fatalf("datastar actions = %d, want 5: %v", len(actions), keys(actions))
 	}
 	if n, ok := actions["/play/*/draw"]; !ok {
 		t.Errorf("missing /play/*/draw action; got %v", keys(actions))
@@ -48,6 +48,16 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 	}
 	if _, ok := actions["/rows/*"]; !ok {
 		t.Errorf("missing /rows/* action; got %v", keys(actions))
+	}
+	// The client-prep-call-then-backend-action clause must still surface its
+	// @post action — this is the case that was silently dropped entirely
+	// before (addDatastarAction/addDatastarClientHandler were mutually
+	// exclusive over the WHOLE attribute value, not per-clause).
+	if _, ok := actions["/apps/create"]; !ok {
+		t.Errorf("missing /apps/create action from the mixed client-call+backend-action clause; got %v", keys(actions))
+	}
+	if _, ok := actions["/app-configs/save"]; !ok {
+		t.Errorf("missing /app-configs/save action from the guarded if(){} clause; got %v", keys(actions))
 	}
 
 	// data-text/data-bind become signal nodes, not component junk.
@@ -68,8 +78,8 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 			}
 		}
 	}
-	if actionEdges != 3 {
-		t.Errorf("datastar_action edges = %d, want 3", actionEdges)
+	if actionEdges != 5 {
+		t.Errorf("datastar_action edges = %d, want 5", actionEdges)
 	}
 }
 
@@ -93,8 +103,8 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 			targets = append(targets, n)
 		}
 	}
-	if len(targets) != 2 {
-		t.Fatalf("dom_target nodes = %d, want 2 (signal-only handler must produce none): %+v", len(targets), targets)
+	if len(targets) != 4 {
+		t.Fatalf("dom_target nodes = %d, want 4 (signal-only handler must produce none): %+v", len(targets), targets)
 	}
 	byHandler := map[string]graph.Node{}
 	for _, n := range targets {
@@ -119,14 +129,36 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 		t.Errorf("indirect handler pattern = %q, want dom_event_attr", indirect.Meta["pattern"])
 	}
 
+	// The mixed client-call+backend-action clause must ALSO surface its
+	// client-side half as a dom_target — this was the exact bug: the two
+	// halves of one data-on:* value used to be mutually exclusive.
+	mixed, ok := byHandler["window.maple.prepareCreateAppSubmit()"]
+	if !ok {
+		t.Fatalf("missing dom_target for the client-call half of a mixed data-on clause; got handlers %v", byHandler)
+	}
+	if mixed.Meta["pattern"] != "dom_event_attr" {
+		t.Errorf("mixed clause handler pattern = %q, want dom_event_attr", mixed.Meta["pattern"])
+	}
+
+	// The guard-condition call must lose to the actual conditionally-invoked
+	// action call — validateAppConfigForm() is the leftmost embedded window.X
+	// call in its clause, prepareAppConfigSubmit() is the last.
+	guarded, ok := byHandler["window.maple.prepareAppConfigSubmit()"]
+	if !ok {
+		t.Fatalf("missing dom_target for the action half of a guarded if(){} clause (guard call must not win); got handlers %v", byHandler)
+	}
+	if guarded.Meta["pattern"] != "dom_event_attr" {
+		t.Errorf("guarded clause handler pattern = %q, want dom_event_attr", guarded.Meta["pattern"])
+	}
+
 	var listenEdges int
 	for _, e := range edges {
-		if e.Type == graph.EdgeTypeDOMListen && (e.To == got.ID || e.To == indirect.ID) {
+		if e.Type == graph.EdgeTypeDOMListen && (e.To == got.ID || e.To == indirect.ID || e.To == mixed.ID || e.To == guarded.ID) {
 			listenEdges++
 		}
 	}
-	if listenEdges != 2 {
-		t.Errorf("dom_listen edges to the two handlers = %d, want 2", listenEdges)
+	if listenEdges != 4 {
+		t.Errorf("dom_listen edges to the four handlers = %d, want 4", listenEdges)
 	}
 }
 

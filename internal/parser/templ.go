@@ -265,9 +265,21 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 	// back to the exact same dom_target/handler shape a native onclick=
 	// attribute gets, so LinkJSGlobals' existing window.maple.X / bare-
 	// identifier resolution picks it up with no separate linker pass.
+	//
+	// The two are not mutually exclusive within one attribute:
+	// `data-on:submit__prevent="window.maple.prepareCreateAppSubmit(); @post(...)"`
+	// runs a client-side prep call THEN a backend action. val is already a
+	// dequoted plain string here (unlike VisitExpressionAttribute's raw Go
+	// expression, where a ';' can sit inside a concatenation chain), so a
+	// bare split is safe — evaluate every clause independently instead of
+	// stopping at the first one that matches, which used to silently drop
+	// whichever half lost the race (prepareCreateAppSubmit/
+	// prepareAppConfigSubmit read as dead code because of exactly this).
 	case v.isDataOnKey(key):
-		if !v.addDatastarAction(val, lineNo) {
-			v.addDatastarClientHandler(key, val, lineNo)
+		for _, stmt := range splitOnSemicolons(val) {
+			if !v.addDatastarAction(stmt, lineNo) {
+				v.addDatastarClientHandler(key, stmt, lineNo)
+			}
 		}
 
 	// data-bind / data-signals / data-model
@@ -388,6 +400,16 @@ func (v *templVisitor) addDatastarClientHandler(key, val string, lineNo int) {
 	// handler is the linkable JS call, not raw Go expression text.
 	if resolved := v.resolveHelperHandler(val); resolved != "" {
 		val = resolved
+	} else if strings.Contains(val, "{") {
+		// A control-flow-wrapped clause
+		// (`if (window.maple.guard()) { window.maple.action() }`) isn't itself a
+		// clean handler call — isolate the LAST embedded window.X(...) call
+		// (the guard condition, if any, is checked first and matches first;
+		// the actual conditionally-invoked action comes after it) rather than
+		// minting the raw control-flow text as an unresolvable handler.
+		if matches := reWindowCallName.FindAllString(val, -1); len(matches) > 0 {
+			val = strings.TrimSuffix(matches[len(matches)-1], "(") + "()"
+		}
 	}
 	// A pure signal mutation (data-on:click="$flipped = !$flipped") is not a
 	// callable and must stay "produces nothing", same as before this method
@@ -535,6 +557,23 @@ func (v *templVisitor) addSignalReads(val string, lineNo int) {
 // v1: colon only, combined fallback: both).
 func (v *templVisitor) isDataOnKey(key string) bool {
 	return v.vocab.IsDataOnKey(key)
+}
+
+// splitOnSemicolons splits an already-dequoted attribute value into trimmed,
+// non-empty statements. Only safe on a plain string (VisitConstantAttribute's
+// val) — a Go expression's raw text (VisitExpressionAttribute's raw) can have
+// a ';' sitting inside a string-concatenation chain, where a bare split would
+// cut a reconstructed runtime string in half.
+func splitOnSemicolons(val string) []string {
+	parts := strings.Split(val, ";")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // stripQuotes removes a single matching pair of surrounding quotes.

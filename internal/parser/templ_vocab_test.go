@@ -80,10 +80,10 @@ func TestTemplParser_FallbackVocab_V1File(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	// Existing test coverage: 3 actions from colon-syntax file.
+	// Existing test coverage: 5 actions from colon-syntax file.
 	got := countDatastarActions(nodes)
-	if got != 3 {
-		t.Errorf("nil matcher + v1 file: datastar actions = %d, want 3", got)
+	if got != 5 {
+		t.Errorf("nil matcher + v1 file: datastar actions = %d, want 5", got)
 	}
 }
 
