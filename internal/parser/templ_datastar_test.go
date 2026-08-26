@@ -103,8 +103,8 @@ func TestTemplParser_DatastarClientHandler(t *testing.T) {
 			targets = append(targets, n)
 		}
 	}
-	if len(targets) != 4 {
-		t.Fatalf("dom_target nodes = %d, want 4 (signal-only handler must produce none): %+v", len(targets), targets)
+	if len(targets) != 5 {
+		t.Fatalf("dom_target nodes = %d, want 5 (signal-only handler must produce none): %+v", len(targets), targets)
 	}
 	byHandler := map[string]graph.Node{}
 	for _, n := range targets {
@@ -181,6 +181,54 @@ func unrelated() string {
 	if _, ok := got["unrelated"]; ok {
 		t.Errorf("unrelated() has no window.maple call and must not be captured")
 	}
+}
+
+// The templ.ComponentScript{Call:/Function: fmt.Sprintf(...)} inline-script
+// idiom (maple-manager's ai_package_results.templ / pdv_dashboard.templ) isn't
+// a bare `return fmt.Sprintf(...) string` — the window.maple.X() call is a
+// struct field, and the return type isn't `string`. extractHelperHandlers
+// must still find it by scanning the whole function body, not just a single
+// return statement.
+func TestExtractHelperHandlers_ComponentScriptStruct(t *testing.T) {
+	t.Parallel()
+	content := []byte(`package testdata
+
+func showPkgInfoScript(name string) templ.ComponentScript {
+	return templ.ComponentScript{
+		Name: "showPkgInfo",
+		Call: fmt.Sprintf("window.maple.showPkgInfo(this,'%s')", name),
+	}
+}
+`)
+	got := extractHelperHandlers(content)
+	if got["showPkgInfoScript"] != "window.maple.showPkgInfo()" {
+		t.Errorf("showPkgInfoScript = %q, want window.maple.showPkgInfo()", got["showPkgInfoScript"])
+	}
+}
+
+// onclick={ helperFunc(...) } — a native event attribute, not data-on:* —
+// must resolve the same helper indirection addDatastarClientHandler already
+// does. This is the exact shape that read ai_package_results.templ's
+// applyUpdatesScript-style helpers' targets as dead code.
+func TestTemplParser_OnclickHelperIndirection(t *testing.T) {
+	t.Parallel()
+	p := &TemplParser{}
+	nodes, _, _, err := p.Parse("testdata/datastar.templ", "app", nil, nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeDOMTarget && n.Meta["handler"] == "window.maple.showPkgInfo()" {
+			return
+		}
+	}
+	var handlers []string
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeDOMTarget {
+			handlers = append(handlers, n.Meta["handler"])
+		}
+	}
+	t.Fatalf("missing dom_target with handler=window.maple.showPkgInfo() from onclick={showPkgInfoScript(...)}; got %v", handlers)
 }
 
 func TestDatastarEventType(t *testing.T) {

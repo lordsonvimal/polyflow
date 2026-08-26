@@ -7,6 +7,15 @@ func appConfigEditScript(gameID string) string {
 	return fmt.Sprintf("window.maple.openAppConfigForEdit('%s')", gameID)
 }
 
+// showPkgInfoScript mirrors maple-manager's templ.ComponentScript inline-script
+// idiom: the window.maple.X() call lives in a struct field, not a bare return.
+func showPkgInfoScript(name string) templ.ComponentScript {
+	return templ.ComponentScript{
+		Name: "showPkgInfo",
+		Call: fmt.Sprintf("window.maple.showPkgInfo(this,'%s')", name),
+	}
+}
+
 templ ActionPanel(gameID string, page int) {
 	<div>
 		// Colon syntax, JSExpression wrapper, concatenated path → POST /play/*/draw
@@ -29,6 +38,10 @@ templ ActionPanel(gameID string, page int) {
 		// A guarded client call wrapped in `if (...) { ... }`, THEN a backend
 		// @verb action — the actual action call must win over the guard call.
 		<form data-on:submit__prevent="if (window.maple.validateAppConfigForm()) { window.maple.prepareAppConfigSubmit(); @post('/app-configs/save', {contentType: 'form'}) }"></form>
+		// Native onclick={...} calling a templ.ComponentScript-returning
+		// helper — a completely different attribute (not data-on:*) that
+		// needs the same helper-indirection resolution.
+		<button onclick={ showPkgInfoScript("foo") }>Info</button>
 		// Reactive text binding referencing a compound signal expression
 		<span data-text="$idx + 1"></span>
 		<input data-bind="username"/>
