@@ -28,6 +28,17 @@ import (
 // itself just `Const.new(...)`, the common Ruby self-factory shape —
 // `AwsFacade.new_instance` delegating to `AwsFacade.new` is exactly this).
 //
+// DC.5 extends this to three more shapes, all still syntactic (no arbitrary
+// return-type inference): an implicit-self `new(...)` inside a singleton
+// context (`class << self`/`def self.x`) resolves to the enclosing class;
+// an inline `<new-expr>.method` chain with no intermediate variable
+// resolves the same way an assigned-variable receiver does; and a
+// classmethod literally named `call` whose body is exactly that inline
+// chain (the "service object" convention: `SomeService.call(x)` delegating
+// to `SomeService.new(x).call`) has its return type narrowly inferred as
+// "the same class's instance" — not the instance `call` method's own return
+// value, which stays out of scope as unbounded in general.
+//
 // Type inference is purely syntactic (constant name propagation) and does
 // not depend on cross-file resolution, so it runs once per service over
 // every file's AST before any call site is resolved. Call resolution then
@@ -97,10 +108,10 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, serviceFiles map[string][]str
 		methodReturnType := map[string]string{}
 		for round := 0; round < 3; round++ {
 			for _, a := range asts {
-				collectRubyIvarTypes(a.root, a.src, "", ivarType, methodReturnType)
+				collectRubyIvarTypes(a.root, a.src, "", false, ivarType, methodReturnType)
 			}
 			for _, a := range asts {
-				collectRubyMethodReturnTypes(a.root, a.src, "", ivarType, methodReturnType)
+				collectRubyMethodReturnTypes(a.root, a.src, "", false, ivarType, methodReturnType)
 			}
 		}
 
@@ -234,6 +245,58 @@ func inferRubyExprClass(n *sitter.Node, src []byte, methodReturnType map[string]
 	return methodReturnType[recv.Content(src)+"\x00"+mn.Content(src)]
 }
 
+// inferRubyNewClassCtx extends inferRubyNewClass to DC.5's implicit-self
+// shape: inside a singleton context (`class << self` or `def self.x`), a
+// receiverless `new(...)` refers to the enclosing class itself, exactly the
+// way an explicit `Const.new(...)` already does. Outside a singleton context
+// a receiverless `new` is not `self.class.new` — Ruby has no such implicit
+// dispatch — so selfIsClass gates this strictly.
+func inferRubyNewClassCtx(n *sitter.Node, src []byte, class string, selfIsClass bool) string {
+	if cls := inferRubyNewClass(n, src); cls != "" {
+		return cls
+	}
+	if n == nil || n.Type() != "call" || !selfIsClass || class == "" {
+		return ""
+	}
+	mn := n.ChildByFieldName("method")
+	if mn == nil || mn.Content(src) != "new" {
+		return ""
+	}
+	if recv := n.ChildByFieldName("receiver"); recv != nil {
+		return ""
+	}
+	return class
+}
+
+// inferRubyInlineChainClass recognizes DC.5's "zero-hop inline chain" shape —
+// `<new-expr>.method` with no intermediate variable, where <new-expr> is
+// either a literal `Const.new(...)` or (inside a singleton context) an
+// implicit-self `new(...)`. Returns the instantiated class, or "" if n is not
+// this shape.
+func inferRubyInlineChainClass(n *sitter.Node, src []byte, class string, selfIsClass bool) string {
+	if n == nil || n.Type() != "call" {
+		return ""
+	}
+	recv := n.ChildByFieldName("receiver")
+	if recv == nil || recv.Type() != "call" {
+		return ""
+	}
+	return inferRubyNewClassCtx(recv, src, class, selfIsClass)
+}
+
+// inferRubyExprClassCtx is inferRubyExprClass widened with the two DC.5
+// shapes above, for callers that need singleton-context awareness (ivar and
+// local-variable assignment right-hand sides).
+func inferRubyExprClassCtx(n *sitter.Node, src []byte, class string, selfIsClass bool, methodReturnType map[string]string) string {
+	if cls := inferRubyNewClassCtx(n, src, class, selfIsClass); cls != "" {
+		return cls
+	}
+	if cls := inferRubyInlineChainClass(n, src, class, selfIsClass); cls != "" {
+		return cls
+	}
+	return inferRubyExprClass(n, src, methodReturnType)
+}
+
 // lastMeaningfulStatement returns the last named (non-comment) child of a
 // method body, or nil for an empty body.
 func lastMeaningfulStatement(body *sitter.Node) *sitter.Node {
@@ -253,47 +316,65 @@ func lastMeaningfulStatement(body *sitter.Node) *sitter.Node {
 // or `@ivar ||= Const.new` assignment, the class an instance/class variable
 // was memoized to. class tracks the syntactically enclosing class/module
 // name (simple name, not fully qualified — matching methodsByClass's join
-// key elsewhere in this package).
-func collectRubyIvarTypes(node *sitter.Node, src []byte, class string, ivarType, methodReturnType map[string]string) {
-	switch node.Type() {
-	case "class", "module":
+// key elsewhere in this package). selfIsClass tracks whether the current
+// position is inside a singleton context (`class << self` or `def self.x`)
+// where implicit `self` refers to class itself — DC.5's implicit-receiver
+// `new` shape is only valid there.
+func collectRubyIvarTypes(node *sitter.Node, src []byte, class string, selfIsClass bool, ivarType, methodReturnType map[string]string) {
+	t := node.Type()
+	if t == "class" || t == "module" {
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 			class = nameNode.Content(src)
 		}
-	case "assignment", "operator_assignment":
+		selfIsClass = false
+	}
+	if t == "singleton_class" || t == "singleton_method" {
+		selfIsClass = true
+	}
+	if t == "assignment" || t == "operator_assignment" {
 		left := node.ChildByFieldName("left")
 		right := node.ChildByFieldName("right")
 		if left != nil && right != nil && class != "" &&
 			(left.Type() == "instance_variable" || left.Type() == "class_variable") {
-			if cls := inferRubyExprClass(right, src, methodReturnType); cls != "" {
+			if cls := inferRubyExprClassCtx(right, src, class, selfIsClass, methodReturnType); cls != "" {
 				ivarType[class+"\x00"+left.Content(src)] = cls
 			}
 		}
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
-		collectRubyIvarTypes(node.NamedChild(i), src, class, ivarType, methodReturnType)
+		collectRubyIvarTypes(node.NamedChild(i), src, class, selfIsClass, ivarType, methodReturnType)
 	}
 }
 
 // collectRubyMethodReturnTypes walks node recording, for every method whose
 // body's last statement syntactically resolves to a known class, class +
-// "\x00" + methodName → that class. Three shapes are recognised, in order:
-// a trailing `Const.new(...)` (a plain factory method); a trailing
+// "\x00" + methodName → that class. Four shapes are recognised, in order: a
+// trailing `Const.new(...)` (a plain factory method); a trailing
 // `@ivar ||=`/`@ivar =` assignment to `Const.new(...)` (a memo-reader
 // writing its memo and returning it in the same expression — Ruby's `||=`
-// evaluates to the assigned value); and a trailing bare `@ivar` read whose
-// type ivarType already knows (a memo-reader whose memoizing assignment
-// isn't the last line). `class << self` bodies are covered the same as
-// instance methods — preCollectRubyMethods-style class tracking doesn't
-// distinguish singleton scope, matching this package's existing imprecision.
-func collectRubyMethodReturnTypes(node *sitter.Node, src []byte, class string, ivarType, methodReturnType map[string]string) {
-	switch node.Type() {
-	case "class", "module":
+// evaluates to the assigned value); a trailing bare `@ivar` read whose type
+// ivarType already knows (a memo-reader whose memoizing assignment isn't the
+// last line); and DC.5's narrow "service object" convention — a classmethod
+// literally named `call`, inside a singleton context, whose body is the
+// inline chain `new(...).call` — inferred as returning "the same class's
+// instance" (not the instance `call` method's own return value, which is
+// unbounded in general — see docs/deadcode-false-positive-plan.md DC.5).
+// `class << self` bodies are covered the same as `def self.x` via
+// selfIsClass, tracked the same way scanRubyReceiverTypedCalls tracks it.
+func collectRubyMethodReturnTypes(node *sitter.Node, src []byte, class string, selfIsClass bool, ivarType, methodReturnType map[string]string) {
+	t := node.Type()
+	if t == "class" || t == "module" {
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 			class = nameNode.Content(src)
 		}
-	case "method", "singleton_method":
+		selfIsClass = false
+	}
+	if t == "singleton_class" || t == "singleton_method" {
+		selfIsClass = true
+	}
+	if t == "method" || t == "singleton_method" {
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil && class != "" {
+			name := nameNode.Content(src)
 			last := lastMeaningfulStatement(node.ChildByFieldName("body"))
 			if last != nil {
 				cls := ""
@@ -302,44 +383,58 @@ func collectRubyMethodReturnTypes(node *sitter.Node, src []byte, class string, i
 					if left := last.ChildByFieldName("left"); left != nil &&
 						(left.Type() == "instance_variable" || left.Type() == "class_variable") {
 						if right := last.ChildByFieldName("right"); right != nil {
-							cls = inferRubyExprClass(right, src, methodReturnType)
+							cls = inferRubyExprClassCtx(right, src, class, selfIsClass, methodReturnType)
 						}
 					}
 				case "instance_variable", "class_variable":
 					cls = ivarType[class+"\x00"+last.Content(src)]
 				case "call":
-					cls = inferRubyExprClass(last, src, methodReturnType)
+					if name == "call" && selfIsClass {
+						cls = inferRubyInlineChainClass(last, src, class, selfIsClass)
+					}
+					if cls == "" {
+						cls = inferRubyExprClass(last, src, methodReturnType)
+					}
 				}
 				if cls != "" {
-					methodReturnType[class+"\x00"+nameNode.Content(src)] = cls
+					methodReturnType[class+"\x00"+name] = cls
 				}
 			}
 		}
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
-		collectRubyMethodReturnTypes(node.NamedChild(i), src, class, ivarType, methodReturnType)
+		collectRubyMethodReturnTypes(node.NamedChild(i), src, class, selfIsClass, ivarType, methodReturnType)
 	}
 }
 
 // scanRubyReceiverTypedCalls walks file collecting a classMethodCallRef for
 // every call whose receiver is:
-//   - a local variable last assigned `= Const.new(...)` earlier in the same
-//     method (flow-insensitive: the most recent assignment textually before
-//     the call site wins, since Go's tree-sitter walk is already
-//     depth/source order);
+//   - a local variable last assigned `= Const.new(...)` (or, per DC.5, any
+//     other traceable receiver expression inferRubyExprClassCtx recognises)
+//     earlier in the same method (flow-insensitive: the most recent
+//     assignment textually before the call site wins, since Go's tree-sitter
+//     walk is already depth/source order);
 //   - an instance/class variable memoized via ivarType;
 //   - a bare same-class method call (no args, no explicit receiver) whose
-//     return type methodReturnType already knows — the memo-reader shape.
+//     return type methodReturnType already knows — the memo-reader shape;
+//   - (DC.5) an inline chain — the receiver is itself a `new(...)` call
+//     (literal-constant or, inside a singleton context, implicit-self) with
+//     no intermediate variable, e.g. `new(x).method` inside `def self.call`.
 //
 // `new`/`include`/`extend`/`prepend` and constant/self receivers are
 // excluded: those are already handled by extractRubyVariables or
-// LinkRubyClassMethodCalls.
+// LinkRubyClassMethodCalls. selfIsClass tracks whether implicit `self` at the
+// current position refers to the enclosing class (`class << self`/`def
+// self.x`), the same way collectRubyMethodReturnTypes tracks it.
 func scanRubyReceiverTypedCalls(root *sitter.Node, src []byte, file, svcName string, ivarType, methodReturnType map[string]string) []classMethodCallRef {
 	var refs []classMethodCallRef
 
-	var walk func(n *sitter.Node, class string, ns []string, methodID string, locals map[string]string)
-	walk = func(n *sitter.Node, class string, ns []string, methodID string, locals map[string]string) {
+	var walk func(n *sitter.Node, class string, ns []string, methodID string, locals map[string]string, selfIsClass bool)
+	walk = func(n *sitter.Node, class string, ns []string, methodID string, locals map[string]string, selfIsClass bool) {
 		inner := ns
+		if n.Type() == "singleton_class" || n.Type() == "singleton_method" {
+			selfIsClass = true
+		}
 		switch n.Type() {
 		case "class", "module":
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
@@ -347,6 +442,7 @@ func scanRubyReceiverTypedCalls(root *sitter.Node, src []byte, file, svcName str
 				class = clsName
 				inner = append(append([]string{}, ns...), strings.Split(clsName, "::")...)
 			}
+			selfIsClass = false
 		case "method", "singleton_method":
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
 				methodID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, file, nameNode.Content(src), int(n.StartPoint().Row)+1)
@@ -357,7 +453,7 @@ func scanRubyReceiverTypedCalls(root *sitter.Node, src []byte, file, svcName str
 		case "assignment", "operator_assignment":
 			if left := n.ChildByFieldName("left"); left != nil && left.Type() == "identifier" && methodID != "" {
 				if right := n.ChildByFieldName("right"); right != nil {
-					if cls := inferRubyNewClass(right, src); cls != "" {
+					if cls := inferRubyExprClassCtx(right, src, class, selfIsClass, methodReturnType); cls != "" {
 						locals[left.Content(src)] = cls
 					}
 				}
@@ -383,6 +479,8 @@ func scanRubyReceiverTypedCalls(root *sitter.Node, src []byte, file, svcName str
 								if class != "" {
 									cls = ivarType[class+"\x00"+recv.Content(src)]
 								}
+							case "call":
+								cls = inferRubyNewClassCtx(recv, src, class, selfIsClass)
 							}
 							if cls != "" {
 								refs = append(refs, classMethodCallRef{
@@ -397,9 +495,9 @@ func scanRubyReceiverTypedCalls(root *sitter.Node, src []byte, file, svcName str
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i), class, inner, methodID, locals)
+			walk(n.NamedChild(i), class, inner, methodID, locals, selfIsClass)
 		}
 	}
-	walk(root, "", nil, "", map[string]string{})
+	walk(root, "", nil, "", map[string]string{}, false)
 	return refs
 }
