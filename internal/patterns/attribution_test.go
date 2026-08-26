@@ -274,6 +274,42 @@ func TestMatchToGraph_UnresolvedCallRefs(t *testing.T) {
 	assert.Equal(t, "web", unresolved[0].Service)
 }
 
+// global_member_call is scoped to the window.* namespace idiom: a
+// window.maple.X() callee lands in the unresolved ledger under its full dotted
+// path (for LinkJSGlobals to resolve against the global symbol table), while
+// a non-window member call (Utils.format, this.foo) — which the YAML query's
+// #match? predicate already filters at the tree-sitter level, but that gate
+// only exists in the .yaml file, not here — is dropped by the same check
+// matcher.go applies in Go, so a MatchResult built directly (bypassing the
+// query) still can't leak one through.
+func TestMatchToGraph_GlobalMemberCallScopedToWindow(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "arrow_func_var",
+			File:        "app.js",
+			Line:        3,
+			EndLine:     20,
+			Captures:    map[string]string{"name": "init"},
+		},
+		{
+			PatternName: "global_member_call",
+			File:        "app.js",
+			Line:        5,
+			Captures:    map[string]string{"callee": "window.maple.queueToast"},
+		},
+		{
+			PatternName: "global_member_call",
+			File:        "app.js",
+			Line:        6,
+			Captures:    map[string]string{"callee": "Utils.format"},
+		},
+	}
+	_, _, unresolved := patterns.MatchToGraph("web", results)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "window.maple.queueToast", unresolved[0].Name)
+	assert.Equal(t, "call_ref", unresolved[0].Kind)
+}
+
 // Anonymous goroutines produce a worker node spawned by the enclosing function.
 func TestMatchToGraph_AnonGoroutineSpawns(t *testing.T) {
 	results := []patterns.MatchResult{

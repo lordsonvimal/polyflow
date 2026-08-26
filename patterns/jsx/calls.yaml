@@ -39,3 +39,14 @@ patterns:
     captures:
       - name: callee
         role: func_ref
+  # Global-namespace member calls: window.maple.queueToast(...) — see
+  # jsx_calls/calls.yaml for the full rationale (same pattern, mirrored here
+  # for .tsx/.jsx files which run the "jsx" pattern language instead).
+  - name: global_member_call
+    query: |
+      (call_expression
+        function: (member_expression) @callee
+        (#match? @callee "^window\\."))
+    captures:
+      - name: callee
+        role: func_ref

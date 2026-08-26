@@ -1,5 +1,12 @@
 package testdata
 
+// appConfigEditScript builds a client-handler string out-of-line, the
+// maple-manager idiom: markup references the helper by name, not the literal
+// window.maple.X() call.
+func appConfigEditScript(gameID string) string {
+	return fmt.Sprintf("window.maple.openAppConfigForEdit('%s')", gameID)
+}
+
 templ ActionPanel(gameID string, page int) {
 	<div>
 		// Colon syntax, JSExpression wrapper, concatenated path → POST /play/*/draw
@@ -13,6 +20,9 @@ templ ActionPanel(gameID string, page int) {
 		// Plain client-side JS call (no @verb) — must create a dom_target
 		// node with a resolvable handler, the same as onclick= would.
 		<button data-on:click="window.maple.syncAllBaseImages()">Sync</button>
+		// Handler built indirectly via a local Go helper function — the
+		// attribute never mentions window.maple.X literally.
+		<button data-on:click={ fmt.Sprintf("$open = ''; %s", appConfigEditScript(gameID)) }>Edit</button>
 		// Reactive text binding referencing a compound signal expression
 		<span data-text="$idx + 1"></span>
 		<input data-bind="username"/>

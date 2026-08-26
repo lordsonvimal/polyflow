@@ -691,6 +691,7 @@ var jsBuiltins = map[string]bool{
 func isCallRef(patternName string) bool {
 	return patternName == "component_fn_call" ||
 		patternName == "jsx_event_handler_ref" ||
+		patternName == "global_member_call" ||
 		patternName == "goroutine_call" ||
 		patternName == "cobra_run" ||
 		patternName == "python_func_call"
@@ -1710,6 +1711,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	for _, r := range callRefs {
 		callee, ok := r.Captures["callee"]
 		if !ok {
+			continue
+		}
+		// global_member_call fires on every member-expression callee
+		// (array.push(), this.foo(), $(x).addClass(), …) — scope it to the
+		// window-rooted namespace idiom LinkJSGlobals actually resolves
+		// (window.maple.X = function(){}); anything else would flood the
+		// unresolved ledger with call sites no global table entry ever
+		// explains.
+		if r.PatternName == "global_member_call" && !strings.HasPrefix(callee, "window.") {
 			continue
 		}
 		callee = stripStringLiteral(callee)
