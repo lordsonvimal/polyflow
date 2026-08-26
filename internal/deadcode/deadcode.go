@@ -61,6 +61,19 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 		if graph.IsTestFilePath(n.File) {
 			continue
 		}
+		// Well-known Go interface methods (GORM's Tabler/hook interfaces,
+		// encoding/json's Marshaler, fmt.Stringer, sql.Scanner, ...) are
+		// invoked by the framework through an interface value or reflection,
+		// never by a literal call site in application source — so they are
+		// zero-caller by construction, the same way an HTTP handler is.
+		// Gated to Language "go" + NodeTypeMethod: this is a Go naming
+		// convention (stdlib and GORM alike), not a cross-language one — a
+		// Ruby/JS/Python method that happens to share one of these names
+		// (e.g. a JS class's own `value()`) implements no such interface and
+		// must stay a real deadcode candidate.
+		if n.Type == graph.NodeTypeMethod && n.Language == "go" && reflectDispatchedMethod[n.Label] {
+			continue
+		}
 		if hasCaller(idx, n.ID) {
 			continue
 		}
@@ -92,6 +105,34 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 	}
 
 	return &Result{Functions: items, Total: len(items)}
+}
+
+// reflectDispatchedMethod names Go methods that a framework or the standard
+// library dispatches through an interface value or reflection rather than a
+// literal call site: GORM's Tabler and model-lifecycle hooks (TableName,
+// Before*/After*), encoding/json's Marshaler/Unmarshaler, fmt.Stringer,
+// database/sql's Scanner/Valuer, and net/http's Handler. Mirrors the same
+// reserved-name list staticcheck's U1000 check exempts, for the same reason.
+var reflectDispatchedMethod = map[string]bool{
+	"TableName":     true,
+	"BeforeCreate":  true,
+	"AfterCreate":   true,
+	"BeforeUpdate":  true,
+	"AfterUpdate":   true,
+	"BeforeSave":    true,
+	"AfterSave":     true,
+	"BeforeDelete":  true,
+	"AfterDelete":   true,
+	"AfterFind":     true,
+	"String":        true,
+	"Error":         true,
+	"MarshalJSON":   true,
+	"UnmarshalJSON": true,
+	"MarshalText":   true,
+	"UnmarshalText": true,
+	"Scan":          true,
+	"Value":         true,
+	"ServeHTTP":     true,
 }
 
 // hasCaller reports whether n has at least one inbound graph.EdgeTypeCalls
