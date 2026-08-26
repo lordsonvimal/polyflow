@@ -1550,6 +1550,51 @@ func jsxTagName(n *sitter.Node, src []byte) string {
 // handleCall emits flows_to edges when a tracked module variable is passed
 // to a function declared in the same file, and (B.1) calls edges when a
 // same-file function declaration is passed as a bare identifier argument.
+// emitNestedLocalCallEdge resolves a bare-identifier call site whose callee
+// is a function-expression variable declared in a NESTED (non-module) lexical
+// scope — `var el = function(id){...}` inside one function, called as
+// `el(...)` inside that same function — and emits the calls edge the
+// pattern matcher's own component_fn_call pass can never produce for it: the
+// matcher's node-name index (nameByFileAndName) is built only from
+// tree-sitter-pattern-emitted nodes, and no YAML pattern captures a
+// non-arrow, non-top-level `var x = function(){}` — only walk()'s
+// self-attribution above does, entirely outside the matcher's node universe.
+// Without this, every such local was permanently zero-caller regardless of
+// how many times it was actually called, because neither side of the call
+// graph could see the other's half.
+//
+// Scoped strictly to frame > 0 (a real nested function scope, not module
+// level): module-level names are already correctly resolved by the pattern
+// matcher's Pass 3, and re-resolving them here would just double the edge.
+// resolve() walks scopes innermost-first, so two sibling scopes each
+// shadowing the same name (two different `var el = ...` in two different
+// outer functions) each resolve to their OWN declaration.
+func (ex *jsExtractor) emitNestedLocalCallEdge(node *sitter.Node, fnName string, scopes []*jsScope) {
+	frame := resolve(scopes, fnName)
+	if frame <= 0 {
+		return
+	}
+	line, ok := scopes[frame].locals[fnName]
+	if !ok {
+		return
+	}
+	toID := ex.fnNodeID(fnName, line)
+	if !ex.nodeSeen[toID] {
+		// The local name shadows a non-function declaration (`var count = 0`
+		// named like a call-site identifier) — no function node exists at
+		// this ID, so there is nothing valid to point an edge at.
+		return
+	}
+	fromID := attribution(scopes, ex)
+	if fromID == "" {
+		fromID = ex.moduleAttr(node)
+	}
+	if fromID == "" || fromID == toID {
+		return
+	}
+	ex.addEdge(graph.EdgeTypeCalls, fromID, toID, graph.ConfidenceStatic, nil)
+}
+
 func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 	args := node.ChildByFieldName("arguments")
 	if args == nil {
@@ -1560,6 +1605,7 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 	fnNode := node.ChildByFieldName("function")
 	if fnNode != nil && fnNode.Type() == "identifier" {
 		fnName := fnNode.Content(ex.src)
+		ex.emitNestedLocalCallEdge(node, fnName, scopes)
 		fnLine, declared := ex.fnDecls[fnName]
 		if declared {
 			for i := 0; i < int(args.NamedChildCount()); i++ {

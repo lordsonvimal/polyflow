@@ -101,6 +101,74 @@ func TestMatchToGraph_CallRefContainment(t *testing.T) {
 	assert.Equal(t, "edgeRow", labelByID[edges[0].To])
 }
 
+// Two sibling scopes each declaring their own same-named local closure
+// (`var el = function(id){...}`, a common throwaway-selector-helper idiom)
+// and calling it locally must resolve to their OWN declaration, not collide
+// on the flat file+name map's last-write-wins pick — the juniper corpus
+// hit this for real: app-config.js declares `var el = ...` in two different
+// outer functions, and one of the two was permanently starved of its very
+// real, very local call site, reading as dead code.
+func TestMatchToGraph_SiblingScopesSameLocalNameDoNotCollide(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "arrow_func_var",
+			File:        "app-config.js",
+			Line:        1,
+			EndLine:     20,
+			Captures:    map[string]string{"name": "outerA"},
+		},
+		{
+			PatternName: "arrow_func_var",
+			File:        "app-config.js",
+			Line:        5,
+			EndLine:     7,
+			Captures:    map[string]string{"name": "el"},
+		},
+		{
+			PatternName: "component_fn_call", // el(...) at line 10: inside outerA only
+			File:        "app-config.js",
+			Line:        10,
+			Captures:    map[string]string{"callee": "el"},
+		},
+		{
+			PatternName: "arrow_func_var",
+			File:        "app-config.js",
+			Line:        30,
+			EndLine:     50,
+			Captures:    map[string]string{"name": "outerB"},
+		},
+		{
+			PatternName: "arrow_func_var",
+			File:        "app-config.js",
+			Line:        35,
+			EndLine:     37,
+			Captures:    map[string]string{"name": "el"},
+		},
+		{
+			PatternName: "component_fn_call", // el(...) at line 40: inside outerB only
+			File:        "app-config.js",
+			Line:        40,
+			Captures:    map[string]string{"callee": "el"},
+		},
+	}
+	nodes, edges, unresolved := patterns.MatchToGraph("web", results)
+	assert.Empty(t, unresolved)
+
+	idByLine := map[int]string{}
+	labelByID := map[string]string{}
+	for _, n := range nodes {
+		idByLine[n.Line] = n.ID
+		labelByID[n.ID] = n.Label
+	}
+	require.Len(t, edges, 2)
+	byFrom := map[string]string{}
+	for _, e := range edges {
+		byFrom[labelByID[e.From]] = e.To
+	}
+	assert.Equal(t, idByLine[5], byFrom["outerA"], "outerA's call must resolve to its OWN el (line 5), not outerB's")
+	assert.Equal(t, idByLine[35], byFrom["outerB"], "outerB's call must resolve to its OWN el (line 35), not outerA's")
+}
+
 // Module-level JSX usage (render(<App/>) in index.tsx) gets a synthetic
 // per-file module node as its caller instead of being dropped.
 func TestMatchToGraph_ModuleLevelRender(t *testing.T) {
