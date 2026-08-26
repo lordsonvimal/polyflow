@@ -622,6 +622,15 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			referencedIDs[id] = true
 		}
 
+		// Stamp graph.MetaReflectDispatched on methods the pattern registry's
+		// package/version-gated reflect_dispatched_methods declares (GORM
+		// hooks, Go stdlib interface methods, ...) — done here, once per
+		// service and before caching, so it survives the semantic cache and
+		// deadcode can exclude these with one generic Meta check instead of a
+		// hardcoded name list. Applied unconditionally (cached or fresh path)
+		// since it's a pure function of already-in-memory data, not source.
+		stampReflectDispatched(semNodes, reg.ForService(sf.deps).ReflectDispatchedMethods(sf.svc.Language))
+
 		nodesJSON, _ := json.Marshal(semNodes)
 		edgesJSON, _ := json.Marshal(semEdges)
 		referencedJSON, _ := json.Marshal(semReferenced)
@@ -1234,6 +1243,28 @@ func CountFilesModifiedSince(root string, excludes []string, since time.Time, ca
 		return nil
 	})
 	return count, capped
+}
+
+// stampReflectDispatched sets graph.MetaReflectDispatched on every
+// NodeTypeMethod node in nodes whose label is in reflectMethods. Gated to
+// NodeTypeMethod: a free function sharing one of these names (e.g. a
+// package-level "String" helper) implements no interface and must stay a
+// real deadcode candidate — only a method (which has a receiver, and so is
+// eligible for interface satisfaction) can be reflect-dispatched this way.
+func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]bool) {
+	if len(reflectMethods) == 0 {
+		return
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeMethod || !reflectMethods[n.Label] {
+			continue
+		}
+		if n.Meta == nil {
+			n.Meta = map[string]string{}
+		}
+		n.Meta[graph.MetaReflectDispatched] = "true"
+	}
 }
 
 // isMinifiedAsset reports whether path is a minified/bundled vendor asset

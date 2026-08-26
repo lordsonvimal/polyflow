@@ -32,28 +32,36 @@ func (r *Registry) ForService(svcDeps []deps.Dependency) *Registry {
 	out := NewRegistry()
 	for lang, ps := range r.patterns {
 		for _, p := range ps {
-			if gateSatisfied(p, versions) {
+			if gateSatisfied(p.Package, p.VersionRange, versions) {
 				out.Register(lang, p)
+			}
+		}
+	}
+	for lang, gs := range r.reflectMethods {
+		for _, g := range gs {
+			if gateSatisfied(g.Package, g.VersionRange, versions) {
+				out.reflectMethods[lang] = append(out.reflectMethods[lang], g)
 			}
 		}
 	}
 	return out
 }
 
-// gateSatisfied reports whether the pattern's package/version gate passes for
-// the given resolved dependency versions.
-func gateSatisfied(p *Pattern, versions map[string]string) bool {
-	if p.Package == "" {
+// gateSatisfied reports whether a package/version gate passes for the given
+// resolved dependency versions. Shared by *Pattern and reflectMethodGate
+// filtering — both carry the identical Package/VersionRange gate shape.
+func gateSatisfied(pkg, versionRange string, versions map[string]string) bool {
+	if pkg == "" {
 		return true
 	}
-	version, ok := versions[p.Package]
+	version, ok := versions[pkg]
 	if !ok {
 		return false
 	}
-	if p.VersionRange == "" {
+	if versionRange == "" {
 		return true
 	}
-	return VersionInRange(version, p.VersionRange)
+	return VersionInRange(version, versionRange)
 }
 
 // VersionInRange reports whether an exact version satisfies a range

@@ -111,6 +111,17 @@ const (
 // contract engine and coverage denominators are not.
 const MetaIsTest = "is_test"
 
+// MetaReflectDispatched marks a method the indexer determined is invoked by
+// a framework or the standard library through an interface value or
+// reflection rather than a literal call site (GORM's TableName/Before*/
+// After* hooks, encoding/json's Marshaler, fmt.Stringer, ...) — see
+// patterns.PatternFile.ReflectDispatchedMethods for where the name list is
+// declared. Stamped once at index time (package/version-gated per service,
+// language-scoped) so query-time consumers like deadcode can exclude these
+// with a single generic Meta check instead of hardcoding a per-framework
+// name list themselves.
+const MetaReflectDispatched = "reflect_dispatched"
+
 // MetaChannelRole records which side(s) of a broker channel a service was
 // observed on: ChannelRoleProducer if it publishes to the exchange,
 // ChannelRoleConsumer if it only binds a queue to it, or ChannelRoleBoth.

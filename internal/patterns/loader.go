@@ -65,6 +65,16 @@ type PatternFile struct {
 	// Optional grammar allow-list restricting which grammars this file's
 	// patterns compile against; see Pattern.Grammars.
 	Grammars []string `yaml:"grammars"`
+
+	// ReflectDispatchedMethods names methods this file's Package/VersionRange
+	// gate (or no gate at all, for a language's own stdlib interfaces) is
+	// known to invoke through an interface value or reflection rather than a
+	// literal call site — e.g. gorm.yaml declares GORM's TableName/Before*/
+	// After* hooks, gated on gorm.io/gorm. Framework-specific reflect-dispatch
+	// knowledge lives here, declaratively and per-language/per-package,
+	// instead of as a hardcoded name list in the deadcode algorithm: a new
+	// framework's hook methods are one YAML entry away, no Go code change.
+	ReflectDispatchedMethods []string `yaml:"reflect_dispatched_methods"`
 }
 
 // Load reads and parses all *.yaml pattern files under dir (recursively).

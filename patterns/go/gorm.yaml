@@ -7,6 +7,26 @@
 language: go
 version: "1"
 package: gorm.io/gorm
+
+# TableName (the Tabler interface) and the model lifecycle hooks
+# (Before*/After*) are never called by a literal call site in application
+# code — GORM finds and invokes them via reflection when it operates on a
+# model. Declaring them here (rather than hardcoding the name list in
+# internal/deadcode) means the exclusion only applies to services that
+# actually depend on gorm.io/gorm, and a future GORM hook can be added
+# without touching Go source.
+reflect_dispatched_methods:
+  - TableName
+  - BeforeCreate
+  - AfterCreate
+  - BeforeUpdate
+  - AfterUpdate
+  - BeforeSave
+  - AfterSave
+  - BeforeDelete
+  - AfterDelete
+  - AfterFind
+
 patterns:
   # gorm.Open(postgres.Open(dsn), &gorm.Config{}) — captures the dialector so
   # the datastore engine (postgres/sqlite) is recorded.

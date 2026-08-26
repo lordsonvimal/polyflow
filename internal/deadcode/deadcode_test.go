@@ -86,6 +86,31 @@ func TestBuild_FileFilter(t *testing.T) {
 	assert.Equal(t, "be:orphan", out.Functions[0].ID)
 }
 
+func TestBuild_ReflectDispatchedMethodNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "be:table_name", Type: graph.NodeTypeMethod, Label: "TableName",
+		Service: "backend", File: "model.go", Line: 40, Language: "go",
+		Meta: map[string]string{graph.MetaReflectDispatched: "true"},
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:table_name", f.ID, "a node the indexer stamped reflect_dispatched must not be flagged")
+	}
+}
+
+func TestBuild_SpawnsEdgeCountsAsCaller(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:worker_loop", Type: graph.NodeTypeMethod, Label: "loop", Service: "backend", File: "scheduler.go", Line: 50})
+	idx.AddEdge(&graph.Edge{ID: "e3", From: "be:handler", To: "be:worker_loop", Type: graph.EdgeTypeSpawns})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:worker_loop", f.ID, "a `go x.method()` target has a real caller via EdgeTypeSpawns")
+	}
+}
+
 func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
 	idx.AddNode(&graph.Node{ID: "be:handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "backend", File: "h.go", Line: 1})
