@@ -86,6 +86,38 @@ func TestBuild_FileFilter(t *testing.T) {
 	assert.Equal(t, "be:orphan", out.Functions[0].ID)
 }
 
+func TestBuild_CallbackRootKindNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "be:on_proceed", Type: graph.NodeTypeFunction, Label: "onProceed",
+		Service: "backend", File: "popovers.js", Line: 60,
+		Meta: map[string]string{"root_kind": "callback"},
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:on_proceed", f.ID, "root_kind=callback (object-literal handler / SSA-referenced value) must not be flagged")
+	}
+}
+
+func TestBuild_UnreachableRootKindStillFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "be:dead", Type: graph.NodeTypeFunction, Label: "dead",
+		Service: "backend", File: "dead.go", Line: 60,
+		Meta: map[string]string{"root_kind": "unreachable"},
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "be:dead" {
+			found = true
+		}
+	}
+	assert.True(t, found, "root_kind=unreachable is exactly the deadcode verdict and must still be flagged")
+}
+
 func TestBuild_ReflectDispatchedMethodNotFlagged(t *testing.T) {
 	idx := fixtureIndex()
 	idx.AddNode(&graph.Node{
