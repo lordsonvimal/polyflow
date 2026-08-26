@@ -66,6 +66,17 @@ import (
 // Only the superclass chain propagates. A module cannot legally declare a filter
 // in its body — the spelling is `included do`, which is ledgered — so `include`
 // contributes methods to look up, never registrations to inherit.
+//
+// # Model callbacks
+//
+// ActiveRecord's `before_validation :set_username` / `validate :cro_user_must_be_sso`
+// register a private method the same way `before_action` does, and they were
+// invisible for the same reason: app/models never entered this pass. They are
+// walked and resolved by the identical machinery — only:/except: and skips are
+// controller-only concepts, so model classes never collect actions, which means
+// the class-scope edge (`User --calls--> normalize_email`) is the only one they
+// can ever emit. There is no per-action edge to spray, because a model has no
+// actions.
 func LinkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
 	svcNames := make([]string, 0, len(serviceFiles))
 	for svc := range serviceFiles {
@@ -77,7 +88,7 @@ func LinkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string) ([]g
 	var unresolved []graph.UnresolvedRef
 
 	for _, svc := range svcNames {
-		files := controllerFiles(serviceFiles[svc])
+		files := filterHostFiles(serviceFiles[svc])
 		if len(files) == 0 {
 			continue // not a Rails app
 		}
@@ -89,18 +100,20 @@ func LinkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string) ([]g
 	return edges, unresolved
 }
 
-// controllerFiles returns every Ruby file under an app/controllers tree, sorted.
+// filterHostFiles returns every Ruby file under an app/controllers or
+// app/models tree, sorted.
 //
-// Not just `*_controller.rb`: app/controllers/concerns holds the modules that
-// define the callbacks, and their `include`s are needed to walk the ancestor
-// chain that resolves them.
-func controllerFiles(files []string) []string {
+// Not just `*_controller.rb`/`*.rb` models: the concerns directories under each
+// hold the modules that define the callbacks, and their `include`s are needed
+// to walk the ancestor chain that resolves them.
+func filterHostFiles(files []string) []string {
 	var out []string
 	for _, f := range files {
 		if filepath.Ext(f) != ".rb" {
 			continue
 		}
-		if !strings.Contains(filepath.ToSlash(f), "/app/controllers/") {
+		slash := filepath.ToSlash(f)
+		if !strings.Contains(slash, "/app/controllers/") && !strings.Contains(slash, "/app/models/") {
 			continue
 		}
 		out = append(out, f)
@@ -275,6 +288,10 @@ func (ix *filterIndex) resolveSuper(c *ctrlClass) []*ctrlClass {
 // ---------------------------------------------------------------------------
 
 // filterKinds are the registrations that add a filter.
+//
+// The ActiveRecord half — before_validation, validate, before_save, and the
+// rest of the lifecycle macros — reads a callback symbol the same way
+// before_action does, so they share this table and the same parseFilterCall.
 var filterKinds = map[string]bool{
 	"before_action":         true,
 	"around_action":         true,
@@ -285,6 +302,27 @@ var filterKinds = map[string]bool{
 	"append_before_action":  true,
 	"append_around_action":  true,
 	"append_after_action":   true,
+
+	"validate":          true,
+	"before_validation": true,
+	"after_validation":  true,
+	"before_save":       true,
+	"around_save":       true,
+	"after_save":        true,
+	"before_create":     true,
+	"around_create":     true,
+	"after_create":      true,
+	"before_update":     true,
+	"around_update":     true,
+	"after_update":      true,
+	"before_destroy":    true,
+	"around_destroy":    true,
+	"after_destroy":     true,
+	"after_commit":      true,
+	"after_rollback":    true,
+	"after_initialize":  true,
+	"after_find":        true,
+	"after_touch":       true,
 }
 
 // skipKinds remove an inherited filter. They only mean anything now that
@@ -325,6 +363,14 @@ func (ix *filterIndex) scanFile(file string) {
 	}
 	defer tree.Close()
 
+	// Actions are a controller concept: only:/except: restrict a filter to some
+	// of a class's public methods, which means something for a dispatchable
+	// action and nothing for an ActiveRecord instance method. A model class
+	// therefore never collects actions, so the loop in link() that fans a
+	// registration out across c.actions simply has nothing to iterate — the
+	// class-scope edge is the only one a model callback can ever produce.
+	collectActions := strings.Contains(filepath.ToSlash(file), "/app/controllers/")
+
 	// Every filter call in the file, so the ones no class body claims can be
 	// ledgered (bug-class #12) rather than silently lost. The shape that reaches
 	// here is `included do before_action :x end` inside a concern, where the
@@ -357,7 +403,7 @@ func (ix *filterIndex) scanFile(file string) {
 				parts := strings.Split(nameNode.Content(src), "::")
 				outer := append(append([]string{}, ns...), parts[:len(parts)-1]...)
 				name := parts[len(parts)-1]
-				ix.collectClass(n, name, outer, file, src, t == "module")
+				ix.collectClass(n, name, outer, file, src, t == "module", collectActions)
 				inner = append(outer, name)
 			}
 		}
@@ -368,7 +414,7 @@ func (ix *filterIndex) scanFile(file string) {
 	walk(tree.RootNode(), nil)
 }
 
-func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string, file string, src []byte, isModule bool) {
+func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string, file string, src []byte, isModule, collectActions bool) {
 	c := &ctrlClass{
 		name: name,
 		ns:   ns,
@@ -402,8 +448,12 @@ func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string,
 		case "method":
 			// A module has no actions: nothing routes to it directly, and its
 			// methods become actions only of whatever includes it — which that
-			// class's own body already reports.
-			if public && !isModule {
+			// class's own body already reports. A model class has no actions
+			// either — only:/except: scope a filter to some of a controller's
+			// dispatchable methods, which is meaningless for an AR instance
+			// method, so collectActions is false for every class outside
+			// app/controllers and only the class-scope edge gets emitted.
+			if public && !isModule && collectActions {
 				if nn := stmt.ChildByFieldName("name"); nn != nil {
 					c.actions = append(c.actions, ctrlAction{nn.Content(src), int(stmt.StartPoint().Row) + 1})
 				}
