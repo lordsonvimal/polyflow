@@ -43,6 +43,12 @@ func TestLoadFileJavaScriptPatterns(t *testing.T) {
 	assert.GreaterOrEqual(t, len(files), 3, "expected at least 3 JavaScript pattern files")
 	for _, pf := range files {
 		assert.Equal(t, "javascript", pf.Language)
+		if len(pf.ReflectDispatchedMethods) > 0 {
+			// A reflect_dispatched_methods-only file (e.g. react.yaml) has
+			// nothing for the tree-sitter matcher to look for — same shape as
+			// patterns/ruby/devise.yaml.
+			continue
+		}
 		assert.NotEmpty(t, pf.Patterns)
 	}
 }
