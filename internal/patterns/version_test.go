@@ -212,6 +212,34 @@ func TestReflectDispatchedMethods_Gating(t *testing.T) {
 // TestAWSSDKGating loads the real shipped AWS pattern files and proves the
 // gating level of the version split: a service pinning SDK v1 activates only
 // the v1 file; a service on SDK v2 activates only the v2 file.
+// TestDeviseReflectDispatchedGating loads the real patterns/ruby/devise.yaml
+// (Tier DV.3) and proves its reflect_dispatched_methods list only surfaces
+// for a service that actually depends on the devise gem — mirrors
+// TestReflectDispatchedMethods_Gating's in-memory version, but against the
+// shipped YAML rather than a synthetic PatternFile, the same real-file
+// precedent TestAWSSDKGating sets for its own pattern pair.
+func TestDeviseReflectDispatchedGating(t *testing.T) {
+	pf, err := patterns.LoadFile("../../patterns/ruby/devise.yaml")
+	require.NoError(t, err)
+
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(pf)
+
+	t.Run("service with devise in Gemfile.lock gets the hook names", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: deps.EcosystemRuby, Name: "devise", Version: "5.0.4", Kind: deps.KindProd},
+		})
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.True(t, names["password_required?"])
+	})
+
+	t.Run("service without devise gets nothing", func(t *testing.T) {
+		svc := reg.ForService(nil)
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.Empty(t, names)
+	})
+}
+
 func TestAWSSDKGating(t *testing.T) {
 	v1, err := patterns.LoadFile("../../patterns/go/aws_s3_v1.yaml")
 	require.NoError(t, err)

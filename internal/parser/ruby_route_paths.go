@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -243,6 +244,12 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 				names.enterResource(singular, pluralName), nestingParam(seg, plural))
 		}
 		return
+	case "devise_for":
+		seg, ok := firstPositionalSegment(n, w.src)
+		if ok {
+			w.emitDeviseRoutes(n, mod, seg)
+		}
+		return
 	case "member":
 		if blockNode != nil {
 			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), mod, names, "")
@@ -423,6 +430,187 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 			},
 		})
 	}
+}
+
+// deviseAction is one action `devise_for` implicitly routes for a given scope
+// (sessions, registrations, ...). Unlike pluralRESTActions, the path is not
+// derivable from a generic member/collection shape — Devise names its own
+// routes (`/users/sign_in`, `/users/password/new`) independent of REST
+// convention — so each scope carries its own literal path template, `%s`
+// standing in for the mapping's scope argument (`:users`).
+type deviseAction struct {
+	Name   string
+	Method string
+	Path   string // %s == scope arg, e.g. "users"
+}
+
+// deviseScopeActions is Devise's per-scope default action/path table (see
+// docs/rails-devise-gem-plan.md's Pinned Interfaces, verified against 5.0.4
+// route-generation behavior). It also carries `invitations`
+// (devise_invitable) and `password_expired` (devise-security's
+// password_expirable) — not Devise core, but named directly in orion's
+// `controllers:` override hash, so DV.1 must be able to route them the same
+// way it routes core scopes (see the plan's Non-goals section: their *own*
+// default/non-overridden route set is out of scope, only resolving an
+// explicit controllers: override is in scope here).
+var deviseScopeActions = map[string][]deviseAction{
+	"sessions": {
+		{"new", "GET", "/%s/sign_in"},
+		{"create", "POST", "/%s/sign_in"},
+		{"destroy", "DELETE", "/%s/sign_out"},
+	},
+	"registrations": {
+		{"new", "GET", "/%s/sign_up"},
+		{"create", "POST", "/%s"},
+		{"edit", "GET", "/%s/edit"},
+		{"update", "PATCH", "/%s"},
+		{"destroy", "DELETE", "/%s"},
+		{"cancel", "GET", "/%s/cancel"},
+	},
+	"passwords": {
+		{"new", "GET", "/%s/password/new"},
+		{"create", "POST", "/%s/password"},
+		{"edit", "GET", "/%s/password/edit"},
+		{"update", "PATCH", "/%s/password"},
+	},
+	"confirmations": {
+		{"new", "GET", "/%s/confirmation/new"},
+		{"create", "POST", "/%s/confirmation"},
+		{"show", "GET", "/%s/confirmation"},
+	},
+	"unlocks": {
+		{"new", "GET", "/%s/unlock/new"},
+		{"create", "POST", "/%s/unlock"},
+		{"show", "GET", "/%s/unlock"},
+	},
+	"invitations": {
+		{"new", "GET", "/%s/invitation/new"},
+		{"create", "POST", "/%s/invitation"},
+		{"edit", "GET", "/%s/invitation/accept"},
+		{"update", "PUT", "/%s/invitation"},
+	},
+	"password_expired": {
+		{"edit", "GET", "/%s/password_expired/edit"},
+		{"update", "PUT", "/%s/password_expired"},
+	},
+}
+
+// emitDeviseRoutes synthesizes routes for a `devise_for` call's `controllers:`
+// override hash (Phase DV.1). Scopes not named there are DV.2's territory
+// (unimplemented: the default, non-overridden scopes need the model's `devise
+// :module1, ...` declaration to know which of them actually apply, a
+// cross-file join this per-file walker cannot do).
+//
+// Each override names a controller basename — `sessions: "sessions"` — which
+// is exactly what LinkRailsRouteActions' by-convention resolver needs in
+// Meta["resource"] to find SessionsController; a namespaced value
+// (`sessions: "users/sessions"`) splits into extra controller_module nesting
+// the same way composeAndStamp's `to:` handling already does.
+func (w *routeWalker) emitDeviseRoutes(call *sitter.Node, mod []string, scopeArg string) {
+	controllers := deviseControllersHash(call, w.src)
+	if len(controllers) == 0 {
+		return
+	}
+	skip := deviseSkipSet(call, w.src)
+	scopeMod := mod
+	if m := keywordSegment(call, w.src, "module"); m != "" {
+		scopeMod = appendSeg(mod, m)
+	}
+	line := int(call.StartPoint().Row) + 1
+
+	scopes := make([]string, 0, len(controllers))
+	for scopeName := range controllers {
+		scopes = append(scopes, scopeName)
+	}
+	sort.Strings(scopes)
+
+	for _, scopeName := range scopes {
+		if skip[scopeName] {
+			continue
+		}
+		actions, ok := deviseScopeActions[scopeName]
+		if !ok {
+			continue
+		}
+		ctrlMod, basename := scopeMod, controllers[scopeName]
+		if slash := strings.LastIndex(basename, "/"); slash >= 0 {
+			ctrlMod = appendSeg(scopeMod, basename[:slash])
+			basename = basename[slash+1:]
+		}
+		for _, a := range actions {
+			path := strings.Replace(a.Path, "%s", scopeArg, 1)
+			key := a.Method + " " + path
+			if w.seen[key] {
+				continue
+			}
+			w.seen[key] = true
+			w.out = append(w.out, graph.Node{
+				ID:       w.service + ":" + w.file + ":" + string(graph.NodeTypeHTTPHandler) + ":" + key + ":" + strconv.Itoa(line),
+				Type:     graph.NodeTypeHTTPHandler,
+				Label:    key,
+				Service:  w.service,
+				File:     w.file,
+				Line:     line,
+				EndLine:  line,
+				Language: "ruby",
+				Meta: map[string]string{
+					"pattern":           "devise_route",
+					"path":              path,
+					"full_path":         path,
+					"method":            a.Method,
+					"action":            a.Name,
+					"resource":          basename,
+					"controller_module": strings.Join(ctrlMod, "/"),
+				},
+			})
+		}
+	}
+}
+
+// deviseControllersHash reads `devise_for`'s `controllers: { scope: "basename"
+// }` keyword hash, one entry per Devise-scope override.
+func deviseControllersHash(call *sitter.Node, src []byte) map[string]string {
+	out := map[string]string{}
+	hash := keywordValueNode(call, src, "controllers")
+	if hash == nil || hash.Type() != "hash" {
+		return out
+	}
+	for i := 0; i < int(hash.NamedChildCount()); i++ {
+		p := hash.NamedChild(i)
+		if p == nil || p.Type() != "pair" {
+			continue
+		}
+		key, val := p.ChildByFieldName("key"), p.ChildByFieldName("value")
+		if key == nil || val == nil {
+			continue
+		}
+		// A hash literal's key spells the same symbol two ways depending on
+		// syntax (`sessions: "x"` parses the key as a colon-less
+		// hash_key_symbol; `:sessions => "x"` as a simple_symbol carrying the
+		// leading colon) — literalSegment only handles the latter, so read it
+		// the same raw-trim way keywordSegment's outer keys already do.
+		scope := strings.TrimSuffix(strings.TrimPrefix(string(src[key.StartByte():key.EndByte()]), ":"), ":")
+		basename := literalSegment(val, src)
+		if scope != "" && basename != "" {
+			out[scope] = basename
+		}
+	}
+	return out
+}
+
+// deviseSkipSet reads `devise_for`'s `skip:` keyword — a bare symbol or an
+// array of symbols naming scopes to drop entirely (reuses symbolNames, the
+// same array/`%i[]` walk restActionFilters' `only:`/`except:` uses).
+func deviseSkipSet(call *sitter.Node, src []byte) map[string]bool {
+	out := map[string]bool{}
+	v := keywordValueNode(call, src, "skip")
+	if v == nil {
+		return out
+	}
+	for _, s := range symbolNames(v, src) {
+		out[s] = true
+	}
+	return out
 }
 
 // restActionFilters reads the `only:`/`except:` keyword arguments of a

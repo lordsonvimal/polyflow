@@ -159,9 +159,21 @@ func pathHelperName(ns nameScope, literal string) string {
 // (`as: "collection"`, `as: :admin`), returning "" when it is absent or not a
 // literal.
 func keywordSegment(call *sitter.Node, src []byte, want string) string {
+	v := keywordValueNode(call, src, want)
+	if v == nil {
+		return ""
+	}
+	return literalSegment(v, src)
+}
+
+// keywordValueNode returns the raw value node of a keyword argument
+// (`key: value`), or nil when absent — the general form keywordSegment builds
+// on, needed by callers whose value is not a bare literal (a `controllers: {
+// ... }` hash, a `skip: [...]` array).
+func keywordValueNode(call *sitter.Node, src []byte, want string) *sitter.Node {
 	args := call.ChildByFieldName("arguments")
 	if args == nil {
-		return ""
+		return nil
 	}
 	for i := 0; i < int(args.ChildCount()); i++ {
 		c := args.Child(i)
@@ -174,8 +186,8 @@ func keywordSegment(call *sitter.Node, src []byte, want string) string {
 		}
 		k := strings.TrimSuffix(strings.TrimPrefix(string(src[key.StartByte():key.EndByte()]), ":"), ":")
 		if k == want {
-			return literalSegment(value, src)
+			return value
 		}
 	}
-	return ""
+	return nil
 }

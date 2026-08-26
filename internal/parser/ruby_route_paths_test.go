@@ -609,3 +609,109 @@ end
 		require.Empty(t, g.Meta["path"], "a group is not an endpoint: %+v", g)
 	}
 }
+
+// TestDeviseForControllersOverride is orion's real shape (Phase DV.1):
+// `devise_for :users, controllers: {...}` names a custom controller basename
+// per Devise scope, which must resolve by the same by-convention mechanism
+// `resources`-synthesized routes already use.
+func TestDeviseForControllersOverride(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `
+Rails.application.routes.draw do
+  devise_for :users, controllers: {
+    invitations: "invitations", passwords: "passwords",
+    registrations: "registrations", password_expired: "password_expired",
+    sessions: "sessions"
+  }
+end
+`)
+
+	got := map[string]*graph.Node{}
+	for _, n := range routeNode(nodes, "devise_route") {
+		got[n.Label] = n
+	}
+
+	sessionsCreate, ok := got["POST /users/sign_in"]
+	require.True(t, ok, "missing sessions create route, got %v", got)
+	require.Equal(t, "sessions", sessionsCreate.Meta["resource"])
+	require.Equal(t, "create", sessionsCreate.Meta["action"])
+	require.Empty(t, sessionsCreate.Meta["controller_module"])
+
+	sessionsDestroy, ok := got["DELETE /users/sign_out"]
+	require.True(t, ok, "missing sessions destroy route")
+	require.Equal(t, "destroy", sessionsDestroy.Meta["action"])
+
+	regUpdate, ok := got["PATCH /users"]
+	require.True(t, ok, "missing registrations update route, got %v", got)
+	require.Equal(t, "registrations", regUpdate.Meta["resource"])
+	require.Equal(t, "update", regUpdate.Meta["action"])
+
+	pwNew, ok := got["GET /users/password/new"]
+	require.True(t, ok, "missing passwords new route")
+	require.Equal(t, "passwords", pwNew.Meta["resource"])
+
+	_, ok = got["GET /users/invitation/new"]
+	require.True(t, ok, "invitations override must still route despite not being core Devise")
+
+	_, ok = got["GET /users/password_expired/edit"]
+	require.True(t, ok, "password_expired override must still route despite not being core Devise")
+}
+
+// TestDeviseForNoControllersHashSynthesizesNothing is orion-atlas's real shape
+// (Phase DV.1's scope boundary): `skip: [...]` with no `controllers:` hash at
+// all means DV.1 has nothing to override — Atlas's custom Users::SessionsController
+// is already reachable via its own explicit `to:` route, confirmed separately.
+// DV.1 must synthesize zero nodes here; the default (non-overridden, non-skipped)
+// scopes are DV.2's territory.
+func TestDeviseForNoControllersHashSynthesizesNothing(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `
+Rails.application.routes.draw do
+  devise_for :users, skip: [:sessions], path: ""
+end
+`)
+
+	got := routeNode(nodes, "devise_route")
+	require.Empty(t, got, "no controllers: hash means DV.1 has no override to synthesize, got %+v", got)
+}
+
+// TestDeviseForNamespacedControllerBasename covers a `controllers:` value that
+// embeds its own namespace (`sessions: "users/sessions"`), the same "extra
+// module nesting beyond controller_module" shape composeAndStamp's `to:`
+// handling already parses for plain Rails routes.
+func TestDeviseForNamespacedControllerBasename(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `
+Rails.application.routes.draw do
+  devise_for :users, controllers: { sessions: "users/sessions" }
+end
+`)
+
+	got := map[string]*graph.Node{}
+	for _, n := range routeNode(nodes, "devise_route") {
+		got[n.Label] = n
+	}
+	create, ok := got["POST /users/sign_in"]
+	require.True(t, ok)
+	require.Equal(t, "sessions", create.Meta["resource"])
+	require.Equal(t, "users", create.Meta["controller_module"])
+}
+
+// TestDeviseForSkipDropsOverriddenScope: `skip:` removes a scope even when it
+// is also named in `controllers:` — skip wins, since Rails never generates
+// the route to point the override at in the first place.
+func TestDeviseForSkipDropsOverriddenScope(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `
+Rails.application.routes.draw do
+  devise_for :users, skip: [:sessions], controllers: { sessions: "sessions", passwords: "passwords" }
+end
+`)
+
+	got := map[string]bool{}
+	for _, n := range routeNode(nodes, "devise_route") {
+		got[n.Label] = true
+	}
+	require.False(t, got["POST /users/sign_in"], "skip: must drop the sessions scope even though it's also overridden")
+	require.True(t, got["GET /users/password/new"], "the non-skipped override must still synthesize")
+}
