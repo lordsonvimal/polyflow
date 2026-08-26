@@ -373,32 +373,6 @@ end
 	require.Equal(t, first, second)
 }
 
-// TestSingularize covers the inflections used for nested-resource parameters
-// and, since C.2, for route names. The irregulars matter more in the second
-// role: a parameter name normalizes to a wildcard when matched, but a view's
-// `person_path` is looked up verbatim and either hits or does not.
-func TestSingularize(t *testing.T) {
-	t.Parallel()
-	for in, want := range map[string]string{
-		"folders":  "folder",
-		"files":    "file",
-		"studies":  "study",
-		"boxes":    "box",
-		"branches": "branch",
-		"status":   "status",
-		"user":     "user",
-		"people":   "person",
-		"children": "child",
-		"media":    "medium",
-		// Deliberately not inflected: the -ves rule that would give "leaf"
-		// gives "archif" and "mof" for the names real apps actually use.
-		"archives": "archive",
-		"moves":    "move",
-	} {
-		require.Equal(t, want, singularize(in), "singularize(%q)", in)
-	}
-}
-
 // TestBareStringRouteVerbUpcased pins the Tier HH.2 normalization: a
 // bare-string route captures @method verbatim, so it used to keep Ruby's
 // lowercase `post` while every other handler in the graph carries `POST`.

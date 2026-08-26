@@ -12,6 +12,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
 // LinkRubyAssociations resolves ActiveRecord `has_many`/`belongs_to`/`has_one`
@@ -248,39 +249,9 @@ func associationTarget(macro string, args *sitter.Node, src []byte) string {
 		return className
 	}
 	if macro == "has_many" {
-		return snakeToClassName(singularizeAssociation(symbolText))
+		return snakeToClassName(railsinflect.Singularize(symbolText))
 	}
 	return snakeToClassName(symbolText)
-}
-
-// singularizeAssociation covers the same handful of English inflections
-// internal/parser/ruby_route_paths.go's singularize does for route
-// params/names, duplicated rather than imported: internal/linker cannot
-// import internal/parser (see docs/config-baseurl-prefix-tier-cb notes on
-// the same constraint).
-var rubyAssociationIrregularSingulars = map[string]string{
-	"people": "person", "men": "man", "women": "woman", "children": "child",
-	"mice": "mouse", "oxen": "ox", "teeth": "tooth", "feet": "foot",
-	"geese": "goose", "data": "datum", "criteria": "criterion", "media": "medium",
-}
-
-func singularizeAssociation(s string) string {
-	if irr, ok := rubyAssociationIrregularSingulars[s]; ok {
-		return irr
-	}
-	switch {
-	case strings.HasSuffix(s, "ies") && len(s) > 3:
-		return s[:len(s)-3] + "y"
-	case strings.HasSuffix(s, "ses"), strings.HasSuffix(s, "xes"),
-		strings.HasSuffix(s, "zes"), strings.HasSuffix(s, "ches"),
-		strings.HasSuffix(s, "shes"):
-		return s[:len(s)-2]
-	case strings.HasSuffix(s, "us"):
-		return s
-	case strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss"):
-		return s[:len(s)-1]
-	}
-	return s
 }
 
 // snakeToClassName converts a snake_case name to a PascalCase class name

@@ -12,6 +12,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
 // composeRailsRoutePaths walks routes.rb's tree-sitter AST maintaining a
@@ -236,7 +237,7 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		}
 		singular, pluralName := nameSeg, nameSeg
 		if plural {
-			singular = singularize(nameSeg)
+			singular = railsinflect.Singularize(nameSeg)
 		}
 		w.emitRESTRoutes(n, scope, mod, names, seg, singular, pluralName, plural)
 		if blockNode != nil {
@@ -432,68 +433,11 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 	}
 }
 
-// deviseAction is one action `devise_for` implicitly routes for a given scope
-// (sessions, registrations, ...). Unlike pluralRESTActions, the path is not
-// derivable from a generic member/collection shape — Devise names its own
-// routes (`/users/sign_in`, `/users/password/new`) independent of REST
-// convention — so each scope carries its own literal path template, `%s`
-// standing in for the mapping's scope argument (`:users`).
-type deviseAction struct {
-	Name   string
-	Method string
-	Path   string // %s == scope arg, e.g. "users"
-}
-
-// deviseScopeActions is Devise's per-scope default action/path table (see
-// docs/rails-devise-gem-plan.md's Pinned Interfaces, verified against 5.0.4
-// route-generation behavior). It also carries `invitations`
-// (devise_invitable) and `password_expired` (devise-security's
-// password_expirable) — not Devise core, but named directly in orion's
-// `controllers:` override hash, so DV.1 must be able to route them the same
-// way it routes core scopes (see the plan's Non-goals section: their *own*
-// default/non-overridden route set is out of scope, only resolving an
-// explicit controllers: override is in scope here).
-var deviseScopeActions = map[string][]deviseAction{
-	"sessions": {
-		{"new", "GET", "/%s/sign_in"},
-		{"create", "POST", "/%s/sign_in"},
-		{"destroy", "DELETE", "/%s/sign_out"},
-	},
-	"registrations": {
-		{"new", "GET", "/%s/sign_up"},
-		{"create", "POST", "/%s"},
-		{"edit", "GET", "/%s/edit"},
-		{"update", "PATCH", "/%s"},
-		{"destroy", "DELETE", "/%s"},
-		{"cancel", "GET", "/%s/cancel"},
-	},
-	"passwords": {
-		{"new", "GET", "/%s/password/new"},
-		{"create", "POST", "/%s/password"},
-		{"edit", "GET", "/%s/password/edit"},
-		{"update", "PATCH", "/%s/password"},
-	},
-	"confirmations": {
-		{"new", "GET", "/%s/confirmation/new"},
-		{"create", "POST", "/%s/confirmation"},
-		{"show", "GET", "/%s/confirmation"},
-	},
-	"unlocks": {
-		{"new", "GET", "/%s/unlock/new"},
-		{"create", "POST", "/%s/unlock"},
-		{"show", "GET", "/%s/unlock"},
-	},
-	"invitations": {
-		{"new", "GET", "/%s/invitation/new"},
-		{"create", "POST", "/%s/invitation"},
-		{"edit", "GET", "/%s/invitation/accept"},
-		{"update", "PUT", "/%s/invitation"},
-	},
-	"password_expired": {
-		{"edit", "GET", "/%s/password_expired/edit"},
-		{"update", "PUT", "/%s/password_expired"},
-	},
-}
+// Devise's per-scope default action/path table and the DeviseAction shape
+// live in internal/railsinflect (a dependency-free leaf package below both
+// internal/parser and internal/linker) rather than here, because DV.2
+// (internal/linker/rails_devise.go) needs the identical table and internal/
+// linker cannot import internal/parser — see railsinflect's doc comment.
 
 // emitDeviseRoutes synthesizes routes for a `devise_for` call's `controllers:`
 // override hash (Phase DV.1). Scopes not named there are DV.2's territory
@@ -528,7 +472,7 @@ func (w *routeWalker) emitDeviseRoutes(call *sitter.Node, mod []string, scopeArg
 		if skip[scopeName] {
 			continue
 		}
-		actions, ok := deviseScopeActions[scopeName]
+		actions, ok := railsinflect.DeviseScopeActions[scopeName]
 		if !ok {
 			continue
 		}
@@ -677,43 +621,7 @@ func nestingParam(seg string, plural bool) string {
 	if !plural {
 		return ""
 	}
-	return ":" + singularize(seg) + "_id"
-}
-
-// railsIrregularSingulars are the plurals no suffix rule reaches. They matter
-// more than they did when this function only named path parameters (which
-// normalize to a wildcard regardless): a route *name* is looked up verbatim by
-// a view's `person_path`, so an inflection miss is a missing link, not a
-// cosmetic wart.
-var railsIrregularSingulars = map[string]string{
-	"people": "person", "men": "man", "women": "woman", "children": "child",
-	"mice": "mouse", "oxen": "ox", "teeth": "tooth", "feet": "foot",
-	"geese": "goose", "data": "datum", "criteria": "criterion", "media": "medium",
-}
-
-// singularize applies the handful of English inflections Rails' own defaults cover
-// for route parameters and route names. It is deliberately not a full inflector:
-// the "-ves → -f" rule the general case would want (leaves → leaf) is a net loss
-// on real resource names, where `archives` and `moves` are common and `leaves`
-// is not.
-func singularize(s string) string {
-	if irr, ok := railsIrregularSingulars[s]; ok {
-		return irr
-	}
-	switch {
-	case strings.HasSuffix(s, "ies") && len(s) > 3:
-		return s[:len(s)-3] + "y"
-	case strings.HasSuffix(s, "ses"), strings.HasSuffix(s, "xes"),
-		strings.HasSuffix(s, "zes"), strings.HasSuffix(s, "ches"),
-		strings.HasSuffix(s, "shes"):
-		return s[:len(s)-2]
-	case strings.HasSuffix(s, "us"):
-		// Already singular: status, campus, bonus.
-		return s
-	case strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss"):
-		return s[:len(s)-1]
-	}
-	return s
+	return ":" + railsinflect.Singularize(seg) + "_id"
 }
 
 // blockBody returns a do_block's body_statement node (the container of its
