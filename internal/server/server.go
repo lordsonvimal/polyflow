@@ -121,9 +121,13 @@ func (s *Server) SetFleet(mergeFn FleetMergeFunc, ensureFn FleetEnsureFunc, memb
 // RefreshFleet re-runs FleetMergeFunc and swaps in the result — idx,
 // per-service checkout roots, and federated searchers all update together
 // so a request never sees roots/searchers out of sync with idx. Called once
-// at `serve` startup (the default full-fleet view) and again by
-// handleFleetActive after ensuring a new member is locally resolved. A nil
-// fleetMerge (not a fleet member) is a no-op, not an error.
+// at `serve` startup (the default full-fleet view, now backgrounded so it
+// can't delay the browser opening against the cheap local-only idx `serve`
+// starts with) and again by handleFleetActive after ensuring a new member
+// is locally resolved. A nil fleetMerge (not a fleet member) is a no-op,
+// not an error. Broadcasts graph_updated like Reload so a browser tab
+// already open against the local-only idx picks up the fleet-wide merge
+// once it lands, instead of needing a manual refresh.
 func (s *Server) RefreshFleet(ctx context.Context) error {
 	s.idxMu.RLock()
 	mergeFn := s.fleetMerge
@@ -144,6 +148,10 @@ func (s *Server) RefreshFleet(ctx context.Context) error {
 		s.fleetResolved[svc] = true
 	}
 	s.idxMu.Unlock()
+	select {
+	case s.broadcast <- `{"type":"graph_updated"}`:
+	default:
+	}
 	return nil
 }
 
