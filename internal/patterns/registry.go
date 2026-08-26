@@ -26,6 +26,7 @@ type reflectMethodGate struct {
 	Method       string
 	Package      string
 	VersionRange string
+	PathPrefix   string
 }
 
 // NewRegistry creates an empty Registry.
@@ -58,6 +59,7 @@ func (r *Registry) RegisterFile(pf *PatternFile) {
 		for _, m := range pf.ReflectDispatchedMethods {
 			r.reflectMethods[pf.Language] = append(r.reflectMethods[pf.Language], reflectMethodGate{
 				Method: m, Package: pf.Package, VersionRange: pf.VersionRange,
+				PathPrefix: pf.ReflectDispatchedPathPrefix,
 			})
 		}
 		r.mu.Unlock()
@@ -75,6 +77,23 @@ func (r *Registry) ReflectDispatchedMethods(language string) map[string]bool {
 	out := make(map[string]bool, len(r.reflectMethods[language]))
 	for _, g := range r.reflectMethods[language] {
 		out[g.Method] = true
+	}
+	return out
+}
+
+// ReflectDispatchedPathPrefixes returns, for every reflect-dispatched method
+// name in language that declared a ReflectDispatchedPathPrefix, that prefix
+// (a substring the node's file path must contain for the exclusion to
+// apply). A method with no entry here has no path restriction. Call on the
+// result of ForService, same as ReflectDispatchedMethods.
+func (r *Registry) ReflectDispatchedPathPrefixes(language string) map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]string)
+	for _, g := range r.reflectMethods[language] {
+		if g.PathPrefix != "" {
+			out[g.Method] = g.PathPrefix
+		}
 	}
 	return out
 }

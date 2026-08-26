@@ -75,6 +75,17 @@ type PatternFile struct {
 	// instead of as a hardcoded name list in the deadcode algorithm: a new
 	// framework's hook methods are one YAML entry away, no Go code change.
 	ReflectDispatchedMethods []string `yaml:"reflect_dispatched_methods"`
+
+	// ReflectDispatchedPathPrefix additionally restricts this file's
+	// ReflectDispatchedMethods to nodes whose file path contains this
+	// substring. Empty (the default gorm.yaml/devise.yaml use) means no
+	// restriction — those hook names are specific enough on their own.
+	// Needed for names that are common English words with no gem-specific
+	// spelling (ActiveRecord migrations' change/up/down, see
+	// active_record_migration.yaml): without a path constraint, any unrelated
+	// method sharing that name anywhere in a Rails service would be
+	// incorrectly excluded from deadcode.
+	ReflectDispatchedPathPrefix string `yaml:"reflect_dispatched_path_prefix"`
 }
 
 // Load reads and parses all *.yaml pattern files under dir (recursively).

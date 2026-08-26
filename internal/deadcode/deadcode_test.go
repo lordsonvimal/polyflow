@@ -157,6 +157,52 @@ func TestBuild_DeviseOverrideHookNotFlagged(t *testing.T) {
 	}
 }
 
+// TestBuild_MigrationMethodNotFlagged is Tier DC.2's worked example: a Rails
+// migration's change/up/down methods (db/migrate/*.rb) are invoked by the
+// `rails db:migrate` runner by filename+method-name convention — zero
+// in-repo call sites, ever. internal/indexer/stampReflectDispatched (gated by
+// patterns/ruby/active_record_migration.yaml, package: activerecord, scoped
+// to db/migrate/ via reflect_dispatched_path_prefix) is what stamps
+// graph.MetaReflectDispatched here before Build runs; this exercises the
+// same mechanism TestBuild_ReflectDispatchedMethodNotFlagged does.
+func TestBuild_MigrationMethodNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "be:migration_change", Type: graph.NodeTypeFunction, Label: "change",
+		Service: "backend", File: "db/migrate/20260101_add_x.rb", Line: 3, Language: "ruby",
+		Meta: map[string]string{graph.MetaReflectDispatched: "true"},
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:migration_change", f.ID, "a Rails migration's change method stamped reflect_dispatched must not be flagged")
+	}
+}
+
+// TestBuild_SameNamedMethodOutsideMigrationStillFlagged guards against the
+// over-widening risk DC.2's plan explicitly calls out: change/up/down are
+// common English words with no gem-specific spelling, so the exclusion must
+// only apply to a node the indexer actually stamped (i.e. one that passed
+// the db/migrate/ path-prefix check upstream) — a same-named method the
+// indexer did NOT stamp (no gem, or outside a migration-shaped path) must
+// stay a real deadcode candidate.
+func TestBuild_SameNamedMethodOutsideMigrationStillFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "be:coin_change", Type: graph.NodeTypeFunction, Label: "change",
+		Service: "backend", File: "app/models/coin.rb", Line: 10, Language: "ruby",
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "be:coin_change" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a same-named method outside db/migrate/ (never stamped reflect_dispatched) must still be flagged")
+}
+
 func TestBuild_SpawnsEdgeCountsAsCaller(t *testing.T) {
 	idx := fixtureIndex()
 	idx.AddNode(&graph.Node{ID: "be:worker_loop", Type: graph.NodeTypeMethod, Label: "loop", Service: "backend", File: "scheduler.go", Line: 50})

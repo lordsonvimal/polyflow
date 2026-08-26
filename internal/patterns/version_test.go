@@ -240,6 +240,42 @@ func TestDeviseReflectDispatchedGating(t *testing.T) {
 	})
 }
 
+// TestActiveRecordMigrationReflectDispatchedGating loads the real shipped
+// patterns/ruby/active_record_migration.yaml (Tier DC.2) and proves both its
+// package gate (only activated for a service depending on activerecord) and
+// its reflect_dispatched_path_prefix (change/up/down only exempted under
+// db/migrate/) — mirrors TestDeviseReflectDispatchedGating's real-file
+// precedent for the gate half, and adds the path-prefix half DC.2 introduced.
+func TestActiveRecordMigrationReflectDispatchedGating(t *testing.T) {
+	pf, err := patterns.LoadFile("../../patterns/ruby/active_record_migration.yaml")
+	require.NoError(t, err)
+
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(pf)
+
+	t.Run("service with activerecord in Gemfile.lock gets the migration method names", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: deps.EcosystemRuby, Name: "activerecord", Version: "8.1.3.1", Kind: deps.KindProd},
+		})
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.True(t, names["change"])
+		assert.True(t, names["up"])
+		assert.True(t, names["down"])
+
+		prefixes := svc.ReflectDispatchedPathPrefixes("ruby")
+		assert.Equal(t, "db/migrate/", prefixes["change"])
+		assert.Equal(t, "db/migrate/", prefixes["up"])
+		assert.Equal(t, "db/migrate/", prefixes["down"])
+	})
+
+	t.Run("service without activerecord gets nothing", func(t *testing.T) {
+		svc := reg.ForService(nil)
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.Empty(t, names)
+		assert.Empty(t, svc.ReflectDispatchedPathPrefixes("ruby"))
+	})
+}
+
 func TestAWSSDKGating(t *testing.T) {
 	v1, err := patterns.LoadFile("../../patterns/go/aws_s3_v1.yaml")
 	require.NoError(t, err)

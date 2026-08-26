@@ -456,7 +456,9 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		// of the tree-sitter matcher (functions.yaml's method_decl and
 		// friends), not out of the later Go SSA semantic pass, so this must
 		// be applied in this loop, against these nodes.
-		reflectMethods := reg.ForService(sf.deps).ReflectDispatchedMethods(sf.svc.Language)
+		svcReg := reg.ForService(sf.deps)
+		reflectMethods := svcReg.ReflectDispatchedMethods(sf.svc.Language)
+		reflectPathPrefixes := svcReg.ReflectDispatchedPathPrefixes(sf.svc.Language)
 
 		var toParse []string
 		for _, file := range sf.files {
@@ -479,7 +481,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 					if json.Unmarshal([]byte(old.UnresolvedJSON), &cachedUnresolved) == nil {
 						allUnresolved = append(allUnresolved, cachedUnresolved...)
 					}
-					stampReflectDispatched(nodes, reflectMethods)
+					stampReflectDispatched(nodes, reflectMethods, reflectPathPrefixes)
 					for i := range nodes {
 						if err := bw.AddNode(ctx, &nodes[i]); err != nil {
 							return nil, err
@@ -539,7 +541,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				fhBatch = append(fhBatch, fh)
 				continue
 			}
-			stampReflectDispatched(result.Nodes, reflectMethods)
+			stampReflectDispatched(result.Nodes, reflectMethods, reflectPathPrefixes)
 			nodesJSON, _ := json.Marshal(result.Nodes)
 			edgesJSON, _ := json.Marshal(result.Edges)
 			unresolvedJSON, _ := json.Marshal(result.Unresolved)
@@ -1303,13 +1305,24 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 // package-level "String" helper) implements no interface and must stay a
 // real deadcode candidate — only a method (which has a receiver, and so is
 // eligible for interface satisfaction) can be reflect-dispatched this way.
-func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]bool) {
+//
+// pathPrefixes additionally restricts specific method names (e.g.
+// ActiveRecord migrations' change/up/down, Tier DC.2) to nodes whose file
+// path contains the declared prefix — those names are common English words
+// with no gem-specific spelling, so an unscoped name match would sweep in
+// unrelated methods anywhere in the service. A method name absent from
+// pathPrefixes has no such restriction (the gorm.io/devise hook names are
+// distinctive enough on their own).
+func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]bool, pathPrefixes map[string]string) {
 	if len(reflectMethods) == 0 {
 		return
 	}
 	for i := range nodes {
 		n := &nodes[i]
 		if !reflectMethods[n.Label] {
+			continue
+		}
+		if prefix, ok := pathPrefixes[n.Label]; ok && !strings.Contains(n.File, prefix) {
 			continue
 		}
 		eligible := n.Type == graph.NodeTypeMethod

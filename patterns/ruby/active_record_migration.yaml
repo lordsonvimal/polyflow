@@ -1,0 +1,30 @@
+# ActiveRecord migration methods (Tier DC.2,
+# docs/deadcode-false-positive-plan.md). `change`/`up`/`down` are invoked by
+# the Rails migration runner (`rails db:migrate` / `db:rollback`) by
+# filename+method-name convention — confirmed live via `polyflow impact`
+# against a migration file: zero inbound edges of any type, because there is
+# no in-repo call site anywhere for a linker to resolve. Same "classificatory,
+# not connective" shape as devise.yaml's DV.3 override hooks.
+#
+# `def change` (with `up`/`down` retained for irreversible migrations) has
+# been ActiveRecord::Migration's stable convention since Rails 3.1 — asserted
+# from Rails' own long-published migration guide, not read from an installed
+# gem's source (no `activerecord` gem is present on this machine to `bundle
+# show`/read directly; same disclosed gap devise.yaml's DV.3 flagged for its
+# own list). Re-verify against real gem source before extending this list.
+#
+# change/up/down are common English words with no gem-specific spelling —
+# unlike password_required? or TableName, a name-only match would sweep in
+# unrelated methods (state machines, geometry, elevators, ...) fleet-wide.
+# reflect_dispatched_path_prefix scopes the exclusion to db/migrate/, the
+# Rails convention path every migration file lives under, so it only ever
+# fires on an actual migration class.
+language: ruby
+version: "1"
+package: activerecord
+reflect_dispatched_path_prefix: db/migrate/
+reflect_dispatched_methods:
+  - change
+  - up
+  - down
+patterns: []
