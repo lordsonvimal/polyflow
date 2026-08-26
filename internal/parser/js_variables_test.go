@@ -145,6 +145,61 @@ func TestJSVariables_NestedLocalCallEdgesDoNotCollide(t *testing.T) {
 	}
 }
 
+// A `get`/`set` accessor is invoked by property read/write syntax
+// (`obj.value`), never a call expression — no pattern anywhere in the graph
+// can produce a `calls` edge to one, so it must be stamped js_accessor=true
+// for indexer.go's classifyRoot to route it to root_kind=callback instead of
+// the "unreachable" default (the real bug: snapshot-init.js's `get value()`
+// read as permanently dead code).
+const jsAccessorFixture = `function makeBox() {
+  return {
+    get value() {
+      return 1;
+    },
+    set value(v) {
+      this._v = v;
+    },
+    plainMethod() {
+      return 2;
+    },
+  };
+}
+`
+
+func TestJSVariables_AccessorMethodsStampedJSAccessor(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "app.js")
+	if err := os.WriteFile(file, []byte(jsAccessorFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := os.ReadFile(file)
+	nodes, _, _, _ := extractJSVariables(file, "web", "javascript", "javascript", src)
+
+	var getters, setters, plain int
+	for _, n := range nodes {
+		if n.Type != graph.NodeTypeFunction || n.Label != "value" {
+			if n.Type == graph.NodeTypeFunction && n.Label == "plainMethod" {
+				if n.Meta["js_accessor"] == "true" {
+					t.Errorf("plainMethod must not be stamped js_accessor")
+				}
+				plain++
+			}
+			continue
+		}
+		if n.Meta["js_accessor"] != "true" {
+			t.Errorf("accessor node at line %d missing js_accessor=true (meta=%v)", n.Line, n.Meta)
+		}
+		if n.Line == 3 {
+			getters++
+		} else if n.Line == 6 {
+			setters++
+		}
+	}
+	if getters != 1 || setters != 1 || plain != 1 {
+		t.Fatalf("getters=%d setters=%d plain=%d, want 1/1/1", getters, setters, plain)
+	}
+}
+
 func TestJSVariables_ModuleDeclarations(t *testing.T) {
 	t.Parallel()
 	nodes, _ := parseJSVarFixture(t)

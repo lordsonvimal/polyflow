@@ -40,6 +40,16 @@ func TestClassifyRoot_ObjectMethodPairIsCallback(t *testing.T) {
 	assert.Equal(t, "callback", n.Meta["root_kind"])
 }
 
+func TestClassifyRoot_JSAccessorIsCallback(t *testing.T) {
+	n := &graph.Node{
+		ID: "js:x.js:function:value:10", Type: graph.NodeTypeFunction, Label: "value",
+		Meta: map[string]string{"js_accessor": "true"},
+	}
+	ok := classifyRoot(n, map[string]bool{}, nil)
+	assert.True(t, ok)
+	assert.Equal(t, "callback", n.Meta["root_kind"])
+}
+
 func TestClassifyRoot_ReferencedIDIsCallback(t *testing.T) {
 	n := &graph.Node{ID: "go:x.go:function:runIndex:1", Type: graph.NodeTypeFunction, Label: "runIndex"}
 	ok := classifyRoot(n, map[string]bool{}, map[string]bool{n.ID: true})
