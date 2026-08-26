@@ -24,7 +24,7 @@
     "route_group",
     "variable",
     "variable",
-    "function",
+    "middleware_use",
     "function",
     "function",
     "function",

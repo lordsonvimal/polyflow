@@ -1,4 +1,4 @@
 {
   "patterns": ["express_verb_route", "express_verb_route", "express_verb_route_dynamic", "express_mount", "express_middleware_use"],
-  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler", "function"]
+  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler", "middleware_use"]
 }
