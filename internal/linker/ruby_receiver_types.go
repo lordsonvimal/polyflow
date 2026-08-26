@@ -59,28 +59,7 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, serviceFiles map[string][]str
 		return nil, nil
 	}
 
-	methodsByClass := make(map[string][]string)
-	classIDByFileLabel := make(map[string]string)
-	for i := range nodes {
-		n := &nodes[i]
-		if n.Type == graph.NodeTypeClass {
-			classIDByFileLabel[n.File+"\x00"+n.Label] = n.ID
-		}
-	}
-	for i := range nodes {
-		n := &nodes[i]
-		if (n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod) || n.Meta["class"] == "" {
-			continue
-		}
-		clsID, ok := classIDByFileLabel[n.File+"\x00"+n.Meta["class"]]
-		if !ok {
-			continue
-		}
-		methodsByClass[clsID+"\x00"+n.Label] = append(methodsByClass[clsID+"\x00"+n.Label], n.ID)
-	}
-	for k := range methodsByClass {
-		sort.Strings(methodsByClass[k])
-	}
+	methodsByClass := buildMethodsByClass(nodes)
 
 	svcNames := make([]string, 0, len(serviceFiles))
 	for svcName := range serviceFiles {
