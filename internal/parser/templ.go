@@ -92,15 +92,11 @@ type templVisitor struct {
 	helperHandlers      map[string]string       // Go helper func name -> "window.maple.X()" it returns, see extractHelperHandlers
 }
 
-// reHelperFunc matches a package-level Go helper function in a .templ file
-// whose entire body is `return fmt.Sprintf("<literal>", ...)` — the
-// maple-manager idiom for building a data-on:click handler string out-of-line
-// (`func appConfigEditScript(c Config) string { return fmt.Sprintf("window.maple.openAppConfigForEdit('%s')", c.ID) }`),
-// then referenced indirectly from the markup (`data-on:click={ fmt.Sprintf("...; %s", appConfigEditScript(config)) }`).
-// Without resolving this indirection the attribute's raw Go expression text
-// never contains a `window.maple.X(` substring, so the handler stays
-// unlinkable and the JS function it names reads as zero-caller dead code.
-var reHelperFunc = regexp.MustCompile(`func\s+(\w+)\s*\([^)]*\)\s*string\s*\{\s*return\s+fmt\.Sprintf\(\s*"([^"]*)"`)
+// reTopLevelDecl matches a top-level `func NAME(...)` or `templ NAME(...)`
+// declaration at column 0 — used only to find each Go helper function's body
+// boundaries (from right after its signature to the start of the next
+// top-level declaration), not to parse Go syntax.
+var reTopLevelDecl = regexp.MustCompile(`(?m)^(func|templ)\s+(\w+)`)
 
 // reWindowCallName matches a `window.a.b.c(` callee; the trailing `(` is
 // trimmed off by the caller (RE2 has no lookahead) to isolate the dotted path.
@@ -111,13 +107,35 @@ var reCallIdent = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*\(`)
 
 // extractHelperHandlers scans a .templ file's raw source (its Go code
 // regions, not the HTML/templ markup the typed AST already covers) for
-// single-statement helper functions of the reHelperFunc shape and returns a
-// map from helper function name to the literal `window.maple.X()` call it
-// builds.
+// top-level Go helper functions whose body builds a `window.maple.X(...)`
+// call string and returns a map from helper function name to that literal
+// `window.maple.X()` call. maple-manager builds these two ways — a bare string
+// (`func f(c Config) string { return fmt.Sprintf("window.maple.g('%s')", c.ID) }`)
+// or templ's own `templ.ComponentScript{Call: fmt.Sprintf(...)}` /
+// `{Function: fmt.Sprintf(...)}` inline-script struct — then references the
+// helper indirectly from markup (`data-on:click={ fmt.Sprintf("...; %s",
+// f(config)) }` or `onclick={ f(config) }`). Without resolving this
+// indirection the attribute's raw Go expression text never contains a
+// `window.maple.X(` substring, so the handler stays unlinkable and the JS
+// function it names reads as zero-caller dead code. Scoped to a function's
+// body span (bounded by the next top-level func/templ declaration) rather
+// than a single-statement shape so it isn't tied to one struct/field/quote
+// style — the only requirement is a `window.maple.X(` substring appearing
+// somewhere in the body, wherever it's assigned from.
 func extractHelperHandlers(content []byte) map[string]string {
 	var out map[string]string
-	for _, m := range reHelperFunc.FindAllSubmatch(content, -1) {
-		call := reWindowCallName.FindString(string(m[2]))
+	locs := reTopLevelDecl.FindAllSubmatchIndex(content, -1)
+	for i, loc := range locs {
+		if string(content[loc[2]:loc[3]]) != "func" {
+			continue
+		}
+		name := string(content[loc[4]:loc[5]])
+		bodyStart := loc[1]
+		bodyEnd := len(content)
+		if i+1 < len(locs) {
+			bodyEnd = locs[i+1][0]
+		}
+		call := reWindowCallName.FindString(string(content[bodyStart:bodyEnd]))
 		if call == "" {
 			continue
 		}
@@ -125,7 +143,7 @@ func extractHelperHandlers(content []byte) map[string]string {
 		if out == nil {
 			out = make(map[string]string)
 		}
-		out[string(m[1])] = call + "()"
+		out[name] = call + "()"
 	}
 	return out
 }
@@ -383,6 +401,17 @@ func isSelectorHookAttr(key string) bool {
 // addEventAttr emits a dom_target node for a native on<event> attribute and
 // a dom_listen edge from the enclosing component.
 func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
+	// onclick={ applyUpdatesScript(data.ConfigID) } calls a local Go helper
+	// that builds the real `window.maple.X()` call (see extractHelperHandlers,
+	// including templ's own `templ.ComponentScript{Call:/Function: ...}`
+	// inline-script idiom) rather than naming the handler literally — same
+	// indirection addDatastarClientHandler already resolves for data-on:*;
+	// onclick={...} needs it too, or the minted handler is unparseable raw
+	// Go expression text ("applyUpdatesScript(data.ConfigID)") instead of the
+	// linkable JS call, and the function it names reads as dead code.
+	if resolved := v.resolveHelperHandler(val); resolved != "" {
+		val = resolved
+	}
 	v.mintDOMEventTarget(key, key[2:], val, lineNo)
 }
 
