@@ -433,6 +433,23 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		}},
 		// Rails routes name their action by convention, not by the Meta["handler"]
 		// receiver string LinkRouteHandlers keys on, so they need their own pass.
+		{"rails_devise_default_routes", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			deviseNodes := linker.LinkDeviseDefaultRoutes(svcFiles)
+			if len(deviseNodes) == 0 {
+				return nil
+			}
+			for i := range deviseNodes {
+				n := deviseNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			return st.bw.Flush(st.ctx)
+		}},
+		// Rails routes name their action by convention, not by the Meta["handler"]
+		// receiver string LinkRouteHandlers keys on, so they need their own pass.
 		{"rails_route_actions", scopeSameServiceOnly, func() error {
 			railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(st.allNodes)
 			if err := st.writeEdges(railsActionEdges); err != nil {

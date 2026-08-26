@@ -396,3 +396,30 @@ func TestLinkRailsRouteActions_OneEdgePerRoute(t *testing.T) {
 	edges, _ := LinkRailsRouteActions([]graph.Node{h, railsAction("orion", ctrl, "index", 10), dup})
 	assert.Len(t, edges, 1)
 }
+
+// TestLinkRailsRouteActions_DeviseForControllersOverride is Phase DV.1's
+// worked example: `devise_for :users, controllers: { sessions: "sessions" }`
+// synthesizes a devise_route handler with Meta{resource:"sessions",
+// action:"create"} (internal/parser/ruby_route_paths.go's emitDeviseRoutes),
+// which must resolve to SessionsController#create by the exact same
+// by-convention mechanism a plain `resources` route already uses — DV.1
+// deliberately needs zero changes here, only correct Meta shape.
+func TestLinkRailsRouteActions_DeviseForControllersOverride(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/sessions_controller.rb"
+	h := railsHandler("orion", "POST /users/sign_in", 12, map[string]string{
+		"action":            "create",
+		"resource":          "sessions",
+		"method":            "POST",
+		"path":              "/users/sign_in",
+		"pattern":           "devise_route",
+		"controller_module": "",
+	})
+	target := railsAction("orion", ctrl, "create", 20)
+	nodes := []graph.Node{h, target}
+
+	edges, unresolved := LinkRailsRouteActions(nodes)
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
+}

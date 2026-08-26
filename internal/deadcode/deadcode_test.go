@@ -132,6 +132,31 @@ func TestBuild_ReflectDispatchedMethodNotFlagged(t *testing.T) {
 	}
 }
 
+// TestBuild_DeviseOverrideHookNotFlagged is Tier DV.3's worked example:
+// orion-atlas/app/models/user.rb:105's `password_required?` is a private
+// method DatabaseAuthenticatable calls on `self` from Devise's own gem
+// source — zero inbound calls/spawns edges, and no in-repo call site will
+// ever produce one. patterns/ruby/devise.yaml's reflect_dispatched_methods
+// (package: devise) is what the indexer's stampReflectDispatched reads to
+// stamp graph.MetaReflectDispatched here before Build ever runs; this test
+// exercises the same mechanism TestBuild_ReflectDispatchedMethodNotFlagged
+// does, pinned to the exact live method name and Ruby's node-type shape
+// (graph.NodeTypeFunction — Ruby has no separate method/function split by
+// receiver the way Go does, see indexer.stampReflectDispatched).
+func TestBuild_DeviseOverrideHookNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "atlas:password_required", Type: graph.NodeTypeFunction, Label: "password_required?",
+		Service: "orion-atlas", File: "app/models/user.rb", Line: 105, Language: "ruby",
+		Meta: map[string]string{graph.MetaReflectDispatched: "true"},
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "atlas:password_required", f.ID, "a Devise override hook stamped reflect_dispatched must not be flagged")
+	}
+}
+
 func TestBuild_SpawnsEdgeCountsAsCaller(t *testing.T) {
 	idx := fixtureIndex()
 	idx.AddNode(&graph.Node{ID: "be:worker_loop", Type: graph.NodeTypeMethod, Label: "loop", Service: "backend", File: "scheduler.go", Line: 50})

@@ -1,0 +1,28 @@
+# Devise's own model-module override hooks (Tier DV.3,
+# docs/rails-devise-gem-plan.md). A method like `password_required?`
+# (confirmed live in orion-atlas/app/models/user.rb:105) is never called by a
+# literal call site anywhere in application code — Devise's own modules
+# (DatabaseAuthenticatable, Validatable, ...) invoke it on `self` from gem
+# source this codebase never parses. Declaring the name list here, gated on
+# the devise gem, keeps the exclusion scoped to services that actually depend
+# on it — the same shape gorm.yaml's TableName/Before*/After* hooks use for
+# GORM's reflection-dispatched methods.
+#
+# The plan's own risk note applies: this list is asserted from Devise's
+# documented, long-stable module API (authenticatable.rb,
+# database_authenticatable.rb, validatable.rb, confirmable.rb, lockable.rb,
+# recoverable.rb), not read from the installed gem source (neither target
+# repo's `devise` gem is present on this machine). `password_required?` is the
+# one name independently confirmed live; add further names only once observed
+# as a genuinely zero-caller override on a class that includes Devise, not
+# speculatively.
+language: ruby
+version: "1"
+package: devise
+reflect_dispatched_methods:
+  - password_required?
+  - active_for_authentication?
+  - inactive_message
+  - send_devise_notification
+  - after_database_authentication
+patterns: []

@@ -1309,7 +1309,20 @@ func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]bool) 
 	}
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type != graph.NodeTypeMethod || !reflectMethods[n.Label] {
+		if !reflectMethods[n.Label] {
+			continue
+		}
+		eligible := n.Type == graph.NodeTypeMethod
+		if n.Language == "ruby" {
+			// Ruby has no method/function split by receiver the way Go does —
+			// every instance method a class defines comes out of
+			// extractRubyVariables as graph.NodeTypeFunction (ruby_variables.go),
+			// so the Go-only "only a receiver method can satisfy an interface"
+			// restriction above would blanket-exclude every Devise override
+			// hook (DV.3) despite the package/version gate being satisfied.
+			eligible = eligible || n.Type == graph.NodeTypeFunction
+		}
+		if !eligible {
 			continue
 		}
 		if n.Meta == nil {
