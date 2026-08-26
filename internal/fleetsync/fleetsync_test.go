@@ -126,7 +126,7 @@ func TestResolveService_CleanLocalMatch_NoClone(t *testing.T) {
 	assert.True(t, isEmptyDir(t, scratch))
 }
 
-func TestResolveService_DirtyLocalMatch_Clones(t *testing.T) {
+func TestResolveService_DirtyLocalMatch_ReusesLocal(t *testing.T) {
 	bareURL, sha := newBareRepo(t)
 	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
 
@@ -144,9 +144,8 @@ func TestResolveService_DirtyLocalMatch_Clones(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, sha, resolvedSHA)
-	assert.False(t, isEmptyDir(t, scratch), "dirty local match must clone")
-	assert.FileExists(t, dbPath)
-	assert.Equal(t, filepath.Join(scratch, "svc", meta.DBDir, meta.DBFile), dbPath)
+	assert.True(t, isEmptyDir(t, scratch), "dirty local match at the right SHA must not clone")
+	assert.Equal(t, filepath.Join(localDir, meta.DBDir, meta.DBFile), dbPath)
 }
 
 func TestResolveService_WrongSHALocalMatch_Clones(t *testing.T) {
@@ -179,7 +178,7 @@ func TestResolveService_WrongSHALocalMatch_Clones(t *testing.T) {
 // ephemeral path — that path is gone by the next process, so registering it
 // would turn a working "local checkout matches" resolution into a
 // permanently dangling one.
-func TestResolveService_DirtyLocalMatch_EphemeralScratch_DoesNotClobberRegistry(t *testing.T) {
+func TestResolveService_DirtyLocalMatch_NoScratchDir_ReusesLocal(t *testing.T) {
 	bareURL, _ := newBareRepo(t)
 	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
 
@@ -190,8 +189,9 @@ func TestResolveService_DirtyLocalMatch_EphemeralScratch_DoesNotClobberRegistry(
 	regPath := newRegistryPath(t)
 	require.NoError(t, registry.Sync(regPath, "svc", localDir))
 
-	// No ScratchDir set: cloneAndIndex must fall back to its own
-	// os.MkdirTemp, which this test never sees or controls.
+	// No ScratchDir set: a dirty checkout at the right SHA must still reuse
+	// localDir directly rather than falling to cloneAndIndex's own
+	// os.MkdirTemp fallback.
 	_, _, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
 		RegistryPath: regPath,
 	})
