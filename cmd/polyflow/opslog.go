@@ -81,6 +81,39 @@ var stdinCapturingTools = map[string]bool{"hook-context-inject": true}
 // slot (no concurrency) is sufficient.
 var current *opsRecording
 
+// chdirToWorkspaceRoot lets every command work from any subdirectory of a
+// polyflow workspace, the same way git commands work from any subdirectory
+// of a repo: every path this binary touches (meta.DBDir, meta.ConfigFile,
+// and everything derived from them — openStore, ops.db, workspace.Load) is
+// cwd-relative with no walk-up of its own, so `polyflow mcp`/`status`/etc.
+// silently looked for ./.polyflow or ./polyflow.yml right where the calling
+// agent happened to be started, not the project root. `init` and `setup`
+// are exempted: they create/register config relative to wherever the user
+// invoked them, same as `git init`.
+func chdirToWorkspaceRoot(cmd *cobra.Command) {
+	if cmd == initCmd || cmd == setupCmd {
+		return
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, meta.ConfigFile)); err == nil {
+			break
+		}
+		if _, err := os.Stat(filepath.Join(dir, meta.DBDir)); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return // no workspace found up the tree — leave cwd as-is
+		}
+		dir = parent
+	}
+	_ = os.Chdir(dir)
+}
+
 // opsPersistentPreRun is rootCmd's PersistentPreRunE (wired in init below).
 // It fires once per invocation, for whichever leaf subcommand cobra
 // resolved, before that subcommand's own RunE runs. Commands run outside
@@ -88,6 +121,8 @@ var current *opsRecording
 // `--help` which never reach here) skip recording: there is nothing to key
 // it to. Failure to open ops.db never fails the command.
 func opsPersistentPreRun(cmd *cobra.Command, args []string) error {
+	chdirToWorkspaceRoot(cmd)
+
 	if _, err := os.Stat(meta.ConfigFile); err != nil {
 		return nil // not in a workspace
 	}
