@@ -42,6 +42,14 @@ templ ActionPanel(gameID string, page int) {
 		// helper — a completely different attribute (not data-on:*) that
 		// needs the same helper-indirection resolution.
 		<button onclick={ showPkgInfoScript("foo") }>Info</button>
+		// A SINGLE clause (no ';') where the client call gates the @post as
+		// an if-condition — addDatastarAction alone would swallow the whole
+		// thing since it also matches the @post inside.
+		<form data-on:submit__prevent="if (window.maple.prepareExecConfigSubmit()) { @post('/exec-configs/save', {contentType: 'form'}) }"></form>
+		// A data-on:click EXPRESSION attribute (not constant) whose Go
+		// expression embeds the window.maple.X( literal directly inline via
+		// fmt.Sprintf, with no separate helper function to resolve through.
+		<button data-on:click={ fmt.Sprintf("window.maple.snapshotDiff(%d)", snapshot.ID) }>Diff</button>
 		// Reactive text binding referencing a compound signal expression
 		<span data-text="$idx + 1"></span>
 		<input data-bind="username"/>
