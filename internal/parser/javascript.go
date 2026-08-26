@@ -82,10 +82,54 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	stampJQueryHandlers(nodes, jqListeners)
 	edges = reattributeJQueryHandlers(nodes, edges, jqListeners)
 
-	nodes = append(nodes, varNodes...)
+	nodes = mergeJSNodes(nodes, varNodes)
 	edges = append(edges, varEdges...)
 	unresolved = append(unresolved, varUnresolved...)
 	return nodes, edges, unresolved, err
+}
+
+// mergeJSNodes appends overlay (extractJSVariables' structural pass) onto
+// base (the YAML-pattern matcher's output), the same way a plain
+// `append(nodes, varNodes...)` did — EXCEPT an ID collision no longer lets
+// overlay silently blow away base's node. Both passes independently create a
+// node for an ordinary top-level function/method declaration (the matcher
+// via function_decl/object_method_shorthand, extractJSVariables via its own
+// self-attribution walk, whose own comment says it exists to backfill shapes
+// the matcher DOESN'T cover — a named function *expression*, `const f =
+// function(){}` — not to replace ones it does). On collision, base's own
+// fields are authoritative: its EndLine spans the real declaration
+// (@_def-captured), where overlay's self-attribution stamps EndLine == Line,
+// a degenerate single-line span other passes (LinkExpressMiddleware's
+// enclosing-function range index, among others) rely on being wide. What
+// DOES need to survive from overlay is any Meta key it uniquely
+// contributes (js_accessor) — union those into base's Meta without letting
+// them overwrite a key base already set (MetaReferencedAsValue from
+// matcher.go's Pass 3c, which a same-ID overlay re-creation with an empty
+// Meta map used to wipe outright).
+func mergeJSNodes(base, overlay []graph.Node) []graph.Node {
+	idx := make(map[string]int, len(base))
+	for i := range base {
+		idx[base[i].ID] = i
+	}
+	for _, on := range overlay {
+		i, exists := idx[on.ID]
+		if !exists {
+			base = append(base, on)
+			continue
+		}
+		if len(on.Meta) == 0 {
+			continue
+		}
+		if base[i].Meta == nil {
+			base[i].Meta = map[string]string{}
+		}
+		for k, v := range on.Meta {
+			if _, already := base[i].Meta[k]; !already {
+				base[i].Meta[k] = v
+			}
+		}
+	}
+	return base
 }
 
 // grammarLanguage returns the tree-sitter grammar name for a file extension.
