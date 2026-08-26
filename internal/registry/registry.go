@@ -19,6 +19,51 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// lockStaleAfter is how old an on-disk lock file must be before a waiter
+// treats it as abandoned (e.g. left behind by a killed process) and steals
+// it, rather than waiting forever.
+const lockStaleAfter = 30 * time.Second
+
+// lockPollInterval is how often a waiter re-checks for the lock file to
+// disappear.
+const lockPollInterval = 50 * time.Millisecond
+
+// lockWait is the maximum time a caller will wait to acquire the lock
+// before giving up and proceeding unlocked (better to risk a rare race than
+// hang `polyflow index` indefinitely on a stuck lock).
+const lockWait = 5 * time.Second
+
+// withLock serializes concurrent Load-modify-Save cycles across processes
+// (e.g. two `polyflow index` runs racing on the same machine) using a
+// sibling ".lock" file as an advisory mutex. Without this, two processes
+// can both read the same base registry, both append/mutate independently,
+// and each Save() the other's update out from under it — or, worse, two
+// Save() calls can interleave writes to the same tmp path and corrupt the
+// YAML (the cause of a prior duplicate-key parse failure).
+func withLock(path string, fn func() error) error {
+	lockPath := path + ".lock"
+	deadline := time.Now().Add(lockWait)
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			f.Close()
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !os.IsExist(err) {
+			return fmt.Errorf("create registry lock: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
+			os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return fn()
+		}
+		time.Sleep(lockPollInterval)
+	}
+}
+
 // polyflowHomeEnv overrides the default ~/.polyflow home directory, e.g. for
 // test isolation or a machine with an unusual home dir (same reasoning as
 // the FR-plan's other env-var overrides).
@@ -85,7 +130,10 @@ func Load(path string) (*Registry, error) {
 }
 
 // Save writes reg back to path atomically, creating parent directories as
-// needed.
+// needed. The tmp file is unique per call (PID + nanosecond suffix) so that
+// two concurrent Save calls — e.g. from two `polyflow index` runs racing
+// outside of withLock — can never interleave writes to the same tmp path
+// and corrupt the YAML.
 func Save(path string, reg *Registry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create registry dir: %w", err)
@@ -94,11 +142,12 @@ func Save(path string, reg *Registry) error {
 	if err != nil {
 		return fmt.Errorf("marshal registry: %w", err)
 	}
-	tmp := path + ".tmp"
+	tmp := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write registry tmp: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("rename registry: %w", err)
 	}
 	return nil
@@ -118,25 +167,27 @@ func (r *Registry) Lookup(service string) (*Entry, bool) {
 // indexedAt to now. It loads path, mutates, and saves — safe to call
 // repeatedly for the same service without accumulating duplicates.
 func Sync(path, service, localPath string) error {
-	reg, err := Load(path)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	if e, ok := reg.Lookup(service); ok {
-		e.LocalPath = localPath
-		e.IndexedAt = now
-	} else {
-		reg.Entries = append(reg.Entries, Entry{
-			Service:   service,
-			LocalPath: localPath,
-			IndexedAt: now,
-		})
-	}
-	if reg.Version == "" {
-		reg.Version = "1"
-	}
-	return Save(path, reg)
+	return withLock(path, func() error {
+		reg, err := Load(path)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if e, ok := reg.Lookup(service); ok {
+			e.LocalPath = localPath
+			e.IndexedAt = now
+		} else {
+			reg.Entries = append(reg.Entries, Entry{
+				Service:   service,
+				LocalPath: localPath,
+				IndexedAt: now,
+			})
+		}
+		if reg.Version == "" {
+			reg.Version = "1"
+		}
+		return Save(path, reg)
+	})
 }
 
 // RecordFleetMembership upserts fleetName into service's Fleets list (no
@@ -148,28 +199,30 @@ func Sync(path, service, localPath string) error {
 // created (LocalPath/IndexedAt left zero) rather than erroring, since a
 // build-cache-resolved member never goes through registry.Sync itself.
 func RecordFleetMembership(path, service, fleetName, fleetConfigPath string) error {
-	reg, err := Load(path)
-	if err != nil {
-		return err
-	}
-	e, ok := reg.Lookup(service)
-	if !ok {
-		reg.Entries = append(reg.Entries, Entry{Service: service})
-		e, _ = reg.Lookup(service)
-	}
-	if !containsString(e.Fleets, fleetName) {
-		e.Fleets = append(e.Fleets, fleetName)
-	}
-	if fleetConfigPath != "" {
-		if reg.FleetConfigPaths == nil {
-			reg.FleetConfigPaths = make(map[string]string)
+	return withLock(path, func() error {
+		reg, err := Load(path)
+		if err != nil {
+			return err
 		}
-		reg.FleetConfigPaths[fleetName] = fleetConfigPath
-	}
-	if reg.Version == "" {
-		reg.Version = "1"
-	}
-	return Save(path, reg)
+		e, ok := reg.Lookup(service)
+		if !ok {
+			reg.Entries = append(reg.Entries, Entry{Service: service})
+			e, _ = reg.Lookup(service)
+		}
+		if !containsString(e.Fleets, fleetName) {
+			e.Fleets = append(e.Fleets, fleetName)
+		}
+		if fleetConfigPath != "" {
+			if reg.FleetConfigPaths == nil {
+				reg.FleetConfigPaths = make(map[string]string)
+			}
+			reg.FleetConfigPaths[fleetName] = fleetConfigPath
+		}
+		if reg.Version == "" {
+			reg.Version = "1"
+		}
+		return Save(path, reg)
+	})
 }
 
 // FleetsForPath returns the fleet names, if any, that claim the service
