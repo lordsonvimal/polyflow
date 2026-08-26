@@ -12,81 +12,8 @@ import (
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
-
-// deviseAction and deviseScopeActions duplicate
-// internal/parser/ruby_route_paths.go's DV.1 table verbatim rather than
-// importing it: internal/parser's own test suite (js_b1_test.go, same
-// `package parser`) already imports internal/linker, so a linker → parser
-// import here would be a build cycle, not just an undesirable dependency
-// direction. Keep the two tables in sync by hand if Devise's route shape
-// ever changes; see ruby_route_paths.go's deviseAction for the shared
-// rationale.
-type deviseAction struct {
-	name   string
-	method string
-	path   string // %s == scope arg, e.g. "users"
-}
-
-var deviseScopeActions = map[string][]deviseAction{
-	"sessions": {
-		{"new", "GET", "/%s/sign_in"},
-		{"create", "POST", "/%s/sign_in"},
-		{"destroy", "DELETE", "/%s/sign_out"},
-	},
-	"registrations": {
-		{"new", "GET", "/%s/sign_up"},
-		{"create", "POST", "/%s"},
-		{"edit", "GET", "/%s/edit"},
-		{"update", "PATCH", "/%s"},
-		{"destroy", "DELETE", "/%s"},
-		{"cancel", "GET", "/%s/cancel"},
-	},
-	"passwords": {
-		{"new", "GET", "/%s/password/new"},
-		{"create", "POST", "/%s/password"},
-		{"edit", "GET", "/%s/password/edit"},
-		{"update", "PATCH", "/%s/password"},
-	},
-	"confirmations": {
-		{"new", "GET", "/%s/confirmation/new"},
-		{"create", "POST", "/%s/confirmation"},
-		{"show", "GET", "/%s/confirmation"},
-	},
-	"unlocks": {
-		{"new", "GET", "/%s/unlock/new"},
-		{"create", "POST", "/%s/unlock"},
-		{"show", "GET", "/%s/unlock"},
-	},
-}
-
-// railsIrregularSingulars and singularize duplicate
-// ruby_route_paths.go's identically-named helpers for the same
-// import-cycle reason as deviseScopeActions above.
-var railsIrregularSingulars = map[string]string{
-	"people": "person", "men": "man", "women": "woman", "children": "child",
-	"mice": "mouse", "oxen": "ox", "teeth": "tooth", "feet": "foot",
-	"geese": "goose", "data": "datum", "criteria": "criterion", "media": "medium",
-}
-
-func singularize(s string) string {
-	if irr, ok := railsIrregularSingulars[s]; ok {
-		return irr
-	}
-	switch {
-	case strings.HasSuffix(s, "ies") && len(s) > 3:
-		return s[:len(s)-3] + "y"
-	case strings.HasSuffix(s, "ses"), strings.HasSuffix(s, "xes"),
-		strings.HasSuffix(s, "zes"), strings.HasSuffix(s, "ches"),
-		strings.HasSuffix(s, "shes"):
-		return s[:len(s)-2]
-	case strings.HasSuffix(s, "us"):
-		return s
-	case strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss"):
-		return s[:len(s)-1]
-	}
-	return s
-}
 
 // deviseModuleForScope maps a Devise route scope to the model-declaration
 // module symbol that enables it (docs/rails-devise-gem-plan.md's Pinned
@@ -179,9 +106,9 @@ func synthesizeServiceDeviseDefaults(svc string, files []string) []graph.Node {
 			if !enabled[deviseModuleForScope[scopeName]] {
 				continue
 			}
-			for _, a := range deviseScopeActions[scopeName] {
-				path := strings.Replace(a.path, "%s", m.scopeArg, 1)
-				key := a.method + " " + path
+			for _, a := range railsinflect.DeviseScopeActions[scopeName] {
+				path := strings.Replace(a.Path, "%s", m.scopeArg, 1)
+				key := a.Method + " " + path
 				if seen[key] {
 					continue
 				}
@@ -199,8 +126,8 @@ func synthesizeServiceDeviseDefaults(svc string, files []string) []graph.Node {
 						"pattern":           "devise_default_route",
 						"path":              path,
 						"full_path":         path,
-						"method":            a.method,
-						"action":            a.name,
+						"method":            a.Method,
+						"action":            a.Name,
 						"resource":          scopeName,
 						"controller_module": "",
 					},
@@ -213,13 +140,13 @@ func synthesizeServiceDeviseDefaults(svc string, files []string) []graph.Node {
 
 // modelNameForScope inflects `devise_for`'s scope argument to the model
 // constant name Rails' own convention derives it from: `:users` → "User".
-// Reuses the duplicated singularize table above rather than a fresh
-// inflector — per the plan's own risk note, this shortcut ("s"-stripping) is
-// not a general inflector, only sufficient for both live repos, where the
-// scope name matches the model name exactly (see the plan's Non-goals: no
-// class_name: override support).
+// Reuses railsinflect.Singularize rather than a fresh inflector — per the
+// plan's own risk note, this shortcut ("s"-stripping) is not a general
+// inflector, only sufficient for both live repos, where the scope name
+// matches the model name exactly (see the plan's Non-goals: no class_name:
+// override support).
 func modelNameForScope(scopeArg string) string {
-	s := singularize(scopeArg)
+	s := railsinflect.Singularize(scopeArg)
 	if s == "" {
 		return ""
 	}
