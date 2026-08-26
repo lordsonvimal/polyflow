@@ -168,6 +168,56 @@ func TestBuild_SpawnsEdgeCountsAsCaller(t *testing.T) {
 	}
 }
 
+func TestBuild_RendersEdgeCountsAsCaller(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "fe:alert", Type: graph.NodeTypeFunction, Label: "Alert", Service: "backend", File: "Alert.tsx", Line: 5})
+	idx.AddEdge(&graph.Edge{ID: "e4", From: "be:handler", To: "fe:alert", Type: graph.EdgeTypeRenders})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "fe:alert", f.ID, "a JSX usage site is a real caller via EdgeTypeRenders")
+	}
+}
+
+func TestBuild_JobEnqueueAndPerformEdgesCountAsCallers(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:enqueued", Type: graph.NodeTypeFunction, Label: "perform", Service: "backend", File: "report_job.rb", Line: 5})
+	idx.AddNode(&graph.Node{ID: "be:performed", Type: graph.NodeTypeMethod, Label: "perform", Service: "backend", File: "job.rb", Line: 5})
+	idx.AddEdge(&graph.Edge{ID: "e5", From: "be:handler", To: "be:enqueued", Type: graph.EdgeTypeJobEnqueue})
+	idx.AddEdge(&graph.Edge{ID: "e6", From: "be:handler", To: "be:performed", Type: graph.EdgeTypeJobPerform})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:enqueued", f.ID, "the contract engine resolves job_enqueue straight onto the real perform method")
+		assert.NotEqual(t, "be:performed", f.ID, "job_perform is a real invocation the same way job_enqueue is")
+	}
+}
+
+func TestBuild_SidekiqAliasEdgesCountAsCallers(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:sk_enqueued", Type: graph.NodeTypeFunction, Label: "perform_async", Service: "backend", File: "worker.rb", Line: 5})
+	idx.AddNode(&graph.Node{ID: "be:sk_performed", Type: graph.NodeTypeMethod, Label: "perform", Service: "backend", File: "worker.rb", Line: 10})
+	idx.AddEdge(&graph.Edge{ID: "e7", From: "be:handler", To: "be:sk_enqueued", Type: graph.EdgeTypeSidekiqEnqueue})
+	idx.AddEdge(&graph.Edge{ID: "e8", From: "be:handler", To: "be:sk_performed", Type: graph.EdgeTypeSidekiqPerform})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:sk_enqueued", f.ID, "sidekiq_enqueue is a deprecated alias for job_enqueue, same treatment")
+		assert.NotEqual(t, "be:sk_performed", f.ID, "sidekiq_perform is a deprecated alias for job_perform, same treatment")
+	}
+}
+
+func TestBuild_SubscribesEdgeCountsAsCaller(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:consumer", Type: graph.NodeTypeFunction, Label: "handle_message", Service: "backend", File: "consumer.rb", Line: 5})
+	idx.AddEdge(&graph.Edge{ID: "e9", From: "be:handler", To: "be:consumer", Type: graph.EdgeTypeSubscribes})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:consumer", f.ID, "an AMQP subscribes edge resolved onto a real handler is a real invocation")
+	}
+}
+
 func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
 	idx.AddNode(&graph.Node{ID: "be:handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "backend", File: "h.go", Line: 1})

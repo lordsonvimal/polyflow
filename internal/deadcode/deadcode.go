@@ -116,14 +116,49 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 }
 
 // invokingEdgeTypes are the edge types that represent a real invocation of
-// their target for deadcode's purposes. EdgeTypeSpawns (`go f()`) is a
-// genuine caller the same way a direct call is — a goroutine target with no
-// inbound EdgeTypeCalls was a systematic false positive (every function only
-// ever launched via `go x.method()`, e.g. a scheduler's background loop,
-// qualified as zero-caller by construction).
+// their target for deadcode's purposes. Structural (contains, declares),
+// data (reads, writes, flows_to, uses_type), and producer-side (publishes,
+// navigates_to, http_call, ...) edges never qualify — only add a type here
+// once a live query has confirmed it lands on a NodeTypeFunction/Method, not
+// just a still-unresolved proxy node (job/message-broker consumers resolve
+// lazily, the same way LinkJS's JSX proxy redirect works for renders — an
+// edge type can be correct to add even where today's data shows it still
+// landing on the odd unresolved proxy elsewhere).
+//
+// EdgeTypeSpawns (`go f()`) is a genuine caller the same way a direct call
+// is — a goroutine target with no inbound EdgeTypeCalls was a systematic
+// false positive (every function only ever launched via `go x.method()`,
+// e.g. a scheduler's background loop, qualified as zero-caller by
+// construction).
+//
+// EdgeTypeRenders (JSX/component usage) is a genuine invocation — LinkJS
+// redirects the usage-site proxy to the real component declaration before
+// this edge lands (confirmed live: chessleap/juniper/orion graphs all
+// carry renders edges terminating on real function/component nodes).
+//
+// EdgeTypeJobEnqueue/EdgeTypeJobPerform (background-job dispatch: ActiveJob,
+// Celery, delayed_job, Sidekiq, solid_queue) are minted by the generic
+// contract engine (contracts/jobs.yaml) straight onto the class's real
+// `perform` method, the same way a direct call would be — confirmed live on
+// the orion graph (job_enqueue and job_perform edges landing on
+// NodeTypeFunction). EdgeTypeSidekiqEnqueue/EdgeTypeSidekiqPerform are kept
+// alongside them: the enum documents them as deprecated aliases for graphs
+// indexed before the generic job_enqueue/job_perform rename, so a stored
+// graph using the old names must get the same treatment, not a stale one.
+//
+// EdgeTypeSubscribes (AMQP/message-broker consumer registration) is a
+// genuine invocation once resolved to a handler — confirmed live on the
+// juniper graph (function/method targets, not just the unresolved
+// channel/worker proxy nodes the same edge type can also terminate on).
 var invokingEdgeTypes = map[graph.EdgeType]bool{
-	graph.EdgeTypeCalls:  true,
-	graph.EdgeTypeSpawns: true,
+	graph.EdgeTypeCalls:          true,
+	graph.EdgeTypeSpawns:         true,
+	graph.EdgeTypeRenders:        true,
+	graph.EdgeTypeJobEnqueue:     true,
+	graph.EdgeTypeJobPerform:     true,
+	graph.EdgeTypeSidekiqEnqueue: true,
+	graph.EdgeTypeSidekiqPerform: true,
+	graph.EdgeTypeSubscribes:     true,
 }
 
 // hasCaller reports whether n has at least one inbound invoking edge.
