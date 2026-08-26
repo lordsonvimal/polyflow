@@ -457,8 +457,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		// friends), not out of the later Go SSA semantic pass, so this must
 		// be applied in this loop, against these nodes.
 		svcReg := reg.ForService(sf.deps)
-		reflectMethods := svcReg.ReflectDispatchedMethods(sf.svc.Language)
-		reflectPathPrefixes := svcReg.ReflectDispatchedPathPrefixes(sf.svc.Language)
+		reflectMethods := svcReg.AllReflectDispatchedMethods()
+		reflectPathPrefixes := svcReg.AllReflectDispatchedPathPrefixes()
 
 		var toParse []string
 		for _, file := range sf.files {
@@ -1300,11 +1300,20 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 }
 
 // stampReflectDispatched sets graph.MetaReflectDispatched on every
-// NodeTypeMethod node in nodes whose label is in reflectMethods. Gated to
-// NodeTypeMethod: a free function sharing one of these names (e.g. a
+// NodeTypeMethod node in nodes whose label is in reflectMethods[n.Language].
+// Gated to NodeTypeMethod: a free function sharing one of these names (e.g. a
 // package-level "String" helper) implements no interface and must stay a
 // real deadcode candidate — only a method (which has a receiver, and so is
 // eligible for interface satisfaction) can be reflect-dispatched this way.
+//
+// reflectMethods and pathPrefixes are keyed by language (Registry.
+// AllReflectDispatchedMethods/AllReflectDispatchedPathPrefixes), not one
+// language for the whole call: a single *service* is routinely polyglot (a
+// Rails app with a React frontend is one service tagged `language: ruby`
+// that also indexes `.tsx` files), so keying the lookup off a single
+// service-level language string would silently never apply a
+// javascript-gated file's exclusions (e.g. patterns/javascript/react.yaml,
+// DC.4b) to that service's JS/TS nodes.
 //
 // pathPrefixes additionally restricts specific method names (e.g.
 // ActiveRecord migrations' change/up/down, Tier DC.2) to nodes whose file
@@ -1313,16 +1322,29 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 // unrelated methods anywhere in the service. A method name absent from
 // pathPrefixes has no such restriction (the gorm.io/devise hook names are
 // distinctive enough on their own).
-func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]bool, pathPrefixes map[string]string) {
+func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]map[string]bool, pathPrefixes map[string]map[string]string) {
 	if len(reflectMethods) == 0 {
 		return
 	}
 	for i := range nodes {
 		n := &nodes[i]
-		if !reflectMethods[n.Label] {
+		// Every JS/TS pattern file (react.yaml included) declares one bucket,
+		// `language: javascript` — a single tree-sitter grammar family covers
+		// both — but a .ts/.tsx node's own Language field is stamped
+		// "typescript" (tsLanguage, internal/parser/javascript.go). Without
+		// this fallback, every TS/TSX file in a mixed-stack service would
+		// silently miss every javascript-gated reflect_dispatched_methods
+		// entry, which is most of them.
+		lang := n.Language
+		methods := reflectMethods[lang]
+		if len(methods) == 0 && lang == "typescript" {
+			lang = "javascript"
+			methods = reflectMethods[lang]
+		}
+		if len(methods) == 0 || !methods[n.Label] {
 			continue
 		}
-		if prefix, ok := pathPrefixes[n.Label]; ok && !strings.Contains(n.File, prefix) {
+		if prefix, ok := pathPrefixes[lang][n.Label]; ok && !strings.Contains(n.File, prefix) {
 			continue
 		}
 		eligible := n.Type == graph.NodeTypeMethod
@@ -1333,6 +1355,14 @@ func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]bool, 
 			// so the Go-only "only a receiver method can satisfy an interface"
 			// restriction above would blanket-exclude every Devise override
 			// hook (DV.3) despite the package/version gate being satisfied.
+			eligible = eligible || n.Type == graph.NodeTypeFunction
+		}
+		if n.Language == "javascript" || n.Language == "typescript" {
+			// Same gap, same fix, different language (DC.4b): extractJSVariables
+			// mints every class method as graph.NodeTypeFunction too — there is
+			// no NodeTypeMethod in JS/TS at all — so without this, a
+			// package:react-gated name like componentDidMount would never be
+			// eligible and the YAML gate would silently do nothing.
 			eligible = eligible || n.Type == graph.NodeTypeFunction
 		}
 		if !eligible {

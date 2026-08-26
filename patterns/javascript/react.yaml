@@ -1,0 +1,27 @@
+# React class-component lifecycle hooks (Tier DC.4b,
+# docs/deadcode-false-positive-plan.md). A method like `componentDidCatch` on
+# a class extending React.Component/React.PureComponent is never called by a
+# literal call site in application code — React itself invokes it via its own
+# reconciler internals, the same "reflection-dispatched" shape gorm.yaml's
+# Before*/After* hooks and devise.yaml's override hooks use. Declaring the
+# name list here, gated on the react package, keeps the exclusion scoped to
+# services that actually depend on it.
+#
+# getDerivedStateFromError and getSnapshotBeforeUpdate are React 16.3+ only;
+# version_range keeps this file inactive on anything pinned earlier. Verified
+# against orion-atlas's installed react (^19.2.5, package.json) — every name
+# below is still current React API at that version, none have been removed.
+language: javascript
+version: "1"
+package: react
+version_range: ">=16.3.0"
+reflect_dispatched_methods:
+  - render
+  - componentDidMount
+  - componentDidUpdate
+  - componentWillUnmount
+  - componentDidCatch
+  - getDerivedStateFromError
+  - shouldComponentUpdate
+  - getSnapshotBeforeUpdate
+patterns: []

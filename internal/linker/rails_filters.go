@@ -323,6 +323,13 @@ var filterKinds = map[string]bool{
 	"after_initialize":  true,
 	"after_find":        true,
 	"after_touch":       true,
+
+	// rescue_from ExceptionClass, with: :method_name registers a controller
+	// method by symbol exactly like before_action does — only the argument
+	// shape differs (a positional exception class ahead of the keyword arg),
+	// which parseFilterCall's rescue_from case split reads instead of the
+	// bare-symbol list before_action expects.
+	"rescue_from": true,
 }
 
 // skipKinds remove an inherited filter. They only mean anything now that
@@ -485,8 +492,13 @@ func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string,
 				if isModule {
 					continue
 				}
-				if reg, ok := parseFilterCall(stmt, name, src); ok {
+				reg, ok := parseFilterCall(stmt, name, src)
+				if ok {
 					c.filters = append(c.filters, reg)
+					delete(ix.strayFilters, fmt.Sprintf("%s\x00%d", file, reg.line))
+				} else if name == "rescue_from" {
+					// `rescue_from X do |e| ... end` names no method to
+					// resolve — a legitimate shape, not an unattributed filter.
 					delete(ix.strayFilters, fmt.Sprintf("%s\x00%d", file, reg.line))
 				}
 			case skipKinds[name]:
@@ -518,10 +530,18 @@ func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string,
 // level of indirection away, which the `form` meta records.
 func parseFilterCall(call *sitter.Node, kind string, src []byte) (filterReg, bool) {
 	reg := filterReg{kind: kind, line: int(call.StartPoint().Row) + 1}
+	rescueFrom := kind == "rescue_from"
 
 	args := call.ChildByFieldName("arguments")
 	if args == nil {
 		// `before_action { agent }` — no argument list at all, only a block.
+		// `rescue_from X do |e| ... end` reaches here too, but unlike a filter
+		// block its body is exception-handling logic, not a stand-in for a
+		// callback name — there is nothing to resolve, so it is left unclaimed
+		// rather than treated as inline.
+		if rescueFrom {
+			return reg, false
+		}
 		reg.callbacks = blockCallbacks(call, src)
 		reg.inline = len(reg.callbacks) > 0
 		return reg, reg.inline
@@ -532,7 +552,13 @@ func parseFilterCall(call *sitter.Node, kind string, src []byte) (filterReg, boo
 			a := n.NamedChild(i)
 			switch a.Type() {
 			case "simple_symbol":
-				reg.callbacks = append(reg.callbacks, symbolName(a.Content(src)))
+				// rescue_from's positional argument is an exception class
+				// (constant/scope_resolution), never a bare symbol, so this
+				// branch is before_action-shaped only — guarded anyway in
+				// case a future rescue_from spelling adds one.
+				if !rescueFrom {
+					reg.callbacks = append(reg.callbacks, symbolName(a.Content(src)))
+				}
 			case "hash":
 				visit(a) // trailing options sometimes arrive wrapped
 			case "pair":
@@ -548,6 +574,11 @@ func parseFilterCall(call *sitter.Node, kind string, src []byte) (filterReg, boo
 					reg.except = append(reg.except, symbolList(val, src)...)
 				case "if", "unless":
 					reg.conditional = true
+				case "with":
+					// rescue_from's sole callback: `with: :render_not_found`.
+					if rescueFrom && val != nil && val.Type() == "simple_symbol" {
+						reg.callbacks = append(reg.callbacks, symbolName(val.Content(src)))
+					}
 				}
 			}
 		}
@@ -555,6 +586,11 @@ func parseFilterCall(call *sitter.Node, kind string, src []byte) (filterReg, boo
 	visit(args)
 
 	if len(reg.callbacks) == 0 {
+		if rescueFrom {
+			// `with:` named a lambda/proc, or was omitted in favor of a
+			// block — neither names a resolvable method on the class.
+			return reg, false
+		}
 		// Options but no symbol: `before_action(only: %i[index edit]) { agent }`,
 		// or a lambda sitting in the argument list.
 		reg.callbacks = blockCallbacks(call, src)

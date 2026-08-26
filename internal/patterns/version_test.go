@@ -209,6 +209,75 @@ func TestReflectDispatchedMethods_Gating(t *testing.T) {
 	})
 }
 
+// TestAllReflectDispatchedMethods_KeyedPerLanguage (DC.4b) proves the
+// polyglot-service fix directly at the registry level: a service that
+// depends on both gorm.io/gorm (go) and devise (ruby) gets BOTH languages'
+// gated names back from one call, keyed so a caller can look each node up by
+// its own Language field instead of one language for the whole service.
+func TestAllReflectDispatchedMethods_KeyedPerLanguage(t *testing.T) {
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(&patterns.PatternFile{
+		Language:                 "go",
+		Package:                  "gorm.io/gorm",
+		ReflectDispatchedMethods: []string{"TableName"},
+	})
+	reg.RegisterFile(&patterns.PatternFile{
+		Language:                    "ruby",
+		Package:                     "devise",
+		ReflectDispatchedMethods:    []string{"password_required?"},
+		ReflectDispatchedPathPrefix: "app/models/",
+	})
+
+	svc := reg.ForService([]deps.Dependency{
+		{Ecosystem: "go", Name: "gorm.io/gorm", Version: "v1.25.0"},
+		{Ecosystem: deps.EcosystemRuby, Name: "devise", Version: "5.0.4", Kind: deps.KindProd},
+	})
+
+	all := svc.AllReflectDispatchedMethods()
+	assert.True(t, all["go"]["TableName"])
+	assert.True(t, all["ruby"]["password_required?"])
+	assert.False(t, all["ruby"]["TableName"], "a go-gated name must not leak into the ruby language key")
+
+	prefixes := svc.AllReflectDispatchedPathPrefixes()
+	assert.Equal(t, "app/models/", prefixes["ruby"]["password_required?"])
+}
+
+// TestReactReflectDispatchedGating loads the real shipped
+// patterns/javascript/react.yaml (Tier DC.4b) and proves its
+// reflect_dispatched_methods list only surfaces for a service that actually
+// depends on react — mirrors TestDeviseReflectDispatchedGating's real-file
+// precedent.
+func TestReactReflectDispatchedGating(t *testing.T) {
+	pf, err := patterns.LoadFile("../../patterns/javascript/react.yaml")
+	require.NoError(t, err)
+
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(pf)
+
+	t.Run("service with react in package.json gets the lifecycle hook names", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: deps.EcosystemNPM, Name: "react", Version: "19.2.5", Kind: deps.KindProd},
+		})
+		names := svc.ReflectDispatchedMethods("javascript")
+		assert.True(t, names["componentDidCatch"])
+		assert.True(t, names["getDerivedStateFromError"])
+	})
+
+	t.Run("service pinned pre-16.3 does not get the React 16.3+ only hooks", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: deps.EcosystemNPM, Name: "react", Version: "15.6.2", Kind: deps.KindProd},
+		})
+		names := svc.ReflectDispatchedMethods("javascript")
+		assert.Empty(t, names)
+	})
+
+	t.Run("service without react gets nothing", func(t *testing.T) {
+		svc := reg.ForService(nil)
+		names := svc.ReflectDispatchedMethods("javascript")
+		assert.Empty(t, names)
+	})
+}
+
 // TestAWSSDKGating loads the real shipped AWS pattern files and proves the
 // gating level of the version split: a service pinning SDK v1 activates only
 // the v1 file; a service on SDK v2 activates only the v2 file.

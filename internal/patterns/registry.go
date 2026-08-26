@@ -98,6 +98,51 @@ func (r *Registry) ReflectDispatchedPathPrefixes(language string) map[string]str
 	return out
 }
 
+// AllReflectDispatchedMethods is ReflectDispatchedMethods for every language
+// this (already service-filtered) registry has an entry for, keyed by that
+// language.
+//
+// A single service is routinely polyglot — a Rails app with a React
+// frontend is one `orion-atlas` service tagged `language: ruby` that also
+// indexes `.tsx` files — so a caller keying the lookup off one service-level
+// language string (as internal/indexer/indexer.go used to) would silently
+// never see a javascript-gated file's reflect_dispatched_methods (e.g.
+// patterns/javascript/react.yaml) for that service. Keying per-node by its
+// own Language field instead is what stampReflectDispatched needs this for.
+func (r *Registry) AllReflectDispatchedMethods() map[string]map[string]bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]map[string]bool, len(r.reflectMethods))
+	for lang, gs := range r.reflectMethods {
+		m := make(map[string]bool, len(gs))
+		for _, g := range gs {
+			m[g.Method] = true
+		}
+		out[lang] = m
+	}
+	return out
+}
+
+// AllReflectDispatchedPathPrefixes is ReflectDispatchedPathPrefixes for every
+// language this registry has an entry for, keyed by that language — the
+// per-language sibling AllReflectDispatchedMethods needs for the same
+// polyglot-service reason.
+func (r *Registry) AllReflectDispatchedPathPrefixes() map[string]map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]map[string]string, len(r.reflectMethods))
+	for lang, gs := range r.reflectMethods {
+		m := make(map[string]string)
+		for _, g := range gs {
+			if g.PathPrefix != "" {
+				m[g.Method] = g.PathPrefix
+			}
+		}
+		out[lang] = m
+	}
+	return out
+}
+
 // List returns all patterns for the given language.
 func (r *Registry) List(language string) []*Pattern {
 	r.mu.RLock()

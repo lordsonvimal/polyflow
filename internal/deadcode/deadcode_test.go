@@ -179,6 +179,53 @@ func TestBuild_MigrationMethodNotFlagged(t *testing.T) {
 	}
 }
 
+// TestBuild_ReactLifecycleHookNotFlagged is Tier DC.4b's worked example: an
+// ErrorBoundary's getDerivedStateFromError/componentDidCatch/render are
+// invoked by React's own reconciler on any class extending React.Component,
+// never by a literal call site in application code. patterns/javascript/
+// react.yaml's reflect_dispatched_methods (package: react) is what the
+// indexer's stampReflectDispatched reads to stamp graph.MetaReflectDispatched
+// here before Build ever runs — this exercises the same mechanism
+// TestBuild_ReflectDispatchedMethodNotFlagged does, pinned to JS/TS's
+// node-type shape (graph.NodeTypeFunction — JS has no method/function split
+// at all, see indexer.stampReflectDispatched's javascript/typescript case).
+func TestBuild_ReactLifecycleHookNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "fe:component_did_catch", Type: graph.NodeTypeFunction, Label: "componentDidCatch",
+		Service: "frontend", File: "ErrorBoundary.jsx", Line: 12, Language: "javascript",
+		Meta: map[string]string{graph.MetaReflectDispatched: "true"},
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "fe:component_did_catch", f.ID, "a React lifecycle hook stamped reflect_dispatched must not be flagged")
+	}
+}
+
+// TestBuild_NonFrameworkRenderStillFlagged guards against the over-widening
+// risk DC.4b's plan explicitly calls out: render/componentDidCatch/etc are
+// plain English/framework-agnostic identifiers, so the exclusion must only
+// apply to a node the indexer actually stamped (i.e. a class in a service
+// that depends on react) -- a same-named method in a service with no react
+// dependency is never stamped and must stay a real deadcode candidate.
+func TestBuild_NonFrameworkRenderStillFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{
+		ID: "fe:widget_render", Type: graph.NodeTypeFunction, Label: "render",
+		Service: "frontend", File: "Widget.js", Line: 8, Language: "javascript",
+	})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "fe:widget_render" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a render method the indexer did not stamp (no react dependency) must stay flagged")
+}
+
 // TestBuild_SameNamedMethodOutsideMigrationStillFlagged guards against the
 // over-widening risk DC.2's plan explicitly calls out: change/up/down are
 // common English words with no gem-specific spelling, so the exclusion must

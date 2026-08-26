@@ -30,6 +30,7 @@ var filterFixtureFiles = []string{
 	"testdata/rails_filters/app/controllers/client_api/v1/api_base_controller.rb",
 	"testdata/rails_filters/app/controllers/client_api/v1/repository_controller.rb",
 	"testdata/rails_filters/app/controllers/documents_controller.rb",
+	"testdata/rails_filters/app/controllers/errors_controller.rb",
 	"testdata/rails_filters/app/controllers/repository_controller.rb",
 	"testdata/rails_filters/app/controllers/concerns/auditable.rb",
 	"testdata/rails_filters/app/controllers/concerns/security_checks.rb",
@@ -351,6 +352,48 @@ func TestLinkRailsFilters_InlineBlockForm(t *testing.T) {
 	for _, e := range edges {
 		if e.To == plain {
 			assert.Empty(t, e.Meta["form"])
+		}
+	}
+}
+
+// TestLinkRailsFilters_RescueFromResolvesWithSymbol (DC.4a): rescue_from
+// registers a controller method by symbol exactly like before_action does,
+// but the with: keyword arg shape used to fall outside parseFilterCall's
+// bare-symbol/only/except reading entirely, so the exception handler never
+// showed a caller.
+func TestLinkRailsFilters_RescueFromResolvesWithSymbol(t *testing.T) {
+	t.Parallel()
+	nodes, edges, _ := filterFixture(t)
+
+	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "ErrorsController")
+	assert.Contains(t, filterTargets(nodes, edges, classID), "render_not_found/class")
+
+	target := methodID(t, nodes, "ErrorsController#render_not_found")
+	for _, e := range edges {
+		if e.To == target {
+			assert.Equal(t, "rescue_from", e.Meta["filter"])
+		}
+	}
+}
+
+// TestLinkRailsFilters_RescueFromBlockFormIsSkippedNotLedgered (DC.4a): the
+// block form (`rescue_from StandardError do |e| ... end`) names no method to
+// resolve at all -- it must not be treated as an inline filter (which would
+// wrongly turn the block body's calls into fake callback registrations) and
+// must not be ledgered as an unattributed filter either, since a class body
+// plainly does own it.
+func TestLinkRailsFilters_RescueFromBlockFormIsSkippedNotLedgered(t *testing.T) {
+	t.Parallel()
+	nodes, edges, unresolved := filterFixture(t)
+
+	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "ErrorsController")
+	assert.NotContains(t, filterTargets(nodes, edges, classID), "render/class",
+		"the block body's calls must not be read as callback registrations")
+
+	for _, u := range unresolved {
+		if u.Kind == "rails_filter_unattributed" {
+			assert.NotContains(t, u.File, "errors_controller.rb",
+				"the block-form rescue_from is claimed by its class body, not stray")
 		}
 	}
 }
