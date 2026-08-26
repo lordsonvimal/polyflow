@@ -48,7 +48,6 @@ func LinkRubyClassMethodCalls(nodes []graph.Node, serviceFiles map[string][]stri
 	byDeclByService := make(map[string]map[string]string)
 	fileByID := make(map[string]string)
 	classTotal := 0
-	classIDByFileLabel := make(map[string]string)
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeClass {
@@ -63,34 +62,13 @@ func LinkRubyClassMethodCalls(nodes []graph.Node, serviceFiles map[string][]stri
 		byName[n.Label] = append(byName[n.Label], n.ID)
 		byDeclByService[n.Service][declKey(n.File, n.Label, n.Line)] = n.ID
 		fileByID[n.ID] = n.File
-		classIDByFileLabel[n.File+"\x00"+n.Label] = n.ID
 		classTotal++
 	}
 	if classTotal == 0 {
 		return nil, nil
 	}
 
-	// Method ownership: classID + "\x00" + methodName → method node IDs.
-	// Keyed off Meta["class"], the same join linkRubyClassMembers uses — a
-	// reopened class in another file is a different node with its own
-	// methods, which is correct: the edge below lands on whichever
-	// declaration this service's constant resolution actually names.
-	methodsByClass := make(map[string][]string)
-	for i := range nodes {
-		n := &nodes[i]
-		if (n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod) || n.Meta["class"] == "" {
-			continue
-		}
-		clsID, ok := classIDByFileLabel[n.File+"\x00"+n.Meta["class"]]
-		if !ok {
-			continue
-		}
-		key := clsID + "\x00" + n.Label
-		methodsByClass[key] = append(methodsByClass[key], n.ID)
-	}
-	for k := range methodsByClass {
-		sort.Strings(methodsByClass[k])
-	}
+	methodsByClass := buildMethodsByClass(nodes)
 
 	svcNames := make([]string, 0, len(serviceFiles))
 	for svcName := range serviceFiles {
@@ -140,6 +118,42 @@ func LinkRubyClassMethodCalls(nodes []graph.Node, serviceFiles map[string][]stri
 		}
 	}
 	return allEdges, allUnresolved
+}
+
+// buildMethodsByClass indexes method ownership: classID + "\x00" + methodName
+// → method node IDs. Keyed off Meta["class"], the same join
+// linkRubyClassMembers uses — a reopened class in another file is a
+// different node with its own methods, which is correct: a lookup against
+// this index lands on whichever declaration the caller's own constant
+// resolution actually names. Shared by every pass that needs "does this
+// resolved class declare a method named X" (LinkRubyClassMethodCalls,
+// LinkRubyReceiverTypeCalls, LinkRubyTypeRelations' instantiate-to-initialize
+// edge) so the join is defined once, not reimplemented per call site.
+func buildMethodsByClass(nodes []graph.Node) map[string][]string {
+	classIDByFileLabel := make(map[string]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeClass {
+			classIDByFileLabel[n.File+"\x00"+n.Label] = n.ID
+		}
+	}
+	methodsByClass := make(map[string][]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if (n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod) || n.Meta["class"] == "" {
+			continue
+		}
+		clsID, ok := classIDByFileLabel[n.File+"\x00"+n.Meta["class"]]
+		if !ok {
+			continue
+		}
+		key := clsID + "\x00" + n.Label
+		methodsByClass[key] = append(methodsByClass[key], n.ID)
+	}
+	for k := range methodsByClass {
+		sort.Strings(methodsByClass[k])
+	}
+	return methodsByClass
 }
 
 func emitClassMethodCall(

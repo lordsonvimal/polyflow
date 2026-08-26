@@ -402,3 +402,92 @@ end
 		t.Errorf("ambiguous Helper was not ledgered, got %+v", unresolved)
 	}
 }
+
+// TestLinkRubyTypeRelations_InstantiateLinksToInitialize is the DC.3
+// regression guard: `Foo.new` used to bind only to the class node, never to
+// the class's own `initialize`, so a constructor doing real work (validating
+// args, setting up state) read as dead code even when something in the same
+// service instantiated it every time. The class-granularity `instantiates`
+// edge must still be produced alongside the new method-granularity `calls`
+// edge — this is additive, not a replacement.
+func TestLinkRubyTypeRelations_InstantiateLinksToInitialize(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	consumer := writeRuby(t, dir, "consumer.rb", `
+class Consumer
+  def build
+    Widget.new
+  end
+end
+`)
+	widget := writeRuby(t, dir, "widget.rb", `
+class Widget
+  def initialize
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNodeAt("svc", consumer, "Consumer", 2),
+		rubyClassNodeAt("svc", widget, "Widget", 2),
+		classCallFuncNode("svc", widget, "Widget", "initialize", 3),
+	}
+	edges, _ := LinkRubyTypeRelations(nodes, map[string][]string{
+		"svc": {consumer, widget},
+	})
+
+	fromID := fmt.Sprintf("svc:%s:function:build:3", consumer)
+	wantClassEdge := fmt.Sprintf("instantiates:%s->svc:%s:class:Widget:2", fromID, widget)
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:initialize:3", fromID, widget)
+
+	var gotClassEdge, gotMethodEdge bool
+	for _, e := range edges {
+		switch e.ID {
+		case wantClassEdge:
+			gotClassEdge = true
+		case wantMethodEdge:
+			gotMethodEdge = true
+			if e.Type != graph.EdgeTypeCalls {
+				t.Errorf("initialize edge has type %s; want calls", e.Type)
+			}
+		}
+	}
+	if !gotClassEdge {
+		t.Errorf("missing class-granularity instantiates edge %s; got %+v", wantClassEdge, edges)
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to initialize %s; got %+v", wantMethodEdge, edges)
+	}
+}
+
+// TestLinkRubyTypeRelations_InstantiateNoInitializeStaysClassOnly pins the
+// other half: a class with no explicit `initialize` (Ruby's implicit default
+// takes no edge) must not have a method-level edge fabricated.
+func TestLinkRubyTypeRelations_InstantiateNoInitializeStaysClassOnly(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	consumer := writeRuby(t, dir, "consumer.rb", `
+class Consumer
+  def build
+    Gadget.new
+  end
+end
+`)
+	gadget := writeRuby(t, dir, "gadget.rb", "class Gadget\nend\n")
+
+	nodes := []graph.Node{
+		rubyClassNodeAt("svc", consumer, "Consumer", 2),
+		rubyClassNodeAt("svc", gadget, "Gadget", 1),
+	}
+	edges, _ := LinkRubyTypeRelations(nodes, map[string][]string{
+		"svc": {consumer, gadget},
+	})
+
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls {
+			t.Errorf("fabricated a calls edge %s for a class with no explicit initialize", e.ID)
+		}
+	}
+}

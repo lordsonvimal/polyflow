@@ -70,6 +70,7 @@ func LinkRubyTypeRelations(nodes []graph.Node, serviceFiles map[string][]string)
 	if total == 0 {
 		return nil, nil
 	}
+	methodsByClass := buildMethodsByClass(nodes)
 
 	// Service order decides edge order, so it cannot come from a map.
 	svcNames := make([]string, 0, len(serviceFiles))
@@ -87,10 +88,11 @@ func LinkRubyTypeRelations(nodes []graph.Node, serviceFiles map[string][]string)
 		sort.Strings(files)
 
 		ix := &rubyTypeIndex{
-			svc:      svcName,
-			byName:   byNameByService[svcName],
-			byQual:   map[string][]string{},
-			fileByID: fileByID,
+			svc:            svcName,
+			byName:         byNameByService[svcName],
+			byQual:         map[string][]string{},
+			fileByID:       fileByID,
+			methodsByClass: methodsByClass,
 		}
 		if ix.byName == nil {
 			ix.byName = map[string][]string{}
@@ -323,6 +325,14 @@ type rubyTypeIndex struct {
 	byName   map[string][]string // label → node IDs, simple-name fallback
 	byQual   map[string][]string // fully qualified name → node IDs
 	fileByID map[string]string
+
+	// methodsByClass is classID + "\x00" + methodName → method node IDs (see
+	// buildMethodsByClass). Only LinkRubyTypeRelations populates it, to emit a
+	// method-granularity `calls` edge alongside a class-granularity
+	// `instantiates` edge when the instantiated class declares `initialize`.
+	// Left nil for every other caller of rubyTypeIndex, which is safe: a nil
+	// map read is just an empty lookup.
+	methodsByClass map[string][]string
 }
 
 // resolve finds the definitions a constant reference names, innermost enclosing
@@ -419,6 +429,30 @@ func (ix *rubyTypeIndex) emit(r rubyTypeRef, seen map[string]bool) ([]graph.Edge
 			ID: eid, From: r.fromID, To: targetID,
 			Type: r.edgeType, Confidence: conf, Meta: r.meta,
 		})
+
+		// Additive: alongside the class-granularity `instantiates` edge, also
+		// land a method-granularity `calls` edge on the class's own
+		// `initialize` when it declares one, the same lookup
+		// LinkRubyClassMethodCalls does for `ClassName.method_name`. A
+		// constructor that does real work (validates args, sets up state)
+		// otherwise reads as unreachable dead code even when something in the
+		// same service instantiates it every time. No node is fabricated when
+		// the class has no explicit `initialize` (Ruby's implicit default
+		// takes no edge).
+		if r.edgeType == graph.EdgeTypeInstantiates {
+			for _, mID := range ix.methodsByClass[targetID+"\x00initialize"] {
+				ceid := fmt.Sprintf("calls:%s->%s", r.fromID, mID)
+				if seen[ceid] {
+					continue
+				}
+				seen[ceid] = true
+				edges = append(edges, graph.Edge{
+					ID: ceid, From: r.fromID, To: mID,
+					Type: graph.EdgeTypeCalls, Confidence: conf,
+					Meta: map[string]string{"via": "instantiate_initialize"},
+				})
+			}
+		}
 	}
 	return edges, unresolved
 }

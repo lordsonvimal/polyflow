@@ -34,6 +34,35 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 		return nil, nil
 	}
 
+	// constructorByClass: classID → its own explicit constructor() method
+	// node ID, when it declares one. A class without an explicit constructor
+	// has an implicit no-op one — no node exists for that, so no edge is
+	// fabricated. Built from EndLine, which collectClass already stamps on
+	// every JS/TS class node: a "constructor"-labeled function node whose
+	// Line falls inside [class.Line, class.EndLine] belongs to that class.
+	// This reuses information the parser already recorded rather than
+	// re-parsing every file a second time to answer the same question.
+	ctorsByFile := make(map[string][]lineNode)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeFunction && n.Label == "constructor" {
+			ctorsByFile[n.File] = append(ctorsByFile[n.File], lineNode{line: n.Line, id: n.ID})
+		}
+	}
+	constructorByClass := make(map[string]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeClass {
+			continue
+		}
+		for _, c := range ctorsByFile[n.File] {
+			if c.line >= n.Line && c.line <= n.EndLine {
+				constructorByClass[n.ID] = c.id
+				break
+			}
+		}
+	}
+
 	// Build set of already-emitted inherits/implements/instantiates edge IDs
 	// so we don't re-emit what the per-file extractor already produced.
 	existingEdges := make(map[string]bool)
@@ -94,7 +123,7 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 			// or it always misses (fileDecls silently empty on every call,
 			// meaning walkTypeRefs's nearestDecl below could never attribute
 			// a cross-file uses_type edge to anything).
-			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], existingEdges, seen)
+			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], constructorByClass, existingEdges, seen)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -102,7 +131,7 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 	return allEdges, allUnresolved
 }
 
-func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, existingEdges, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, constructorByClass map[string]string, existingEdges, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil
@@ -412,6 +441,25 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 								Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
 								Meta: map[string]string{"count": "1"},
 							})
+						}
+						// Additive: also land a method-granularity `calls`
+						// edge on the class's own explicit constructor, the
+						// same shape as the Ruby `.new` → `initialize` edge in
+						// LinkRubyTypeRelations. No edge for a class with no
+						// explicit constructor (constructorByClass has no
+						// entry — JS/TS's implicit default takes no edge).
+						if found && enclosingFnID != "" {
+							if ctorID, ok := constructorByClass[targetID]; ok {
+								ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
+								if !seen[ceid] {
+									seen[ceid] = true
+									edges = append(edges, graph.Edge{
+										ID: ceid, From: enclosingFnID, To: ctorID,
+										Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
+										Meta: map[string]string{"via": "instantiate_constructor"},
+									})
+								}
+							}
 						}
 					}
 				}
