@@ -39,6 +39,21 @@ patterns:
       - name: name
         role: func_name
 
+  # { test: /^dep:/i, parse: parseDepPrefix } — a dispatch-table entry
+  # referencing an already-declared function BY NAME as a property value,
+  # not defining one inline (object_method_pair's shape). The function is
+  # only ever reached by reading this property and calling it indirectly
+  # (`entry.parse(x)`), never a literal call site naming it — the same
+  # "invoked as a value" shape Go's SSA referencedIDs already captures.
+  # isCallRef routes this to matcher.go's Pass 3c (see MetaReferencedAsValue)
+  # instead of node creation: it names an existing node, not a new one.
+  - name: object_value_ref
+    query: |
+      (pair value: (identifier) @ref)
+    captures:
+      - name: ref
+        role: func_ref
+
   # foo() {} — ES6 method shorthand. tree-sitter uses the same
   # method_definition node whether this sits in an object literal
   # (`{ foo() {} }`) or a class body (`class X { foo() {} }`), so one pattern

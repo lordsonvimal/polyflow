@@ -692,6 +692,7 @@ func isCallRef(patternName string) bool {
 	return patternName == "component_fn_call" ||
 		patternName == "jsx_event_handler_ref" ||
 		patternName == "global_member_call" ||
+		patternName == "object_value_ref" ||
 		patternName == "goroutine_call" ||
 		patternName == "cobra_run" ||
 		patternName == "python_func_call"
@@ -1801,6 +1802,41 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// Materialise any module nodes synthesized above.
 	for _, mn := range moduleNodes {
 		nodes = append(nodes, *mn)
+	}
+
+	// Pass 3c: object_value_ref (`{ parse: parseDepPrefix }`) names an
+	// EXISTING same-file function/method by reference rather than creating
+	// anything or a call site — stamp MetaReferencedAsValue on the target
+	// node directly so indexer.go's classifyRoot routes it to
+	// root_kind=callback (see graph.MetaReferencedAsValue for the full
+	// rationale: a dispatch-table entry is only ever invoked indirectly,
+	// e.g. `entry.parse(x)`, never a literal call naming it).
+	{
+		nodeIndexByID := make(map[string]int, len(nodes))
+		for i := range nodes {
+			nodeIndexByID[nodes[i].ID] = i
+		}
+		for _, r := range callRefs {
+			if r.PatternName != "object_value_ref" {
+				continue
+			}
+			ref, ok := r.Captures["ref"]
+			if !ok {
+				continue
+			}
+			targetID, ok := nameByFileAndName[r.File+"\x00"+ref]
+			if !ok {
+				continue
+			}
+			idx, ok := nodeIndexByID[targetID]
+			if !ok {
+				continue
+			}
+			if nodes[idx].Meta == nil {
+				nodes[idx].Meta = map[string]string{}
+			}
+			nodes[idx].Meta[graph.MetaReferencedAsValue] = "true"
+		}
 	}
 
 	// Pass 3b: connect event listeners to their handlers. Listener nodes

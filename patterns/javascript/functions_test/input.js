@@ -10,3 +10,6 @@ var Module = {
 class Foo {
   bar() {}
 }
+
+function parseDepPrefix(s) {}
+var PREFIXES = [{ test: /^dep:/i, parse: parseDepPrefix }];

@@ -1286,6 +1286,12 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 	// zero-caller by construction regardless of real property access.
 	case n.Meta["js_accessor"] == "true":
 		kind = "callback"
+	// A dispatch-table entry (`{ test: /^dep:/i, parse: parseDepPrefix }`)
+	// names an already-declared function BY REFERENCE as a property value —
+	// only ever invoked indirectly (`entry.parse(x)`), never a literal call
+	// site naming it. Stamped by matcher.go's Pass 3c (object_value_ref).
+	case n.Meta[graph.MetaReferencedAsValue] == "true":
+		kind = "callback"
 	}
 	stampRootKind(n, kind)
 	return true

@@ -378,6 +378,40 @@ func TestMatchToGraph_GlobalMemberCallScopedToWindow(t *testing.T) {
 	assert.Equal(t, "call_ref", unresolved[0].Kind)
 }
 
+// object_value_ref stamps MetaReferencedAsValue on the SAME-file function it
+// names, not a new node or edge — a dispatch-table entry
+// (`{ parse: parseDepPrefix }`) is only ever invoked indirectly
+// (`entry.parse(x)`), the JS tree-sitter-pattern equivalent of Go's SSA
+// referencedIDs.
+func TestMatchToGraph_ObjectValueRefStampsTarget(t *testing.T) {
+	results := []patterns.MatchResult{
+		{
+			PatternName: "function_decl",
+			File:        "search-parser.js",
+			Line:        10,
+			EndLine:     12,
+			Captures:    map[string]string{"name": "parseDepPrefix"},
+		},
+		{
+			PatternName: "object_value_ref",
+			File:        "search-parser.js",
+			Line:        20,
+			Captures:    map[string]string{"ref": "parseDepPrefix"},
+		},
+	}
+	nodes, edges, _ := patterns.MatchToGraph("web", results)
+	assert.Empty(t, edges, "object_value_ref must not create an edge — it stamps meta on the existing node")
+
+	var found bool
+	for _, n := range nodes {
+		if n.Label == "parseDepPrefix" {
+			found = true
+			assert.Equal(t, "true", n.Meta[graph.MetaReferencedAsValue])
+		}
+	}
+	assert.True(t, found)
+}
+
 // Anonymous goroutines produce a worker node spawned by the enclosing function.
 func TestMatchToGraph_AnonGoroutineSpawns(t *testing.T) {
 	results := []patterns.MatchResult{

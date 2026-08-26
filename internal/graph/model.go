@@ -122,6 +122,16 @@ const MetaIsTest = "is_test"
 // name list themselves.
 const MetaReflectDispatched = "reflect_dispatched"
 
+// MetaReferencedAsValue marks a same-file function whose NAME appears as an
+// object-literal property value (`{ test: /^dep:/i, parse: parseDepPrefix }`
+// — a dispatch table mapping a matcher to a handler by reference, not an
+// inline function). This is the tree-sitter-pattern-driven JS equivalent of
+// Go's SSA-derived referencedIDs: a function reachable only by being read as
+// a value and invoked indirectly (`entry.parse(x)`), never by a literal call
+// site naming it. Stamped by matcher.go's object_value_ref handling so
+// indexer.go's classifyRoot can route it to root_kind=callback the same way.
+const MetaReferencedAsValue = "referenced_as_value"
+
 // MetaChannelRole records which side(s) of a broker channel a service was
 // observed on: ChannelRoleProducer if it publishes to the exchange,
 // ChannelRoleConsumer if it only binds a queue to it, or ChannelRoleBoth.
