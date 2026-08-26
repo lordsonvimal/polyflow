@@ -10,6 +10,9 @@ templ ActionPanel(gameID string, page int) {
 		<button data-on:click={ "@post('/play/static/resign')" }>Resign</button>
 		// Signal-only handler (no @verb) — must NOT create an http_client node
 		<button data-on:click="$flipped = !$flipped">Flip</button>
+		// Plain client-side JS call (no @verb) — must create a dom_target
+		// node with a resolvable handler, the same as onclick= would.
+		<button data-on:click="window.maple.syncAllBaseImages()">Sync</button>
 		// Reactive text binding referencing a compound signal expression
 		<span data-text="$idx + 1"></span>
 		<input data-bind="username"/>

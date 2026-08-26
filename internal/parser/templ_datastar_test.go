@@ -73,6 +73,66 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 	}
 }
 
+// TestTemplParser_DatastarClientHandler proves data-on:<event> attributes
+// whose value is not a backend @verb(...) action fall back to the same
+// dom_target/handler shape a native onclick= attribute gets (so
+// LinkJSGlobals resolves window.maple.X the same way for both), while a pure
+// signal mutation still produces nothing — the pre-existing behavior for
+// that case must not regress into a phantom unresolved dom_target.
+func TestTemplParser_DatastarClientHandler(t *testing.T) {
+	t.Parallel()
+	p := &TemplParser{}
+	nodes, edges, _, err := p.Parse("testdata/datastar.templ", "app", nil, nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	var targets []graph.Node
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeDOMTarget {
+			targets = append(targets, n)
+		}
+	}
+	if len(targets) != 1 {
+		t.Fatalf("dom_target nodes = %d, want 1 (signal-only handler must produce none): %+v", len(targets), targets)
+	}
+	got := targets[0]
+	if got.Meta["handler"] != "window.maple.syncAllBaseImages()" {
+		t.Errorf("handler = %q, want the plain JS call", got.Meta["handler"])
+	}
+	if got.Meta["event_type"] != "click" {
+		t.Errorf("event_type = %q, want %q", got.Meta["event_type"], "click")
+	}
+	if got.Meta["pattern"] != "dom_event_attr" {
+		t.Errorf("pattern = %q, want dom_event_attr (must match LinkJSGlobals' scoping check)", got.Meta["pattern"])
+	}
+
+	var listenEdges int
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeDOMListen && e.To == got.ID {
+			listenEdges++
+		}
+	}
+	if listenEdges != 1 {
+		t.Errorf("dom_listen edges to %s = %d, want 1", got.ID, listenEdges)
+	}
+}
+
+func TestDatastarEventType(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"data-on:click":  "click",
+		"data-on-click":  "click",
+		"data-on:change": "change",
+		"data-init":      "data-init",
+	}
+	for key, want := range cases {
+		if got := datastarEventType(key); got != want {
+			t.Errorf("datastarEventType(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func keys(m map[string]graph.Node) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

@@ -207,8 +207,16 @@ func (v *templVisitor) VisitConstantAttribute(ca *templparser.ConstantAttribute)
 
 	switch {
 	// data-on:<event>={ @verb('/path') } / data-on-<event>="@verb('/path')"
+	// is a backend SSE action. When the value isn't one (no @verb(...) found),
+	// it's a plain client-side JS call — data-on:click="window.maple.
+	// syncAllBaseImages()" — the Datastar idiom that replaced onclick=. Falls
+	// back to the exact same dom_target/handler shape a native onclick=
+	// attribute gets, so LinkJSGlobals' existing window.maple.X / bare-
+	// identifier resolution picks it up with no separate linker pass.
 	case v.isDataOnKey(key):
-		v.addDatastarAction(val, lineNo)
+		if !v.addDatastarAction(val, lineNo) {
+			v.addDatastarClientHandler(key, val, lineNo)
+		}
 
 	// data-bind / data-signals / data-model
 	case key == "data-bind" || key == "data-signals" || key == "data-model":
@@ -311,6 +319,33 @@ func isSelectorHookAttr(key string) bool {
 // addEventAttr emits a dom_target node for a native on<event> attribute and
 // a dom_listen edge from the enclosing component.
 func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
+	v.mintDOMEventTarget(key, key[2:], val, lineNo)
+}
+
+// addDatastarClientHandler emits the same dom_target/dom_listen shape as a
+// native on<event> attribute for a data-on:<event> value that turned out not
+// to be a backend @verb(...) SSE action — i.e. a plain client-side JS call
+// (data-on:click="window.maple.syncAllBaseImages()"), the Datastar idiom that
+// replaced onclick=. Reusing the exact dom_event_attr shape means
+// LinkJSGlobals' existing window.maple.X / bare-identifier resolution picks
+// this up for free — no separate linker pass needed.
+func (v *templVisitor) addDatastarClientHandler(key, val string, lineNo int) {
+	// A pure signal mutation (data-on:click="$flipped = !$flipped") is not a
+	// callable and must stay "produces nothing", same as before this method
+	// existed: extractHandlerCandidates already returns nil for anything
+	// without a call, but minting the node anyway would still add a phantom
+	// dom_target and an unresolved-ledger entry for something that was never
+	// a handler reference. A call always has an opening paren; a signal
+	// write never does.
+	if !strings.ContainsRune(val, '(') {
+		return
+	}
+	v.mintDOMEventTarget(key, datastarEventType(key), val, lineNo)
+}
+
+// mintDOMEventTarget is the shared node/edge builder behind addEventAttr and
+// addDatastarClientHandler.
+func (v *templVisitor) mintDOMEventTarget(key, eventType, val string, lineNo int) {
 	nodeID := templNodeID(v.service, v.file, lineNo, graph.NodeTypeDOMTarget, key+":"+val)
 	v.nodes = append(v.nodes, graph.Node{
 		ID: nodeID, Type: graph.NodeTypeDOMTarget,
@@ -320,9 +355,24 @@ func (v *templVisitor) addEventAttr(key, val string, lineNo int) {
 		Line:     lineNo,
 		EndLine:  lineNo,
 		Language: "templ",
-		Meta:     map[string]string{"prop": key, "event_type": key[2:], "handler": val, "pattern": "dom_event_attr"},
+		Meta:     map[string]string{"prop": key, "event_type": eventType, "handler": val, "pattern": "dom_event_attr"},
 	})
 	v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDOMListen))
+}
+
+// datastarEventType extracts the event name from a data-on key in either
+// Datastar vocabulary: "data-on:click" (v1, colon) or "data-on-click" (v0,
+// hyphen). data-init (no event suffix — runs on element mount) falls through
+// unchanged, which is fine: it is not a real DOM event type but is still a
+// meaningful label for the mint call site.
+func datastarEventType(key string) string {
+	rest := strings.TrimPrefix(key, "data-on")
+	rest = strings.TrimPrefix(rest, ":")
+	rest = strings.TrimPrefix(rest, "-")
+	if rest == "" {
+		return key
+	}
+	return rest
 }
 
 // ExpressionAttribute covers data-on:click={ expr } style attributes. The
@@ -335,7 +385,9 @@ func (v *templVisitor) VisitExpressionAttribute(ea *templparser.ExpressionAttrib
 	lineNo := line(ea.Range.From)
 
 	if v.isDataOnKey(key) {
-		v.addDatastarAction(raw, lineNo)
+		if !v.addDatastarAction(raw, lineNo) {
+			v.addDatastarClientHandler(key, stripQuotes(raw), lineNo)
+		}
 		return nil
 	}
 
