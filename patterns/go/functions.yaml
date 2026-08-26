@@ -1,5 +1,25 @@
 language: go
 version: "1"
+
+# No package gate: these are the Go language's own reserved interface method
+# names (fmt.Stringer, the error interface, encoding/json's Marshaler/
+# Unmarshaler, encoding.TextMarshaler/TextUnmarshaler, database/sql's
+# Scanner/Valuer, net/http's Handler), so they apply to every Go service
+# regardless of its dependencies. A method with one of these exact names and
+# signature is invoked by the stdlib through an interface value, never a
+# literal call site — so it is a zero-caller false positive in the deadcode
+# scan by construction, the same way an HTTP handler is.
+reflect_dispatched_methods:
+  - String
+  - Error
+  - MarshalJSON
+  - UnmarshalJSON
+  - MarshalText
+  - UnmarshalText
+  - Scan
+  - Value
+  - ServeHTTP
+
 patterns:
   # @_def spans the whole declaration so the matcher can record where the
   # body ends (containment-based enclosing-function attribution).

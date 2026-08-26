@@ -163,6 +163,52 @@ func TestForService_PythonVersionGating(t *testing.T) {
 	})
 }
 
+// TestReflectDispatchedMethods_Gating proves reflect_dispatched_methods
+// shares the exact same package/version gate as tree-sitter patterns: a
+// GORM-gated hook name only surfaces for a service that actually depends on
+// gorm.io/gorm, while an ungated (stdlib) name always surfaces for the
+// language regardless of dependencies.
+func TestReflectDispatchedMethods_Gating(t *testing.T) {
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(&patterns.PatternFile{
+		Language:                 "go",
+		Package:                  "gorm.io/gorm",
+		ReflectDispatchedMethods: []string{"TableName", "BeforeCreate"},
+	})
+	reg.RegisterFile(&patterns.PatternFile{
+		Language:                 "go",
+		ReflectDispatchedMethods: []string{"String", "Error"},
+	})
+
+	t.Run("gorm service gets both gated and ungated names", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: "go", Name: "gorm.io/gorm", Version: "v1.25.0"},
+		})
+		names := svc.ReflectDispatchedMethods("go")
+		assert.True(t, names["TableName"])
+		assert.True(t, names["BeforeCreate"])
+		assert.True(t, names["String"])
+		assert.True(t, names["Error"])
+	})
+
+	t.Run("non-gorm service only gets ungated stdlib names", func(t *testing.T) {
+		svc := reg.ForService(nil)
+		names := svc.ReflectDispatchedMethods("go")
+		assert.False(t, names["TableName"])
+		assert.False(t, names["BeforeCreate"])
+		assert.True(t, names["String"])
+		assert.True(t, names["Error"])
+	})
+
+	t.Run("wrong language returns nothing", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: "go", Name: "gorm.io/gorm", Version: "v1.25.0"},
+		})
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.Empty(t, names)
+	})
+}
+
 // TestAWSSDKGating loads the real shipped AWS pattern files and proves the
 // gating level of the version split: a service pinning SDK v1 activates only
 // the v1 file; a service on SDK v2 activates only the v2 file.
