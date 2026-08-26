@@ -1026,6 +1026,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			continue
 		}
 
+		if isRequestResponseShapePattern(r.PatternName) {
+			continue
+		}
+
 		// Build label from captures, preferring the most informative available field.
 		label := r.PatternName
 		if method, ok := r.Captures["method"]; ok {
@@ -1959,6 +1963,18 @@ func isAWSClientConstructor(patternName string) bool {
 	return strings.Contains(patternName, "_client_new")
 }
 
+// isRequestResponseShapePattern reports whether a pattern only extracts
+// request/response shape metadata (gin.Context.JSON/ShouldBindJSON and
+// friends) rather than declaring a callable entity. These have no "callee"
+// capture, so isCallRef's edge-resolution path can't handle them either —
+// like isConstantPattern, they must never reach node construction. Without
+// this, the raw @fn capture ("JSON", "ShouldBindJSON") becomes the node
+// label, minting a phantom function keyed at the call site that deadcode
+// then reports as an unreachable zero-caller function.
+func isRequestResponseShapePattern(patternName string) bool {
+	return patternName == "gin_json_response" || patternName == "gin_bind_request"
+}
+
 // looksLikeHTTPEndpoint reports whether v is shaped like an HTTP request target
 // — an absolute path ("/api/x"), a full URL ("https://…"), or an X.1
 // dynamic-template reconstruction ("*/api/x") — as opposed to a bare identifier
@@ -2244,6 +2260,13 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		lower == "namespace_route" ||
 		strings.HasPrefix(lower, "gin_route_group") || strings.HasPrefix(lower, "chi_route_group"):
 		return graph.NodeTypeRouteGroup, graph.EdgeTypeHTTPCall
+
+	// Middleware-registration call sites (`router.Use(mw)`, `app.use(mw)`)
+	// carry router/middleware Meta for LinkGinMiddleware/LinkExpressMiddleware
+	// to consume; they are not callables, so must not fall to the
+	// NodeTypeFunction default below (see NodeTypeMiddlewareUse doc).
+	case lower == "gin_middleware_use" || lower == "express_middleware_use":
+		return graph.NodeTypeMiddlewareUse, graph.EdgeTypeCalls
 
 	// ── HTTP routes / handlers ────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "chi_get") || strings.HasPrefix(lower, "chi_post") ||

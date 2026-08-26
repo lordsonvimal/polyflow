@@ -91,6 +91,16 @@ const (
 	// places. Meta: pattern, plus the group's own capture (resource, ns,
 	// prefix/var_name/receiver). Tier HH.3.
 	NodeTypeRouteGroup NodeType = "route_group"
+
+	// NodeTypeMiddlewareUse marks a middleware-registration call site
+	// (`router.Use(mw)`, `app.use(mw)`) that exists purely to carry
+	// router/middleware Meta for LinkGinMiddleware/LinkExpressMiddleware to
+	// consume — it is not itself a callable. Typed apart from function/method
+	// so it never enters the deadcode scan: nothing "calls" a registration
+	// call site (the framework invokes what it wraps, not this node), so
+	// under NodeTypeFunction it was a zero-caller false positive by
+	// construction (94 hits on one live corpus alone).
+	NodeTypeMiddlewareUse NodeType = "middleware_use"
 )
 
 // MetaIsTest marks a node whose call site sits inside a test-DSL harness

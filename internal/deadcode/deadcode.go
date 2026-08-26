@@ -53,6 +53,14 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 		if _, _, ok := graph.ClassifyEntrypoint(n); ok {
 			continue
 		}
+		// Test functions are invoked by the test runner, not by a static
+		// caller in the graph — every one of them is a zero-caller node by
+		// construction. Flagging them as dead code is never actionable and
+		// drowns out real hits (measured: 70% of a live scan's flagged
+		// functions were _test.go/.spec. files).
+		if graph.IsTestFilePath(n.File) {
+			continue
+		}
 		if hasCaller(idx, n.ID) {
 			continue
 		}

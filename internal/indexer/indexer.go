@@ -1236,6 +1236,17 @@ func CountFilesModifiedSince(root string, excludes []string, since time.Time, ca
 	return count, capped
 }
 
+// isMinifiedAsset reports whether path is a minified/bundled vendor asset
+// (e.g. datastar.min.js) rather than authored source. These ship pre-built,
+// often as a single line of mangled identifiers with no stable call edges
+// back to application code; parsing them as ordinary source floods the graph
+// (and the deadcode scan in particular) with thousands of phantom
+// zero-caller nodes for library internals nobody wrote or calls directly.
+func isMinifiedAsset(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	return strings.HasSuffix(base, ".min.js") || strings.HasSuffix(base, ".min.css")
+}
+
 func walkService(root string, excludes []string) ([]string, map[string]int, error) {
 	var files []string
 	unparsed := map[string]int{}
@@ -1256,6 +1267,9 @@ func walkService(root string, excludes []string) ([]string, map[string]int, erro
 			}
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if isMinifiedAsset(path) {
 			return nil
 		}
 		if parser.ForFile(path) != nil {
