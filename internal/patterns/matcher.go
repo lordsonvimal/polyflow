@@ -1509,7 +1509,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		id   string
 	}
 	funcsByFile := make(map[string][]lineID)
-	nameByFileAndName := make(map[string]string) // "file\x00name" -> nodeID
+	nameByFileAndName := make(map[string]string) // "file\x00name" -> nodeID (last-write-wins)
+	// nameCandidatesByFileAndName keeps every node sharing a (file, name) key,
+	// not just the last one written to nameByFileAndName — two different
+	// enclosing functions each declaring `var el = function(id){...}` and
+	// calling it locally (a common minifier-adjacent idiom: short throwaway
+	// closures reused by name across sibling scopes) previously collapsed to
+	// one node ID, permanently starving the other of its very real, very
+	// local call site. See resolveScopedCallee.
+	nameCandidatesByFileAndName := make(map[string][]lineID)
 	for i := range nodes {
 		n := &nodes[i]
 		// X.0: a test-DSL-demoted comm site (Type=function, is_test=true) is a
@@ -1544,6 +1552,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 				funcsByFile[n.File] = append(funcsByFile[n.File], lineID{n.Line, end, n.ID})
 			}
 			nameByFileAndName[n.File+"\x00"+n.Label] = n.ID
+			key := n.File + "\x00" + n.Label
+			nameCandidatesByFileAndName[key] = append(nameCandidatesByFileAndName[key], lineID{n.Line, end, n.ID})
 		case graph.NodeTypeWorker:
 			// Goroutine bodies are enclosing scopes too: calls inside
 			// go func(){…} must attribute to the worker node, not the outer
@@ -1724,8 +1734,24 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		}
 		callee = stripStringLiteral(callee)
 
-		// Resolve callee to an existing node in the same file.
+		// Resolve callee to an existing node in the same file. When more than
+		// one node shares this (file, name) — two sibling scopes each
+		// declaring their own local `var el = function(id){...}` — the flat
+		// last-write-wins map picks one arbitrarily and starves the other of
+		// its real, local call site forever. Disambiguate by lexical scope:
+		// the candidate declared inside the same enclosing function as this
+		// call site wins over the flat map's pick.
 		calleeID, ok := nameByFileAndName[r.File+"\x00"+callee]
+		if cands := nameCandidatesByFileAndName[r.File+"\x00"+callee]; len(cands) > 1 {
+			if callerScope := enclosingFunc(r.File, r.Line, ""); callerScope != nil {
+				for _, c := range cands {
+					if declScope := enclosingFunc(r.File, c.line, c.id); declScope != nil && declScope.id == callerScope.id {
+						calleeID, ok = c.id, true
+						break
+					}
+				}
+			}
+		}
 		if !ok {
 			if !jsBuiltins[callee] {
 				unresolved = append(unresolved, graph.UnresolvedRef{

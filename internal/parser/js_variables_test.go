@@ -67,6 +67,84 @@ func jsEdge(edges []graph.Edge, typ graph.EdgeType, fromSub, toSub string) *grap
 	return nil
 }
 
+// Two sibling functions each declaring their own `var el = function(id){...}`
+// and calling it locally: the pattern matcher's own node-name index never
+// sees these nodes (no YAML pattern captures a non-arrow, non-top-level `var
+// x = function(){}`), so without emitNestedLocalCallEdge both reads as
+// zero-caller dead code regardless of the obvious local call sites — the
+// real bug hit in the juniper corpus (app-config.js).
+const jsNestedLocalCallFixture = `function outerA() {
+  var el = function (id) {
+    return document.getElementById(id);
+  };
+  el("a");
+}
+
+function outerB() {
+  var el = function (id) {
+    return document.getElementById(id);
+  };
+  el("b");
+}
+`
+
+func TestJSVariables_NestedLocalCallEdgesDoNotCollide(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "app.js")
+	if err := os.WriteFile(file, []byte(jsNestedLocalCallFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := os.ReadFile(file)
+	nodes, edges, unresolved, _ := extractJSVariables(file, "web", "javascript", "javascript", src)
+	_ = unresolved
+
+	var elNodes []graph.Node
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeFunction && n.Label == "el" {
+			elNodes = append(elNodes, n)
+		}
+	}
+	if len(elNodes) != 2 {
+		t.Fatalf("el nodes = %d, want 2 (one per outer scope)", len(elNodes))
+	}
+
+	outerA := jsNode(nodes, graph.NodeTypeFunction, "outerA")
+	outerB := jsNode(nodes, graph.NodeTypeFunction, "outerB")
+	if outerA == nil || outerB == nil {
+		t.Fatalf("missing outerA/outerB nodes")
+	}
+
+	callsFrom := func(fromID string) string {
+		for _, e := range edges {
+			if e.Type == graph.EdgeTypeCalls && e.From == fromID {
+				return e.To
+			}
+		}
+		return ""
+	}
+	toFromA := callsFrom(outerA.ID)
+	toFromB := callsFrom(outerB.ID)
+	if toFromA == "" || toFromB == "" {
+		t.Fatalf("missing calls edge: outerA->%q outerB->%q", toFromA, toFromB)
+	}
+	if toFromA == toFromB {
+		t.Fatalf("outerA and outerB's el(...) calls resolved to the SAME node %q — sibling scopes collided", toFromA)
+	}
+	// Each edge must land on the el declared inside that SAME outer function.
+	var elA, elB *graph.Node
+	for i := range elNodes {
+		if elNodes[i].ID == toFromA {
+			elA = &elNodes[i]
+		}
+		if elNodes[i].ID == toFromB {
+			elB = &elNodes[i]
+		}
+	}
+	if elA == nil || elB == nil {
+		t.Fatalf("calls edges did not land on the two el nodes: got %q and %q", toFromA, toFromB)
+	}
+}
+
 func TestJSVariables_ModuleDeclarations(t *testing.T) {
 	t.Parallel()
 	nodes, _ := parseJSVarFixture(t)
