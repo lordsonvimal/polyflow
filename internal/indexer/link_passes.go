@@ -268,7 +268,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// two passes above explicitly leave alone.
 		{"ruby_receiver_type_calls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			receiverTypeEdges, receiverTypeUnresolved := linker.LinkRubyReceiverTypeCalls(st.allNodes, svcFiles)
+			receiverTypeEdges, receiverTypeUnresolved := linker.LinkRubyReceiverTypeCalls(st.allNodes, st.allEdges, svcFiles)
 			if err := st.writeEdges(receiverTypeEdges); err != nil {
 				return err
 			}
@@ -307,16 +307,31 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// walks — and which is also what keeps it from binding a call to the copy of
 		// lib/dx.rb another service vendors.
 		{"ruby_mixin_methods", scopeSameServiceOnly, func() error {
-			mixinEdges, mixinResolved, mixinCollisions := linker.LinkRubyMixinMethods(st.allNodes, st.allEdges, st.allUnresolved)
+			// DC.6: both LinkRubyMixinMethods (upward: caller's ancestor
+			// defines the name) and LinkRubyOverrideDispatch (downward: caller's
+			// descendant overrides the name) scan the same call_ref snapshot
+			// independently, so a base class calling its own method AND having
+			// subclasses override it gets both edges -- "in addition to, not
+			// instead of". Neither pass may see the other's filtered-down
+			// st.allUnresolved, or whichever runs second would miss call sites
+			// the first one already resolved and removed from the ledger.
+			rawCallRefs := st.allUnresolved
+			mixinEdges, mixinResolved, mixinCollisions := linker.LinkRubyMixinMethods(st.allNodes, st.allEdges, rawCallRefs)
+			overrideEdges, overrideResolved, overrideLedger := linker.LinkRubyOverrideDispatch(st.allNodes, st.allEdges, rawCallRefs)
+
 			filtered := st.allUnresolved[:0]
 			for _, u := range st.allUnresolved {
-				if u.Kind == "call_ref" && mixinResolved[linker.RubyCallRefKey(u.File, u.Line, u.Name)] {
-					continue
+				if u.Kind == "call_ref" {
+					key := linker.RubyCallRefKey(u.File, u.Line, u.Name)
+					if mixinResolved[key] || overrideResolved[key] {
+						continue
+					}
 				}
 				filtered = append(filtered, u)
 			}
 			st.allUnresolved = append(filtered, mixinCollisions...)
-			return st.writeEdges(mixinEdges)
+			st.allUnresolved = append(st.allUnresolved, overrideLedger...)
+			return st.writeEdges(append(mixinEdges, overrideEdges...))
 		}},
 		// RW.2: mint one http_client node per call site of a Level-1-detected
 		// Ruby wrapper (patterns/ruby/wrapper_url_target.yaml), instead of

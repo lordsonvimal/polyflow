@@ -112,7 +112,9 @@ func LinkRubyClassMethodCalls(nodes []graph.Node, serviceFiles map[string][]stri
 		}
 
 		for _, ref := range refs {
-			edges, unresolved := emitClassMethodCall(ix, ref, methodsByClass, seen)
+			// nil: a literal Const.method call never fans out (see
+			// emitClassMethodCall's ox parameter doc).
+			edges, unresolved := emitClassMethodCall(ix, ref, methodsByClass, seen, nil)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -161,6 +163,12 @@ func emitClassMethodCall(
 	ref classMethodCallRef,
 	methodsByClass map[string][]string,
 	seen map[string]bool,
+	// ox is nil from LinkRubyClassMethodCalls: a literal `Const.method` call
+	// names an exact class with no runtime-polymorphism ambiguity to fan out
+	// over. Only LinkRubyReceiverTypeCalls (an inferred, not literal,
+	// receiver) passes a built index, enabling DC.6's downward override
+	// fan-out for that shape — see ruby_override_dispatch.go.
+	ox *rubyOverrideIndex,
 ) ([]graph.Edge, []graph.UnresolvedRef) {
 	targets := ix.resolve(ref.receiver, ref.ns)
 	if len(targets) == 0 {
@@ -213,6 +221,11 @@ func emitClassMethodCall(
 					Type: graph.EdgeTypeCalls, Confidence: conf,
 					Meta: map[string]string{"via": "class_method_call"},
 				})
+			}
+			if ox != nil {
+				fanEdges, fanUnresolved := ox.emit(ref.fromID, classID, ref.mname, ix.svc, ref.file, ref.line, seen)
+				edges = append(edges, fanEdges...)
+				unresolved = append(unresolved, fanUnresolved...)
 			}
 			continue
 		}
