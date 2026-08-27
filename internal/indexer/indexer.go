@@ -235,6 +235,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// B.0: unparsed-file-class ledger — counts per (service, extension).
 	allUnparsedFiles := map[string]map[string]int{}
 
+	// workspaceRoot bounds resolveNode's upward package.json search to this
+	// workspace: a service whose path is a language subdirectory (e.g. a
+	// Rails repo's `js` service pointed at ./app/javascript, with
+	// package.json only at the repo root) otherwise resolves zero npm deps,
+	// silently deactivating every package-version-gated pattern for that
+	// service.
+	workspaceRoot, err := filepath.Abs(".")
+	if err != nil {
+		workspaceRoot = ""
+	}
+
 	var allSvcFiles []serviceFiles
 	for _, svc := range services {
 		absSvcPath, _ := filepath.Abs(svc.Path)
@@ -258,7 +269,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			allUnparsedFiles[svc.Name] = unparsed
 		}
 
-		svcDeps, err := deps.Resolve(absSvcPath)
+		svcDeps, err := deps.Resolve(absSvcPath, workspaceRoot)
 		if err != nil {
 			fmt.Fprintf(logw, "  Warning: dependency resolution for %s: %v\n", svc.Name, err)
 		}

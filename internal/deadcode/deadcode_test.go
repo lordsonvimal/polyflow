@@ -311,6 +311,17 @@ func TestBuild_SubscribesEdgeCountsAsCaller(t *testing.T) {
 	}
 }
 
+func TestBuild_DOMListenEdgeCountsAsCaller(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "fe:click_handler", Type: graph.NodeTypeFunction, Label: "click@.js-approve-ai-gen", Service: "backend", File: "agent-nodes.js", Line: 13})
+	idx.AddEdge(&graph.Edge{ID: "e10", From: "fe:element", To: "fe:click_handler", Type: graph.EdgeTypeDOMListen})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "fe:click_handler", f.ID, "a jQuery/DOM event registration is a real invocation via EdgeTypeDOMListen")
+	}
+}
+
 func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
 	idx.AddNode(&graph.Node{ID: "be:handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "backend", File: "h.go", Line: 1})

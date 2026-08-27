@@ -77,7 +77,7 @@ func TestLinkJSTypeRelations_InstantiateLinksToConstructor(t *testing.T) {
 		jsFuncNode("svc", widget, "constructor", 2),
 		jsFuncNode("svc", consumer, "build", 3),
 	}
-	edges, _ := LinkJSTypeRelations(nodes, map[string][]string{
+	edges, _ := LinkJSTypeRelations(nodes, nil, map[string][]string{
 		"svc": {widget, consumer},
 	})
 
@@ -99,6 +99,58 @@ func TestLinkJSTypeRelations_InstantiateLinksToConstructor(t *testing.T) {
 	}
 	if !gotClassEdge {
 		t.Errorf("missing class-granularity instantiates edge %s; got %+v", wantClassEdge, edges)
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to constructor %s; got %+v", wantMethodEdge, edges)
+	}
+}
+
+// TestLinkJSTypeRelations_SameFileInstantiateLinksToConstructor is the fix
+// for the gap DC.3's cross-file test didn't cover: a same-file `new X()` (or
+// an asset-pipeline-style global class with no import/export at all) never
+// went through walkNew's isImport-gated branch, so extractJSVariables'
+// class-granularity `instantiates` edge was the only edge ever produced and
+// the constructor stayed permanently zero-caller. LinkJSTypeRelations must
+// fill in the missing calls edge for any `instantiates` edge already present
+// in priorEdges, regardless of which pass produced it.
+func TestLinkJSTypeRelations_SameFileInstantiateLinksToConstructor(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSFixture(t, map[string]string{
+		"widget.js": "class Widget {\n" +
+			"  constructor() {\n" +
+			"    this.ready = true;\n" +
+			"  }\n" +
+			"}\n" +
+			"function build() {\n" +
+			"  return new Widget();\n" +
+			"}\n",
+	})
+	widget := paths[0]
+
+	nodes := []graph.Node{
+		jsClassNode("svc", widget, "Widget", 1, 5),
+		jsFuncNode("svc", widget, "constructor", 2),
+		jsFuncNode("svc", widget, "build", 6),
+	}
+	buildID := fmt.Sprintf("svc:%s:function:build:6", widget)
+	classID := fmt.Sprintf("svc:%s:class:Widget:1", widget)
+	priorEdges := []graph.Edge{
+		{ID: fmt.Sprintf("instantiates:%s->%s", buildID, classID), From: buildID, To: classID, Type: graph.EdgeTypeInstantiates},
+	}
+
+	edges, _ := LinkJSTypeRelations(nodes, priorEdges, map[string][]string{
+		"svc": {widget},
+	})
+
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:constructor:2", buildID, widget)
+	var gotMethodEdge bool
+	for _, e := range edges {
+		if e.ID == wantMethodEdge {
+			gotMethodEdge = true
+			if e.Type != graph.EdgeTypeCalls {
+				t.Errorf("constructor edge has type %s; want calls", e.Type)
+			}
+		}
 	}
 	if !gotMethodEdge {
 		t.Errorf("missing method-granularity calls edge to constructor %s; got %+v", wantMethodEdge, edges)
@@ -134,7 +186,7 @@ func TestLinkJSTypeRelations_InstantiateNoConstructorStaysClassOnly(t *testing.T
 		jsClassNode("svc", gadget, "Gadget", 1, 3),
 		jsFuncNode("svc", consumer, "build", 3),
 	}
-	edges, _ := LinkJSTypeRelations(nodes, map[string][]string{
+	edges, _ := LinkJSTypeRelations(nodes, nil, map[string][]string{
 		"svc": {gadget, consumer},
 	})
 

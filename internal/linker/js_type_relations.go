@@ -17,9 +17,12 @@ import (
 // instantiates edges for JavaScript and TypeScript. It re-parses each JS/TS
 // file to find class_heritage (extends/implements) and new_expression nodes,
 // then resolves the referenced class/interface names through the file's import
-// bindings. Same-file edges (confidence=static) are already emitted by
-// extractJSVariables; this pass only adds cross-file inferred edges.
-func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
+// bindings. Same-file inherits/implements/instantiates edges (confidence=
+// static) are already emitted by extractJSVariables; this pass adds
+// cross-file inferred edges, plus the instantiate→constructor `calls` fill-in
+// for every `instantiates` edge already in priorEdges regardless of which
+// pass produced it (see the loop below).
+func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
 	// Build service-level class/interface table: name → nodeID (first wins).
 	classTable := make(map[string]string)
 	for i := range nodes {
@@ -96,6 +99,37 @@ func LinkJSTypeRelations(nodes []graph.Node, serviceFiles map[string][]string) (
 	var allEdges []graph.Edge
 	var allUnresolved []graph.UnresolvedRef
 	seen := make(map[string]bool)
+
+	// Same-file (and global, no-import) instantiate→constructor fill-in:
+	// extractJSVariables' handleNew only emits the class-granularity
+	// `instantiates` edge for a `new X()` whose class it resolved in the same
+	// file, never the method-granularity `calls` edge onto that class's
+	// explicit constructor — the cross-file `walkNew` case below already adds
+	// it, but only when the constructor name came in through a plain import,
+	// so every same-file instantiation (and every asset-pipeline-style global
+	// class with no import/export at all, e.g. `var X = class X {...}`) left
+	// its constructor with zero inbound `calls` edges regardless of how many
+	// times the class was actually instantiated. Walking priorEdges instead
+	// of re-parsing catches both shapes uniformly.
+	for _, e := range priorEdges {
+		if e.Type != graph.EdgeTypeInstantiates {
+			continue
+		}
+		ctorID, ok := constructorByClass[e.To]
+		if !ok {
+			continue
+		}
+		ceid := fmt.Sprintf("calls:%s->%s", e.From, ctorID)
+		if seen[ceid] {
+			continue
+		}
+		seen[ceid] = true
+		allEdges = append(allEdges, graph.Edge{
+			ID: ceid, From: e.From, To: ctorID,
+			Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
+			Meta: map[string]string{"via": "instantiate_constructor"},
+		})
+	}
 
 	for svcName, files := range serviceFiles {
 		// Build a per-service class nodeID-by-label (same as classTable but

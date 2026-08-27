@@ -150,6 +150,16 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 // genuine invocation once resolved to a handler — confirmed live on the
 // juniper graph (function/method targets, not just the unresolved
 // channel/worker proxy nodes the same edge type can also terminate on).
+//
+// EdgeTypeDOMListen (a jQuery/vanilla-JS event registration — `$(el).on(...)`,
+// `el.addEventListener(...)`) is a genuine invocation the same way a direct
+// call is: the browser's event loop calls the handler, not a literal call
+// site. The indexer's own root classifier (classifyRoot) already treats any
+// non-Contains inbound edge, dom_listen included, as proof a node is reached
+// — omitting it here just meant deadcode and root classification disagreed,
+// flagging every jQuery/DOM handler as dead code (confirmed live: 92 of a
+// orion scan's flagged functions were dom_listen-only handler nodes like
+// `click@.js-approve-ai-gen`, none of them actually unreached).
 var invokingEdgeTypes = map[graph.EdgeType]bool{
 	graph.EdgeTypeCalls:          true,
 	graph.EdgeTypeSpawns:         true,
@@ -159,6 +169,7 @@ var invokingEdgeTypes = map[graph.EdgeType]bool{
 	graph.EdgeTypeSidekiqEnqueue: true,
 	graph.EdgeTypeSidekiqPerform: true,
 	graph.EdgeTypeSubscribes:     true,
+	graph.EdgeTypeDOMListen:      true,
 }
 
 // hasCaller reports whether n has at least one inbound invoking edge.

@@ -26,7 +26,7 @@ pytest==7.4.0
 black==23.7.0
 `)
 
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	flask := find(ds, "flask")
@@ -90,7 +90,7 @@ category = "main"
 optional = false
 `)
 
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	flask := find(ds, "flask")
@@ -123,7 +123,7 @@ version = "8.0.0"
 groups = ["dev"]
 `)
 
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	flask := find(ds, "flask")
@@ -164,7 +164,7 @@ dependencies = ["flask>=2.0"]
 pytest = ">=7.0"
 `)
 
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	flask := find(ds, "flask")
@@ -198,7 +198,7 @@ name = "myapp"
 black = ">=24.0"
 `)
 
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	black := find(ds, "black")
@@ -213,7 +213,7 @@ SQLAlchemy==2.0.0
 Pillow==10.0.0
 typing_extensions==4.8.0
 `)
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	assert.NotNil(t, find(ds, "sqlalchemy"), "SQLAlchemy → sqlalchemy")
@@ -222,7 +222,7 @@ typing_extensions==4.8.0
 }
 
 func TestResolvePython_EmptyDir(t *testing.T) {
-	ds, err := Resolve(t.TempDir())
+	ds, err := Resolve(t.TempDir(), "")
 	require.NoError(t, err)
 	for _, d := range ds {
 		assert.NotEqual(t, EcosystemPyPI, d.Ecosystem, "no Python manifests → no pypi deps")

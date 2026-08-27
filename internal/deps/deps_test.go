@@ -36,7 +36,7 @@ require (
 
 require github.com/rabbitmq/amqp091-go v1.9.0 // indirect
 `)
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	aws := find(ds, "github.com/aws/aws-sdk-go")
@@ -63,7 +63,7 @@ func TestResolveNode_PackageLockV3(t *testing.T) {
     "node_modules/jquery": {"version": "3.7.1", "dev": true}
   }
 }`)
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	react := find(ds, "react")
@@ -92,7 +92,7 @@ react@^17.0.0, react@^17.0.2:
 "@nordic/theme@portal:../synergy/packages/theme":
   version "0.0.0-use.local"
 `)
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	react := find(ds, "react")
@@ -107,11 +107,43 @@ react@^17.0.0, react@^17.0.2:
 func TestResolveNode_NoLockfile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "package.json", `{"dependencies": {"axios": "^1.6.0"}}`)
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 	axios := find(ds, "axios")
 	require.NotNil(t, axios)
 	assert.Equal(t, "1.6.0", axios.Version, "range stripped to base version as best effort")
+}
+
+// TestResolveNode_WalksUpToRootManifest covers a monorepo service split by
+// language into a subdirectory (a Rails repo's `js` service pointed at
+// ./app/javascript, package.json only at the repo root): a service dir with
+// no manifest of its own must still resolve the ancestor manifest, or every
+// package-version-gated pattern for that service silently never activates.
+func TestResolveNode_WalksUpToRootManifest(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "package.json", `{"dependencies": {"react": "19.2.5"}}`)
+	svcDir := filepath.Join(root, "app", "javascript")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+
+	ds, err := Resolve(svcDir, root)
+	require.NoError(t, err)
+	react := find(ds, "react")
+	require.NotNil(t, react, "should resolve the root package.json when the service dir has none")
+	assert.Equal(t, "19.2.5", react.Version)
+}
+
+// TestResolveNode_NoRootDisablesWalk pins the opt-out: an empty root must
+// preserve the pre-existing "dir must hold its own manifest" behavior every
+// other caller (e2e tests, single-service CLI invocations) relies on.
+func TestResolveNode_NoRootDisablesWalk(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "package.json", `{"dependencies": {"react": "19.2.5"}}`)
+	svcDir := filepath.Join(root, "app", "javascript")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+
+	ds, err := Resolve(svcDir, "")
+	require.NoError(t, err)
+	assert.Nil(t, find(ds, "react"), "empty root must not walk up at all")
 }
 
 func TestResolveGemfileLock(t *testing.T) {
@@ -136,7 +168,7 @@ DEPENDENCIES
 BUNDLED WITH
    2.5.9
 `)
-	ds, err := Resolve(dir)
+	ds, err := Resolve(dir, "")
 	require.NoError(t, err)
 
 	s3 := find(ds, "aws-sdk-s3")
@@ -151,7 +183,7 @@ BUNDLED WITH
 }
 
 func TestResolve_EmptyDir(t *testing.T) {
-	ds, err := Resolve(t.TempDir())
+	ds, err := Resolve(t.TempDir(), "")
 	require.NoError(t, err)
 	assert.Empty(t, ds)
 }

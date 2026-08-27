@@ -11,6 +11,14 @@
 # version_range keeps this file inactive on anything pinned earlier. Verified
 # against orion-atlas's installed react (^19.2.5, package.json) — every name
 # below is still current React API at that version, none have been removed.
+#
+# componentWillMount/componentWillReceiveProps/componentWillUpdate (and their
+# UNSAFE_-prefixed renamed forms, still valid React API at every version this
+# file is gated to, just deprecated) are the same reconciler-invoked shape as
+# the hooks above — a live orion scan flagged UNSAFE_componentWillMount as
+# dead code because it was simply missing from this list, not because it was
+# unreachable any differently than componentDidMount is. getChildContext is
+# the legacy context API's equivalent hook, same invocation shape.
 language: javascript
 version: "1"
 package: react
@@ -24,4 +32,11 @@ reflect_dispatched_methods:
   - getDerivedStateFromError
   - shouldComponentUpdate
   - getSnapshotBeforeUpdate
+  - componentWillMount
+  - UNSAFE_componentWillMount
+  - componentWillReceiveProps
+  - UNSAFE_componentWillReceiveProps
+  - componentWillUpdate
+  - UNSAFE_componentWillUpdate
+  - getChildContext
 patterns: []
