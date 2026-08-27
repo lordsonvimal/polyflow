@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/stretchr/testify/assert"
 )
 
 const rubyVarFixture = `MAX_RETRIES = 3
@@ -224,6 +225,84 @@ end
 	}
 	if gotRender {
 		t.Errorf("framework builtin `render` must not be ledgered; unresolved: %+v", unresolved)
+	}
+}
+
+// TestRubyVariables_ERBViewBareCallLedgered is DC.12: a `.erb` view runs with
+// `self` bound to the view instance mixing in every helper module, but has no
+// enclosing `def` for the pre-DC.12 methodID=="" guard to let through. The
+// call itself can't resolve same-file (views define no real methods) — only
+// the ledger entry is this pass's job; LinkRubyMixinMethods resolves it
+// cross-file against the service's helper modules.
+func TestRubyVariables_ERBViewBareCallLedgered(t *testing.T) {
+	t.Parallel()
+	src := `
+  unique_names(workflows)
+`
+	_, _, unresolved := extractRubyVariables("app/views/task_lists/_filters.html.erb", "app", []byte(src))
+
+	var got bool
+	for _, u := range unresolved {
+		if u.Kind == "call_ref" && u.Name == "unique_names" {
+			got = true
+		}
+	}
+	assert.True(t, got, "expected unique_names to be ledgered as call_ref from ERB view top-level scope; unresolved: %+v", unresolved)
+}
+
+// TestRubyVariables_ERBViewSelfCallLedgered covers the other DC.12 shape: an
+// explicit `self.` receiver call, same as a bare call for lookup purposes.
+func TestRubyVariables_ERBViewSelfCallLedgered(t *testing.T) {
+	t.Parallel()
+	src := `
+  self.current_organization
+`
+	_, _, unresolved := extractRubyVariables("app/views/layouts/_nav.html.erb", "app", []byte(src))
+
+	var got bool
+	for _, u := range unresolved {
+		if u.Kind == "call_ref" && u.Name == "current_organization" {
+			got = true
+		}
+	}
+	assert.True(t, got, "expected self.current_organization to be ledgered from ERB view scope; unresolved: %+v", unresolved)
+}
+
+// TestRubyVariables_ERBViewLocalNotMistakenForCall keeps Tier BC's local-vs-call
+// discipline: a locally-scriptletted variable used bare must never be
+// ledgered as a call, matching the identifier-case rule already applied
+// inside method bodies.
+func TestRubyVariables_ERBViewLocalNotMistakenForCall(t *testing.T) {
+	t.Parallel()
+	src := `
+  workflows = @study.workflows
+  workflows
+`
+	_, _, unresolved := extractRubyVariables("app/views/studies/_show.html.erb", "app", []byte(src))
+
+	for _, u := range unresolved {
+		if u.Name == "workflows" {
+			t.Errorf("a locally-assigned view variable must never be ledgered as a call: %+v", u)
+		}
+	}
+}
+
+// TestRubyVariables_TopLevelRubyScriptBareCallNotLedgered pins DC.12's scope:
+// only `.erb` view top-level scope is relaxed. A plain `.rb` top-level DSL
+// call (rake task, migration, initializer) keeps its pre-DC.12 zero-noise
+// behavior — ledgering every such call would flood the unresolved-ref ledger
+// with framework/gem DSL methods no pass can ever resolve.
+func TestRubyVariables_TopLevelRubyScriptBareCallNotLedgered(t *testing.T) {
+	t.Parallel()
+	src := `
+  add_indexes(:users)
+`
+	_, _, unresolved := extractRubyVariables("db/add_index_in_database.rb", "app", []byte(src))
+
+	for _, u := range unresolved {
+		if u.Name == "add_indexes" {
+			t.Errorf("top-level .rb call sites are out of DC.12 scope and must not be ledgered: %+v", u)
+		}
 	}
 }
 
