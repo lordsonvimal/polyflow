@@ -322,6 +322,29 @@ func TestContextTool_CarriesTrust(t *testing.T) {
 	assert.InDelta(t, 1.0, out.Trust.Recall, 1e-9)
 }
 
+// TestContextTool_DefaultBudgetIsCompact mirrors
+// TestImpactTool_DefaultBudgetIsCompact: context was the one MCP tool still
+// falling through to a raw unbounded ApplyBudget(0) (== unlimited) when a
+// caller omitted max_tokens, unlike impact/trace/investigate which all
+// default to a compact budget already — an agent's plain `context` call with
+// no max_tokens set returned full per-node detail, source snippets and all,
+// for however large the traversal happened to be.
+func TestContextTool_DefaultBudgetIsCompact(t *testing.T) {
+	store, idx := fixture()
+	cs := connect(t, store, idx)
+
+	var out struct {
+		Upstream []map[string]any `json:"upstream"`
+		Budget   map[string]any   `json:"budget"`
+	}
+	callJSON(t, cs, "context", map[string]any{"target": "getUser"}, &out)
+
+	assert.NotEmpty(t, out.Upstream, "small neighborhood fits the default budget: detail kept")
+	require.NotNil(t, out.Budget, "default run must stamp a budget, not run unlimited")
+	assert.Equal(t, "detail", out.Budget["level"])
+	assert.Equal(t, float64(defaultContextBudget), out.Budget["max_tokens"])
+}
+
 func TestContextTool_CarriesEpistemic(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
