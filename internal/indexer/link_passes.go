@@ -316,8 +316,26 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			// st.allUnresolved, or whichever runs second would miss call sites
 			// the first one already resolved and removed from the ledger.
 			rawCallRefs := st.allUnresolved
-			mixinEdges, mixinResolved, mixinCollisions := linker.LinkRubyMixinMethods(st.allNodes, st.allEdges, rawCallRefs)
+			mixinEdges, mixinResolved, mixinCollisions, mixinNodes := linker.LinkRubyMixinMethods(st.allNodes, st.allEdges, rawCallRefs)
 			overrideEdges, overrideResolved, overrideLedger := linker.LinkRubyOverrideDispatch(st.allNodes, st.allEdges, rawCallRefs)
+
+			// DC.12: a view_helper edge's From is a `.erb` view's NodeTypeFile
+			// node, minted here on demand — "ensure_scanned_files" mints the
+			// same node for every file, but runs long after this pass, too
+			// late for this pass's own edge write to satisfy the FK
+			// constraint on first insert.
+			for i := range mixinNodes {
+				n := mixinNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			if len(mixinNodes) > 0 {
+				if err := st.bw.Flush(st.ctx); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, mixinNodes...)
+			}
 
 			filtered := st.allUnresolved[:0]
 			for _, u := range st.allUnresolved {

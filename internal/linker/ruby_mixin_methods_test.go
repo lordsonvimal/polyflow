@@ -93,7 +93,7 @@ func TestMixinMethods_ResolvesThroughInclude(t *testing.T) {
 		callRef("orion", "/repo/app/controllers/files_controller.rb", 12, "logger_context"),
 	}
 
-	got, resolved, ledger := LinkRubyMixinMethods(nodes, edges, refs)
+	got, resolved, ledger, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	require.Len(t, got, 1)
 	assert.Equal(t, []string{
 		"orion:/repo/app/controllers/files_controller.rb:function:show:10 -> " +
@@ -108,6 +108,57 @@ func TestMixinMethods_ResolvesThroughInclude(t *testing.T) {
 	// The ledger entry must be suppressed, or the fix is invisible to the agent
 	// reading the "verify these N references" footer.
 	assert.True(t, resolved[RubyCallRefKey("/repo/app/controllers/files_controller.rb", 12, "logger_context")])
+}
+
+// TestMixinMethods_ViewResolvesThroughHelperModule is DC.12: a `.erb` view has
+// no enclosing class/inherits edge for ix.lookup's ancestor walk to use, but
+// Rails auto-includes every app/helpers/*.rb module into every view — a flat
+// name lookup against helperMethods, not the ancestor walk.
+func TestMixinMethods_ViewResolvesThroughHelperModule(t *testing.T) {
+	t.Parallel()
+	svc := "orion"
+	helperFile := "app/helpers/task_lists_helper.rb"
+	viewFile := "app/views/task_lists/_filters.html.erb"
+
+	helperMod := mixinClass(svc, helperFile, "TaskListsHelper", 1, 20)
+	uniqueNames := mixinMethod(svc, helperFile, "TaskListsHelper", "unique_names", 5, 8)
+
+	nodes := []graph.Node{helperMod, uniqueNames}
+	refs := []graph.UnresolvedRef{
+		callRef(svc, viewFile, 12, "unique_names"),
+	}
+
+	got, resolved, ledger, _ := LinkRubyMixinMethods(nodes, nil, refs)
+	require.Len(t, got, 1)
+	assert.Equal(t, []string{
+		svc + ":" + viewFile + ":" + string(graph.NodeTypeFile) + " -> " + uniqueNames.ID,
+	}, edgeTargets(got))
+	assert.Equal(t, graph.EdgeTypeCalls, got[0].Type)
+	assert.Equal(t, "view_helper", got[0].Meta["via"])
+	assert.Empty(t, ledger)
+	assert.True(t, resolved[RubyCallRefKey(viewFile, 12, "unique_names")])
+}
+
+// TestMixinMethods_ViewHelperUnrelatedNameStaysUnresolved pins the negative:
+// a name no helper module in the service declares must not resolve to
+// anything (e.g. a framework/ActionView builtin the parser already excludes
+// from the ledger, or a genuine typo).
+func TestMixinMethods_ViewHelperUnrelatedNameStaysUnresolved(t *testing.T) {
+	t.Parallel()
+	svc := "orion"
+	helperFile := "app/helpers/task_lists_helper.rb"
+	viewFile := "app/views/task_lists/_filters.html.erb"
+
+	nodes := []graph.Node{
+		mixinClass(svc, helperFile, "TaskListsHelper", 1, 20),
+		mixinMethod(svc, helperFile, "TaskListsHelper", "unique_names", 5, 8),
+	}
+	refs := []graph.UnresolvedRef{
+		callRef(svc, viewFile, 12, "some_undefined_helper"),
+	}
+
+	got, _, _, _ := LinkRubyMixinMethods(nodes, nil, refs)
+	assert.Empty(t, got)
 }
 
 // TestMixinMethods_NeverCrossesAServiceBoundary is the vendored-copy guard, and
@@ -132,7 +183,7 @@ func TestMixinMethods_NeverCrossesAServiceBoundary(t *testing.T) {
 		callRef("orion", "/repo/app/controllers/files_controller.rb", 12, "logger_context"),
 	}
 
-	got, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	got, _, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	require.Len(t, got, 1, "a call site must bind to exactly its own service's copy")
 
 	svcOf := map[string]string{}
@@ -168,7 +219,7 @@ func TestMixinMethods_ResolvesThroughTheSuperclassChain(t *testing.T) {
 		callRef(svc, "/repo/app/controllers/studies_controller.rb", 7, "logger_context"),
 	}
 
-	got, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	got, _, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	require.Len(t, got, 1)
 	assert.Equal(t, logger.ID, got[0].To)
 	assert.Equal(t, "3", got[0].Meta["depth"])
@@ -194,7 +245,7 @@ func TestMixinMethods_NearestDefinitionWins(t *testing.T) {
 	}
 	refs := []graph.UnresolvedRef{callRef(svc, "/repo/app/controllers/x_controller.rb", 6, "log_it")}
 
-	got, _, ledger := LinkRubyMixinMethods(nodes, edges, refs)
+	got, _, ledger, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	require.Len(t, got, 1)
 	assert.Equal(t, nearM.ID, got[0].To)
 	assert.Empty(t, ledger, "one winner is not a collision")
@@ -220,7 +271,7 @@ func TestMixinMethods_TiedDefinitionsFanOut(t *testing.T) {
 	}
 	refs := []graph.UnresolvedRef{callRef(svc, "/repo/app/x.rb", 6, "log_it")}
 
-	got, _, ledger := LinkRubyMixinMethods(nodes, edges, refs)
+	got, _, ledger, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	require.Len(t, got, 2)
 	for _, e := range got {
 		assert.Equal(t, "true", e.Meta["ambiguous"])
@@ -240,7 +291,7 @@ func TestMixinMethods_UnrelatedClassStaysUnresolved(t *testing.T) {
 	nodes = append(nodes, other, otherM)
 
 	refs := []graph.UnresolvedRef{callRef("orion", "/repo/app/models/thing.rb", 6, "logger_context")}
-	got, resolved, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	got, resolved, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	assert.Empty(t, got)
 	assert.Empty(t, resolved)
 }
@@ -254,7 +305,7 @@ func TestMixinMethods_ClassBodyCallIsAttributedToTheClass(t *testing.T) {
 	refs := []graph.UnresolvedRef{
 		callRef("orion", "/repo/app/controllers/files_controller.rb", 5, "logger_context"),
 	}
-	got, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	got, _, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	require.Len(t, got, 1)
 	assert.Equal(t, "orion:/repo/app/controllers/files_controller.rb:class:FilesController", got[0].From)
 }
@@ -277,7 +328,7 @@ func TestMixinMethods_CyclicAncestorsTerminate(t *testing.T) {
 	}
 	refs := []graph.UnresolvedRef{callRef(svc, "/repo/app/x.rb", 6, "nope")}
 
-	got, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	got, _, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	assert.Empty(t, got)
 }
 
@@ -291,9 +342,9 @@ func TestMixinMethods_Deterministic(t *testing.T) {
 		callRef("orion", "/repo/app/controllers/files_controller.rb", 12, "logger_context"),
 	}
 
-	first, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	first, _, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	for i := 0; i < 20; i++ {
-		got, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+		got, _, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 		require.Equal(t, edgeIDs(first), edgeIDs(got))
 	}
 }

@@ -137,6 +137,15 @@ func isRubyFile(file string) bool {
 	return ext == ".rb" || ext == ".rake"
 }
 
+// isERBFile reports a Rails view. Kept distinct from isRubyFile — that gate
+// also covers passes that os.ReadFile + rubysitter.ParseCtx the file
+// directly, which would produce garbage on ERB's mixed markup/Ruby content;
+// only passes that consume already-extracted virtualRuby content (or, like
+// LinkRubyMixinMethods, already-emitted UnresolvedRef entries) can accept it.
+func isERBFile(file string) bool {
+	return strings.ToLower(filepath.Ext(file)) == ".erb"
+}
+
 // ---------------------------------------------------------------------------
 // scan
 // ---------------------------------------------------------------------------

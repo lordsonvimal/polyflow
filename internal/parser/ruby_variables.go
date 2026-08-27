@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -29,6 +30,7 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 
 	ex := &rubyExtractor{
 		file: file, service: service, src: src,
+		isView:             strings.EqualFold(filepath.Ext(file), ".erb"),
 		ivarDecl:           map[string]int{},
 		classTable:         map[string]string{},
 		nodeSeen:           map[string]bool{},
@@ -55,6 +57,19 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 type rubyExtractor struct {
 	file, service string
 	src           []byte
+
+	// isView marks a `.erb` file's virtualRuby content (see erb.go): a view
+	// runs with `self` bound to the view instance, mixing in every helper
+	// module exactly like a class body would, but tree-sitter never sees an
+	// enclosing `class`/`def` for that scope. DC.12 relaxes the two
+	// methodID=="" bare-call guards below specifically for this case so a
+	// view's bare/self call sites get ledgered as call_ref (for
+	// LinkRubyMixinMethods/LinkRubyOverrideDispatch to resolve cross-file
+	// against the service's helper modules) instead of silently vanishing —
+	// scoped to .erb only so plain top-level Ruby script/DSL calls (rake
+	// tasks, migrations, initializers) keep their existing zero-noise
+	// behavior.
+	isView bool
 
 	ivarDecl   map[string]int    // "@name" (class-qualified) → first-seen line
 	classTable map[string]string // class/module name → nodeID (same-file)
@@ -325,6 +340,19 @@ func isRubyBareCallExcluded(node *sitter.Node) bool {
 // this pass's conservative scope tracking missed), unlike an unresolved
 // case "call", which the parser structurally knows is a real call.
 func (ex *rubyExtractor) resolveBareCall(mname, lookupClass, class, methodID string, srcLine int, ledgerUnresolved bool) {
+	if ex.isView {
+		// A view has no enclosing method/class node to attribute a same-file
+		// edge from (methodID is "" by construction), and its methods live in
+		// separate helper-module files this single-file pass cannot see.
+		// Ledger only — LinkRubyMixinMethods resolves it cross-file.
+		if ledgerUnresolved && !isRubyBuiltinCall(mname, ex.file) {
+			ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+				Service: ex.service, File: ex.file,
+				Line: srcLine, Name: mname, Kind: "call_ref",
+			})
+		}
+		return
+	}
 	targetID := ""
 	if lookupClass != "" {
 		targetID = ex.methodsByClassName[lookupClass+"\x00"+mname]
@@ -509,7 +537,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			// static type inference Ruby's dynamism rules out, so it is left
 			// alone (rule 9: only attribute a call when the target is
 			// unambiguous).
-			if methodID == "" {
+			if methodID == "" && !ex.isView {
 				break
 			}
 			lookupClass := class
@@ -546,7 +574,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 		// from within a method body, exactly like case "call" above; never
 		// attribute a bare identifier as a call to a name preCollectRubyLocals
 		// found assigned/bound anywhere in this method.
-		if methodID == "" || isRubyBareCallExcluded(node) {
+		if (methodID == "" && !ex.isView) || isRubyBareCallExcluded(node) {
 			break
 		}
 		mname := node.Content(ex.src)

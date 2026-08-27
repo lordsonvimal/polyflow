@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -59,19 +60,24 @@ func LinkRubyMixinMethods(
 	nodes []graph.Node,
 	edges []graph.Edge,
 	allUnresolved []graph.UnresolvedRef,
-) (newEdges []graph.Edge, resolved map[string]bool, unresolvedOut []graph.UnresolvedRef) {
+) (newEdges []graph.Edge, resolved map[string]bool, unresolvedOut []graph.UnresolvedRef, newNodes []graph.Node) {
 	resolved = make(map[string]bool)
 
 	ix := newRubyMixinIndex(nodes, edges)
-	if len(ix.ancestors) == 0 {
-		return nil, resolved, nil
+	if len(ix.ancestors) == 0 && len(ix.helperMethods) == 0 {
+		return nil, resolved, nil, nil
 	}
 
 	// Ledger order is input order, but the refs themselves are sorted so the
 	// edge list does not depend on how the parse phase interleaved files.
 	refs := make([]graph.UnresolvedRef, 0, 64)
 	for _, u := range allUnresolved {
-		if u.Kind == "call_ref" && isRubyFile(u.File) {
+		// DC.12: a `.erb` view's virtualRuby content (extractRubyVariables)
+		// now ledgers its own bare/self call sites as call_ref the same way a
+		// `.rb` method body does — isRubyFile itself stays .rb/.rake-only
+		// since it also gates raw-source re-parse passes that cannot parse
+		// ERB markup, but this filter only reads already-emitted refs.
+		if u.Kind == "call_ref" && (isRubyFile(u.File) || isERBFile(u.File)) {
 			refs = append(refs, u)
 		}
 	}
@@ -95,7 +101,12 @@ func LinkRubyMixinMethods(
 		unresolvedOut = append(unresolvedOut, u...)
 		resolved[RubyCallRefKey(ref.File, ref.Line, ref.Name)] = true
 	}
-	return newEdges, resolved, unresolvedOut
+	// DC.12: a view_helper edge's From is a view's NodeTypeFile node, minted
+	// on demand by ix.fileIdx (see emitViewHelperCall) rather than assumed —
+	// "ensure_scanned_files" mints that same node for every file, but runs
+	// long after this pass, too late for this pass's own edge write.
+	newEdges = append(newEdges, ix.fileIdx.mintedEdges...)
+	return newEdges, resolved, unresolvedOut, ix.fileIdx.minted
 }
 
 // RubyCallRefKey identifies one call site. Keyed by line as well as name,
@@ -120,20 +131,33 @@ type scopeSpan struct {
 }
 
 type rubyMixinIndex struct {
-	classSpans map[string][]scopeSpan // file → class bodies, innermost-last
-	funcSpans  map[string][]scopeSpan // file → method bodies, innermost-last
-	ancestors  map[string][]string    // classID → direct ancestor classIDs, sorted
-	methods    map[string][]string    // classID + "\x00" + name → method node IDs
-	serviceOf  map[string]string      // node ID → service
+	classSpans    map[string][]scopeSpan       // file → class bodies, innermost-last
+	funcSpans     map[string][]scopeSpan       // file → method bodies, innermost-last
+	ancestors     map[string][]string          // classID → direct ancestor classIDs, sorted
+	methods       map[string][]string          // classID + "\x00" + name → method node IDs
+	serviceOf     map[string]string            // node ID → service
+	helperMethods map[string]map[string][]string // service → method name → method node IDs, from every app/helpers/*.rb module
+	fileIdx       *fileNodeIndex               // mints the NodeTypeFile node a view_helper edge's From needs
+}
+
+// isRubyHelperFile matches Rails' `app/helpers/**/*.rb` convention: every
+// module declared there is auto-included into every view's `self` (see
+// ActionView::Helpers), independent of any explicit `include`/inherits edge —
+// which is why this can't reuse the `ancestors` walk built from `inherits`
+// edges the same way a class body's mixins can.
+func isRubyHelperFile(file string) bool {
+	return isRubyFile(file) && (strings.Contains(file, "/helpers/") || strings.HasPrefix(file, "helpers/"))
 }
 
 func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 	ix := &rubyMixinIndex{
-		classSpans: map[string][]scopeSpan{},
-		funcSpans:  map[string][]scopeSpan{},
-		ancestors:  map[string][]string{},
-		methods:    map[string][]string{},
-		serviceOf:  map[string]string{},
+		classSpans:    map[string][]scopeSpan{},
+		funcSpans:     map[string][]scopeSpan{},
+		ancestors:     map[string][]string{},
+		methods:       map[string][]string{},
+		serviceOf:     map[string]string{},
+		helperMethods: map[string]map[string][]string{},
+		fileIdx:       newFileNodeIndex(nodes),
 	}
 
 	// classByFileLabel resolves a function node's Meta["class"] to the class
@@ -177,6 +201,15 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 			}
 			key := cls.id + "\x00" + n.Label
 			ix.methods[key] = append(ix.methods[key], n.ID)
+		}
+
+		if isRubyHelperFile(n.File) {
+			byName := ix.helperMethods[n.Service]
+			if byName == nil {
+				byName = map[string][]string{}
+				ix.helperMethods[n.Service] = byName
+			}
+			byName[n.Label] = append(byName[n.Label], n.ID)
 		}
 	}
 
@@ -263,6 +296,9 @@ const rubyMixinMaxDepth = 12
 func (ix *rubyMixinIndex) emit(ref graph.UnresolvedRef, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
 	cls, ok := innermost(ix.classSpans[ref.File], ref.Line)
 	if !ok {
+		if isERBFile(ref.File) {
+			return ix.emitViewHelperCall(ref, seen)
+		}
 		return nil, nil
 	}
 
@@ -294,6 +330,53 @@ func (ix *rubyMixinIndex) emit(ref graph.UnresolvedRef, seen map[string]bool) ([
 			"via":   "mixin_method",
 			"depth": strconv.Itoa(depth),
 		}
+		if len(targets) > 1 {
+			meta["ambiguous"] = "true"
+		}
+		edges = append(edges, graph.Edge{
+			ID:         id,
+			From:       fromID,
+			To:         to,
+			Type:       graph.EdgeTypeCalls,
+			Confidence: graph.ConfidenceInferred,
+			Meta:       meta,
+		})
+	}
+	if len(edges) > 0 && len(targets) > 1 {
+		unresolved = append(unresolved, graph.UnresolvedRef{
+			Service: ref.Service, File: ref.File, Line: ref.Line,
+			Name: ref.Name, Kind: "mixin_method_collision",
+		})
+	}
+	return edges, unresolved
+}
+
+// emitViewHelperCall resolves a call_ref ledgered from a `.erb` view's
+// top-level scope (DC.12): a view has no enclosing class, so ix.lookup's
+// ancestor walk does not apply — instead every `app/helpers/*.rb` module in
+// the service is implicitly mixed into every view (ActionView::Helpers), so
+// resolution is a flat name lookup against helperMethods rather than a
+// depth-ranked ancestor walk. The view itself has no method/class node to
+// attribute the call from; the deterministic NodeTypeFile ID
+// (file_nodes.go's `ensure` convention) stands in, since EnsureAllScannedFiles
+// mints that same node for every scanned file regardless of this pass's own
+// ordering in the link pipeline.
+func (ix *rubyMixinIndex) emitViewHelperCall(ref graph.UnresolvedRef, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+	targets := ix.helperMethods[ref.Service][ref.Name]
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	fromID := ix.fileIdx.ensure(ref.Service, ref.File)
+
+	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
+	for _, to := range sortedUnique(append([]string{}, targets...)) {
+		id := fmt.Sprintf("calls:%s->%s", fromID, to)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		meta := map[string]string{"via": "view_helper"}
 		if len(targets) > 1 {
 			meta["ambiguous"] = "true"
 		}
