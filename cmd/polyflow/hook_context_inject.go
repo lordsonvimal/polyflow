@@ -56,7 +56,15 @@ func init() {
 }
 
 const hookSeenDir = "/tmp/polyflow-context-injected"
-const hookMaxContextChars = 600
+
+// hookMaxContextChars caps each auto-injected block. This is unsolicited
+// context appended to a plain Read/grep/cat/Edit — no agent asked for it on
+// that call — so it stays well under an explicit tool call's own budget
+// (defaultContextBudget's ~2000 tokens): a full caller/callee neighborhood
+// is diagnostic value the agent can always fetch on purpose via context/
+// investigate, but every unsolicited call pays this cost whether or not the
+// agent ends up using it.
+const hookMaxContextChars = 350
 const hookCallsEdge = "calls"
 
 // hookToolHint is appended to every injected block so an agent reading it

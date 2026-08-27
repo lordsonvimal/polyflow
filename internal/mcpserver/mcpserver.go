@@ -425,13 +425,29 @@ const defaultImpactBudget = impact.DefaultBudget
 // explicit request up to that point.
 const multiRootBudgetCeiling = 15000
 
+// defaultContextBudget mirrors defaultImpactBudget's reasoning for the
+// context tool: an unset max_tokens must still mean "compact default", not
+// unlimited — context was the one MCP tool still falling through to a raw
+// unbounded ApplyBudget(0) when a caller left max_tokens unset, silently
+// returning full per-node detail (source snippets included) for however
+// large the traversal happened to be, unlike trace/impact/investigate which
+// all default to a bounded budget already.
+const defaultContextBudget = 2000
+
 // effectiveBudget maps an MCP max_tokens input to an impact.ApplyBudget budget.
 // 0 (unset) → the compact default; a negative value → 0 (unlimited, opt-in);
 // any positive value is honoured as-is.
 func effectiveBudget(maxTokens int) int {
+	return effectiveBudgetWithDefault(maxTokens, defaultImpactBudget)
+}
+
+// effectiveBudgetWithDefault is effectiveBudget generalized over the
+// per-tool default (impact/trace share defaultImpactBudget; context has its
+// own, smaller defaultContextBudget).
+func effectiveBudgetWithDefault(maxTokens, def int) int {
 	switch {
 	case maxTokens == 0:
-		return defaultImpactBudget
+		return def
 	case maxTokens < 0:
 		return 0
 	}
@@ -595,7 +611,7 @@ type contextInput struct {
 	Limit           int      `json:"limit,omitempty" jsonschema:"with files: max related files returned (default 20, -1 = unlimited)"`
 	Task            string   `json:"task,omitempty" jsonschema:"task type: impact (callers only), generate (callees only), debug or refactor (both; default debug)"`
 	Depth           int      `json:"depth,omitempty" jsonschema:"max traversal depth (node mode default 5, files mode default 2, -1 = unlimited)"`
-	MaxTokens       int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = unlimited); over budget, per-node detail rolls up per file"`
+	MaxTokens       int      `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer (0 = default ~2000; pass a negative value for unlimited); over budget, per-node detail rolls up per file"`
 	Summary         bool     `json:"summary,omitempty" jsonschema:"emit the file-grouped rollup instead of per-node detail"`
 	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
@@ -628,7 +644,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 			return nil, nil, err
 		}
 		result.AttachUnresolved(unresolved)
-		result.ApplyBudget(in.MaxTokens)
+		result.ApplyBudget(effectiveBudgetWithDefault(in.MaxTokens, defaultContextBudget))
 		return jsonResult(result)
 	}
 
@@ -668,7 +684,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 	// §2: snippets default ON so the first context call shows code. 0 (unset) →
 	// default; negative → off. The max_tokens budget still caps total size.
 	result.InlineSnippets(".", defaultSnippetLines(in.SnippetLines))
-	return jsonResult(result.ApplyBudget(in.MaxTokens, in.Summary))
+	return jsonResult(result.ApplyBudget(effectiveBudgetWithDefault(in.MaxTokens, defaultContextBudget), in.Summary))
 }
 
 // defaultSnippetLines maps the snippet_lines input to an effective count:
