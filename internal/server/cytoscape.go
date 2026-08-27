@@ -84,7 +84,7 @@ func ToCytoscapeJSON(nodes []*graph.Node, edges []*graph.Edge) CytoscapeGraph {
 
 	for _, e := range edges {
 		meta := e.Meta
-		if class := graph.ClassifyEdgeNoise(e, byID[e.To]); class != graph.NoiseNone {
+		if class := graph.ClassifyEdgeNoise(e, byID[e.From], byID[e.To]); class != graph.NoiseNone {
 			meta = make(map[string]string, len(e.Meta)+1)
 			for k, v := range e.Meta {
 				meta[k] = v

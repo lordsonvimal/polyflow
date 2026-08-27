@@ -144,7 +144,7 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verbose
 
 	var allEdges []graph.Edge
 	if direction == "backward" || direction == "both" {
-		hops, edges := toHops(idx, graph.Ancestors(idx, rootID, depth), verboseSources)
+		hops, edges := toHops(idx, graph.Ancestors(idx, rootID, depth), verboseSources, include, r.HiddenByClass)
 		r.Nodes = append(r.Nodes, hops...)
 		allEdges = append(allEdges, edges...)
 		chains, hidden, truncated := enumerateChains(idx, rootID, "in", depth, MaxChains-len(r.Chains), exploreChains, include, verboseSources)
@@ -153,7 +153,7 @@ func Run(idx *graph.AdjacencyIndex, rootID, direction string, depth int, verbose
 		r.Truncated = r.Truncated || truncated
 	}
 	if direction == "forward" || direction == "both" {
-		hops, edges := toHops(idx, graph.Descendants(idx, rootID, depth), verboseSources)
+		hops, edges := toHops(idx, graph.Descendants(idx, rootID, depth), verboseSources, include, r.HiddenByClass)
 		r.Nodes = append(r.Nodes, hops...)
 		allEdges = append(allEdges, edges...)
 		chains, hidden, truncated := enumerateChains(idx, rootID, "out", depth, MaxChains-len(r.Chains), exploreChains, include, verboseSources)
@@ -317,14 +317,29 @@ func (r *Result) Compact() *CompactResult {
 	}
 }
 
-// toHops converts traversal results to hops with full node + edge metadata.
-// Returns the hop slice and the edges traversed (for VerificationSummary).
-func toHops(idx *graph.AdjacencyIndex, results []graph.TraversalResult, verboseSources bool) ([]Hop, []graph.Edge) {
+// toHops converts traversal results to hops with full node + edge metadata,
+// applying the same noise-class filter enumerateChains uses for the Chains
+// section — the hop tree printed above it is otherwise a second, unfiltered
+// view of the same traversal, so filter_chain/mixin/containment/render_tree/
+// test_code edges would flood it even when the Chains list correctly hides
+// them. hidden is credited with everything dropped here (merged into the
+// same tally enumerateChains reports through).
+func toHops(idx *graph.AdjacencyIndex, results []graph.TraversalResult, verboseSources bool, include graph.NoiseInclude, hidden map[graph.NoiseClass]int) ([]Hop, []graph.Edge) {
 	out := make([]Hop, 0, len(results))
 	var edges []graph.Edge
 	for _, tr := range results {
 		if tr.Node == nil {
 			continue
+		}
+		if tr.Via != nil {
+			srcID := tr.Via.From
+			if srcID == tr.Node.ID {
+				srcID = tr.Via.To
+			}
+			if class := graph.ClassifyEdgeNoise(tr.Via, idx.Nodes[srcID], tr.Node); !include.Allows(class) {
+				hidden[class]++
+				continue
+			}
 		}
 		h := nodeHop(tr.Node)
 		h.Depth = tr.Depth
@@ -453,7 +468,8 @@ func enumerateChains(idx *graph.AdjacencyIndex, rootID, direction string, maxDep
 				if !ok {
 					continue
 				}
-				if class := graph.ClassifyEdgeNoise(e, dst); !include.Allows(class) {
+				src := idx.Nodes[nodeID]
+				if class := graph.ClassifyEdgeNoise(e, src, dst); !include.Allows(class) {
 					explored++
 					hidden[class]++
 					if explored >= maxExplore {

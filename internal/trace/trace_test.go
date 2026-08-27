@@ -235,11 +235,11 @@ func TestRun_NoiseFiltering_DefaultHidesAllFourClasses(t *testing.T) {
 	assert.Contains(t, r.Chains[0].Text, "Behavioral")
 
 	assert.Equal(t, map[graph.NoiseClass]int{
-		graph.NoiseFilterChain: 1,
-		graph.NoiseMixin:       1,
-		graph.NoiseContainment: 1,
-		graph.NoiseRenderTree:  1,
-	}, r.HiddenByClass)
+		graph.NoiseFilterChain: 2,
+		graph.NoiseMixin:       2,
+		graph.NoiseContainment: 2,
+		graph.NoiseRenderTree:  2,
+	}, r.HiddenByClass, "each noise edge is tallied once in the hop tree and once in the chain list")
 }
 
 func TestRun_NoiseFiltering_ExplicitIncludeShowsRenderTree(t *testing.T) {
@@ -256,10 +256,10 @@ func TestRun_NoiseFiltering_ExplicitIncludeShowsRenderTree(t *testing.T) {
 	assert.Contains(t, strings.Join(texts, "\n"), "Rendered")
 
 	assert.Equal(t, map[graph.NoiseClass]int{
-		graph.NoiseFilterChain: 1,
-		graph.NoiseMixin:       1,
-		graph.NoiseContainment: 1,
-	}, r.HiddenByClass)
+		graph.NoiseFilterChain: 2,
+		graph.NoiseMixin:       2,
+		graph.NoiseContainment: 2,
+	}, r.HiddenByClass, "each noise edge is tallied once in the hop tree and once in the chain list")
 }
 
 func TestRun_NoiseFiltering_HiddenTallyAccountsForAllExploredEvenPastDisplayCap(t *testing.T) {
@@ -285,8 +285,8 @@ func TestRun_NoiseFiltering_HiddenTallyAccountsForAllExploredEvenPastDisplayCap(
 	for _, c := range r.Chains {
 		assert.Contains(t, c.Text, "behavioral")
 	}
-	assert.Equal(t, 200, r.HiddenByClass[graph.NoiseMixin],
-		"hidden tally accounts for every noisy chain even though none were ever candidates for a display slot")
+	assert.Equal(t, 400, r.HiddenByClass[graph.NoiseMixin],
+		"hidden tally accounts for every noisy chain (200) plus every noisy hop-tree entry (200), even though none were ever candidates for a display slot")
 }
 
 func TestAttachUnresolved_CleanTraceHasEmptySectionAndNoNote(t *testing.T) {

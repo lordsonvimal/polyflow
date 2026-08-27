@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // NoiseClass labels *why* an edge is structural/plumbing rather than a
@@ -16,12 +17,54 @@ const (
 	NoiseMixin       NoiseClass = "mixin"        // include/extend/prepend — class-wide, not call-site-specific
 	NoiseContainment NoiseClass = "containment"  // "this file/class also declares..." — not a call at all
 	NoiseRenderTree  NoiseClass = "render_tree"  // JSX/DOM render target (CSS-selector `element` nodes)
+	NoiseTestCode    NoiseClass = "test_code"    // edge touches a _test.go/.spec.ts/_spec.rb/... file — a test exercising production code, not a production call chain
 )
 
+// testFileSuffixes/testFileMarkers flag a file as test code by name
+// convention across the languages this indexer parses. A file matching
+// either is never a "real" production call site — tracing through it just
+// enumerates every test that happens to exercise the node on the other end
+// of the edge, which fans a single shared production function out to
+// dozens of unrelated callers (the same shape filter_chain hides for Rails
+// before_action/Gin middleware, just triggered by test frameworks instead).
+var testFileSuffixes = []string{
+	"_test.go",
+	".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+	".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+	"_spec.rb", "_test.rb",
+	"_test.py", "_test.py3",
+}
+
+func isTestFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	base := path
+	if i := strings.LastIndexByte(path, '/'); i >= 0 {
+		base = path[i+1:]
+	}
+	for _, suf := range testFileSuffixes {
+		if strings.HasSuffix(path, suf) {
+			return true
+		}
+	}
+	if strings.HasPrefix(base, "test_") {
+		return true
+	}
+	for _, seg := range []string{"/spec/", "/tests/", "/__tests__/"} {
+		if strings.Contains(path, seg) {
+			return true
+		}
+	}
+	return false
+}
+
 // ClassifyEdgeNoise reports which class an edge belongs to, given its
-// destination node. Every signal below is already present in the graph —
-// no parser or linker change is required for classification itself.
-func ClassifyEdgeNoise(e *Edge, dst *Node) NoiseClass {
+// source and destination nodes. Every signal below is already present in
+// the graph — no parser or linker change is required for classification
+// itself. src may be nil when unavailable to the caller (test-file
+// detection then falls back to dst alone).
+func ClassifyEdgeNoise(e *Edge, src, dst *Node) NoiseClass {
 	if e.Meta != nil {
 		switch e.Meta["via"] {
 		case "rails_filter":
@@ -49,6 +92,9 @@ func ClassifyEdgeNoise(e *Edge, dst *Node) NoiseClass {
 	if dst != nil && dst.Type == NodeTypeElement { // model.go:25
 		return NoiseRenderTree
 	}
+	if (src != nil && isTestFile(src.File)) || (dst != nil && isTestFile(dst.File)) {
+		return NoiseTestCode
+	}
 	return NoiseNone
 }
 
@@ -64,7 +110,7 @@ func (n NoiseInclude) Allows(c NoiseClass) bool {
 	return n[c]
 }
 
-var allNoiseClasses = []NoiseClass{NoiseFilterChain, NoiseMixin, NoiseContainment, NoiseRenderTree}
+var allNoiseClasses = []NoiseClass{NoiseFilterChain, NoiseMixin, NoiseContainment, NoiseRenderTree, NoiseTestCode}
 
 // AllNoiseInclude returns an include-set containing every noise class —
 // today's unfiltered behavior ("all"), for callers that predate Tier NV

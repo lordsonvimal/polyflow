@@ -27,7 +27,9 @@ const (
 // measured sessions.
 const nudgeBody = `## Tool preferences
 
-- For call-chain, impact, blast-radius, or cross-file/cross-service relationship questions (e.g. "what calls this", "what breaks if I change this", "trace this request across services"), query polyflow first — before grepping or spawning an Explore subagent. Polyflow answers graph-shaped questions that grep can't; grep/Explore remain fine for known-location lookups and simple string searches.`
+- For call-chain, impact, blast-radius, or cross-file/cross-service relationship questions (e.g. "what calls this", "what breaks if I change this", "trace this request across services"), query polyflow first — before grepping or spawning an Explore subagent. Polyflow answers graph-shaped questions that grep can't; grep/Explore remain fine for known-location lookups and simple string searches.
+- If the user's question bundles more than one ask (e.g. "trace flow X and tell me the impacts"), split it into one polyflow call per ask instead of pasting the whole sentence into a single query — a compound query dilutes the match. Strip conversational framing too; pass the core entity/feature name, not the full question.
+- If a polyflow call returns empty or low-confidence results, don't fall back to grep/filesystem search yet — call resolve with the same term first to see ranked candidates (it often reveals the query just needs a different node type or service scope), then retry with that.`
 
 func nudgeBlock() string {
 	return nudgeMarkerStart + "\n" + nudgeBody + "\n" + nudgeMarkerEnd

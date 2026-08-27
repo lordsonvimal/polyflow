@@ -195,8 +195,8 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"references in the traversed files the indexer could not resolve — verify those " +
 			"manually, edges may be missing. " +
 			"Structural plumbing (Rails filter-chain wiring, mixins, containment, JSX/DOM render-tree " +
-			"edges) is hidden by default, keyed off task (generate shows render_tree, others hide all " +
-			"four); pass include_noise to restore specific classes or 'all'. hidden_by_class in the " +
+			"edges, test-file edges) is hidden by default, keyed off task (generate shows render_tree, " +
+			"others hide all five); pass include_noise to restore specific classes or 'all'. hidden_by_class in the " +
 			"response tallies what was hidden by class, present whenever anything was — never silently dropped. " +
 			"Set max_tokens to cap output size (over budget, per-node detail rolls up per file), " +
 			"summary to force the rollup, snippet_lines to inline source snippets per node. " +
@@ -220,7 +220,7 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"small blast radii return full per-node detail, large ones auto-roll-up per file, each " +
 			"line reporting direct_nodes/contained_nodes and a sample caller so you can tell a real " +
 			"hit from container fan-out. Structural plumbing (Rails filter-chain wiring, mixins, " +
-			"containment, JSX/DOM render-tree edges) is hidden from the default result entirely " +
+			"containment, JSX/DOM render-tree edges, test-file edges) is hidden from the default result entirely " +
 			"(impact has no task concept, so this is unconditional); pass include_noise to restore " +
 			"specific classes or 'all'. hidden_by_class in the response tallies what was hidden by " +
 			"class, present whenever anything was — never silently dropped. Set max_tokens to raise or lower that cap (negative = " +
@@ -242,8 +242,8 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"this tool — prefer that reading over spending many grep/Read calls hunting for code that " +
 			"may not exist. " +
 			"Chains containing structural plumbing (Rails filter-chain wiring, mixins, containment, " +
-			"JSX/DOM render-tree edges) are hidden by default, keyed off task (generate shows " +
-			"render_tree, others hide all four); pass include_noise to restore specific classes or " +
+			"JSX/DOM render-tree edges, test-file edges) are hidden by default, keyed off task (generate shows " +
+			"render_tree, others hide all five); pass include_noise to restore specific classes or " +
 			"'all'. hidden_by_class in the response tallies chains hidden by class, present whenever " +
 			"anything was — never silently dropped. " +
 			"If target_candidates is non-empty in the response, re-query with target_service to pin the right node. " +
@@ -600,7 +600,7 @@ type contextInput struct {
 	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
-	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. Overrides the task-based default entirely (never merges with it). Default hides all four classes except when task=generate, which shows render_tree"`
+	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, test_code, or all/none. Overrides the task-based default entirely (never merges with it). Default hides all five classes except when task=generate, which shows render_tree"`
 }
 
 func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
@@ -700,7 +700,7 @@ type impactInput struct {
 	SnippetLines    int      `json:"snippet_lines,omitempty" jsonschema:"inline N source lines per node in detail output (default 4; negative = off; the max_tokens budget still caps total size)"`
 	MinVerification string   `json:"min_verification,omitempty" jsonschema:"filter edges by minimum verification level: verified, declared, observed, or any (default any — recall over precision)"`
 	VerboseSources  bool     `json:"verbose_sources,omitempty" jsonschema:"return full SourceRef structs instead of compact provider:ref strings (increases token usage)"`
-	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. impact has no task concept, so the default (unset) always hides all four classes"`
+	IncludeNoise    []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, test_code, or all/none. impact has no task concept, so the default (unset) always hides all five classes"`
 }
 
 func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impactInput) (*mcp.CallToolResult, any, error) {
@@ -792,7 +792,7 @@ type traceInput struct {
 	MaxTokens       int    `json:"max_tokens,omitempty" jsonschema:"approximate token budget for the answer; defaults to a compact budget that trims chains then nodes to fit. direction=both with a deep depth on a busy hub node (e.g. a shared queue/exchange) can otherwise produce a result too large for your own tool-output limit to even return. Pass a negative value for unlimited detail"`
 	Detail          bool   `json:"detail,omitempty" jsonschema:"return full per-hop metadata (types, node_meta, sources) instead of the default compact arrow-chain text (file:line label -[edge_type]-> file:line label -> ...); costs substantially more tokens, use only when you need struct shapes, provenance, or exact line-level edge metadata"`
 
-	IncludeNoise  []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, or all/none. Overrides the task-based default entirely (never merges with it). Default hides all four classes except when task=generate, which shows render_tree"`
+	IncludeNoise  []string `json:"include_noise,omitempty" jsonschema:"noise classes to show: filter_chain, mixin, containment, render_tree, test_code, or all/none. Overrides the task-based default entirely (never merges with it). Default hides all five classes except when task=generate, which shows render_tree"`
 	Task          string   `json:"task,omitempty" jsonschema:"task type used ONLY to pick a noise-visibility default when include_noise is unset: impact, generate, debug, refactor (default debug)"`
 	ExploreChains int      `json:"explore_chains,omitempty" jsonschema:"how many candidate chains to enumerate before giving up (default 500 = 5x the 100-chain display cap). Raise this if a root gated by heavy filter_chain/mixin fan-out returns few or no visible chains even though a real behavioral chain exists further down the same subtree"`
 }
