@@ -134,10 +134,38 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 		})
 	}
 
+	// fileClassIndex: file (cwd-relative) → label → nodeID. Unlike classTable/
+	// svcClassByLabel (service-scoped, first-label-wins), a default-export
+	// resolution must address the exact class declared in the exact target
+	// file — two files in the same service can legally declare same-named
+	// classes, and classTable would silently pick the wrong one.
+	fileClassIndex := make(map[string]map[string]string)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeClass && n.Type != graph.NodeTypeInterface {
+			continue
+		}
+		if fileClassIndex[n.File] == nil {
+			fileClassIndex[n.File] = make(map[string]string)
+		}
+		if _, ex := fileClassIndex[n.File][n.Label]; !ex {
+			fileClassIndex[n.File][n.Label] = n.ID
+		}
+	}
+
+	// defaultExportCache memoizes each target file's default-exported class
+	// name (or "" for a miss) across every importer that references it, so a
+	// widely-imported default export is only re-parsed once per run.
+	defaultExportCache := make(map[string]string)
+
 	for svcName, files := range serviceFiles {
 		// Build a per-service class nodeID-by-label (same as classTable but
 		// scoped to service, for unresolved miss detection).
 		svcClassByLabel := make(map[string]string)
+		// svcFileSet: raw (pre-relativize) indexed JS/TS paths for this
+		// service, in the same form serviceFiles carries them — the shape
+		// resolveJSImportPath (import_edges.go) already expects.
+		svcFileSet := make(map[string]bool)
 		for i := range nodes {
 			n := &nodes[i]
 			if n.Service != svcName {
@@ -147,6 +175,11 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 				if _, ex := svcClassByLabel[n.Label]; !ex {
 					svcClassByLabel[n.Label] = n.ID
 				}
+			}
+		}
+		for _, f := range files {
+			if isJSFile(f) {
+				svcFileSet[f] = true
 			}
 		}
 
@@ -160,7 +193,7 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 			// or it always misses (fileDecls silently empty on every call,
 			// meaning walkTypeRefs's nearestDecl below could never attribute
 			// a cross-file uses_type edge to anything).
-			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], constructorByClass, existingEdges, seen)
+			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], constructorByClass, existingEdges, seen, svcFileSet, fileClassIndex, defaultExportCache)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -168,7 +201,7 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 	return allEdges, allUnresolved
 }
 
-func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, constructorByClass map[string]string, existingEdges, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, constructorByClass map[string]string, existingEdges, seen map[string]bool, svcFileSet map[string]bool, fileClassIndex map[string]map[string]string, defaultExportCache map[string]string) ([]graph.Edge, []graph.UnresolvedRef) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil
@@ -216,6 +249,16 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
       (import_specifier
         name: (identifier) @name)))
   source: (string) @source)`, lang)
+	// defaultQ matches a bare default-import binding (`import X from './x'`,
+	// including the combined `import X, { Y } from './x'` form) — a direct
+	// (identifier) child of import_clause is only produced by that shape;
+	// namespace_import and named_imports wrap their identifiers one level
+	// deeper, so this can't misfire on either.
+	defaultQ, _ := compiledQuery(`
+(import_statement
+  (import_clause
+    (identifier) @local)
+  source: (string) @source)`, lang)
 
 	for _, q := range []*sitter.Query{namedQ, sameAliasQ} {
 		if q == nil {
@@ -255,7 +298,50 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 		}
 	}
 
-	if len(plainImport) == 0 {
+	// Default imports (`import X from './x'`) carry no exported-name
+	// information in the import statement itself — unlike a named import,
+	// the local name is not guaranteed to match anything in the target file.
+	// Resolving one requires following the source specifier to its file and
+	// reading *that* file's own default export declaration, keying
+	// defaultImportTarget off the target file's actual exported class rather
+	// than the local name.
+	defaultImportTarget := make(map[string]string) // localName → class/interface nodeID
+	if defaultQ != nil {
+		cur := sitter.NewQueryCursor()
+		cur.Exec(defaultQ, root)
+		for {
+			m, ok := cur.NextMatch()
+			if !ok {
+				break
+			}
+			caps := make(map[string]string)
+			for _, c := range m.Captures {
+				caps[defaultQ.CaptureNameForId(c.Index)] = c.Node.Content(src)
+			}
+			local, source := caps["local"], caps["source"]
+			if local == "" || source == "" || !isRelative(source) {
+				continue
+			}
+			resolvedFile := resolveJSImportPath(file, strings.Trim(source, "\"'`"), svcFileSet)
+			if resolvedFile == "" {
+				continue
+			}
+			relTarget := patterns.RelativizeToCwd(resolvedFile)
+			className, cached := defaultExportCache[relTarget]
+			if !cached {
+				className = findDefaultExportClassName(resolvedFile)
+				defaultExportCache[relTarget] = className
+			}
+			if className == "" {
+				continue
+			}
+			if targetID, found := fileClassIndex[relTarget][className]; found {
+				defaultImportTarget[local] = targetID
+			}
+		}
+	}
+
+	if len(plainImport) == 0 && len(defaultImportTarget) == 0 {
 		return nil, nil
 	}
 
@@ -466,37 +552,38 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 			ctor := n.ChildByFieldName("constructor")
 			if ctor != nil && (ctor.Type() == "identifier" || ctor.Type() == "type_identifier") {
 				localName := ctor.Content(src)
-				exportedName, isImport := plainImport[localName]
-				if isImport {
-					targetID, found := classTable[exportedName]
-					if found && enclosingFnID != "" {
-						eid := fmt.Sprintf("instantiates:%s->%s", enclosingFnID, targetID)
-						if !seen[eid] {
-							seen[eid] = true
+				var targetID string
+				var found bool
+				if exportedName, isImport := plainImport[localName]; isImport {
+					targetID, found = classTable[exportedName]
+				} else if tid, ok := defaultImportTarget[localName]; ok {
+					targetID, found = tid, true
+				}
+				if found && enclosingFnID != "" {
+					eid := fmt.Sprintf("instantiates:%s->%s", enclosingFnID, targetID)
+					if !seen[eid] {
+						seen[eid] = true
+						edges = append(edges, graph.Edge{
+							ID: eid, From: enclosingFnID, To: targetID,
+							Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
+							Meta: map[string]string{"count": "1"},
+						})
+					}
+					// Additive: also land a method-granularity `calls`
+					// edge on the class's own explicit constructor, the
+					// same shape as the Ruby `.new` → `initialize` edge in
+					// LinkRubyTypeRelations. No edge for a class with no
+					// explicit constructor (constructorByClass has no
+					// entry — JS/TS's implicit default takes no edge).
+					if ctorID, ok := constructorByClass[targetID]; ok {
+						ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
+						if !seen[ceid] {
+							seen[ceid] = true
 							edges = append(edges, graph.Edge{
-								ID: eid, From: enclosingFnID, To: targetID,
-								Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
-								Meta: map[string]string{"count": "1"},
+								ID: ceid, From: enclosingFnID, To: ctorID,
+								Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
+								Meta: map[string]string{"via": "instantiate_constructor"},
 							})
-						}
-						// Additive: also land a method-granularity `calls`
-						// edge on the class's own explicit constructor, the
-						// same shape as the Ruby `.new` → `initialize` edge in
-						// LinkRubyTypeRelations. No edge for a class with no
-						// explicit constructor (constructorByClass has no
-						// entry — JS/TS's implicit default takes no edge).
-						if found && enclosingFnID != "" {
-							if ctorID, ok := constructorByClass[targetID]; ok {
-								ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
-								if !seen[ceid] {
-									seen[ceid] = true
-									edges = append(edges, graph.Edge{
-										ID: ceid, From: enclosingFnID, To: ctorID,
-										Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
-										Meta: map[string]string{"via": "instantiate_constructor"},
-									})
-								}
-							}
 						}
 					}
 				}
@@ -590,4 +677,59 @@ func isFunctionLike(t string) bool {
 		return true
 	}
 	return false
+}
+
+// findDefaultExportClassName reads file and returns the class name bound to
+// its `export default`, or "" when the file has no default export or the
+// default export isn't a class. Handles both `export default class X {...}`
+// (declaration field) and `export default X;` (value field, referencing a
+// class already declared earlier in the same file — the local name carries
+// the resolution, matched later against fileClassIndex). `default` is an
+// anonymous grammar token (not a field on export_statement), so its presence
+// must be checked positionally among the unnamed children.
+func findDefaultExportClassName(file string) string {
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return ""
+	}
+	lang := grammarLangForFile(file)
+	root, err := sitter.ParseCtx(context.Background(), src, lang)
+	if err != nil {
+		return ""
+	}
+
+	isDefaultExport := func(n *sitter.Node) bool {
+		for i := 0; i < int(n.ChildCount()); i++ {
+			if n.Child(i).Content(src) == "default" {
+				return true
+			}
+		}
+		return false
+	}
+
+	var found string
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if found != "" {
+			return
+		}
+		if n.Type() == "export_statement" && isDefaultExport(n) {
+			if decl := n.ChildByFieldName("declaration"); decl != nil {
+				if decl.Type() == "class_declaration" {
+					if nameNode := decl.ChildByFieldName("name"); nameNode != nil {
+						found = nameNode.Content(src)
+						return
+					}
+				}
+			} else if val := n.ChildByFieldName("value"); val != nil && val.Type() == "identifier" {
+				found = val.Content(src)
+				return
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+	return found
 }
