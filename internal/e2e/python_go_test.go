@@ -56,7 +56,7 @@ func indexPythonGo(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Works
 		svcPath := svc.Path
 
 		// Resolve deps so version-gated patterns activate correctly.
-		svcDeps, err := deps.Resolve(svcPath)
+		svcDeps, err := deps.Resolve(svcPath, "")
 		require.NoError(t, err)
 
 		matcher := patterns.NewTreeSitterMatcherForService(reg, svcDeps)

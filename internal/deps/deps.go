@@ -36,8 +36,10 @@ type Dependency struct {
 
 // Resolve inspects dir for every supported manifest and returns all resolved
 // dependencies. Missing manifests are skipped silently; parse errors on a
-// present manifest are returned.
-func Resolve(dir string) ([]Dependency, error) {
+// present manifest are returned. root bounds resolveNode's upward
+// package.json search for a service dir with no manifest of its own; pass ""
+// to disable it (dir must hold its own manifest).
+func Resolve(dir, root string) ([]Dependency, error) {
 	var out []Dependency
 
 	if ds, err := resolveGoMod(filepath.Join(dir, "go.mod")); err != nil {
@@ -46,7 +48,7 @@ func Resolve(dir string) ([]Dependency, error) {
 		out = append(out, ds...)
 	}
 
-	npm, err := resolveNode(dir)
+	npm, err := resolveNode(dir, root)
 	if err != nil {
 		return nil, err
 	}

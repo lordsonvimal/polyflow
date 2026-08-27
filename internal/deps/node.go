@@ -12,16 +12,43 @@ import (
 // from package.json; exact resolved versions come from the lockfile
 // (package-lock.json v2/v3 or yarn.lock v1/berry). If no lockfile exists, the
 // declared range is stripped to its base version as a best effort.
-func resolveNode(dir string) ([]Dependency, error) {
-	pkgPath := filepath.Join(dir, "package.json")
-	data, err := os.ReadFile(pkgPath)
-	if os.IsNotExist(err) {
-		return nil, nil
+//
+// A service whose own dir has no package.json walks up toward root looking
+// for one, the same direction Node's own module resolution walks toward the
+// filesystem root looking for node_modules — a workspace that splits one
+// language into a subdirectory "service" (e.g. a Rails repo's `js` service
+// pointed at ./app/javascript, package.json only at the repo root) otherwise
+// resolves zero npm deps for that service, silently deactivating every
+// package-version-gated pattern (react.yaml's lifecycle-hook reflect-dispatch
+// among them — confirmed live on orion: the `js` service's own dir has no
+// manifest, so react was never "seen" as a dependency and every lifecycle
+// hook in app/javascript/**/*.jsx read as regular, zero-caller dead code).
+// root bounds the walk; pass "" to disable it (dir must hold its own
+// manifest, the pre-existing behavior every other caller still gets).
+func resolveNode(dir, root string) ([]Dependency, error) {
+	for {
+		pkgPath := filepath.Join(dir, "package.json")
+		data, err := os.ReadFile(pkgPath)
+		if err == nil {
+			return parseNodePackage(dir, data)
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if root == "" || dir == root {
+			return nil, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil, nil
+		}
+		dir = parent
 	}
-	if err != nil {
-		return nil, err
-	}
+}
 
+// parseNodePackage reads dependencies/devDependencies from an already-loaded
+// package.json and resolves their exact versions against dir's lockfile.
+func parseNodePackage(dir string, data []byte) ([]Dependency, error) {
 	var pkg struct {
 		Dependencies    map[string]string `json:"dependencies"`
 		DevDependencies map[string]string `json:"devDependencies"`

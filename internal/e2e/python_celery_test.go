@@ -52,7 +52,7 @@ func indexPythonCelery(t *testing.T) *graph.SQLiteStore {
 	for _, svc := range cfg.Services {
 		svcPath := svc.Path
 
-		svcDeps, err := deps.Resolve(svcPath)
+		svcDeps, err := deps.Resolve(svcPath, "")
 		require.NoError(t, err)
 
 		matcher := patterns.NewTreeSitterMatcherForService(reg, svcDeps)

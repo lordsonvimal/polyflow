@@ -231,7 +231,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// JS/TS cross-file inherits/implements/instantiates edges.
 		{"js_type_relations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			jsTypeEdges, jsTypeUnresolved := linker.LinkJSTypeRelations(st.allNodes, svcFiles)
+			jsTypeEdges, jsTypeUnresolved := linker.LinkJSTypeRelations(st.allNodes, st.allEdges, svcFiles)
 			if err := st.writeEdges(jsTypeEdges); err != nil {
 				return err
 			}
