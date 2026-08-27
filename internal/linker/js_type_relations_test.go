@@ -366,3 +366,75 @@ func TestLinkJSTypeRelations_DefaultImportRenamedLocalStillResolves(t *testing.T
 		t.Errorf("missing method-granularity calls edge to constructor %s for renamed default import; got %+v", wantMethodEdge, edges)
 	}
 }
+
+// TestLinkJSTypeRelations_GlobalWindowNewInstantiateLinksToConstructor is the
+// DC.15 regression guard: `new window.X(...)` (a member_expression
+// constructor, not a bare identifier) used to be silently dropped everywhere
+// — same-file and cross-file alike — because handleNew only accepted
+// identifier/type_identifier constructors. The confirmed live shape
+// (orion's pusher_client.es6) is a same-file `window.PusherClient =
+// PusherClient` self-registration, stamped onto the class node itself, with
+// the `new window.PusherClient(...)` call site living in an unrelated file
+// that never imports pusher_client.es6 at all — so plainImport/
+// defaultImportTarget are both empty and only the global-symbol table can
+// resolve it.
+func TestLinkJSTypeRelations_GlobalWindowNewInstantiateLinksToConstructor(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSFixture(t, map[string]string{
+		"pusher_client.es6": "class PusherClient {\n" +
+			"  constructor(pusher) {\n" +
+			"    this.pusher = pusher;\n" +
+			"  }\n" +
+			"}\n" +
+			"window.PusherClient = PusherClient;\n",
+		"connection.jsx": "export function connect() {\n" +
+			"  return new window.PusherClient(pusher);\n" +
+			"}\n",
+	})
+	var pusherFile, connFile string
+	for _, p := range paths {
+		switch filepath.Base(p) {
+		case "pusher_client.es6":
+			pusherFile = p
+		case "connection.jsx":
+			connFile = p
+		}
+	}
+
+	classNode := jsClassNode("svc", pusherFile, "PusherClient", 1, 5)
+	classNode.Meta = map[string]string{
+		"global_symbol": "PusherClient",
+		"global_path":   "window.PusherClient",
+	}
+	nodes := []graph.Node{
+		classNode,
+		jsFuncNode("svc", pusherFile, "constructor", 2),
+		jsFuncNode("svc", connFile, "connect", 1),
+	}
+	edges, _ := LinkJSTypeRelations(nodes, nil, map[string][]string{
+		"svc": {pusherFile, connFile},
+	})
+
+	fromID := fmt.Sprintf("svc:%s:function:connect:1", connFile)
+	wantClassEdge := fmt.Sprintf("instantiates:%s->svc:%s:class:PusherClient:1", fromID, pusherFile)
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:constructor:2", fromID, pusherFile)
+
+	var gotClassEdge, gotMethodEdge bool
+	for _, e := range edges {
+		switch e.ID {
+		case wantClassEdge:
+			gotClassEdge = true
+		case wantMethodEdge:
+			gotMethodEdge = true
+			if e.Type != graph.EdgeTypeCalls {
+				t.Errorf("constructor edge has type %s; want calls", e.Type)
+			}
+		}
+	}
+	if !gotClassEdge {
+		t.Errorf("missing class-granularity instantiates edge %s; got %+v", wantClassEdge, edges)
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to constructor %s; got %+v", wantMethodEdge, edges)
+	}
+}

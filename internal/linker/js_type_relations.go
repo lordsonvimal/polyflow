@@ -166,6 +166,12 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 		// service, in the same form serviceFiles carries them — the shape
 		// resolveJSImportPath (import_edges.go) already expects.
 		svcFileSet := make(map[string]bool)
+		// svcGlobalClassByName: global name (leaf or full dotted path, e.g.
+		// both "PusherClient" and "window.PusherClient") → classID, built from
+		// stampGlobalSymbols' class-node stamping (js_variables.go) of a
+		// same-file `window.X = X` self-registration. Resolves the DC.15 shape:
+		// a `new window.X(...)` in a *different* file than X's declaration.
+		svcGlobalClassByName := make(map[string]string)
 		for i := range nodes {
 			n := &nodes[i]
 			if n.Service != svcName {
@@ -174,6 +180,17 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 			if n.Type == graph.NodeTypeClass || n.Type == graph.NodeTypeInterface {
 				if _, ex := svcClassByLabel[n.Label]; !ex {
 					svcClassByLabel[n.Label] = n.ID
+				}
+			}
+			if n.Type != graph.NodeTypeClass {
+				continue
+			}
+			for _, key := range []string{n.Meta["global_symbol"], n.Meta["global_path"]} {
+				if key == "" {
+					continue
+				}
+				if _, ex := svcGlobalClassByName[key]; !ex {
+					svcGlobalClassByName[key] = n.ID
 				}
 			}
 		}
@@ -193,7 +210,7 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 			// or it always misses (fileDecls silently empty on every call,
 			// meaning walkTypeRefs's nearestDecl below could never attribute
 			// a cross-file uses_type edge to anything).
-			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], constructorByClass, existingEdges, seen, svcFileSet, fileClassIndex, defaultExportCache)
+			edges, unresolved := resolveJSTypeRelations(file, svcName, svcClassByLabel, declsByFile[patterns.RelativizeToCwd(file)], constructorByClass, existingEdges, seen, svcFileSet, fileClassIndex, defaultExportCache, svcGlobalClassByName)
 			allEdges = append(allEdges, edges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
@@ -201,7 +218,7 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 	return allEdges, allUnresolved
 }
 
-func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, constructorByClass map[string]string, existingEdges, seen map[string]bool, svcFileSet map[string]bool, fileClassIndex map[string]map[string]string, defaultExportCache map[string]string) ([]graph.Edge, []graph.UnresolvedRef) {
+func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, constructorByClass map[string]string, existingEdges, seen map[string]bool, svcFileSet map[string]bool, fileClassIndex map[string]map[string]string, defaultExportCache map[string]string, globalClassByName map[string]string) ([]graph.Edge, []graph.UnresolvedRef) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil
@@ -341,7 +358,7 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 		}
 	}
 
-	if len(plainImport) == 0 && len(defaultImportTarget) == 0 {
+	if len(plainImport) == 0 && len(defaultImportTarget) == 0 && len(globalClassByName) == 0 {
 		return nil, nil
 	}
 
@@ -544,46 +561,71 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 		}
 	}
 
+	// emitInstantiate lands the class-granularity `instantiates` edge plus
+	// the constructor `calls` fill-in — shared by the plain/default-import
+	// identifier case and the DC.15 `new window.X(...)` global-symbol case
+	// below, which resolve targetID differently but emit the same two edges.
+	emitInstantiate := func(enclosingFnID, targetID string) {
+		if enclosingFnID == "" || targetID == "" {
+			return
+		}
+		eid := fmt.Sprintf("instantiates:%s->%s", enclosingFnID, targetID)
+		if !seen[eid] {
+			seen[eid] = true
+			edges = append(edges, graph.Edge{
+				ID: eid, From: enclosingFnID, To: targetID,
+				Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
+				Meta: map[string]string{"count": "1"},
+			})
+		}
+		// Additive: also land a method-granularity `calls` edge on the
+		// class's own explicit constructor, the same shape as the Ruby
+		// `.new` → `initialize` edge in LinkRubyTypeRelations. No edge for a
+		// class with no explicit constructor (constructorByClass has no
+		// entry — JS/TS's implicit default takes no edge).
+		if ctorID, ok := constructorByClass[targetID]; ok {
+			ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
+			if !seen[ceid] {
+				seen[ceid] = true
+				edges = append(edges, graph.Edge{
+					ID: ceid, From: enclosingFnID, To: ctorID,
+					Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
+					Meta: map[string]string{"via": "instantiate_constructor"},
+				})
+			}
+		}
+	}
+
 	// Also handle new_expression cross-file instantiates.
 	var walkNew func(n *sitter.Node, enclosingFnID string)
 	walkNew = func(n *sitter.Node, enclosingFnID string) {
 		t := n.Type()
 		if t == "new_expression" {
 			ctor := n.ChildByFieldName("constructor")
-			if ctor != nil && (ctor.Type() == "identifier" || ctor.Type() == "type_identifier") {
-				localName := ctor.Content(src)
-				var targetID string
-				var found bool
-				if exportedName, isImport := plainImport[localName]; isImport {
-					targetID, found = classTable[exportedName]
-				} else if tid, ok := defaultImportTarget[localName]; ok {
-					targetID, found = tid, true
-				}
-				if found && enclosingFnID != "" {
-					eid := fmt.Sprintf("instantiates:%s->%s", enclosingFnID, targetID)
-					if !seen[eid] {
-						seen[eid] = true
-						edges = append(edges, graph.Edge{
-							ID: eid, From: enclosingFnID, To: targetID,
-							Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
-							Meta: map[string]string{"count": "1"},
-						})
+			if ctor != nil {
+				switch ctor.Type() {
+				case "identifier", "type_identifier":
+					localName := ctor.Content(src)
+					var targetID string
+					var found bool
+					if exportedName, isImport := plainImport[localName]; isImport {
+						targetID, found = classTable[exportedName]
+					} else if tid, ok := defaultImportTarget[localName]; ok {
+						targetID, found = tid, true
 					}
-					// Additive: also land a method-granularity `calls`
-					// edge on the class's own explicit constructor, the
-					// same shape as the Ruby `.new` → `initialize` edge in
-					// LinkRubyTypeRelations. No edge for a class with no
-					// explicit constructor (constructorByClass has no
-					// entry — JS/TS's implicit default takes no edge).
-					if ctorID, ok := constructorByClass[targetID]; ok {
-						ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
-						if !seen[ceid] {
-							seen[ceid] = true
-							edges = append(edges, graph.Edge{
-								ID: ceid, From: enclosingFnID, To: ctorID,
-								Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
-								Meta: map[string]string{"via": "instantiate_constructor"},
-							})
+					if found {
+						emitInstantiate(enclosingFnID, targetID)
+					}
+				case "member_expression":
+					// DC.15: `new window.X(...)` / `new globalThis.X(...)` /
+					// `new self.X(...)` — X resolves through the per-service
+					// global-symbol table a same-file `window.X = X`
+					// self-registration stamped onto the class node
+					// (stampGlobalSymbols in js_variables.go), not through
+					// this file's own imports.
+					if _, leaf, ok := globalMemberPath(ctor, src); ok {
+						if targetID, found := globalClassByName[leaf]; found {
+							emitInstantiate(enclosingFnID, targetID)
 						}
 					}
 				}
@@ -668,6 +710,54 @@ func nearestDecl(fileDecls []lineNode, refLine int) string {
 		}
 	}
 	return id
+}
+
+// jsGlobalRoots is the set of identifiers that name the global object.
+// Duplicated from parser/js_variables.go's globalRoots/globalMemberPath: the
+// linker package can never import internal/parser (see docs/config-baseurl-
+// prefix design note), so this tiny AST helper is reproduced here rather than
+// exported across the boundary.
+var jsGlobalRoots = map[string]bool{"window": true, "globalThis": true, "self": true}
+
+// globalMemberPath returns (dotted, leaf, ok) for a member_expression whose
+// left-most object identifier is in {window, globalThis, self}.
+//
+//	window.maple.PusherClient  -> ("window.maple.PusherClient", "PusherClient", true)
+//	window.PusherClient      -> ("window.PusherClient", "PusherClient", true)
+//	foo.bar                  -> ("", "", false)
+func globalMemberPath(left *sitter.Node, src []byte) (dotted, leaf string, ok bool) {
+	if left.Type() != "member_expression" {
+		return "", "", false
+	}
+	prop := left.ChildByFieldName("property")
+	if prop == nil {
+		return "", "", false
+	}
+	leaf = prop.Content(src)
+
+	segs := []string{leaf}
+	obj := left.ChildByFieldName("object")
+	for obj != nil && obj.Type() == "member_expression" {
+		p := obj.ChildByFieldName("property")
+		if p == nil {
+			return "", "", false
+		}
+		segs = append(segs, p.Content(src))
+		obj = obj.ChildByFieldName("object")
+	}
+	if obj == nil || obj.Type() != "identifier" {
+		return "", "", false
+	}
+	rootName := obj.Content(src)
+	if !jsGlobalRoots[rootName] {
+		return "", "", false
+	}
+	parts := make([]string, 0, len(segs)+1)
+	parts = append(parts, rootName)
+	for i := len(segs) - 1; i >= 0; i-- {
+		parts = append(parts, segs[i])
+	}
+	return strings.Join(parts, "."), leaf, true
 }
 
 func isFunctionLike(t string) bool {

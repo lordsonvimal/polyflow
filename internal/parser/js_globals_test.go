@@ -146,6 +146,33 @@ func TestStampGlobalSymbols_WrappedInIIFE(t *testing.T) {
 	assert.Equal(t, graph.NodeTypeFunction, found.Type)
 }
 
+// TestStampGlobalSymbols_WindowAssignClass: window.X = X, where X is a class
+// already declared in this file, stamps global_symbol/global_path onto the
+// CLASS node itself rather than minting a phantom variable node — the DC.15
+// self-registration shape (orion's pusher_client.es6:
+// `window.PusherClient = PusherClient`) a cross-file `new window.X(...)`
+// resolver depends on to find the real constructor.
+func TestStampGlobalSymbols_WindowAssignClass(t *testing.T) {
+	t.Parallel()
+	src := `class PusherClient {
+  constructor() {}
+}
+window.PusherClient = PusherClient;
+`
+	nodes, _, _ := parseJS(t, src)
+
+	cls := jsNodeI2(nodes, graph.NodeTypeClass, "PusherClient")
+	require.NotNil(t, cls, "PusherClient class node must exist")
+	assert.Equal(t, "PusherClient", cls.Meta["global_symbol"])
+	assert.Equal(t, "window.PusherClient", cls.Meta["global_path"])
+
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeVariable && nodes[i].Label == "PusherClient" {
+			t.Errorf("window.X = X (class) must not also mint a phantom variable node; got %+v", nodes[i])
+		}
+	}
+}
+
 // TestStampGlobalSymbols_Negative_NonWindow: assignment to non-window object
 // does NOT produce a global_symbol node.
 func TestStampGlobalSymbols_Negative_NonWindow(t *testing.T) {
