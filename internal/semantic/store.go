@@ -162,6 +162,7 @@ type ftsHit struct {
 	EntityType string
 	Rank       int    // 1-based (1 = best match)
 	Label      string // node label for exact-match detection; "" for flows/docs
+	NodeType   string // graph.NodeType string for declaration-priority tie-break; "" for flows/docs
 }
 
 // FTSSearch runs the tokenised ftsQuery against entities_fts and returns up
@@ -175,7 +176,7 @@ func (s *Store) FTSSearch(ctx context.Context, ftsQuery string, limit int) ([]ft
 	// Wrap the FTS match in a subquery so the LEFT JOIN with nodes is safe
 	// across all SQLite versions that support FTS5 JOIN semantics.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.entity_id, f.entity_type, COALESCE(n.label,'') AS label
+		SELECT f.entity_id, f.entity_type, COALESCE(n.label,''), COALESCE(n.type,'')
 		FROM (
 			SELECT entity_id, entity_type
 			FROM entities_fts
@@ -192,7 +193,7 @@ func (s *Store) FTSSearch(ctx context.Context, ftsQuery string, limit int) ([]ft
 	var hits []ftsHit
 	for rows.Next() {
 		var h ftsHit
-		if err := rows.Scan(&h.EntityID, &h.EntityType, &h.Label); err != nil {
+		if err := rows.Scan(&h.EntityID, &h.EntityType, &h.Label, &h.NodeType); err != nil {
 			return nil, fmt.Errorf("scan fts hit: %w", err)
 		}
 		h.Rank = len(hits) + 1 // 1-based rank preserving FTS5 BM25 order
@@ -228,7 +229,7 @@ func (s *Store) FTSSearchPerType(ctx context.Context, ftsQuery string, perType i
 		// entity_type is UNINDEXED, so it is filtered as an ordinary column
 		// against the matched set rather than through the FTS index.
 		rows, err := s.db.QueryContext(ctx, `
-			SELECT f.entity_id, f.entity_type, COALESCE(n.label,'') AS label
+			SELECT f.entity_id, f.entity_type, COALESCE(n.label,''), COALESCE(n.type,'')
 			FROM (
 				SELECT entity_id, entity_type
 				FROM entities_fts
@@ -244,7 +245,7 @@ func (s *Store) FTSSearchPerType(ctx context.Context, ftsQuery string, perType i
 		rank := 0
 		for rows.Next() {
 			var h ftsHit
-			if err := rows.Scan(&h.EntityID, &h.EntityType, &h.Label); err != nil {
+			if err := rows.Scan(&h.EntityID, &h.EntityType, &h.Label, &h.NodeType); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan fts hit (%s): %w", et, err)
 			}
