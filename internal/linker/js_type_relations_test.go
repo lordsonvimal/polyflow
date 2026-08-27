@@ -243,3 +243,126 @@ func TestLinkJSTypeRelations_InstantiateNoConstructorStaysClassOnly(t *testing.T
 		}
 	}
 }
+
+// TestLinkJSTypeRelations_DefaultImportInstantiateLinksToConstructor is the
+// DC.14 regression guard: `import Widget from './widget'; new Widget()` (a
+// bare default import, not `import { Widget } from ...`) previously never
+// populated plainImport at all, so a default-exported class instantiated
+// this way got neither the cross-file `instantiates` edge nor DC.9's
+// constructor `calls` fill-in, regardless of how many call sites used it.
+func TestLinkJSTypeRelations_DefaultImportInstantiateLinksToConstructor(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSFixture(t, map[string]string{
+		"widget.js": "export default class Widget {\n" +
+			"  constructor() {\n" +
+			"    this.ready = true;\n" +
+			"  }\n" +
+			"}\n",
+		"consumer.js": "import Widget from './widget';\n" +
+			"\n" +
+			"export function build() {\n" +
+			"  return new Widget();\n" +
+			"}\n",
+	})
+	var widget, consumer string
+	for _, p := range paths {
+		switch filepath.Base(p) {
+		case "widget.js":
+			widget = p
+		case "consumer.js":
+			consumer = p
+		}
+	}
+
+	nodes := []graph.Node{
+		jsClassNode("svc", widget, "Widget", 1, 5),
+		jsFuncNode("svc", widget, "constructor", 2),
+		jsFuncNode("svc", consumer, "build", 3),
+	}
+	edges, _ := LinkJSTypeRelations(nodes, nil, map[string][]string{
+		"svc": {widget, consumer},
+	})
+
+	fromID := fmt.Sprintf("svc:%s:function:build:3", consumer)
+	wantClassEdge := fmt.Sprintf("instantiates:%s->svc:%s:class:Widget:1", fromID, widget)
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:constructor:2", fromID, widget)
+
+	var gotClassEdge, gotMethodEdge bool
+	for _, e := range edges {
+		switch e.ID {
+		case wantClassEdge:
+			gotClassEdge = true
+		case wantMethodEdge:
+			gotMethodEdge = true
+			if e.Type != graph.EdgeTypeCalls {
+				t.Errorf("constructor edge has type %s; want calls", e.Type)
+			}
+		}
+	}
+	if !gotClassEdge {
+		t.Errorf("missing class-granularity instantiates edge %s; got %+v", wantClassEdge, edges)
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to constructor %s; got %+v", wantMethodEdge, edges)
+	}
+}
+
+// TestLinkJSTypeRelations_DefaultImportRenamedLocalStillResolves proves the
+// fix isn't a same-name coincidence: a default import's local binding name
+// carries no information about the target file's own export name (unlike a
+// named import), so resolution must follow the import's source path to
+// widget.js and read its `export default class Widget` declaration rather
+// than matching on the local name `Foo`.
+func TestLinkJSTypeRelations_DefaultImportRenamedLocalStillResolves(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSFixture(t, map[string]string{
+		"widget.js": "export default class Widget {\n" +
+			"  constructor() {\n" +
+			"    this.ready = true;\n" +
+			"  }\n" +
+			"}\n",
+		"consumer.js": "import Foo from './widget';\n" +
+			"\n" +
+			"export function build() {\n" +
+			"  return new Foo();\n" +
+			"}\n",
+	})
+	var widget, consumer string
+	for _, p := range paths {
+		switch filepath.Base(p) {
+		case "widget.js":
+			widget = p
+		case "consumer.js":
+			consumer = p
+		}
+	}
+
+	nodes := []graph.Node{
+		jsClassNode("svc", widget, "Widget", 1, 5),
+		jsFuncNode("svc", widget, "constructor", 2),
+		jsFuncNode("svc", consumer, "build", 3),
+	}
+	edges, _ := LinkJSTypeRelations(nodes, nil, map[string][]string{
+		"svc": {widget, consumer},
+	})
+
+	fromID := fmt.Sprintf("svc:%s:function:build:3", consumer)
+	wantClassEdge := fmt.Sprintf("instantiates:%s->svc:%s:class:Widget:1", fromID, widget)
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:constructor:2", fromID, widget)
+
+	var gotClassEdge, gotMethodEdge bool
+	for _, e := range edges {
+		switch e.ID {
+		case wantClassEdge:
+			gotClassEdge = true
+		case wantMethodEdge:
+			gotMethodEdge = true
+		}
+	}
+	if !gotClassEdge {
+		t.Errorf("missing class-granularity instantiates edge %s for renamed default import; got %+v", wantClassEdge, edges)
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to constructor %s for renamed default import; got %+v", wantMethodEdge, edges)
+	}
+}

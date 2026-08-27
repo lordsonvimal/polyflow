@@ -76,12 +76,12 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 	// re-parses the SQL on every call, which dominates large index builds.
 	return w.store.WithTx(ctx, func(tx *sql.Tx) error {
 		upsert, err := tx.PrepareContext(ctx, `
-			INSERT INTO nodes (id, type, label, service, file, line, language, meta)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO nodes (id, type, label, service, file, line, end_line, language, meta)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				type=excluded.type, label=excluded.label, service=excluded.service,
-				file=excluded.file, line=excluded.line, language=excluded.language,
-				meta=excluded.meta`)
+				file=excluded.file, line=excluded.line, end_line=excluded.end_line,
+				language=excluded.language, meta=excluded.meta`)
 		if err != nil {
 			return fmt.Errorf("prepare node upsert: %w", err)
 		}
@@ -104,7 +104,7 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 				return fmt.Errorf("marshal node %s meta: %w", n.ID, err)
 			}
 			if _, err = upsert.ExecContext(ctx,
-				n.ID, string(n.Type), n.Label, n.Service, n.File, n.Line, n.Language, metaJSON); err != nil {
+				n.ID, string(n.Type), n.Label, n.Service, n.File, n.Line, n.EndLine, n.Language, metaJSON); err != nil {
 				return fmt.Errorf("upsert node %s: %w", n.ID, err)
 			}
 			// Keep FTS in sync. On a build store the journal knows whether a
