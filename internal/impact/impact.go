@@ -286,7 +286,11 @@ func assemble(idx *graph.AdjacencyIndex, ancestors []graph.TraversalResult, verb
 	filtered := make([]graph.TraversalResult, 0, len(ancestors))
 	for _, a := range ancestors {
 		if a.Via != nil {
-			if class := graph.ClassifyEdgeNoise(a.Via, a.Node); !include.Allows(class) {
+			srcID := a.Via.From
+			if srcID == a.Node.ID {
+				srcID = a.Via.To
+			}
+			if class := graph.ClassifyEdgeNoise(a.Via, idx.Nodes[srcID], a.Node); !include.Allows(class) {
 				hidden[class]++
 				continue
 			}

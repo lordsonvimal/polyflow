@@ -189,18 +189,18 @@ func traverse(idx *graph.AdjacencyIndex, targetID, task string, depth int, verbo
 	hidden = map[graph.NoiseClass]int{}
 	switch task {
 	case "impact":
-		upstream, edges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
+		upstream, edges = toTraceNodes(idx, graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
 	case "generate":
-		downstream, edges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
+		downstream, edges = toTraceNodes(idx, graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
 	case "debug", "refactor":
 		var upEdges, downEdges []graph.Edge
-		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
-		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
+		upstream, upEdges = toTraceNodes(idx, graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
+		downstream, downEdges = toTraceNodes(idx, graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
 		edges = append(upEdges, downEdges...)
 	default:
 		var upEdges, downEdges []graph.Edge
-		upstream, upEdges = toTraceNodes(graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
-		downstream, downEdges = toTraceNodes(graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
+		upstream, upEdges = toTraceNodes(idx, graph.Ancestors(idx, targetID, depth), verboseSources, include, hidden)
+		downstream, downEdges = toTraceNodes(idx, graph.Descendants(idx, targetID, depth), verboseSources, include, hidden)
 		edges = append(upEdges, downEdges...)
 	}
 	return
@@ -222,7 +222,7 @@ func marshalSources(sources []graph.SourceRef, verbose bool) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-func toTraceNodes(results []graph.TraversalResult, verboseSources bool, include graph.NoiseInclude, hidden map[graph.NoiseClass]int) ([]TraceNode, []graph.Edge) {
+func toTraceNodes(idx *graph.AdjacencyIndex, results []graph.TraversalResult, verboseSources bool, include graph.NoiseInclude, hidden map[graph.NoiseClass]int) ([]TraceNode, []graph.Edge) {
 	out := make([]TraceNode, 0, len(results))
 	var edges []graph.Edge
 	for _, r := range results {
@@ -230,7 +230,11 @@ func toTraceNodes(results []graph.TraversalResult, verboseSources bool, include 
 			continue
 		}
 		if r.Via != nil {
-			if class := graph.ClassifyEdgeNoise(r.Via, r.Node); !include.Allows(class) {
+			srcID := r.Via.From
+			if srcID == r.Node.ID {
+				srcID = r.Via.To
+			}
+			if class := graph.ClassifyEdgeNoise(r.Via, idx.Nodes[srcID], r.Node); !include.Allows(class) {
 				hidden[class]++
 				continue
 			}

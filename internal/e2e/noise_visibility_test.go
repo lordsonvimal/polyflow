@@ -92,8 +92,8 @@ func TestNoiseVisibility_JSXTrace_DefaultHidesRenderTreeShowsBusinessCall(t *tes
 		assert.NotContains(t, c.Text, ".upload-widget", "render-tree element edges must not appear in default output")
 	}
 
-	assert.Equal(t, 2, r.HiddenByClass[graph.NoiseRenderTree],
-		"the two className-selector element edges must be tallied, not silently dropped")
+	assert.Equal(t, 4, r.HiddenByClass[graph.NoiseRenderTree],
+		"the two className-selector element edges must be tallied in both the hop tree and the chain list, not silently dropped")
 }
 
 // TestNoiseVisibility_RailsTrace_DefaultHidesFilterChainShowsBusinessCall
@@ -117,8 +117,8 @@ func TestNoiseVisibility_RailsTrace_DefaultHidesFilterChainShowsBusinessCall(t *
 		assert.NotContains(t, c.Text, "verify_organization!", "before_action filter edges must not appear in default output")
 	}
 
-	assert.Equal(t, 2, r.HiddenByClass[graph.NoiseFilterChain],
-		"the two before_action edges must be tallied, not silently dropped")
+	assert.Equal(t, 4, r.HiddenByClass[graph.NoiseFilterChain],
+		"the two before_action edges must be tallied in both the hop tree and the chain list, not silently dropped")
 }
 
 // TestNoiseVisibility_Context_DefaultHidesFilterChainShowsBusinessCall proves

@@ -166,7 +166,11 @@ func FileImpactWithPolicy(idx *AdjacencyIndex, service, path, direction string, 
 				}
 				if res.Via != nil {
 					e.EdgeTypes = appendUnique(e.EdgeTypes, string(res.Via.Type))
-					if class := ClassifyEdgeNoise(res.Via, res.Node); class != NoiseNone {
+					srcID := res.Via.From
+					if srcID == res.Node.ID {
+						srcID = res.Via.To
+					}
+					if class := ClassifyEdgeNoise(res.Via, idx.Nodes[srcID], res.Node); class != NoiseNone {
 						e.NoiseClasses = appendUnique(e.NoiseClasses, string(class))
 					}
 				}
