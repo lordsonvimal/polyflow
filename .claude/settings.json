@@ -4,7 +4,7 @@
       {
         "hooks": [
           {
-            "command": "polyflow hook-context-inject",
+            "command": "/usr/local/bin/polyflow hook-context-inject",
             "type": "command"
           }
         ],
@@ -13,7 +13,7 @@
       {
         "hooks": [
           {
-            "command": "polyflow hook-context-inject",
+            "command": "/usr/local/bin/polyflow hook-context-inject",
             "type": "command"
           }
         ],
@@ -21,10 +21,6 @@
       },
       {
         "hooks": [
-          {
-            "command": "polyflow hook-context-inject",
-            "type": "command"
-          },
           {
             "command": "/usr/local/bin/polyflow hook-context-inject",
             "type": "command"
