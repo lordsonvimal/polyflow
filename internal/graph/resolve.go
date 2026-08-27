@@ -257,7 +257,12 @@ func preferNonTestFile(nodes []*Node) *Node {
 
 // IsTestFilePath reports whether file looks like a test/spec file by common
 // cross-language naming conventions (JS/TS .test./.spec., Go _test.go, Ruby
-// _spec.rb/_test.rb, Python test_*.py, and __tests__/spec/test directories).
+// _spec.rb/_test.rb, Python test_*.py, and a test/tests/__tests__/spec path
+// segment anywhere in the path — e.g. src/test/setup.ts, a Vitest/Jest
+// global-mock setup file invoked by the test runner rather than any static
+// caller, the same "not a real dead-code caller" category this exclusion
+// already covers by filename suffix). Segment-based, not substring-based, so
+// an unrelated directory like "latest/" never false-positives.
 func IsTestFilePath(file string) bool {
 	if file == "" {
 		return false
@@ -272,9 +277,12 @@ func IsTestFilePath(file string) bool {
 		strings.HasSuffix(base, "_test.go"), strings.HasSuffix(base, "_test.rb"),
 		strings.HasSuffix(base, "_spec.rb"), strings.HasPrefix(base, "test_"):
 		return true
-	case strings.Contains(lower, "/__tests__/"), strings.Contains(lower, "/spec/"),
-		strings.HasPrefix(lower, "spec/"):
-		return true
+	}
+	for _, seg := range strings.Split(lower, "/") {
+		switch seg {
+		case "test", "tests", "__tests__", "spec":
+			return true
+		}
 	}
 	return false
 }

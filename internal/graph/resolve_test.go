@@ -45,6 +45,41 @@ func (s *stubSearcherWithGetNode) GetNode(_ context.Context, id string) (*graph.
 	return nil, fmt.Errorf("not found: %s", id)
 }
 
+// ── IsTestFilePath (DC.7) ────────────────────────────────────────────────────
+
+func TestIsTestFilePath(t *testing.T) {
+	cases := []struct {
+		file string
+		want bool
+	}{
+		// existing filename-suffix conventions, unchanged.
+		{"foo.test.ts", true},
+		{"foo.spec.ts", true},
+		{"foo_test.go", true},
+		{"foo_test.rb", true},
+		{"foo_spec.rb", true},
+		{"test_foo.py", true},
+		{"src/app.ts", false},
+		// widened: a test/tests/__tests__/spec path segment anywhere.
+		{"src/test/setup.ts", true},
+		{"src/tests/setup.ts", true},
+		{"src/__tests__/setup.ts", true},
+		{"spec/setup.rb", true},
+		{"a/b/spec/support/helper.rb", true},
+		{"test/fixtures/foo.go", true},
+		// adjacent-but-not-matching: must not false-positive on substring.
+		{"latest/x.ts", false},
+		{"contest/x.ts", false},
+		{"testimonials/x.ts", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := graph.IsTestFilePath(c.file); got != c.want {
+			t.Errorf("IsTestFilePath(%q) = %v, want %v", c.file, got, c.want)
+		}
+	}
+}
+
 // ── filter unit tests ─────────────────────────────────────────────────────────
 
 func TestResolveTarget_NoFilters(t *testing.T) {
