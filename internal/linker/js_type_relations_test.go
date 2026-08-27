@@ -157,6 +157,53 @@ func TestLinkJSTypeRelations_SameFileInstantiateLinksToConstructor(t *testing.T)
 	}
 }
 
+// TestLinkJSTypeRelations_ComponentImplLinksToConstructor is DC.13's fix: a
+// react_rails `react_component("Name", props)` ERB mount resolves to
+// EdgeTypeComponentImpl (rails_views.go's linkTemplates), not
+// EdgeTypeInstantiates — the same instantiate→constructor fill-in loop must
+// also walk this edge type, or a component mounted exclusively this way
+// keeps a permanently zero-caller constructor exactly like the same-file
+// `new X()` gap DC.9 fixed.
+func TestLinkJSTypeRelations_ComponentImplLinksToConstructor(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSFixture(t, map[string]string{
+		"widget.jsx": "class Widget {\n" +
+			"  constructor() {\n" +
+			"    this.ready = true;\n" +
+			"  }\n" +
+			"}\n",
+	})
+	widget := paths[0]
+
+	nodes := []graph.Node{
+		jsClassNode("svc", widget, "Widget", 1, 5),
+		jsFuncNode("svc", widget, "constructor", 2),
+	}
+	mountID := "svc:app/views/foo/show.html.erb:element:react_component:1"
+	classID := fmt.Sprintf("svc:%s:class:Widget:1", widget)
+	priorEdges := []graph.Edge{
+		{ID: fmt.Sprintf("component_impl:%s->%s", mountID, classID), From: mountID, To: classID, Type: graph.EdgeTypeComponentImpl},
+	}
+
+	edges, _ := LinkJSTypeRelations(nodes, priorEdges, map[string][]string{
+		"svc": {widget},
+	})
+
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:constructor:2", mountID, widget)
+	var gotMethodEdge bool
+	for _, e := range edges {
+		if e.ID == wantMethodEdge {
+			gotMethodEdge = true
+			if e.Type != graph.EdgeTypeCalls {
+				t.Errorf("constructor edge has type %s; want calls", e.Type)
+			}
+		}
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to constructor %s; got %+v", wantMethodEdge, edges)
+	}
+}
+
 // TestLinkJSTypeRelations_InstantiateNoConstructorStaysClassOnly pins the
 // other half: a class with no explicit `constructor` (JS/TS's implicit
 // no-op default takes no edge) must not have a method-level edge fabricated.

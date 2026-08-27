@@ -151,6 +151,16 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 // juniper graph (function/method targets, not just the unresolved
 // channel/worker proxy nodes the same edge type can also terminate on).
 //
+// EdgeTypeComponentImpl (react_rails' `react_component("Name", props)` ERB
+// helper, resolved by `linkTemplates` in rails_views.go to the implementing
+// JS class/function via componentIndex) is a genuine invocation the same way
+// a direct call is: the ERB mount point is the only caller a server-rendered
+// React entry point ever gets, the same shape as EdgeTypeRenders for
+// JSX-mounted components — confirmed live: orion container/dashboard
+// components (AllOperationsContainer and ~25 others) mounted exclusively via
+// react_component had zero inbound edges of any other type and were flagged
+// dead despite being the page's actual React root.
+//
 // EdgeTypeDOMListen (a jQuery/vanilla-JS event registration — `$(el).on(...)`,
 // `el.addEventListener(...)`) is a genuine invocation the same way a direct
 // call is: the browser's event loop calls the handler, not a literal call
@@ -170,6 +180,7 @@ var invokingEdgeTypes = map[graph.EdgeType]bool{
 	graph.EdgeTypeSidekiqPerform: true,
 	graph.EdgeTypeSubscribes:     true,
 	graph.EdgeTypeDOMListen:      true,
+	graph.EdgeTypeComponentImpl:  true,
 }
 
 // hasCaller reports whether n has at least one inbound invoking edge.
