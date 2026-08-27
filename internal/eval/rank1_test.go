@@ -39,18 +39,24 @@ func TestRank1Case_ExpectedWins(t *testing.T) {
 // TestRank1Case_PresentButNotFirstIsAHardFail is the whole point of the kind:
 // a semantic case scores this same result as a pass because the entity is in
 // the top 10. Only rank-1 identity sees the demotion.
+//
+// Both fixture labels are cased to legitimately case-sensitive-exact-match
+// their query token ("Handler" capitalized, matching the query's own
+// capitalized "Handler" — isExact is case-sensitive precisely so an
+// incidental lowercase collision, e.g. "...gin handler", can no longer do
+// this), so the exact-match floor ties and the demotion has to come from
+// BM25 alone: the decoy repeats "Handler" in its FTS card, so it still
+// outranks the target on score within the tied exact tier.
 func TestRank1Case_PresentButNotFirstIsAHardFail(t *testing.T) {
 	store := makeSemanticTestDB(t, []semantic.Entity{
-		// "handler" appears twice in the decoy's text and once in the target's,
-		// so FTS ranks the decoy first for a query naming both.
-		entityFTS("svc:error/handler.go:function:Handler:1", "Handler handler", "error/handler.go"),
+		entityFTS("svc:error/handler.go:function:Handler:1", "Handler Handler", "error/handler.go"),
 		entityFTS("svc:api/application.go:function:CreateApplication:92", "CreateApplication", "api/application.go"),
 	})
 
 	c := Case{
 		ID:          "demoted",
 		Kind:        "rank1",
-		Query:       "CreateApplication handler",
+		Query:       "CreateApplication Handler",
 		Section:     "nodes",
 		ExpectRank1: "CreateApplication",
 	}

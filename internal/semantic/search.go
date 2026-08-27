@@ -362,15 +362,55 @@ type fusedEntry struct {
 	label      string
 	score      float64
 	retrieval  string
+	nodeType   string
+}
+
+// declarationPriority ranks graph.NodeType strings so a real declaration
+// (function/method/class/struct) outranks a pattern-derived annotation node
+// minted at the same source line — e.g. a Celery `@shared_task` decorator
+// mints a subscriber node at the function's own declaration line, sharing
+// its exact label. Both are legitimate "exact" hits for the same query
+// token, but the annotation node's FTS card is shorter (fewer meta fields),
+// which BM25 rewards regardless of relevance: a synthetic node minted AT a
+// declaration was outranking the declaration it describes. Declaration
+// types get priority 0; everything else (including nodes with no join, like
+// flows/docs) gets 1, so this only ever discriminates among competing exact
+// node matches and never touches the flow/doc sections.
+func declarationPriority(nodeType string) int {
+	switch graph.NodeType(nodeType) {
+	case graph.NodeTypeFunction, graph.NodeTypeMethod, graph.NodeTypeClass, graph.NodeTypeStruct:
+		return 0
+	default:
+		return 1
+	}
+}
+
+// exactEligible reports whether a node type may claim the exact-match floor
+// at all — not merely lose a tie-break against one, as declarationPriority
+// governs. A short, common identifier like "edges" or "password" is reused
+// as a local variable name dozens of times across a repo (and once as a
+// synthetic aggregate node, e.g. `polyflow:table:edges`); none of those
+// individually name the thing a descriptive query is asking about, yet each
+// is an exact label match on one query word, so the real declaration
+// (filterEdgesByConfidence, CreatePassword) never even gets to compete on
+// score — it loses to the exact/non-exact tier split before score is
+// consulted at all. Declaration types are specific enough that an exact
+// match on one is trustworthy; nodeType == "" (no join — flows/docs, or a
+// caller that hasn't wired NodeType) defaults to eligible so this only ever
+// narrows the floor for node hits that name a type explicitly.
+func exactEligible(nodeType string) bool {
+	return nodeType == "" || declarationPriority(nodeType) == 0
 }
 
 // rrfFuse merges FTS and vector hit lists using Reciprocal Rank Fusion (k=60).
-// Sort order: exact-match first, then score desc, ties broken by entity ID
-// (bug-class rules 2 and 9: deterministic, exact-match floor).
+// Sort order: exact-match first, then declaration-priority, then score desc,
+// ties broken by entity ID (bug-class rules 2 and 9: deterministic,
+// exact-match floor).
 func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 	type entry struct {
 		entityType string
 		label      string
+		nodeType   string
 		ftsRank    int
 		vecRank    int
 	}
@@ -379,6 +419,7 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		combined[h.EntityID] = &entry{
 			entityType: h.EntityType,
 			label:      h.Label,
+			nodeType:   h.NodeType,
 			ftsRank:    h.Rank,
 		}
 	}
@@ -404,17 +445,30 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 			entityType: e.entityType,
 			label:      e.label,
 			score:      score,
-			retrieval:  retrievalLabel(e.ftsRank, e.vecRank, e.label, q),
+			retrieval:  retrievalLabel(e.ftsRank, e.vecRank, e.label, e.nodeType, q),
+			nodeType:   e.nodeType,
 		})
 	}
 
-	// Stable sort: exact first, score desc, then entity ID for deterministic ties.
+	// Stable sort: exact first, then declaration priority, score desc, then
+	// entity ID for deterministic ties. Declaration priority is not gated to
+	// the exact tier: a bare local variable's generic name ("edges",
+	// "password") can score competitively on both FTS and vector arms purely
+	// because the word is common, without ever being the thing a multi-word
+	// query is actually asking about — filterEdgesByConfidence never reaches
+	// the exact tier at all (its label isn't a literal query token) and still
+	// needs to win on relevance over noise it never gets to out-score
+	// directly, since RRF rewards a generic word's broad co-occurrence over a
+	// specific compound identifier's narrower, exact-topic match.
 	sort.Slice(out, func(i, j int) bool {
 		ei, ej := out[i], out[j]
 		iEx := ei.retrieval == "exact"
 		jEx := ej.retrieval == "exact"
 		if iEx != jEx {
 			return iEx
+		}
+		if pi, pj := declarationPriority(ei.nodeType), declarationPriority(ej.nodeType); pi != pj {
+			return pi < pj
 		}
 		if ei.score != ej.score {
 			return ei.score > ej.score
@@ -424,8 +478,8 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 	return out
 }
 
-func retrievalLabel(ftsRank, vecRank int, label, q string) string {
-	if isExact(label, q) {
+func retrievalLabel(ftsRank, vecRank int, label, nodeType, q string) string {
+	if exactEligible(nodeType) && isExact(label, q) {
 		return "exact"
 	}
 	switch {
@@ -438,19 +492,31 @@ func retrievalLabel(ftsRank, vecRank int, label, q string) string {
 	}
 }
 
-// isExact reports whether label is a case-insensitive exact match for the
-// whole query or for any individual whitespace-separated token of the query.
+// isExact reports whether label is a case-sensitive exact match for the whole
+// query or for any individual whitespace-separated token of the query.
+//
+// Case-sensitive on purpose: a caller who pastes or types a real identifier
+// preserves its casing (CreateApplication, generate_invoice), while a plain
+// descriptive word in a natural-language query is typically lowercase even
+// when it happens to collide with an unrelated capitalized declaration's
+// name — "...gin handler" incidentally matched the `Handler` struct
+// case-insensitively and outranked the query's actual identifier,
+// `CreateApplication`, on the exact-match floor; "user password hashing"
+// matched the `User` model over the intended `CreatePassword`. Comparing
+// case-sensitively treats the coincidence as what it is (a fused/lexical
+// hit, not an exact one) while every existing passing case already quotes
+// the identifier's real casing, so it loses nothing.
 func isExact(label, q string) bool {
 	if label == "" {
 		return false
 	}
-	ll := strings.ToLower(strings.TrimSpace(label))
-	lq := strings.ToLower(strings.TrimSpace(q))
-	if ll == lq {
+	l := strings.TrimSpace(label)
+	trimmedQ := strings.TrimSpace(q)
+	if l == trimmedQ {
 		return true
 	}
-	for _, tok := range strings.Fields(lq) {
-		if ll == tok {
+	for _, tok := range strings.Fields(trimmedQ) {
+		if l == tok {
 			return true
 		}
 	}

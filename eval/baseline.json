@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-19T12:06:25.407371Z",
+  "generated_at": "2026-08-27T05:32:02.856847Z",
   "repos": [
     {
       "repo": "gotify",
@@ -142,11 +142,11 @@
         {
           "case_id": "rank1-create-application-descriptive",
           "kind": "rank1",
-          "recall": 0,
+          "recall": 1,
           "honest_misses": 0,
           "silent_misses": 0,
-          "hard_fail": true,
-          "rank1": "Handler",
+          "hard_fail": false,
+          "rank1": "CreateApplication",
           "rank1_score": 0.016,
           "rank2": "CreateApplication",
           "rank2_score": 0.016
@@ -154,13 +154,13 @@
         {
           "case_id": "rank1-delete-message",
           "kind": "rank1",
-          "recall": 0,
+          "recall": 1,
           "honest_misses": 0,
           "silent_misses": 0,
-          "hard_fail": true,
-          "rank1": "Handler",
+          "hard_fail": false,
+          "rank1": "DeleteMessage",
           "rank1_score": 0.016,
-          "rank2": "DeleteMessage",
+          "rank2": "Handler",
           "rank2_score": 0.016
         },
         {
@@ -182,16 +182,16 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
-          "rank1": "User",
-          "rank1_score": 0.025,
-          "rank2": "password",
-          "rank2_score": 0.014
+          "rank1": "POST /user/current/password",
+          "rank1_score": 0.027,
+          "rank2": "POST /user/current/password",
+          "rank2_score": 0.027
         }
       ],
-      "recall": 0.85,
+      "recall": 0.95,
       "precision": 1,
       "exhaustive_cases": 9,
-      "rank1_accuracy": 0.4
+      "rank1_accuracy": 0.8
     },
     {
       "repo": "lobsters",
@@ -322,8 +322,8 @@
           "hard_fail": false,
           "rank1": "find_similar_by_url",
           "rank1_score": 0.033,
-          "rank2": "Story",
-          "rank2_score": 0.014
+          "rank2": "story_votes_by_user_for_story_ids_hash",
+          "rank2_score": 0.028
         },
         {
           "case_id": "rank1-already-posted-recently",
@@ -332,10 +332,10 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": true,
-          "rank1": "Story",
-          "rank1_score": 0.013,
-          "rank2": "ActiveRecordDoctorIncorrectLengthValidation",
-          "rank2_score": 0.032
+          "rank1": "ActiveRecordDoctorIncorrectLengthValidation",
+          "rank1_score": 0.032,
+          "rank2": "check_already_posted_recently?",
+          "rank2_score": 0.031
         },
         {
           "case_id": "rank1-controller-scoped-create",
@@ -426,8 +426,8 @@
           "hard_fail": false,
           "rank1": "UnresolvedNote",
           "rank1_score": 0.016,
-          "rank2": "ledger",
-          "rank2_score": 0.013
+          "rank2": "Build",
+          "rank2_score": 0.016
         },
         {
           "case_id": "rank1-adjacency-index",
@@ -438,7 +438,7 @@
           "hard_fail": false,
           "rank1": "AdjacencyIndex",
           "rank1_score": 0.013,
-          "rank2": "file",
+          "rank2": "Build",
           "rank2_score": 0.016
         },
         {
@@ -450,25 +450,25 @@
           "hard_fail": false,
           "rank1": "LinkRouteHandlers",
           "rank1_score": 0.016,
-          "rank2": "navHelperPatterns",
+          "rank2": "CountFilesModifiedSince",
           "rank2_score": 0.016
         },
         {
           "case_id": "rank1-confidence-filter",
           "kind": "rank1",
-          "recall": 0,
+          "recall": 1,
           "honest_misses": 0,
           "silent_misses": 0,
-          "hard_fail": true,
-          "rank1": "edges",
-          "rank1_score": 0.031,
-          "rank2": "filterFixtureFiles",
-          "rank2_score": 0.028
+          "hard_fail": false,
+          "rank1": "filterEdgesByConfidence",
+          "rank1_score": 0.016,
+          "rank2": "JavaScriptParser",
+          "rank2_score": 0.016
         }
       ],
-      "recall": 0.9166666666666666,
+      "recall": 1,
       "semantic_recall": 1,
-      "rank1_accuracy": 0.75,
+      "rank1_accuracy": 1,
       "rank1_min_gap": -0.003000000000000001
     },
     {
@@ -639,20 +639,22 @@
         {
           "case_id": "rank1-generate-invoice",
           "kind": "rank1",
-          "recall": 0,
+          "recall": 1,
           "honest_misses": 0,
           "silent_misses": 0,
-          "hard_fail": true,
-          "rank1": "celery_apply_async",
-          "rank1_score": 0.033,
-          "rank2": "celery_task_decorator",
-          "rank2_score": 0.032
+          "hard_fail": false,
+          "rank1": "generate_invoice",
+          "rank1_score": 0.032,
+          "rank2": "celery_apply_async",
+          "rank2_score": 0.033
         }
       ],
-      "recall": 0.8409090909090909,
+      "recall": 0.8863636363636364,
       "semantic_recall": 1,
       "precision": 1,
-      "exhaustive_cases": 5
+      "exhaustive_cases": 5,
+      "rank1_accuracy": 1,
+      "rank1_min_gap": -0.0010000000000000009
     },
     {
       "repo": "writefreely",

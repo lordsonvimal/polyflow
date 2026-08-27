@@ -174,16 +174,26 @@ func TestIsExact_WholeQuery(t *testing.T) {
 	}
 }
 
-func TestIsExact_CaseInsensitive(t *testing.T) {
-	if !isExact("Create", "create") {
-		t.Error("case-insensitive exact match should work")
+func TestIsExact_CaseSensitive(t *testing.T) {
+	// isExact is case-sensitive on purpose: a lowercase descriptive word in a
+	// natural-language query ("...gin handler") must not exact-match an
+	// unrelated capitalized declaration ("Handler") and steal the exact-match
+	// floor from the query's real identifier. See isExact's doc comment.
+	if isExact("Create", "create") {
+		t.Error("case-mismatched label/token should not be exact")
+	}
+	if !isExact("Create", "Create") {
+		t.Error("case-matched label/token should be exact")
 	}
 }
 
 func TestIsExact_SingleTokenOfMultiWord(t *testing.T) {
-	// "Create" matches token "create" of query "create user"
-	if !isExact("Create", "create user") {
+	// "Create" matches token "Create" of query "Create user"
+	if !isExact("Create", "Create user") {
 		t.Error("label matching a single token of multi-word query should be exact")
+	}
+	if isExact("Create", "create user") {
+		t.Error("case-mismatched token match should not be exact")
 	}
 }
 
