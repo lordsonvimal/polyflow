@@ -45,7 +45,14 @@ import (
 // reuses ruby_class_method_calls.go's rubyTypeIndex/emitClassMethodCall
 // machinery unchanged — an inferred receiver is, by the time it reaches
 // that code, just another constant name to resolve.
-func LinkRubyReceiverTypeCalls(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
+//
+// DC.6 wires emitClassMethodCall's downward override fan-out into this pass
+// specifically (never into LinkRubyClassMethodCalls): an inferred receiver's
+// true runtime type could be any subtype of the class traced here, so a
+// call site this pass resolves to `A#foo` must also reach every `B#foo`
+// where B is a descendant of A that overrides it — see
+// ruby_override_dispatch.go.
+func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
 	byNameByService := make(map[string]map[string][]string)
 	byDeclByService := make(map[string]map[string]string)
 	fileByID := make(map[string]string)
@@ -71,6 +78,17 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, serviceFiles map[string][]str
 	}
 
 	methodsByClass := buildMethodsByClass(nodes)
+
+	// DC.6: an inferred receiver's true runtime type could be any subtype of
+	// the class ruby_receiver_types.go traced it to (unlike a literal
+	// `Const.method` call, which names an exact class) — see
+	// ruby_override_dispatch.go's doc comment. Building on the same
+	// rubyMixinIndex the mixin pass already builds from these same
+	// `inherits` edges, not a second full scan.
+	var ox *rubyOverrideIndex
+	if mixinIx := newRubyMixinIndex(nodes, edges); len(mixinIx.ancestors) > 0 {
+		ox = newRubyOverrideIndex(mixinIx)
+	}
 
 	svcNames := make([]string, 0, len(serviceFiles))
 	for svcName := range serviceFiles {
@@ -139,8 +157,8 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, serviceFiles map[string][]str
 		}
 
 		for _, ref := range refs {
-			edges, unresolved := emitClassMethodCall(ix, ref, methodsByClass, seen)
-			allEdges = append(allEdges, edges...)
+			callEdges, unresolved := emitClassMethodCall(ix, ref, methodsByClass, seen, ox)
+			allEdges = append(allEdges, callEdges...)
 			allUnresolved = append(allUnresolved, unresolved...)
 		}
 	}

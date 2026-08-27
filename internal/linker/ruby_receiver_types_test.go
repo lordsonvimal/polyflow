@@ -36,7 +36,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {controller, model}}
 
-	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	var got *graph.Edge
 	for i := range edges {
@@ -96,7 +96,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {controller, facade}}
 
-	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	wantTo := "svc:" + facade + ":function:complete_multipart_upload:9"
 	var got *graph.Edge
@@ -145,7 +145,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {caller, client}}
 
-	edges, _ := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	wantTo := "svc:" + client + ":function:fetch:3"
 	found := false
@@ -188,7 +188,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {file}}
 
-	edges, _ := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	wantTo := "svc:" + file + ":function:call:9"
 	found := false
@@ -232,7 +232,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {caller, client}}
 
-	edges, _ := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	wantTo := "svc:" + client + ":function:fetch:3"
 	found := false
@@ -293,7 +293,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {caller, service}}
 
-	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	wantTo := "svc:" + service + ":function:success?:13"
 	found := false
@@ -364,7 +364,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {caller, service, fast, slow}}
 
-	edges, _ := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 
 	for _, e := range edges {
 		if e.To == "svc:"+fast+":function:success?:3" || e.To == "svc:"+slow+":function:success?:3" {
@@ -394,7 +394,7 @@ end
 	}
 	serviceFiles := map[string][]string{"svc": {caller}}
 
-	edges, _ := LinkRubyReceiverTypeCalls(nodes, serviceFiles)
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
 	if len(edges) != 0 {
 		t.Errorf("expected no edges for an untypeable receiver, got %v", edges)
 	}
