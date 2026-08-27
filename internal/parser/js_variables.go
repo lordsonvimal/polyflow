@@ -1701,15 +1701,29 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 // handleNew emits an instantiates edge when the new_expression constructor
 // resolves to a same-file class node. Cross-file constructors are resolved by
 // LinkJSTypeRelations; unresolvable ones stay silent (no edge, no ledger).
+// A `new window.X(...)` / `new globalThis.X(...)` constructor (member_expression
+// rooted at a global object) resolves the same way a bare `new X(...)` does
+// when X is declared in this file — the common self-registration shape
+// (`window.X = X` at the bottom of the file, stamped onto the class node
+// itself by stampGlobalSymbols) means classNodes already has the entry.
 func (ex *jsExtractor) handleNew(node *sitter.Node, scopes []*jsScope) {
 	ctor := node.ChildByFieldName("constructor")
 	if ctor == nil {
 		return
 	}
-	if ctor.Type() != "identifier" && ctor.Type() != "type_identifier" {
+	var className string
+	switch ctor.Type() {
+	case "identifier", "type_identifier":
+		className = ctor.Content(ex.src)
+	case "member_expression":
+		_, leaf, ok := globalMemberPath(ctor, ex.src)
+		if !ok {
+			return
+		}
+		className = leaf
+	default:
 		return
 	}
-	className := ctor.Content(ex.src)
 	classID, ok := ex.classNodes[className]
 	if !ok {
 		return // not same-file; linker may resolve cross-file
@@ -1761,6 +1775,14 @@ func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
 		}
 	}
 
+	// Node index by ID → slice index, used to stamp an already-declared class
+	// node (ex.classNodes stores IDs, not slice positions) when it is the
+	// target of a `window.X = X` self-registration assignment below.
+	nodeIdxByID := make(map[string]int, len(ex.nodes))
+	for i, n := range ex.nodes {
+		nodeIdxByID[n.ID] = i
+	}
+
 	stamp := func(idx int, globalName string) {
 		if ex.nodes[idx].Meta == nil {
 			ex.nodes[idx].Meta = map[string]string{}
@@ -1802,6 +1824,21 @@ func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
 			return
 		}
 		lineNo := tsLine(expr)
+
+		// Class self-registration: `window.X = X`, referencing a class already
+		// declared in this file (DC.15's confirmed shape — e.g. pusher_client.es6's
+		// `window.PusherClient = PusherClient`). Stamp the class node itself
+		// rather than minting a phantom variable node, so a cross-file
+		// `new window.PusherClient(...)` can resolve through it later.
+		if right.Type() == "identifier" {
+			if classID, ok := ex.classNodes[right.Content(ex.src)]; ok {
+				if idx, ok2 := nodeIdxByID[classID]; ok2 {
+					stamp(idx, leaf)
+					ex.nodes[idx].Meta["global_path"] = dotted
+					return
+				}
+			}
+		}
 
 		if isFunctionNode(right.Type()) {
 			// Named or anonymous function assigned to <global>.…leaf.

@@ -230,6 +230,32 @@ function makeService() {
 	}
 }
 
+// TestJSI2_SameFileGlobalWindowNewInstantiates is the DC.15 regression guard:
+// `new window.X(...)` is a member_expression constructor, which handleNew
+// used to reject outright (identifier/type_identifier only) — even when X is
+// declared in the very same file. window/globalThis/self are all valid
+// global roots; this covers the plain `window.` case same-file resolution
+// must still handle before the cross-file linker pass ever runs.
+func TestJSI2_SameFileGlobalWindowNewInstantiates(t *testing.T) {
+	t.Parallel()
+	src := []byte(`
+class Store {}
+function createStore() {
+  return new window.Store();
+}
+`)
+	nodes, edges, _, _ := extractJSVariables("svc.js", "svc", "javascript", "javascript", src)
+
+	cls := jsNodeI2(nodes, graph.NodeTypeClass, "Store")
+	if cls == nil {
+		t.Fatalf("missing class node Store; nodes: %+v", nodes)
+	}
+	e := jsEdgeI2(edges, graph.EdgeTypeInstantiates, "function:createStore", "class:Store")
+	if e == nil {
+		t.Fatalf("missing instantiates edge for new window.Store(); edges: %+v", edges)
+	}
+}
+
 // TestJSI2_CrossFileInheritsUnresolved: class Admin extends User where User is
 // not in the same file produces an inherits_unresolved ref in the extractor
 // (the linker resolves it later if User was imported).
