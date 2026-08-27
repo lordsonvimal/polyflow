@@ -299,7 +299,10 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 		Description: "Return the EXACT source lines of a symbol (function, method, class, struct, " +
 			"interface) by node id — its true span, not the whole file. Use after search/hierarchy/context/" +
 			"resolve give you an id, instead of opening the file. span_known=false means the exact end was " +
-			"unknown and a bounded window was returned; max_lines caps runaway spans.",
+			"unknown and a bounded window was returned; max_lines caps runaway spans. Pass targets (a list, " +
+			"up to 20) instead of target to read several symbols — possibly from different files — in one " +
+			"call instead of one round trip each; results come back in request order under results, and a " +
+			"single unresolved target is reported in that entry's error field without failing the others.",
 	}, auditTool(s, "read", s.read))
 
 	mcp.AddTool(srv, &mcp.Tool{

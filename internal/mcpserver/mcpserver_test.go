@@ -186,6 +186,29 @@ func TestReadTool(t *testing.T) {
 		&mcp.CallToolParams{Name: "read", Arguments: map[string]any{"target": "does-not-exist"}})
 	require.NoError(t, err)
 	assert.True(t, res.IsError, "unknown target should return a tool error")
+
+	// Batch: multiple targets in one call, one of them unresolvable — the
+	// good entries still come back, the bad one carries an error instead of
+	// failing the whole call.
+	var batch readBatchOutput
+	callJSON(t, cs, "read", map[string]any{
+		"targets": []string{"p:foo.go:function:Foo:3", "does-not-exist", "p:foo.go:variable:loose:7"},
+	}, &batch)
+	require.Len(t, batch.Results, 3)
+	assert.Equal(t, "p:foo.go:function:Foo:3", batch.Results[0].Requested)
+	assert.Equal(t, 3, batch.Results[0].StartLine)
+	assert.Empty(t, batch.Results[0].Error)
+	assert.Equal(t, "does-not-exist", batch.Results[1].Requested)
+	assert.NotEmpty(t, batch.Results[1].Error)
+	assert.Equal(t, "p:foo.go:variable:loose:7", batch.Results[2].Requested)
+	assert.Empty(t, batch.Results[2].Error)
+
+	// target and targets together is a request error, not a partial result.
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "read", Arguments: map[string]any{
+		"target": "p:foo.go:function:Foo:3", "targets": []string{"p:foo.go:variable:loose:7"},
+	}})
+	require.NoError(t, err)
+	assert.True(t, res.IsError, "target and targets together should be rejected")
 }
 
 // hierFixture: two services with nested dirs, so hierarchy has a real tree to
