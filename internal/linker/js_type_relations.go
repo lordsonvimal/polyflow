@@ -110,9 +110,12 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 	// class with no import/export at all, e.g. `var X = class X {...}`) left
 	// its constructor with zero inbound `calls` edges regardless of how many
 	// times the class was actually instantiated. Walking priorEdges instead
-	// of re-parsing catches both shapes uniformly.
+	// of re-parsing catches both shapes uniformly. EdgeTypeComponentImpl
+	// (rails_views.go's react_component(...) mount) gets the same treatment —
+	// a mounted class's constructor is otherwise left permanently zero-caller
+	// the same way a same-file `new X()` was before this fill-in existed.
 	for _, e := range priorEdges {
-		if e.Type != graph.EdgeTypeInstantiates {
+		if e.Type != graph.EdgeTypeInstantiates && e.Type != graph.EdgeTypeComponentImpl {
 			continue
 		}
 		ctorID, ok := constructorByClass[e.To]

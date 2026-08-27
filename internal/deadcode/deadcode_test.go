@@ -322,6 +322,17 @@ func TestBuild_DOMListenEdgeCountsAsCaller(t *testing.T) {
 	}
 }
 
+func TestBuild_ComponentImplEdgeCountsAsCaller(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "fe:container", Type: graph.NodeTypeClass, Label: "AllOperationsContainer", Service: "backend", File: "containers/AllOperationsContainer.jsx", Line: 1})
+	idx.AddEdge(&graph.Edge{ID: "e11", From: "fe:mount", To: "fe:container", Type: graph.EdgeTypeComponentImpl})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "fe:container", f.ID, "a react_component(...) ERB mount is a real invocation via EdgeTypeComponentImpl")
+	}
+}
+
 func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
 	idx.AddNode(&graph.Node{ID: "be:handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "backend", File: "h.go", Line: 1})
