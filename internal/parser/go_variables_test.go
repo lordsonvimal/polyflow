@@ -77,6 +77,19 @@ var rolePriority = map[string]int{
 	roleAdmin: 2,
 }
 `,
+		"fixtures.go": `package main
+
+var fixtureBase = "https://example.com/fixtures"
+
+type fixture struct {
+	URL string
+}
+
+var fixtureList = []fixture{
+	{URL: fixtureBase + "/a.xpt"},
+	{URL: fixtureBase + "/b.xpt"},
+}
+`,
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -233,6 +246,29 @@ func TestGoVariables_ConstUsedInPackageVarInitializer(t *testing.T) {
 	}
 	if hasEdge(res, graph.EdgeTypeReads, "variable:rolePriority", "variable:roleUser") == nil {
 		t.Errorf("missing reads edge rolePriority -> roleUser; edges: %+v", res.Edges)
+	}
+}
+
+// TestGoVariables_GlobalUsedInPackageVarInitializer is the third worked
+// example from the same live finding: a package-level *var* (not const)
+// referenced only inside another package var's composite-literal initializer
+// (`var fixtureList = []fixture{{URL: fixtureBase + "/a.xpt"}}`). Var
+// initializers compile into the package's synthesized init function, which
+// resolveFunc can never match to a tree-sitter node, so fnResolved is always
+// false for every instruction in it — the *ssa.UnOp global-load for
+// fixtureBase needs fromAt's enclosingVarAt fallback, the same mechanism the
+// const-in-initializer case (TestGoVariables_ConstUsedInPackageVarInitializer)
+// uses, just reached through the UnOp read path instead of the typed-AST
+// const-ref pass.
+func TestGoVariables_GlobalUsedInPackageVarInitializer(t *testing.T) {
+	res := analyzeVars(t)
+
+	fixtureBase := findNode(res, graph.NodeTypeVariable, "fixtureBase")
+	if fixtureBase == nil {
+		t.Fatalf("missing variable node for fixtureBase; nodes: %+v", res.Nodes)
+	}
+	if hasEdge(res, graph.EdgeTypeReads, "variable:fixtureList", "variable:fixtureBase") == nil {
+		t.Errorf("missing reads edge fixtureList -> fixtureBase for a global used in another global's composite-literal initializer; edges: %+v", res.Edges)
 	}
 }
 
