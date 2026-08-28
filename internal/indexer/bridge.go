@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -133,6 +134,25 @@ func BuildBridge(ctx context.Context, links []workspace.Link, contractsDir strin
 		cp.Meta = nm
 		bridgeNodes = append(bridgeNodes, cp)
 	}
+
+	// Evidence-fusion reconciliation (Tier CSC, Phase 1): stamp bridge edges
+	// with Sources[]/VerificationState the same way the single-repo indexing
+	// path does (indexer.go's Run), so a bridge.db edge is never left with
+	// an empty verification_state. Bridge edges have no config-file or
+	// contract-rule provenance beyond what the contract engine already
+	// attached to the edge itself, so the static provider alone is
+	// sufficient here — this yields `candidate` for every edge (no runtime
+	// or spec provider is present to earn `verified`).
+	staticProv := evidence.NewStaticProvider(bridgeNodes, newEdges, nil)
+	rec, err := evidence.NewReconciler(staticProv)
+	if err != nil {
+		return nil, fmt.Errorf("bridge evidence reconciler: %w", err)
+	}
+	result, err := rec.Reconcile(ctx, st.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("bridge evidence reconcile: %w", err)
+	}
+	newEdges = result.Edges
 
 	sort.Slice(newEdges, func(i, j int) bool { return newEdges[i].ID < newEdges[j].ID })
 

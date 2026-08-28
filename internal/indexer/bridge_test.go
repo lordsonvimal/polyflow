@@ -135,6 +135,8 @@ func TestBuildBridge_ProducesCrossServiceEdgeFromIndependentMemberDBs(t *testing
 		if (from.Service == "web" && to.Service == "api") || (from.Service == "api" && to.Service == "web") {
 			foundWebToAPI = true
 		}
+		assert.NotEmpty(t, e.VerificationState, "bridge edge %s must be reconciled (Tier CSC Phase 1): verification_state must never be empty", e.ID)
+		assert.Equal(t, graph.StateCandidate, e.VerificationState, "with only a static provider, a bridge edge must land at candidate, never verified")
 	}
 	assert.True(t, foundWebToAPI, "bridge must contain the web<->api cross-service edge")
 }
