@@ -333,6 +333,81 @@ func TestBuild_ComponentImplEdgeCountsAsCaller(t *testing.T) {
 	}
 }
 
+func TestBuild_ComponentTypeFlaggedWhenZeroCallers(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "fe:orphan_component", Type: graph.NodeTypeComponent, Label: "OrphanCard", Service: "backend", File: "OrphanCard.jsx", Line: 1})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "fe:orphan_component" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a component node with zero inbound renders/component_impl edges must be flagged")
+}
+
+func TestBuild_ComponentTypeNotFlaggedWhenRendered(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "fe:used_component", Type: graph.NodeTypeComponent, Label: "UsedCard", Service: "backend", File: "UsedCard.jsx", Line: 1})
+	idx.AddEdge(&graph.Edge{ID: "e12", From: "be:handler", To: "fe:used_component", Type: graph.EdgeTypeRenders})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "fe:used_component", f.ID, "a component reached via a renders edge must not be flagged")
+	}
+}
+
+func TestBuild_VariableFlaggedWhenZeroReaders(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:dead_const", Type: graph.NodeTypeVariable, Label: "MaxRetries", Service: "backend", File: "config.go", Line: 8, Meta: map[string]string{"kind": "const", "scope": "package"}})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "be:dead_const" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a variable/const node with zero inbound reads edges must be flagged")
+}
+
+func TestBuild_VariableNotFlaggedWhenRead(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:used_const", Type: graph.NodeTypeVariable, Label: "MaxRetries", Service: "backend", File: "config.go", Line: 8, Meta: map[string]string{"kind": "const", "scope": "package"}})
+	idx.AddEdge(&graph.Edge{ID: "e13", From: "be:handler", To: "be:used_const", Type: graph.EdgeTypeReads})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:used_const", f.ID, "a variable with at least one reads edge must not be flagged")
+	}
+}
+
+func TestBuild_VariableWriteOnlyStillFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:write_only", Type: graph.NodeTypeVariable, Label: "cachedResult", Service: "backend", File: "cache.go", Line: 3, Meta: map[string]string{"kind": "var", "scope": "package"}})
+	idx.AddEdge(&graph.Edge{ID: "e14", From: "be:handler", To: "be:write_only", Type: graph.EdgeTypeWrites})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "be:write_only" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a writes-only edge is not usage — a variable never read back is still dead")
+}
+
+func TestBuild_VariableInTestFileNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:test_const", Type: graph.NodeTypeVariable, Label: "fixtureVal", Service: "backend", File: "config_test.go", Line: 3, Meta: map[string]string{"kind": "const", "scope": "package"}})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:test_const", f.ID, "a variable in a test file must not be flagged")
+	}
+}
+
 func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
 	idx.AddNode(&graph.Node{ID: "be:handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "backend", File: "h.go", Line: 1})
