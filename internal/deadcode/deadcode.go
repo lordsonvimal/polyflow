@@ -1,6 +1,7 @@
-// Package deadcode finds function/method nodes with zero inbound calls
-// edges: a fixed-shape, full-graph scan rather than an ad-hoc query
-// language, matching the rest of polyflow's tool set.
+// Package deadcode finds function/method/component nodes with zero inbound
+// invoking edges and variable/const nodes with zero inbound reads: a
+// fixed-shape, full-graph scan rather than an ad-hoc query language, matching
+// the rest of polyflow's tool set.
 package deadcode
 
 import (
@@ -9,7 +10,8 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
-// Item is one flagged zero-caller function or method.
+// Item is one flagged zero-caller function/method/component or
+// zero-reader variable/const.
 type Item struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
@@ -32,22 +34,54 @@ type Options struct {
 	File    string // "" = every file
 }
 
-// Build scans idx for function/method nodes with no inbound invoking edge
-// (see invokingEdgeTypes), excluding nodes graph.ClassifyEntrypoint already
-// recognises as an entry point (HTTP handlers, routes, workers, subscribers,
-// gRPC/GraphQL handlers, and functions tagged meta.root_kind=entrypoint) —
-// those are meant to have zero static callers. Structural edges (contains,
-// declares, ...) never count as a caller.
+// Build scans idx for two independent dead shapes:
+//
+//   - function/method/component nodes with no inbound invoking edge (see
+//     invokingEdgeTypes), excluding nodes graph.ClassifyEntrypoint already
+//     recognises as an entry point (HTTP handlers, routes, workers,
+//     subscribers, gRPC/GraphQL handlers, and functions tagged
+//     meta.root_kind=entrypoint) — those are meant to have zero static
+//     callers. Structural edges (contains, declares, ...) never count as a
+//     caller.
+//   - variable/const nodes (graph.NodeTypeVariable) with no inbound
+//     EdgeTypeReads — a callable's "invoked" predicate doesn't apply to a
+//     value, so this branch uses hasReader instead of hasCaller and skips
+//     the entrypoint/reflect-dispatched checks entirely (see hasReader).
 func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 	var items []Item
 	for _, n := range idx.Nodes {
-		if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
+		isCallable := n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeComponent
+		if !isCallable && n.Type != graph.NodeTypeVariable {
 			continue
 		}
 		if opts.Service != "" && n.Service != opts.Service {
 			continue
 		}
 		if opts.File != "" && n.File != opts.File {
+			continue
+		}
+		// A variable/const node (see graph.NodeTypeVariable) has no notion of
+		// "invoked" — it's read, not called — so it needs its own dead
+		// predicate rather than being run through the invokingEdgeTypes/
+		// entrypoint/reflect-dispatched machinery below, all of which assume a
+		// callable unit. Write-only is still dead: an assignment nobody ever
+		// reads has no observable effect.
+		if !isCallable {
+			if graph.IsTestFilePath(n.File) {
+				continue
+			}
+			if hasReader(idx, n.ID) {
+				continue
+			}
+			items = append(items, Item{
+				ID:      n.ID,
+				Label:   n.Label,
+				Type:    string(n.Type),
+				Service: n.Service,
+				File:    n.File,
+				Line:    n.Line,
+				EndLine: n.EndLine,
+			})
 			continue
 		}
 		// meta.root_kind=callback (referenced as a value / satisfies an
@@ -187,6 +221,19 @@ var invokingEdgeTypes = map[graph.EdgeType]bool{
 func hasCaller(idx *graph.AdjacencyIndex, id string) bool {
 	for _, e := range idx.InEdges[id] {
 		if invokingEdgeTypes[e.Type] {
+			return true
+		}
+	}
+	return false
+}
+
+// hasReader reports whether the variable/const node id has at least one
+// inbound EdgeTypeReads. EdgeTypeWrites deliberately does not count: a
+// variable only ever assigned to and never read back is exactly the dead
+// case this is meant to catch.
+func hasReader(idx *graph.AdjacencyIndex, id string) bool {
+	for _, e := range idx.InEdges[id] {
+		if e.Type == graph.EdgeTypeReads {
 			return true
 		}
 	}
