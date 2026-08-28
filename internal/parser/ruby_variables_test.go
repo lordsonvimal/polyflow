@@ -751,3 +751,48 @@ end
 		}
 	}
 }
+
+// TestRubyVariables_RakeTaskBareCallResolves is DC.18: a `task do...end` block
+// has no enclosing `def`, so a bare call made directly inside it (a common
+// Rake shape — the task body calls a helper method defined later in the same
+// file) never had a methodID to key scope tracking off and was silently
+// dropped. A synthetic per-block scope should let the existing same-file
+// bare-call resolution machinery resolve it exactly like a real method body.
+func TestRubyVariables_RakeTaskBareCallResolves(t *testing.T) {
+	t.Parallel()
+	src := `task :rename_categories do
+  rename_categories
+end
+
+def rename_categories
+  puts "renamed"
+end
+`
+	_, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "rake_block", "function:rename_categories") == nil {
+		t.Errorf("missing calls edge from task block -> rename_categories; edges: %+v", edges)
+	}
+}
+
+// TestRubyVariables_RakeNamespaceTaskBareCallResolves confirms the same
+// synthetic scope applies when the bare call sits inside a `task` nested in a
+// `namespace` block.
+func TestRubyVariables_RakeNamespaceTaskBareCallResolves(t *testing.T) {
+	t.Parallel()
+	src := `namespace :categories do
+  task :add_categories do
+    add_categories
+  end
+end
+
+def add_categories
+  puts "added"
+end
+`
+	_, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "rake_block", "function:add_categories") == nil {
+		t.Errorf("missing calls edge from nested task block -> add_categories; edges: %+v", edges)
+	}
+}

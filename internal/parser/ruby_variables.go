@@ -147,6 +147,17 @@ func (ex *rubyExtractor) methodNodeID(method string, ln int) string {
 	return fmt.Sprintf("%s:%s:function:%s:%d", ex.service, ex.file, method, ln)
 }
 
+// rakeBlockScopeID synthesizes a per-block scope ID for a `task`/`namespace`
+// DSL call's `do...end` (or `{}`) body (DC.18): the block has no enclosing
+// `def` to key a methodID on, but calls made directly inside it are still
+// self-scoped exactly like a method body, so a per-block ID derived from the
+// block's own file position lets the existing same-file bare-call resolution
+// machinery (resolveBareCall, case "identifier") apply unchanged — both
+// preCollectRubyLocals and walk call this so the two passes agree on the ID.
+func (ex *rubyExtractor) rakeBlockScopeID(block *sitter.Node) string {
+	return fmt.Sprintf("%s:%s:rake_block:%d", ex.service, ex.file, rbLine(block))
+}
+
 // preCollectRubyClasses scans the AST recursively to build classTable:
 // className → nodeID for all class/module declarations in the file.
 func (ex *rubyExtractor) preCollectRubyClasses(node *sitter.Node) {
@@ -275,6 +286,20 @@ func (ex *rubyExtractor) preCollectRubyLocals(node *sitter.Node, methodID string
 		}
 		if params := node.ChildByFieldName("parameters"); params != nil {
 			ex.collectParamNames(params, methodID)
+		}
+	case "call":
+		// DC.18: a `task`/`namespace` DSL block has no enclosing `def`, so
+		// give its body a synthetic method-like scope the same way walk does
+		// below — see rakeBlockScopeID.
+		if methodID == "" {
+			if mn := node.ChildByFieldName("method"); mn != nil {
+				mname := mn.Content(ex.src)
+				if mname == "task" || mname == "namespace" {
+					if block := node.ChildByFieldName("block"); block != nil {
+						methodID = ex.rakeBlockScopeID(block)
+					}
+				}
+			}
 		}
 	case "assignment", "operator_assignment":
 		if methodID != "" {
@@ -504,6 +529,17 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 							})
 						}
 					}
+				}
+			}
+		case "task", "namespace":
+			// DC.18: a `task`/`namespace` DSL block has no enclosing `def`,
+			// so bare calls made directly inside it never had a methodID to
+			// key scope tracking off. Synthesize one scoped to the block —
+			// the generic per-node recursion below then carries it into the
+			// block body exactly like a real method scope would.
+			if methodID == "" {
+				if block := node.ChildByFieldName("block"); block != nil {
+					methodID = ex.rakeBlockScopeID(block)
 				}
 			}
 		case "new":
