@@ -236,3 +236,98 @@ describe("BottomDrawer / Unresolved tab", () => {
     expect(container.querySelector('[data-testid="unresolved-targets"]')).toBeFalsy();
   });
 });
+
+// The web counterpart to `polyflow status --unknown-edges` / the MCP
+// `unknown_edges` tool — same GET /api/unknown-edges endpoint, same
+// contract.FilterEdgesByConfidence logic on the server side.
+describe("BottomDrawer / Unknown Edges tab", () => {
+  let container: HTMLElement;
+  let dispose: (() => void) | undefined;
+
+  beforeEach(() => {
+    scopeStore.reset();
+    drawerStore.setOpen(false);
+    drawerStore.setActiveTab("context");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    dispose = render(() => <BottomDrawer />, container);
+  });
+
+  afterEach(() => {
+    dispose?.();
+    container.remove();
+  });
+
+  it("defaults to min_confidence=unknown and renders the edge list", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unknown-edges": {
+        edges: [
+          { confidence: "unknown", type: "http_call", from: "fetchStatus", from_id: "n1", service: "auth", file: "auth/client.go", line: 30, to: "unresolved" },
+        ],
+        total: 1,
+        by_confidence: { unknown: 1 },
+      },
+    });
+    drawerStore.openUnknownEdges();
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unknown-edges-row"]')).toBeTruthy());
+
+    expect(container.querySelector('[data-testid="unknown-edges-list"]')!.textContent).toContain("fetchStatus");
+    expect(container.querySelector('[data-testid="unknown-edges-min-confidence"]') as HTMLSelectElement).toHaveProperty("value", "unknown");
+  });
+
+  it("changing min_confidence re-fetches with the new threshold", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unknown-edges": { edges: [], total: 0, by_confidence: {} },
+    });
+    drawerStore.openUnknownEdges();
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unknown-edges-tab"]')).toBeTruthy());
+
+    const calls: string[] = [];
+    (globalThis as any).fetch = vi.fn((url: string) => {
+      calls.push(url);
+      return Promise.resolve({ ok: true, json: async () => ({ edges: [], total: 0, by_confidence: {} }) } as Response);
+    });
+    const select = container.querySelector('[data-testid="unknown-edges-min-confidence"]') as HTMLSelectElement;
+    select.value = "static";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    const u = new URL(calls[calls.length - 1], "http://localhost");
+    expect(u.searchParams.get("min_confidence")).toBe("static");
+  });
+
+  it("clicking a row with a file pushes its file scope", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unknown-edges": {
+        edges: [
+          { confidence: "unknown", type: "http_call", from: "fetchStatus", from_id: "n1", service: "auth", file: "auth/client.go", line: 30, to: "unresolved" },
+        ],
+        total: 1,
+        by_confidence: { unknown: 1 },
+      },
+    });
+    drawerStore.openUnknownEdges();
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unknown-edges-row"]')).toBeTruthy());
+    (container.querySelector('[data-testid="unknown-edges-row"]') as HTMLElement).click();
+    expect(scopeStore.stack().at(-1)).toEqual({ kind: "file", service: "auth", path: "auth/client.go" });
+  });
+
+  it("service and edge-type inputs re-fetch with those params", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/unknown-edges": { edges: [], total: 0, by_confidence: {} },
+    });
+    drawerStore.openUnknownEdges();
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="unknown-edges-tab"]')).toBeTruthy());
+
+    const calls: string[] = [];
+    (globalThis as any).fetch = vi.fn((url: string) => {
+      calls.push(url);
+      return Promise.resolve({ ok: true, json: async () => ({ edges: [], total: 0, by_confidence: {} }) } as Response);
+    });
+    const serviceInput = container.querySelector('[data-testid="unknown-edges-service"]') as HTMLInputElement;
+    serviceInput.value = "auth";
+    serviceInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    const u = new URL(calls[calls.length - 1], "http://localhost");
+    expect(u.searchParams.get("service")).toBe("auth");
+  });
+});
