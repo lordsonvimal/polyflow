@@ -700,6 +700,21 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, rubyImportUnresolved...)
 			return nil
 		}},
+		// SH1: shell script cross-file invocation (`bash x.sh`, `source x.sh`,
+		// bare `./x.sh`) as `calls` edges (meta via=exec). Runs after every
+		// shell file's own (script) scope node exists in st.allNodes (minted
+		// unconditionally by internal/parser/shell.go during the main parse
+		// phase, not by a link pass), same ordering requirement as the JS/Ruby
+		// import-edge passes above.
+		{"shell_invocation_edges", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			shellEdges, shellUnresolved := linker.LinkShellInvocationEdges(st.allNodes, svcFiles)
+			if err := st.writeEdges(shellEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, shellUnresolved...)
+			return nil
+		}},
 		{"datastores", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkDatastores(st.allNodes))
 		}},
