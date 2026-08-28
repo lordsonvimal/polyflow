@@ -324,7 +324,8 @@ func TestLinkTables(t *testing.T) {
 		{ID: "svc:store", Type: graph.NodeTypeDatastore, Service: "svc",
 			Meta: map[string]string{"kind": "store"}}, // not a call — ignored
 	}
-	tableNodes, edges := LinkTables(nodes)
+	tableNodes, edges, unresolved := LinkTables(nodes)
+	assert.Empty(t, unresolved)
 
 	// Two distinct tables (meta touched twice → deduped), no table for PRAGMA.
 	require.Len(t, tableNodes, 2)
@@ -352,6 +353,100 @@ func TestLinkTables(t *testing.T) {
 	assert.Equal(t, "svc:table:nodes", byFrom["svc:del"].To)
 	_, pragmaHasEdge := byFrom["svc:pragma"]
 	assert.False(t, pragmaHasEdge, "PRAGMA must not fabricate a table edge")
+}
+
+// TestLinkTables_SQ2ReconcilesSchemaDeclaredTable verifies SQ2: when a
+// schema-declared graph.NodeTypeTable node (minted by internal/parser/sql.go
+// from a real CREATE TABLE) is already present, a datastore call querying the
+// same table name rewires its edge onto that node instead of minting a
+// duplicate synthetic one — even when the call lives in a different service
+// than the schema file (the plan's "shared db/migrations service" case).
+func TestLinkTables_SQ2ReconcilesSchemaDeclaredTable(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "schema:db/schema.sql:table:users:3", Type: graph.NodeTypeTable,
+			Label: "users", Service: "schema", File: "db/schema.sql", Line: 3,
+			Meta: map[string]string{"columns": `[{"name":"id"}]`}},
+		{ID: "app:sel", Type: graph.NodeTypeDatastore, Service: "app",
+			Meta: map[string]string{"kind": "call", "op": "query",
+				"sql": "`SELECT * FROM users WHERE id = ?`"}},
+	}
+	tableNodes, edges, unresolved := LinkTables(nodes)
+
+	assert.Empty(t, tableNodes, "no duplicate table node minted when a schema declaration already exists")
+	assert.Empty(t, unresolved)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "schema:db/schema.sql:table:users:3", edges[0].To,
+		"query edge lands on the real schema-declared node, not a synthetic app:table:users")
+	assert.Equal(t, graph.EdgeTypeQueries, edges[0].Type)
+}
+
+// TestLinkTables_SQ2SchemaAbsentRegression is SQ2's own regression fixture
+// (rule 5): with no schema-declared table node anywhere in the workspace, the
+// pre-SQ2 synthetic-mint path must be byte-for-byte unchanged.
+func TestLinkTables_SQ2SchemaAbsentRegression(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "app:sel", Type: graph.NodeTypeDatastore, Service: "app",
+			Meta: map[string]string{"kind": "call", "op": "query",
+				"sql": "`SELECT * FROM users WHERE id = ?`"}},
+	}
+	tableNodes, edges, unresolved := LinkTables(nodes)
+
+	require.Len(t, tableNodes, 1)
+	assert.Equal(t, "app:table:users", tableNodes[0].ID)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "app:table:users", edges[0].To)
+	assert.Empty(t, unresolved)
+}
+
+// TestLinkTables_SQ2NameCollisionFansOut verifies the extended rule-1 fan-out:
+// two schema-declared tables sharing a name across different services both
+// receive the query edge, plus a sql_table_query_collision ledger entry —
+// never first-match.
+func TestLinkTables_SQ2NameCollisionFansOut(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "svcA:a.sql:table:users:1", Type: graph.NodeTypeTable,
+			Label: "users", Service: "svcA", File: "a.sql", Line: 1},
+		{ID: "svcB:b.sql:table:users:1", Type: graph.NodeTypeTable,
+			Label: "users", Service: "svcB", File: "b.sql", Line: 1},
+		{ID: "app:sel", Type: graph.NodeTypeDatastore, Service: "app", File: "app.go", Line: 5,
+			Meta: map[string]string{"kind": "call", "op": "query",
+				"sql": "`SELECT * FROM users WHERE id = ?`"}},
+	}
+	tableNodes, edges, unresolved := LinkTables(nodes)
+
+	assert.Empty(t, tableNodes)
+	require.Len(t, edges, 2)
+	gotTo := map[string]bool{}
+	for _, e := range edges {
+		gotTo[e.To] = true
+	}
+	assert.True(t, gotTo["svcA:a.sql:table:users:1"])
+	assert.True(t, gotTo["svcB:b.sql:table:users:1"])
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "sql_table_query_collision", unresolved[0].Kind)
+}
+
+// TestLinkTables_SQ2Determinism runs LinkTables twice against the same input
+// (rule 2 — this pass iterates a name->[]nodeID map, the exact non-determinism
+// shape rule 2 exists for) and asserts byte-identical edge sets both runs.
+func TestLinkTables_SQ2Determinism(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "svcA:a.sql:table:users:1", Type: graph.NodeTypeTable,
+			Label: "users", Service: "svcA", File: "a.sql", Line: 1},
+		{ID: "svcB:b.sql:table:users:1", Type: graph.NodeTypeTable,
+			Label: "users", Service: "svcB", File: "b.sql", Line: 1},
+		{ID: "app:sel", Type: graph.NodeTypeDatastore, Service: "app", File: "app.go", Line: 5,
+			Meta: map[string]string{"kind": "call", "op": "query",
+				"sql": "`SELECT * FROM users WHERE id = ?`"}},
+	}
+	_, edges1, unresolved1 := LinkTables(nodes)
+	_, edges2, unresolved2 := LinkTables(nodes)
+	assert.Equal(t, edges1, edges2)
+	assert.Equal(t, unresolved1, unresolved2)
 }
 
 // TestParseSQLTable covers the table-name extraction edge cases directly.
