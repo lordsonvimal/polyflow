@@ -40,6 +40,7 @@ var attrAllowlist = map[string]bool{
 	// Code attribution — presence upgrades verified_granularity to "site"
 	"code.filepath": true,
 	"code.function": true,
+	"code.lineno":   true,
 }
 
 // spanKindString maps the OTLP integer kind to our string representation.
@@ -160,7 +161,26 @@ type jsonKV struct {
 }
 
 type jsonAnyValue struct {
-	StringValue string `json:"stringValue"`
+	StringValue string    `json:"stringValue"`
+	IntValue    jsonInt64 `json:"intValue"`
+}
+
+// jsonInt64 accepts both a bare number and a quoted decimal string — the
+// OTLP JSON format quotes int64 AnyValue fields to avoid float64 precision
+// loss, same rationale as jsonUint64.
+type jsonInt64 int64
+
+func (i *jsonInt64) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" {
+		return nil
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return err
+	}
+	*i = jsonInt64(v)
+	return nil
 }
 
 type jsonLink struct {
@@ -214,8 +234,13 @@ func convertJSONSpan(s jsonSpan, service string) Span {
 	// Collect allowlisted attributes only.
 	allowed := make(map[string]string)
 	for _, kv := range s.Attributes {
-		if attrAllowlist[kv.Key] && kv.Value.StringValue != "" {
+		if !attrAllowlist[kv.Key] {
+			continue
+		}
+		if kv.Value.StringValue != "" {
 			allowed[kv.Key] = kv.Value.StringValue
+		} else if kv.Value.IntValue != 0 {
+			allowed[kv.Key] = strconv.FormatInt(int64(kv.Value.IntValue), 10)
 		}
 	}
 	if len(allowed) > 0 {
@@ -302,10 +327,13 @@ func convertProtoSpan(s *tracev1.Span, service string) Span {
 	// Allowlisted attributes only.
 	allowed := make(map[string]string)
 	for _, kv := range s.GetAttributes() {
-		if attrAllowlist[kv.GetKey()] {
-			if sv := kv.GetValue().GetStringValue(); sv != "" {
-				allowed[kv.GetKey()] = sv
-			}
+		if !attrAllowlist[kv.GetKey()] {
+			continue
+		}
+		if sv := kv.GetValue().GetStringValue(); sv != "" {
+			allowed[kv.GetKey()] = sv
+		} else if iv := kv.GetValue().GetIntValue(); iv != 0 {
+			allowed[kv.GetKey()] = strconv.FormatInt(iv, 10)
 		}
 	}
 	if len(allowed) > 0 {

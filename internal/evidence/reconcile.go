@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -131,6 +132,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 	type clearKey struct{ service, file, name string; line int }
 	clearSet := make(map[clearKey]bool)
 
+	// Location-only clears (no Name): a provider observing a call site
+	// directly — e.g. runtime spans, which see the resolved URL but never the
+	// source expression that built it — can only pin (service, file, line).
+	// Gated below to contract.DynamicUnresolvedKinds so this can never clear
+	// an unrelated unresolved-ref kind that happens to share a line.
+	type locKey struct {
+		service, file string
+		line          int
+	}
+	locClearSet := make(map[locKey]bool)
+
 	// Collect all unresolved from all providers.
 	var allUnresolved []graph.UnresolvedRef
 
@@ -235,6 +247,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		for _, u := range c.ev.ClearsUnresolved {
 			clearSet[clearKey{u.Service, u.File, u.Name, u.Line}] = true
 		}
+		for _, loc := range c.ev.ClearsUnresolvedByLocation {
+			locClearSet[locKey{loc.Service, loc.File, loc.Line}] = true
+		}
 	}
 	for _, id := range gapOrder {
 		workingEdges = append(workingEdges, *gapByID[id])
@@ -244,9 +259,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 	// has claimed via ClearsUnresolved (those are replaced by the provider's
 	// own entries, e.g. config_not_found instead of dynamic_url).
 	for _, u := range staticEv.Unresolved {
-		if !clearSet[clearKey{u.Service, u.File, u.Name, u.Line}] {
-			allUnresolved = append(allUnresolved, u)
+		if clearSet[clearKey{u.Service, u.File, u.Name, u.Line}] {
+			continue
 		}
+		if contract.DynamicUnresolvedKinds[u.Kind] && locClearSet[locKey{u.Service, u.File, u.Line}] {
+			continue
+		}
+		allUnresolved = append(allUnresolved, u)
 	}
 
 	// Recompute VerificationState for every edge from Sources[] (total).

@@ -221,6 +221,7 @@ func TestMapSpansCodeAttribution(t *testing.T) {
 	ref := flows[0].Refs[0]
 	assert.Equal(t, "internal/handler/games.go", ref.CodeFile, "code.filepath must be preserved in FlowRef")
 	assert.Equal(t, "GetGame", ref.CodeFunc, "code.function must be preserved in FlowRef")
+	assert.Equal(t, "42", ref.CodeLine, "code.lineno must be preserved in FlowRef")
 }
 
 // ─── TestMapSpansGranularityGuard ─────────────────────────────────────────────

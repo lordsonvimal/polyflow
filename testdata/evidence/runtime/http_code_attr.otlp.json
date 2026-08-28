@@ -17,5 +17,6 @@
        {"key": "http.request.method", "value": {"stringValue": "GET"}},
        {"key": "http.route", "value": {"stringValue": "/games/:id"}},
        {"key": "code.filepath", "value": {"stringValue": "internal/handler/games.go"}},
-       {"key": "code.function", "value": {"stringValue": "GetGame"}}]}]}]}
+       {"key": "code.function", "value": {"stringValue": "GetGame"}},
+       {"key": "code.lineno", "value": {"intValue": "42"}}]}]}]}
 ]}

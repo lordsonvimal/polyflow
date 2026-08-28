@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
@@ -94,22 +95,56 @@ func (p *RuntimeProvider) Collect(_ context.Context, ws *workspace.WorkspaceConf
 		}
 	}
 
-	// Build edges from merged flow records.
+	// Build edges from merged flow records, and collect location-only ledger
+	// clears from any ref that pins a call site (CodeFile + CodeLine both
+	// present — true site granularity, not just a channel match). The clear's
+	// Service is the caller (FromService): dynamic-key unresolved refs are
+	// producer-side entries, and FromService is who executed that call site.
 	edges := make([]graph.Edge, 0, len(mergeOrder))
+	var clearsByLocation []evidence.UnresolvedLocation
+	seenLoc := map[evidence.UnresolvedLocation]bool{}
 	for _, fk := range mergeOrder {
 		rec := merged[fk]
 		sortRefs(rec.Refs)
 		edges = append(edges, flowRecordToEdge(rec))
+		if rec.FromService == "" {
+			continue
+		}
+		for _, ref := range rec.Refs {
+			if ref.CodeFile == "" || ref.CodeLine == "" {
+				continue
+			}
+			line, err := strconv.Atoi(ref.CodeLine)
+			if err != nil {
+				continue
+			}
+			loc := evidence.UnresolvedLocation{Service: rec.FromService, File: ref.CodeFile, Line: line}
+			if !seenLoc[loc] {
+				seenLoc[loc] = true
+				clearsByLocation = append(clearsByLocation, loc)
+			}
+		}
 	}
 
 	// Sort edges by ID for deterministic output (bug-class rule 2).
 	sort.Slice(edges, func(i, j int) bool {
 		return edges[i].ID < edges[j].ID
 	})
+	sort.Slice(clearsByLocation, func(i, j int) bool {
+		a, b := clearsByLocation[i], clearsByLocation[j]
+		if a.Service != b.Service {
+			return a.Service < b.Service
+		}
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		return a.Line < b.Line
+	})
 
 	return evidence.Evidence{
-		Edges:      edges,
-		Unresolved: allLedger,
+		Edges:                      edges,
+		Unresolved:                 allLedger,
+		ClearsUnresolvedByLocation: clearsByLocation,
 	}, nil
 }
 

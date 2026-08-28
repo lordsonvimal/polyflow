@@ -205,6 +205,66 @@ func TestUnknownAttrsDropped(t *testing.T) {
 	assert.False(t, hasDB, "non-allowlisted attribute must be dropped")
 }
 
+// TestIntValueAttrParsed_JSON verifies that an allowlisted int-typed OTel
+// attribute (code.lineno) is captured, not silently dropped. The OTLP JSON
+// format quotes int64 AnyValue fields (same rationale as
+// startTimeUnixNano), so both the quoted and bare-number forms must parse.
+func TestIntValueAttrParsed_JSON(t *testing.T) {
+	quoted := `{"resourceSpans": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+		"scopeSpans": [{"spans": [{
+			"traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", "spanId": "bbbbbbbbbbbbbbbb",
+			"name": "GET /x", "kind": 2,
+			"startTimeUnixNano": "1", "endTimeUnixNano": "2",
+			"attributes": [{"key": "code.lineno", "value": {"intValue": "42"}}]
+		}]}]}]}`
+	spans, err := ParseOTLPBytes([]byte(quoted))
+	require.NoError(t, err)
+	require.Len(t, spans, 1)
+	assert.Equal(t, "42", spans[0].Attrs["code.lineno"], "quoted intValue must parse")
+
+	bare := `{"resourceSpans": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "web"}}]},
+		"scopeSpans": [{"spans": [{
+			"traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", "spanId": "bbbbbbbbbbbbbbbb",
+			"name": "GET /x", "kind": 2,
+			"startTimeUnixNano": "1", "endTimeUnixNano": "2",
+			"attributes": [{"key": "code.lineno", "value": {"intValue": 42}}]
+		}]}]}]}`
+	spans2, err := ParseOTLPBytes([]byte(bare))
+	require.NoError(t, err)
+	require.Len(t, spans2, 1)
+	assert.Equal(t, "42", spans2[0].Attrs["code.lineno"], "bare-number intValue must parse")
+}
+
+// TestIntValueAttrParsed_Proto verifies the protobuf path also captures
+// int-typed attributes (IntValue), not just StringValue.
+func TestIntValueAttrParsed_Proto(t *testing.T) {
+	rs := &tracev1.ResourceSpans{
+		Resource: &resourcev1.Resource{Attributes: []*commonv1.KeyValue{{
+			Key: "service.name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "web"}},
+		}}},
+		ScopeSpans: []*tracev1.ScopeSpans{{
+			Spans: []*tracev1.Span{{
+				TraceId: []byte{0xaa, 0xbb}, SpanId: []byte{0xcc, 0xdd},
+				Name: "GET /x", Kind: tracev1.Span_SPAN_KIND_SERVER,
+				StartTimeUnixNano: 1, EndTimeUnixNano: 2,
+				Attributes: []*commonv1.KeyValue{{
+					Key: "code.lineno", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 42}},
+				}},
+			}},
+		}},
+	}
+	b, err := proto.Marshal(rs)
+	require.NoError(t, err)
+	var buf []byte
+	buf = protowire.AppendTag(buf, 1, protowire.BytesType)
+	buf = protowire.AppendBytes(buf, b)
+
+	spans, err := ParseOTLPBytes(buf)
+	require.NoError(t, err)
+	require.Len(t, spans, 1)
+	assert.Equal(t, "42", spans[0].Attrs["code.lineno"], "proto IntValue must parse")
+}
+
 // TestMetricsOnlyFile verifies that a metrics-only OTLP file returns zero
 // spans without error (graceful degradation: this is a valid OTLP file, just
 // not a trace file).
@@ -244,7 +304,7 @@ func TestAttrAllowlistIsExhaustive(t *testing.T) {
 		// Messaging (old semconv)
 		"messaging.operation",
 		// Code attribution
-		"code.filepath", "code.function",
+		"code.filepath", "code.function", "code.lineno",
 	}
 	for _, k := range required {
 		assert.True(t, attrAllowlist[k], "attrAllowlist must include %q", k)

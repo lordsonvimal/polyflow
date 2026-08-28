@@ -366,6 +366,51 @@ func TestReconcilerMultipleGapsPerService(t *testing.T) {
 	assert.Equal(t, 2, endpointNodes, "one synthetic endpoint node per gap channel")
 }
 
+// TestReconcilerClearsUnresolvedByLocation asserts that a provider's
+// location-only clear (service, file, line — no name) drops a matching
+// dynamic-key static unresolved entry, mirroring how runtime spans can pin
+// the call site but never the source expression that built it.
+func TestReconcilerClearsUnresolvedByLocation(t *testing.T) {
+	staticUnres := []graph.UnresolvedRef{
+		{Service: "svc-a", File: "client.go", Line: 42, Name: "`/api/${id}`", Kind: "dynamic_url"},
+	}
+	sp := evidence.NewStaticProvider(nil, nil, staticUnres)
+	runtimeEv := evidence.Evidence{
+		ClearsUnresolvedByLocation: []evidence.UnresolvedLocation{
+			{Service: "svc-a", File: "client.go", Line: 42},
+		},
+	}
+	rec, err := evidence.NewReconciler(sp, &fakeProvider{name: "runtime", ev: runtimeEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, result.Unresolved, "location clear must remove the dynamic_url entry despite the Name mismatch")
+}
+
+// TestReconcilerClearsUnresolvedByLocation_NonDynamicKindNotCleared asserts
+// the gate: a location clear must never remove an unresolved entry whose
+// Kind is outside contract.DynamicUnresolvedKinds, even if it sits on the
+// exact same (service, file, line) — runtime evidence only ever speaks to
+// dynamic-key call sites, not arbitrary static-analysis blind spots that
+// happen to share a source line.
+func TestReconcilerClearsUnresolvedByLocation_NonDynamicKindNotCleared(t *testing.T) {
+	staticUnres := []graph.UnresolvedRef{
+		{Service: "svc-a", File: "client.go", Line: 42, Name: "SomeHelper", Kind: "route_convention_unresolved"},
+	}
+	sp := evidence.NewStaticProvider(nil, nil, staticUnres)
+	runtimeEv := evidence.Evidence{
+		ClearsUnresolvedByLocation: []evidence.UnresolvedLocation{
+			{Service: "svc-a", File: "client.go", Line: 42},
+		},
+	}
+	rec, err := evidence.NewReconciler(sp, &fakeProvider{name: "runtime", ev: runtimeEv})
+	require.NoError(t, err)
+	result, err := rec.Reconcile(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, result.Unresolved, 1, "non-dynamic-kind entries must survive a location clear")
+	assert.Equal(t, "route_convention_unresolved", result.Unresolved[0].Kind)
+}
+
 // TestReconcilerVerifiedGranularity asserts that a channel-confirmed edge is
 // stamped verified_granularity=channel — the guard against reading channel
 // verification as call-site proof — and that unconfirmed edges carry none.
