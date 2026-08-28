@@ -53,6 +53,8 @@ func grammarForExt(ext string) string {
 		return "python"
 	case ".sh", ".bash", ".bats":
 		return "bash"
+	case ".sql":
+		return "sql"
 	default:
 		return ""
 	}

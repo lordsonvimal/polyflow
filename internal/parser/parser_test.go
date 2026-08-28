@@ -340,7 +340,7 @@ func TestLanguage_Methods(t *testing.T) {
 func TestForFile_ReturnsNilForUnknownExtension(t *testing.T) {
 	t.Parallel()
 	assert.Nil(t, parser.ForFile("config.json"))
-	assert.Nil(t, parser.ForFile("main.sql"))
+	assert.Nil(t, parser.ForFile("main.proto"))
 }
 
 func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
@@ -352,6 +352,8 @@ func TestForFile_ReturnsParserForKnownExtensions(t *testing.T) {
 	assert.NotNil(t, parser.ForFile("page.templ"))
 	assert.NotNil(t, parser.ForFile("Rakefile.rake"))
 	assert.NotNil(t, parser.ForFile("service.py"))
+	assert.NotNil(t, parser.ForFile("deploy.sh"))
+	assert.NotNil(t, parser.ForFile("schema.sql"))
 }
 
 func TestRubyParser_RakeExtension(t *testing.T) {

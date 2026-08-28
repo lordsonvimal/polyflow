@@ -276,6 +276,11 @@ const (
 	// instantiates: function/method→struct/class it constructs.
 	// Deduped per (function, type) pair; meta: count=<n>.
 	EdgeTypeInstantiates EdgeType = "instantiates"
+	// references: declaring table → table its REFERENCES/FOREIGN KEY clause
+	// points at (SQ1) — a .sql-declared table's one real structural
+	// relationship to another table. meta: column=<fk column>,
+	// ref_column=<referenced column>.
+	EdgeTypeReferences EdgeType = "references"
 	// Response-type edges (Tier Y.4 — the return half of a request flow).
 	//
 	// returns: handler-function → struct it writes as its JSON response body

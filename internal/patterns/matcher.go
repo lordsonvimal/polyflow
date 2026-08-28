@@ -20,6 +20,7 @@ import (
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
 	pythonsitter "github.com/smacker/go-tree-sitter/python"
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
+	sqlsitter "github.com/smacker/go-tree-sitter/sql"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 
@@ -108,6 +109,15 @@ var restClientDynamicMethodPatterns = map[string]bool{
 var keyWalkerKeyCaptureNames = map[string]bool{
 	"url": true, "path": true, "channel": true, "exchange": true,
 	"routing_key": true, "topic": true, "queue": true, "queue_name": true,
+	// "columns" is not a contract producer/consumer key at all — SQ0 (see
+	// docs/shell-sql-language-plan.md) reuses this same retention mechanism
+	// for a second, unrelated purpose: internal/parser/sql.go needs the
+	// column_definitions tree-sitter node itself (not just its flattened
+	// capture text) to build meta["columns"] JSON, because MatchResult.
+	// Captures is a flat map[string]string and can't carry one entry per
+	// column. "path" already sets this precedent for shell.go's own
+	// non-KeyWalker consumption of a retained node.
+	"columns": true,
 }
 
 // keyWalkerRoutedLangs restricts X.1a's live WalkKey routing to the
@@ -185,6 +195,8 @@ func languageFor(lang string) *sitter.Language {
 		return htmlsitter.GetLanguage()
 	case "bash":
 		return bashsitter.GetLanguage()
+	case "sql":
+		return sqlsitter.GetLanguage()
 	default:
 		return nil
 	}
@@ -1111,7 +1123,8 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		idName := r.PatternName
 		namedTypes := nodeType == graph.NodeTypeFunction || nodeType == graph.NodeTypeMethod ||
 			nodeType == graph.NodeTypeComponent || nodeType == graph.NodeTypeElement ||
-			nodeType == graph.NodeTypeClass || nodeType == graph.NodeTypeStruct
+			nodeType == graph.NodeTypeClass || nodeType == graph.NodeTypeStruct ||
+			nodeType == graph.NodeTypeTable
 		if namedTypes && label != r.PatternName {
 			idName = label
 		}
@@ -1178,6 +1191,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		if r.PatternName == "eventsource_connect" {
 			meta["method"] = "GET"
 			meta["transport"] = "sse"
+		}
+
+		// SQ0: a CREATE VIEW gets the same NodeTypeTable as CREATE TABLE (one
+		// node type, a meta discriminator — the NodeTypeTemplElement lesson
+		// applied up front) rather than a new node type of its own.
+		if r.PatternName == "sql_create_view" {
+			meta["kind"] = "view"
 		}
 
 		// H.1: `new WebSocketServer({server, ...})` / `{noServer: true}` have
@@ -2243,6 +2263,15 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
 	case lower == "class_decl":
 		return graph.NodeTypeClass, graph.EdgeTypeCalls
+
+	// ── SQL schema declarations (SQ0) ───────────────────────────────────────
+	// CREATE VIEW shares the same node type (meta["kind"]="view", stamped
+	// above in Pass 1) rather than getting its own NodeType — CREATE INDEX/
+	// ALTER TABLE/DROP TABLE never reach this classifier at all:
+	// internal/parser/sql.go pulls those pattern names out before calling
+	// MatchToGraph and merges them onto the existing table node instead.
+	case lower == "sql_create_table" || lower == "sql_create_view":
+		return graph.NodeTypeTable, graph.EdgeTypeCalls
 
 	// ── Python imports (no graph node; captured for future cross-file linker) ──
 	case lower == "python_import" || lower == "python_from_import":
