@@ -52,6 +52,7 @@ var wantLinkPasses = []struct {
 	{"sprockets_assets", scopeSameServiceOnly},
 	{"rails_views", scopeSameServiceOnly},
 	{"ruby_import_edges", scopeSameServiceOnly},
+	{"shell_invocation_edges", scopeSameServiceOnly},
 	{"datastores", scopeSameServiceOnly},
 	{"tables", scopeSameServiceOnly},
 	{"response_shapes", scopeCrossService},
