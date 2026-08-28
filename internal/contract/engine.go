@@ -184,11 +184,18 @@ func matchProducerWithKeyOverride(
 		rawKey := strings.Join(rawFields, " ")
 		normKey := strings.Join(normFields, " ")
 
-		hits, _ := findMatches(rawKey, normKey, rule.Match, idx)
+		hits, _, matchMeta := findMatches(rawKey, normKey, rule.Match, idx)
 		emitted := false
 		for _, hit := range hits {
 			if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
 				continue
+			}
+			edgeMeta := map[string]string{
+				"confidence": graph.ConfidenceInferred,
+				"via":        "branch_enum",
+			}
+			for k, v := range matchMeta {
+				edgeMeta[k] = v
 			}
 			result.Edges = append(result.Edges, graph.Edge{
 				ID:         fmt.Sprintf("%s:%s->%s", rule.Edge.IDPrefix, prod.ID, hit.ID),
@@ -197,10 +204,7 @@ func matchProducerWithKeyOverride(
 				Type:       rule.Edge.Type,
 				Label:      normKey,
 				Confidence: graph.ConfidenceInferred,
-				Meta: map[string]string{
-					"confidence": graph.ConfidenceInferred,
-					"via":        "branch_enum",
-				},
+				Meta:       edgeMeta,
 			})
 			emitted = true
 		}
@@ -256,7 +260,7 @@ func matchProducer(
 		rawKey := strings.Join(rawFields, " ")
 		normKey := strings.Join(normFields, " ")
 
-		hits, confidence := findMatches(rawKey, normKey, rule.Match, idx)
+		hits, confidence, matchMeta := findMatches(rawKey, normKey, rule.Match, idx)
 
 		// Collect the hits that pass the same-service policy first, so fan-out
 		// ambiguity can be judged before edges are emitted (recall is preserved:
@@ -311,6 +315,9 @@ func matchProducer(
 
 		for _, hit := range eligible {
 			edgeMeta := map[string]string{"confidence": edgeConfidence}
+			for k, v := range matchMeta {
+				edgeMeta[k] = v
+			}
 			for metaKey, viaValue := range rule.Edge.ViaMeta {
 				if prod.Meta[metaKey] != "" {
 					edgeMeta["via"] = viaValue
@@ -394,29 +401,55 @@ func distinctTargetServices(hits []*graph.Node) int {
 
 // findMatches tries each tier in order against the consumer indexes and
 // returns every consumer on the first tier that hits, plus the corresponding
-// confidence string. Consumers are returned in node-input order (stable).
-func findMatches(rawKey, normKey string, tiers []MatchTier, idx consumerIndexes) ([]*graph.Node, string) {
+// confidence string and any tier-specific match metadata. Consumers are
+// returned in node-input order (stable).
+func findMatches(rawKey, normKey string, tiers []MatchTier, idx consumerIndexes) ([]*graph.Node, string, map[string]string) {
 	for _, tier := range tiers {
 		switch tier {
 		case TierExact:
 			if hs := idx.exact[rawKey]; len(hs) > 0 {
-				return hs, graph.ConfidenceStatic
+				return hs, graph.ConfidenceStatic, nil
 			}
 		case TierNormalized:
 			if hs := idx.norm[normKey]; len(hs) > 0 {
-				return hs, graph.ConfidenceInferred
+				return hs, graph.ConfidenceInferred, nil
 			}
 		case TierWildcardAnchored:
 			if hs := wildcardScan(normKey, idx); len(hs) > 0 {
-				return hs, graph.ConfidenceInferred
+				return hs, graph.ConfidenceInferred, wildcardMatchMeta(normKey)
 			}
 		case TierExchangeOnly:
 			if hs := exchangeOnlyScan(normKey, idx); len(hs) > 0 {
-				return hs, graph.ConfidencePartial
+				return hs, graph.ConfidencePartial, nil
 			}
 		}
 	}
-	return nil, ""
+	return nil, "", nil
+}
+
+// wildcardMatchMeta records the anchor strength of a TierWildcardAnchored
+// match: the fraction of the matched key's path segments that are concrete
+// (not "*"). Phase 2's measurement (docs/cross-service-edge-confidence-plan.md)
+// found this population uniformly >=50% concrete-anchored across two fleets —
+// well above the flat `inferred` confidence's single bucket — but also found
+// no threshold split that would change *which* edges qualify, so this is
+// surfaced as metadata for a caller to use rather than folded into a new
+// confidence tier (the plan's open design question resolves to the
+// lower-risk choice: confidence itself is unchanged by this).
+func wildcardMatchMeta(key string) map[string]string {
+	keyPath, _ := splitAtFirstSlash(key)
+	segs := splitPath(keyPath)
+	if len(segs) == 0 {
+		return nil
+	}
+	concrete := 0
+	for _, s := range segs {
+		if s != "*" {
+			concrete++
+		}
+	}
+	ratio := float64(concrete) / float64(len(segs))
+	return map[string]string{"anchor_ratio": strconv.FormatFloat(ratio, 'f', 2, 64)}
 }
 
 func applyUnmatched(prod *graph.Node, rule Rule, targetSvc string, result *Result, synthSeen map[string]bool) {
