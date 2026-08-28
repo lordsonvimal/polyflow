@@ -313,6 +313,18 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"raise depth to 3 for symbols. Symbol-level `id` feeds directly into read, context, or impact.",
 	}, auditTool(s, "hierarchy", s.hierarchy))
 
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "unknown_edges",
+		Description: "List confidence-bearing edges (http_call, publishes, …) at or below a " +
+			"confidence tier, fleet-wide, in one call — the bulk-audit counterpart to calling `context` " +
+			"on the synthetic `unresolved` node, which only covers one traversal's budget. Default " +
+			"min_confidence is \"unknown\"; pass \"partial\"/\"inferred\"/\"static\" to widen the report. " +
+			"A producer with a better-resolved edge elsewhere in the fleet-merged graph (e.g. its own " +
+			"local store said unknown but bridge.db resolved it cross-service) is excluded — it is not " +
+			"actually unresolved fleet-wide. Scope with service/edge_type to narrow a large-fleet scan. " +
+			"from_id feeds directly into read/context/trace for the producer call site.",
+	}, auditTool(s, "unknown_edges", s.unknownEdges))
+
 	return srv, s
 }
 

@@ -158,6 +158,11 @@ type Store interface {
 	ListNodesByType(ctx context.Context, nodeType, service string, limit int) ([]*Node, error)
 	ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
 	ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
+	// ListEdgesByConfidence returns edges whose confidence is one of the
+	// given values (empty = no filter), optionally restricted to the given
+	// edge types (empty = no filter). Ordered by the "from" node's
+	// (service, file, line) for stable reporting.
+	ListEdgesByConfidence(ctx context.Context, confidences []string, edgeTypes []string) ([]*Edge, error)
 	BuildIndex(ctx context.Context) (*AdjacencyIndex, error)
 	Stats(ctx context.Context) (nodeCount, edgeCount int, err error)
 	// UpsertParseError records (or updates) a parse error for a file.
@@ -516,6 +521,49 @@ func (s *SQLiteStore) ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, 
 	}
 	defer rows.Close()
 	return scanEdges(rows)
+}
+
+// ListEdgesByConfidence returns edges whose confidence is one of the given
+// values (empty confidences = no confidence filter), optionally restricted
+// to the given edge types (empty edgeTypes = no type filter). Ordered by
+// the "from" node's (service, file, line) for stable reporting, the same
+// rationale ListUnresolvedRefs' ordering documents — a caller printing this
+// as a flat list gets file-adjacent edges grouped together instead of id
+// order.
+func (s *SQLiteStore) ListEdgesByConfidence(ctx context.Context, confidences []string, edgeTypes []string) ([]*Edge, error) {
+	query := `SELECT e.id, e."from", e."to", e.type, e.label, e.meta, e.confidence, e.method, e.path, e.sources_json, e.verification_state, e.verified_granularity
+		FROM edges e JOIN nodes n ON n.id = e."from"`
+	var conds []string
+	var args []any
+	if len(confidences) > 0 {
+		conds = append(conds, "e.confidence IN ("+placeholders(len(confidences))+")")
+		for _, c := range confidences {
+			args = append(args, c)
+		}
+	}
+	if len(edgeTypes) > 0 {
+		conds = append(conds, "e.type IN ("+placeholders(len(edgeTypes))+")")
+		for _, t := range edgeTypes {
+			args = append(args, t)
+		}
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " ORDER BY n.service, n.file, n.line"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list edges by confidence: %w", err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
+// placeholders returns "?, ?, ..." for n items, used by ListEdgesByConfidence's
+// dynamic IN clauses.
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 func (s *SQLiteStore) BuildIndex(ctx context.Context) (*AdjacencyIndex, error) {
