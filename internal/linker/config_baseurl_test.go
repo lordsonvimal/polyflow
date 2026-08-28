@@ -353,3 +353,33 @@ func TestResolveConfigBaseURLPaths_ReadsK8sAndTerraform(t *testing.T) {
 		t.Errorf("terraform path = %q", got)
 	}
 }
+
+// TestResolveConfigBaseURLPaths_ReadsShellExport is SH2's integration test:
+// a Go host-resolver fixture (a client node ResolveGoHTTPHosts would have
+// stamped Meta["env_var"] on) whose ONLY env source in the service tree is a
+// deploy.sh `export` now resolves — proving the seam (configsrc.Load merging
+// in shellEnvValues), not just the extractor in isolation. Zero changes to
+// this file or internal/linker/go_http_hosts.go were needed: configsrc.Load
+// is the only integration point SH2 touches.
+func TestResolveConfigBaseURLPaths_ReadsShellExport(t *testing.T) {
+	t.Parallel()
+	svcPaths := writeConfigFixture(t, "svc-a", map[string]string{
+		"deploy.sh": "export MYSYCAMORE_API_URL=https://svc-b.internal/api/v2\n",
+	})
+	nodes := []graph.Node{clientNode(map[string]string{
+		"path":    "*/users",
+		"env_var": "MYSYCAMORE_API_URL",
+	})}
+
+	changed := ResolveConfigBaseURLPaths(nodes, svcPaths)
+
+	if len(changed) != 1 {
+		t.Fatalf("expected 1 changed node, got %d", len(changed))
+	}
+	if got := nodes[0].Meta["path"]; got != "*/api/v2/users" {
+		t.Errorf("path = %q, want %q", got, "*/api/v2/users")
+	}
+	if got := nodes[0].Meta["path_prefix_ref"]; got != "deploy.sh:1" {
+		t.Errorf("path_prefix_ref = %q, want deploy.sh:1", got)
+	}
+}

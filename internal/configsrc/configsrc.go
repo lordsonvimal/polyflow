@@ -48,6 +48,13 @@ func Load(svcPath string) map[string][]Value {
 	for _, sub := range tfSubdirs {
 		merge(out, terraformEnvValues(filepath.Join(svcPath, sub)))
 	}
+	// SH2: shell deploy/entrypoint scripts (`export DATABASE_URL=...`,
+	// `ENV_VAR=value some-command`) are a third real source of the same
+	// facts. Unlike k8s/terraform, shell scripts carry no dedicated
+	// subdirectory convention — deploy.sh/entrypoint.sh commonly sit at the
+	// service root, so shellEnvValues scans the whole service tree (it
+	// already recurses) rather than a fixed subdirectory list.
+	merge(out, shellEnvValues(svcPath))
 	return out
 }
 
