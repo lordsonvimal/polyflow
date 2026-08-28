@@ -66,7 +66,26 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 		// entrypoint/reflect-dispatched machinery below, all of which assume a
 		// callable unit. Write-only is still dead: an assignment nobody ever
 		// reads has no observable effect.
+		//
+		// Only meta.scope=package|module qualifies. Verified live on the
+		// juniper fleet: scope=captured (isLocalVariable's function-local
+		// receivers/params/locals — every one, not just closure-captured ones,
+		// see graph.isLocalVariable) had a 100% zero-reads rate (1376/1376) —
+		// the reads/writes extractors never mint edges for that bucket at all,
+		// so "zero reads" carries no signal there. scope=global (JS
+		// window-namespace values matched by MetaGlobalSymbol string in
+		// rails_views.go, not by a reads edge) was equally 51/51 zero-reads for
+		// the same reason: wrong liveness mechanism, not actually dead.
+		// scope=package/module are the only buckets a reads edge is actually
+		// minted for on genuine usage (confirmed live: a flagged package-scope
+		// const/var with a real call site, e.g. `providerOnce.Do(...)`, was the
+		// exception rather than the rule — real orphans like an unused status
+		// enum member dominate that bucket).
 		if !isCallable {
+			scope := n.Meta["scope"]
+			if scope != "package" && scope != "module" {
+				continue
+			}
 			if graph.IsTestFilePath(n.File) {
 				continue
 			}

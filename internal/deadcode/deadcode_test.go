@@ -398,6 +398,26 @@ func TestBuild_VariableWriteOnlyStillFlagged(t *testing.T) {
 	assert.True(t, found, "a writes-only edge is not usage — a variable never read back is still dead")
 }
 
+func TestBuild_CapturedScopeVariableNeverFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:local_var", Type: graph.NodeTypeVariable, Label: "result", Service: "backend", File: "handler.go", Line: 12, Meta: map[string]string{"kind": "var", "scope": "captured"}})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:local_var", f.ID, "scope=captured (function-local receivers/params/locals) never gets reads edges minted, so zero-reads carries no signal there")
+	}
+}
+
+func TestBuild_GlobalScopeVariableNeverFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "fe:global_symbol", Type: graph.NodeTypeVariable, Label: "ContainerTypesContainer", Service: "backend", File: "app-config.js", Line: 20, Meta: map[string]string{"scope": "global"}})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "fe:global_symbol", f.ID, "scope=global values are matched by global_symbol, not a reads edge, so zero-reads carries no signal there")
+	}
+}
+
 func TestBuild_VariableInTestFileNotFlagged(t *testing.T) {
 	idx := fixtureIndex()
 	idx.AddNode(&graph.Node{ID: "be:test_const", Type: graph.NodeTypeVariable, Label: "fixtureVal", Service: "backend", File: "config_test.go", Line: 3, Meta: map[string]string{"kind": "const", "scope": "package"}})
