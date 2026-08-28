@@ -226,12 +226,14 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 	matchedProd := make(map[*Span]bool)
 
 	// Pass 3: match consumers — link-based causality first, key_match fallback.
+	//
+	// Code attribution is taken from the PRODUCER span, not the consumer: a
+	// dynamic-key ledger entry (dynamic_topic/dynamic_queue) is a producer-side
+	// call site — code.filepath/lineno on the publish call is what pins it, the
+	// same convention the HTTP path uses (caller's call site, not the handler's).
+	// Refs are built per matched producer (not shared/reused across a fan-out)
+	// so each call site keeps its own code attribution.
 	for _, c := range msgConsumers {
-		ref := FlowRef{
-			Session:    session,
-			TraceID:    c.sp.TraceID,
-			ObservedAt: int64(c.sp.StartUnixNano / 1_000_000_000),
-		}
 		// Link-based: span links reference the producer span's (traceId, spanId).
 		linked := false
 		for _, lk := range c.sp.Links {
@@ -245,7 +247,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 				continue
 			}
 			matchedProd[prod] = true
-			addFlow(string(c.kind), c.key, fromSvc, c.service, "link", ref)
+			addFlow(string(c.kind), c.key, fromSvc, c.service, "link", codeRef(session, c.sp, prod))
 			linked = true
 			// No break — fan-out: every linked producer gets an edge.
 		}
@@ -262,7 +264,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 		}
 		for _, p := range prods {
 			matchedProd[p.sp] = true
-			addFlow(string(c.kind), c.key, p.service, c.service, "key_match", ref)
+			addFlow(string(c.kind), c.key, p.service, c.service, "key_match", codeRef(session, c.sp, p.sp))
 		}
 	}
 
@@ -275,6 +277,9 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			Session:    session,
 			TraceID:    p.sp.TraceID,
 			ObservedAt: int64(p.sp.StartUnixNano / 1_000_000_000),
+			CodeFile:   p.sp.Attrs["code.filepath"],
+			CodeFunc:   p.sp.Attrs["code.function"],
+			CodeLine:   p.sp.Attrs["code.lineno"],
 		}
 		addFlow(string(p.kind), p.key, p.service, "", "key_match", ref)
 	}
@@ -479,6 +484,21 @@ func workspaceLinks(ws *workspace.WorkspaceConfig) []workspace.Link {
 		return nil
 	}
 	return ws.Links
+}
+
+// codeRef builds a FlowRef for a messaging observation. TraceID/ObservedAt
+// come from the consumer span (the causality anchor); CodeFile/CodeFunc/
+// CodeLine come from the producer span, since the dynamic-key call site a
+// ledger entry names is the publish, not the receive.
+func codeRef(session string, consumer, producer *Span) FlowRef {
+	return FlowRef{
+		Session:    session,
+		TraceID:    consumer.TraceID,
+		ObservedAt: int64(consumer.StartUnixNano / 1_000_000_000),
+		CodeFile:   producer.Attrs["code.filepath"],
+		CodeFunc:   producer.Attrs["code.function"],
+		CodeLine:   producer.Attrs["code.lineno"],
+	}
 }
 
 // appendRef appends ref to existing, deduped by (Session, TraceID).
