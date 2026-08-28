@@ -76,6 +76,34 @@ ALTER TABLE orders ADD COLUMN status VARCHAR(50);
 	assert.Equal(t, "status", orderCols[2].Name)
 }
 
+// TestSQL_SchemaQualifiedNameMintsOneTable is the regression fixture for the
+// object_reference dialect gap found during SQ3 corpus authoring: a
+// schema-qualified name (`CREATE TABLE public.maple_agents (...)`, real
+// pg_dump syntax) has TWO identifier children under object_reference
+// ("public", "maple_agents"), not one. An unanchored `(identifier) @name`
+// capture matches both separately, minting a spurious "public"-labeled
+// table node per qualified CREATE TABLE. schema.yaml's trailing `.` anchor
+// pins @name to the LAST identifier child, so exactly one table node —
+// named after the real table, not the schema — comes out.
+func TestSQL_SchemaQualifiedNameMintsOneTable(t *testing.T) {
+	t.Parallel()
+	src := `CREATE TABLE public.maple_agents (
+  id SERIAL PRIMARY KEY,
+  name TEXT
+);
+`
+	nodes, _, _ := parseSQLSrc(t, "schema.sql", src)
+
+	var tables []graph.Node
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeTable {
+			tables = append(tables, n)
+		}
+	}
+	require.Len(t, tables, 1, "a schema-qualified CREATE TABLE must mint exactly one table node, not one per qualifier segment")
+	assert.Equal(t, "maple_agents", tables[0].Label, "the table node must be labeled after the real table name, not the schema qualifier")
+}
+
 // TestSQL_AlterTableEmitsSelfEdge verifies ALTER TABLE ADD/DROP COLUMN never
 // mints a new node (it's a mutation of the same entity) and instead emits an
 // edge onto the existing table node.
