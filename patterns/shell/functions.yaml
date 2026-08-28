@@ -1,0 +1,34 @@
+language: bash
+version: "1"
+patterns:
+  # Function definitions. The bash grammar produces the same node shape,
+  # function_definition, for both the `function foo { }` keyword form and
+  # the parenthesis-only `foo() { }` POSIX form — one query covers both.
+  # @_def spans the whole body so containment-based enclosing-scope
+  # attribution (same-file bare calls, Pass 2's funcsByFile) bounds
+  # correctly on the closing brace, not just the declaration line.
+  - name: func_decl
+    query: |
+      (function_definition
+        name: (word) @name) @_def
+    captures:
+      - name: name
+        role: func_name
+
+  # Same-file bare-word command invocations (`foo`, `foo arg1`). Anchored on
+  # a literal (word) command name only — a dynamic command name
+  # (concatenation, expansion) never resolves to a declared function by
+  # construction, so it is deliberately excluded from this pattern rather
+  # than routed to the unresolved ledger under a misleading "call_ref" name.
+  # Resolution against a declared function name happens generically in
+  # MatchToGraph's call-ref pass (same-file name lookup); an unresolved
+  # bare word (an external program: echo, cat, curl, ...) lands in the
+  # unresolved ledger like any other unresolved call reference in any
+  # other language — expected, honest noise, not a defect.
+  - name: shell_command_call
+    query: |
+      (command
+        name: (command_name (word) @callee))
+    captures:
+      - name: callee
+        role: func_ref

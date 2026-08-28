@@ -569,7 +569,7 @@ func TestRun_UnparsedFileLedger(t *testing.T) {
 	require.NoError(t, os.MkdirAll(svcDir, 0o755))
 	writeFile(t, svcDir, "go.mod", "module example.com/api\n\ngo 1.22\n")
 	writeFile(t, svcDir, "main.go", "package main\nfunc main() {}\n")
-	writeFile(t, svcDir, "deploy.sh", "#!/bin/sh\necho deploy\n")
+	writeFile(t, svcDir, "deploy.sql", "-- not a CREATE TABLE, just an unparsed blind spot\n")
 	writeFile(t, svcDir, "Dockerfile", "FROM alpine\n")
 	writeFile(t, svcDir, "logo.png", "\x89PNG\r\n") // allowlisted — must not appear
 
@@ -594,11 +594,11 @@ func TestRun_UnparsedFileLedger(t *testing.T) {
 
 	meta1 := openAndReadMeta()
 
-	// Verify content: .sh and Dockerfile present; .png absent.
+	// Verify content: .sql and Dockerfile present; .png absent.
 	var parsed map[string]map[string]int
 	require.NoError(t, json.Unmarshal([]byte(meta1), &parsed))
 	apiCounts := parsed["api"]
-	assert.Equal(t, 1, apiCounts[".sh"], ".sh count in api service")
+	assert.Equal(t, 1, apiCounts[".sql"], ".sql count in api service")
 	assert.Equal(t, 1, apiCounts["Dockerfile"], "Dockerfile count in api service")
 	assert.Equal(t, 2, len(apiCounts), "only two non-asset blind spots")
 	_, hasPNG := apiCounts[".png"]

@@ -51,6 +51,8 @@ func grammarForExt(ext string) string {
 		return "html"
 	case ".py":
 		return "python"
+	case ".sh", ".bash", ".bats":
+		return "bash"
 	default:
 		return ""
 	}
@@ -159,8 +161,8 @@ func TestPatternFixtures(t *testing.T) {
 					if n.Type == graph.NodeTypeChannel {
 						continue // synthesized channel nodes are a side effect, not the match itself
 					}
-					if n.Label == "(module)" || n.Label == "(document)" {
-						continue // synthesized scope node (JS module / HTML document), not the match itself
+					if n.Label == "(module)" || n.Label == "(document)" || n.Label == "(script)" {
+						continue // synthesized scope node (JS module / HTML document / shell script), not the match itself
 					}
 					if !want[string(n.Type)] {
 						t.Errorf("pattern %s produced node type %q, expected one of %v (line %d)",

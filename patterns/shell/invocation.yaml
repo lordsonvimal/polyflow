@@ -1,0 +1,46 @@
+language: bash
+version: "1"
+patterns:
+  # Verb-prefixed script invocation: `bash x.sh`, `sh x.sh`, `. x.sh`,
+  # `source x.sh`. The `.` anchor between name: and argument: fields
+  # requires @path to be the FIRST argument immediately following the verb
+  # (a command node's `argument:` field repeats once per positional
+  # argument — without the anchor this query fires once per argument,
+  # e.g. `bash migrate.sh --flag` would also match "--flag" as a second,
+  # bogus invocation target).
+  #
+  # @path captures whatever node shape the argument actually is (word,
+  # string, raw_string, concatenation, simple_expansion, ...) — literal-vs-
+  # dynamic classification is NOT done here via a predicate; it happens in
+  # internal/parser/shell.go on the retained tree-sitter node (SH1's own
+  # narrow literal-vs-variable check, deliberately not routed through
+  # contract.KeyWalker). This pattern only recognizes the shape; it does
+  # not decide resolvability.
+  - name: shell_invocation_verb
+    query: |
+      (command
+        name: (command_name (word) @verb)
+        .
+        argument: (_) @path
+        (#match? @verb "^(bash|sh|source|\\.)$"))
+    captures:
+      - name: verb
+        role: invocation_verb
+      - name: path
+        role: invocation_path
+
+  # Bare executable-bit invocation: `./scripts/seed.sh`, `../seed.sh`. The
+  # whole command_name node is the target (no separate verb/argument split).
+  # Matched syntactically on a leading "./" or "../" prefix in the node's
+  # rendered text — Node.Content() returns the exact source span regardless
+  # of internal structure, so this predicate matches equally whether the
+  # path is a literal word or a dynamic concatenation
+  # (`./scripts/$ENV/seed.sh`); shell.go does the literal-vs-dynamic split.
+  - name: shell_invocation_bare
+    query: |
+      (command
+        name: (command_name) @path
+        (#match? @path "^\\.\\.?/"))
+    captures:
+      - name: path
+        role: invocation_path
