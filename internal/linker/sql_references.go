@@ -165,9 +165,12 @@ type sqlTableDecl struct {
 // query — kept as a literal Go string (not loaded from the YAML) because
 // this pass re-parses independently of the patterns/matcher pipeline, the
 // same decoupling internal/linker/shell_invocation.go's own query constants
-// already use for their own cross-file queries.
+// already use for their own cross-file queries. The trailing `.` anchor on
+// @name pins it to object_reference's LAST identifier child — a
+// schema-qualified name (`public.maple_agents`) has two, and an unanchored
+// capture matches both separately (see schema.yaml's own comment on this).
 const sqlCreateTableQuery = `(create_table
-  (object_reference (identifier) @name)
+  (object_reference (identifier) @name .)
   (column_definitions) @columns) @_stmt`
 
 // parseSQLTableDecls walks file for every CREATE TABLE statement's name and
@@ -322,10 +325,14 @@ func standaloneForeignKey(cons *sitter.Node, src []byte) (sqlForeignKey, bool) {
 }
 
 // objectReferenceName returns an object_reference node's bare identifier
-// text (quote-stripped).
+// text (quote-stripped) — the LAST named child, since a schema-qualified
+// reference (`REFERENCES public.maple_agents(id)`) has two identifier
+// children ("public", "maple_agents") and the table name is always the last
+// one regardless of how many qualifier segments precede it (the same fix
+// applied to sqlCreateTableQuery's own object_reference capture above).
 func objectReferenceName(n *sitter.Node, src []byte) string {
-	if n.NamedChildCount() > 0 {
-		return patterns.StripStringLiteral(n.NamedChild(0).Content(src))
+	if cnt := n.NamedChildCount(); cnt > 0 {
+		return patterns.StripStringLiteral(n.NamedChild(int(cnt) - 1).Content(src))
 	}
 	return patterns.StripStringLiteral(n.Content(src))
 }

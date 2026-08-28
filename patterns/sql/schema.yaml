@@ -7,10 +7,19 @@ patterns:
   # capture name can't survive as a list); internal/parser/sql.go walks the
   # retained tree-sitter node (via keyWalkerKeyCaptureNames' "columns" entry)
   # to build meta["columns"] JSON, the NodeTypeStruct "fields" JSON precedent.
+  #
+  # object_reference's trailing `.` anchor (every occurrence in this file):
+  # a schema-qualified name (`CREATE TABLE public.maple_agents (...)`) parses
+  # as object_reference with TWO named identifier children ("public",
+  # "maple_agents"), not one — an unanchored `(identifier) @name` matches
+  # BOTH separately, producing two CREATE TABLE matches (one spuriously
+  # labeled "public") for a single real statement. The anchor pins @name to
+  # the LAST identifier child, which is always the actual table/view/index
+  # name regardless of how many schema-qualifier segments precede it.
   - name: sql_create_table
     query: |
       (create_table
-        (object_reference (identifier) @name)
+        (object_reference (identifier) @name .)
         (column_definitions) @columns) @_def
     captures:
       - name: name
@@ -25,7 +34,7 @@ patterns:
   - name: sql_create_view
     query: |
       (create_view
-        (object_reference (identifier) @name)) @_def
+        (object_reference (identifier) @name .)) @_def
     captures:
       - name: name
         role: table_name
@@ -36,7 +45,7 @@ patterns:
     query: |
       (create_index
         (identifier) @index_name
-        (object_reference (identifier) @name)) @_def
+        (object_reference (identifier) @name .)) @_def
     captures:
       - name: name
         role: table_name
@@ -48,7 +57,7 @@ patterns:
   - name: sql_drop_table
     query: |
       (drop_table
-        (object_reference (identifier) @name)) @_def
+        (object_reference (identifier) @name .)) @_def
     captures:
       - name: name
         role: table_name
@@ -60,7 +69,7 @@ patterns:
   - name: sql_alter_add_column
     query: |
       (alter_table
-        (object_reference (identifier) @name)
+        (object_reference (identifier) @name .)
         (add_column
           (column_definition (identifier) @column))) @_def
     captures:
@@ -73,7 +82,7 @@ patterns:
   - name: sql_alter_drop_column
     query: |
       (alter_table
-        (object_reference (identifier) @name)
+        (object_reference (identifier) @name .)
         (drop_column (identifier) @column)) @_def
     captures:
       - name: name

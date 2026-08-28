@@ -72,6 +72,42 @@ func TestLinkSQLReferences_InlineAndStandalone(t *testing.T) {
 	}
 }
 
+// TestLinkSQLReferences_SchemaQualifiedNames is the regression fixture for
+// the object_reference dialect gap found during SQ3 corpus authoring: real
+// pg_dump-style SQL schema-qualifies both the declaring CREATE TABLE
+// (`public.orders`) and the REFERENCES target (`public.users`).
+// object_reference's schema-qualifier ("public") must never leak into
+// either the declaring table's own label or the resolved FK target — both
+// resolve by the bare table name.
+func TestLinkSQLReferences_SchemaQualifiedNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	usersFile := filepath.Join(dir, "users.sql")
+	mustWrite(t, usersFile, "CREATE TABLE public.users (id INT PRIMARY KEY);\n")
+
+	ordersFile := filepath.Join(dir, "orders.sql")
+	mustWrite(t, ordersFile,
+		"CREATE TABLE public.orders (id INT PRIMARY KEY, user_id INT REFERENCES public.users(id));\n")
+
+	nodes := []graph.Node{
+		makeSQLTableNode("n:users", "svc", usersFile, "users"),
+		makeSQLTableNode("n:orders", "svc", ordersFile, "orders"),
+	}
+	svcFiles := map[string][]string{"svc": {usersFile, ordersFile}}
+
+	edges, unresolved := LinkSQLReferences(nodes, svcFiles)
+	if len(unresolved) != 0 {
+		t.Errorf("expected no unresolved entries (schema qualifier must not break resolution), got %+v", unresolved)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 references edge, got %d: %+v", len(edges), edges)
+	}
+	if edges[0].From != "n:orders" || edges[0].To != "n:users" {
+		t.Errorf("edge = %s -> %s, want n:orders -> n:users", edges[0].From, edges[0].To)
+	}
+}
+
 // TestLinkSQLReferences_UnresolvedTarget verifies a REFERENCES clause whose
 // target table isn't indexed in this workspace ledgers rather than being
 // dropped silently or fabricated.
