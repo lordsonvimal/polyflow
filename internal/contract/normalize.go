@@ -35,6 +35,7 @@ func init() {
 	RegisterNormalizer("dynamic_host_strip", normDynamicHostStrip)
 	RegisterNormalizer("amqp_topic_wildcard", normAMQPTopicWildcard)
 	RegisterNormalizer("empty_path_guard", normEmptyPathGuard)
+	RegisterNormalizer("format_suffix_strip", normFormatSuffixStrip)
 }
 
 var (
@@ -59,6 +60,18 @@ var (
 	// and meet the composed handler `/api/v1/exec-configs/:config_id/dependent-apps`
 	// on the wildcard tier (X.10c).
 	reInterpSegment = regexp.MustCompile(`[^/]*\$\{[^}]*\}[^/]*`)
+	// reFormatSuffix matches a trailing Rails implicit-format extension.
+	// Rails' router strips format negotiation before registering a route —
+	// `get "study_roles"` never appears in the route table as
+	// "study_roles.json" — so a client key built from the rendered path
+	// (`/app/studies/:id/study_roles.json`) and the registered handler key
+	// (`/app/studies/:id/study_roles`) can never string-match without this.
+	// The extension set is deliberately the handful Rails ships
+	// `respond_to` support for by default; verified against all four Ruby
+	// repos in the juniper/orion fleet (2026-08-28) that zero
+	// `http_handler` nodes carry any of these as a literal path segment, so
+	// stripping can never manufacture a collision with a real handler.
+	reFormatSuffix = regexp.MustCompile(`\.(?:json|js|xml|csv|html)$`)
 )
 
 // normParamWildcard replaces path parameter segments with *.
@@ -80,6 +93,14 @@ func normQueryStrip(value string, _ NormalizeEnv) string {
 		return value[:i]
 	}
 	return value
+}
+
+// normFormatSuffixStrip removes a trailing Rails implicit-format extension
+// (.json, .js, .xml, .csv, .html) from the whole value. A no-op on anything
+// else, including non-path key fields (an HTTP method never ends in one of
+// these).
+func normFormatSuffixStrip(value string, _ NormalizeEnv) string {
+	return reFormatSuffix.ReplaceAllString(value, "")
 }
 
 // normQuoteStrip removes surrounding single-quotes, double-quotes, or backticks.

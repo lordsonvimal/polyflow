@@ -82,6 +82,35 @@ func TestNormQueryStrip_NoQuery(t *testing.T) {
 	assert.Equal(t, "/users", callNorm("query_strip", "/users", env0()))
 }
 
+// --- format_suffix_strip ---
+
+func TestNormFormatSuffixStrip_JSON(t *testing.T) {
+	assert.Equal(t, "/app/studies/*/study_roles",
+		callNorm("format_suffix_strip", "/app/studies/*/study_roles.json", env0()))
+}
+
+func TestNormFormatSuffixStrip_JS(t *testing.T) {
+	assert.Equal(t, "/app/files/*/edit",
+		callNorm("format_suffix_strip", "/app/files/*/edit.js", env0()))
+}
+
+func TestNormFormatSuffixStrip_MidPathUnaffected(t *testing.T) {
+	// Negative: the extension must be the trailing suffix of the whole
+	// value, not merely present somewhere in it.
+	assert.Equal(t, "/app/data.csv/export",
+		callNorm("format_suffix_strip", "/app/data.csv/export", env0()))
+}
+
+func TestNormFormatSuffixStrip_NoSuffix(t *testing.T) {
+	// Negative: no recognized suffix → unchanged
+	assert.Equal(t, "/app/studies", callNorm("format_suffix_strip", "/app/studies", env0()))
+}
+
+func TestNormFormatSuffixStrip_MethodFieldUnaffected(t *testing.T) {
+	// Negative: applied to a non-path key field (HTTP method) → no-op
+	assert.Equal(t, "GET", callNorm("format_suffix_strip", "GET", env0()))
+}
+
 // --- quote_strip ---
 
 func TestNormQuoteStrip_DoubleQuotes(t *testing.T) {

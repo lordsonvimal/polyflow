@@ -31,7 +31,7 @@ contracts:
       node: http_handler
       key: [method, path]
     normalizers:                     # applied in order to each key field
-      [case_fold, url_to_path, dynamic_host_strip, base_url_strip, query_strip, param_wildcard, trim_slash, empty_path_guard]
+      [case_fold, url_to_path, dynamic_host_strip, base_url_strip, query_strip, format_suffix_strip, param_wildcard, trim_slash, empty_path_guard]
                                      # case_fold first: chi emits "Post", templ emits
                                      # "POST" — normalizing to lowercase before key
                                      # comparison gives method-case-insensitive parity
@@ -42,6 +42,14 @@ contracts:
                                      # → "*/api/v1/x") so it aligns with the handler's
                                      # bare "/api/v1/x" — placed after url_to_path,
                                      # before base_url_strip per the worked example.
+                                     # format_suffix_strip: a Rails client path ends
+                                     # in an implicit-format extension the router never
+                                     # registers as a literal segment
+                                     # (`study_roles.json` in source, `study_roles` in
+                                     # the route table) — placed after query_strip so a
+                                     # `?x=y.json`-shaped query is already gone, before
+                                     # param_wildcard so a dynamic last segment
+                                     # (`/foo/*.json`) still reduces cleanly.
                                      # empty_path_guard (J.2c) LAST: a path that has
                                      # reduced to nothing ("", "/", all-wildcard) is
                                      # voided, so an unresolvable client URL falls to
@@ -98,7 +106,7 @@ contracts:
     consumer:
       node: http_handler
       key: [method, path]
-    normalizers: [case_fold, url_to_path, dynamic_host_strip, query_strip, param_wildcard, trim_slash, empty_path_guard]
+    normalizers: [case_fold, url_to_path, dynamic_host_strip, query_strip, format_suffix_strip, param_wildcard, trim_slash, empty_path_guard]
     match: [exact, normalized, wildcard_anchored]
     edge:
       type: navigates_to
