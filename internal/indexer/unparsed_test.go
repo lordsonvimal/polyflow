@@ -11,29 +11,30 @@ import (
 )
 
 // buildFixtureTree creates the worked-example fixture:
-//   main.go      → parseable
-//   deploy.sql    → unparsed blind spot (.sql)
-//   Dockerfile   → unparsed blind spot (extensionless)
-//   logo.png     → allowlisted asset (absent from output)
+//
+//	main.go      → parseable
+//	deploy.proto    → unparsed blind spot (.proto)
+//	Dockerfile   → unparsed blind spot (extensionless)
+//	logo.png     → allowlisted asset (absent from output)
 func buildFixtureTree(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.sql"), []byte("#!/bin/sh"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.proto"), []byte("#!/bin/sh"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "logo.png"), []byte("\x89PNG"), 0o644))
 	return dir
 }
 
 // TestWalkService_UnparsedCounts verifies that walkService counts blind-spot
-// files correctly: .sql and Dockerfile appear; logo.png is allowlisted.
+// files correctly: .proto and Dockerfile appear; logo.png is allowlisted.
 func TestWalkService_UnparsedCounts(t *testing.T) {
 	t.Parallel()
 	dir := buildFixtureTree(t)
 	_, unparsed, err := walkService(dir, nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, unparsed[".sql"], ".sql count")
+	assert.Equal(t, 1, unparsed[".proto"], ".proto count")
 	assert.Equal(t, 1, unparsed["Dockerfile"], "Dockerfile count (extensionless uses basename)")
 	assert.Equal(t, 2, len(unparsed), "only two non-asset blind spots")
 }
@@ -69,7 +70,7 @@ func TestWalkService_CleanService(t *testing.T) {
 func TestSerializeUnparsed_Determinism(t *testing.T) {
 	t.Parallel()
 	counts := map[string]map[string]int{
-		"api": {".sql": 3, "Dockerfile": 1},
+		"api": {".proto": 3, "Dockerfile": 1},
 		"web": {".vue": 12, ".svelte": 4},
 	}
 	first := serializeUnparsed(counts)
@@ -80,7 +81,7 @@ func TestSerializeUnparsed_Determinism(t *testing.T) {
 	// encoding/json marshals map keys in alphabetical order.
 	var parsed map[string]map[string]int
 	require.NoError(t, json.Unmarshal([]byte(first), &parsed))
-	assert.Equal(t, 3, parsed["api"][".sql"])
+	assert.Equal(t, 3, parsed["api"][".proto"])
 	assert.Equal(t, 1, parsed["api"]["Dockerfile"])
 	assert.Equal(t, 12, parsed["web"][".vue"])
 }
@@ -99,15 +100,15 @@ func TestUnparsedSummary_TopThree(t *testing.T) {
 	t.Parallel()
 	exts := map[string]int{
 		".vue":       12,
-		".sql":        3,
+		".proto":     3,
 		"Dockerfile": 1,
 		".svelte":    7,
 	}
 	total, parts := UnparsedSummary(exts)
 	assert.Equal(t, 23, total, "total count")
 	// sort.Strings: '.' (ASCII 46) < 'D' (ASCII 68), so dot-extensions sort first.
-	// Sorted: .sql, .svelte, .vue, Dockerfile → top-3: .sql, .svelte, .vue
-	assert.Contains(t, parts, ".sql", "top-3 should include .sql")
+	// Sorted: .proto, .svelte, .vue, Dockerfile → top-3: .proto, .svelte, .vue
+	assert.Contains(t, parts, ".proto", "top-3 should include .proto")
 	assert.Contains(t, parts, ".svelte", "top-3 should include .svelte")
 	assert.Contains(t, parts, ".vue", "top-3 should include .vue")
 	assert.NotContains(t, parts, "Dockerfile", "Dockerfile is 4th alphabetically, not in top-3")
@@ -117,10 +118,10 @@ func TestUnparsedSummary_TopThree(t *testing.T) {
 // works correctly.
 func TestUnparsedSummary_FewExtensions(t *testing.T) {
 	t.Parallel()
-	exts := map[string]int{".sql": 2}
+	exts := map[string]int{".proto": 2}
 	total, parts := UnparsedSummary(exts)
 	assert.Equal(t, 2, total)
-	assert.Equal(t, ".sql ×2", parts)
+	assert.Equal(t, ".proto ×2", parts)
 }
 
 // TestWalkService_TwoRunDeterminism verifies that two consecutive walkService
@@ -129,7 +130,7 @@ func TestWalkService_TwoRunDeterminism(t *testing.T) {
 	t.Parallel()
 	dir := buildFixtureTree(t)
 	// Add more files to exercise ordering.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy2.sql"), []byte("#!/bin/sh"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy2.proto"), []byte("#!/bin/sh"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("all:"), 0o644))
 
 	_, unparsed1, err1 := walkService(dir, nil)
@@ -151,10 +152,10 @@ func TestWalkService_ParseableFilesNotCounted(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("const x = 1"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.rb"), []byte("puts 'hi'"), 0o644))
 	// One non-parseable non-asset
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.sql"), []byte("#!/bin/sh"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.proto"), []byte("#!/bin/sh"), 0o644))
 
 	_, unparsed, err := walkService(dir, nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, map[string]int{".sql": 1}, unparsed, "only .sql is a blind spot")
+	assert.Equal(t, map[string]int{".proto": 1}, unparsed, "only .proto is a blind spot")
 }

@@ -715,6 +715,19 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, shellUnresolved...)
 			return nil
 		}},
+		// SQ1: .sql REFERENCES/FOREIGN KEY clauses as `references` edges
+		// between schema-declared table nodes. Runs after every service's
+		// .sql files have been parsed (internal/parser/sql.go mints the
+		// table nodes during the main parse phase, not by a link pass).
+		{"sql_reference_edges", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			sqlEdges, sqlUnresolved := linker.LinkSQLReferences(st.allNodes, svcFiles)
+			if err := st.writeEdges(sqlEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, sqlUnresolved...)
+			return nil
+		}},
 		{"datastores", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkDatastores(st.allNodes))
 		}},

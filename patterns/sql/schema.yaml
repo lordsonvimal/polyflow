@@ -1,0 +1,82 @@
+language: sql
+version: "1"
+patterns:
+  # CREATE TABLE name (...) -> graph.NodeTypeTable. @columns captures the
+  # whole column_definitions node (not one capture per column — a
+  # MatchResult's Captures is a flat map[string]string, so a repeated
+  # capture name can't survive as a list); internal/parser/sql.go walks the
+  # retained tree-sitter node (via keyWalkerKeyCaptureNames' "columns" entry)
+  # to build meta["columns"] JSON, the NodeTypeStruct "fields" JSON precedent.
+  - name: sql_create_table
+    query: |
+      (create_table
+        (object_reference (identifier) @name)
+        (column_definitions) @columns) @_def
+    captures:
+      - name: name
+        role: table_name
+      - name: columns
+        role: table_columns
+
+  # CREATE VIEW name AS ... -> the SAME NodeTypeTable, meta["kind"]="view"
+  # (stamped in internal/patterns/matcher.go's Pass 1) — one node type, a
+  # meta discriminator, not a second node type for what is structurally the
+  # same "queryable named relation" entity.
+  - name: sql_create_view
+    query: |
+      (create_view
+        (object_reference (identifier) @name)) @_def
+    captures:
+      - name: name
+        role: table_name
+
+  # CREATE INDEX idx ON table(cols) — captured as meta on the existing table
+  # node (internal/parser/sql.go), never a node of its own.
+  - name: sql_create_index
+    query: |
+      (create_index
+        (identifier) @index_name
+        (object_reference (identifier) @name)) @_def
+    captures:
+      - name: name
+        role: table_name
+      - name: index_name
+        role: index_name
+
+  # DROP TABLE name — captured as meta (dropped=true) on the existing table
+  # node (internal/parser/sql.go), never a node of its own.
+  - name: sql_drop_table
+    query: |
+      (drop_table
+        (object_reference (identifier) @name)) @_def
+    captures:
+      - name: name
+        role: table_name
+
+  # ALTER TABLE name ADD COLUMN col type — a mutation of the existing table
+  # entity, not a new one; internal/parser/sql.go merges @column onto the
+  # table node's meta["columns"] and emits a self-edge (via=alter) instead of
+  # letting this reach patterns.MatchToGraph as an ordinary definition.
+  - name: sql_alter_add_column
+    query: |
+      (alter_table
+        (object_reference (identifier) @name)
+        (add_column
+          (column_definition (identifier) @column))) @_def
+    captures:
+      - name: name
+        role: table_name
+      - name: column
+        role: column_name
+
+  # ALTER TABLE name DROP COLUMN col — same treatment as ADD COLUMN above.
+  - name: sql_alter_drop_column
+    query: |
+      (alter_table
+        (object_reference (identifier) @name)
+        (drop_column (identifier) @column)) @_def
+    captures:
+      - name: name
+        role: table_name
+      - name: column
+        role: column_name

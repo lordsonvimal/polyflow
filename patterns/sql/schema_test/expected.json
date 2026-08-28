@@ -1,0 +1,8 @@
+{
+  "patterns": [
+    "sql_create_table", "sql_create_table", "sql_create_view",
+    "sql_alter_add_column", "sql_alter_drop_column",
+    "sql_create_index", "sql_drop_table"
+  ],
+  "node_types": ["table", "table", "table"]
+}
