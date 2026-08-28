@@ -203,6 +203,32 @@ type filterIndex struct {
 	strayFilters map[string]int
 }
 
+// relFilePrefix derives the absolute-path prefix this service's files share
+// with graph.Node.File (workspace-relative): it finds one node whose File a
+// file in files ends with, and returns the absolute path minus that suffix.
+// serviceFiles (built from filepath.WalkDir on the service's absolute root)
+// are absolute, but every graph.Node.File is workspace-relative — without
+// this, classID's file\x00Name\x00line key never matches between the two,
+// silently dropping every class-scope filter edge (see the doc comment on
+// LinkRailsFilters, "Model callbacks": a model class has no actions, so the
+// class-scope edge is the *only* edge a validate/before_save callback can
+// ever produce — this bug zeroed that out for every model in every service).
+func relFilePrefix(nodes []graph.Node, svc string, files []string) string {
+	for i := range nodes {
+		if nodes[i].Service != svc || nodes[i].File == "" {
+			continue
+		}
+		suffix := "/" + filepath.ToSlash(nodes[i].File)
+		for _, f := range files {
+			fs := filepath.ToSlash(f)
+			if strings.HasSuffix(fs, suffix) {
+				return fs[:len(fs)-len(nodes[i].File)]
+			}
+		}
+	}
+	return ""
+}
+
 func newFilterIndex(nodes []graph.Node, svc string, files []string) *filterIndex {
 	ix := &filterIndex{
 		svc:          svc,
@@ -234,8 +260,9 @@ func newFilterIndex(nodes []graph.Node, svc string, files []string) *filterIndex
 		sort.Strings(ix.methodQN[qn])
 	}
 
+	prefix := relFilePrefix(nodes, svc, files)
 	for _, f := range files {
-		ix.scanFile(f)
+		ix.scanFile(f, prefix)
 	}
 	sort.SliceStable(ix.classes, func(i, j int) bool {
 		if ix.classes[i].file != ix.classes[j].file {
@@ -357,11 +384,12 @@ func filterFamily(kind string) string {
 	return kind
 }
 
-func (ix *filterIndex) scanFile(file string) {
+func (ix *filterIndex) scanFile(file, relPrefix string) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return
 	}
+	relFile := strings.TrimPrefix(filepath.ToSlash(file), relPrefix)
 	p := sitter.NewParser()
 	p.SetLanguage(rubysitter.GetLanguage())
 	tree, err := p.ParseCtx(context.Background(), nil, src)
@@ -386,7 +414,7 @@ func (ix *filterIndex) scanFile(file string) {
 	markStray = func(n *sitter.Node) {
 		if n.Type() == "call" {
 			if mn := n.ChildByFieldName("method"); mn != nil && filterKinds[mn.Content(src)] {
-				ix.strayFilters[fmt.Sprintf("%s\x00%d", file, int(n.StartPoint().Row)+1)] = int(n.StartPoint().Row) + 1
+				ix.strayFilters[fmt.Sprintf("%s\x00%d", relFile, int(n.StartPoint().Row)+1)] = int(n.StartPoint().Row) + 1
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
@@ -410,7 +438,7 @@ func (ix *filterIndex) scanFile(file string) {
 				parts := strings.Split(nameNode.Content(src), "::")
 				outer := append(append([]string{}, ns...), parts[:len(parts)-1]...)
 				name := parts[len(parts)-1]
-				ix.collectClass(n, name, outer, file, src, t == "module", collectActions)
+				ix.collectClass(n, name, outer, relFile, src, t == "module", collectActions)
 				inner = append(outer, name)
 			}
 		}
