@@ -10,7 +10,10 @@
      "attributes": [
        {"key": "messaging.system", "value": {"stringValue": "kafka"}},
        {"key": "messaging.operation.type", "value": {"stringValue": "publish"}},
-       {"key": "messaging.destination.name", "value": {"stringValue": "orders-topic"}}
+       {"key": "messaging.destination.name", "value": {"stringValue": "orders-topic"}},
+       {"key": "code.filepath", "value": {"stringValue": "internal/publisher/orders.go"}},
+       {"key": "code.function", "value": {"stringValue": "PublishOrderCreated"}},
+       {"key": "code.lineno", "value": {"intValue": "88"}}
      ]}]}]},
   {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "consumer-svc"}}]},
    "scopeSpans": [{"spans": [{

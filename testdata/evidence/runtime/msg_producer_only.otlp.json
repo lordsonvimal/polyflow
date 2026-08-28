@@ -10,6 +10,9 @@
      "attributes": [
        {"key": "messaging.system", "value": {"stringValue": "nats"}},
        {"key": "messaging.operation.type", "value": {"stringValue": "publish"}},
-       {"key": "messaging.destination.name", "value": {"stringValue": "events.created"}}
+       {"key": "messaging.destination.name", "value": {"stringValue": "events.created"}},
+       {"key": "code.filepath", "value": {"stringValue": "internal/publisher/nats.go"}},
+       {"key": "code.function", "value": {"stringValue": "PublishEventCreated"}},
+       {"key": "code.lineno", "value": {"intValue": "5"}}
      ]}]}]}
 ]}

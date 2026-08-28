@@ -581,6 +581,10 @@ func TestMapSpansMsgAMQPLinked(t *testing.T) {
 	assert.Equal(t, "sess-amqp", f.Refs[0].Session)
 	assert.Equal(t, "ccdd000000000000000000000000cc22", f.Refs[0].TraceID,
 		"ref must come from the CONSUMER span's trace")
+	assert.Equal(t, "internal/publisher/events.go", f.Refs[0].CodeFile,
+		"code attribution must come from the PRODUCER span (the publish call site), not the consumer")
+	assert.Equal(t, "PublishUserCreated", f.Refs[0].CodeFunc)
+	assert.Equal(t, "17", f.Refs[0].CodeLine)
 }
 
 // ─── TestMapSpansMsgKafkaKeyMatch ─────────────────────────────────────────────
@@ -603,6 +607,11 @@ func TestMapSpansMsgKafkaKeyMatch(t *testing.T) {
 	assert.Equal(t, "producer-svc", f.FromService)
 	assert.Equal(t, "consumer-svc", f.ToService)
 	assert.Equal(t, "key_match", f.Causality, "no span link → causality must be key_match")
+	require.Len(t, f.Refs, 1)
+	assert.Equal(t, "internal/publisher/orders.go", f.Refs[0].CodeFile,
+		"key_match path must also attribute code from the PRODUCER span")
+	assert.Equal(t, "PublishOrderCreated", f.Refs[0].CodeFunc)
+	assert.Equal(t, "88", f.Refs[0].CodeLine)
 }
 
 // ─── TestMapSpansMsgProducerOnly ──────────────────────────────────────────────
@@ -624,6 +633,11 @@ func TestMapSpansMsgProducerOnly(t *testing.T) {
 	assert.Equal(t, "events.created", f.Key)
 	assert.Equal(t, "publisher", f.FromService)
 	assert.Equal(t, "", f.ToService, "no consumer in-window: ToService must be empty (no fabricated edge)")
+	require.Len(t, f.Refs, 1)
+	assert.Equal(t, "internal/publisher/nats.go", f.Refs[0].CodeFile,
+		"producer-only path must also attribute code from the PRODUCER span")
+	assert.Equal(t, "PublishEventCreated", f.Refs[0].CodeFunc)
+	assert.Equal(t, "5", f.Refs[0].CodeLine)
 }
 
 // ─── TestMapSpansMsgConsumerNoCausality ───────────────────────────────────────
@@ -690,8 +704,10 @@ func TestMapSpansMsgOldSemconv(t *testing.T) {
 //
 // Acceptance: the linked AMQP trace's publish→process span confirms a static
 // AMQP edge (exchange=user.events, routing_key=user.created) → edge flips to
-// verified, granularity=channel. Mirrors the bunny→amqp091 static fixture chain
-// with runtime-observed causality.
+// verified, granularity=site (the fixture's PRODUCER span carries
+// code.filepath/lineno, so messaging code attribution — same convention as
+// HTTP — upgrades it past channel). Mirrors the bunny→amqp091 static fixture
+// chain with runtime-observed causality.
 func TestMapSpansMsgAMQPAcceptance(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "pub-chan", Service: "publisher", Type: graph.NodeTypeChannel,
@@ -730,7 +746,8 @@ func TestMapSpansMsgAMQPAcceptance(t *testing.T) {
 	require.NotNil(t, found, "static AMQP edge must appear in reconciled result")
 	assert.Equal(t, graph.StateVerified, found.VerificationState,
 		"linked AMQP trace must flip the static edge to verified")
-	assert.Equal(t, graph.GranularityChannel, found.VerifiedGranularity)
+	assert.Equal(t, graph.GranularitySite, found.VerifiedGranularity,
+		"producer span carries code.filepath/lineno — messaging now attributes code like HTTP does")
 }
 
 // ─── TestMapSpansMsgKafkaAcceptance ──────────────────────────────────────────

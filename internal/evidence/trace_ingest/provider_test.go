@@ -53,6 +53,32 @@ func TestRuntimeProviderNoLocationClearWithoutCodeLine(t *testing.T) {
 	assert.Empty(t, ev.ClearsUnresolvedByLocation, "channel-only observation must not clear any ledger location")
 }
 
+// TestRuntimeProviderClearsUnresolvedByLocation_Messaging verifies that a
+// linked AMQP producer/consumer pair also produces a location clear, keyed
+// on the PRODUCER's service and call site — messaging code attribution
+// previously didn't exist at all (span_map.go never set CodeFile/CodeFunc on
+// messaging refs), so dynamic_topic/dynamic_queue ledger entries could never
+// be cleared even when runtime confirmed the exact publish call site.
+func TestRuntimeProviderClearsUnresolvedByLocation_Messaging(t *testing.T) {
+	capturesDir := t.TempDir()
+	sessionDir := filepath.Join(capturesDir, "sess1")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	data, err := os.ReadFile(filepath.Join(testFixturesDir, "msg_amqp_linked.otlp.json"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "spans.otlp.json"), data, 0o644))
+
+	ws := msgWS("publisher", "consumer")
+	p := NewRuntimeProvider(capturesDir, nil)
+	ev, err := p.Collect(context.Background(), ws)
+	require.NoError(t, err)
+
+	require.Len(t, ev.ClearsUnresolvedByLocation, 1)
+	loc := ev.ClearsUnresolvedByLocation[0]
+	assert.Equal(t, "publisher", loc.Service, "clear must be keyed on the producer, not the consumer")
+	assert.Equal(t, "internal/publisher/events.go", loc.File)
+	assert.Equal(t, 17, loc.Line)
+}
+
 // TestRuntimeProviderClearsUnresolvedByLocation_Deterministic runs Collect
 // twice and requires identical output ordering (bug-class rule 2).
 func TestRuntimeProviderClearsUnresolvedByLocation_Deterministic(t *testing.T) {
