@@ -61,4 +61,22 @@ type Evidence struct {
 	// accumulated set, so the original dynamic_<kind> entry is replaced rather
 	// than duplicated. Matched by (Service, File, Line, Name).
 	ClearsUnresolved []graph.UnresolvedRef
+	// ClearsUnresolvedByLocation is a weaker clear: it names call sites
+	// (Service, File, Line only — no Name) whose dynamic-key ledger entry this
+	// provider has confirmed by direct observation. Unlike ClearsUnresolved,
+	// the provider here cannot know the original entry's Name — e.g. runtime
+	// spans see a resolved URL, never the source expression that built it
+	// (`key_dynamic_raw`) — so matching drops the Name field entirely. The
+	// reconciler restricts this match to graph.UnresolvedRef kinds in
+	// contract.DynamicUnresolvedKinds, so a location clear can never remove an
+	// unrelated unresolved-ref kind that happens to share a line.
+	ClearsUnresolvedByLocation []UnresolvedLocation
+}
+
+// UnresolvedLocation identifies a call site for location-only ledger
+// clearing (see Evidence.ClearsUnresolvedByLocation).
+type UnresolvedLocation struct {
+	Service string
+	File    string
+	Line    int
 }

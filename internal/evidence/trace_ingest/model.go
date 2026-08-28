@@ -41,6 +41,7 @@ type FlowRef struct {
 	ObservedAt int64
 	CodeFile   string // from code.filepath — presence upgrades granularity to "site"
 	CodeFunc   string // from code.function
+	CodeLine   string // from code.lineno; only meaningful alongside CodeFile
 }
 
 // IngestLedgerEntry persists through the existing unresolved_refs store as a

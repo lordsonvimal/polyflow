@@ -141,6 +141,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			ObservedAt: int64(sp.StartUnixNano / 1_000_000_000),
 			CodeFile:   sp.Attrs["code.filepath"],
 			CodeFunc:   sp.Attrs["code.function"],
+			CodeLine:   sp.Attrs["code.lineno"],
 		}
 
 		// SSE detection: content-type response header or workspace-listed route.

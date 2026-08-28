@@ -6,6 +6,20 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
+// DynamicUnresolvedKinds is the exhaustive set of UnresolvedRef.Kind values
+// that name a dynamic-key producer the static pipeline could not resolve
+// (e.g. dynamic_url → http, dynamic_topic → kafka/nats). Other providers
+// (config_resolve, trace_ingest) that reason about which ledger entries a
+// dynamic-key call site can produce reuse this set rather than duplicating
+// the literal list (divergence here silently miscounts or misclears).
+var DynamicUnresolvedKinds = map[string]bool{
+	"dynamic_url":     true,
+	"dynamic_topic":   true,
+	"dynamic_queue":   true,
+	"dynamic_channel": true,
+	"dynamic_event":   true,
+}
+
 // KindCoverage holds the matched and unresolved producer counts for one contract kind.
 type KindCoverage struct {
 	Kind       string `json:"kind"`
@@ -54,17 +68,7 @@ func ComputeCoverage(rules []Rule, result Result) []KindCoverage {
 		// dynamic_<kind> unresolved refs are counted in the Dynamic column of
 		// their base kind (e.g. dynamic_url → http, dynamic_topic → kafka/nats).
 		// They also appear as their own "kind" row for full ledger visibility.
-		isDynamic := false
-		for _, dk := range []string{
-			"dynamic_url", "dynamic_topic", "dynamic_queue",
-			"dynamic_channel", "dynamic_event",
-		} {
-			if u.Kind == dk {
-				isDynamic = true
-				break
-			}
-		}
-		if isDynamic {
+		if DynamicUnresolvedKinds[u.Kind] {
 			dynamic[u.Kind]++
 		} else {
 			unresolved[u.Kind]++
