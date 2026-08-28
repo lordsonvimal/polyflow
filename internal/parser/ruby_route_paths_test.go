@@ -388,6 +388,24 @@ end
 	require.Equal(t, "/login", got[0].Meta["path"])
 }
 
+// TestOptionalSegmentRouteParensStripped: RC.2. Rails' `"foo(/:a/:b)/bar"`
+// optional-segment syntax left the literal parens embedded in the composed
+// path, producing a route no client key could ever match (a real request
+// never sends "(" or ")"). Stripping them recovers the fully-specified
+// (all-params-present) shape as a normal, matchable path.
+func TestOptionalSegmentRouteParensStripped(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  get "dependency(/:object/:id)/detect_details", to: "dependencies#detect_details"
+end
+`)
+	got := routeNode(nodes, "http_verb_route")
+	require.Len(t, got, 1)
+	require.Equal(t, "/dependency/:object/:id/detect_details", got[0].Meta["path"])
+	require.NotContains(t, got[0].Meta["path"], "(")
+	require.NotContains(t, got[0].Meta["path"], ")")
+}
+
 // TestBareStringRouteLabelRefreshed: the label is minted from the raw capture
 // at node-creation time, before composeRailsRoutePaths rewrites the path, so it
 // read "patch Users/:id" — neither the composed path nor the graph-wide

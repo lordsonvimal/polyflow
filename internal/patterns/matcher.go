@@ -92,6 +92,18 @@ type MatchResult struct {
 // @key node (a bare property_identifier, always non-literal to the walker)
 // wrongly marked it key_dynamic and deleted every ws_send edge from the
 // fixture corpus (caught by TestFixtureEdgeTypes_Snapshot).
+// restClientDynamicMethodPatterns are the Ruby RestClient patterns whose
+// query grammar cannot distinguish a keyword argument's literal value
+// (`method: :get`) from a bare identifier referencing a runtime variable
+// (`method: method`, `RestClient.send(method, url)`) — both arrive as plain
+// captured source text, so `normalizeHTTPVerb`'s decline is the only signal
+// available. See the RC.1 comment where this is consulted, in the
+// http_client method-normalization block.
+var restClientDynamicMethodPatterns = map[string]bool{
+	"rest_client_request": true,
+	"rest_client_send":    true,
+}
+
 var keyWalkerKeyCaptureNames = map[string]bool{
 	"url": true, "path": true, "channel": true, "exchange": true,
 	"routing_key": true, "topic": true, "queue": true, "queue_name": true,
@@ -1325,6 +1337,28 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 						label = v + strings.TrimPrefix(label, raw)
 					}
 					meta["method"] = v
+				} else if !ok && restClientDynamicMethodPatterns[r.PatternName] {
+					// RC.1: `RestClient::Request.execute(method: method, ...)`
+					// — the keyword argument's *value* is a bare identifier
+					// referencing a runtime variable, but the tree-sitter
+					// query's `value: (_) @method` captures any expression's
+					// raw source text, so this comes back as the literal
+					// string "method": the keyword's own name, not its value.
+					// That string can never equal a handler's verb — worse
+					// than capturing nothing, since http.yaml's
+					// method_fallback only activates on an *empty* method, so
+					// the garbage text evades the retry-every-verb chance an
+					// honestly-empty capture would get. Scoped to the two
+					// RestClient patterns whose grammar has this exact
+					// keyword-vs-identifier ambiguity — general Go/JS dynamic
+					// method expressions (`req.method`) keep today's
+					// leave-it-verbatim behavior, since blanking there is a
+					// real precision trade this fix has no corpus evidence
+					// for.
+					if strings.HasPrefix(label, raw+" ") {
+						label = strings.TrimPrefix(label, raw+" ")
+					}
+					meta["method"] = ""
 				}
 			}
 		}
