@@ -509,6 +509,36 @@ func extractVariables(
 							}
 						}
 					}
+					// A global used as a call's receiver or argument is a real
+					// read of it regardless of where the callee lives — a
+					// stdlib/vendor method call (`providerOnce.Do(...)`) never
+					// enters inService below (Do belongs to package sync), so
+					// without this every package-level sync.Once/mutex/client
+					// var used only via method calls looked permanently
+					// zero-reads. Confirmed live on the juniper fleet:
+					// this was deadcode's one false positive left after the
+					// captured/global scope fix (see deadcode.go). Checked
+					// ahead of the in-service-only flows_to block below so it
+					// fires whether or not that block also runs.
+					if fnResolved {
+						if common.IsInvoke() {
+							if g := rootGlobal(common.Value); g != nil {
+								if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
+									addEdge(graph.EdgeTypeReads, fnID, id, map[string]string{"op": "call_receiver"})
+								}
+							}
+						}
+						for _, arg := range common.Args {
+							g := rootGlobal(arg)
+							if g == nil {
+								continue
+							}
+							if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
+								addEdge(graph.EdgeTypeReads, fnID, id, map[string]string{"op": "call_arg"})
+							}
+						}
+					}
+
 					callee, _ := common.Value.(*ssa.Function)
 					if callee == nil || !inService[callee] {
 						continue
@@ -658,6 +688,85 @@ func extractVariables(
 		return best.nodeID, true
 	}
 
+	// varsByFile/enclosingVarAt is enclosingFnAt's counterpart for a const
+	// reference that isn't inside any function body at all — a package-level
+	// var's initializer expression (`var RolePriority = map[string]int{
+	// RoleAdmin: 3, ...}`). enclosingFnAt alone silently dropped these (no
+	// function range ever contains them), which meant every enum-style const
+	// used only as a map/slice/struct-literal value at package scope read as
+	// permanently zero-reads. Confirmed live on the juniper fleet:
+	// RoleAdmin/RoleEditor (maple-manager/internal/auth/saml/config.go), used
+	// exclusively as RolePriority's map keys, were flagged dead despite
+	// being referenced right there. The "from" side is the enclosing
+	// var/const's own node — a variable-to-variable reads edge, the same
+	// shape templ.go already uses for a component-to-variable read.
+	varsByFile := map[string][]fnRng{}
+	for _, p := range pkgs {
+		if p == nil || p.TypesInfo == nil {
+			continue
+		}
+		for _, f := range p.Syntax {
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || (gd.Tok != token.VAR && gd.Tok != token.CONST) {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Names) == 0 {
+						continue
+					}
+					var nodeID string
+					for _, name := range vs.Names {
+						obj := p.TypesInfo.Defs[name]
+						if obj == nil || obj.Pkg() == nil {
+							continue
+						}
+						if id, ok := qualifiedNameIDs[obj.Pkg().Path()+"."+obj.Name()]; ok {
+							nodeID = id
+							break
+						}
+					}
+					if nodeID == "" {
+						continue
+					}
+					startPos := fset.Position(vs.Pos())
+					if !startPos.IsValid() || !inDir(startPos) {
+						continue
+					}
+					endPos := fset.Position(vs.End())
+					cf := canonicalPath(startPos.Filename)
+					varsByFile[cf] = append(varsByFile[cf], fnRng{startPos.Line, endPos.Line, nodeID})
+				}
+			}
+		}
+	}
+	for cf := range varsByFile {
+		sort.Slice(varsByFile[cf], func(i, j int) bool {
+			return varsByFile[cf][i].start < varsByFile[cf][j].start
+		})
+	}
+	enclosingVarAt := func(filename string, line int) (string, bool) {
+		cf := canonicalPath(filename)
+		var best *fnRng
+		for i := range varsByFile[cf] {
+			v := &varsByFile[cf][i]
+			if v.start > line {
+				continue
+			}
+			if v.end > 0 && line > v.end {
+				continue
+			}
+			if best == nil || v.start > best.start {
+				best = v
+			}
+		}
+		if best == nil {
+			return "", false
+		}
+		return best.nodeID, true
+	}
+
 	for _, p := range pkgs {
 		if p == nil || p.TypesInfo == nil || p.Types == nil {
 			continue
@@ -679,11 +788,14 @@ func extractVariables(
 			if !inDir(pos) {
 				continue
 			}
-			fnID, ok := enclosingFnAt(pos.Filename, pos.Line)
+			fromID, ok := enclosingFnAt(pos.Filename, pos.Line)
 			if !ok {
+				fromID, ok = enclosingVarAt(pos.Filename, pos.Line)
+			}
+			if !ok || fromID == constNodeID {
 				continue
 			}
-			addEdge(graph.EdgeTypeReads, fnID, constNodeID, nil)
+			addEdge(graph.EdgeTypeReads, fromID, constNodeID, nil)
 		}
 	}
 
