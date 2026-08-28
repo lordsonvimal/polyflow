@@ -112,6 +112,58 @@ func TestERBParser_Determinism(t *testing.T) {
 	}
 }
 
+// DC.16: a `.js.erb` file (Rails `format.js` AJAX-response template) is
+// JS content punctuated by ERB interpolations, not HTML — it must go through
+// the JS pattern matcher/structural pass, not the HTML one.
+func TestERBParser_JSERB(t *testing.T) {
+	t.Parallel()
+	m := mustMatcher(t)
+	p := parser.ForFile("update.js.erb")
+	require.NotNil(t, p)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "update.js.erb")
+	content := `class Modal {
+  show() {}
+}
+function refresh() {
+  new Modal();
+}
+$("#count").text("<%= @count %>");
+`
+	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0o644))
+
+	nodes, edges, _, err := p.Parse(tmpFile, "myapp", m, nil)
+	require.NoError(t, err)
+
+	var modal, refresh *graph.Node
+	for i := range nodes {
+		switch {
+		case nodes[i].Type == graph.NodeTypeClass && nodes[i].Label == "Modal":
+			modal = &nodes[i]
+		case nodes[i].Label == "refresh" && nodes[i].Language == "javascript":
+			refresh = &nodes[i]
+		}
+	}
+	require.NotNil(t, modal, "expected a JS class node for Modal; nodes: %+v", nodes)
+	require.NotNil(t, refresh, "expected a JS function node for refresh; nodes: %+v", nodes)
+
+	foundInstantiates := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeInstantiates && strings.Contains(e.From, refresh.ID) && e.To == modal.ID {
+			foundInstantiates = true
+		}
+	}
+	assert.True(t, foundInstantiates, "expected instantiates edge refresh -> Modal; edges: %+v", edges)
+
+	// The <%= @count %> interpolation must still be handled by the Ruby side.
+	for _, n := range nodes {
+		if n.Language == "html" {
+			t.Errorf("unexpected html node in .js.erb: %s (pattern=%s)", n.ID, n.Meta["pattern"])
+		}
+	}
+}
+
 func TestForFile_ERBExtension(t *testing.T) {
 	t.Parallel()
 	assert.NotNil(t, parser.ForFile("app/views/users/index.html.erb"))
