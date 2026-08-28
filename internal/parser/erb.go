@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/railsview"
@@ -39,13 +41,38 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 	// directly (bypassing the matcher's own relativization).
 	file = patterns.RelativizeToCwd(file)
 
-	// HTML pass: nav links and inline event attributes from static markup.
-	htmlResults, _ := matcher.Match("html", file, blankedHTML)
-	// C.5: blanking an ERB tag leaves whitespace where an interpolated id= or
-	// class= value used to be, and that value is what names the element node.
-	htmlResults = normalizeHTMLElementMatches(htmlResults)
-	htmlNodes, htmlEdges, htmlUnresolved := patterns.MatchToGraph(service, htmlResults)
-	setLanguage(htmlNodes, "html")
+	var htmlNodes []graph.Node
+	var htmlEdges []graph.Edge
+	var htmlUnresolved []graph.UnresolvedRef
+
+	if isJSERB(file) {
+		// DC.16: a `.js.erb` (Rails `format.js` AJAX-response template) is
+		// almost pure JavaScript with occasional `<%= %>` interpolations —
+		// blankedHTML already isolates that static content (every ERB tag
+		// blanked, everything else untouched at its original offset), so run
+		// the JS pattern matcher and structural pass over it instead of the
+		// HTML matcher; there is no markup here for HTML patterns to find.
+		jsResults, _ := matcher.Match("javascript", file, blankedHTML)
+		jsNodes, jsEdges, jsUnresolved := patterns.MatchToGraph(service, jsResults)
+		setLanguage(jsNodes, "javascript")
+
+		varNodes, varEdges, varUnresolved, jqListeners := extractJSVariables(file, service, "javascript", "javascript", blankedHTML)
+		stampJQueryHandlers(jsNodes, jqListeners)
+		jsEdges = reattributeJQueryHandlers(jsNodes, jsEdges, jqListeners)
+		jsNodes = mergeJSNodes(jsNodes, varNodes)
+
+		htmlNodes = jsNodes
+		htmlEdges = append(jsEdges, varEdges...)
+		htmlUnresolved = append(jsUnresolved, varUnresolved...)
+	} else {
+		// HTML pass: nav links and inline event attributes from static markup.
+		htmlResults, _ := matcher.Match("html", file, blankedHTML)
+		// C.5: blanking an ERB tag leaves whitespace where an interpolated id= or
+		// class= value used to be, and that value is what names the element node.
+		htmlResults = normalizeHTMLElementMatches(htmlResults)
+		htmlNodes, htmlEdges, htmlUnresolved = patterns.MatchToGraph(service, htmlResults)
+		setLanguage(htmlNodes, "html")
+	}
 
 	// Ruby pass: link_to / button_to / form_with helpers plus any other
 	// Ruby patterns (route captures in partials, etc.).
@@ -68,6 +95,13 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 	unresolved = append(unresolved, varUnresolved...)
 
 	return nodes, edges, unresolved, nil
+}
+
+// isJSERB reports whether file is a Rails `format.js` response template
+// (`create.js.erb`, `update.js.coffee.erb`, …) rather than an HTML view.
+func isJSERB(file string) bool {
+	lower := strings.ToLower(file)
+	return strings.HasSuffix(lower, ".js.erb") || strings.HasSuffix(lower, ".js.coffee.erb")
 }
 
 func init() {
