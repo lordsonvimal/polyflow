@@ -194,6 +194,52 @@ func TestListEdgesFromTo(t *testing.T) {
 	assert.Empty(t, fromN3)
 }
 
+func TestListEdgesByConfidence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"n1", "n2", "n3"} {
+		require.NoError(t, s.UpsertNode(ctx, nodeFixture(id)))
+	}
+	unknownCall := edgeFixture("e1", "n1", "n2")
+	unknownCall.Type = graph.EdgeTypeHTTPCall
+	unknownCall.Confidence = graph.ConfidenceUnknown
+	require.NoError(t, s.UpsertEdge(ctx, unknownCall))
+
+	inferredCall := edgeFixture("e2", "n1", "n3")
+	inferredCall.Type = graph.EdgeTypeHTTPCall
+	inferredCall.Confidence = graph.ConfidenceInferred
+	require.NoError(t, s.UpsertEdge(ctx, inferredCall))
+
+	unknownCalls := edgeFixture("e3", "n2", "n3")
+	unknownCalls.Type = graph.EdgeTypeCalls
+	unknownCalls.Confidence = graph.ConfidenceUnknown
+	require.NoError(t, s.UpsertEdge(ctx, unknownCalls))
+
+	// No filters: every edge.
+	all, err := s.ListEdgesByConfidence(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.Len(t, all, 3)
+
+	// Confidence filter only.
+	unknown, err := s.ListEdgesByConfidence(ctx, []string{graph.ConfidenceUnknown}, nil)
+	require.NoError(t, err)
+	require.Len(t, unknown, 2)
+	ids := []string{unknown[0].ID, unknown[1].ID}
+	assert.ElementsMatch(t, []string{"e1", "e3"}, ids)
+
+	// Confidence + type filter together.
+	unknownHTTP, err := s.ListEdgesByConfidence(ctx, []string{graph.ConfidenceUnknown}, []string{string(graph.EdgeTypeHTTPCall)})
+	require.NoError(t, err)
+	require.Len(t, unknownHTTP, 1)
+	assert.Equal(t, "e1", unknownHTTP[0].ID)
+
+	// A confidence nothing matches.
+	none, err := s.ListEdgesByConfidence(ctx, []string{graph.ConfidenceStatic}, nil)
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
 func TestSearchNodes(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -991,16 +991,20 @@ func findEmbedSidecarBin() (string, error) {
 // ─── status ──────────────────────────────────────────────────────────────────
 
 var (
-	statusErrors     bool
-	statusUnresolved bool
-	statusTrend      bool
-	statusTrendN     int
+	statusErrors        bool
+	statusUnresolved    bool
+	statusUnknownEdges  bool
+	statusMinConfidence string
+	statusTrend         bool
+	statusTrendN        int
 	statusWS         string
 )
 
 func initStatusFlags() {
 	statusCmd.Flags().BoolVar(&statusErrors, "errors", false, "list files with parse errors")
 	statusCmd.Flags().BoolVar(&statusUnresolved, "unresolved", false, "list references the graph could not resolve (blind spots)")
+	statusCmd.Flags().BoolVar(&statusUnknownEdges, "unknown-edges", false, "list edges at or below --min-confidence (fleet-aware: includes bridge.db cross-service edges when this workspace is a fleet member)")
+	statusCmd.Flags().StringVar(&statusMinConfidence, "min-confidence", "unknown", "with --unknown-edges: report edges AT OR BELOW this confidence tier (unknown, partial, inferred, static)")
 	statusCmd.Flags().BoolVar(&statusTrend, "trend", false, "show per-service unresolved count trend over recent index runs")
 	statusCmd.Flags().IntVar(&statusTrendN, "trend-n", 5, "number of past runs to compare against for --trend")
 	statusCmd.Flags().StringVar(&statusWS, "workspace", meta.ConfigFile, "path to polyflow.yml")
@@ -1202,6 +1206,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+	if statusUnknownEdges {
+		if err := printUnknownEdges(ctx, store, statusMinConfidence); err != nil {
+			return err
+		}
+	}
 	if statusTrend {
 		fmt.Println()
 		dbStore, dbErr := graph.NewSQLiteStore(dbPath)
@@ -1251,6 +1260,51 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				status,
 			)
 		}
+	}
+	return nil
+}
+
+// printUnknownEdges implements `polyflow status --unknown-edges`: every edge
+// at or below --min-confidence, fleet-aware. Reuses buildFleetAwareIndex —
+// the same local-member-plus-bridge merge search/context/impact/trace
+// already build their answers from — rather than opening bridge.db a second
+// time by hand, which would risk reintroducing the stale-scratch-clone
+// duplicate-node bug mergeFleetBridge's bridgeDupKey remapping exists to
+// avoid (see that function's doc comment).
+func printUnknownEdges(ctx context.Context, store *graph.SQLiteStore, minConfidence string) error {
+	idx, err := buildFleetAwareIndex(ctx, store)
+	if err != nil {
+		return fmt.Errorf("build fleet-aware index: %w", err)
+	}
+	matched := contract.FilterEdgesByConfidence(idx, minConfidence)
+
+	fmt.Println()
+	byConfidence := map[string]int{}
+	for _, e := range matched {
+		byConfidence[e.Confidence]++
+	}
+	var summaryParts []string
+	for _, c := range []string{graph.ConfidenceUnknown, graph.ConfidencePartial, graph.ConfidenceInferred, graph.ConfidenceStatic} {
+		if byConfidence[c] > 0 {
+			summaryParts = append(summaryParts, fmt.Sprintf("%d %s", byConfidence[c], c))
+		}
+	}
+	fmt.Printf("  Edges at or below %q confidence: %d (%s)\n",
+		minConfidence, len(matched), strings.Join(summaryParts, ", "))
+
+	for _, e := range matched {
+		from, to := idx.Nodes[e.From], idx.Nodes[e.To]
+		fromLabel, loc := e.From, ""
+		if from != nil {
+			fromLabel = from.Label
+			loc = fmt.Sprintf("%s:%d", from.File, from.Line)
+		}
+		toLabel := e.To
+		if to != nil {
+			toLabel = to.Label
+		}
+		fmt.Printf("  %-8s %-6s %s -> %s  %s\n",
+			strings.ToUpper(e.Confidence), e.Type, fromLabel, toLabel, loc)
 	}
 	return nil
 }

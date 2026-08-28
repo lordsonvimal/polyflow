@@ -355,10 +355,13 @@ func matchProducer(
 	return false
 }
 
-// confidenceRank orders the confidence tiers so a ceiling can be applied
+// ConfidenceRank orders the confidence tiers so a ceiling can be applied
 // without a table of pairwise comparisons. Unknown strings rank highest so an
-// unrecognised ceiling never silently weakens an edge.
-func confidenceRank(c string) int {
+// unrecognised ceiling never silently weakens an edge. Exported so callers
+// outside this package (e.g. `polyflow status --unknown-edges`'s
+// --min-confidence flag) use the same tier order as the engine, rather than
+// hand-maintaining a second one that could drift.
+func ConfidenceRank(c string) int {
 	switch c {
 	case graph.ConfidenceUnknown:
 		return 0
@@ -379,7 +382,7 @@ func capConfidence(conf, ceiling string) string {
 	if ceiling == "" {
 		return conf
 	}
-	if confidenceRank(ceiling) < confidenceRank(conf) {
+	if ConfidenceRank(ceiling) < ConfidenceRank(conf) {
 		return ceiling
 	}
 	return conf
