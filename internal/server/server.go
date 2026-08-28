@@ -372,6 +372,7 @@ func (s *Server) registerRoutes() {
 	s.handle("GET /api/health", s.handleHealth)
 	s.handle("GET /api/docs/cli", s.handleDocsCLI)
 	s.handle("GET /api/unresolved", s.handleUnresolved)
+	s.handle("GET /api/unknown-edges", s.handleUnknownEdges)
 	s.handle("POST /api/context/bundle", s.handleContextBundle)
 	s.handle("POST /api/capture/start", s.handleCaptureStart)
 	s.handle("POST /api/capture/stop", s.handleCaptureStop)

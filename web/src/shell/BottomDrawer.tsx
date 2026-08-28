@@ -6,12 +6,14 @@ import type { CopyMode } from "../views/context/copy";
 import { apiFetch } from "../lib/apiFetch";
 import { scopeStore } from "../stores/scope";
 import type { UnresolvedRef } from "../stores/tree";
+import { CONFIDENCE_LEVELS } from "../lib/confidence";
 import JobsTab from "../views/ops/JobsTab";
 import ToolCallsTab from "../views/ops/ToolCallsTab";
 
 const TABS: { id: DrawerTab; label: string }[] = [
   { id: "context", label: "Context" },
   { id: "unresolved", label: "Unresolved" },
+  { id: "unknown-edges", label: "Unknown Edges" },
   { id: "jobs", label: "Jobs" },
   { id: "toolcalls", label: "Tool Calls" },
 ];
@@ -370,6 +372,125 @@ function UnresolvedTab() {
   );
 }
 
+// UnknownEdgeEntry mirrors internal/server/unknownedgesapi.go's
+// unknownEdgeEntry (GET /api/unknown-edges).
+interface UnknownEdgeEntry {
+  confidence: string;
+  type: string;
+  from: string;
+  from_id: string;
+  service?: string;
+  file?: string;
+  line?: number;
+  to: string;
+  label?: string;
+}
+
+// The Unknown Edges tab: the web counterpart to `polyflow status
+// --unknown-edges` and the MCP `unknown_edges` tool — same endpoint logic
+// (contract.FilterEdgesByConfidence), so this list can't drift from what
+// those report. Structured like UnresolvedTab (filter row + list), not
+// like the canvas's confidence chip filter — that filter hides/dims edges
+// already drawn from the current scope, this browses every low-confidence
+// edge fleet-wide regardless of what's currently in view.
+function UnknownEdgesTab() {
+  const [minConfidence, setMinConfidence] = createSignal<string>("unknown");
+  const [service, setService] = createSignal("");
+  const [edgeType, setEdgeType] = createSignal("");
+
+  const [result, { refetch }] = createResource(
+    () => ({ minConfidence: minConfidence(), service: service(), edgeType: edgeType() }),
+    async ({ minConfidence: mc, service: svc, edgeType: et }) => {
+      const p = new URLSearchParams();
+      p.set("min_confidence", mc);
+      if (svc) p.set("service", svc);
+      if (et) p.set("edge_type", et);
+      p.set("limit", "200");
+      const r = await apiFetch(`/api/unknown-edges?${p}`, { silent: true });
+      return (await r.json()) as { edges: UnknownEdgeEntry[]; total: number; by_confidence: Record<string, number> };
+    },
+  );
+
+  function openProducer(entry: UnknownEdgeEntry) {
+    if (!entry.file) return;
+    scopeStore.push({ kind: "file", service: entry.service ?? "", path: entry.file });
+  }
+
+  return (
+    <div data-testid="unknown-edges-tab" class="p-2 text-xs text-neutral-300 flex flex-col h-full gap-2">
+      <div class="flex items-center gap-2 shrink-0">
+        <select
+          data-testid="unknown-edges-min-confidence"
+          class="bg-neutral-800 rounded px-1.5 py-0.5"
+          value={minConfidence()}
+          onChange={(e) => setMinConfidence(e.currentTarget.value)}
+        >
+          <For each={CONFIDENCE_LEVELS}>{(c) => <option value={c}>at or below {c}</option>}</For>
+        </select>
+        <input
+          data-testid="unknown-edges-service"
+          class="bg-neutral-800 rounded px-1.5 py-0.5 w-28"
+          placeholder="service"
+          value={service()}
+          onInput={(e) => setService(e.currentTarget.value)}
+        />
+        <input
+          data-testid="unknown-edges-type"
+          class="bg-neutral-800 rounded px-1.5 py-0.5 w-28"
+          placeholder="edge type"
+          value={edgeType()}
+          onInput={(e) => setEdgeType(e.currentTarget.value)}
+        />
+        <button class="text-neutral-400 hover:text-white shrink-0 ml-auto" onClick={refetch}>
+          ↻
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto min-h-0">
+        <Show when={result.loading}>
+          <div class="text-neutral-400">Loading…</div>
+        </Show>
+        <Show when={!result.loading && result()}>
+          {(r) => (
+            <>
+              <div class="text-neutral-400 mb-1">
+                {r().total} edge{r().total === 1 ? "" : "s"}
+                <Show when={Object.keys(r().by_confidence).length > 0}>
+                  {" "}
+                  ({Object.entries(r().by_confidence)
+                    .map(([c, n]) => `${n} ${c}`)
+                    .join(", ")})
+                </Show>
+              </div>
+              <ul data-testid="unknown-edges-list" class="space-y-0.5">
+                <For each={r().edges}>
+                  {(entry) => (
+                    <li
+                      data-testid="unknown-edges-row"
+                      class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-neutral-800 cursor-pointer"
+                      onClick={() => openProducer(entry)}
+                    >
+                      <span class="text-amber-400 shrink-0">{entry.confidence}</span>
+                      <span class="text-neutral-500 shrink-0">{entry.type}</span>
+                      <span class="text-neutral-200 truncate">{entry.from}</span>
+                      <span class="text-neutral-500 shrink-0">→</span>
+                      <span class="text-neutral-300 truncate">{entry.to}</span>
+                      <Show when={entry.file}>
+                        <span class="text-neutral-500 truncate ml-auto">
+                          {entry.file}:{entry.line}
+                        </span>
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </>
+          )}
+        </Show>
+      </div>
+    </div>
+  );
+}
+
 export default function BottomDrawer() {
   const open = drawerStore.open;
   const setOpen = drawerStore.setOpen;
@@ -435,6 +556,9 @@ export default function BottomDrawer() {
           </Show>
           <Show when={drawerStore.activeTab() === "unresolved"}>
             <UnresolvedTab />
+          </Show>
+          <Show when={drawerStore.activeTab() === "unknown-edges"}>
+            <UnknownEdgesTab />
           </Show>
           <Show when={drawerStore.activeTab() === "jobs"}>
             <JobsTab />

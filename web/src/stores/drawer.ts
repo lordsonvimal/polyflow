@@ -6,7 +6,7 @@ import { createSignal } from "solid-js";
 // without owning it. Both the Context (UF.5) and Unresolved (UF.6) tabs are
 // real; `unresolvedFilter` seeds the Unresolved tab's service/free-text
 // query (BottomDrawer.tsx's UnresolvedTab).
-export type DrawerTab = "context" | "unresolved" | "jobs" | "toolcalls";
+export type DrawerTab = "context" | "unresolved" | "unknown-edges" | "jobs" | "toolcalls";
 
 export const DRAWER_DEFAULT_HEIGHT = 260;
 export const DRAWER_MIN_HEIGHT = 140;
@@ -39,6 +39,10 @@ export const drawerStore = {
   openUnresolvedByKind: (kind: string) => {
     setUnresolvedKindFilter(kind);
     setActiveTab("unresolved");
+    setOpen(true);
+  },
+  openUnknownEdges: () => {
+    setActiveTab("unknown-edges");
     setOpen(true);
   },
   openContext: () => {
