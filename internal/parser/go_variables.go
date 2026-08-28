@@ -377,6 +377,147 @@ func extractVariables(
 		return resolveFunc(fn)
 	}
 
+	// enclosingFnAt/enclosingVarAt attribute a source position to the nearest
+	// containing declaration, for code the instruction walk below can't
+	// attribute through fnResolved alone: a package-level var/const
+	// initializer expression compiles into the package's synthesized init
+	// function, which has no tree-sitter node of its own (resolveFunc always
+	// fails for it), so fnResolved is false for every instruction inside it.
+	type fnRng struct {
+		start  int
+		end    int // 0 = unknown
+		nodeID string
+	}
+	fnsByFile := map[string][]fnRng{}
+	for fn := range inService {
+		if fn.Parent() != nil {
+			continue // skip closures; attribute to named parent
+		}
+		pos := fset.Position(fn.Pos())
+		if !inDir(pos) {
+			continue
+		}
+		nodeID, ok := resolveFunc(fn)
+		if !ok {
+			continue
+		}
+		endLine := 0
+		if syn := fn.Syntax(); syn != nil {
+			endPos := fset.Position(syn.End())
+			if endPos.IsValid() {
+				endLine = endPos.Line
+			}
+		}
+		cf := canonicalPath(pos.Filename)
+		fnsByFile[cf] = append(fnsByFile[cf], fnRng{pos.Line, endLine, nodeID})
+	}
+	for cf := range fnsByFile {
+		sort.Slice(fnsByFile[cf], func(i, j int) bool {
+			return fnsByFile[cf][i].start < fnsByFile[cf][j].start
+		})
+	}
+	enclosingFnAt := func(filename string, line int) (string, bool) {
+		cf := canonicalPath(filename)
+		var best *fnRng
+		for i := range fnsByFile[cf] {
+			f := &fnsByFile[cf][i]
+			if f.start > line {
+				continue
+			}
+			if f.end > 0 && line > f.end {
+				continue
+			}
+			if best == nil || f.start > best.start {
+				best = f
+			}
+		}
+		if best == nil {
+			return "", false
+		}
+		return best.nodeID, true
+	}
+
+	// varsByFile/enclosingVarAt is enclosingFnAt's counterpart for a
+	// reference that isn't inside any function body at all — a package-level
+	// var's initializer expression (`var RolePriority = map[string]int{
+	// RoleAdmin: 3, ...}`, or `var cdiscADAMDatasets = []T{{URL: cdiscADAMBase
+	// + "/x"}}`). enclosingFnAt alone silently dropped these (no function
+	// range ever contains them), which meant every enum-style const or global
+	// used only as a map/slice/struct-literal value at package scope read as
+	// permanently zero-reads. Confirmed live on the juniper fleet:
+	// RoleAdmin/RoleEditor (maple-manager/internal/auth/saml/config.go, const
+	// case) and cdiscADAMBase/cdiscSDTMBase (maple-agent/internal/pdv/
+	// cdisc_fixtures.go, global-var case) were both flagged dead despite
+	// being referenced right there. The "from" side is the enclosing
+	// var/const's own node — a variable-to-variable reads edge, the same
+	// shape templ.go already uses for a component-to-variable read.
+	varsByFile := map[string][]fnRng{}
+	for _, p := range pkgs {
+		if p == nil || p.TypesInfo == nil {
+			continue
+		}
+		for _, f := range p.Syntax {
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || (gd.Tok != token.VAR && gd.Tok != token.CONST) {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Names) == 0 {
+						continue
+					}
+					var nodeID string
+					for _, name := range vs.Names {
+						obj := p.TypesInfo.Defs[name]
+						if obj == nil || obj.Pkg() == nil {
+							continue
+						}
+						if id, ok := qualifiedNameIDs[obj.Pkg().Path()+"."+obj.Name()]; ok {
+							nodeID = id
+							break
+						}
+					}
+					if nodeID == "" {
+						continue
+					}
+					startPos := fset.Position(vs.Pos())
+					if !startPos.IsValid() || !inDir(startPos) {
+						continue
+					}
+					endPos := fset.Position(vs.End())
+					cf := canonicalPath(startPos.Filename)
+					varsByFile[cf] = append(varsByFile[cf], fnRng{startPos.Line, endPos.Line, nodeID})
+				}
+			}
+		}
+	}
+	for cf := range varsByFile {
+		sort.Slice(varsByFile[cf], func(i, j int) bool {
+			return varsByFile[cf][i].start < varsByFile[cf][j].start
+		})
+	}
+	enclosingVarAt := func(filename string, line int) (string, bool) {
+		cf := canonicalPath(filename)
+		var best *fnRng
+		for i := range varsByFile[cf] {
+			v := &varsByFile[cf][i]
+			if v.start > line {
+				continue
+			}
+			if v.end > 0 && line > v.end {
+				continue
+			}
+			if best == nil || v.start > best.start {
+				best = v
+			}
+		}
+		if best == nil {
+			return "", false
+		}
+		return best.nodeID, true
+	}
+
 	// instCounts accumulates instantiation counts across all SSA functions
 	// that resolve to the same enclosing node ID (closures → parent).
 	// Key: fnID + "->" + typeID.
@@ -385,6 +526,20 @@ func extractVariables(
 	// ── Instruction walk: reads, writes, captures, flows_to, uses_type ──────
 	for fn := range inService {
 		fnID, fnResolved := enclosing(fn)
+		// fromAt is fnID/fnResolved's fallback for an instruction whose
+		// enclosing SSA function is a synthesized package init (fnResolved
+		// false) — it re-attributes to the enclosing var/const declaration at
+		// pos instead of dropping the edge. Only meaningful for
+		// reads/writes/flows_to call sites (captures/uses_type are
+		// function-signature concepts with no init-scope analogue), so it's
+		// applied selectively at each of those call sites below, not folded
+		// into fnID itself.
+		fromAt := func(pos token.Position) (string, bool) {
+			if fnResolved {
+				return fnID, true
+			}
+			return enclosingVarAt(pos.Filename, pos.Line)
+		}
 
 		// Closure captures: every free variable of fn was declared in a
 		// parent function; surface it as a captured-variable node.
@@ -455,8 +610,10 @@ func extractVariables(
 				switch in := instr.(type) {
 				case *ssa.Store:
 					if g := rootGlobal(in.Addr); g != nil {
-						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok && fnResolved {
-							addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "assign"})
+						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok {
+							if fromID, ok := fromAt(fset.Position(in.Pos())); ok && fromID != id {
+								addEdge(graph.EdgeTypeWrites, fromID, id, map[string]string{"op": "assign"})
+							}
 						}
 					}
 					// Mutation through a captured variable's address.
@@ -471,17 +628,28 @@ func extractVariables(
 					}
 				case *ssa.MapUpdate:
 					if g := rootGlobal(in.Map); g != nil {
-						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok && fnResolved {
-							addEdge(graph.EdgeTypeWrites, fnID, id, map[string]string{"op": "map_update"})
+						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok {
+							if fromID, ok := fromAt(fset.Position(in.Pos())); ok && fromID != id {
+								addEdge(graph.EdgeTypeWrites, fromID, id, map[string]string{"op": "map_update"})
+							}
 						}
 					}
 				case *ssa.UnOp:
 					if in.Op != token.MUL {
 						continue
 					}
+					// A global read outside any resolvable function (a
+					// package-level var's own initializer expression, e.g.
+					// `var cdiscADAMDatasets = []T{{URL: cdiscADAMBase + "/x"}}`)
+					// falls back to enclosingVarAt via fromAt instead of being
+					// dropped — see fromAt's doc comment. Confirmed live: this
+					// was cdiscADAMBase/cdiscSDTMBase's exact shape
+					// (maple-agent/internal/pdv/cdisc_fixtures.go).
 					if g, ok := in.X.(*ssa.Global); ok {
-						if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked && fnResolved {
-							addEdge(graph.EdgeTypeReads, fnID, id, nil)
+						if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
+							if fromID, ok := fromAt(fset.Position(in.Pos())); ok && fromID != id {
+								addEdge(graph.EdgeTypeReads, fromID, id, nil)
+							}
 						}
 					}
 				case ssa.CallInstruction:
@@ -519,12 +687,17 @@ func extractVariables(
 					// this was deadcode's one false positive left after the
 					// captured/global scope fix (see deadcode.go). Checked
 					// ahead of the in-service-only flows_to block below so it
-					// fires whether or not that block also runs.
-					if fnResolved {
+					// fires whether or not that block also runs. Uses fromAt,
+					// not fnID/fnResolved directly, so the same call inside a
+					// package-var initializer (init-scope) still attributes.
+					{
+						callPos := fset.Position(in.Pos())
 						if common.IsInvoke() {
 							if g := rootGlobal(common.Value); g != nil {
 								if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
-									addEdge(graph.EdgeTypeReads, fnID, id, map[string]string{"op": "call_receiver"})
+									if fromID, ok := fromAt(callPos); ok && fromID != id {
+										addEdge(graph.EdgeTypeReads, fromID, id, map[string]string{"op": "call_receiver"})
+									}
 								}
 							}
 						}
@@ -534,7 +707,9 @@ func extractVariables(
 								continue
 							}
 							if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
-								addEdge(graph.EdgeTypeReads, fnID, id, map[string]string{"op": "call_arg"})
+								if fromID, ok := fromAt(callPos); ok && fromID != id {
+									addEdge(graph.EdgeTypeReads, fromID, id, map[string]string{"op": "call_arg"})
+								}
 							}
 						}
 					}
@@ -608,6 +783,83 @@ func extractVariables(
 		}
 	}
 
+	// ── Package-init instruction walk: reads/writes with no named function ──
+	// isServiceFunc excludes fn.Synthetic != "" (see go_semantic.go), so a
+	// package's synthesized init function — where every package-level var's
+	// initializer expression actually executes — is never a member of
+	// inService and the instruction walk above never visits its blocks at
+	// all. That's the whole reason fromAt is needed elsewhere in this file:
+	// this loop is what actually walks those blocks, always going straight to
+	// enclosingVarAt (there's no enclosing() named function to try first).
+	// Confirmed live: cdiscADAMBase/cdiscSDTMBase, referenced only inside
+	// cdiscADAMDatasets/cdiscSDTMDatasets's composite-literal initializers
+	// (maple-agent/internal/pdv/cdisc_fixtures.go), needed exactly this.
+	for _, p := range ssaPkgs {
+		if p == nil {
+			continue
+		}
+		initFn := p.Func("init")
+		if initFn == nil {
+			continue
+		}
+		for _, b := range initFn.Blocks {
+			for _, instr := range b.Instrs {
+				switch in := instr.(type) {
+				case *ssa.Store:
+					if g := rootGlobal(in.Addr); g != nil {
+						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok {
+							if fromID, ok := enclosingVarAt(fset.Position(in.Pos()).Filename, fset.Position(in.Pos()).Line); ok && fromID != id {
+								addEdge(graph.EdgeTypeWrites, fromID, id, map[string]string{"op": "assign"})
+							}
+						}
+					}
+				case *ssa.MapUpdate:
+					if g := rootGlobal(in.Map); g != nil {
+						if id, ok := resolveGlobalID(g, globalIDs, qualifiedNameIDs); ok {
+							if fromID, ok := enclosingVarAt(fset.Position(in.Pos()).Filename, fset.Position(in.Pos()).Line); ok && fromID != id {
+								addEdge(graph.EdgeTypeWrites, fromID, id, map[string]string{"op": "map_update"})
+							}
+						}
+					}
+				case *ssa.UnOp:
+					if in.Op != token.MUL {
+						continue
+					}
+					if g, ok := in.X.(*ssa.Global); ok {
+						if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
+							if fromID, ok := enclosingVarAt(fset.Position(in.Pos()).Filename, fset.Position(in.Pos()).Line); ok && fromID != id {
+								addEdge(graph.EdgeTypeReads, fromID, id, nil)
+							}
+						}
+					}
+				case ssa.CallInstruction:
+					common := in.Common()
+					callPos := fset.Position(in.Pos())
+					if common.IsInvoke() {
+						if g := rootGlobal(common.Value); g != nil {
+							if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
+								if fromID, ok := enclosingVarAt(callPos.Filename, callPos.Line); ok && fromID != id {
+									addEdge(graph.EdgeTypeReads, fromID, id, map[string]string{"op": "call_receiver"})
+								}
+							}
+						}
+					}
+					for _, arg := range common.Args {
+						g := rootGlobal(arg)
+						if g == nil {
+							continue
+						}
+						if id, tracked := resolveGlobalID(g, globalIDs, qualifiedNameIDs); tracked {
+							if fromID, ok := enclosingVarAt(callPos.Filename, callPos.Line); ok && fromID != id {
+								addEdge(graph.EdgeTypeReads, fromID, id, map[string]string{"op": "call_arg"})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// ── Instantiates edges (emitted once per (fn, type) pair with count) ────
 	for key, count := range instCounts {
 		sep := strings.Index(key, "->")
@@ -623,8 +875,8 @@ func extractVariables(
 	// structurally possible via the instruction walk, regardless of whether the
 	// const is same-package or imported. We resolve them using the type-checker's
 	// Uses map (available from packages.LoadAllSyntax, the same load mode the SSA
-	// pass already uses). We build a per-file function-range index from inService
-	// to find the enclosing function node for each const-reference identifier.
+	// pass already uses). enclosingFnAt (built above, alongside enclosingVarAt)
+	// gives the enclosing function node for each const-reference identifier.
 	// Y.2 extends this from cross-package only to same-package as well (the 109
 	// same-package const nodes previously dangled).
 	//
@@ -634,139 +886,6 @@ func extractVariables(
 	// with higher precision (type-checker distinguishes *types.Const from
 	// *types.Var and *types.Func) and avoids new cross-layer coupling.
 	// Recorded as a deviation in the phase outcome note.
-	type fnRng struct {
-		start  int
-		end    int // 0 = unknown
-		nodeID string
-	}
-	fnsByFile := map[string][]fnRng{}
-	for fn := range inService {
-		if fn.Parent() != nil {
-			continue // skip closures; attribute to named parent
-		}
-		pos := fset.Position(fn.Pos())
-		if !inDir(pos) {
-			continue
-		}
-		nodeID, ok := resolveFunc(fn)
-		if !ok {
-			continue
-		}
-		endLine := 0
-		if syn := fn.Syntax(); syn != nil {
-			endPos := fset.Position(syn.End())
-			if endPos.IsValid() {
-				endLine = endPos.Line
-			}
-		}
-		cf := canonicalPath(pos.Filename)
-		fnsByFile[cf] = append(fnsByFile[cf], fnRng{pos.Line, endLine, nodeID})
-	}
-	for cf := range fnsByFile {
-		sort.Slice(fnsByFile[cf], func(i, j int) bool {
-			return fnsByFile[cf][i].start < fnsByFile[cf][j].start
-		})
-	}
-	enclosingFnAt := func(filename string, line int) (string, bool) {
-		cf := canonicalPath(filename)
-		var best *fnRng
-		for i := range fnsByFile[cf] {
-			f := &fnsByFile[cf][i]
-			if f.start > line {
-				continue
-			}
-			if f.end > 0 && line > f.end {
-				continue
-			}
-			if best == nil || f.start > best.start {
-				best = f
-			}
-		}
-		if best == nil {
-			return "", false
-		}
-		return best.nodeID, true
-	}
-
-	// varsByFile/enclosingVarAt is enclosingFnAt's counterpart for a const
-	// reference that isn't inside any function body at all — a package-level
-	// var's initializer expression (`var RolePriority = map[string]int{
-	// RoleAdmin: 3, ...}`). enclosingFnAt alone silently dropped these (no
-	// function range ever contains them), which meant every enum-style const
-	// used only as a map/slice/struct-literal value at package scope read as
-	// permanently zero-reads. Confirmed live on the juniper fleet:
-	// RoleAdmin/RoleEditor (maple-manager/internal/auth/saml/config.go), used
-	// exclusively as RolePriority's map keys, were flagged dead despite
-	// being referenced right there. The "from" side is the enclosing
-	// var/const's own node — a variable-to-variable reads edge, the same
-	// shape templ.go already uses for a component-to-variable read.
-	varsByFile := map[string][]fnRng{}
-	for _, p := range pkgs {
-		if p == nil || p.TypesInfo == nil {
-			continue
-		}
-		for _, f := range p.Syntax {
-			for _, decl := range f.Decls {
-				gd, ok := decl.(*ast.GenDecl)
-				if !ok || (gd.Tok != token.VAR && gd.Tok != token.CONST) {
-					continue
-				}
-				for _, spec := range gd.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok || len(vs.Names) == 0 {
-						continue
-					}
-					var nodeID string
-					for _, name := range vs.Names {
-						obj := p.TypesInfo.Defs[name]
-						if obj == nil || obj.Pkg() == nil {
-							continue
-						}
-						if id, ok := qualifiedNameIDs[obj.Pkg().Path()+"."+obj.Name()]; ok {
-							nodeID = id
-							break
-						}
-					}
-					if nodeID == "" {
-						continue
-					}
-					startPos := fset.Position(vs.Pos())
-					if !startPos.IsValid() || !inDir(startPos) {
-						continue
-					}
-					endPos := fset.Position(vs.End())
-					cf := canonicalPath(startPos.Filename)
-					varsByFile[cf] = append(varsByFile[cf], fnRng{startPos.Line, endPos.Line, nodeID})
-				}
-			}
-		}
-	}
-	for cf := range varsByFile {
-		sort.Slice(varsByFile[cf], func(i, j int) bool {
-			return varsByFile[cf][i].start < varsByFile[cf][j].start
-		})
-	}
-	enclosingVarAt := func(filename string, line int) (string, bool) {
-		cf := canonicalPath(filename)
-		var best *fnRng
-		for i := range varsByFile[cf] {
-			v := &varsByFile[cf][i]
-			if v.start > line {
-				continue
-			}
-			if v.end > 0 && line > v.end {
-				continue
-			}
-			if best == nil || v.start > best.start {
-				best = v
-			}
-		}
-		if best == nil {
-			return "", false
-		}
-		return best.nodeID, true
-	}
-
 	for _, p := range pkgs {
 		if p == nil || p.TypesInfo == nil || p.Types == nil {
 			continue
