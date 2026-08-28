@@ -116,6 +116,39 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 	return bwE.Flush(st.ctx)
 }
 
+// deleteNodes removes ids from the store and from allNodes, and — critically
+// — filters allEdges to drop anything touching a removed endpoint in the
+// same call. DeleteNodes cascades edge deletion in the store, so the
+// in-memory edge set must match or a later pass (the evidence reconciler)
+// re-upserts an edge whose endpoint no longer exists and aborts the index on
+// an FK violation. That exact split — allNodes filtered, allEdges not — was
+// the synergy crash (proxy nodes deleted, dangling renders edge re-upserted);
+// bundling both filters into one method means a future node-deleting pass
+// can't reintroduce it by only remembering half the cleanup.
+func (st *linkPipelineState) deleteNodes(ids map[string]bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := st.store.DeleteNodes(st.ctx, ids); err != nil {
+		return fmt.Errorf("delete nodes: %w", err)
+	}
+	filteredNodes := st.allNodes[:0]
+	for _, n := range st.allNodes {
+		if !ids[n.ID] {
+			filteredNodes = append(filteredNodes, n)
+		}
+	}
+	st.allNodes = filteredNodes
+	filteredEdges := st.allEdges[:0]
+	for _, e := range st.allEdges {
+		if !ids[e.From] && !ids[e.To] {
+			filteredEdges = append(filteredEdges, e)
+		}
+	}
+	st.allEdges = filteredEdges
+	return nil
+}
+
 // filterEdgesByService keeps only edges where at least one endpoint's owning
 // service (looked up via nodeService) is in targets. Empty/nil targets is a
 // no-op — matching still needs every service's nodes present (narrowing
@@ -189,29 +222,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.writeEdges(jsEdges); err != nil {
 				return err
 			}
-			if len(removeIDs) > 0 {
-				if err := st.store.DeleteNodes(st.ctx, removeIDs); err != nil {
-					return fmt.Errorf("delete proxy nodes: %w", err)
-				}
-				filteredNodes := st.allNodes[:0]
-				for _, n := range st.allNodes {
-					if !removeIDs[n.ID] {
-						filteredNodes = append(filteredNodes, n)
-					}
-				}
-				st.allNodes = filteredNodes
-				// DeleteNodes cascades edge deletion in the store; the in-memory
-				// edge set must match, or the evidence reconciler re-upserts edges
-				// whose endpoints no longer exist (FK failure aborts the index).
-				filteredEdges := st.allEdges[:0]
-				for _, e := range st.allEdges {
-					if !removeIDs[e.From] && !removeIDs[e.To] {
-						filteredEdges = append(filteredEdges, e)
-					}
-				}
-				st.allEdges = filteredEdges
-			}
-			return nil
+			return st.deleteNodes(removeIDs)
 		}},
 		// L.W1: global/window symbol resolution + inline handler linking.
 		// Runs after LinkJS so imports-first ordering is enforced via jsImportedNames.
