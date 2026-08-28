@@ -24,6 +24,44 @@ func callNorm(name, value string, env contract.NormalizeEnv) string {
 	return norm(value, env)
 }
 
+// --- resolved_id_wildcard ---
+
+func TestNormResolvedIDWildcard_NumericSegment(t *testing.T) {
+	assert.Equal(t, "/games/*", callNorm("resolved_id_wildcard", "/games/42", env0()))
+}
+
+func TestNormResolvedIDWildcard_UUID(t *testing.T) {
+	assert.Equal(t, "/users/*",
+		callNorm("resolved_id_wildcard", "/users/550e8400-e29b-41d4-a716-446655440000", env0()))
+}
+
+func TestNormResolvedIDWildcard_MongoObjectID(t *testing.T) {
+	assert.Equal(t, "/docs/*",
+		callNorm("resolved_id_wildcard", "/docs/507f1f77bcf86cd799439011", env0()))
+}
+
+func TestNormResolvedIDWildcard_MultipleSegments(t *testing.T) {
+	assert.Equal(t, "/orgs/*/users/*",
+		callNorm("resolved_id_wildcard", "/orgs/42/users/99", env0()))
+}
+
+func TestNormResolvedIDWildcard_NoDynamicSegment(t *testing.T) {
+	// Negative: purely alphabetic literal segments are left alone.
+	assert.Equal(t, "/users/list", callNorm("resolved_id_wildcard", "/users/list", env0()))
+}
+
+func TestNormResolvedIDWildcard_VersionSegmentFalsePositive(t *testing.T) {
+	// Known, accepted limitation: a literal numeric API version segment
+	// (no "v" prefix) is indistinguishable from a resolved numeric ID at this
+	// stage. This is exactly why the normalizer is restricted to the runtime
+	// resolved-path fallback chain and never applied to a route template.
+	assert.Equal(t, "/api/*/users", callNorm("resolved_id_wildcard", "/api/2/users", env0()))
+}
+
+func TestNormResolvedIDWildcard_Empty(t *testing.T) {
+	assert.Equal(t, "", callNorm("resolved_id_wildcard", "", env0()))
+}
+
 // --- param_wildcard ---
 
 func TestNormParamWildcard_ColonParam(t *testing.T) {

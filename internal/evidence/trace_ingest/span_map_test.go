@@ -81,8 +81,13 @@ func TestMapSpansRoutePrefersHTTPRoute(t *testing.T) {
 
 // ─── TestMapSpansURLPathFallback ──────────────────────────────────────────────
 //
-// SERVER span has no http.route but has url.path (raw concrete path).
-// param_wildcard is applied to the raw path.
+// SERVER span has no http.route but has url.path (a resolved, concrete path).
+// Without a route template, param_wildcard alone can't recognize "42" as a
+// dynamic ID — it only matches template placeholder syntax (":id", "{id}").
+// The resolved-path fallback chain adds resolved_id_wildcard specifically for
+// this case, so the numeric segment still collapses to "*" and the key
+// matches what the templated route ("get /games/*") would have produced —
+// without it, this observation could never verify the real static edge.
 func TestMapSpansURLPathFallback(t *testing.T) {
 	spans, err := ParseOTLPFile(filepath.Join(testFixturesDir, "http_2svc.otlp.json"))
 	require.NoError(t, err)
@@ -96,12 +101,8 @@ func TestMapSpansURLPathFallback(t *testing.T) {
 
 	flows, _ := MapSpans(spans, "s", twoSvcWS())
 	require.Len(t, flows, 1)
-	// url.path "/games/42" → param_wildcard → "/games/*" (numeric segment treated
-	// as a wildcard candidate only via normalizer; here the segment is "42" which
-	// is NOT a colon/brace param, so it stays "42").  Normalizers do NOT
-	// wildcard numeric segments — only ":id", "{id}", and "[pattern]" forms.
-	assert.Equal(t, "get /games/42", flows[0].Key,
-		"numeric segment in url.path is not wildcarded by param_wildcard")
+	assert.Equal(t, "get /games/*", flows[0].Key,
+		"resolved_id_wildcard must collapse a numeric resolved segment to match the templated route's key")
 }
 
 // ─── TestMapSpansOldSemconv ───────────────────────────────────────────────────
@@ -120,9 +121,11 @@ func TestMapSpansOldSemconv(t *testing.T) {
 	assert.Empty(t, ledger)
 	f := flows[0]
 	assert.Equal(t, "http", string(f.Kind))
-	// http.target="/users/7" is not a route pattern → param_wildcard is no-op on /users/7;
-	// but the path /users/7 has a numeric segment which stays as-is.
-	assert.Equal(t, "get /users/7", f.Key)
+	// http.target="/users/7" is a resolved path, not a route template — the
+	// resolved-path fallback chain's resolved_id_wildcard collapses the
+	// numeric segment to "*" so this joins the same key a templated route
+	// ("get /users/*") would produce.
+	assert.Equal(t, "get /users/*", f.Key)
 	assert.Equal(t, "parent_child", f.Causality)
 }
 

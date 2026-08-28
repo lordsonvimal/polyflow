@@ -103,7 +103,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			continue
 		}
 
-		method, rawPath, ok := extractHTTPInfo(sp)
+		method, rawPath, isTemplate, ok := extractHTTPInfo(sp)
 		if !ok {
 			addLedger(sp, "no_route_or_path")
 			continue
@@ -151,7 +151,7 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 			// always GET and the static sse_endpoint edges key on path alone).
 			sseKey, err := contract.NormalizeFields(
 				[]string{rawPath},
-				sseNormChain,
+				sseChainFor(isTemplate),
 				env,
 			)
 			if err != nil {
@@ -164,10 +164,13 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 
 		// Build normalized HTTP channel key using the contract engine's normalizer
 		// chain — identical to what static HTTP edges use, ensuring the join
-		// key matches (bug-class rule 6 / divergent-normalization guard).
+		// key matches (bug-class rule 6 / divergent-normalization guard). A
+		// resolved (non-template) path additionally gets resolved_id_wildcard so
+		// a literal ID (`/games/5`, from url.path/http.target/url.full) still
+		// collapses to the same key as the templated route (`/games/*`).
 		key, err := contract.NormalizeFields(
 			[]string{method, rawPath},
-			httpNormChain,
+			httpChainFor(isTemplate),
 			env,
 		)
 		if err != nil {
@@ -347,17 +350,56 @@ func MapSpans(spans []Span, session string, ws *workspace.WorkspaceConfig) ([]Fl
 // httpNormChain is the normalizer sequence applied to [method, path] fields
 // for HTTP flow records — identical to the static HTTP contract rule chain so
 // the join key is always compatible (divergent normalization is a silent miss).
+// Used when the path came from a route template (SERVER span's http.route).
 var httpNormChain = []string{
 	"case_fold", "url_to_path", "base_url_strip", "query_strip",
 	"param_wildcard", "trim_slash",
 }
 
+// httpNormChainResolved is httpNormChain plus resolved_id_wildcard, inserted
+// before param_wildcard. Used when the path is a *resolved* value (a CLIENT
+// span's url.full, or a SERVER span whose framework never set http.route) —
+// param_wildcard alone only recognizes template placeholder syntax (`:id`,
+// `{id}`), so a literal resolved ID (`/games/5`) would otherwise never
+// collapse to the same key as the templated route (`/games/*`) and would
+// falsely surface as observed_only_gap instead of verifying the real edge.
+// Never used on a template path: a legitimate static segment that happens to
+// be purely numeric (e.g. a literal API version) would be misidentified as a
+// dynamic ID — see normResolvedIDWildcard.
+var httpNormChainResolved = []string{
+	"case_fold", "url_to_path", "base_url_strip", "query_strip",
+	"resolved_id_wildcard", "param_wildcard", "trim_slash",
+}
+
+// httpChainFor selects the HTTP normalizer chain for a path's provenance.
+func httpChainFor(isTemplate bool) []string {
+	if isTemplate {
+		return httpNormChain
+	}
+	return httpNormChainResolved
+}
+
 // sseNormChain is the normalizer sequence applied to [path] for SSE connection
 // flow records.  No method prefix: SSE is always GET, and static sse_endpoint
-// edges key on path alone.
+// edges key on path alone. Used when the path came from a route template.
 var sseNormChain = []string{
 	"case_fold", "url_to_path", "query_strip",
 	"param_wildcard", "trim_slash",
+}
+
+// sseNormChainResolved is sseNormChain plus resolved_id_wildcard — the SSE
+// counterpart to httpNormChainResolved, same rationale.
+var sseNormChainResolved = []string{
+	"case_fold", "url_to_path", "query_strip",
+	"resolved_id_wildcard", "param_wildcard", "trim_slash",
+}
+
+// sseChainFor selects the SSE normalizer chain for a path's provenance.
+func sseChainFor(isTemplate bool) []string {
+	if isTemplate {
+		return sseNormChain
+	}
+	return sseNormChainResolved
 }
 
 // FlowsToEdges converts a slice of FlowRecords to graph.Edges suitable for
@@ -400,24 +442,27 @@ func isHTTPSpan(sp *Span) bool {
 	return sp.Attrs["http.request.method"] != "" || sp.Attrs["http.method"] != ""
 }
 
-// extractHTTPInfo returns the HTTP method and raw path/URL from a span.
-// For SERVER spans, prefers http.route (already a route pattern) over url.path
-// and http.target. For CLIENT spans, uses url.full (url_to_path normalizer
-// extracts the path). Returns ok=false when either field is absent.
-func extractHTTPInfo(sp *Span) (method, rawPath string, ok bool) {
+// extractHTTPInfo returns the HTTP method and raw path/URL from a span, plus
+// isTemplate: true only when rawPath came from http.route (a route template
+// like "/games/:id"), false when it's a resolved value (url.path,
+// http.target, or url.full — e.g. "/games/5"). Callers use isTemplate to pick
+// the normalizer chain: param_wildcard alone only recognizes template
+// placeholder syntax, so a resolved path needs the resolved_id_wildcard
+// fallback to still collapse to the same key as the templated route.
+func extractHTTPInfo(sp *Span) (method, rawPath string, isTemplate, ok bool) {
 	method = sp.Attrs["http.request.method"]
 	if method == "" {
 		method = sp.Attrs["http.method"]
 	}
 	if method == "" {
-		return "", "", false
+		return "", "", false, false
 	}
 
 	if sp.Kind == "SERVER" {
-		rawPath = sp.Attrs["http.route"]
-		if rawPath == "" {
-			rawPath = sp.Attrs["url.path"]
+		if route := sp.Attrs["http.route"]; route != "" {
+			return method, route, true, true
 		}
+		rawPath = sp.Attrs["url.path"]
 		if rawPath == "" {
 			rawPath = sp.Attrs["http.target"]
 		}
@@ -426,9 +471,9 @@ func extractHTTPInfo(sp *Span) (method, rawPath string, ok bool) {
 	}
 
 	if rawPath == "" {
-		return "", "", false
+		return "", "", false, false
 	}
-	return method, rawPath, true
+	return method, rawPath, false, true
 }
 
 // isSSESpan reports whether sp is an SSE connection span.  Detection uses the

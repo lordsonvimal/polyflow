@@ -36,6 +36,7 @@ func init() {
 	RegisterNormalizer("amqp_topic_wildcard", normAMQPTopicWildcard)
 	RegisterNormalizer("empty_path_guard", normEmptyPathGuard)
 	RegisterNormalizer("format_suffix_strip", normFormatSuffixStrip)
+	RegisterNormalizer("resolved_id_wildcard", normResolvedIDWildcard)
 }
 
 var (
@@ -72,6 +73,12 @@ var (
 	// `http_handler` nodes carry any of these as a literal path segment, so
 	// stripping can never manufacture a collision with a real handler.
 	reFormatSuffix = regexp.MustCompile(`\.(?:json|js|xml|csv|html)$`)
+	// reResolvedIDSegment matches a whole path segment that looks like a
+	// resolved dynamic identifier rather than a literal route segment: pure
+	// digits, a UUID, or a 24-hex Mongo ObjectID. Deliberately narrow — these
+	// three shapes almost never occur as real static path literals, unlike a
+	// looser alphanumeric-slug heuristic would. See normResolvedIDWildcard.
+	reResolvedIDSegment = regexp.MustCompile(`^(?:\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{24})$`)
 )
 
 // normParamWildcard replaces path parameter segments with *.
@@ -85,6 +92,37 @@ func normParamWildcard(value string, _ NormalizeEnv) string {
 	p = reParamRegex.ReplaceAllString(p, "*")
 	p = reParamPrintf.ReplaceAllString(p, "*")
 	return p
+}
+
+// normResolvedIDWildcard heuristically wildcards path segments that look like
+// a *resolved* dynamic identifier — pure digits, a UUID, or a 24-hex Mongo
+// ObjectID — as opposed to normParamWildcard, which only recognizes
+// syntactic placeholders (`:id`, `{id}`, printf verbs) in a route template.
+//
+// This exists for exactly one caller: trace_ingest's HTTP/SSE fallback chain,
+// used only when a span carries a resolved path instead of a route template
+// (a CLIENT span's url.full, or a SERVER span whose framework never set
+// http.route). It is deliberately NOT part of the primary httpNormChain/
+// sseNormChain used whenever a route template is available — a legitimate
+// static path segment that happens to be purely numeric (e.g. a literal API
+// version segment) would be misidentified as a dynamic ID, so this heuristic
+// is only worth the precision cost in the already-degraded fallback case.
+func normResolvedIDWildcard(value string, _ NormalizeEnv) string {
+	if value == "" {
+		return value
+	}
+	segs := strings.Split(value, "/")
+	changed := false
+	for i, s := range segs {
+		if s != "" && reResolvedIDSegment.MatchString(s) {
+			segs[i] = "*"
+			changed = true
+		}
+	}
+	if !changed {
+		return value
+	}
+	return strings.Join(segs, "/")
 }
 
 // normQueryStrip removes the query string from a URL or path.
