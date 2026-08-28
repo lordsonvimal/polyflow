@@ -302,14 +302,55 @@ func inferRubyInlineChainClass(n *sitter.Node, src []byte, class string, selfIsC
 	return inferRubyNewClassCtx(recv, src, class, selfIsClass)
 }
 
+// inferRubyFinderClass recognizes DC.19's ActiveRecord finder shape: a
+// receiver typed via `Model.find(id)`/`Model.find_by(...)` or
+// `Model.where(...).first`/`.last`/`.take` is unambiguously an instance of
+// Model, the same "unambiguous once traced" bar `Const.new(...)` clears.
+// A bare `Model.where(...)` with no terminal method is deliberately NOT
+// recognised here — it returns an ActiveRecord::Relation, not an instance,
+// and has a different method set; tracing it as an instance would be a
+// wrong-class misattribution, not a missed one.
+func inferRubyFinderClass(n *sitter.Node, src []byte) string {
+	if n == nil || n.Type() != "call" {
+		return ""
+	}
+	mn := n.ChildByFieldName("method")
+	if mn == nil {
+		return ""
+	}
+	switch mn.Content(src) {
+	case "find", "find_by", "find_by!":
+		if recv := n.ChildByFieldName("receiver"); recv != nil && recv.Type() == "constant" {
+			return recv.Content(src)
+		}
+	case "first", "last", "take":
+		recv := n.ChildByFieldName("receiver")
+		if recv == nil || recv.Type() != "call" {
+			return ""
+		}
+		rmn := recv.ChildByFieldName("method")
+		if rmn == nil || rmn.Content(src) != "where" {
+			return ""
+		}
+		if rrecv := recv.ChildByFieldName("receiver"); rrecv != nil && rrecv.Type() == "constant" {
+			return rrecv.Content(src)
+		}
+	}
+	return ""
+}
+
 // inferRubyExprClassCtx is inferRubyExprClass widened with the two DC.5
-// shapes above, for callers that need singleton-context awareness (ivar and
-// local-variable assignment right-hand sides).
+// shapes above plus DC.19's finder shape, for callers that need
+// singleton-context awareness (ivar and local-variable assignment
+// right-hand sides).
 func inferRubyExprClassCtx(n *sitter.Node, src []byte, class string, selfIsClass bool, methodReturnType map[string]string) string {
 	if cls := inferRubyNewClassCtx(n, src, class, selfIsClass); cls != "" {
 		return cls
 	}
 	if cls := inferRubyInlineChainClass(n, src, class, selfIsClass); cls != "" {
+		return cls
+	}
+	if cls := inferRubyFinderClass(n, src); cls != "" {
 		return cls
 	}
 	return inferRubyExprClass(n, src, methodReturnType)
@@ -499,6 +540,9 @@ func scanRubyReceiverTypedCalls(root *sitter.Node, src []byte, file, svcName str
 								}
 							case "call":
 								cls = inferRubyNewClassCtx(recv, src, class, selfIsClass)
+								if cls == "" {
+									cls = inferRubyFinderClass(recv, src)
+								}
 							}
 							if cls != "" {
 								refs = append(refs, classMethodCallRef{

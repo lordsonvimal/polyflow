@@ -399,3 +399,172 @@ end
 		t.Errorf("expected no edges for an untypeable receiver, got %v", edges)
 	}
 }
+
+// TestLinkRubyReceiverTypeCalls_FinderMethodNew covers DC.19's bounded
+// finder-method shape: `x = Model.find(id); x.some_method` — the return type
+// of an ActiveRecord finder is unambiguously an instance of Model, the same
+// bar `Const.new(...)` clears.
+func TestLinkRubyReceiverTypeCalls_FinderMethodFind(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	controller := writeRuby(t, dir, "favorites_controller.rb", `
+class FavoritesController
+  def show
+    study = Study.find(params[:id])
+    study.active_children
+  end
+end
+`)
+	model := writeRuby(t, dir, "study.rb", `
+class Study
+  def active_children
+    []
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNode("svc", controller, "FavoritesController", 2),
+		classCallFuncNode("svc", controller, "FavoritesController", "show", 3),
+		rubyClassNode("svc", model, "Study", 2),
+		classCallFuncNode("svc", model, "Study", "active_children", 3),
+	}
+	serviceFiles := map[string][]string{"svc": {controller, model}}
+
+	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
+
+	var got *graph.Edge
+	for i := range edges {
+		if edges[i].To == "svc:"+model+":function:active_children:3" {
+			got = &edges[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected an edge into Study#active_children, got edges=%v unresolved=%v", edges, unresolved)
+	}
+	if got.From != "svc:"+controller+":function:show:3" {
+		t.Errorf("edge From = %q, want FavoritesController#show", got.From)
+	}
+}
+
+// TestLinkRubyReceiverTypeCalls_FinderMethodWhereTerminal covers
+// `x = Model.where(...).first; x.some_method` — a `.where` chain terminated
+// with `.first`/`.last`/`.take` types a scalar instance, unlike a bare
+// `.where(...)` (see the negative case below).
+func TestLinkRubyReceiverTypeCalls_FinderMethodWhereTerminal(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	controller := writeRuby(t, dir, "favorites_controller.rb", `
+class FavoritesController
+  def show
+    folder = Folder.where(user_id: 1).first
+    folder.active_children
+  end
+end
+`)
+	model := writeRuby(t, dir, "folder.rb", `
+class Folder
+  def active_children
+    []
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNode("svc", controller, "FavoritesController", 2),
+		classCallFuncNode("svc", controller, "FavoritesController", "show", 3),
+		rubyClassNode("svc", model, "Folder", 2),
+		classCallFuncNode("svc", model, "Folder", "active_children", 3),
+	}
+	serviceFiles := map[string][]string{"svc": {controller, model}}
+
+	edges, unresolved := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
+
+	var got *graph.Edge
+	for i := range edges {
+		if edges[i].To == "svc:"+model+":function:active_children:3" {
+			got = &edges[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected an edge into Folder#active_children, got edges=%v unresolved=%v", edges, unresolved)
+	}
+}
+
+// TestLinkRubyReceiverTypeCalls_BareWhereNotTracedAsInstance is the required
+// negative case: `x = Model.where(...); x.some_method` must NOT resolve —
+// `.where` with no terminal method returns an ActiveRecord::Relation, a
+// different method set than Model's instances, and tracing it as an instance
+// would be a wrong-class misattribution.
+func TestLinkRubyReceiverTypeCalls_BareWhereNotTracedAsInstance(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	controller := writeRuby(t, dir, "favorites_controller.rb", `
+class FavoritesController
+  def show
+    folders = Folder.where(user_id: 1)
+    folders.active_children
+  end
+end
+`)
+	model := writeRuby(t, dir, "folder.rb", `
+class Folder
+  def active_children
+    []
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNode("svc", controller, "FavoritesController", 2),
+		classCallFuncNode("svc", controller, "FavoritesController", "show", 3),
+		rubyClassNode("svc", model, "Folder", 2),
+		classCallFuncNode("svc", model, "Folder", "active_children", 3),
+	}
+	serviceFiles := map[string][]string{"svc": {controller, model}}
+
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
+	if len(edges) != 0 {
+		t.Errorf("bare .where(...) must not be traced as a Model instance, got %v", edges)
+	}
+}
+
+// TestLinkRubyReceiverTypeCalls_MethodParameterReceiverStaysUnresolved is the
+// already-standing hard ceiling DC.19 documents but does not attempt: a
+// receiver that is a bare method parameter has no call-site type annotation,
+// and must stay unresolved rather than guessed from its name.
+func TestLinkRubyReceiverTypeCalls_MethodParameterReceiverStaysUnresolved(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	caller := writeRuby(t, dir, "favorites_controller.rb", `
+class FavoritesController
+  def favorites_in_folder(folder)
+    folder.active_children
+  end
+end
+`)
+	model := writeRuby(t, dir, "folder.rb", `
+class Folder
+  def active_children
+    []
+  end
+end
+`)
+
+	nodes := []graph.Node{
+		rubyClassNode("svc", caller, "FavoritesController", 2),
+		classCallFuncNode("svc", caller, "FavoritesController", "favorites_in_folder", 3),
+		rubyClassNode("svc", model, "Folder", 2),
+		classCallFuncNode("svc", model, "Folder", "active_children", 3),
+	}
+	serviceFiles := map[string][]string{"svc": {caller, model}}
+
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
+	if len(edges) != 0 {
+		t.Errorf("a bare method-parameter receiver must stay unresolved (no guessing), got %v", edges)
+	}
+}
