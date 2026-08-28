@@ -233,6 +233,26 @@ func TestMatchToGraph_UnrecognizedVerbExpressionIsLeftVerbatim(t *testing.T) {
 	assert.Equal(t, "req.method", nodes[0].Meta["method"])
 }
 
+func TestMatchToGraph_RestClientDynamicMethodIsBlanked(t *testing.T) {
+	// RC.1: unlike the general case above, `RestClient::Request.execute(method:
+	// method, ...)` captures the *keyword's own name* ("method"), not the
+	// runtime value of the local variable it references — the query grammar
+	// has no way to tell a bare identifier from a literal symbol here. That
+	// text can never equal a handler's verb, so keeping it is strictly worse
+	// than blanking it: blank is what makes http.yaml's method_fallback
+	// retry every verb instead of guaranteeing a miss.
+	results := []patterns.MatchResult{{
+		PatternName: "rest_client_request",
+		File:        "agr_api_tests.rb",
+		Line:        117,
+		Captures:    map[string]string{"method": "method", "url": `"/client_api/v1/application_groups/#{endpoint}"`},
+	}}
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "", nodes[0].Meta["method"])
+	assert.NotContains(t, nodes[0].Label, "method ", "the blanked verb token must not linger in the label")
+}
+
 func TestMatchToGraph_CobraRunIsEdge(t *testing.T) {
 	// cobra_run must be a call-ref: no new node, edge from enclosing func to RunE target.
 	results := []patterns.MatchResult{

@@ -28,6 +28,14 @@ var httpVerbs = map[string]bool{
 // value this function declines is left exactly as it was, so an unrecognized
 // expression keeps today's behavior rather than being guessed at.
 //
+// One narrow, pattern-scoped exception lives in matcher.go (RC.1): Ruby's
+// `RestClient::Request.execute(method: method, ...)` keyword-argument form
+// has a grammar ambiguity this function cannot see from raw text alone (a
+// bare identifier value vs. a literal symbol both arrive as plain source
+// text), so the caller blanks the decline there instead of keeping it. That
+// is a caller-level decision scoped to two pattern names, not a change to
+// this function's own contract.
+//
 // The Go operand is matched by *name*, not by import path: the tree-sitter
 // matcher has no type information here, and `http` is the overwhelmingly
 // dominant alias for net/http. A package aliased to `http` that defined its

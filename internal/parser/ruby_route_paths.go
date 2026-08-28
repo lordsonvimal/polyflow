@@ -766,6 +766,19 @@ func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names 
 		// String-literal path — same member :id insertion applies when
 		// `on: :member` is present as a keyword argument.
 		lit := strings.Trim(node.Meta["path"], `"'`)
+		// RC.2: Rails' optional-segment syntax — `"dependency(/:object/:id)/detect_details"`
+		// — marks a group that may or may not be present at runtime, but the
+		// parens carry no path-segment meaning of their own. Left in, they
+		// become part of one opaque literal blob no client key can ever
+		// match (a fetch/href call never sends literal "(" or ")"), so the
+		// route was unreachable regardless of what any caller sent. Stripping
+		// them makes the fully-specified (all-params-present) shape of the
+		// route matchable — the group's params still normalize to wildcards
+		// downstream — rather than leaving it permanently unmatchable either
+		// way. The all-absent shape (a caller that omits the whole group) is
+		// a second, structurally different route this does not add; see
+		// docs/client-key-normalization-gaps-plan.md.
+		lit = strings.NewReplacer("(", "", ")", "").Replace(lit)
 		lit = strings.Trim(lit, "/")
 		if onMember(call, src) {
 			segs = append(segs, ":id")
