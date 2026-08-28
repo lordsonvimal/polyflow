@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	bashsitter "github.com/smacker/go-tree-sitter/bash"
 	gositter "github.com/smacker/go-tree-sitter/golang"
 	htmlsitter "github.com/smacker/go-tree-sitter/html"
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
@@ -182,6 +183,8 @@ func languageFor(lang string) *sitter.Language {
 		return rubysitter.GetLanguage()
 	case "html":
 		return htmlsitter.GetLanguage()
+	case "bash":
+		return bashsitter.GetLanguage()
 	default:
 		return nil
 	}
@@ -707,7 +710,8 @@ func isCallRef(patternName string) bool {
 		patternName == "object_value_ref" ||
 		patternName == "goroutine_call" ||
 		patternName == "cobra_run" ||
-		patternName == "python_func_call"
+		patternName == "python_func_call" ||
+		patternName == "shell_command_call"
 }
 
 // isConstantPattern returns true for pattern results that only feed the URL
@@ -1629,21 +1633,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// "" and the node keeps no caller edge, as before.
 	moduleNodes := make(map[string]*graph.Node)
 	moduleNodeFor := func(file string) string {
-		if !isJSModuleFile(file) {
+		label, scope, ok := moduleScopeFor(file)
+		if !ok {
 			return ""
 		}
 		if n, ok := moduleNodes[file]; ok {
 			return n.ID
 		}
-		id := fmt.Sprintf("%s:%s:function:(module):0", service, file)
+		id := fmt.Sprintf("%s:%s:function:%s:0", service, file, label)
 		moduleNodes[file] = &graph.Node{
 			ID:      id,
 			Type:    graph.NodeTypeFunction,
-			Label:   "(module)",
+			Label:   label,
 			Service: service,
 			File:    file,
 			Line:    0,
-			Meta:    map[string]string{"scope": "module"},
+			Meta:    map[string]string{"scope": scope},
 		}
 		return id
 	}
@@ -2005,6 +2010,41 @@ func isJSModuleFile(file string) bool {
 		}
 	}
 	return false
+}
+
+// isShellFile reports whether file is a shell script (.sh/.bash) or a
+// Bats-core test file (.bats, which parses as ordinary bash-dialect content
+// — SH0 registers no test-file special-casing for it).
+func isShellFile(file string) bool {
+	for _, ext := range []string{".sh", ".bash", ".bats"} {
+		if strings.HasSuffix(file, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// moduleScopeFor returns the synthetic per-file fallback-scope label and
+// scope-meta value for file's language, or ok=false when the language has no
+// such convention (Go/Ruby have their own top-level attribution: Go via
+// goTopLevelScope's main/init fallback, Ruby has no bare top-level call
+// pattern today). JS/TS/Python get "(module)" (SH0's precedent: top-level
+// statements execute on load, unconditionally an entry point regardless of
+// whether anything else in-repo references the file — see classifyRoot).
+// Shell gets "(script)" instead of "(module)": a shell script is executable
+// from line 1 exactly like a JS module, but unlike a JS module its
+// entrypoint status is CONDITIONAL on not being invoked by another indexed
+// script (SH1's calls edges) — classifyRoot treats the two labels
+// differently for exactly this reason.
+func moduleScopeFor(file string) (label, scope string, ok bool) {
+	switch {
+	case isJSModuleFile(file):
+		return "(module)", "module", true
+	case isShellFile(file):
+		return "(script)", "script", true
+	default:
+		return "", "", false
+	}
 }
 
 // isHTMLFile reports whether file is a static HTML document (.html/.htm).
@@ -2504,8 +2544,67 @@ func railsClassify(receiver string) string {
 
 // stripStringLiteral removes surrounding string delimiters from a captured value.
 // Handles: Go/JS/Ruby (", ', `); Python prefix forms (f"", r"", b"", u"",
-// and combinations: rb"", fr"", etc.); Python triple-quoted strings ("""/”').
+// and combinations: rb"", fr"", etc.); Python triple-quoted strings ("""/”');
+// bash $'...' ANSI-C quoting and heredoc bodies (<<EOF, <<-EOF, <<'EOF' —
+// SH0, rule 11).
 func stripStringLiteral(s string) string {
+	// Bash ANSI-C quoting: $'...'. Must be checked before the generic
+	// single/double/backtick strip below (the leading '$' would otherwise
+	// leave the pair unbalanced and fall through unstripped).
+	if len(s) >= 3 && s[0] == '$' && s[1] == '\'' && s[len(s)-1] == '\'' {
+		return s[2 : len(s)-1]
+	}
+
+	// Bash heredoc: the captured text is the whole `<<[-]['"]?DELIM ... DELIM`
+	// construct (delimiter line + body + closing delimiter line), the shape a
+	// future capture over a redirected_statement's source span would carry.
+	// The no-substitution form (`<<'EOF'` / `<<"EOF"`) and the ordinary form
+	// (`<<EOF`) both strip down to the body between the two delimiter lines;
+	// `<<-EOF` (leading-tab-stripping) is the same shape with a `-` marker.
+	if body, ok := stripHeredoc(s); ok {
+		return body
+	}
+
+	return stripStringLiteralQuotes(s)
+}
+
+// stripHeredoc extracts a bash heredoc body from its full captured
+// `<<[-]DELIM\n...\nDELIM` text. ok=false when s is not heredoc-shaped (no
+// stripping performed); callers fall through to ordinary quote stripping.
+func stripHeredoc(s string) (body string, ok bool) {
+	if !strings.HasPrefix(s, "<<") {
+		return "", false
+	}
+	rest := s[2:]
+	rest = strings.TrimPrefix(rest, "-")
+	nl := strings.IndexByte(rest, '\n')
+	if nl < 0 {
+		return "", false
+	}
+	delimLine := strings.TrimSpace(rest[:nl])
+	// The no-substitution form quotes the delimiter: 'EOF' or "EOF".
+	delimLine = strings.Trim(delimLine, `'"`)
+	if delimLine == "" {
+		return "", false
+	}
+	remainder := rest[nl+1:]
+	// The closing delimiter is the first line that, trimmed, equals the
+	// opening delimiter exactly (heredoc terminators are not indented,
+	// except the <<- form, which strip.go's caller doesn't need to
+	// distinguish here — the body content is identical either way).
+	lines := strings.Split(remainder, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == delimLine {
+			return strings.Join(lines[:i], "\n"), true
+		}
+	}
+	return "", false
+}
+
+// stripStringLiteralQuotes is the original stripStringLiteral body (Go/JS/
+// Ruby/Python quote and prefix forms), factored out so bash-specific forms
+// above can fall through to it.
+func stripStringLiteralQuotes(s string) string {
 	// Strip Python/Ruby string prefix letters (f, r, b, u and combinations).
 	// Only strip when the prefix is immediately followed by a quote character.
 	i := 0

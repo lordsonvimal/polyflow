@@ -1273,6 +1273,20 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 		stampRootKind(n, "entrypoint")
 		return true
 	}
+	// SH0/SH1: a shell script's synthetic (script) scope is entrypoint
+	// status CONDITIONAL on nothing else invoking it — the opposite polarity
+	// from (module) above. A JS module always executes on load regardless of
+	// whether anything imports it (browser/bundler entry), but a shell
+	// script that another indexed script sources or execs is not itself a
+	// root; only a script with zero inbound `calls` (via=exec, SH1) edges is
+	// one, exactly like an un-called Go main.
+	if n.Label == "(script)" {
+		if incoming[n.ID] {
+			return false
+		}
+		stampRootKind(n, "entrypoint")
+		return true
+	}
 	if incoming[n.ID] {
 		return false
 	}

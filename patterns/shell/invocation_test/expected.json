@@ -1,0 +1,8 @@
+{
+  "patterns": [
+    "shell_invocation_verb", "shell_invocation_verb",
+    "shell_invocation_verb", "shell_invocation_verb",
+    "shell_invocation_bare", "shell_invocation_bare"
+  ],
+  "node_types": []
+}

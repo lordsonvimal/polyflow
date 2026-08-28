@@ -1,0 +1,10 @@
+{
+  "patterns": [
+    "func_decl", "func_decl",
+    "shell_command_call", "shell_command_call",
+    "shell_command_call", "shell_command_call"
+  ],
+  "node_types": [
+    "function", "function"
+  ]
+}
