@@ -734,7 +734,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Y.3c: parse table names out of datastore call SQL and terminate each
 		// query/persist at a real table entity (mints table nodes).
 		{"tables", scopeSameServiceOnly, func() error {
-			tableNodes, tableEdges := linker.LinkTables(st.allNodes)
+			tableNodes, tableEdges, tableUnresolved := linker.LinkTables(st.allNodes)
 			for i := range tableNodes {
 				n := tableNodes[i]
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
@@ -745,6 +745,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
+			st.allUnresolved = append(st.allUnresolved, tableUnresolved...)
 			return st.writeEdges(tableEdges)
 		}},
 		// Y.4: join server response DTOs to the client interfaces that mirror their

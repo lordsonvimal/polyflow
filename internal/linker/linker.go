@@ -391,18 +391,41 @@ func LinkDatastores(nodes []graph.Node) []graph.Edge {
 // `handler-fn → calls → repo-fn → calls → callNode → queries → store` is
 // connected — but it terminates at an opaque driver/store node. This pass
 // parses the table name out of the SQL (first FROM/INTO/UPDATE target) and
-// emits `callNode → table` (queries/persists), minting one table node per
-// (service, table). The call node is itself type=datastore, so the emitted
-// edge is literally the plan's `datastore → table`, and the query now ends at
-// a real entity. Statements with no resolvable table (PRAGMA, multi-statement)
-// are left alone — no table node is fabricated (#12).
-func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
+// emits `callNode → table` (queries/persists). Statements with no resolvable
+// table (PRAGMA, multi-statement) are left alone — no table node is
+// fabricated (#12).
+//
+// SQ2: before minting a synthetic table node, the cleaned table name is
+// looked up against every schema-declared graph.NodeTypeTable node already in
+// `nodes` (minted by internal/parser/sql.go's CREATE TABLE pass, which runs
+// before this link pass) — by name only, across every service, not scoped to
+// the call node's own service, since a schema file commonly lives in a
+// different service than the code querying it (a shared db/migrations
+// service, or a cross-service call). A match rewires the query/persist edge
+// onto the real declaration instead of minting a duplicate. Zero matches
+// falls back to the pre-SQ2 per-(service,table) synthetic mint, unchanged.
+// More than one match is a genuine name collision (the same "fan out, never
+// first-match" rule.1 SQ1 applies to REFERENCES targets) — the edge lands on
+// every candidate and the site is ledgered sql_table_query_collision.
+func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
 	tableID := func(service, name string) string {
 		return service + ":table:" + name
 	}
+	// Schema-declared table nodes, indexed by cleaned name across every
+	// service (SQ2) — these already exist in `nodes`, minted by the SQL
+	// parser during the main parse phase, not by this pass.
+	byName := make(map[string][]string)
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeTable {
+			byName[nodes[i].Label] = append(byName[nodes[i].Label], nodes[i].ID)
+		}
+	}
+
 	seen := make(map[string]bool)
+	seenCollision := make(map[string]bool)
 	var newNodes []graph.Node
 	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeDatastore || n.Meta["kind"] != "call" {
@@ -412,32 +435,51 @@ func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge) {
 		if table == "" {
 			continue
 		}
-		tid := tableID(n.Service, table)
-		if !seen[tid] {
-			seen[tid] = true
-			newNodes = append(newNodes, graph.Node{
-				ID:       tid,
-				Type:     graph.NodeTypeTable,
-				Label:    table,
-				Service:  n.Service,
-				Language: n.Language,
-				Meta:     map[string]string{"name": table},
-			})
-		}
 		edgeType := graph.EdgeTypeQueries
 		if n.Meta["op"] == "persist" {
 			edgeType = graph.EdgeTypePersists
 		}
-		edges = append(edges, graph.Edge{
-			ID:         fmt.Sprintf("%s:%s->%s", string(edgeType), n.ID, tid),
-			From:       n.ID,
-			To:         tid,
-			Type:       edgeType,
-			Confidence: graph.ConfidenceStatic,
-			Meta:       map[string]string{"via": "sql_table", "table": table},
-		})
+
+		targets := byName[table]
+		if len(targets) == 0 {
+			// No schema declaration indexed anywhere in this workspace —
+			// today's synthetic-mint behavior, unchanged.
+			tid := tableID(n.Service, table)
+			if !seen[tid] {
+				seen[tid] = true
+				newNodes = append(newNodes, graph.Node{
+					ID:       tid,
+					Type:     graph.NodeTypeTable,
+					Label:    table,
+					Service:  n.Service,
+					Language: n.Language,
+					Meta:     map[string]string{"name": table},
+				})
+			}
+			targets = []string{tid}
+		} else if len(targets) > 1 {
+			key := table + "\x00" + n.ID
+			if !seenCollision[key] {
+				seenCollision[key] = true
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: n.Service, File: n.File, Line: n.Line,
+					Name: table, Kind: "sql_table_query_collision",
+				})
+			}
+		}
+
+		for _, tid := range targets {
+			edges = append(edges, graph.Edge{
+				ID:         fmt.Sprintf("%s:%s->%s", string(edgeType), n.ID, tid),
+				From:       n.ID,
+				To:         tid,
+				Type:       edgeType,
+				Confidence: graph.ConfidenceStatic,
+				Meta:       map[string]string{"via": "sql_table", "table": table},
+			})
+		}
 	}
-	return newNodes, edges
+	return newNodes, edges, unresolved
 }
 
 // LinkResourceSignals closes hop 6's fetch→signal binding (Y.6). A Solid

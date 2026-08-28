@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-28T17:11:50.204381Z",
+  "generated_at": "2026-08-28T17:56:38.632309Z",
   "repos": [
     {
       "repo": "juniper",
@@ -134,11 +134,146 @@
           "honest_misses": 0,
           "silent_misses": 0,
           "hard_fail": false
+        },
+        {
+          "case_id": "sq-fk-clean-base-image-versions",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq-fk-collision-base-images-migration-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq-fk-collision-base-images-schema-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-dedup-schema-migrations",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-dedup-app-access-grants",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-container-events-migration-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-container-events-schema-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-user-apps-migration-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-user-apps-schema-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-compute-profiles-migration-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-compute-profiles-schema-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-settings-migration-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-settings-schema-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-exec-configs-migration-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
+        },
+        {
+          "case_id": "sq2-collision-exec-configs-schema-side",
+          "recall": 1,
+          "precision": 1,
+          "exhaustive": true,
+          "honest_misses": 0,
+          "silent_misses": 0,
+          "hard_fail": false
         }
       ],
       "recall": 1,
       "precision": 1,
-      "exhaustive_cases": 13
+      "exhaustive_cases": 28
     },
     {
       "repo": "gotify",
