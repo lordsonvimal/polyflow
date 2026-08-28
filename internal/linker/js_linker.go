@@ -86,23 +86,39 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			continue
 		}
 		// Skip framework components (Show, For, Match etc. — no user declaration).
+		// The renders edge that pointed at this proxy is dropped, not redirected
+		// (there is nothing to redirect to) — ledger it so the loss is visible
+		// instead of a silent node deletion.
 		if isFrameworkComponent(n.Label) {
 			removeNodeIDs[n.ID] = true
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: n.Label, Kind: "jsx_framework_component",
+			})
 			continue
 		}
 
 		// Find the declaration node: same label, function type, same service.
 		declID, ok := funcByServiceLabel[n.Service+"\x00"+n.Label]
 		if !ok {
-			// No matching declaration — could be an external library component; drop proxy.
+			// No matching declaration — could be an external library component,
+			// or a real resolution miss; either way the renders edge is dropped
+			// rather than redirected, so ledger it instead of deleting silently.
 			removeNodeIDs[n.ID] = true
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: n.Label, Kind: "jsx_component_unresolved",
+			})
 			continue
 		}
 		if declID == n.ID {
 			continue
 		}
 
-		// Redirect the renders edge: from enclosingFunc → declID instead of → proxy.
+		// Redirect the renders edge: from enclosingFunc → declID instead of →
+		// proxy. The proxy's own line is the only record of exactly where in
+		// enclosingFunc the JSX usage sits — carry it on the edge so deleting
+		// the proxy node doesn't also delete that provenance.
 		callerID, hasCaller := edgeFromByTo[n.ID]
 		if hasCaller && callerID != declID {
 			newEdges = append(newEdges, graph.Edge{
@@ -110,6 +126,7 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 				From: callerID,
 				To:   declID,
 				Type: graph.EdgeTypeRenders,
+				Meta: map[string]string{"usage_line": strconv.Itoa(n.Line)},
 			})
 		}
 		// Mark the proxy node for removal.
