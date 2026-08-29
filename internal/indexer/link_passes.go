@@ -11,6 +11,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
+	"github.com/lordsonvimal/polyflow/internal/pluginloader"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
@@ -100,6 +101,26 @@ type linkPipelineState struct {
 	// from the persisted nodes, which still read key_dynamic since handshake
 	// resolution lives only on the pre-engine working copy).
 	handshakeResolved map[string]bool
+
+	// pluginManifests: linker plugins discovered + pattern-registered by
+	// loadLinkPlugins before the scan loop (plugin_link.go). Read by
+	// buildLinkPasses to append one Link pass per (plugin, component) and
+	// one Reconcile pass per plugin (plugin_passes.go). Empty for every
+	// workspace with no .polyflow/plugins/ — buildLinkPasses' insertion is a
+	// no-op in that case, so this field changes nothing for existing users.
+	pluginManifests []*pluginloader.Manifest
+	// pluginClients: launched plugin subprocesses, keyed by manifest name,
+	// lazily populated the first time a (component, service) pair actually
+	// qualifies (plugin_passes.go's launchPlugin) — a manifest with no
+	// qualifying pair for this run never spawns a process. Closed by Run()'s
+	// defer once the whole pipeline (including every plugin's Reconcile)
+	// has finished.
+	pluginClients map[string]*pluginloader.LaunchedPlugin
+	// pluginComponentResults: each plugin's own per-component Link output,
+	// pooled across every service that qualified — exactly the shape
+	// linkplugin.ReconcileContext.ComponentResults/AllResults need. Keyed
+	// pluginName -> componentID.
+	pluginComponentResults map[string]map[string]pluginloader.LinkResult
 }
 
 // writeEdges appends edges to the store and to allEdges — the same helper
@@ -201,7 +222,7 @@ func (st *linkPipelineState) svcFilesOf() map[string][]string {
 // can be asserted in a test without performing a real index (see
 // link_passes_test.go).
 func buildLinkPasses(st *linkPipelineState) []namedPass {
-	return []namedPass{
+	return insertPluginPasses(st, []namedPass{
 		// JS/TS component + import-aware linking.
 		{"js_link", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
@@ -1026,5 +1047,5 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return nil
 		}},
-	}
+	})
 }

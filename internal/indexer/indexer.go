@@ -246,6 +246,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		workspaceRoot = ""
 	}
 
+	// Linker-plugin discovery (docs/linker-plugin-architecture-plan.md Phase
+	// 1): reuses workspaceRoot the same way npm dependency resolution just
+	// above does, for the project-local .polyflow/plugins/ override. Must
+	// run before the scan loop below so a qualifying component's patterns
+	// are registered before NewTreeSitterMatcherForService compiles queries
+	// per service.
+	pluginManifests := loadLinkPlugins(reg, workspaceRoot, logw)
+
 	var allSvcFiles []serviceFiles
 	for _, svc := range services {
 		absSvcPath, _ := filepath.Abs(svc.Path)
@@ -688,17 +696,23 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// pass runs in the exact order it used to execute inline, threading state
 	// through linkPipelineState instead of closures over Run()'s locals.
 	linkState := &linkPipelineState{
-		ctx:           ctx,
-		store:         store,
-		bw:            bw,
-		cfg:           cfg,
-		opts:          opts,
-		stats:         stats,
-		allSvcFiles:   allSvcFiles,
-		allNodes:      allNodes,
-		allEdges:      allEdges,
-		allUnresolved: allUnresolved,
+		ctx:             ctx,
+		store:           store,
+		bw:              bw,
+		cfg:             cfg,
+		opts:            opts,
+		stats:           stats,
+		allSvcFiles:     allSvcFiles,
+		allNodes:        allNodes,
+		allEdges:        allEdges,
+		allUnresolved:   allUnresolved,
+		pluginManifests: pluginManifests,
 	}
+	defer func() {
+		for _, c := range linkState.pluginClients {
+			c.Close()
+		}
+	}()
 	for _, pass := range buildLinkPasses(linkState) {
 		if err := pass.exec(); err != nil {
 			return nil, fmt.Errorf("link pass %s: %w", pass.name, err)
