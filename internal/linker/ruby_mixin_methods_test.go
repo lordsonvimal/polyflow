@@ -290,6 +290,51 @@ func TestMixinMethods_UnrelatedClassStaysUnresolved(t *testing.T) {
 	otherM := mixinMethod("orion", "/repo/app/models/thing.rb", "Thing", "save!", 4, 10)
 	nodes = append(nodes, other, otherM)
 
+	refs := []graph.UnresolvedRef{callRef("orion", "/repo/app/models/thing.rb", 6, "totally_unknown_method")}
+	got, resolved, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	assert.Empty(t, got)
+	assert.Empty(t, resolved)
+}
+
+// TestMixinMethods_BareCallResolvesToTheUniqueServiceWideCandidate is DC.21:
+// a bare call from a class with no inherits/mixin path to any definition of
+// the name still resolves when exactly one class in the service defines it —
+// the gap Tier BC's per-file methodsByName left (it never had a cross-file
+// component for the fully-bare identifier path at all).
+func TestMixinMethods_BareCallResolvesToTheUniqueServiceWideCandidate(t *testing.T) {
+	t.Parallel()
+	nodes, edges := dxFixture("orion")
+	other := mixinClass("orion", "/repo/app/models/thing.rb", "Thing", 1, 30)
+	otherM := mixinMethod("orion", "/repo/app/models/thing.rb", "Thing", "save!", 4, 10)
+	nodes = append(nodes, other, otherM)
+
+	// Thing has no inherits/mixin edge to Dx at all, so ix.lookup's ancestor
+	// walk finds nothing — only the DC.21 flat service-wide fallback resolves
+	// this.
+	refs := []graph.UnresolvedRef{callRef("orion", "/repo/app/models/thing.rb", 6, "logger_context")}
+	got, resolved, ledger, _ := LinkRubyMixinMethods(nodes, edges, refs)
+	require.Len(t, got, 1)
+	assert.Equal(t, "orion:/repo/app/models/thing.rb:function:save!:4", got[0].From)
+	assert.Equal(t, "orion:/repo/lib/dx.rb:function:logger_context:31", got[0].To)
+	assert.Equal(t, "bare_call_cross_class", got[0].Meta["via"])
+	assert.Empty(t, ledger)
+	assert.True(t, resolved[RubyCallRefKey("/repo/app/models/thing.rb", 6, "logger_context")])
+}
+
+// TestMixinMethods_BareCallAmbiguousAcrossTwoUnrelatedClassesStaysUnresolved
+// is DC.21's required negative case: two unrelated classes both define the
+// same name, so the fallback has no way to break the tie and must not guess.
+func TestMixinMethods_BareCallAmbiguousAcrossTwoUnrelatedClassesStaysUnresolved(t *testing.T) {
+	t.Parallel()
+	nodes, edges := dxFixture("orion")
+	other := mixinClass("orion", "/repo/app/models/thing.rb", "Thing", 1, 30)
+	otherM := mixinMethod("orion", "/repo/app/models/thing.rb", "Thing", "save!", 4, 10)
+	third := mixinClass("orion", "/repo/app/models/widget.rb", "Widget", 1, 30)
+	// A second, unrelated definition of logger_context — now two service-wide
+	// candidates, so the fallback must decline rather than pick one.
+	thirdM := mixinMethod("orion", "/repo/app/models/widget.rb", "Widget", "logger_context", 4, 10)
+	nodes = append(nodes, other, otherM, third, thirdM)
+
 	refs := []graph.UnresolvedRef{callRef("orion", "/repo/app/models/thing.rb", 6, "logger_context")}
 	got, resolved, _, _ := LinkRubyMixinMethods(nodes, edges, refs)
 	assert.Empty(t, got)
