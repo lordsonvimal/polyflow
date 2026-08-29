@@ -688,9 +688,13 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					// `bar_method` itself remains unresolvable
 					// (receiver-typed dispatch, handled by the goto next
 					// bail below).
+					// DC.29: ledgerUnresolved follows the same methodID != ""
+					// gate as the standalone-identifier case above, and for
+					// the same reason (an ERB view's untracked scriptlet
+					// locals) — see that case's comment.
 					recvName := receiver.Content(ex.src)
 					if !ex.locals[methodID][recvName] {
-						ex.resolveBareCall(recvName, class, class, methodID, rbLine(receiver), false)
+						ex.resolveBareCall(recvName, class, class, methodID, rbLine(receiver), methodID != "")
 					}
 					goto next
 				default:
@@ -727,7 +731,35 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 		if ex.locals[methodID][mname] {
 			break
 		}
-		ex.resolveBareCall(mname, class, class, methodID, rbLine(node), false)
+		// DC.29: ledgerUnresolved is now methodID != "" (not the
+		// unconditional false this had before). Inside a real method body,
+		// the name is by this point confirmed not a local var and not
+		// structurally excluded, so in Ruby grammar terms it can only be a
+		// call — exactly as certain as the identically-shaped `case "call":`
+		// bare-call branch above, which already ledgers (line ~713). The
+		// paren'd and paren-less spellings of the same call
+		// (`helper_method()` vs `helper_method`) were, before this fix,
+		// treated asymmetrically: the paren'd form's same-file-unresolved
+		// miss reached the `call_ref` ledger for LinkRubyMixinMethods
+		// (DC.6) to resolve cross-file against an included concern/
+		// superclass; the paren-less form (the far more common Ruby idiom
+		// for a zero-arg accessor/helper, e.g. a mixin method used as a
+		// plain hash value or `.any?`'s bare receiver) was silently
+		// dropped — no edge, no ledger entry, nothing for any pass to ever
+		// pick up. Still gated to methodID != "" (real method bodies only):
+		// an ERB view's top-level scriptlet scope also reaches this case
+		// (methodID=="" but ex.isView true) and its locally-assigned
+		// scriptlet variables are NOT tracked by addLocal (a no-op for
+		// methodID==""), so the locals check two lines up can't tell a view
+		// local from a call there the way it reliably can inside a method —
+		// ledgering those would misreport genuine local reads as unresolved
+		// calls (see TestRubyVariables_ERBViewLocalNotMistakenForCall).
+		// Confirmed live on orion: `Organization#dss_org_info`'s
+		// `distinguished_domain_names: distinguished_domain_names` calls
+		// `OrganizationConfiguration#distinguished_domain_names` (a mixin
+		// method) this way; before this fix it had zero inbound edges and
+		// zero ledger rows of any kind.
+		ex.resolveBareCall(mname, class, class, methodID, rbLine(node), methodID != "")
 	}
 
 next:
