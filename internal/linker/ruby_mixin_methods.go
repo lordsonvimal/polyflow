@@ -135,6 +135,7 @@ type rubyMixinIndex struct {
 	funcSpans     map[string][]scopeSpan       // file → method bodies, innermost-last
 	ancestors     map[string][]string          // classID → direct ancestor classIDs, sorted
 	methods       map[string][]string          // classID + "\x00" + name → method node IDs
+	constants     map[string][]string          // classID + "\x00" + name → const variable node IDs (DC.31)
 	serviceOf     map[string]string            // node ID → service
 	helperMethods map[string]map[string][]string // service → method name → method node IDs, from every app/helpers/*.rb module
 	fileIdx       *fileNodeIndex               // mints the NodeTypeFile node a view_helper edge's From needs
@@ -165,6 +166,7 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 		funcSpans:     map[string][]scopeSpan{},
 		ancestors:     map[string][]string{},
 		methods:       map[string][]string{},
+		constants:     map[string][]string{},
 		serviceOf:     map[string]string{},
 		helperMethods: map[string]map[string][]string{},
 		fileIdx:       newFileNodeIndex(nodes),
@@ -231,6 +233,25 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 		}
 	}
 
+	// Constant ownership (DC.31), same class-line-range-containment join as
+	// method ownership above: a variable node's Meta["class"] names the
+	// declaring class, and classByFileLabel + line range disambiguates a
+	// file that reopens the same class name twice.
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Language != "ruby" || n.Type != graph.NodeTypeVariable || n.Meta["kind"] != "const" {
+			continue
+		}
+		for _, cls := range classByFileLabel[n.File+"\x00"+n.Meta["class"]] {
+			if n.Line < cls.start || n.Line > cls.end {
+				continue
+			}
+			key := cls.id + "\x00" + n.Label
+			ix.constants[key] = append(ix.constants[key], n.ID)
+		}
+		ix.serviceOf[n.ID] = n.Service
+	}
+
 	for i := range edges {
 		e := &edges[i]
 		if e.Type != graph.EdgeTypeInherits {
@@ -259,6 +280,9 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 	}
 	for key := range ix.methods {
 		ix.methods[key] = sortedUnique(ix.methods[key])
+	}
+	for key := range ix.constants {
+		ix.constants[key] = sortedUnique(ix.constants[key])
 	}
 	for _, byName := range ix.byNameService {
 		for name := range byName {
@@ -487,4 +511,145 @@ func (ix *rubyMixinIndex) lookup(classID, name string) ([]string, int) {
 		frontier = next
 	}
 	return nil, 0
+}
+
+// lookupConst is lookup's twin for constants (DC.31): same breadth-first
+// ancestor walk, same shallowest-depth-wins rule, against ix.constants
+// instead of ix.methods. Ruby resolves a bare constant reference through the
+// same ancestor chain a bare method call does when the reference lives
+// inside a class body that includes the defining module.
+func (ix *rubyMixinIndex) lookupConst(classID, name string) ([]string, int) {
+	visited := map[string]bool{classID: true}
+	frontier := []string{classID}
+
+	for depth := 0; depth <= rubyMixinMaxDepth && len(frontier) > 0; depth++ {
+		var hits []string
+		for _, id := range frontier {
+			hits = append(hits, ix.constants[id+"\x00"+name]...)
+		}
+		if len(hits) > 0 {
+			return sortedUnique(hits), depth
+		}
+		var next []string
+		for _, id := range frontier {
+			for _, anc := range ix.ancestors[id] {
+				if visited[anc] {
+					continue
+				}
+				visited[anc] = true
+				next = append(next, anc)
+			}
+		}
+		sort.Strings(next)
+		frontier = next
+	}
+	return nil, 0
+}
+
+// LinkRubyMixinConstants resolves a bare Ruby constant reference (DC.31,
+// parser side: ruby_variables.go's case "constant", ledgered as const_ref
+// when the constant is not defined in the referencing file) to the constant
+// a mixin or superclass contributes to the referencing class — the same
+// upward ancestor-walk join LinkRubyMixinMethods does for bare calls, over
+// ix.constants instead of ix.methods. Confirmed live on orion:
+// `Messaging::Constants`' MT_* constants are `include`d into
+// DataServerCommunicatorAmqp and referenced unqualified there.
+func LinkRubyMixinConstants(
+	nodes []graph.Node,
+	edges []graph.Edge,
+	allUnresolved []graph.UnresolvedRef,
+) (newEdges []graph.Edge, resolved map[string]bool, unresolvedOut []graph.UnresolvedRef) {
+	resolved = make(map[string]bool)
+
+	ix := newRubyMixinIndex(nodes, edges)
+	if len(ix.ancestors) == 0 && len(ix.constants) == 0 {
+		return nil, resolved, nil
+	}
+
+	refs := make([]graph.UnresolvedRef, 0, 32)
+	for _, u := range allUnresolved {
+		if u.Kind == "const_ref" && isRubyFile(u.File) {
+			refs = append(refs, u)
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].File != refs[j].File {
+			return refs[i].File < refs[j].File
+		}
+		if refs[i].Line != refs[j].Line {
+			return refs[i].Line < refs[j].Line
+		}
+		return refs[i].Name < refs[j].Name
+	})
+
+	seen := make(map[string]bool)
+	for _, ref := range refs {
+		e, u := ix.emitConst(ref, seen)
+		if len(e) == 0 {
+			continue
+		}
+		newEdges = append(newEdges, e...)
+		unresolvedOut = append(unresolvedOut, u...)
+		resolved[RubyCallRefKey(ref.File, ref.Line, ref.Name)] = true
+	}
+	return newEdges, resolved, unresolvedOut
+}
+
+// emitConst is emit's twin for a const_ref (DC.31): same caller-attribution
+// rule (method body if the reference is inside one, else the class body
+// itself — a reference at class-load time, e.g. a `validates` macro
+// argument, is attributed to the class), same shallowest-ancestor-wins
+// lookup, but mints a `reads` edge (a constant is read, not called) instead
+// of `calls`.
+func (ix *rubyMixinIndex) emitConst(ref graph.UnresolvedRef, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+	cls, ok := innermost(ix.classSpans[ref.File], ref.Line)
+	if !ok {
+		return nil, nil
+	}
+
+	fromID := cls.id
+	if fn, ok := innermost(ix.funcSpans[ref.File], ref.Line); ok {
+		fromID = fn.id
+	}
+
+	targets, depth := ix.lookupConst(cls.id, ref.Name)
+	if len(targets) == 0 {
+		return nil, nil
+	}
+
+	var edges []graph.Edge
+	var unresolved []graph.UnresolvedRef
+	for _, to := range targets {
+		// Asserted, not assumed: see the vendored-copy note on emit above.
+		if ix.serviceOf[fromID] != ix.serviceOf[to] {
+			continue
+		}
+		id := fmt.Sprintf("reads:%s->%s", fromID, to)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		meta := map[string]string{
+			"via":   "mixin_const",
+			"depth": strconv.Itoa(depth),
+		}
+		if len(targets) > 1 {
+			meta["ambiguous"] = "true"
+		}
+		edges = append(edges, graph.Edge{
+			ID:         id,
+			From:       fromID,
+			To:         to,
+			Type:       graph.EdgeTypeReads,
+			Confidence: graph.ConfidenceInferred,
+			Meta:       meta,
+		})
+	}
+	if len(edges) > 0 && len(targets) > 1 {
+		unresolved = append(unresolved, graph.UnresolvedRef{
+			Service: ref.Service, File: ref.File, Line: ref.Line,
+			Name: ref.Name, Kind: "mixin_const_collision",
+		})
+	}
+	return edges, unresolved
 }
