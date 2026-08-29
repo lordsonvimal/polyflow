@@ -1,0 +1,4 @@
+{
+  "patterns": ["requests_session_instance_binding", "requests_session_call", "requests_session_call"],
+  "node_types": ["variable", "http_client", "http_client"]
+}

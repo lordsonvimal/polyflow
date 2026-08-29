@@ -1,0 +1,47 @@
+# Python requests library instance-based HTTP client patterns (Tier PH).
+#
+# Gate: only activates for services that depend on requests.
+# requests_client.yaml only matches the module-level shorthand
+# (requests.get(url)); a `Session` instance's verb methods
+# (s = requests.Session(); s.get(url)) are Python's other common HTTP client
+# shape and are captured here. Unlike requests_client.yaml's `@pkg == "requests"`
+# guard, requests_session_call's query has no fixed receiver name to check
+# (any identifier could be a Session) — internal/parser/python_http_instances.go
+# gates the match to receivers positively confirmed, anywhere in the file, to
+# have been assigned via `requests.Session()`, dropping the rest (e.g.
+# `config.get("key")`) before they ever reach the graph.
+language: python
+version: "1"
+package: requests
+patterns:
+  # s = requests.Session()
+  - name: requests_session_instance_binding
+    query: |
+      (assignment
+        left: (identifier) @instance_name
+        right: (call
+          function: (attribute
+            object: (identifier) @pkg
+            (#eq? @pkg "requests")
+            attribute: (identifier) @fn
+            (#eq? @fn "Session"))))
+    captures:
+      - name: instance_name
+        role: alias_instance_name
+
+  # s.get(url) / s.post(url, json=data) / s.request("GET", url)
+  - name: requests_session_call
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @via_alias
+          attribute: (identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options|request)$"))
+        arguments: (argument_list . (_) @url))
+    captures:
+      - name: via_alias
+        role: alias_receiver
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url

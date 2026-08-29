@@ -17,6 +17,7 @@ func (p *PythonParser) Parse(file, service string, matcher *patterns.TreeSitterM
 		return nil, nil, nil, err
 	}
 	results, err := matcher.Match("python", file, src)
+	results = dropNonHTTPPythonMatches(results, src)
 	if err != nil {
 		nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 		setLanguage(nodes, "python")
