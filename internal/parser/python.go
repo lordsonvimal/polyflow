@@ -24,6 +24,13 @@ func (p *PythonParser) Parse(file, service string, matcher *patterns.TreeSitterM
 	}
 	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "python")
+
+	// Tier PC (docs/python-parity-plan.md): resolve same-file attribute
+	// calls (self.foo(), cls.foo(), typed-local x = Foo(); x.bar()) that
+	// patterns/python/functions.yaml's identifier-only call pattern cannot
+	// see at all.
+	edges = append(edges, resolvePythonAttributeCalls(file, src, nodes)...)
+
 	return nodes, edges, unresolved, nil
 }
 
