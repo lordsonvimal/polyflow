@@ -722,6 +722,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	allEdges = linkState.allEdges
 	allUnresolved = linkState.allUnresolved
 	handshakeResolved := linkState.handshakeResolved
+	pluginCoverageNotes := linkState.pluginCoverageNotes
 
 	// ── Root classification ──────────────────────────────────────────────────
 	// With the full edge set assembled, function/method nodes with no incoming
@@ -876,6 +877,26 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		_ = store.SetMeta(ctx, "toolchain_coverage", "[]")
 	} else if tcCovJSON, err := json.Marshal(allToolchainNotes); err == nil {
 		_ = store.SetMeta(ctx, "toolchain_coverage", string(tcCovJSON))
+	}
+
+	// Plugin version_range coverage (Phase 2, docs/linker-plugin-architecture-plan.md):
+	// one note per (component, service) pair skipped for an out-of-range
+	// resolved framework version. Sorted for stable output, same reasoning as
+	// allToolchainNotes above.
+	sort.SliceStable(pluginCoverageNotes, func(i, j int) bool {
+		a, b := pluginCoverageNotes[i], pluginCoverageNotes[j]
+		if a.Plugin != b.Plugin {
+			return a.Plugin < b.Plugin
+		}
+		if a.Component != b.Component {
+			return a.Component < b.Component
+		}
+		return a.Reason < b.Reason
+	})
+	if len(pluginCoverageNotes) == 0 {
+		_ = store.SetMeta(ctx, "plugin_coverage", "[]")
+	} else if pcJSON, err := json.Marshal(pluginCoverageNotes); err == nil {
+		_ = store.SetMeta(ctx, "plugin_coverage", string(pcJSON))
 	}
 
 	if err := store.SetMeta(ctx, "last_indexed", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {

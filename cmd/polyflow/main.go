@@ -42,6 +42,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/ops"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/pluginloader"
 	"github.com/lordsonvimal/polyflow/internal/queryresolve"
 	"github.com/lordsonvimal/polyflow/internal/registry"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
@@ -3721,6 +3722,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		profilesJSON, _ := store.GetMeta(ctx3, "toolchain_profiles")
 		notesJSON, _ := store.GetMeta(ctx3, "toolchain_coverage")
 		fmt.Print(toolchain.RenderVersionCoverage(profilesJSON, notesJSON))
+		// Phase 2 plugin version_range coverage — same graph meta pass, same
+		// "not silently-wrong, not a crash" reporting contract.
+		pluginCovJSON, _ := store.GetMeta(ctx3, "plugin_coverage")
+		fmt.Print(pluginloader.RenderCoverage(pluginCovJSON))
 	} else {
 		fmt.Printf("  Fusion coverage:     (no cross-service edges — run 'polyflow index' first)\n")
 	}

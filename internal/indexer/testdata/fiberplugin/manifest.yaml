@@ -6,6 +6,7 @@ entrypoint: ./fiber
 components:
   - id: routes
     package: github.com/gofiber/fiber/v2
+    version_range: ">=2.60.0,<3.0.0"
     language: go
     patterns: patterns/routes.yaml
     requires: []
