@@ -72,6 +72,16 @@ jobs:
           key: eval-cache-${{ hashFiles('eval/corpus/**/manifest.yaml') }}
           restore-keys: eval-cache-
 
+      # eval/corpus/polyflow indexes this repo itself; its semantic pass runs
+      # go/packages.Load over the whole module, which type-checks
+      # internal/parser/rgrammar too. That package's cgo preamble #includes
+      # the vendored tree-sitter-r C source, gitignored and fetched on
+      # demand (see internal/parser/rgrammar/fetch.sh) — without it the
+      # module fails to compile and this corpus item silently falls back to
+      # tree-sitter-only edges (semantic_fallback gate failure).
+      - name: Fetch tree-sitter-r grammar
+        run: bash internal/parser/rgrammar/fetch.sh
+
       - name: Clone and index corpus repos
         run: make eval-corpus
 
