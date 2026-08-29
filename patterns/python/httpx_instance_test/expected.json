@@ -1,0 +1,4 @@
+{
+  "patterns": ["httpx_client_instance_binding", "httpx_client_call", "httpx_client_call"],
+  "node_types": ["variable", "http_client", "http_client"]
+}

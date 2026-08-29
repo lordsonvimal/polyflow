@@ -1,0 +1,57 @@
+# httpx instance-based HTTP client patterns (Tier PH).
+#
+# Gate: only activates for services that depend on httpx.
+# httpx_client.yaml only matches the module-level shorthand API
+# (httpx.get(url)); a Client/AsyncClient instance's verb methods
+# (c = httpx.Client(base_url=BASE_URL); c.get(url)) are captured here instead.
+# Same over-match risk and same gate as requests_instance.yaml's
+# requests_session_call: internal/parser/python_http_instances.go drops any
+# httpx_client_call whose receiver was not positively confirmed, anywhere in
+# the file, to have been assigned via `httpx.Client(...)`/`httpx.AsyncClient(...)`.
+#
+# httpx_client_instance_binding's base_url capture (when present) feeds the
+# generic alias/instance mechanism (internal/contract/alias.go) so the
+# composed base_url + path lands on the call-site node's url/path meta —
+# same mechanism JS's axios_instance.yaml and Go's resty_new.yaml use.
+language: python
+version: "1"
+package: httpx
+patterns:
+  # c = httpx.Client(base_url=BASE_URL)
+  - name: httpx_client_instance_binding
+    query: |
+      (assignment
+        left: (identifier) @instance_name
+        right: (call
+          function: (attribute
+            object: (identifier) @pkg
+            (#eq? @pkg "httpx")
+            attribute: (identifier) @fn
+            (#match? @fn "^(Client|AsyncClient)$"))
+          arguments: (argument_list
+            (keyword_argument
+              name: (identifier) @key
+              (#eq? @key "base_url")
+              value: (_) @instance_base_url))))
+    captures:
+      - name: instance_name
+        role: alias_instance_name
+      - name: instance_base_url
+        role: alias_base_url
+
+  # c.get(url) / c.post(url, json=data) / c.request("GET", url)
+  - name: httpx_client_call
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @via_alias
+          attribute: (identifier) @method
+          (#match? @method "^(get|post|put|patch|delete|head|options|request)$"))
+        arguments: (argument_list . (_) @url))
+    captures:
+      - name: via_alias
+        role: alias_receiver
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url

@@ -3,7 +3,7 @@
 # Gate: only activates for services that depend on httpx.
 # Covers the module-level shorthand API (httpx.get(), httpx.post(), etc.)
 # and the generic httpx.request() form. Client/AsyncClient instance methods
-# (httpx.Client().get()) are not yet captured.
+# (c = httpx.Client(); c.get()) are covered by httpx_instance.yaml (Tier PH).
 language: python
 version: "1"
 package: httpx
