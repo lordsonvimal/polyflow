@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package linkplugin;
+
+option go_package = "github.com/lordsonvimal/polyflow/sdk/linkplugin/proto";
+
+// Node mirrors internal/graph/model.go's Node. The SDK vendors this shape
+// (sdk/linkplugin/graph) rather than importing internal/graph directly, so
+// core can evolve its internal representation without breaking the wire
+// contract — this .proto only changes on a protocol_version bump.
+message Node {
+  string id = 1;
+  string type = 2;
+  string label = 3;
+  string service = 4;
+  string file = 5;
+  int64 line = 6;
+  int64 end_line = 7;
+  string language = 8;
+  map<string, string> meta = 9;
+}
+
+message SourceRef {
+  string provider = 1;
+  string confidence = 2;
+  string ref = 3;
+  int64 observed_at = 4;
+  string code_file = 5;
+  string code_func = 6;
+}
+
+message Edge {
+  string id = 1;
+  string from = 2;
+  string to = 3;
+  string type = 4;
+  string label = 5;
+  string confidence = 6;
+  string method = 7;
+  string path = 8;
+  map<string, string> meta = 9;
+  repeated SourceRef sources = 10;
+  string verification_state = 11;
+  string verified_granularity = 12;
+}
+
+message UnresolvedRef {
+  string service = 1;
+  string file = 2;
+  int64 line = 3;
+  string name = 4;
+  string kind = 5;
+  string targets = 6;
+}
+
+// Result is a plugin's Link/Reconcile output — see linkplugin.Result in
+// sdk/linkplugin/plugin.go. Retract mirrors DropResolvedRefs
+// (internal/linker/amqp_handshake.go)'s in-process precedent.
+message Result {
+  repeated Edge edges = 1;
+  repeated UnresolvedRef unresolved = 2;
+  repeated string retract = 3;
+}
+
+message HandshakeRequest {
+  int32 protocol_version = 1;
+}
+
+message HandshakeResponse {
+  int32 protocol_version = 1;
+  string name = 2;
+}
+
+message RequiresRequest {
+  string component_id = 1;
+}
+
+// capabilities values are the wire form of linkplugin.Capability
+// ("containment" | "symbol_resolver" | "dynamic_key_ledger").
+message RequiresResponse {
+  repeated string capabilities = 1;
+}
+
+// LinkRequest is one batched Link() call: one component, one service, one
+// file-batch — see docs/linker-plugin-architecture-plan.md's Performance
+// section on why batching is load-bearing, not optional. broker_id is a
+// hashicorp/go-plugin GRPCBroker connection ID the plugin dials back on to
+// reach the bulk-query capability services this component declared in
+// capabilities (0 = no capabilities wired, no dial-back expected).
+message LinkRequest {
+  string component_id = 1;
+  string service = 2;
+  repeated string files = 3;
+  repeated Node nodes = 4;
+  uint32 broker_id = 5;
+  repeated string capabilities = 6;
+}
+
+message LinkResponse {
+  Result result = 1;
+}
+
+// ReconcileRequest mirrors linkplugin.ReconcileContext: this plugin's own
+// per-component results pooled across every service, plus read-only
+// visibility into every other plugin's (and core's built-in linkers') own
+// results, keyed by name.
+message ReconcileRequest {
+  map<string, Result> component_results = 1;
+  map<string, Result> all_results = 2;
+}
+
+message ReconcileResponse {
+  Result result = 1;
+}
+
+// LinkPlugin is the core->plugin direction: core drives Handshake once,
+// then Requires/Link/Reconcile per docs/linker-plugin-architecture-plan.md's
+// load sequence.
+service LinkPlugin {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Requires(RequiresRequest) returns (RequiresResponse);
+  rpc Link(LinkRequest) returns (LinkResponse);
+  rpc Reconcile(ReconcileRequest) returns (ReconcileResponse);
+}
+
+message BulkResolveRequest {
+  repeated string files = 1;
+}
+
+// Scope is one bulk-query capability's answer for one file — a class/module
+// containment scope (ContainmentIndex), a resolved symbol's defining scope
+// (SymbolResolver), or a dynamic-key ledger entry (DynamicKeyLedger). The
+// three capabilities share this shape because all three are, structurally,
+// "given a file, name a scope/definition site."
+message Scope {
+  string kind = 1;
+  string id = 2;
+  string label = 3;
+}
+
+message BulkResolveResponse {
+  map<string, Scope> scopes = 1;
+}
+
+// Capabilities is the plugin->core callback direction: a plugin component
+// that declared containment/symbol_resolver/dynamic_key_ledger in Requires()
+// dials back over the GRPCBroker connection named by LinkRequest.broker_id
+// to reach these bulk-query implementations, backed by core's existing
+// in-process indexes (internal/pluginloader/capabilities.go). Every method
+// is bulk (files []string in, one response), never per-node — see
+// docs/linker-plugin-architecture-plan.md's Performance section: the
+// interface shape is the batching-enforcement mechanism, not a lint rule.
+service Capabilities {
+  rpc ContainmentBulkResolve(BulkResolveRequest) returns (BulkResolveResponse);
+  rpc SymbolBulkResolve(BulkResolveRequest) returns (BulkResolveResponse);
+  rpc KeyLedgerBulkResolve(BulkResolveRequest) returns (BulkResolveResponse);
+}
