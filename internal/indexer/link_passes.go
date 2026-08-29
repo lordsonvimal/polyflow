@@ -362,6 +362,27 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, overrideLedger...)
 			return st.writeEdges(append(mixinEdges, overrideEdges...))
 		}},
+		// DC.31: a bare constant reference the parser could not bind in its
+		// own file (case "constant" in ruby_variables.go), resolved the same
+		// way ruby_mixin_methods resolves a bare call -- against the
+		// constants the referencing class inherits or mixes in. Runs on its
+		// own const_ref ledger snapshot, independent of the call_ref
+		// filtering above.
+		{"ruby_mixin_constants", scopeSameServiceOnly, func() error {
+			constEdges, constResolved, constCollisions := linker.LinkRubyMixinConstants(st.allNodes, st.allEdges, st.allUnresolved)
+			filtered := st.allUnresolved[:0]
+			for _, u := range st.allUnresolved {
+				if u.Kind == "const_ref" {
+					key := linker.RubyCallRefKey(u.File, u.Line, u.Name)
+					if constResolved[key] {
+						continue
+					}
+				}
+				filtered = append(filtered, u)
+			}
+			st.allUnresolved = append(filtered, constCollisions...)
+			return st.writeEdges(constEdges)
+		}},
 		// RW.2: mint one http_client node per call site of a Level-1-detected
 		// Ruby wrapper (patterns/ruby/wrapper_url_target.yaml), instead of
 		// leaving every caller collapsed onto the wrapper's single shared,

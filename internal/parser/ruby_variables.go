@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -33,6 +34,7 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 		isView:             strings.EqualFold(filepath.Ext(file), ".erb"),
 		ivarDecl:           map[string]int{},
 		classTable:         map[string]string{},
+		constTable:         map[string]string{},
 		nodeSeen:           map[string]bool{},
 		edgeSeen:           map[string]bool{},
 		methodsByClassName: map[string]string{},
@@ -46,6 +48,7 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 	// misattributed as a call to a same-named method (Tier BC).
 	ex.preCollectRubyClasses(tree.RootNode())
 	ex.preCollectRubyMethods(tree.RootNode(), "")
+	ex.preCollectRubyConstants(tree.RootNode(), "")
 	ex.preCollectRubyLocals(tree.RootNode(), "")
 	ex.walk(tree.RootNode(), "", "", "")
 
@@ -73,6 +76,7 @@ type rubyExtractor struct {
 
 	ivarDecl   map[string]int    // "@name" (class-qualified) → first-seen line
 	classTable map[string]string // class/module name → nodeID (same-file)
+	constTable map[string]string // CONST name → nodeID (same-file, class/module-body scope only)
 
 	// methodsByClassName/methodsByName index same-file method definitions for
 	// bare-call resolution (implicit-self calls): "class\x00name" → nodeID,
@@ -166,6 +170,13 @@ var railsCallbackBlockMethods = map[string]bool{
 	"before_destroy": true, "around_destroy": true, "after_destroy": true,
 	"after_commit": true, "after_rollback": true,
 }
+
+// rubyScreamingConstRE matches Ruby's true-constant naming convention
+// (SCREAMING_SNAKE_CASE), as opposed to a class/module name (CamelCase) —
+// both share the same "constant" tree-sitter node type, so this is the only
+// way to tell them apart without full type resolution. See DC.31's use in
+// walk's case "constant".
+var rubyScreamingConstRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // dslBlockScopeID synthesizes a per-block scope ID for a DSL call's
 // `do...end` (or `{}`) body (DC.18, widened by DC.28 to Rails callback
@@ -266,6 +277,61 @@ func (ex *rubyExtractor) preCollectRubyMethods(node *sitter.Node, class string) 
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		ex.preCollectRubyMethods(node.NamedChild(i), class)
+	}
+}
+
+// preCollectRubyConstants scans the AST recursively to build constTable:
+// every class/module-body-scope constant assignment (`CONST = ...`), keyed by
+// bare name → nodeID (same shape as the node walk's own case "assignment"
+// mints at line ~550). Runs before walk so a constant referenced earlier in
+// the file than its definition (or from a sibling method) still resolves,
+// and so walk's own case "constant" (DC.30) has a table to mint reads edges
+// against — without this, a constant used only as a plain value anywhere
+// (a hash value, array element, method/macro argument, condition — anything
+// but a superclass, mixin argument, or call receiver, the three contexts
+// case "constant" already special-cased) never got a reads edge at all,
+// making every such constant a 100%-false-positive deadcode candidate the
+// instant DC.29's variable-node minting made it visible to the scanner.
+// Confirmed live on orion: 660/2294 (29%) of remaining flags were
+// SCREAMING_CASE constants like ContainerAttribute::VALID_DATA_TYPES, used
+// on the very next line (`validates :data_type, inclusion: { in:
+// VALID_DATA_TYPES }`) but with zero reads edges of any kind.
+func (ex *rubyExtractor) preCollectRubyConstants(node *sitter.Node, methodID string) {
+	switch node.Type() {
+	case "method", "singleton_method":
+		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+			methodID = ex.methodNodeID(nameNode.Content(ex.src), rbLine(node))
+		}
+	case "assignment", "operator_assignment":
+		if methodID == "" {
+			if left := node.ChildByFieldName("left"); left != nil && left.Type() == "constant" {
+				name := left.Content(ex.src)
+				ex.constTable[name] = fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, rbLine(node))
+			}
+		}
+	case "call":
+		// A task/namespace/Rails-callback-registration DSL block (see walk's
+		// "task", "namespace" and railsCallbackBlockMethods cases) creates its
+		// own scope the same way a real method body does: walk never mints a
+		// variable node for a `CONST = ...` inside one (methodID is non-empty
+		// there via dslBlockScopeID). This pass must treat it identically —
+		// otherwise it registers a constTable entry pointing at a node that
+		// will never exist, and a same-block reference resolving it mints a
+		// reads edge to nothing (FK violation), confirmed live on orion's
+		// lib/tasks/infra/org_create_and_configure.rake.
+		if methodID == "" {
+			if mn := node.ChildByFieldName("method"); mn != nil {
+				mname := mn.Content(ex.src)
+				if mname == "task" || mname == "namespace" || railsCallbackBlockMethods[mname] {
+					if block := node.ChildByFieldName("block"); block != nil {
+						methodID = "dsl_block"
+					}
+				}
+			}
+		}
+	}
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		ex.preCollectRubyConstants(node.NamedChild(i), methodID)
 	}
 }
 
@@ -575,6 +641,48 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 				id := ex.ivarNode(node.Content(ex.src), class, rbLine(node))
 				ex.addEdge(graph.EdgeTypeReads, methodID, id, nil)
 			}
+		}
+	case "constant":
+		// DC.30: a bare constant reference — anywhere but the left side of
+		// its own definition (skipped below, same guard shape as
+		// instance_variable/class_variable above). Superclass, mixin
+		// argument, and call-receiver constants also reach this case via
+		// walk's unconditional child recursion; constTable only holds actual
+		// `CONST = value` assignments, so those three (class/module names)
+		// simply miss the lookup and no-op, same as before.
+		if parent := node.Parent(); parent != nil {
+			pt := parent.Type()
+			if (pt == "assignment" || pt == "operator_assignment") && parent.ChildByFieldName("left") == node {
+				break
+			}
+		}
+		name := node.Content(ex.src)
+		if id, ok := ex.constTable[name]; ok {
+			if methodID != "" {
+				ex.addEdge(graph.EdgeTypeReads, methodID, id, nil)
+			} else if classID != "" {
+				ex.addEdge(graph.EdgeTypeReads, classID, id, nil)
+			}
+		} else if (methodID != "" || classID != "") && rubyScreamingConstRE.MatchString(name) {
+			// DC.31: same-file miss. Unlike a bare method call, this is NOT
+			// ledgered for every "constant"-typed node — that grammar node
+			// covers class/module names too (`User.find`, `raise
+			// SomeError`, `ActiveRecord::Base`), which vastly outnumber real
+			// constants and would flood the ledger with names no pass could
+			// ever resolve (mirrors the "framework or builtin is not a
+			// blind spot" reasoning in the bare-call branch below). Ruby's
+			// naming convention — SCREAMING_SNAKE_CASE for a true constant,
+			// CamelCase for a class/module — is a grammar-level distinction
+			// tree-sitter itself doesn't make but every Ruby style guide
+			// enforces, so filtering on it is a structural narrowing, not a
+			// name-list guess. Confirmed live on orion: `Messaging::
+			// Constants`' MT_* constants are `include`d into
+			// DataServerCommunicatorAmqp and referenced unqualified there —
+			// same cross-file mixin shape as DC.6's call_ref, resolved by
+			// LinkRubyMixinConstants.
+			ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+				Service: ex.service, File: ex.file, Line: rbLine(node), Name: name, Kind: "const_ref",
+			})
 		}
 	case "call":
 		mn := node.ChildByFieldName("method")

@@ -1088,3 +1088,150 @@ end
 		}
 	}
 }
+
+// TestRubyVariables_ClassConstantReadMintsEdge is DC.30: a constant used as a
+// plain value anywhere in the same file (not the left side of its own
+// definition, not a superclass, not a mixin argument, not a call receiver)
+// must produce a reads edge, or the constant is a 100% false-positive
+// deadcode candidate the instant it becomes a variable node. Confirmed live
+// on orion: ContainerAttribute::VALID_DATA_TYPES, used the very next line
+// via `validates :data_type, inclusion: { in: VALID_DATA_TYPES }`.
+func TestRubyVariables_ClassConstantReadMintsEdge(t *testing.T) {
+	t.Parallel()
+	src := `class ContainerAttribute
+  VALID_DATA_TYPES = %w[text date].freeze
+  validates :data_type, inclusion: { in: VALID_DATA_TYPES }
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/models/container_attribute.rb", "shop", []byte(src))
+
+	var constNode *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "VALID_DATA_TYPES" {
+			constNode = &nodes[i]
+		}
+	}
+	if constNode == nil {
+		t.Fatalf("expected VALID_DATA_TYPES variable node; nodes: %+v", nodes)
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeReads && e.To == constNode.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a reads edge to VALID_DATA_TYPES; edges: %+v", edges)
+	}
+}
+
+// TestRubyVariables_MethodBodyConstantReadMintsEdge is DC.30's method-body
+// shape: a constant read from inside a `def`, not just class-body level.
+func TestRubyVariables_MethodBodyConstantReadMintsEdge(t *testing.T) {
+	t.Parallel()
+	src := `class AppLock
+  GC_KINDS = %w[promise_callback agent_message_txn].freeze
+
+  def gc_kind?(kind)
+    GC_KINDS.include?(kind)
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/models/app_lock.rb", "shop", []byte(src))
+
+	var constNode, methodNode *graph.Node
+	for i := range nodes {
+		switch {
+		case nodes[i].Label == "GC_KINDS":
+			constNode = &nodes[i]
+		case nodes[i].Label == "gc_kind?" && nodes[i].Type == graph.NodeTypeFunction:
+			methodNode = &nodes[i]
+		}
+	}
+	if constNode == nil || methodNode == nil {
+		t.Fatalf("expected GC_KINDS and gc_kind? nodes; nodes: %+v", nodes)
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeReads && e.From == methodNode.ID && e.To == constNode.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a reads edge from gc_kind? to GC_KINDS; edges: %+v", edges)
+	}
+}
+
+// TestRubyVariables_DSLBlockConstantNotOrphanRead is a regression guard for a
+// bug caught while shipping DC.30: a `CONST = ...` assignment inside a
+// task/namespace/Rails-callback DSL block (see dslBlockScopeID) has no
+// variable node minted for it (methodID is non-empty inside the block, same
+// gate as a real method body) — but the constant-read pre-collection pass
+// must know about that same block-scoping, or it registers a constTable
+// entry pointing at a node that will never exist, and a same-block reference
+// resolving it mints a reads edge to nothing (an FK violation at write time).
+// Confirmed live on orion's lib/tasks/infra/org_create_and_configure.rake.
+func TestRubyVariables_DSLBlockConstantNotOrphanRead(t *testing.T) {
+	t.Parallel()
+	src := `namespace :infra do
+  task :create_and_configure do
+    DEFAULT_POOL_SIZE = 5
+    puts DEFAULT_POOL_SIZE
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("lib/tasks/infra/org_create_and_configure.rake", "shop", []byte(src))
+
+	nodeIDs := map[string]bool{}
+	for _, n := range nodes {
+		nodeIDs[n.ID] = true
+	}
+	for _, e := range edges {
+		if e.Type != graph.EdgeTypeReads {
+			continue
+		}
+		if !nodeIDs[e.To] {
+			t.Errorf("reads edge %+v targets a node ID that was never minted (dangling edge)", e)
+		}
+	}
+}
+
+// TestRubyVariables_CrossFileConstantIsLedgered is DC.31's parser-side
+// shape: a SCREAMING_CASE constant not defined in this file is ledgered as
+// const_ref for LinkRubyMixinConstants to resolve cross-file — but a
+// same-name-shaped reference to a class/module (CamelCase, sharing the same
+// "constant" tree-sitter node type) must NOT be ledgered, or the ledger
+// floods with every class reference in the file.
+func TestRubyVariables_CrossFileConstantIsLedgered(t *testing.T) {
+	t.Parallel()
+	src := `class DataServerCommunicatorAmqp
+  include Messaging::Constants
+
+  def enqueue_delete
+    ApplicationRecord.transaction do
+      MT_DELETE_AGR
+    end
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/services/data_server_communicator_amqp.rb", "shop", []byte(src))
+
+	foundConst, foundClass := false, false
+	for _, u := range unresolved {
+		if u.Kind != "const_ref" {
+			continue
+		}
+		if u.Name == "MT_DELETE_AGR" {
+			foundConst = true
+		}
+		if u.Name == "ApplicationRecord" {
+			foundClass = true
+		}
+	}
+	if !foundConst {
+		t.Errorf("expected MT_DELETE_AGR to be ledgered as const_ref; unresolved: %+v", unresolved)
+	}
+	if foundClass {
+		t.Errorf("a CamelCase class reference must never be ledgered as const_ref; unresolved: %+v", unresolved)
+	}
+}
