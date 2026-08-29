@@ -1331,7 +1331,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// G.7 base-URL captures, and L.W2 selector/element captures. Selector
 		// captures arrive as raw source (`'"#save-btn"'`); id and class values
 		// from HTML/JSX attribute patterns similarly carry surrounding quotes.
-		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url", "selector", "id", "class", "broker_field"} {
+		for _, key := range []string{"path", "url", "method", "prefix", "instance_base_url", "alias_base_url", "selector", "id", "class", "broker_field", "service"} {
 			if v, ok := meta[key]; ok {
 				meta[key] = stripStringLiteral(v)
 			}
@@ -2377,10 +2377,12 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case strings.HasPrefix(lower, "s3_") || strings.HasPrefix(lower, "bedrock_"):
 		return graph.NodeTypeExternalService, graph.EdgeTypeCloudCall
 
-	// ── Datastores (GORM / database/sql) ──────────────────────────────────────
-	case strings.HasPrefix(lower, "gorm_query") || strings.HasPrefix(lower, "sql_query"):
+	// ── Datastores (GORM / database/sql / Django ORM) ─────────────────────────
+	case strings.HasPrefix(lower, "gorm_query") || strings.HasPrefix(lower, "sql_query") ||
+		strings.HasPrefix(lower, "django_orm_query"):
 		return graph.NodeTypeDatastore, graph.EdgeTypeQueries
-	case strings.HasPrefix(lower, "gorm_persist") || strings.HasPrefix(lower, "sql_exec"):
+	case strings.HasPrefix(lower, "gorm_persist") || strings.HasPrefix(lower, "sql_exec") ||
+		strings.HasPrefix(lower, "django_orm_persist"):
 		return graph.NodeTypeDatastore, graph.EdgeTypePersists
 	case strings.HasPrefix(lower, "gorm_open") || lower == "sql_open":
 		return graph.NodeTypeDatastore, graph.EdgeTypeCalls

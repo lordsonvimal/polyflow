@@ -1,0 +1,4 @@
+{
+  "patterns": ["django_orm_query", "django_orm_query", "django_orm_persist", "django_orm_persist"],
+  "node_types": ["datastore", "datastore", "datastore", "datastore"]
+}

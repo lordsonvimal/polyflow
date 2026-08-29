@@ -1,0 +1,4 @@
+{
+  "patterns": ["s3_client_python", "s3_operation_python", "s3_operation_python"],
+  "node_types": ["external_service", "external_service", "external_service"]
+}

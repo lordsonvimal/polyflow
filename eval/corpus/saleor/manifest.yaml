@@ -1,0 +1,19 @@
+repo:
+  name: saleor
+  url: https://github.com/saleor/saleor
+  sha: 8c7815d83922bd0f98bc678c31af4a34fd0a007b
+  workspace: polyflow.yml
+
+# Selection rationale: saleor is a large, actively maintained, real-world Django
+# application (~4300 Python files) selected specifically to close the Tier PF
+# gap in docs/python-parity-plan.md — Django ORM call resolution and boto3/S3
+# usage — after a fleet survey (see memory) found zero real fleet Python source
+# using either library. Confirmed via pyproject.toml: django~=5.2, boto3~=1.43,
+# django-storages (S3Boto3Storage backend), celery[redis,sqs] (Celery dispatch
+# is already covered by Tier L.P3, not a target here). This is an external
+# corpus for pattern development/validation, not a fleet-relevance addition —
+# juniper/orion remain the only real fleet Python sources.
+#
+# Verification method: pyproject.toml dependency list read directly at the
+# pinned SHA; saleor/settings.py STORAGES/AWS_S3_* config confirms django-storages
+# S3 wiring is live, not just declared.

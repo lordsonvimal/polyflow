@@ -1,0 +1,44 @@
+# Python boto3 S3/SQS clients (mirrors Go's aws_s3_v1/v2 and Ruby's aws_s3.yaml).
+#
+# Gate: only activates for services that depend on boto3.
+language: python
+version: "1"
+package: boto3
+patterns:
+  # boto3.client("s3", ...) / boto3.resource("s3", ...) — also matches other
+  # service names (e.g. "sqs") since boto3's client/resource factory is
+  # generic; the service string itself is captured so callers can tell them
+  # apart, same as Go's aws_s3_v1/v2 not distinguishing SDK version at the
+  # pattern-match stage.
+  - name: s3_client_python
+    query: |
+      (call
+        function: (attribute
+          object: (identifier) @boto
+          attribute: (identifier) @fn
+          (#eq? @boto "boto3")
+          (#match? @fn "^(client|resource)$"))
+        arguments: (argument_list
+          .
+          (string) @service))
+    captures:
+      - name: service
+        role: s3_client_class
+
+  # client.put_object(Bucket=..., Key=...) and friends — receiver is
+  # deliberately unconstrained ((_) not (identifier)) since the client is
+  # usually a module-level or function-local variable, not always a bare
+  # name at the call site.
+  - name: s3_operation_python
+    query: |
+      (call
+        function: (attribute
+          object: (_) @client
+          attribute: (identifier) @fn
+          (#match? @fn "^(put_object|get_object|delete_object|delete_objects|list_objects_v2|head_object|copy_object|upload_file|download_file|upload_fileobj|download_fileobj|generate_presigned_url|send_message|receive_message|delete_message)$"))
+        arguments: (argument_list) @args)
+    captures:
+      - name: fn
+        role: s3_operation
+      - name: args
+        role: request_shape
