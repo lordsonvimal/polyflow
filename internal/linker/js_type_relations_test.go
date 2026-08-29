@@ -105,6 +105,73 @@ func TestLinkJSTypeRelations_InstantiateLinksToConstructor(t *testing.T) {
 	}
 }
 
+// TestLinkJSTypeRelations_ConstArrowEnclosingInstantiateResolves is the
+// gitnexus live gap: `export const build = async (...) => {...}` (a modern
+// const-arrow-function declaration, no `function` keyword) contains a
+// `new Widget()` — walkNew's enclosing-scope tracker previously resolved a
+// name only via ChildByFieldName("name"), which arrow_function/
+// function_expression nodes never have (only a `function name(){}`
+// declaration does), so enclosingFnID silently stayed "" and
+// emitInstantiate's `enclosingFnID == ""` guard dropped the edge outright —
+// confirmed live on gitnexus's src/cli/wiki.ts (`const wikiCommandImpl =
+// async (...) => {...}` calling `new WikiGenerator(...)`), where neither the
+// class-granularity instantiates edge nor the constructor calls fill-in
+// existed despite the class being genuinely instantiated.
+func TestLinkJSTypeRelations_ConstArrowEnclosingInstantiateResolves(t *testing.T) {
+	t.Parallel()
+	dir, paths := writeJSFixture(t, map[string]string{
+		"widget.js": "export class Widget {\n" +
+			"  constructor() {\n" +
+			"    this.ready = true;\n" +
+			"  }\n" +
+			"}\n",
+		"consumer.js": "import { Widget } from './widget';\n" +
+			"\n" +
+			"export const build = async (opts) => {\n" +
+			"  return new Widget();\n" +
+			"};\n",
+	})
+	_ = dir
+	var widget, consumer string
+	for _, p := range paths {
+		switch filepath.Base(p) {
+		case "widget.js":
+			widget = p
+		case "consumer.js":
+			consumer = p
+		}
+	}
+
+	nodes := []graph.Node{
+		jsClassNode("svc", widget, "Widget", 1, 5),
+		jsFuncNode("svc", widget, "constructor", 2),
+		jsFuncNode("svc", consumer, "build", 3),
+	}
+	edges, _ := LinkJSTypeRelations(nodes, nil, map[string][]string{
+		"svc": {widget, consumer},
+	})
+
+	fromID := fmt.Sprintf("svc:%s:function:build:3", consumer)
+	wantClassEdge := fmt.Sprintf("instantiates:%s->svc:%s:class:Widget:1", fromID, widget)
+	wantMethodEdge := fmt.Sprintf("calls:%s->svc:%s:function:constructor:2", fromID, widget)
+
+	var gotClassEdge, gotMethodEdge bool
+	for _, e := range edges {
+		switch e.ID {
+		case wantClassEdge:
+			gotClassEdge = true
+		case wantMethodEdge:
+			gotMethodEdge = true
+		}
+	}
+	if !gotClassEdge {
+		t.Errorf("missing class-granularity instantiates edge %s from a const-arrow enclosing scope; got %+v", wantClassEdge, edges)
+	}
+	if !gotMethodEdge {
+		t.Errorf("missing method-granularity calls edge to constructor %s; got %+v", wantMethodEdge, edges)
+	}
+}
+
 // TestLinkJSTypeRelations_SameFileInstantiateLinksToConstructor is the fix
 // for the gap DC.3's cross-file test didn't cover: a same-file `new X()` (or
 // an asset-pipeline-style global class with no import/export at all) never
