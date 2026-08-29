@@ -383,6 +383,27 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(filtered, constCollisions...)
 			return st.writeEdges(constEdges)
 		}},
+		// DC.32: a typed-receiver Ruby call (`file.clear_lock!`) the parser
+		// could not attribute (case "call"'s default receiver branch in
+		// ruby_variables.go) resolves when exactly one method in the whole
+		// service shares its name -- see LinkRubySoleDefinerCalls' doc
+		// comment. Every typed_call_ref entry is dropped from the ledger
+		// here regardless of outcome: an unresolved one is a framework/gem
+		// call by construction, and no later pass will ever explain it, so
+		// keeping it would only inflate deadcode's "verify N manually"
+		// footer with entries nothing will ever resolve.
+		{"ruby_sole_definer_calls", scopeSameServiceOnly, func() error {
+			soleEdges, _ := linker.LinkRubySoleDefinerCalls(st.allNodes, st.allEdges, st.allUnresolved)
+			filtered := st.allUnresolved[:0]
+			for _, u := range st.allUnresolved {
+				if u.Kind == "typed_call_ref" {
+					continue
+				}
+				filtered = append(filtered, u)
+			}
+			st.allUnresolved = filtered
+			return st.writeEdges(soleEdges)
+		}},
 		// RW.2: mint one http_client node per call site of a Level-1-detected
 		// Ruby wrapper (patterns/ruby/wrapper_url_target.yaml), instead of
 		// leaving every caller collapsed onto the wrapper's single shared,

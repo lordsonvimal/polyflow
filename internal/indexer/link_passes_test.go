@@ -31,6 +31,7 @@ var wantLinkPasses = []struct {
 	{"rails_filters", scopeSameServiceOnly},
 	{"ruby_mixin_methods", scopeSameServiceOnly},
 	{"ruby_mixin_constants", scopeSameServiceOnly},
+	{"ruby_sole_definer_calls", scopeSameServiceOnly},
 	{"ruby_wrapper_url_call_sites", scopeSameServiceOnly},
 	{"ruby_http_hosts", scopeSameServiceOnly},
 	{"go_http_hosts", scopeSameServiceOnly},

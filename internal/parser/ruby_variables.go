@@ -178,6 +178,59 @@ var railsCallbackBlockMethods = map[string]bool{
 // walk's case "constant".
 var rubyScreamingConstRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
+// rubyCommonMethodNames denylists Ruby/Rails/ActiveSupport/Enumerable
+// vocabulary so common it is never safe to bind by service-wide name
+// uniqueness alone (DC.32, walk's case "call" default-receiver branch): even
+// when a name like `to_json` or `scope` happens to have exactly one
+// app-defined method with that name in the whole service, a call site is far
+// more likely reaching the framework/gem's own method of the same name on
+// some other receiver than it is reaching ours. Confirmed against orion:
+// of 55 sole-service-definer names with a typed-receiver call site, `scope`,
+// `to_json`, `with`, and `await` were the only false-positive risks — this
+// list is deliberately narrow (that measured set plus the obvious rest of
+// the same vocabulary), not an attempt to enumerate every gem method, since
+// anything missed here just falls back to "left unresolved", not a wrong
+// bind.
+var rubyCommonMethodNames = map[string]bool{
+	"each": true, "each_with_index": true, "each_with_object": true, "each_pair": true,
+	"each_slice": true, "each_key": true, "each_value": true, "with_index": true,
+	"map": true, "flat_map": true, "select": true, "filter": true, "reject": true,
+	"find": true, "find_by": true, "find_all": true, "detect": true,
+	"count": true, "size": true, "length": true, "empty?": true,
+	"any?": true, "all?": true, "none?": true, "one?": true,
+	"first": true, "last": true, "sum": true, "min": true, "max": true,
+	"min_by": true, "max_by": true, "sort": true, "sort_by": true,
+	"uniq": true, "compact": true, "flatten": true, "reverse": true,
+	"merge": true, "merge!": true, "dig": true, "fetch": true,
+	"keys": true, "values": true, "include?": true, "key?": true,
+	"respond_to?": true, "is_a?": true, "kind_of?": true, "instance_of?": true,
+	"nil?": true, "present?": true, "blank?": true, "class": true,
+	"to_s": true, "to_i": true, "to_f": true, "to_a": true, "to_h": true,
+	"to_sym": true, "to_json": true, "to_proc": true, "to_str": true,
+	"freeze": true, "frozen?": true, "dup": true, "clone": true,
+	"tap": true, "then": true, "yield_self": true, "call": true,
+	"new": true, "with": true, "await": true, "scope": true,
+	"save": true, "save!": true, "valid?": true, "invalid?": true,
+	"destroy": true, "destroy!": true, "update": true, "update!": true,
+	"update_attribute": true, "update_attributes": true, "create": true, "create!": true,
+	"build": true, "new_record?": true, "persisted?": true, "reload": true,
+	"where": true, "order": true, "limit": true, "offset": true,
+	"joins": true, "includes": true, "group": true, "having": true,
+	"pluck": true, "distinct": true, "exists?": true, "touch": true,
+	"inspect": true, "hash": true, "send": true, "public_send": true,
+	"try": true, "method": true, "methods": true, "instance_variable_get": true,
+	"instance_variable_set": true, "class_eval": true, "instance_eval": true,
+	"define_method": true, "method_missing": true, "respond_to_missing?": true,
+	"gsub": true, "gsub!": true, "sub": true, "sub!": true, "split": true,
+	"join": true, "slice": true, "start_with?": true, "end_with?": true,
+	"match": true, "match?": true, "scan": true, "strip": true,
+	"upcase": true, "downcase": true, "capitalize": true,
+	"attributes": true, "errors": true, "as_json": true, "run": true,
+	"start": true, "stop": true, "close": true, "open": true,
+	"process": true, "handle": true, "perform": true, "render": true,
+	"notify": true,
+}
+
 // dslBlockScopeID synthesizes a per-block scope ID for a DSL call's
 // `do...end` (or `{}`) body (DC.18, widened by DC.28 to Rails callback
 // blocks): the block has no enclosing `def` to key a methodID on, but calls
@@ -804,6 +857,22 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					if !ex.locals[methodID][recvName] {
 						ex.resolveBareCall(recvName, class, class, methodID, rbLine(receiver), methodID != "")
 					}
+					// DC.32: `bar_method` in `foo.bar_method` is exactly the
+					// same receiver-typed-dispatch blind spot as the default
+					// case below (foo's actual class is unknown here just as
+					// article's is for article.save) — foo being a bare
+					// identifier only explains foo itself, not what its
+					// value's class defines. This is empirically the
+					// dominant shape (a local var or method param as
+					// receiver), not an edge case: `org.customized_product_name`
+					// looks nothing like `default:`'s example on the
+					// surface, but is structurally identical to it once the
+					// receiver itself is resolved above.
+					if methodID != "" && !rubyCommonMethodNames[mname] {
+						ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+							Service: ex.service, File: ex.file, Line: rbLine(node), Name: mname, Kind: "typed_call_ref",
+						})
+					}
 					goto next
 				default:
 					// Any other receiver (article.save) needs static type
@@ -811,6 +880,25 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					// here would only exit this inner switch and fall through
 					// to a resolution attempt, so bail out of the call
 					// handling entirely instead.
+					//
+					// DC.32: not every such call is unrecoverable. When the
+					// method name is not one of Ruby/Rails' extremely common
+					// vocabulary (rubyCommonMethodNames), ledger it as a
+					// candidate for LinkRubySoleDefinerCalls: a linker pass
+					// that binds it only when exactly one method in the
+					// whole service has this name — safe by construction,
+					// since the receiver's actual class is then irrelevant
+					// (there is nothing else it could be). Never ledgered
+					// outside a real method body (methodID == "" is a
+					// class-body/top-level call, already excluded from
+					// resolution above this switch), and always stripped
+					// from the ledger regardless of outcome by that pass —
+					// see its doc comment for why.
+					if methodID != "" && !rubyCommonMethodNames[mname] {
+						ex.unresolved = append(ex.unresolved, graph.UnresolvedRef{
+							Service: ex.service, File: ex.file, Line: rbLine(node), Name: mname, Kind: "typed_call_ref",
+						})
+					}
 					goto next
 				}
 			}
