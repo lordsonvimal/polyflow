@@ -1235,3 +1235,86 @@ end
 		t.Errorf("a CamelCase class reference must never be ledgered as const_ref; unresolved: %+v", unresolved)
 	}
 }
+
+// TestRubyVariables_TypedReceiverCallIsLedgered is DC.32's parser-side
+// shape: a call through a receiver that is neither self/implicit, a
+// same-file constant, nor a same-file local (`file.clear_lock!`) cannot be
+// attributed here -- Ruby's dynamism rules out knowing the receiver's real
+// class -- but it is still ledgered as typed_call_ref for
+// LinkRubySoleDefinerCalls to resolve service-wide, unlike before DC.32
+// where this shape was silently dropped.
+func TestRubyVariables_TypedReceiverCallIsLedgered(t *testing.T) {
+	t.Parallel()
+	src := `class OrgFileCleaner
+  def cleanup
+    @file.clear_lock!
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/services/org_file_cleaner.rb", "orion", []byte(src))
+
+	found := false
+	for _, u := range unresolved {
+		if u.Kind == "typed_call_ref" && u.Name == "clear_lock!" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected clear_lock! to be ledgered as typed_call_ref; unresolved: %+v", unresolved)
+	}
+}
+
+// TestRubyVariables_IdentifierReceiverCallIsLedgered is DC.32's dominant
+// live shape, confirmed on orion: a local variable or method parameter as
+// receiver (`org.customized_product_name`) is structurally the same
+// receiver-typed-dispatch blind spot as an instance-variable or
+// method-chain receiver, but reaches a separate branch in the receiver
+// switch (DC.24's "bare identifier filling the receiver slot") that must
+// ledger the *method* name too, not just resolve the receiver itself.
+func TestRubyVariables_IdentifierReceiverCallIsLedgered(t *testing.T) {
+	t.Parallel()
+	src := `class TeamsMessaging
+  def build_name(org)
+    org.customized_product_name
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/services/teams_messaging.rb", "orion", []byte(src))
+
+	found := false
+	for _, u := range unresolved {
+		if u.Kind == "typed_call_ref" && u.Name == "customized_product_name" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected customized_product_name to be ledgered as typed_call_ref; unresolved: %+v", unresolved)
+	}
+}
+
+// TestRubyVariables_CommonMethodNameNotLedgered guards the denylist: a
+// typed-receiver call to extremely common Ruby/Rails vocabulary (`save`,
+// `to_json`) must never be ledgered as typed_call_ref, even though it is
+// exactly the same unattributable shape as clear_lock! above -- binding by
+// service-wide name uniqueness is unsafe for names this likely to be
+// framework/gem methods on some unrelated receiver (see orion's `scope`,
+// `to_json`, `with`, `await` false-positive risks in the DC.32 plan).
+func TestRubyVariables_CommonMethodNameNotLedgered(t *testing.T) {
+	t.Parallel()
+	src := `class Article
+  def publish(record)
+    @record.save
+    @record.to_json
+    record.save
+    record.to_json
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/models/article.rb", "orion", []byte(src))
+
+	for _, u := range unresolved {
+		if u.Kind == "typed_call_ref" && (u.Name == "save" || u.Name == "to_json") {
+			t.Errorf("denylisted method name %q must never be ledgered as typed_call_ref", u.Name)
+		}
+	}
+}
