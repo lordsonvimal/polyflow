@@ -14,7 +14,11 @@ type deadcodeInput struct {
 }
 
 func (s *Server) deadcode(ctx context.Context, req *mcp.CallToolRequest, in deadcodeInput) (*mcp.CallToolResult, any, error) {
-	_, idx, _ := s.snapshot()
-	out := deadcode.Build(idx, deadcode.Options{Service: in.Service, File: in.File})
+	store, idx, _ := s.snapshot()
+	unresolved, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := deadcode.Build(idx, deadcode.Options{Service: in.Service, File: in.File, UnresolvedRefs: unresolved})
 	return jsonResult(out)
 }

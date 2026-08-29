@@ -5,7 +5,9 @@
 package deadcode
 
 import (
+	"path"
 	"sort"
+	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -32,6 +34,17 @@ type Result struct {
 type Options struct {
 	Service string // "" = every service
 	File    string // "" = every file
+
+	// UnresolvedRefs is the graph's blind-spot ledger (graph.Store.
+	// ListUnresolvedRefs), used only by the DC.27 Rails-view branch to
+	// recognize a zero-inbound-renders partial/template as the plausible
+	// target of a dynamic `render partial: expr` call already ledgered as
+	// erb_render_dynamic/erb_render_unresolved. Every caller should pass the
+	// real ledger: leaving this nil does not disable the branch, it just
+	// starves one of its two carve-outs, which is the false-positive
+	// direction DC.26's investigation warned against (flagging a
+	// legitimately dynamic-dispatched partial as dead).
+	UnresolvedRefs []graph.UnresolvedRef
 }
 
 // Build scans idx for two independent dead shapes:
@@ -47,17 +60,39 @@ type Options struct {
 //     EdgeTypeReads — a callable's "invoked" predicate doesn't apply to a
 //     value, so this branch uses hasReader instead of hasCaller and skips
 //     the entrypoint/reflect-dispatched checks entirely (see hasReader).
+//   - (DC.27) Rails view files (graph.NodeTypeFile nodes under app/views/,
+//     excluding layouts/mailers) with no inbound EdgeTypeRenders — see
+//     isDeadRailsView. A view has no "invoked" predicate either, and unlike
+//     the variable branch it needs two carve-outs (implicit view resolution,
+//     dynamic render dispatch) before a zero-inbound result means anything.
 func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 	var items []Item
+	liveRailsRoutes := railsRouteTargets(idx)
+	dynDispatches := railsDynamicRenderTargets(opts.UnresolvedRefs)
 	for _, n := range idx.Nodes {
 		isCallable := n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeComponent
-		if !isCallable && n.Type != graph.NodeTypeVariable {
+		isRailsView := n.Type == graph.NodeTypeFile && isRailsViewFile(n.File)
+		if !isCallable && n.Type != graph.NodeTypeVariable && !isRailsView {
 			continue
 		}
 		if opts.Service != "" && n.Service != opts.Service {
 			continue
 		}
 		if opts.File != "" && n.File != opts.File {
+			continue
+		}
+		if isRailsView {
+			if isDeadRailsView(idx, n, liveRailsRoutes, dynDispatches) {
+				items = append(items, Item{
+					ID:      n.ID,
+					Label:   n.Label,
+					Type:    string(n.Type),
+					Service: n.Service,
+					File:    n.File,
+					Line:    n.Line,
+					EndLine: n.EndLine,
+				})
+			}
 			continue
 		}
 		// A variable/const node (see graph.NodeTypeVariable) has no notion of
@@ -253,6 +288,196 @@ func hasCaller(idx *graph.AdjacencyIndex, id string) bool {
 func hasReader(idx *graph.AdjacencyIndex, id string) bool {
 	for _, e := range idx.InEdges[id] {
 		if e.Type == graph.EdgeTypeReads {
+			return true
+		}
+	}
+	return false
+}
+
+// isRailsViewFile reports whether file is a candidate for the DC.27 dead-view
+// check: an ERB file under app/views/, excluding layouts (own reachability
+// rule — a layout is wired to a controller/action pair, not rendered by
+// name) and mailers (delivered by ActionMailer's `mail`/`deliver`, never a
+// literal `render` call — same reason DC.26's investigation query excluded
+// them from its candidate count).
+func isRailsViewFile(file string) bool {
+	if !strings.HasSuffix(file, ".erb") {
+		return false
+	}
+	if !strings.Contains(file, "app/views/") {
+		return false
+	}
+	if strings.Contains(file, "app/views/layouts/") {
+		return false
+	}
+	if strings.Contains(strings.ToLower(file), "mailer") {
+		return false
+	}
+	return true
+}
+
+// railsRouteTargets indexes every live Ruby http_handler's implicit-view
+// target as "service\x00controllerPath/action". controllerPath is
+// meta["controller_module"] + "/" + meta["resource"] when a module is
+// recorded, else just meta["resource"] — deliberately not the
+// namespace-precise, path-segment-verified resolution
+// internal/linker/rails_route_actions.go's RailsRouteTarget does for
+// pinning a `calls` edge to one exact controller. That precision has no
+// counterpart here: a devise_route/devise_default_route handler (Devise's
+// own view family) never sets controller_module and its full_path/path
+// never contains the resource segment literally (`/users/sign_up` for
+// resource "registrations"), so RailsRouteTarget's path-segment fallback
+// always failed on it — the family DC.26's investigation confirmed serves
+// every one of orion's zero-inbound Devise views. This carve-out only
+// needs to know a route exists, not which controller implements it, so the
+// generous match (no namespace verification when controller_module is
+// absent) is the correct trade — a wrong suppression here just leaves a
+// dead file unflagged, the same safe direction DC.26 already argued for.
+//
+// Independent of whether a controller method node exists for that action:
+// DC.26 also found Rails renders an action's template with no explicit
+// method body at all (true for every Devise view and any other action a
+// controller never overrides), so gating on a method node would silently
+// un-clear exactly the views this carve-out exists for.
+func railsRouteTargets(idx *graph.AdjacencyIndex) map[string]bool {
+	live := map[string]bool{}
+	for _, n := range idx.Nodes {
+		if n.Type != graph.NodeTypeHTTPHandler || n.Language != "ruby" {
+			continue
+		}
+		action := strings.TrimPrefix(n.Meta["action"], ":")
+		resource := n.Meta["resource"]
+		if action == "" || resource == "" {
+			continue
+		}
+		ctrlPath := resource
+		if ns := n.Meta["controller_module"]; ns != "" {
+			ctrlPath = ns + "/" + resource
+		}
+		live[n.Service+"\x00"+ctrlPath+"/"+action] = true
+	}
+	return live
+}
+
+// dynamicRenderTarget is one erb_render_dynamic/erb_render_unresolved ledger
+// entry, reduced to the literal text a matching view's identifier must
+// contain.
+type dynamicRenderTarget struct {
+	service string
+	literal string
+	// exact is true for erb_render_unresolved (name is a fully resolved
+	// literal with no interpolation — leadingSpec already stripped quotes
+	// and returned false only because idx.resolve found no file, so the
+	// remaining text names one specific target). false for
+	// erb_render_dynamic (name is the raw, still-quoted source expression up
+	// to its first `#{`; anything after is Ruby's problem to interpolate,
+	// not this heuristic's — a matching view only needs to share that
+	// literal prefix, the same way DC.26's investigation cleared 73 of 110
+	// zero-inbound partials off a single `"change_logs/models/#{obj_name}"`
+	// call site).
+	exact bool
+}
+
+// railsDynamicRenderTargets reduces the graph's unresolved-ref ledger to the
+// erb_render_dynamic/erb_render_unresolved rows a dead-view check can use.
+// Every other kind (call_ref, import_ref, rails_filter_unresolved, ...) is
+// unrelated to view rendering and skipped.
+func railsDynamicRenderTargets(refs []graph.UnresolvedRef) []dynamicRenderTarget {
+	var out []dynamicRenderTarget
+	for _, r := range refs {
+		var t dynamicRenderTarget
+		switch r.Kind {
+		case "erb_render_dynamic":
+			t.exact = false
+		case "erb_render_unresolved":
+			t.exact = true
+		default:
+			continue
+		}
+		name := strings.TrimPrefix(r.Name, `"`)
+		name = strings.TrimPrefix(name, `'`)
+		if i := strings.Index(name, "#{"); i >= 0 {
+			name = name[:i]
+			t.exact = false // an interpolation always makes this a prefix, regardless of kind
+		}
+		name = strings.TrimPrefix(name, "/")
+		if name == "" {
+			continue
+		}
+		t.service, t.literal = r.Service, name
+		out = append(out, t)
+	}
+	return out
+}
+
+// railsViewIdentifier reduces a view file's path to the logical name Ruby's
+// own `render` call would spell it by: the path relative to app/views/,
+// minus the format/handler extensions (".html.erb", ".js.erb", ".text.erb",
+// ...) and, for a partial, its leading underscore. "" means file did not
+// contain an app/views/ segment (isRailsViewFile already guards every real
+// caller against this, so it should not happen in practice).
+func railsViewIdentifier(file string) string {
+	const marker = "app/views/"
+	i := strings.Index(file, marker)
+	if i < 0 {
+		return ""
+	}
+	rel := file[i+len(marker):]
+	dir, base := path.Split(rel)
+	base = strings.TrimSuffix(base, ".erb")
+	if j := strings.LastIndex(base, "."); j >= 0 {
+		base = base[:j] // drop the format segment: index.html -> index
+	}
+	base = strings.TrimPrefix(base, "_")
+	return strings.TrimSuffix(dir, "/") + "/" + base
+}
+
+// isDeadRailsView reports whether a zero-inbound-EdgeTypeRenders view node
+// clears both DC.26 carve-outs and can be flagged as a real dead-code
+// candidate.
+func isDeadRailsView(idx *graph.AdjacencyIndex, n *graph.Node, liveRoutes map[string]bool, dynTargets []dynamicRenderTarget) bool {
+	if hasRenderer(idx, n.ID) {
+		return false
+	}
+	ident := railsViewIdentifier(n.File)
+	if ident == "" {
+		return false
+	}
+	// (a) implicit view resolution: Devise ships its default views one
+	// directory deeper than its own routes name them (app/views/devise/
+	// <resource>/<action>.erb serves a devise_for route whose meta.resource
+	// is just <resource>, with no "devise" segment) — confirmed live in
+	// DC.26's investigation across all 8 Devise view files it found.
+	routeIdent := strings.TrimPrefix(ident, "devise/")
+	if liveRoutes[n.Service+"\x00"+routeIdent] {
+		return false
+	}
+	// (b) dynamic/unresolved render target: a ledgered call site this view's
+	// identifier could plausibly be the destination of.
+	for _, t := range dynTargets {
+		if t.service != n.Service {
+			continue
+		}
+		if t.exact {
+			if ident == t.literal {
+				return false
+			}
+			continue
+		}
+		if strings.HasPrefix(ident, t.literal) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasRenderer reports whether the view node id has at least one inbound
+// EdgeTypeRenders — the same shape as hasReader, for a view's own "invoked"
+// predicate (a plain `renders` edge, not the wider invokingEdgeTypes set
+// hasCaller checks: a view is never `calls`'d or `spawns`'d, only rendered).
+func hasRenderer(idx *graph.AdjacencyIndex, id string) bool {
+	for _, e := range idx.InEdges[id] {
+		if e.Type == graph.EdgeTypeRenders {
 			return true
 		}
 	}

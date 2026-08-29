@@ -15,5 +15,11 @@ func (s *Server) handleDeadcode(w http.ResponseWriter, r *http.Request) {
 	idx := s.idx
 	s.idxMu.RUnlock()
 
-	writeJSON(w, http.StatusOK, deadcode.Build(idx, deadcode.Options{Service: service, File: file}))
+	unresolved, err := s.db.ListUnresolvedRefs(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, deadcode.Build(idx, deadcode.Options{Service: service, File: file, UnresolvedRefs: unresolved}))
 }

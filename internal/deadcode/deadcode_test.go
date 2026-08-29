@@ -436,3 +436,156 @@ func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	require.NotNil(t, out.Functions)
 	assert.Equal(t, 0, out.Total)
 }
+
+// railsViewNode builds a NodeTypeFile node the way LinkRailsViews' fileNodeIndex
+// mints one for every ERB template/partial, regardless of role.
+func railsViewNode(id, service, file string) *graph.Node {
+	return &graph.Node{ID: id, Type: graph.NodeTypeFile, Label: file, Service: service, File: file, Line: 0}
+}
+
+// railsRouteNode builds an http_handler node the way the Ruby route patterns
+// stamp one — see linker.RailsRouteTarget's doc comment for the meta shape.
+func railsRouteNode(id, service string, meta map[string]string) *graph.Node {
+	return &graph.Node{ID: id, Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: service, File: "config/routes.rb", Line: 1, Language: "ruby", Meta: meta}
+}
+
+// TestBuild_DeadRailsPartialFlagged is DC.27's base case: a partial under
+// app/views/ with no inbound EdgeTypeRenders, no matching route, and no
+// unresolved dynamic-render ledger entry — DC.26's investigation confirmed
+// real, unambiguous instances of exactly this shape (e.g.
+// app/views/shared/_mail_footer.html.erb, zero textual references anywhere
+// in orion).
+func TestBuild_DeadRailsPartialFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:partial", "backend", "app/views/shared/_mail_footer.html.erb"))
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var found bool
+	for _, f := range out.Functions {
+		if f.ID == "be:partial" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a zero-inbound-renders partial with no route/dynamic-render carve-out must be flagged")
+}
+
+// TestBuild_RailsViewWithRendererNotFlagged is deadcode's existing
+// zero-caller predicate applied to the new node type: a real EdgeTypeRenders
+// edge means it isn't dead, no carve-out needed.
+func TestBuild_RailsViewWithRendererNotFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:partial", "backend", "app/views/shared/_row.html.erb"))
+	idx.AddNode(&graph.Node{ID: "be:caller", Type: graph.NodeTypeFile, Service: "backend", File: "app/views/index.html.erb"})
+	idx.AddEdge(&graph.Edge{ID: "e1", From: "be:caller", To: "be:partial", Type: graph.EdgeTypeRenders})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:partial", f.ID)
+	}
+}
+
+// TestBuild_LayoutAndMailerViewsNeverFlagged pins isRailsViewFile's two
+// exclusions: a layout is wired to a controller/action pair, never rendered
+// by name, and a mailer view is delivered by ActionMailer's `mail`, never a
+// literal `render` call — DC.26's investigation query excluded both from its
+// candidate count for the same reason.
+func TestBuild_LayoutAndMailerViewsNeverFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:layout", "backend", "app/views/layouts/application.html.erb"))
+	idx.AddNode(railsViewNode("be:mailer", "backend", "app/views/user_mailer/welcome.html.erb"))
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:layout", f.ID)
+		assert.NotEqual(t, "be:mailer", f.ID)
+	}
+}
+
+// TestBuild_ImplicitViewResolutionNotFlagged is DC.26's Devise finding: Rails
+// implicitly renders an action's template even when the controller defines
+// no method for it at all (confirmed live: none of orion's 8 zero-inbound
+// Devise views had a backing method node anywhere in the ancestor chain), so
+// the carve-out must match on the live route alone, never require a method
+// node. Devise's own views also sit one directory deeper than the route's
+// resource name (app/views/devise/registrations/new.html.erb serves a route
+// whose meta.resource is "registrations", with no "devise" segment).
+func TestBuild_ImplicitViewResolutionNotFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:devise_new", "backend", "app/views/devise/registrations/new.html.erb"))
+	idx.AddNode(railsRouteNode("be:route", "backend", map[string]string{
+		"action": "new", "resource": "registrations", "path": "/users/sign_up",
+	}))
+	// No controller method node anywhere — deliberately, per the finding above.
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:devise_new", f.ID, "an implicit-view-resolution target must not be flagged even with no backing method node")
+	}
+}
+
+// TestBuild_NamespacedImplicitViewResolutionNotFlagged pins the non-Devise
+// case: a namespaced controller's implicit view lives at the same nested
+// path as its controller_module + resource, no special-casing needed.
+func TestBuild_NamespacedImplicitViewResolutionNotFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:index", "backend", "app/views/client_api/v1/studies/index.html.erb"))
+	idx.AddNode(railsRouteNode("be:route", "backend", map[string]string{
+		"action": "index", "resource": "studies", "path": "/client_api/v1/studies", "controller_module": "client_api/v1",
+	}))
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:index", f.ID)
+	}
+}
+
+// TestBuild_DynamicRenderTargetNotFlagged is DC.26's largest confirmed
+// carve-out: a single `render "change_logs/models/#{obj_name}"` call site
+// (ledgered as erb_render_dynamic, quotes and interpolation intact — see
+// railsview.ScanRenders) legitimately explained 73 of 110 zero-inbound
+// partials in the live investigation. The carve-out only needs the literal
+// prefix before the first `#{`.
+func TestBuild_DynamicRenderTargetNotFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:model_partial", "backend", "app/views/change_logs/models/_folder.html.erb"))
+
+	out := deadcode.Build(idx, deadcode.Options{
+		UnresolvedRefs: []graph.UnresolvedRef{
+			{Service: "backend", File: "app/views/change_logs/_change_log_object.html.erb", Line: 2,
+				Name: `"change_logs/models/#{obj_name}"`, Kind: "erb_render_dynamic"},
+		},
+	})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "be:model_partial", f.ID, "a partial under a dynamic render's literal prefix must not be flagged")
+	}
+}
+
+// TestBuild_UnresolvedLiteralRenderTargetNotFlagged pins the
+// erb_render_unresolved half of the same carve-out: an already-literal
+// (non-interpolated) render spec that idx.resolve simply couldn't find a
+// file for must exact-match a candidate's identifier, not merely share a
+// prefix — a partial in the same directory with a different name is not
+// this ledger entry's target and must stay flagged.
+func TestBuild_UnresolvedLiteralRenderTargetNotFlagged(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(railsViewNode("be:target", "backend", "app/views/task_lists/_index.html.erb"))
+	idx.AddNode(railsViewNode("be:sibling", "backend", "app/views/task_lists/_filters.html.erb"))
+
+	out := deadcode.Build(idx, deadcode.Options{
+		UnresolvedRefs: []graph.UnresolvedRef{
+			{Service: "backend", File: "app/views/deliverables/_index.html.erb", Line: 27,
+				Name: "task_lists/index", Kind: "erb_render_unresolved"},
+		},
+	})
+	var targetFlagged, siblingFlagged bool
+	for _, f := range out.Functions {
+		if f.ID == "be:target" {
+			targetFlagged = true
+		}
+		if f.ID == "be:sibling" {
+			siblingFlagged = true
+		}
+	}
+	assert.False(t, targetFlagged, "the exact-matched ledger target must not be flagged")
+	assert.True(t, siblingFlagged, "an unrelated sibling partial must still be flagged — exact match, not directory-prefix")
+}
