@@ -1,0 +1,60 @@
+# Django ORM manager call sites (Model.objects.<verb>()).
+#
+# Gate: only activates for services that depend on django.
+#
+# Scope (Tier PF, docs/python-parity-plan.md): this captures direct
+# `<Model>.objects.<verb>(...)` call sites as Datastore query/persist nodes —
+# the same query/persist edge convention Go's gorm_query/gorm_persist and
+# database/sql sql_query/sql_exec patterns already use — so "what code
+# touches Model X" impact questions have something to answer with. It does
+# NOT attempt full ORM relationship modeling (ForeignKey/ManyToMany graph
+# edges between models); that is explicitly out of scope for this doc and
+# deferred to its own plan, the way Ruby's ActiveRecord associations got
+# docs/ruby-activerecord-association-plan.md after the base linker tiers
+# landed.
+#
+# Deliberately uncaptured: chained calls after the first hop
+# (`Model.objects.filter(x=1).update(y=2)`) — the second call's `object` is
+# a `call` node, not an `(attribute)`, so resolving the root model would
+# need a semantic walk (like Tier PC's resolvePythonAttributeCalls), not a
+# pattern-file match. The first-hop call in that chain is still captured.
+language: python
+version: "1"
+package: django
+patterns:
+  # Model.objects.filter(...) / .get(...) / .all() / .exclude(...) / etc.
+  # (read-only QuerySet verbs) — classified as a Datastore query.
+  - name: django_orm_query
+    query: |
+      (call
+        function: (attribute
+          object: (attribute
+            object: (identifier) @model
+            attribute: (identifier) @manager
+            (#eq? @manager "objects"))
+          attribute: (identifier) @verb
+          (#match? @verb "^(filter|get|all|exclude|values|values_list|annotate|aggregate|first|last|count|exists|iterator|only|defer|order_by|distinct|select_related|prefetch_related)$")))
+    captures:
+      - name: model
+        role: model_ref
+      - name: verb
+        role: orm_verb
+
+  # Model.objects.create(...) / .update(...) / .delete(...) / .bulk_create(...) /
+  # .get_or_create(...) / .update_or_create(...) / .bulk_update(...) / .save(...)
+  # (mutating verbs) — classified as a Datastore persist.
+  - name: django_orm_persist
+    query: |
+      (call
+        function: (attribute
+          object: (attribute
+            object: (identifier) @model
+            attribute: (identifier) @manager
+            (#eq? @manager "objects"))
+          attribute: (identifier) @verb
+          (#match? @verb "^(create|update|delete|bulk_create|bulk_update|get_or_create|update_or_create|save)$")))
+    captures:
+      - name: model
+        role: model_ref
+      - name: verb
+        role: orm_verb

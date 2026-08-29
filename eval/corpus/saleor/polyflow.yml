@@ -1,0 +1,17 @@
+name: saleor
+version: "1"
+services:
+  - name: saleor
+    path: .
+    language: python
+    frameworks:
+      - django
+links: []
+index:
+  exclude:
+    - '**/node_modules/**'
+    - '**/.venv/**'
+    - '**/migrations/**'
+    - '**/tests/**'
+    - '**/test_*.py'
+    - '**/*_test.py'
