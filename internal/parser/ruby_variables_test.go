@@ -728,11 +728,19 @@ end
 	}
 }
 
-func TestRubyVariables_UnresolvedBareIdentifierNotLedgered(t *testing.T) {
+func TestRubyVariables_UnresolvedBareIdentifierIsLedgered(t *testing.T) {
 	t.Parallel()
-	// Ledger policy: an unresolved bare identifier is NOT reported, unlike an
-	// unresolved case "call" (TestRubyVariables_UnresolvableBareCallGoesToLedger)
-	// — the parser has no guarantee this was ever a call at all.
+	// DC.29 ledger policy (revised from the prior "never ledgered" rule): an
+	// unresolved bare identifier *inside a method body* now IS reported, the
+	// same as an unresolved case "call" (TestRubyVariables_UnresolvableBareCallGoesToLedger).
+	// By the time this case is reached, the name is confirmed not a local
+	// var and not structurally excluded, so in Ruby grammar terms it can
+	// only be a call — the old "no guarantee this was ever a call at all"
+	// premise silently dropped real cross-file mixin/superclass calls
+	// (confirmed live on orion: a paren-less mixin-method reference like
+	// `distinguished_domain_names: distinguished_domain_names` had zero
+	// edges *and* zero ledger rows, so LinkRubyMixinMethods (DC.6) could
+	// never recover it — see DC.29 in docs/deadcode-false-positive-plan.md).
 	src := `class Report
   def run
     mystery_thing
@@ -746,10 +754,72 @@ end
 			t.Errorf("no method named mystery_thing exists anywhere; must not resolve: %+v", e)
 		}
 	}
+	found := false
 	for _, u := range unresolved {
-		if u.Name == "mystery_thing" {
-			t.Errorf("unresolved bare identifiers must not be ledgered: %+v", u)
+		if u.Name == "mystery_thing" && u.Kind == "call_ref" {
+			found = true
 		}
+	}
+	if !found {
+		t.Errorf("expected mystery_thing to be ledgered as call_ref; unresolved: %+v", unresolved)
+	}
+}
+
+// TestRubyVariables_BareIdentifierHashValueIsLedgered is DC.29's confirmed
+// live shape: a mixin method referenced paren-less as a hash literal's value
+// (`distinguished_domain_names: distinguished_domain_names`, live in
+// orion's Organization#dss_org_info calling OrganizationConfiguration#
+// distinguished_domain_names). Before DC.29 this produced zero edges and
+// zero ledger rows — nothing for LinkRubyMixinMethods to ever pick up.
+func TestRubyVariables_BareIdentifierHashValueIsLedgered(t *testing.T) {
+	t.Parallel()
+	src := `class Organization
+  def dss_org_info
+    {
+      distinguished_domain_names: distinguished_domain_names,
+      name: name
+    }
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/models/organization.rb", "shop", []byte(src))
+
+	found := false
+	for _, u := range unresolved {
+		if u.Name == "distinguished_domain_names" && u.Kind == "call_ref" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected distinguished_domain_names to be ledgered as call_ref; unresolved: %+v", unresolved)
+	}
+}
+
+// TestRubyVariables_BareIdentifierAsReceiverIsLedgered is DC.29's other
+// confirmed live shape: a mixin method referenced paren-less as the bare
+// receiver of another call (`distinguished_domain_names.any?`, live in the
+// same orion class's #lookup_user_dn_on_create?). Mirrors DC.24's
+// resolveBareCall call site for the receiver slot, which had the same
+// unconditional ledgerUnresolved=false this phase fixes for the standalone
+// identifier case.
+func TestRubyVariables_BareIdentifierAsReceiverIsLedgered(t *testing.T) {
+	t.Parallel()
+	src := `class Organization
+  def lookup_user_dn_on_create?
+    distinguished_domain_names.any?
+  end
+end
+`
+	_, _, unresolved := extractRubyVariables("app/models/organization.rb", "shop", []byte(src))
+
+	found := false
+	for _, u := range unresolved {
+		if u.Name == "distinguished_domain_names" && u.Kind == "call_ref" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected distinguished_domain_names to be ledgered as call_ref; unresolved: %+v", unresolved)
 	}
 }
 
