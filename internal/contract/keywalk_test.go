@@ -108,6 +108,24 @@ func firstExpr(root *sitter.Node) *sitter.Node {
 	}
 }
 
+// lastPythonExpr returns the expression of the last top-level statement in
+// root (a module), unwrapping expression_statement — used by the PK.2
+// if/elif/else branch tests, where the use site is a bare-identifier read
+// following the assigning statements.
+func lastPythonExpr(root *sitter.Node) *sitter.Node {
+	var last *sitter.Node
+	for i := 0; i < int(root.ChildCount()); i++ {
+		c := root.Child(i)
+		if c != nil && c.Type() != "comment" {
+			last = c
+		}
+	}
+	if last != nil && last.Type() == "expression_statement" {
+		return last.Child(0)
+	}
+	return last
+}
+
 func noConsts(name string) (string, bool) { return "", false }
 
 // ── JS walker ────────────────────────────────────────────────────────────────
@@ -565,6 +583,87 @@ func TestPythonWalker_FString_PlainLiteral(t *testing.T) {
 	vals, dyn := w.WalkKey(firstPythonExpr(root), src, noConsts)
 	assert.False(t, dyn)
 	assert.Equal(t, []string{"/admin"}, vals)
+}
+
+func TestPythonWalker_IfElifElse_Branches(t *testing.T) {
+	// PK.2: name assigned once per mutually-exclusive branch of a single
+	// if/elif/else, all branches literal, else present → enumerate all three.
+	src := "if flag:\n" +
+		"    x = \"/a\"\n" +
+		"elif flag2:\n" +
+		"    x = \"/b\"\n" +
+		"else:\n" +
+		"    x = \"/c\"\n" +
+		"x\n"
+	root, srcB := parsePython(t, src)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(lastPythonExpr(root), srcB, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 3)
+	sort.Strings(vals)
+	assert.Equal(t, []string{"/a", "/b", "/c"}, vals)
+}
+
+func TestPythonWalker_IfElse_NoElif_Branches(t *testing.T) {
+	// Same shape without an elif — just if/else.
+	src := "if flag:\n" +
+		"    x = \"/a\"\n" +
+		"else:\n" +
+		"    x = \"/b\"\n" +
+		"x\n"
+	root, srcB := parsePython(t, src)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(lastPythonExpr(root), srcB, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 2)
+	sort.Strings(vals)
+	assert.Equal(t, []string{"/a", "/b"}, vals)
+}
+
+func TestPythonWalker_IfElif_NoElse_StaysDynamic(t *testing.T) {
+	// No else clause → branches aren't exhaustive (some path leaves x
+	// unset), so the binding must stay unknowable rather than guessed.
+	src := "if flag:\n" +
+		"    x = \"/a\"\n" +
+		"elif flag2:\n" +
+		"    x = \"/b\"\n" +
+		"x\n"
+	root, srcB := parsePython(t, src)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(lastPythonExpr(root), srcB, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
+}
+
+func TestPythonWalker_IfElifElse_UnresolvedBranchStaysDynamic(t *testing.T) {
+	// One branch assigns a non-literal (unresolvable) value → the whole
+	// group must decline, not silently drop the unresolvable branch.
+	src := "if flag:\n" +
+		"    x = \"/a\"\n" +
+		"else:\n" +
+		"    x = some_var\n" +
+		"x\n"
+	root, srcB := parsePython(t, src)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(lastPythonExpr(root), srcB, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
+}
+
+func TestPythonWalker_IfElifElse_ExtraReassignmentStaysDynamic(t *testing.T) {
+	// A reassignment outside the if/elif/else entirely makes the whole
+	// binding ambiguous, same as the pre-existing count>1 bailout.
+	src := "x = \"/z\"\n" +
+		"if flag:\n" +
+		"    x = \"/a\"\n" +
+		"else:\n" +
+		"    x = \"/b\"\n" +
+		"x\n"
+	root, srcB := parsePython(t, src)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(lastPythonExpr(root), srcB, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
 }
 
 // ── HTML no-op walker ────────────────────────────────────────────────────────

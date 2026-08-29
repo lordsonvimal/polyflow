@@ -74,6 +74,20 @@ func walkPythonExpr(node *sitter.Node, src []byte, consts ConstResolver, depth i
 		if v := pythonResolveLocalBinding(node, src, name); v != nil {
 			return walkPythonExpr(v, src, consts, depth+1)
 		}
+		if branches := pythonResolveBranchBindings(node, src, name); branches != nil {
+			var combined []string
+			for _, b := range branches {
+				vals, dyn := walkPythonExpr(b, src, consts, depth+1)
+				if dyn {
+					return nil, true
+				}
+				combined = append(combined, vals...)
+			}
+			if len(combined) > keyWalkerMaxBranches {
+				return nil, true
+			}
+			return combined, false
+		}
 		return nil, true
 
 	default:
