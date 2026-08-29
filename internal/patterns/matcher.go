@@ -121,11 +121,14 @@ var keyWalkerKeyCaptureNames = map[string]bool{
 }
 
 // keyWalkerRoutedLangs restricts X.1a's live WalkKey routing to the
-// languages the phase actually extends (go, javascript, ruby) rather than
-// every registered contract.KeyWalker — see the routing-block comment for
-// why python's placeholder walker must not be routed live.
+// languages with a real (non-placeholder) contract.KeyWalker implementation.
+// Tier PK (docs/python-parity-plan.md) adds python here in the same change
+// that gives pythonKeyWalker.WalkKey a real implementation — never split,
+// per the footgun the prior comment on this map existed to prevent: routing
+// the old always-dynamic placeholder live would have silently reclassified
+// every literal `requests.get("/path")` as dynamic.
 var keyWalkerRoutedLangs = map[string]bool{
-	"go": true, "javascript": true, "ruby": true,
+	"go": true, "javascript": true, "ruby": true, "python": true,
 }
 
 // keyWalkerLangFor maps a grammar language to the contract.KeyWalker
@@ -1248,12 +1251,13 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// still yield a single whole-node key_dynamic (matching the engine's
 		// per-node, not per-field, ledger check).
 		//
-		// Scoped to go/javascript/ruby (X.1's Files list) rather than "any
-		// registered walker": the python walker is a placeholder that always
-		// returns dynamic regardless of whether the node is a plain literal
-		// (unlike go/js/ruby, which classify literals first) — routing
-		// python through it here would wrongly dynamic-ledger every literal
-		// requests.get("/path") call. Extending python is future scope.
+		// Scoped to keyWalkerRoutedLangs rather than "any registered walker":
+		// a language whose walker is still the always-dynamic placeholder
+		// (see the map's own comment) must not be routed live, or every
+		// plain literal capture in that language gets wrongly
+		// dynamic-ledgered. Tier PK gave python a real classify-literals-
+		// first implementation, so it now sits in the routed set with go/
+		// javascript/ruby.
 		if keyWalkerRoutedLangs[r.Lang] && isKeyWalkerNode(nodeType) && len(r.KeyNodes) > 0 {
 			if walker := contract.KeyWalkerFor(r.Lang); walker != nil {
 				consts := constResolverFor(constants[r.File])

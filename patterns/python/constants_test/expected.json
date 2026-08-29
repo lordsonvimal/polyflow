@@ -1,0 +1,4 @@
+{
+  "patterns": ["const_string"],
+  "node_types": ["function"]
+}
