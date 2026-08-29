@@ -547,6 +547,31 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		{"route_handlers", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkRouteHandlers(st.allNodes))
 		}},
+		// PW.1: stamp the registering route's path/method onto Go's bare
+		// ws_upgrade node (see LinkWSUpgradeRoute doc comment). Must run
+		// before ApplyHints/the contract engine so the stamped path is
+		// visible to contracts/websocket.yaml's connect-time rule, same as
+		// rails_nav_helpers below.
+		{"ws_upgrade_route", scopeSameServiceOnly, func() error {
+			wsUpdated := linker.LinkWSUpgradeRoute(st.allNodes)
+			if len(wsUpdated) == 0 {
+				return nil
+			}
+			nodeByID := make(map[string]int, len(st.allNodes))
+			for i, n := range st.allNodes {
+				nodeByID[n.ID] = i
+			}
+			for i := range wsUpdated {
+				n := wsUpdated[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				if idx, ok := nodeByID[n.ID]; ok {
+					st.allNodes[idx] = n
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		{"grpc_handlers", scopeSameServiceOnly, func() error {
 			grpcEdges, grpcUnresolved := linker.LinkGRPCHandlers(st.allNodes)
 			if err := st.writeEdges(grpcEdges); err != nil {

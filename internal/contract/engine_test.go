@@ -383,6 +383,54 @@ func TestEngine_WhereGate_NavLink(t *testing.T) {
 	assert.Equal(t, graph.EdgeTypeNavigatesTo, result.Edges[0].Type)
 }
 
+// TestEngine_WhereGate_PipeOR verifies matchesWhere's "a|b" OR-list support
+// (PW.1): a consumer where-clause naming two exact pattern alternatives
+// matches either one, and rejects a third pattern that matches neither.
+func TestEngine_WhereGate_PipeOR(t *testing.T) {
+	rule := contract.Rule{
+		Kind: contract.KindWebSocket,
+		Producer: contract.EndpointSpec{
+			Node: graph.NodeTypeHTTPClient,
+			Key:  []string{"path"},
+		},
+		Consumer: contract.EndpointSpec{
+			Node:  graph.NodeTypeHTTPHandler,
+			Where: map[string]string{"pattern": "ws_upgrade|ws_upgrade_fastapi"},
+			Key:   []string{"path"},
+		},
+		Normalizers: []string{"trim_slash"},
+		Match:       []contract.MatchTier{contract.TierExact},
+		Edge: contract.EdgeSpec{
+			Type:        graph.EdgeTypeWSConnect,
+			IDPrefix:    "wsconn",
+			SameService: "keep",
+		},
+		Unmatched: contract.UnmatchedDrop,
+	}
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "svc-a", Meta: map[string]string{"path": "/go"}},
+		{ID: "c2", Type: graph.NodeTypeHTTPClient, Service: "svc-a", Meta: map[string]string{"path": "/py"}},
+		{ID: "c3", Type: graph.NodeTypeHTTPClient, Service: "svc-a", Meta: map[string]string{"path": "/plain"}},
+		{ID: "go-h", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"pattern": "ws_upgrade", "path": "/go"}},
+		{ID: "py-h", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"pattern": "ws_upgrade_fastapi", "path": "/py"}},
+		// Plain HTTP handler at the same path must never match — wrong pattern.
+		{ID: "plain-h", Type: graph.NodeTypeHTTPHandler, Service: "svc-b",
+			Meta: map[string]string{"pattern": "gin_route", "path": "/plain"}},
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{rule}, nil)
+
+	require.Len(t, result.Edges, 2)
+	ids := map[string]bool{}
+	for _, edge := range result.Edges {
+		ids[edge.ID] = true
+	}
+	assert.True(t, ids["wsconn:c1->go-h"])
+	assert.True(t, ids["wsconn:c2->py-h"])
+}
+
 // --- No rules / no matching nodes ---
 
 func TestEngine_NoRules(t *testing.T) {

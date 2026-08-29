@@ -101,8 +101,8 @@ type Rule struct {
 // EndpointSpec describes how to identify and key producer or consumer nodes.
 type EndpointSpec struct {
 	Node              graph.NodeType      `yaml:"node"`
-	Where             map[string]string   `yaml:"where,omitempty"`     // meta equality; "" ⇒ absent/empty
-	NotWhere          map[string]string   `yaml:"not_where,omitempty"` // meta inequality; excludes nodes holding the value
+	Where             map[string]string   `yaml:"where,omitempty"`         // meta equality; "" ⇒ absent/empty; "a|b" ⇒ OR list of exact alternatives
+	NotWhere          map[string]string   `yaml:"not_where,omitempty"`     // meta inequality; excludes nodes holding the value
 	Key               []string            `yaml:"key"`                     // meta fields, joined with " "
 	KeyFallbacks      map[string][]string `yaml:"key_fallbacks,omitempty"` // per-field meta fallbacks
 	MethodFallback    []string            `yaml:"method_fallback,omitempty"`
@@ -158,8 +158,8 @@ type EndpointSpec struct {
 // EdgeSpec describes the edge emitted on a successful match.
 type EdgeSpec struct {
 	Type        graph.EdgeType    `yaml:"type"`
-	IDPrefix    string            `yaml:"id_prefix"`    // edge ID "<prefix>:<from>-><to>" — part of parity
-	SameService string            `yaml:"same_service"` // "skip" | "keep" | "skip_unless_meta:<key>"
+	IDPrefix    string            `yaml:"id_prefix"`          // edge ID "<prefix>:<from>-><to>" — part of parity
+	SameService string            `yaml:"same_service"`       // "skip" | "keep" | "skip_unless_meta:<key>"
 	ViaMeta     map[string]string `yaml:"via_meta,omitempty"` // producer meta key → Meta["via"] value
 }
 

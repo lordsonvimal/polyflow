@@ -49,3 +49,37 @@ contracts:
       id_prefix: wsconn
       same_service: keep
     unmatched: ledger
+
+  # PW.1: connect-time join for route-style WS servers (Go gorilla,
+  # Python FastAPI @app.websocket) as opposed to rule 2's Node.js `ws`
+  # WebSocketServer shape. Consumer is http_handler (not subscriber) —
+  # these patterns are classified that way because the same decorator/
+  # route-registration node also carries HTTP-route semantics
+  # (classifyPattern's ws_upgrade prefix case). One rule, two exact
+  # pattern names OR'd via matchesWhere's "|" list, rather than a new
+  # pattern_prefix selector kind — cheaper given only two names exist.
+  #
+  # Go's ws_upgrade node (the bare `upgrader.Upgrade(w, r, nil)` call
+  # site) carries no path of its own, unlike Python's decorator shape;
+  # linker.LinkWSUpgradeRoute stamps the registering route's path/method
+  # onto it before this rule runs, reusing LinkRouteHandlers' handler
+  # resolution. A node that already has a path (Python's shape) is left
+  # untouched by that pass.
+  - kind: websocket
+    producer:
+      node: http_client
+      where: {pattern: ws_new_connection}
+      key: [path]
+      key_fallbacks: {path: [url]}
+      target_service_meta: target_service
+    consumer:
+      node: http_handler
+      where: {pattern: "ws_upgrade|ws_upgrade_fastapi"}
+      key: [path]
+    normalizers: [case_fold, url_to_path, param_wildcard, trim_slash]
+    match: [exact, normalized, wildcard_anchored]
+    edge:
+      type: ws_connect
+      id_prefix: wsconn
+      same_service: keep
+    unmatched: ledger
