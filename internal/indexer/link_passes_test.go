@@ -48,6 +48,7 @@ var wantLinkPasses = []struct {
 	{"dom_contracts", scopeSameServiceOnly},
 	{"containment", scopeSameServiceOnly},
 	{"ensure_scanned_files", scopeSameServiceOnly},
+	{"js_lazy_import_calls", scopeSameServiceOnly},
 	{"js_import_edges", scopeSameServiceOnly},
 	{"js_api_wrapper_calls", scopeSameServiceOnly},
 	{"stylesheet_imports", scopeSameServiceOnly},

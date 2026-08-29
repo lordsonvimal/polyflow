@@ -640,6 +640,8 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 				fnName := nameNode.Content(src)
 				// Function node ID: service:file:function:name:line
 				newFnID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, relFile, fnName, int(n.StartPoint().Row)+1)
+			} else if fnID, ok := constDeclFunctionID(n, svcName, relFile, src); ok {
+				newFnID = fnID
 			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
@@ -767,6 +769,42 @@ func isFunctionLike(t string) bool {
 		return true
 	}
 	return false
+}
+
+// constDeclFunctionID resolves walkNew's enclosing-scope ID for an anonymous
+// arrow_function/function_expression assigned to a plain identifier —
+// `const foo = (...) => {...}` / `const foo = async function() {...}` — the
+// modern-JS shape isFunctionLike's caller could not name via
+// n.ChildByFieldName("name") (that field only exists on a `function foo(){}`
+// declaration; an arrow/anonymous function_expression has none of its own).
+//
+// Confirmed live on gitnexus: `const wikiCommandImpl = async (...) => {...}`
+// at module scope contains a same-file `new WikiGenerator(...)`, and every
+// `new` in a file wired this way silently produced no instantiates edge —
+// walkNew's enclosingFnID stayed whatever the outer scope was (typically ""
+// at module level), and emitInstantiate drops on an empty enclosingFnID.
+// collectTopLevel (js_variables.go) already mints a function node for
+// exactly this shape, keyed on the *declaration statement's* line (not the
+// function literal's own line, which can differ when a decorator or leading
+// comment sits between `const` and the arrow) — this mirrors that exact
+// convention so the ID this produces is the one the parser already minted,
+// not a fabricated one that would dangle.
+func constDeclFunctionID(n *sitter.Node, svcName, relFile string, src []byte) (string, bool) {
+	decl := n.Parent()
+	if decl == nil || decl.Type() != "variable_declarator" || decl.ChildByFieldName("value") != n {
+		return "", false
+	}
+	nameNode := decl.ChildByFieldName("name")
+	if nameNode == nil || nameNode.Type() != "identifier" {
+		return "", false
+	}
+	stmt := decl.Parent()
+	if stmt == nil {
+		return "", false
+	}
+	name := nameNode.Content(src)
+	line := int(stmt.StartPoint().Row) + 1
+	return fmt.Sprintf("%s:%s:function:%s:%d", svcName, relFile, name, line), true
 }
 
 // findDefaultExportClassName reads file and returns the class name bound to
