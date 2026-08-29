@@ -1,0 +1,35 @@
+# FastAPI/Starlette Server-Sent Events via StreamingResponse.
+#
+# Gate: only activates for services that depend on fastapi.
+#
+# SSE in FastAPI has no dedicated decorator (unlike @app.websocket) — the
+# route is a plain @app.get/@app.post handler (already captured by
+# fastapi_route) whose body returns
+# StreamingResponse(generator(), media_type="text/event-stream"). This
+# pattern captures that return-site call so the endpoint can be recognized
+# as an SSE stream, mirroring Go's datastar_sse.yaml/sse_hub.yaml
+# (EdgeTypeSSEEndpoint via the sse_ pattern-name prefix) rather than being
+# left as an undifferentiated HTTP handler.
+#
+# Deliberately uncaptured: media_type passed as a variable/constant instead
+# of a string literal (`media_type=SSE_MEDIA_TYPE`) — the value is not
+# statically known at the pattern-match stage, same limitation Ruby/Go
+# string-literal-anchored patterns accept elsewhere.
+language: python
+version: "1"
+package: fastapi
+patterns:
+  - name: sse_streaming_response_python
+    query: |
+      (call
+        function: (identifier) @cls
+        (#eq? @cls "StreamingResponse")
+        arguments: (argument_list
+          (keyword_argument
+            name: (identifier) @kw
+            (#eq? @kw "media_type")
+            value: (string) @media_type
+            (#match? @media_type "text/event-stream"))))
+    captures:
+      - name: media_type
+        role: sse_media_type

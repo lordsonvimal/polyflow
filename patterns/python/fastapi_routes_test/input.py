@@ -23,3 +23,8 @@ async def get_item(item_id: int):
 @app.delete("/users/{user_id}")
 async def delete_user(user_id: int):
     return {"deleted": user_id}
+
+
+@app.websocket("/ws/notifications")
+async def notifications_socket(websocket: WebSocket):
+    await websocket.accept()

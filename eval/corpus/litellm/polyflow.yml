@@ -1,0 +1,18 @@
+name: litellm
+version: "1"
+services:
+  - name: litellm
+    path: .
+    language: python
+    frameworks:
+      - fastapi
+links: []
+index:
+  exclude:
+    - '**/node_modules/**'
+    - '**/.venv/**'
+    - '**/migrations/**'
+    - '**/tests/**'
+    - '**/test_*.py'
+    - '**/*_test.py'
+    - '**/docs/**'

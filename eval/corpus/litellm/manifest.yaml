@@ -1,0 +1,24 @@
+repo:
+  name: litellm
+  url: https://github.com/BerriAI/litellm
+  sha: 817bbe1dc672b1cb753281511db0c00c1930b380
+  workspace: polyflow.yml
+
+# Selection rationale: litellm is a large, actively maintained, real-world
+# FastAPI proxy server (~5400 Python files) selected to close the Tier PF
+# WebSocket/SSE gap identified after the Saleor corpus (eval/corpus/saleor/
+# manifest.yaml) closed the Django ORM / boto3 gap. Confirmed via source
+# read at the pinned SHA:
+#   litellm/proxy/proxy_server.py — real `WebSocket` route handlers (imports
+#   WebSocket from fastapi, registers routes, even synthesizes OpenAPI docs
+#   for them)
+#   litellm/proxy/common_utils/sse_keepalive.py, common_request_processing.py,
+#   response_polling/background_streaming.py — StreamingResponse / SSE usage
+#   across multiple proxy endpoint modules
+#
+# This is an external corpus for pattern development/validation, not a
+# fleet-relevance addition — no fleet repo uses FastAPI WebSockets/SSE today.
+#
+# Verification method: grep for `WebSocket`/`StreamingResponse`/
+# `text/event-stream` under litellm/proxy at the pinned SHA, confirming real
+# route registrations rather than docstring/comment mentions.
