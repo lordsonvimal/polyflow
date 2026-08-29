@@ -121,6 +121,12 @@ type linkPipelineState struct {
 	// linkplugin.ReconcileContext.ComponentResults/AllResults need. Keyed
 	// pluginName -> componentID.
 	pluginComponentResults map[string]map[string]pluginloader.LinkResult
+	// pluginCoverageNotes: one entry per (component, service) pair that
+	// package-qualified (step 3) but failed version_range gating (step 4,
+	// Phase 2) — an out-of-range service, never a silent skip. Persisted by
+	// Run() as graph meta "plugin_coverage" and surfaced by `polyflow doctor`,
+	// mirroring toolchain.CoverageNote's role for tool/version fallbacks.
+	pluginCoverageNotes []pluginloader.CoverageNote
 }
 
 // writeEdges appends edges to the store and to allEdges — the same helper

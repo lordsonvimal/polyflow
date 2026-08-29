@@ -5,15 +5,16 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/sdk/linkplugin"
 )
 
 // PackageQualifies is step 3 of the plan's load sequence for one
 // (component, service) pair: a component whose manifest.yaml package: is not
 // among the service's resolved dependencies is never invoked for that
-// service, full stop. Phase 1 checks presence only — version_range gating
-// against the resolved version is Phase 2 (docs/linker-plugin-architecture-plan.md).
-// An empty pkg (no dependency declared) always qualifies, matching
+// service, full stop. Presence only — version_range gating against the
+// resolved version is a separate step, VersionQualifies (Phase 2). An empty
+// pkg (no dependency declared) always qualifies, matching
 // internal/patterns.gateSatisfied's identical convention for pattern files.
 func PackageQualifies(pkg string, svcDeps []deps.Dependency) bool {
 	if pkg == "" {
@@ -25,6 +26,41 @@ func PackageQualifies(pkg string, svcDeps []deps.Dependency) bool {
 		}
 	}
 	return false
+}
+
+// resolvedVersion returns the version a service resolved for pkg, or "" if
+// pkg isn't among svcDeps. Callers only reach here after PackageQualifies
+// has already confirmed presence, but VersionQualifies re-derives it rather
+// than take it on faith from the caller.
+func resolvedVersion(pkg string, svcDeps []deps.Dependency) string {
+	for _, d := range svcDeps {
+		if d.Name == pkg {
+			return d.Version
+		}
+	}
+	return ""
+}
+
+// VersionQualifies is step 4 of the plan's load sequence for one
+// (component, service) pair that already passed PackageQualifies: the
+// resolved package version is checked against the component's
+// version_range using the exact same semver gate pattern YAML files use
+// (patterns.VersionInRange, docs/versioning-matrix-plan.md's
+// internal/patterns/version.go). An empty VersionRange always qualifies —
+// a component with no version_range: declared is assumed version-agnostic.
+// A resolved version that fails the range, or that can't be resolved at
+// all, does not qualify; unlike PackageQualifies this is never silent — the
+// caller must record a CoverageNote (out-of-range service, not skipped
+// silently, per the plan's fail-safe contract).
+func VersionQualifies(c Component, svcDeps []deps.Dependency) (ok bool, version string) {
+	version = resolvedVersion(c.Package, svcDeps)
+	if c.VersionRange == "" {
+		return true, version
+	}
+	if version == "" {
+		return false, version
+	}
+	return patterns.VersionInRange(version, c.VersionRange), version
 }
 
 // LinkCall performs one batched Link() RPC round-trip: one component, one

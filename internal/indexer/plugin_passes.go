@@ -172,6 +172,15 @@ func runPluginComponentLink(st *linkPipelineState, m *pluginloader.Manifest, c p
 		if !pluginloader.PackageQualifies(c.Package, sf.deps) {
 			continue
 		}
+		if ok, version := pluginloader.VersionQualifies(c, sf.deps); !ok {
+			st.pluginCoverageNotes = append(st.pluginCoverageNotes, pluginloader.CoverageNote{
+				Plugin:    m.Name,
+				Component: c.ID,
+				Reason: fmt.Sprintf("%s: resolved version %q outside version_range %q for service %s",
+					c.Package, version, c.VersionRange, sf.svc.Name),
+			})
+			continue
+		}
 
 		// sf.files is absolute; graph.Node.File may be stored either
 		// workspace-root-relative or absolute depending on which parser path

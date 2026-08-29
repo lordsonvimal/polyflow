@@ -69,6 +69,15 @@ func main() {
 // `polyflow index` invocation from a repo checkout.
 func fiberWorkspace(t *testing.T, withFiberDep bool) (*workspace.WorkspaceConfig, string) {
 	t.Helper()
+	return fiberWorkspaceVersion(t, withFiberDep, "v2.60.0")
+}
+
+// fiberWorkspaceVersion is fiberWorkspace with the resolved fiber dependency
+// version parameterized, so a Phase 2 test can pin a version outside the
+// routes component's version_range (">=2.0.0,<3.0.0" in
+// testdata/fiberplugin/manifest.yaml) without duplicating the whole fixture.
+func fiberWorkspaceVersion(t *testing.T, withFiberDep bool, fiberVersion string) (*workspace.WorkspaceConfig, string) {
+	t.Helper()
 	dir := t.TempDir()
 
 	svcDir := filepath.Join(dir, "api")
@@ -98,7 +107,7 @@ func (a *App) Post(path string, h func(*Ctx) error) {}
 func (a *App) Use(h func(*Ctx) error)                {}
 func (a *App) Listen(addr string) error              { return nil }
 `)
-		goMod += "\nrequire github.com/gofiber/fiber/v2 v2.52.0\n\nreplace github.com/gofiber/fiber/v2 => ../fiberstub\n"
+		goMod += "\nrequire github.com/gofiber/fiber/v2 " + fiberVersion + "\n\nreplace github.com/gofiber/fiber/v2 => ../fiberstub\n"
 	}
 	writeFile(t, svcDir, "go.mod", goMod)
 	writeFile(t, svcDir, "main.go", fiberServiceMain)
@@ -217,4 +226,48 @@ func TestRun_PluginSkipsServiceWithoutDependency(t *testing.T) {
 			assert.NotEqual(t, "routes_to", string(e.Type))
 		}
 	}
+}
+
+// TestRun_PluginSkipsServiceWithVersionOutOfRange is Phase 2's negative
+// fixture (docs/linker-plugin-architecture-plan.md): the service resolves
+// github.com/gofiber/fiber/v2 (package presence satisfied, step 3), but at a
+// version outside the routes component's version_range
+// (">=2.60.0,<3.0.0" — testdata/fiberplugin/manifest.yaml), so step 4 skips
+// it — zero routes_to edges, not a crash and not a silent gap: one
+// plugin_coverage note is recorded instead.
+func TestRun_PluginSkipsServiceWithVersionOutOfRange(t *testing.T) {
+	cfg, dir := fiberWorkspaceVersion(t, true, "v2.10.0")
+	buildFiberPlugin(t, dir)
+	patternsDir, err := filepath.Abs("../../patterns")
+	require.NoError(t, err)
+	t.Chdir(dir)
+
+	dbDir := filepath.Join(dir, ".polyflow")
+
+	_, err = Run(context.Background(), Options{
+		Config:      cfg,
+		DBDir:       dbDir,
+		PatternsDir: patternsDir,
+		Workers:     2,
+		Full:        true,
+	})
+	require.NoError(t, err)
+
+	store, err := graph.NewSQLiteStore(filepath.Join(dbDir, meta.DBFile))
+	require.NoError(t, err)
+	defer store.Close()
+	idx, err := store.BuildIndex(context.Background())
+	require.NoError(t, err)
+
+	for _, edges := range idx.OutEdges {
+		for _, e := range edges {
+			assert.NotEqual(t, "routes_to", string(e.Type))
+		}
+	}
+
+	covJSON, err := store.GetMeta(context.Background(), "plugin_coverage")
+	require.NoError(t, err)
+	assert.Contains(t, covJSON, "fiber")
+	assert.Contains(t, covJSON, "routes")
+	assert.Contains(t, covJSON, "v2.10.0")
 }
