@@ -835,3 +835,97 @@ end
 		t.Fatal("expected a calls edge from a rake_block scope")
 	}
 }
+
+// DC.24: a bare identifier used only as the *receiver* of another call
+// (`memoized_helper.chain_method`) was excluded from bare-call resolution
+// entirely — the memoized accessor itself never got a calls/reads edge.
+// Mirrors the live orion shape: `study_role_assignee_scope` is a
+// memoized (`||=`) accessor called only via
+// `study_role_assignee_scope.sorted_study_role_users`.
+func TestRubyVariables_BareIdentifierAsReceiverResolves(t *testing.T) {
+	t.Parallel()
+	src := `class RolesController
+  def index
+    memoized_scope.sorted_users
+  end
+
+  def memoized_scope
+    @memoized_scope ||= RoleScope.new
+  end
+end
+`
+	_, edges, unresolved := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:index", "function:memoized_scope") == nil {
+		t.Errorf("missing calls edge index -> memoized_scope (receiver-position bare identifier); edges: %+v", edges)
+	}
+	for _, u := range unresolved {
+		if u.Name == "memoized_scope" {
+			t.Errorf("resolved receiver-position bare identifier must not also be ledgered: %+v", u)
+		}
+	}
+}
+
+// Negative case: `self.method_name` as a receiver must not be treated as the
+// DC.24 bare-identifier-receiver shape — it is already handled by the
+// existing implicit-self branch and must not gain a duplicate/spurious edge.
+func TestRubyVariables_SelfReceiverNotTreatedAsBareIdentifierReceiver(t *testing.T) {
+	t.Parallel()
+	src := `class RolesController
+  def index
+    self.memoized_scope.sorted_users
+  end
+
+  def memoized_scope
+    @memoized_scope ||= RoleScope.new
+  end
+end
+`
+	_, edges, _ := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:index", "function:memoized_scope") == nil {
+		t.Errorf("missing calls edge index -> memoized_scope via explicit self receiver; edges: %+v", edges)
+	}
+}
+
+// Negative case: an actual local variable filling the receiver slot
+// (`x = Foo.new; x.bar`) must not gain a spurious edge to a same-named
+// method — the existing locals pre-pass already distinguishes this from the
+// standalone-identifier case; DC.24 must reuse it, not re-derive it.
+func TestRubyVariables_LocalVariableReceiverNotAttributedAsCall(t *testing.T) {
+	t.Parallel()
+	src := `class RolesController
+  def index
+    memoized_scope = RoleScope.new
+    memoized_scope.sorted_users
+  end
+end
+
+class Helper
+  def memoized_scope
+    true
+  end
+end
+`
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src))
+
+	var helperMethod *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "memoized_scope" && nodes[i].Type == graph.NodeTypeFunction {
+			helperMethod = &nodes[i]
+		}
+	}
+	if helperMethod == nil {
+		t.Fatalf("expected Helper#memoized_scope method node; nodes: %+v", nodes)
+	}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.To == helperMethod.ID {
+			t.Errorf("local-variable receiver must never be attributed as a call: %+v", e)
+		}
+	}
+	for _, u := range unresolved {
+		if u.Name == "memoized_scope" {
+			t.Errorf("a local-variable receiver must not be ledgered either: %+v", u)
+		}
+	}
+}

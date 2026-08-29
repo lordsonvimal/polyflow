@@ -628,6 +628,24 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 					// implicit self; lookupClass stays the enclosing class
 				case receiver.Type() == "constant":
 					lookupClass = receiver.Content(ex.src)
+				case receiver.Type() == "identifier":
+					// DC.24: a bare identifier filling the *receiver* slot
+					// (`foo.bar_method`) is itself a call/local-read
+					// ambiguity one level up the tree — the same shape case
+					// "identifier" below resolves for a standalone read, just
+					// structurally excluded from reaching that case by
+					// isRubyBareCallExcluded's `receiver == node` branch.
+					// Resolve it here instead: a memoized accessor
+					// (`foo ||= Bar.new`) called only via `foo.bar_method`
+					// must still be attributed as called, even though
+					// `bar_method` itself remains unresolvable
+					// (receiver-typed dispatch, handled by the goto next
+					// bail below).
+					recvName := receiver.Content(ex.src)
+					if !ex.locals[methodID][recvName] {
+						ex.resolveBareCall(recvName, class, class, methodID, rbLine(receiver), false)
+					}
+					goto next
 				default:
 					// Any other receiver (article.save) needs static type
 					// inference Ruby's dynamism rules out; a plain `break`
