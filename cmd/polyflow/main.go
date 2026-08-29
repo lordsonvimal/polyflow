@@ -2088,7 +2088,12 @@ func runDeadcode(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	out := deadcode.Build(idx, deadcode.Options{Service: deadcodeService, File: deadcodeFile})
+	unresolved, err := store.ListUnresolvedRefs(context.Background())
+	if err != nil {
+		return err
+	}
+
+	out := deadcode.Build(idx, deadcode.Options{Service: deadcodeService, File: deadcodeFile, UnresolvedRefs: unresolved})
 	if deadcodeFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
