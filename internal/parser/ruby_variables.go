@@ -158,6 +158,50 @@ func (ex *rubyExtractor) rakeBlockScopeID(block *sitter.Node) string {
 	return fmt.Sprintf("%s:%s:rake_block:%d", ex.service, ex.file, rbLine(block))
 }
 
+// rakeBlockNode mints the node a rake_block scope ID actually needs to exist
+// as: DC.18 introduced the ID as a lookup key for scope-tracking maps, but
+// every edge addEdge emits keyed on it (calls into the block body, ivar
+// reads/writes) needs a real graph.Node on the From side too, or the upsert
+// violates the nodes/edges foreign key — this was missing and broke a full
+// reindex on any repo with a rake task/namespace block (confirmed on
+// orion's lib/tasks/audited.rake). meta.kind=rake_block is what
+// indexer.go's classifyRoot keys on to stamp root_kind=entrypoint (mirroring
+// main/init): a rake task is invoked externally (`rake task_name`), never by
+// a static in-repo call site, so without that it would show up as a fresh
+// deadcode false positive the moment it became a real node — exactly the
+// class of bug this plan exists to prevent. Not stamped as root_kind here
+// directly: classifyRoot unconditionally overwrites every Function/Method
+// node's root_kind later in the pipeline, so anything set at parse time
+// would just be clobbered.
+func (ex *rubyExtractor) rakeBlockNode(call *sitter.Node, mname string, block *sitter.Node, class string) {
+	id := ex.rakeBlockScopeID(block)
+	ex.addNode(graph.Node{
+		ID: id, Type: graph.NodeTypeFunction, Label: rakeBlockLabel(call, mname, ex.src),
+		Service: ex.service, File: ex.file, Line: rbLine(block), EndLine: rbEndLine(block), Language: "ruby",
+		Meta: map[string]string{"kind": "rake_block", "class": class},
+	})
+}
+
+// rakeBlockLabel derives a friendly label for a synthetic task/namespace
+// block scope node: the DSL's first symbol/string argument (the task or
+// namespace name), or the bare DSL method name if none is found.
+func rakeBlockLabel(call *sitter.Node, mname string, src []byte) string {
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return mname
+	}
+	for i := 0; i < int(args.NamedChildCount()); i++ {
+		a := args.NamedChild(i)
+		switch a.Type() {
+		case "simple_symbol":
+			return strings.TrimPrefix(a.Content(src), ":")
+		case "string":
+			return strings.Trim(a.Content(src), `"'`)
+		}
+	}
+	return mname
+}
+
 // preCollectRubyClasses scans the AST recursively to build classTable:
 // className → nodeID for all class/module declarations in the file.
 func (ex *rubyExtractor) preCollectRubyClasses(node *sitter.Node) {
@@ -540,6 +584,7 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			if methodID == "" {
 				if block := node.ChildByFieldName("block"); block != nil {
 					methodID = ex.rakeBlockScopeID(block)
+					ex.rakeBlockNode(node, mname, block, class)
 				}
 			}
 		case "new":

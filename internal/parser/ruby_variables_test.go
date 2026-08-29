@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -794,5 +795,43 @@ end
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "rake_block", "function:add_categories") == nil {
 		t.Errorf("missing calls edge from nested task block -> add_categories; edges: %+v", edges)
+	}
+}
+
+// TestRubyVariables_RakeTaskBlockMintsANode: the synthetic rake_block scope
+// ID DC.18 introduced is used as an edge's From — every edge's endpoints
+// must be real nodes or the graph DB's foreign key rejects the upsert
+// (reproduced live: a full orion reindex aborted on
+// lib/tasks/audited.rake's `namespace :nordic do` block, whose calls edge
+// pointed at a rake_block ID with no matching node). Confirms both that the
+// node exists and that its ID matches the one addEdge used as From.
+func TestRubyVariables_RakeTaskBlockMintsANode(t *testing.T) {
+	t.Parallel()
+	src := `task :rename_categories do
+  rename_categories
+end
+
+def rename_categories
+  puts "renamed"
+end
+`
+	nodes, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src))
+
+	byID := map[string]bool{}
+	for _, n := range nodes {
+		byID[n.ID] = true
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type != graph.EdgeTypeCalls || !strings.Contains(e.From, "rake_block") {
+			continue
+		}
+		found = true
+		if !byID[e.From] {
+			t.Errorf("edge From %q has no matching node — would fail the graph DB's foreign key constraint", e.From)
+		}
+	}
+	if !found {
+		t.Fatal("expected a calls edge from a rake_block scope")
 	}
 }

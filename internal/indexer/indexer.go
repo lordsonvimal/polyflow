@@ -1273,6 +1273,14 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 		stampRootKind(n, "entrypoint")
 		return true
 	}
+	// A Rake task/namespace block (DC.18/ruby_variables.go's rakeBlockNode) is
+	// invoked externally (`rake task_name`), never by an in-repo call site —
+	// the same unconditional entry-point status as main/init, not one
+	// contingent on incoming edges the way (script) below is.
+	if n.Meta["kind"] == "rake_block" {
+		stampRootKind(n, "entrypoint")
+		return true
+	}
 	// SH0/SH1: a shell script's synthetic (script) scope is entrypoint
 	// status CONDITIONAL on nothing else invoking it — the opposite polarity
 	// from (module) above. A JS module always executes on load regardless of

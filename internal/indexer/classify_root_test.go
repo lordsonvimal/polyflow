@@ -30,6 +30,23 @@ func TestClassifyRoot_MainAndInitAreEntrypoints(t *testing.T) {
 	}
 }
 
+// TestClassifyRoot_RakeBlockIsEntrypoint: a rake_block synthetic scope node
+// (ruby_variables.go's rakeBlockNode, DC.18) is invoked externally via
+// `rake task_name`, never by an in-repo call site — without this case it
+// falls to classifyRoot's "unreachable" default the instant it became a
+// real node, turning every task/namespace block in a repo into a fresh
+// deadcode false positive (reproduced live on orion's
+// lib/tasks/audited.rake).
+func TestClassifyRoot_RakeBlockIsEntrypoint(t *testing.T) {
+	n := &graph.Node{
+		ID: "shop:lib/tasks/categories.rake:rake_block:1", Type: graph.NodeTypeFunction, Label: "rename_categories",
+		Meta: map[string]string{"kind": "rake_block"},
+	}
+	ok := classifyRoot(n, nil, nil)
+	assert.True(t, ok)
+	assert.Equal(t, "entrypoint", n.Meta["root_kind"])
+}
+
 func TestClassifyRoot_ObjectMethodPairIsCallback(t *testing.T) {
 	n := &graph.Node{
 		ID: "js:x.js:function:onProceed:10", Type: graph.NodeTypeFunction, Label: "onProceed",
