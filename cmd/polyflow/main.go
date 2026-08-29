@@ -4378,23 +4378,27 @@ func fleetMemberDBPath(localPath string, svc fleetconfig.Service) string {
 // resolved member's nodes/edges into one idx, record each node's checkout
 // root by its own Service value (a member's polyflow.yml may itself declare
 // more than one internal service, e.g. a monorepo), open one Searcher per
-// resolved member (GR.3's federation), and merge in the fleet's bridge.db
-// on top so cross-service edges reach members never resolved on this
-// machine at all.
+// resolved member (GR.3's federation), collect every resolved member's own
+// unresolved-ref ledger (graph.Store.ListUnresolvedRefs — deadcode.Build's
+// DC.27 Rails-view carve-out needs a member's own ledger the same way it
+// needs that member's own nodes/edges, and the ledger isn't part of either
+// table idx unions), and merge in the fleet's bridge.db on top so
+// cross-service edges reach members never resolved on this machine at all.
 func newFleetMerge(st *fleetServeState, emb semantic.Embedder, synonyms map[string][]string) server.FleetMergeFunc {
-	return func(ctx context.Context) (*graph.AdjacencyIndex, map[string]string, map[string]*semantic.Searcher, []string, error) {
+	return func(ctx context.Context) (*graph.AdjacencyIndex, map[string]string, map[string]*semantic.Searcher, []string, []graph.UnresolvedRef, error) {
 		st.mu.Lock()
 		defer st.mu.Unlock()
 
 		reg, err := registry.Load(st.regPath)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 
 		idx := graph.NewAdjacencyIndex()
 		roots := make(map[string]string)
 		searchers := make(map[string]*semantic.Searcher)
 		var resolved []string
+		var unresolvedRefs []graph.UnresolvedRef
 
 		for _, svc := range st.cfg.Services {
 			store, ok := st.stores[svc.Name]
@@ -4427,11 +4431,14 @@ func newFleetMerge(st *fleetServeState, emb semantic.Embedder, synonyms map[stri
 				idx.AddEdge(&e)
 			}
 			searchers[svc.Name] = buildSearcher(store, emb, synonyms)
+			if refs, refErr := store.ListUnresolvedRefs(ctx); refErr == nil {
+				unresolvedRefs = append(unresolvedRefs, refs...)
+			}
 			resolved = append(resolved, svc.Name)
 		}
 
 		mergeFleetBridge(ctx, idx, ".", false)
-		return idx, roots, searchers, resolved, nil
+		return idx, roots, searchers, resolved, unresolvedRefs, nil
 	}
 }
 

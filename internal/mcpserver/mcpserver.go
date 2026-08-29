@@ -79,6 +79,16 @@ type Server struct {
 	// (docs/global-fleet-registry-plan.md's federation-scope decision) and
 	// narrows to one via searchInput.Service.
 	fleetSearchers map[string]*semantic.Searcher
+
+	// fleetUnresolvedRefs is every locally-resolved fleet member's own
+	// unresolved-ref ledger, unioned by the caller (cmd/polyflow/mcp.go's
+	// runMCP, via fleetAwareUnresolvedRefs) the same way idx already unions
+	// every member's nodes/edges — the ledger isn't part of either table,
+	// so idx being fleet-aware doesn't make this fleet-aware for free. nil
+	// when not a fleet member (or the caller never wired it): the deadcode
+	// tool falls back to store.ListUnresolvedRefs, the single-store
+	// behavior this had before fleet mode existed.
+	fleetUnresolvedRefs []graph.UnresolvedRef
 }
 
 // SetSearcher wires a hybrid Searcher. Call after New; safe to call while
@@ -96,6 +106,17 @@ func (s *Server) SetSearcher(sr *semantic.Searcher) {
 func (s *Server) SetFleetSearchers(searchers map[string]*semantic.Searcher) {
 	s.mu.Lock()
 	s.fleetSearchers = searchers
+	s.mu.Unlock()
+}
+
+// SetFleetUnresolvedRefs wires the fleet-wide unresolved-ref ledger (every
+// locally-resolved member's own graph.Store.ListUnresolvedRefs, unioned) —
+// see the fleetUnresolvedRefs field doc. Pass nil to fall back to the
+// single active store's own ledger (the deadcode tool's pre-fleet-mode
+// behavior).
+func (s *Server) SetFleetUnresolvedRefs(refs []graph.UnresolvedRef) {
+	s.mu.Lock()
+	s.fleetUnresolvedRefs = refs
 	s.mu.Unlock()
 }
 

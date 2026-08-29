@@ -15,7 +15,7 @@ func (s *Server) handleDeadcode(w http.ResponseWriter, r *http.Request) {
 	idx := s.idx
 	s.idxMu.RUnlock()
 
-	unresolved, err := s.db.ListUnresolvedRefs(r.Context())
+	unresolved, err := s.UnresolvedRefs(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

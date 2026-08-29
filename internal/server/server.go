@@ -51,13 +51,14 @@ type Server struct {
 	// browsing, search, impact, trace, and context all see the whole fleet
 	// by default, no "active member" switch required. fleetMerge is nil
 	// when this workspace isn't a registered fleet member.
-	fleetMerge     FleetMergeFunc
-	fleetEnsure    FleetEnsureFunc
-	fleetMembers   []string          // every member of the fleet, not just locally-resolved ones
-	fleetResolved  map[string]bool   // member -> currently merged into idx
-	fleetRoots     map[string]string // service -> checkout root, for relative node.File resolution
-	fleetSearchers map[string]*semantic.Searcher
-	fleetSyncing   bool // true from RefreshFleet's start until it returns; see handleEvents
+	fleetMerge          FleetMergeFunc
+	fleetEnsure         FleetEnsureFunc
+	fleetMembers        []string          // every member of the fleet, not just locally-resolved ones
+	fleetResolved       map[string]bool   // member -> currently merged into idx
+	fleetRoots          map[string]string // service -> checkout root, for relative node.File resolution
+	fleetSearchers      map[string]*semantic.Searcher
+	fleetUnresolvedRefs []graph.UnresolvedRef // every resolved member's own ledger, unioned; nil when not fleet mode
+	fleetSyncing        bool                  // true from RefreshFleet's start until it returns; see handleEvents
 }
 
 // SelectWorkspaceFunc re-points the running `polyflow serve` process at a
@@ -90,14 +91,17 @@ func (s *Server) SetSelectWorkspace(fn SelectWorkspaceFunc) {
 // locally-resolved member's own store (registry.Load, GR.1), unions their
 // nodes/edges into one idx along with the fleet's bridge.db, opens one
 // Searcher per resolved member for federated search (GR.3's
-// semantic.FederatedSearch), and reports which internal service name maps
-// to which member's checkout root (for relative node.File resolution) and
+// semantic.FederatedSearch), collects every resolved member's own
+// unresolved-ref ledger (graph.Store.ListUnresolvedRefs — not part of the
+// nodes/edges tables idx unions, so it needs its own collection the same
+// way the searchers do), and reports which internal service name maps to
+// which member's checkout root (for relative node.File resolution) and
 // which top-level fleet members ended up resolved. Constructed and owned by
 // cmd/polyflow (which has fleetsync/queryresolve/the embedder), not this
 // package. Called once at startup and again after FleetEnsureFunc resolves
 // a new member, so the merge always reflects the registry's current state
 // rather than being maintained incrementally.
-type FleetMergeFunc func(ctx context.Context) (idx *graph.AdjacencyIndex, roots map[string]string, searchers map[string]*semantic.Searcher, resolved []string, err error)
+type FleetMergeFunc func(ctx context.Context) (idx *graph.AdjacencyIndex, roots map[string]string, searchers map[string]*semantic.Searcher, resolved []string, unresolvedRefs []graph.UnresolvedRef, err error)
 
 // FleetEnsureFunc resolves the named fleet member onto this machine —
 // cloning it via GR.1's resolver if not already local — without itself
@@ -151,7 +155,7 @@ func (s *Server) RefreshFleet(ctx context.Context) error {
 	case s.broadcast <- `{"type":"fleet_syncing"}`:
 	default:
 	}
-	idx, roots, searchers, resolved, err := mergeFn(ctx)
+	idx, roots, searchers, resolved, unresolvedRefs, err := mergeFn(ctx)
 	if err != nil {
 		s.idxMu.Lock()
 		s.fleetSyncing = false
@@ -162,6 +166,7 @@ func (s *Server) RefreshFleet(ctx context.Context) error {
 	s.idx = idx
 	s.fleetRoots = roots
 	s.fleetSearchers = searchers
+	s.fleetUnresolvedRefs = unresolvedRefs
 	s.fleetResolved = make(map[string]bool, len(resolved))
 	for _, svc := range resolved {
 		s.fleetResolved[svc] = true
@@ -196,6 +201,23 @@ func (s *Server) FleetSyncing() bool {
 	s.idxMu.RLock()
 	defer s.idxMu.RUnlock()
 	return s.fleetSyncing
+}
+
+// UnresolvedRefs returns the graph's blind-spot ledger, fleet-aware: when
+// this workspace is a fleet member with at least one successful
+// RefreshFleet, that already covers every resolved member's own ledger (see
+// FleetMergeFunc), so it's returned as-is rather than re-queried. Falls
+// back to this workspace's own store when not in fleet mode — the same
+// single-store behavior GET /api/deadcode had before fleet mode existed.
+func (s *Server) UnresolvedRefs(ctx context.Context) ([]graph.UnresolvedRef, error) {
+	s.idxMu.RLock()
+	fleetMode := s.fleetMerge != nil
+	refs := s.fleetUnresolvedRefs
+	s.idxMu.RUnlock()
+	if fleetMode {
+		return refs, nil
+	}
+	return s.db.ListUnresolvedRefs(ctx)
 }
 
 // New creates a Server backed by the given store and adjacency index.
