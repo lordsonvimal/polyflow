@@ -249,6 +249,17 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, jsTypeUnresolved...)
 			return nil
 		}},
+		// JS/TS typed-receiver method calls (this., typed locals/params/
+		// fields, interface fan-out) — see js_receiver_type_calls.go.
+		{"js_receiver_type_calls", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			receiverTypeEdges, receiverTypeUnresolved := linker.LinkJSReceiverTypeCalls(st.allNodes, st.allEdges, svcFiles)
+			if err := st.writeEdges(receiverTypeEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, receiverTypeUnresolved...)
+			return nil
+		}},
 		// Ruby cross-file inherits/implements/instantiates edges.
 		{"ruby_type_relations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
