@@ -20,3 +20,12 @@ eval/corpus/
 *_templ.go
 # ...but keywalk_templ.go is a hand-written source (the templ KeyWalker), not codegen.
 !keywalk_templ.go
+
+# vendored tree-sitter-r grammar — fetched by internal/parser/rgrammar/fetch.sh
+# (`make r-grammar`), not committed: ~4MB of generated C source. binding.go,
+# binding_test.go, and fetch.sh itself are hand-written and stay tracked.
+internal/parser/rgrammar/parser.c
+internal/parser/rgrammar/scanner.c
+internal/parser/rgrammar/node-types.json
+internal/parser/rgrammar/LICENSE
+internal/parser/rgrammar/tree_sitter/
