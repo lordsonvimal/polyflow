@@ -345,6 +345,41 @@ func TestActiveRecordMigrationReflectDispatchedGating(t *testing.T) {
 	})
 }
 
+// TestActiveRecordObserverReflectDispatchedGating loads the real shipped
+// patterns/ruby/active_record_observer.yaml (Tier DC.25) and proves both its
+// package gate (only activated for a service depending on rails-observers)
+// and its reflect_dispatched_path_prefix (lifecycle callback names only
+// exempted under app/observers/) — same shape as
+// TestActiveRecordMigrationReflectDispatchedGating.
+func TestActiveRecordObserverReflectDispatchedGating(t *testing.T) {
+	pf, err := patterns.LoadFile("../../patterns/ruby/active_record_observer.yaml")
+	require.NoError(t, err)
+
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(pf)
+
+	t.Run("service with rails-observers in Gemfile.lock gets the callback names", func(t *testing.T) {
+		svc := reg.ForService([]deps.Dependency{
+			{Ecosystem: deps.EcosystemRuby, Name: "rails-observers", Version: "0.1.5", Kind: deps.KindProd},
+		})
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.True(t, names["after_save"])
+		assert.True(t, names["before_save"])
+		assert.True(t, names["after_create"])
+
+		prefixes := svc.ReflectDispatchedPathPrefixes("ruby")
+		assert.Equal(t, "app/observers/", prefixes["after_save"])
+		assert.Equal(t, "app/observers/", prefixes["before_save"])
+	})
+
+	t.Run("service without rails-observers gets nothing", func(t *testing.T) {
+		svc := reg.ForService(nil)
+		names := svc.ReflectDispatchedMethods("ruby")
+		assert.Empty(t, names)
+		assert.Empty(t, svc.ReflectDispatchedPathPrefixes("ruby"))
+	})
+}
+
 func TestAWSSDKGating(t *testing.T) {
 	v1, err := patterns.LoadFile("../../patterns/go/aws_s3_v1.yaml")
 	require.NoError(t, err)
