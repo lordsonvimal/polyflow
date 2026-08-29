@@ -39,6 +39,8 @@ var filterFixtureFiles = []string{
 	"testdata/rails_filters/app/controllers/public_pages_controller.rb",
 	"testdata/rails_filters/app/controllers/reports_controller.rb",
 	"testdata/rails_filters/app/models/application_record.rb",
+	"testdata/rails_filters/app/models/batch.rb",
+	"testdata/rails_filters/app/models/concerns/batch_change_notifier.rb",
 	"testdata/rails_filters/app/models/user.rb",
 }
 
@@ -488,6 +490,25 @@ func TestLinkRailsFilters_ModelHasNoActionScopeEdges(t *testing.T) {
 			assert.NotEqual(t, "action", e.Meta["scope"],
 				"%s should not carry an action-scope edge, models have no actions", n.Meta["qualified_name"])
 		}
+	}
+}
+
+// TestLinkRailsFilters_ConcernIncludedDoAttributesToTheIncludingModel (DC.20):
+// `included do; after_create :x; end` inside an ActiveSupport::Concern used to
+// leave the registration ledgered `rails_filter_unattributed`, because nothing
+// identified which model actually includes the concern. The class-scope edge
+// must land on Batch, the including model -- not on BatchChangeNotifier, the
+// concern module.
+func TestLinkRailsFilters_ConcernIncludedDoAttributesToTheIncludingModel(t *testing.T) {
+	t.Parallel()
+	nodes, edges, unresolved := filterFixture(t)
+
+	classID := nodeIDFor(t, nodes, graph.NodeTypeClass, "Batch")
+	assert.Contains(t, filterTargets(nodes, edges, classID), "notify_batch_create/class")
+
+	for _, u := range unresolved {
+		assert.NotContains(t, u.File, "batch_change_notifier.rb",
+			"included do inside BatchChangeNotifier should attribute to Batch, not go unclaimed")
 	}
 }
 

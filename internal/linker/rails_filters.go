@@ -145,10 +145,11 @@ type ctrlAction struct {
 
 // ctrlClass is one class body in a controller file.
 type ctrlClass struct {
-	name string
-	ns   []string // enclosing module/class names, outermost first
-	file string
-	line int
+	name     string
+	ns       []string // enclosing module/class names, outermost first
+	file     string
+	line     int
+	isModule bool // module, not class -- see link()'s orphan-Concern check
 
 	prepends []string // prepend Foo, source order
 	includes []string // include/extend Foo, source order
@@ -197,6 +198,14 @@ type filterIndex struct {
 	byQual   map[string][]*ctrlClass // full constant path → declarations
 	methodQN map[string][]string     // "Class#method" → method node IDs
 	classID  map[string]string       // file\x00Name\x00line → class node ID
+
+	// includedByAny is every module name that appears in some class's
+	// `include`/`extend` list, service-wide. A Concern's `included do`
+	// filters can only ever be attributed to whatever includes it (DC.20);
+	// if nothing in the service does, there is no owner to name, and
+	// link() ledgers the registration as unattributed instead of routing it
+	// through per-class resolution.
+	includedByAny map[string]bool
 
 	// filter calls found in a file, keyed file\x00line, minus the ones a class
 	// body claimed — what is left is ledgered rather than dropped.
@@ -270,9 +279,13 @@ func newFilterIndex(nodes []graph.Node, svc string, files []string) *filterIndex
 		}
 		return ix.classes[i].line < ix.classes[j].line
 	})
+	ix.includedByAny = map[string]bool{}
 	for _, c := range ix.classes {
 		ix.byName[c.name] = append(ix.byName[c.name], c)
 		ix.byQual[c.qualified()] = append(ix.byQual[c.qualified()], c)
+		for _, inc := range c.includes {
+			ix.includedByAny[inc] = true
+		}
 	}
 	return ix
 }
@@ -451,10 +464,11 @@ func (ix *filterIndex) scanFile(file, relPrefix string) {
 
 func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string, file string, src []byte, isModule, collectActions bool) {
 	c := &ctrlClass{
-		name: name,
-		ns:   ns,
-		file: file,
-		line: int(node.StartPoint().Row) + 1,
+		name:     name,
+		ns:       ns,
+		file:     file,
+		line:     int(node.StartPoint().Row) + 1,
+		isModule: isModule,
 	}
 	if sup := node.ChildByFieldName("superclass"); sup != nil {
 		for i := 0; i < int(sup.NamedChildCount()); i++ {
@@ -513,6 +527,16 @@ func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string,
 				c.includes = append(c.includes, constArgs(stmt, src)...)
 			case name == "prepend":
 				c.prepends = append(c.prepends, constArgs(stmt, src)...)
+			case isModule && (name == "included" || name == "extended"):
+				// `included do; after_create :x; end` is the legal spelling of a
+				// Concern registering a filter -- a bare `before_action` in a
+				// module body would raise at load time (see the filterKinds case
+				// below). The registration belongs to whatever later includes
+				// this module, which effectiveFilters' eachIncludedModule walk
+				// picks up the same way it already picks up a superclass's.
+				if body := filterBlockBody(stmt); body != nil {
+					ix.collectIncludedDo(body, c, file, src)
+				}
 			case filterKinds[name]:
 				// A bare `before_action` in a module body would raise at load
 				// time; the legal spelling is inside `included do`, which belongs
@@ -542,6 +566,60 @@ func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string,
 		}
 	}
 	ix.classes = append(ix.classes, c)
+}
+
+// filterBlockBody returns the statement list of a `do ... end` / `{ ... }`
+// block attached to a call, or nil. Mirrors blockCallbacks' block-finding
+// step but returns the body node itself rather than flattening it, since
+// collectIncludedDo needs to walk it statement-by-statement the same way
+// collectClass walks a class/module body.
+func filterBlockBody(call *sitter.Node) *sitter.Node {
+	for i := 0; i < int(call.NamedChildCount()); i++ {
+		ch := call.NamedChild(i)
+		if t := ch.Type(); t == "block" || t == "do_block" {
+			if b := ch.ChildByFieldName("body"); b != nil {
+				return b
+			}
+		}
+	}
+	return nil
+}
+
+// collectIncludedDo reads the filter/skip/include/prepend registrations out
+// of a Concern's `included do ... end` block and attributes them to the
+// module itself (c) -- not to whatever includes it, which is not known at
+// this point in the walk. effectiveFilters' eachIncludedModule resolves that
+// side once every file has been scanned, the same way it already resolves a
+// superclass's filters.
+func (ix *filterIndex) collectIncludedDo(body *sitter.Node, c *ctrlClass, file string, src []byte) {
+	for i := 0; i < int(body.NamedChildCount()); i++ {
+		stmt := body.NamedChild(i)
+		if stmt.Type() != "call" {
+			continue
+		}
+		mn := stmt.ChildByFieldName("method")
+		if mn == nil {
+			continue
+		}
+		switch name := mn.Content(src); {
+		case name == "include" || name == "extend":
+			c.includes = append(c.includes, constArgs(stmt, src)...)
+		case name == "prepend":
+			c.prepends = append(c.prepends, constArgs(stmt, src)...)
+		case filterKinds[name]:
+			reg, ok := parseFilterCall(stmt, name, src)
+			if ok {
+				c.filters = append(c.filters, reg)
+				delete(ix.strayFilters, fmt.Sprintf("%s\x00%d", file, reg.line))
+			} else if name == "rescue_from" {
+				delete(ix.strayFilters, fmt.Sprintf("%s\x00%d", file, reg.line))
+			}
+		case skipKinds[name]:
+			if reg, ok := parseFilterCall(stmt, name, src); ok && !reg.inline {
+				c.skips = append(c.skips, reg)
+			}
+		}
+	}
 }
 
 // parseFilterCall reads the callback symbols and the only:/except: restriction
@@ -755,24 +833,54 @@ type effFilter struct {
 // the class's own registrations, then each superclass's, nearest first, minus
 // anything a skip along the chain retracts.
 //
-// Superclasses only. A module cannot legally declare a filter in its body — the
-// spelling is `included do`, which is ledgered — so `include` contributes
-// methods to look up, never registrations to inherit.
+// A module cannot legally declare a filter directly in its body — the spelling
+// is `included do`, which collectIncludedDo attributes to the module's own
+// ctrlClass — so alongside the superclass chain, every class and superclass is
+// also checked for modules it includes, and any filters collectIncludedDo
+// found there count exactly like an inherited registration (DC.20).
 func (ix *filterIndex) effectiveFilters(c *ctrlClass) []effFilter {
 	skips := ix.chainSkips(c)
 
 	var out []effFilter
-	for _, reg := range c.filters {
-		out = append(out, effFilter{reg, c})
-	}
-	ix.eachSuperclass(c, func(decl *ctrlClass) {
+	addFrom := func(decl *ctrlClass) {
 		for _, reg := range decl.filters {
 			if !retracted(skips, reg) {
 				out = append(out, effFilter{reg, decl})
 			}
 		}
-	})
+		visited := map[string]bool{decl.qualified(): true}
+		ix.eachIncludedModule(decl, visited, func(mod *ctrlClass) {
+			for _, reg := range mod.filters {
+				if !retracted(skips, reg) {
+					out = append(out, effFilter{reg, mod})
+				}
+			}
+		})
+	}
+	addFrom(c)
+	ix.eachSuperclass(c, addFrom)
 	return out
+}
+
+// eachIncludedModule walks the modules a class includes, and recursively the
+// modules those include, calling fn once per declaration reached. Cycle-safe
+// via the shared visited set. A module can only ever carry filters that
+// collectIncludedDo attributed to it from an `included do` block — a bare
+// filter call in a module body is invalid Ruby and never reaches c.filters —
+// so folding this into filter resolution alongside eachSuperclass cannot
+// fabricate a registration that was not actually in the source.
+func (ix *filterIndex) eachIncludedModule(c *ctrlClass, visited map[string]bool, fn func(*ctrlClass)) {
+	for _, name := range c.includes {
+		for _, decl := range ix.byName[name] {
+			key := decl.qualified()
+			if visited[key] {
+				continue
+			}
+			visited[key] = true
+			fn(decl)
+			ix.eachIncludedModule(decl, visited, fn)
+		}
+	}
 }
 
 // eachSuperclass walks the superclass chain, nearest first, calling fn once per
@@ -882,6 +990,20 @@ func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
 	}
 
 	for _, c := range ix.classes {
+		if c.isModule && !ix.includedByAny[c.name] {
+			// An orphan Concern: nothing in the service includes it, so
+			// nothing can be named as the owner of its `included do`
+			// registrations. Ledger them (bug-class #12: record, don't
+			// drop) instead of resolving them as if the module itself ran
+			// them -- it never does, only an includer would.
+			for _, reg := range c.filters {
+				unresolved = append(unresolved, graph.UnresolvedRef{
+					Service: ix.svc, File: c.file, Line: reg.line,
+					Name: "before_action", Kind: "rails_filter_unattributed",
+				})
+			}
+			continue
+		}
 		classNodeID := ix.classID[fmt.Sprintf("%s\x00%s\x00%d", c.file, c.name, c.line)]
 		skips := ix.chainSkips(c)
 
