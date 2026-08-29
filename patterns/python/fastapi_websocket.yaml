@@ -1,0 +1,43 @@
+# FastAPI WebSocket message-level pumps — the read/write calls made on a
+# WebSocket connection object *after* ws_upgrade_fastapi
+# (patterns/python/fastapi_routes.yaml) accepts it. Mirrors
+# patterns/go/gorilla_websocket.yaml's ws_read_pump/ws_write_pump shape, but
+# matched on method name only (no receiver-identifier constraint): FastAPI's
+# `WebSocket` parameter can be named anything (`websocket`, `ws`, `sock`,
+# ...), unlike Go's fixed `conn` receiver.
+#
+# Gate: method-name-only matching is broader than Go's receiver-typed shape
+# and risks false positives on unrelated objects that happen to expose the
+# same method names (e.g. an HTTP response's `.send()`, a queue's
+# `.receive()`). internal/parser/python_ws_pumps.go drops any match here
+# whose call site is not contained inside a function whose
+# ws_upgrade_fastapi decorator was also matched in the same file — same
+# containment-scoped-resolution discipline Tier PC uses
+# (resolvePythonAttributeCalls), applied as a post-graph filter since the
+# scoping function span comes from patterns/python/functions.yaml's
+# func_decl node, not from this file's own captures.
+language: python
+version: "1"
+package: fastapi
+patterns:
+  # await websocket.receive() / .receive_text() / .receive_json() / .receive_bytes()
+  - name: ws_read_pump_fastapi
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#match? @fn "^(receive|receive_text|receive_json|receive_bytes)$")))
+    captures:
+      - name: fn
+        role: ws_read
+
+  # await websocket.send(...) / .send_text(...) / .send_json(...) / .send_bytes(...)
+  - name: ws_write_pump_fastapi
+    query: |
+      (call
+        function: (attribute
+          attribute: (identifier) @fn
+          (#match? @fn "^(send|send_text|send_json|send_bytes)$")))
+    captures:
+      - name: fn
+        role: ws_write

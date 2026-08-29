@@ -32,6 +32,11 @@ func (p *PythonParser) Parse(file, service string, matcher *patterns.TreeSitterM
 	// see at all.
 	edges = append(edges, resolvePythonAttributeCalls(file, src, nodes)...)
 
+	// PW.2 (docs/messaging-crossservice-flow-plan.md): drop FastAPI WS
+	// read/write pump nodes whose call site isn't contained inside a
+	// ws_upgrade_fastapi-decorated function — see dropUnscopedWSPumpNodes.
+	nodes, edges = dropUnscopedWSPumpNodes(file, nodes, edges)
+
 	return nodes, edges, unresolved, nil
 }
 
