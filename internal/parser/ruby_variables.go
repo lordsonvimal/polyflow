@@ -147,38 +147,63 @@ func (ex *rubyExtractor) methodNodeID(method string, ln int) string {
 	return fmt.Sprintf("%s:%s:function:%s:%d", ex.service, ex.file, method, ln)
 }
 
-// rakeBlockScopeID synthesizes a per-block scope ID for a `task`/`namespace`
-// DSL call's `do...end` (or `{}`) body (DC.18): the block has no enclosing
-// `def` to key a methodID on, but calls made directly inside it are still
-// self-scoped exactly like a method body, so a per-block ID derived from the
-// block's own file position lets the existing same-file bare-call resolution
-// machinery (resolveBareCall, case "identifier") apply unchanged — both
-// preCollectRubyLocals and walk call this so the two passes agree on the ID.
-func (ex *rubyExtractor) rakeBlockScopeID(block *sitter.Node) string {
-	return fmt.Sprintf("%s:%s:rake_block:%d", ex.service, ex.file, rbLine(block))
+// railsCallbackBlockMethods are Rails callback-registration DSL methods
+// (controller filters + ActiveRecord model callbacks — the same convention
+// `internal/linker/rails_filters.go`'s `filterKinds` resolves for the
+// `:symbol` form) that are also commonly called with a `do...end`/`{}` block
+// instead of a symbol, e.g. `before_action do; log_audit_activity; end`.
+// DC.28: that block has no enclosing `def`, so bare calls made directly
+// inside it need the same synthetic-scope treatment DC.18 gave `task`/
+// `namespace` blocks — see dslBlockScopeID.
+var railsCallbackBlockMethods = map[string]bool{
+	"before_action": true, "after_action": true, "around_action": true,
+	"prepend_before_action": true, "prepend_around_action": true, "prepend_after_action": true,
+	"append_before_action": true, "append_around_action": true, "append_after_action": true,
+	"validate": true, "before_validation": true, "after_validation": true,
+	"before_save": true, "around_save": true, "after_save": true,
+	"before_create": true, "around_create": true, "after_create": true,
+	"before_update": true, "around_update": true, "after_update": true,
+	"before_destroy": true, "around_destroy": true, "after_destroy": true,
+	"after_commit": true, "after_rollback": true,
 }
 
-// rakeBlockNode mints the node a rake_block scope ID actually needs to exist
-// as: DC.18 introduced the ID as a lookup key for scope-tracking maps, but
-// every edge addEdge emits keyed on it (calls into the block body, ivar
+// dslBlockScopeID synthesizes a per-block scope ID for a DSL call's
+// `do...end` (or `{}`) body (DC.18, widened by DC.28 to Rails callback
+// blocks): the block has no enclosing `def` to key a methodID on, but calls
+// made directly inside it are still self-scoped exactly like a method body,
+// so a per-block ID derived from the block's own file position lets the
+// existing same-file bare-call resolution machinery (resolveBareCall, case
+// "identifier") apply unchanged — both preCollectRubyLocals and walk call
+// this so the two passes agree on the ID. `kind` distinguishes a rake block
+// from a Rails callback block for indexer.go's classifyRoot (see
+// dslBlockNode) and keeps the two DSL families from colliding on the same ID
+// if a file (implausibly) used both DSL names at the same line.
+func (ex *rubyExtractor) dslBlockScopeID(kind string, block *sitter.Node) string {
+	return fmt.Sprintf("%s:%s:%s:%d", ex.service, ex.file, kind, rbLine(block))
+}
+
+// dslBlockNode mints the node a dslBlockScopeID actually needs to exist as:
+// DC.18 introduced the ID as a lookup key for scope-tracking maps, but every
+// edge addEdge emits keyed on it (calls into the block body, ivar
 // reads/writes) needs a real graph.Node on the From side too, or the upsert
 // violates the nodes/edges foreign key — this was missing and broke a full
 // reindex on any repo with a rake task/namespace block (confirmed on
-// orion's lib/tasks/audited.rake). meta.kind=rake_block is what
-// indexer.go's classifyRoot keys on to stamp root_kind=entrypoint (mirroring
-// main/init): a rake task is invoked externally (`rake task_name`), never by
-// a static in-repo call site, so without that it would show up as a fresh
-// deadcode false positive the moment it became a real node — exactly the
-// class of bug this plan exists to prevent. Not stamped as root_kind here
-// directly: classifyRoot unconditionally overwrites every Function/Method
-// node's root_kind later in the pipeline, so anything set at parse time
-// would just be clobbered.
-func (ex *rubyExtractor) rakeBlockNode(call *sitter.Node, mname string, block *sitter.Node, class string) {
-	id := ex.rakeBlockScopeID(block)
+// orion's lib/tasks/audited.rake). meta.kind is what indexer.go's
+// classifyRoot keys on to stamp root_kind=entrypoint (mirroring main/init):
+// both a rake task (`rake task_name`) and a Rails callback block (invoked by
+// the framework when the action/model event fires) are reached only by an
+// external/framework trigger, never a static in-repo call site, so without
+// this it would show up as a fresh deadcode false positive the moment it
+// became a real node — exactly the class of bug this plan exists to
+// prevent. Not stamped as root_kind here directly: classifyRoot
+// unconditionally overwrites every Function/Method node's root_kind later in
+// the pipeline, so anything set at parse time would just be clobbered.
+func (ex *rubyExtractor) dslBlockNode(kind string, call *sitter.Node, mname string, block *sitter.Node, class string) {
+	id := ex.dslBlockScopeID(kind, block)
 	ex.addNode(graph.Node{
 		ID: id, Type: graph.NodeTypeFunction, Label: rakeBlockLabel(call, mname, ex.src),
 		Service: ex.service, File: ex.file, Line: rbLine(block), EndLine: rbEndLine(block), Language: "ruby",
-		Meta: map[string]string{"kind": "rake_block", "class": class},
+		Meta: map[string]string{"kind": kind, "class": class},
 	})
 }
 
@@ -332,15 +357,21 @@ func (ex *rubyExtractor) preCollectRubyLocals(node *sitter.Node, methodID string
 			ex.collectParamNames(params, methodID)
 		}
 	case "call":
-		// DC.18: a `task`/`namespace` DSL block has no enclosing `def`, so
-		// give its body a synthetic method-like scope the same way walk does
-		// below — see rakeBlockScopeID.
+		// DC.18/DC.28: a `task`/`namespace` or Rails callback-registration
+		// DSL block has no enclosing `def`, so give its body a synthetic
+		// method-like scope the same way walk does below — see
+		// dslBlockScopeID.
 		if methodID == "" {
 			if mn := node.ChildByFieldName("method"); mn != nil {
 				mname := mn.Content(ex.src)
-				if mname == "task" || mname == "namespace" {
+				switch {
+				case mname == "task" || mname == "namespace":
 					if block := node.ChildByFieldName("block"); block != nil {
-						methodID = ex.rakeBlockScopeID(block)
+						methodID = ex.dslBlockScopeID("rake_block", block)
+					}
+				case railsCallbackBlockMethods[mname]:
+					if block := node.ChildByFieldName("block"); block != nil {
+						methodID = ex.dslBlockScopeID("callback_block", block)
 					}
 				}
 			}
@@ -583,8 +614,8 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 			// block body exactly like a real method scope would.
 			if methodID == "" {
 				if block := node.ChildByFieldName("block"); block != nil {
-					methodID = ex.rakeBlockScopeID(block)
-					ex.rakeBlockNode(node, mname, block, class)
+					methodID = ex.dslBlockScopeID("rake_block", block)
+					ex.dslBlockNode("rake_block", node, mname, block, class)
 				}
 			}
 		case "new":
@@ -610,6 +641,22 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 				}
 			}
 		default:
+			if methodID == "" && railsCallbackBlockMethods[mname] {
+				// DC.28: same shape as the "task"/"namespace" case above, for
+				// a Rails callback-registration DSL method called with a
+				// block instead of a `:symbol` (the `:symbol` form is
+				// resolved separately by internal/linker/rails_filters.go).
+				// Gated on methodID=="" (class-body level, where a bare name
+				// this common — e.g. `validate`, `before_save` — could
+				// otherwise collide with an application-defined method of the
+				// same name called from inside a real method body, which must
+				// still fall through to ordinary bare-call attribution below).
+				if block := node.ChildByFieldName("block"); block != nil {
+					methodID = ex.dslBlockScopeID("callback_block", block)
+					ex.dslBlockNode("callback_block", node, mname, block, class)
+					break
+				}
+			}
 			// Bare/implicit-self method calls: helper(x), save, self.foo.
 			// A `ClassName.method` receiver is also resolvable when the class
 			// is declared in this file — unambiguous the same way `Foo.new`

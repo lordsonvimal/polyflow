@@ -47,6 +47,22 @@ func TestClassifyRoot_RakeBlockIsEntrypoint(t *testing.T) {
 	assert.Equal(t, "entrypoint", n.Meta["root_kind"])
 }
 
+// TestClassifyRoot_CallbackBlockIsEntrypoint: a callback_block synthetic
+// scope node (ruby_variables.go's dslBlockNode, DC.28) is invoked by the
+// Rails framework when the controller action/model event fires, never by an
+// in-repo call site — same unconditional entry-point status as rake_block
+// above, for the Rails callback-registration DSL's block form
+// (`before_action do ... end`) rather than the `:symbol` form.
+func TestClassifyRoot_CallbackBlockIsEntrypoint(t *testing.T) {
+	n := &graph.Node{
+		ID: "shop:app/controllers/change_logs_controller.rb:callback_block:1", Type: graph.NodeTypeFunction, Label: "before_action",
+		Meta: map[string]string{"kind": "callback_block"},
+	}
+	ok := classifyRoot(n, nil, nil)
+	assert.True(t, ok)
+	assert.Equal(t, "entrypoint", n.Meta["root_kind"])
+}
+
 func TestClassifyRoot_ObjectMethodPairIsCallback(t *testing.T) {
 	n := &graph.Node{
 		ID: "js:x.js:function:onProceed:10", Type: graph.NodeTypeFunction, Label: "onProceed",
