@@ -138,6 +138,16 @@ type rubyMixinIndex struct {
 	serviceOf     map[string]string            // node ID → service
 	helperMethods map[string]map[string][]string // service → method name → method node IDs, from every app/helpers/*.rb module
 	fileIdx       *fileNodeIndex               // mints the NodeTypeFile node a view_helper edge's From needs
+
+	// byNameService is DC.21's fallback index: service → method name → owning
+	// method node IDs, flattened across every class in the service (not keyed
+	// by classID the way `methods` is). Only consulted when ix.lookup's
+	// ancestor walk finds nothing — a bare call with no receiver and no
+	// mixin/inherits path to a definition is only safely resolvable when this
+	// map has exactly one candidate for the name; two or more is the same
+	// "ambiguous → don't guess" discipline resolveBareCall already applies
+	// same-file (see emitBareCallFallback).
+	byNameService map[string]map[string][]string
 }
 
 // isRubyHelperFile matches Rails' `app/helpers/**/*.rb` convention: every
@@ -158,6 +168,7 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 		serviceOf:     map[string]string{},
 		helperMethods: map[string]map[string][]string{},
 		fileIdx:       newFileNodeIndex(nodes),
+		byNameService: map[string]map[string][]string{},
 	}
 
 	// classByFileLabel resolves a function node's Meta["class"] to the class
@@ -203,6 +214,13 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 			ix.methods[key] = append(ix.methods[key], n.ID)
 		}
 
+		byName := ix.byNameService[n.Service]
+		if byName == nil {
+			byName = map[string][]string{}
+			ix.byNameService[n.Service] = byName
+		}
+		byName[n.Label] = append(byName[n.Label], n.ID)
+
 		if isRubyHelperFile(n.File) {
 			byName := ix.helperMethods[n.Service]
 			if byName == nil {
@@ -241,6 +259,11 @@ func newRubyMixinIndex(nodes []graph.Node, edges []graph.Edge) *rubyMixinIndex {
 	}
 	for key := range ix.methods {
 		ix.methods[key] = sortedUnique(ix.methods[key])
+	}
+	for _, byName := range ix.byNameService {
+		for name := range byName {
+			byName[name] = sortedUnique(byName[name])
+		}
 	}
 	return ix
 }
@@ -302,16 +325,16 @@ func (ix *rubyMixinIndex) emit(ref graph.UnresolvedRef, seen map[string]bool) ([
 		return nil, nil
 	}
 
-	targets, depth := ix.lookup(cls.id, ref.Name)
-	if len(targets) == 0 {
-		return nil, nil
-	}
-
 	// The caller. A call in a class body rather than a method — `include`d DSL
 	// at load time — is attributed to the class, which is where it runs.
 	fromID := cls.id
 	if fn, ok := innermost(ix.funcSpans[ref.File], ref.Line); ok {
 		fromID = fn.id
+	}
+
+	targets, depth := ix.lookup(cls.id, ref.Name)
+	if len(targets) == 0 {
+		return ix.emitBareCallFallback(ref, fromID, seen)
 	}
 
 	var edges []graph.Edge
@@ -349,6 +372,41 @@ func (ix *rubyMixinIndex) emit(ref graph.UnresolvedRef, seen map[string]bool) ([
 		})
 	}
 	return edges, unresolved
+}
+
+// emitBareCallFallback is DC.21: the class this ref belongs to has no
+// ancestor-reachable definition of ref.Name (ix.lookup already came back
+// empty), which is exactly the gap Tier BC's per-file `methodsByName` left —
+// a private/protected method called bare from an unrelated class, or the
+// same class reopened in a different file (a reopened module is a distinct
+// node per file, so depth-0 of the ancestor walk does not join them). This
+// is the last resort: a flat, service-wide name lookup, safe only when it
+// finds exactly one candidate — two or more is genuinely ambiguous (Ruby's
+// bare-call resolution has no cross-class ordering to break the tie with),
+// so it is left unresolved rather than guessed, same as the same-file
+// `methodsByName` fallback in resolveBareCall.
+func (ix *rubyMixinIndex) emitBareCallFallback(ref graph.UnresolvedRef, fromID string, seen map[string]bool) ([]graph.Edge, []graph.UnresolvedRef) {
+	candidates := ix.byNameService[ref.Service][ref.Name]
+	if len(candidates) != 1 {
+		return nil, nil
+	}
+	to := candidates[0]
+	if to == fromID {
+		return nil, nil
+	}
+	id := fmt.Sprintf("calls:%s->%s", fromID, to)
+	if seen[id] {
+		return nil, nil
+	}
+	seen[id] = true
+	return []graph.Edge{{
+		ID:         id,
+		From:       fromID,
+		To:         to,
+		Type:       graph.EdgeTypeCalls,
+		Confidence: graph.ConfidenceInferred,
+		Meta:       map[string]string{"via": "bare_call_cross_class"},
+	}}, nil
 }
 
 // emitViewHelperCall resolves a call_ref ledgered from a `.erb` view's
