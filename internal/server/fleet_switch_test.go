@@ -67,7 +67,7 @@ func TestFleetMerge_WidensNotSwitches(t *testing.T) {
 	webNode := &graph.Node{ID: "web:n1", Type: graph.NodeTypeFunction, Label: "webFn", Service: "web", File: "index.js", Line: 1}
 
 	webResolved := false
-	mergeFn := func(ctx context.Context) (*graph.AdjacencyIndex, map[string]string, map[string]*semantic.Searcher, []string, error) {
+	mergeFn := func(ctx context.Context) (*graph.AdjacencyIndex, map[string]string, map[string]*semantic.Searcher, []string, []graph.UnresolvedRef, error) {
 		idx := graph.NewAdjacencyIndex()
 		idx.AddNode(apiNode)
 		roots := map[string]string{"api": ""}
@@ -77,7 +77,7 @@ func TestFleetMerge_WidensNotSwitches(t *testing.T) {
 			roots["web"] = webRoot
 			resolved = append(resolved, "web")
 		}
-		return idx, roots, nil, resolved, nil
+		return idx, roots, nil, resolved, nil, nil
 	}
 	ensureFn := func(ctx context.Context, service string) error {
 		if service == "web" {

@@ -99,6 +99,10 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("build index: %w", err)
 	}
+	unresolvedRefs, err := fleetAwareUnresolvedRefs(ctx, store)
+	if err != nil {
+		return fmt.Errorf("list unresolved refs: %w", err)
+	}
 
 	cfg, _ := workspace.Load(meta.ConfigFile) // best-effort
 
@@ -117,6 +121,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	srv, handle := mcpserver.New(store, idx, meta.Version, loadStaleAfter(meta.ConfigFile), enabled)
 	handle.SetSearcher(buildSearcher(store, emb, synonyms))
+	handle.SetFleetUnresolvedRefs(unresolvedRefs)
 
 	// GR.3: search federates across every locally-resolved fleet member by
 	// default. closeFleetSearchers is deferred to the end of the session
@@ -156,7 +161,14 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "mcp reload: build index: %v\n", err)
 			return
 		}
+		newUnresolvedRefs, err := fleetAwareUnresolvedRefs(context.Background(), newStore)
+		if err != nil {
+			newStore.Close()
+			fmt.Fprintf(os.Stderr, "mcp reload: list unresolved refs: %v\n", err)
+			return
+		}
 		handle.SetSearcher(buildSearcher(newStore, emb, synonyms))
+		handle.SetFleetUnresolvedRefs(newUnresolvedRefs)
 		handle.Reload(newStore, newIdx)
 		fmt.Fprintln(os.Stderr, "polyflow mcp: graph reloaded")
 	}); err != nil {
