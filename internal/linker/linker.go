@@ -776,10 +776,25 @@ func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, 
 
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type != graph.NodeTypePublisher && n.Type != graph.NodeTypeSubscriber {
+		// kicks_from_queue (Sneakers/kicks' consumer-side queue binding, Ruby
+		// only) is deliberately modeled as a NodeTypeChannel — not a
+		// NodeTypeSubscriber — so a *literal* queue name can join it to a
+		// publisher's channel.queue(name) declaration the same way any other
+		// channel↔channel pair joins (see the package comment above). But
+		// when the queue name is dynamic (unresolvable — the common case:
+		// `from_queue queue_name.to_sym` reading a runtime/config value), no
+		// literal join is possible and that channel node has no path to a
+		// hint either, since this loop only ever considered
+		// Publisher/Subscriber types. Treat it as consumer-role eligible
+		// here too — it behaves exactly like a subscriber for hint purposes
+		// (a workspace-declared exchange resolves who it listens to), it
+		// just happens to already be a channel node instead of minting one.
+		isDynamicKicksConsumer := n.Type == graph.NodeTypeChannel &&
+			n.Meta["pattern"] == "kicks_from_queue" && stripMeta(n.Meta["queue_name"]) == ""
+		if n.Type != graph.NodeTypePublisher && n.Type != graph.NodeTypeSubscriber && !isDynamicKicksConsumer {
 			continue
 		}
-		if !isBrokerPattern(n.Meta["pattern"]) {
+		if !isDynamicKicksConsumer && !isBrokerPattern(n.Meta["pattern"]) {
 			continue // ws/hub/pusher/job publishers are not RabbitMQ traffic
 		}
 		isPub := n.Type == graph.NodeTypePublisher
