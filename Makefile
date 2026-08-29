@@ -1,9 +1,20 @@
-.PHONY: web build install build-all release test test-chessleap test-e2e bench lint clean
+.PHONY: web build install build-all release test test-chessleap test-e2e bench lint clean r-grammar
 
 BUILD_DIR := dist
 BINARY    := polyflow
 VERSION   := $(shell grep 'Version' internal/meta/meta.go | head -1 | cut -d'"' -f2)
 PREFIX    ?= /usr/local/bin
+
+# r-grammar — fetches the vendored tree-sitter-r C source (internal/parser/
+# rgrammar/fetch.sh). Not committed to the repo (it's a ~4MB generated
+# parser, same "regenerated, not tracked" treatment *_templ.go already gets —
+# see .gitignore and docs/plan-15-fs-links-py-frameworks-r.md Phase R.0);
+# every target that does `go build`/`go test`/`go vet` across the whole
+# module needs this first since internal/parser/rgrammar is a real package
+# that won't compile without it. Idempotent — a second run is a no-op
+# (sha256-verified cache hit per file).
+r-grammar:
+	@bash internal/parser/rgrammar/fetch.sh
 
 web:
 	# Pre-clean rather than let vite's own emptyDir do it: leftovers from a
@@ -23,7 +34,7 @@ web:
 # macOS), so this works with zero extra setup as long as GOOS/GOARCH match the
 # host. Cross-compiling for a *different* OS/arch is what build-all/release
 # are for, and those need a cross C toolchain (see the zig note below).
-build: web
+build: web r-grammar
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY) ./cmd/polyflow
 	# V.2 parser sidecar; discovered next to the polyflow binary at runtime.
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/polyflow-parse-templ ./cmd/polyflow-parse-templ
@@ -49,7 +60,7 @@ install: build
 	$$SUDO install -m 0755 $(BUILD_DIR)/polyflow-parse-templ $(PREFIX)/polyflow-parse-templ
 	@echo "Installed $(BINARY) and polyflow-parse-templ to $(PREFIX)"
 
-test:
+test: r-grammar
 	go test ./... -coverprofile=coverage.out
 	go tool cover -func=coverage.out
 
@@ -62,10 +73,10 @@ test:
 test-chessleap:
 	POLYFLOW_CHESSLEAP=1 go test ./internal/contract/... ./internal/evidence/... ./internal/sidecar/... -run 'Chessleap' -v -count=1
 
-test-e2e:
+test-e2e: r-grammar
 	go test ./internal/e2e/... -v -count=1
 
-bench:
+bench: r-grammar
 	go test ./... -bench=. -benchtime=5s -run=^$
 
 # eval-corpus — clone + index all URL-based corpus repos into eval/.cache/,
@@ -170,7 +181,7 @@ yield-gate:
 	fi; \
 	echo "yield-gate: all corpus repos pass"
 
-lint:
+lint: r-grammar
 	golangci-lint run ./...
 
 clean:
@@ -178,7 +189,7 @@ clean:
 
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-build-all:
+build-all: r-grammar
 	@for platform in $(PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
 		echo "Building $$os/$$arch..."; \
