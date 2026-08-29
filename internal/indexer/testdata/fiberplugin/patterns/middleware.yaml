@@ -1,0 +1,16 @@
+language: go
+version: "1"
+package: github.com/gofiber/fiber/v2
+patterns:
+  - name: fiber_middleware_use
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @router
+          field: (field_identifier) @method
+          (#eq? @method "Use"))
+        arguments: (argument_list
+          (_) @middleware))
+    captures:
+      - name: middleware
+        role: middleware_ref

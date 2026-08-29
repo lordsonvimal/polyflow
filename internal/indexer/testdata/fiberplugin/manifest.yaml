@@ -1,0 +1,16 @@
+name: fiber
+version: "0.1.0"
+protocol_version: 1
+entrypoint: ./fiber
+
+components:
+  - id: routes
+    package: github.com/gofiber/fiber/v2
+    language: go
+    patterns: patterns/routes.yaml
+    requires: []
+  - id: middleware
+    package: github.com/gofiber/fiber/v2
+    language: go
+    patterns: patterns/middleware.yaml
+    requires: [containment]
