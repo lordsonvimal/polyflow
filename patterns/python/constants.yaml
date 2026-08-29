@@ -1,0 +1,22 @@
+# Module-level Python constant assignments, feeding the same
+# name -> literal-value table Go/JS use for KeyWalker identifier resolution
+# (MatchToGraph's isConstantPattern). Anchored to `module` directly rather
+# than a bare `assignment` so a same-shaped assignment inside a function body
+# (a genuinely local variable, resolved instead by
+# internal/contract/keywalk_python_local.go) is never mistaken for a
+# service-wide constant.
+language: python
+version: "1"
+patterns:
+  - name: const_string
+    query: |
+      (module
+        (expression_statement
+          (assignment
+            left: (identifier) @name
+            right: (string) @value)))
+    captures:
+      - name: name
+        role: const_name
+      - name: value
+        role: const_value

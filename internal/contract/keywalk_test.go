@@ -16,6 +16,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	gositter "github.com/smacker/go-tree-sitter/golang"
 	jssitter "github.com/smacker/go-tree-sitter/javascript"
+	pythonsitter "github.com/smacker/go-tree-sitter/python"
 	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
@@ -46,6 +47,40 @@ func parseRuby(t *testing.T, src string) (*sitter.Node, []byte) {
 	root, err := sitter.ParseCtx(context.Background(), b, rubysitter.GetLanguage())
 	require.NoError(t, err)
 	return root, b
+}
+
+func parsePython(t *testing.T, src string) (*sitter.Node, []byte) {
+	t.Helper()
+	b := []byte(src)
+	root, err := sitter.ParseCtx(context.Background(), b, pythonsitter.GetLanguage())
+	require.NoError(t, err)
+	return root, b
+}
+
+// firstPythonExpr descends module > expression_statement to the bare
+// expression node — Python's equivalent of firstExpr for the JS/Ruby
+// grammars, which use "program" instead of "module" at the root.
+func firstPythonExpr(root *sitter.Node) *sitter.Node {
+	node := root
+	for {
+		var child *sitter.Node
+		for i := 0; i < int(node.ChildCount()); i++ {
+			c := node.Child(i)
+			if c != nil && c.Type() != "comment" {
+				child = c
+				break
+			}
+		}
+		if child == nil {
+			return node
+		}
+		switch child.Type() {
+		case "module", "expression_statement":
+			node = child
+		default:
+			return child
+		}
+	}
 }
 
 // firstExpr descends through wrapper nodes (program, expression_statement) to
@@ -443,6 +478,93 @@ func TestRubyWalker_FullyInterpolated_StaysDynamic(t *testing.T) {
 	vals, dyn := w.WalkKey(firstExpr(root), src, noConsts)
 	assert.True(t, dyn)
 	assert.Nil(t, vals)
+}
+
+// ── Python walker ────────────────────────────────────────────────────────────
+
+func TestPythonWalker_Language(t *testing.T) {
+	w := contract.KeyWalkerFor("python")
+	require.NotNil(t, w)
+	assert.Equal(t, "python", w.Language())
+}
+
+func TestPythonWalker_StringLiteral(t *testing.T) {
+	root, src := parsePython(t, `"/admin"`)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	assert.Equal(t, []string{"/admin"}, vals)
+}
+
+func TestPythonWalker_Ternary(t *testing.T) {
+	// "/a" if flag else "/b" → two candidates (PK gate 2)
+	root, src := parsePython(t, `"/a" if flag else "/b"`)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	require.Len(t, vals, 2)
+	sort.Strings(vals)
+	assert.Equal(t, []string{"/a", "/b"}, vals)
+}
+
+func TestPythonWalker_Identifier_Resolved(t *testing.T) {
+	root, src := parsePython(t, `BASE_URL`)
+	w := contract.KeyWalkerFor("python")
+	resolver := func(name string) (string, bool) {
+		if name == "BASE_URL" {
+			return "https://example.com", true
+		}
+		return "", false
+	}
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, resolver)
+	assert.False(t, dyn)
+	assert.Equal(t, []string{"https://example.com"}, vals)
+}
+
+func TestPythonWalker_Identifier_Dynamic(t *testing.T) {
+	root, src := parsePython(t, `some_var`)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
+}
+
+func TestPythonWalker_FString_ResolvedConstant(t *testing.T) {
+	// PK gate 3: f"{BASE_URL}/users" where BASE_URL is a module-level literal
+	// resolves to a concrete host/path, not a ledger entry.
+	root, src := parsePython(t, `f"{BASE_URL}/users"`)
+	w := contract.KeyWalkerFor("python")
+	resolver := func(name string) (string, bool) {
+		if name == "BASE_URL" {
+			return "https://example.com", true
+		}
+		return "", false
+	}
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, resolver)
+	assert.False(t, dyn)
+	require.Len(t, vals, 1)
+	assert.Equal(t, "https://example.com/users", vals[0])
+}
+
+func TestPythonWalker_FString_UnresolvedStaysDynamic(t *testing.T) {
+	// PK gate 4: an unresolvable interpolated identifier still ledgers
+	// cleanly — Python does not wildcard-hole an unresolved host the way
+	// Ruby/JS do for path segments.
+	root, src := parsePython(t, `f"{unresolvable_var}/x"`)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, noConsts)
+	assert.True(t, dyn)
+	assert.Nil(t, vals)
+}
+
+func TestPythonWalker_FString_PlainLiteral(t *testing.T) {
+	// No interpolation at all — same "string" node type, must still resolve
+	// as a plain literal.
+	root, src := parsePython(t, `f"/admin"`)
+	w := contract.KeyWalkerFor("python")
+	vals, dyn := w.WalkKey(firstPythonExpr(root), src, noConsts)
+	assert.False(t, dyn)
+	assert.Equal(t, []string{"/admin"}, vals)
 }
 
 // ── HTML no-op walker ────────────────────────────────────────────────────────
