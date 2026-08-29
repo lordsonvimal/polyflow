@@ -73,7 +73,8 @@ type MatchResult struct {
 // tree-sitter node is retained on MatchResult.KeyNodes for X.1a WalkKey
 // routing — restricted to names that are an actual contract-rule `key:`
 // field somewhere in contracts/*.yaml today (verified against every
-// go/javascript/ruby pattern file, 2026-07-26). "event" is deliberately
+// go/javascript/ruby pattern file, 2026-07-26; "queue_url" added in PW.3 for
+// contracts/sqs.yaml). "event" is deliberately
 // excluded despite appearing in the phase doc's allow-list text: no contract
 // rule keys on it (websocket.yaml keys on message_type; hub.yaml's key is
 // `[]`, matching unconditionally), and sse_hub.yaml's hub_broadcast_call
@@ -109,6 +110,7 @@ var restClientDynamicMethodPatterns = map[string]bool{
 var keyWalkerKeyCaptureNames = map[string]bool{
 	"url": true, "path": true, "channel": true, "exchange": true,
 	"routing_key": true, "topic": true, "queue": true, "queue_name": true,
+	"queue_url": true,
 	// "columns" is not a contract producer/consumer key at all — SQ0 (see
 	// docs/shell-sql-language-plan.md) reuses this same retention mechanism
 	// for a second, unrelated purpose: internal/parser/sql.go needs the
@@ -2372,6 +2374,13 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeSubscriber, graph.EdgeTypeHubSubscribe
 	case strings.HasPrefix(lower, "hub_method"):
 		return graph.NodeTypeMethod, graph.EdgeTypeCalls
+
+	// ── SQS (split out of s3_ in PW.3 so contracts/sqs.yaml can join
+	// producer/consumer by queue_url, mirroring kafka_publish/subscribe) ──────
+	case strings.HasPrefix(lower, "sqs_send"):
+		return graph.NodeTypePublisher, graph.EdgeTypePublishes
+	case strings.HasPrefix(lower, "sqs_receive"):
+		return graph.NodeTypeSubscriber, graph.EdgeTypeSubscribes
 
 	// ── Cloud SDK boundaries (S3, Bedrock) ────────────────────────────────────
 	case strings.HasPrefix(lower, "s3_") || strings.HasPrefix(lower, "bedrock_"):

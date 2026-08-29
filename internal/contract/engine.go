@@ -19,7 +19,7 @@ func dynamicKindFor(k Kind) string {
 		return "dynamic_topic"
 	case KindAMQP:
 		return "dynamic_url"
-	case KindJob:
+	case KindJob, KindSQS:
 		return "dynamic_queue"
 	case KindPusher, KindHub:
 		return "dynamic_channel"

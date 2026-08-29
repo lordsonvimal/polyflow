@@ -26,6 +26,7 @@ const (
 	KindPusher      Kind = "pusher"
 	KindGRPC        Kind = "grpc"
 	KindGraphQL     Kind = "graphql"
+	KindSQS         Kind = "sqs"
 )
 
 // Role is the node's side of a contract channel.

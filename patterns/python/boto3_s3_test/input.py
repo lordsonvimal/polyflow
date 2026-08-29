@@ -12,3 +12,11 @@ def upload(client, bucket, key, path):
 
 def fetch(client, bucket, key):
     return client.get_object(Bucket=bucket, Key=key)
+
+
+def enqueue(client, body):
+    return client.send_message(QueueUrl="https://sqs.us-east-1.amazonaws.com/123/my-queue", MessageBody=body)
+
+
+def dequeue(client):
+    return client.receive_message(QueueUrl="https://sqs.us-east-1.amazonaws.com/123/my-queue")

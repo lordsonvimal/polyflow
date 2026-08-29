@@ -35,10 +35,66 @@ patterns:
         function: (attribute
           object: (_) @client
           attribute: (identifier) @fn
-          (#match? @fn "^(put_object|get_object|delete_object|delete_objects|list_objects_v2|head_object|copy_object|upload_file|download_file|upload_fileobj|download_fileobj|generate_presigned_url|send_message|receive_message|delete_message)$"))
+          (#match? @fn "^(put_object|get_object|delete_object|delete_objects|list_objects_v2|head_object|copy_object|upload_file|download_file|upload_fileobj|download_fileobj|generate_presigned_url|delete_message)$"))
         arguments: (argument_list) @args)
     captures:
       - name: fn
         role: s3_operation
       - name: args
         role: request_shape
+
+  # PW.3: send_message/receive_message split out of s3_operation_python into
+  # producer/consumer patterns so contracts/sqs.yaml can join them by queue
+  # URL, the same way contracts/kafka.yaml joins kafka_publish/kafka_subscribe
+  # by topic. Capture name is queue_url (not "queue"): the Meta key a node
+  # ends up with is the tree-sitter capture name itself, not the
+  # captures[].role label — role is vestigial (see loader.go's Capture.Role:
+  # "kept for backward compat") — so it must match contracts/sqs.yaml's
+  # `key: [queue_url]`.
+  #
+  # Value capture is (_), not (string): real-world QueueUrl is usually a
+  # variable/expression, not a literal (confirmed against
+  # eval/.cache/saleor/saleor/webhook/transport/utils.py and
+  # eval/.cache/saleor/saleor/core/sqs.py — both build the URL dynamically),
+  # same as requests_client.yaml's @url. This lets Tier PK's live Python
+  # KeyWalker resolve simple cases and routes anything it can't resolve to
+  # the dynamic-key ledger, the same policy every other messaging tier here
+  # uses — see keyWalkerKeyCaptureNames in internal/patterns/matcher.go.
+  #
+  # Not matched at all (v1 non-goal): `send_message(**kwargs)` — both real
+  # saleor call sites build the whole kwargs dict (including QueueUrl)
+  # separately and splat it in, so there is no `QueueUrl=` keyword_argument
+  # node at the call site for this query to see. Recovering that would mean
+  # tracing the dict literal assigned to the splatted variable, a materially
+  # bigger feature than this tier's key-walker-on-a-keyword-arg scope.
+  - name: sqs_send_message_python
+    query: |
+      (call
+        function: (attribute
+          object: (_) @client
+          attribute: (identifier) @fn
+          (#eq? @fn "send_message"))
+        arguments: (argument_list
+          (keyword_argument
+            name: (identifier) @kw
+            (#eq? @kw "QueueUrl")
+            value: (_) @queue_url)))
+    captures:
+      - name: queue_url
+        role: queue_url
+
+  - name: sqs_receive_message_python
+    query: |
+      (call
+        function: (attribute
+          object: (_) @client
+          attribute: (identifier) @fn
+          (#eq? @fn "receive_message"))
+        arguments: (argument_list
+          (keyword_argument
+            name: (identifier) @kw
+            (#eq? @kw "QueueUrl")
+            value: (_) @queue_url)))
+    captures:
+      - name: queue_url
+        role: queue_url

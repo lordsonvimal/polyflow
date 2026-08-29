@@ -1,0 +1,36 @@
+# contracts/sqs.yaml — PW.3. Joins boto3 SQS producers (sqs_send_message_python)
+# to consumers (sqs_receive_message_python) by queue_url, the same shape as
+# contracts/kafka.yaml's topic join.
+#
+# queue_url as the join key is a v1 first cut. Real SQS usage often resolves a
+# short queue *name* to a full URL/ARN via get_queue_url() (or, as seen in
+# eval/.cache/saleor, builds the URL from a connection string) before calling
+# send_message/receive_message, so the literal or resolved text at the two call
+# sites can differ even when they target the same queue. Checked against the
+# only two real send_message/receive_message call sites currently in the
+# eval corpora (eval/.cache/saleor/saleor/core/sqs.py,
+# eval/.cache/saleor/saleor/webhook/transport/utils.py; litellm has none): both
+# build QueueUrl dynamically and pass it as `**kwargs`, which this tier's
+# pattern doesn't even match (see boto3_s3.yaml's PW.3 comment) — there isn't
+# yet a real corpus case that would validate a name-normalizing join key, so
+# one isn't built speculatively here, per the same policy
+# contracts/http.yaml's base_url_strip was justified by real fleet data before
+# being added.
+version: "1"
+contracts:
+  - kind: sqs
+    producer:
+      node: publisher
+      where: {pattern: sqs_send_message_python}
+      key: [queue_url]
+    consumer:
+      node: subscriber
+      where: {pattern: sqs_receive_message_python}
+      key: [queue_url]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: publishes
+      id_prefix: sqs
+      same_service: keep
+    unmatched: ledger
