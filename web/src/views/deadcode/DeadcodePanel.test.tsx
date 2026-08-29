@@ -49,7 +49,31 @@ describe("DeadcodePanel", () => {
     render(() => <DeadcodePanel />, container);
 
     await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="deadcode-row"]')).toHaveLength(2));
-    expect(container.querySelector('[data-testid="deadcode-total"]')?.textContent).toContain("2 zero-caller");
+    expect(container.querySelector('[data-testid="deadcode-total"]')?.textContent).toContain("2 dead-code candidates");
+  });
+
+  it("renders a DC.27 Rails-view (file-type) row alongside function rows", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "/api/deadcode": fixture({
+        total: 1,
+        functions: [
+          {
+            id: "be:app/views/shared/_orphan.html.erb:file",
+            label: "app/views/shared/_orphan.html.erb",
+            type: "file",
+            service: "backend",
+            file: "app/views/shared/_orphan.html.erb",
+            line: 0,
+          },
+        ],
+      }),
+      "/api/stack": { services: [{ name: "backend", language: "ruby", files: 1 }] },
+    });
+    render(() => <DeadcodePanel />, container);
+
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="deadcode-row"]')).toHaveLength(1));
+    expect(container.querySelector('[data-testid="deadcode-total"]')?.textContent).toContain("1 dead-code candidate");
+    expect(container.querySelector('[data-testid="deadcode-row"]')?.textContent).toContain("file");
   });
 
   it("renders the empty-scope fallback when total is 0", async () => {

@@ -23,7 +23,7 @@ invisible to the other.
 | `polyflow context` | Context copy (right-click node → "Copy context") / `POST /api/context/bundle` |
 | `polyflow trace` | Flows activity — waypoint/path tracing between two nodes |
 | `polyflow impact` | Impact activity — blast-radius view for a node or file |
-| `polyflow deadcode` | Dead code activity — zero-caller function/method scan, filterable by service/file |
+| `polyflow deadcode` | Dead code activity — zero-caller function/method/component/variable and dead Rails view scan, filterable by service/file |
 | `polyflow deps` | Health activity → dependency list |
 | `polyflow link` | Config activity → `links:` section (form or YAML mode) |
 | `polyflow fleet` | **exception** — Tier GR operator surface; the UI's fleet-member switcher (Settings → Fleet, GR.6) covers the same ground via `GET /api/fleet/services`/`POST /api/fleet/active`, not a wrapper around this command |

@@ -1,8 +1,10 @@
 // CI.3: Dead-code activity — the UI counterpart of `polyflow deadcode` / the
-// MCP `deadcode` tool. Lists function/method nodes with zero inbound `calls`
-// edges (GET /api/deadcode), scoped by service/file. Clicking a row selects
-// the node so DetailHost/canvas show it, the same drill-in every other list
-// view (Tree, search results) uses.
+// MCP `deadcode` tool. Lists function/method/component nodes with zero
+// inbound invoking edges, variable/const nodes with zero inbound reads, and
+// (DC.27) Rails ERB view files with zero inbound `renders` edges (GET
+// /api/deadcode), scoped by service/file. Clicking a row selects the node so
+// DetailHost/canvas show it, the same drill-in every other list view (Tree,
+// search results) uses.
 import { For, Show, onMount } from "solid-js";
 import { deadcodeStore } from "../../stores/deadcode";
 import { treeStore } from "../../stores/tree";
@@ -22,10 +24,12 @@ export default function DeadcodePanel() {
   return (
     <div data-testid="deadcode-panel" class="p-3 overflow-y-auto h-full text-xs text-neutral-300 space-y-3">
       <div class="text-neutral-400">
-        Function/method nodes with zero inbound <code class="text-neutral-500">calls</code> edges,
-        excluding recognized entry points (HTTP handlers, routes, workers, subscribers, gRPC/GraphQL
-        handlers). A candidate list, not a certainty — dynamic dispatch, reflection, and exported
-        public API can all show up here; verify before deleting.
+        Function/method/component nodes with zero inbound <code class="text-neutral-500">calls</code>-family
+        edges, variables with zero inbound <code class="text-neutral-500">reads</code>, and Rails ERB view
+        files with zero inbound <code class="text-neutral-500">renders</code>, excluding recognized entry
+        points (HTTP handlers, routes, workers, subscribers, gRPC/GraphQL handlers) and implicit Rails view
+        resolution/dynamic render targets. A candidate list, not a certainty — dynamic dispatch, reflection,
+        and exported public API can all show up here; verify before deleting.
       </div>
 
       <div class="flex items-center gap-2">
@@ -74,7 +78,7 @@ export default function DeadcodePanel() {
         {(d) => (
           <>
             <div data-testid="deadcode-total" class="text-neutral-400">
-              {d().total} zero-caller function{d().total === 1 ? "" : "s"}/method{d().total === 1 ? "" : "s"}
+              {d().total} dead-code candidate{d().total === 1 ? "" : "s"}
             </div>
             <Show
               when={d().functions.length > 0}
