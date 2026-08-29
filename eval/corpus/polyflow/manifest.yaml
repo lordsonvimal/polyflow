@@ -43,6 +43,12 @@ cases:
     # authored and the fixture was never updated. This is a cross-file JS link —
     # the Phase 0.3 class of fix. Verified: `polyflow impact --target
     # filterEdgesByConfidence` shows filters.ts via an imports edge.
+    # service: web pins the target — polyflow also has an unrelated Go function
+    # with the same name (internal/contract/edge_filter.go:FilterEdgesByConfidence),
+    # and ResolveTarget's bm25-rank tiebreak between the two exact matches isn't
+    # stable across reindexes, so an unscoped query silently resolves to the
+    # wrong language's node.
+    service: web
     expected_impacted:
       - web/src/lib/filters.ts
     must_not_miss:
