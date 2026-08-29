@@ -2088,7 +2088,7 @@ func runDeadcode(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	unresolved, err := store.ListUnresolvedRefs(context.Background())
+	unresolved, err := fleetAwareUnresolvedRefs(context.Background(), store)
 	if err != nil {
 		return err
 	}
@@ -4134,6 +4134,49 @@ func buildFleetAwareIndex(ctx context.Context, store *graph.SQLiteStore) (*graph
 	}
 	mergeFleetMembersFull(ctx, idx, ".", false)
 	return idx, nil
+}
+
+// fleetAwareUnresolvedRefs is store.ListUnresolvedRefs, plus — when this
+// workspace is a registered fleet member — every other locally-resolved
+// member's own unresolved-ref ledger unioned in. buildFleetAwareIndex's
+// node/edge merge doesn't carry this: the ledger isn't part of graph.db's
+// nodes/edges tables, and the fleet bridge (mergeFleetBridge) only ever
+// carries cross-service edges, never a member's own ledger, so there is
+// nothing to pull from it here.
+//
+// Exists for deadcode.Options.UnresolvedRefs (DC.27's Rails-view carve-out):
+// a fleet-wide `polyflow deadcode` scan needs a member's own
+// erb_render_dynamic/erb_render_unresolved rows to suppress a false
+// positive in that member's own service, the same way buildFleetAwareIndex
+// needs a member's own nodes/edges. Same degrade-to-local-only-on-failure
+// behavior as the rest of the fleet-aware machinery (one unreadable member
+// must not break the scan for the rest); unlike mergeFleetMembersFull this
+// returns rather than mutates, since graph.UnresolvedRef has no ID to
+// dedupe on the way AddNode/AddEdge do — a member listed under more than
+// one resolution path would just produce harmless duplicate ledger rows,
+// not a correctness bug for a carve-out that only ever checks membership.
+func fleetAwareUnresolvedRefs(ctx context.Context, store *graph.SQLiteStore) ([]graph.UnresolvedRef, error) {
+	refs, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	members, err := queryresolve.FleetMembers(".", queryresolve.Options{Fleet: fleetFlag})
+	if err != nil {
+		return refs, nil
+	}
+	for _, dbPath := range members {
+		memberStore, openErr := graph.NewSQLiteStore(dbPath)
+		if openErr != nil {
+			continue
+		}
+		memberRefs, listErr := memberStore.ListUnresolvedRefs(ctx)
+		memberStore.Close()
+		if listErr != nil {
+			continue
+		}
+		refs = append(refs, memberRefs...)
+	}
+	return refs, nil
 }
 
 // mergeFleetMembersFull unions every locally-resolved member of the fleet
