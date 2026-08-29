@@ -15,6 +15,17 @@
 # of a string literal (`media_type=SSE_MEDIA_TYPE`) — the value is not
 # statically known at the pattern-match stage, same limitation Ruby/Go
 # string-literal-anchored patterns accept elsewhere.
+#
+# Cross-service flow note (Tier PW.4): this pattern node does NOT
+# participate in cross-service linking — it is a same-service annotation
+# for search/context visibility only ("show me where SSE emission
+# happens"). The real server→client push edge (LinkSSEPush,
+# internal/linker/linker.go) keys off the client's eventsource_connect
+# pattern against whatever http_handler node contracts/http.yaml already
+# joined it to by path/method — the pre-existing fastapi_route/gin_route/
+# etc. decorator node, not this pattern. Same characteristic as Go's
+# datastar_sse.yaml/sse_hub.yaml (see contracts/sse.yaml's header). Do not
+# assume this pattern contributes to flow-completeness; it doesn't.
 language: python
 version: "1"
 package: fastapi
