@@ -836,6 +836,95 @@ end
 	}
 }
 
+// TestRubyVariables_CallbackBlockBareCallResolves is DC.28: a Rails
+// callback-registration DSL method (before_action, validate, ...) called
+// with a `do...end` block instead of a `:symbol` has the same "no enclosing
+// def" gap DC.18 fixed for `task`/`namespace` — a bare call made directly
+// inside the block (a common controller shape: `before_action do;
+// log_audit_activity; end`) never had a methodID to key scope tracking off.
+func TestRubyVariables_CallbackBlockBareCallResolves(t *testing.T) {
+	t.Parallel()
+	src := `class ChangeLogsController
+  before_action do
+    log_audit_activity
+  end
+
+  def log_audit_activity
+    puts "logged"
+  end
+end
+`
+	_, edges, _ := extractRubyVariables("app/controllers/change_logs_controller.rb", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "callback_block", "function:log_audit_activity") == nil {
+		t.Errorf("missing calls edge from callback block -> log_audit_activity; edges: %+v", edges)
+	}
+}
+
+// TestRubyVariables_CallbackBlockMintsANode mirrors
+// TestRubyVariables_RakeTaskBlockMintsANode: the synthetic callback_block
+// scope ID must be a real node, or the edge's From violates the graph DB's
+// foreign key on upsert.
+func TestRubyVariables_CallbackBlockMintsANode(t *testing.T) {
+	t.Parallel()
+	src := `class ChangeLogsController
+  before_action do
+    log_audit_activity
+  end
+
+  def log_audit_activity
+    puts "logged"
+  end
+end
+`
+	nodes, edges, _ := extractRubyVariables("app/controllers/change_logs_controller.rb", "shop", []byte(src))
+
+	byID := map[string]bool{}
+	for _, n := range nodes {
+		byID[n.ID] = true
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type != graph.EdgeTypeCalls || !strings.Contains(e.From, "callback_block") {
+			continue
+		}
+		found = true
+		if !byID[e.From] {
+			t.Errorf("edge From %q has no matching node — would fail the graph DB's foreign key constraint", e.From)
+		}
+	}
+	if !found {
+		t.Fatal("expected a calls edge from a callback_block scope")
+	}
+}
+
+// TestRubyVariables_CallbackMethodBareCallStillResolvesNormally is the
+// required negative case: a bare call to a same-named method (`validate`)
+// from *inside* a real method body (not a class-body-level DSL block
+// registration) must still resolve as an ordinary bare call, not get
+// swallowed by DC.28's callback-block gate. Reuses rubyCallsFixture's
+// `create` -> `validate` shape (TestRubyVariables_BareCallResolvesSameClass)
+// with `validate` — a name in railsCallbackBlockMethods — substituted in, to
+// pin the methodID=="" gate specifically.
+func TestRubyVariables_CallbackMethodBareCallStillResolvesNormally(t *testing.T) {
+	t.Parallel()
+	src := `class UserManager
+  def create
+    validate
+  end
+
+  def validate
+    puts "validating"
+  end
+end
+`
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(src))
+
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
+		t.Errorf("missing calls edge create -> validate; edges: %+v", edges)
+	}
+}
+
 // DC.24: a bare identifier used only as the *receiver* of another call
 // (`memoized_helper.chain_method`) was excluded from bare-call resolution
 // entirely — the memoized accessor itself never got a calls/reads edge.

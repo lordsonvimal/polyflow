@@ -1273,11 +1273,13 @@ func classifyRoot(n *graph.Node, incoming map[string]bool, referencedIDs map[str
 		stampRootKind(n, "entrypoint")
 		return true
 	}
-	// A Rake task/namespace block (DC.18/ruby_variables.go's rakeBlockNode) is
-	// invoked externally (`rake task_name`), never by an in-repo call site —
-	// the same unconditional entry-point status as main/init, not one
-	// contingent on incoming edges the way (script) below is.
-	if n.Meta["kind"] == "rake_block" {
+	// A Rake task/namespace block, or a Rails callback-registration block
+	// (DC.18/DC.28, ruby_variables.go's dslBlockNode) is invoked externally
+	// (`rake task_name`) or by the framework (the action/model event firing),
+	// never by an in-repo call site — the same unconditional entry-point
+	// status as main/init, not one contingent on incoming edges the way
+	// (script) below is.
+	if n.Meta["kind"] == "rake_block" || n.Meta["kind"] == "callback_block" {
 		stampRootKind(n, "entrypoint")
 		return true
 	}
