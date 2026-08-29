@@ -553,7 +553,10 @@ func matchesNotWhere(n *graph.Node, notWhere map[string]string) bool {
 }
 
 // matchesWhere checks a node's meta against a where gate.
-// A gate value of "" means the meta key must be absent or empty.
+// A gate value of "" means the meta key must be absent or empty. A gate
+// value containing "|" is an OR list of exact alternatives (e.g.
+// "ws_upgrade|ws_upgrade_fastapi") — cheaper than a prefix/glob selector
+// kind when the full set of alternatives is small and known (PW.1).
 func matchesWhere(n *graph.Node, where map[string]string) bool {
 	for key, expected := range where {
 		actual := n.Meta[key]
@@ -561,10 +564,23 @@ func matchesWhere(n *graph.Node, where map[string]string) bool {
 			if actual != "" {
 				return false
 			}
-		} else {
-			if actual != expected {
+			continue
+		}
+		if strings.Contains(expected, "|") {
+			matched := false
+			for _, alt := range strings.Split(expected, "|") {
+				if actual == alt {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				return false
 			}
+			continue
+		}
+		if actual != expected {
+			return false
 		}
 	}
 	return true

@@ -1,0 +1,23 @@
+name: "ws-upgrade-route-3svc"
+version: "1"
+services:
+  - name: svc-client
+    path: ./svc-client
+    language: javascript
+  - name: svc-go
+    path: ./svc-go
+    language: go
+  - name: svc-py
+    path: ./svc-py
+    language: python
+links:
+  - from: svc-client
+    to: svc-go
+    base_url: "ws://svc-go"
+  - from: svc-client
+    to: svc-py
+    base_url: "ws://svc-py"
+index:
+  exclude:
+    - "**/node_modules/**"
+    - "**/vendor/**"

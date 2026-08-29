@@ -39,6 +39,7 @@ var wantLinkPasses = []struct {
 	{"js_http_hosts", scopeSameServiceOnly},
 	{"config_baseurl", scopeSameServiceOnly},
 	{"route_handlers", scopeSameServiceOnly},
+	{"ws_upgrade_route", scopeSameServiceOnly},
 	{"grpc_handlers", scopeSameServiceOnly},
 	{"rails_devise_default_routes", scopeSameServiceOnly},
 	{"rails_route_actions", scopeSameServiceOnly},

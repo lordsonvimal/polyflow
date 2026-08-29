@@ -527,6 +527,50 @@ func TestWebSocketRule_DifferentType_Ledger(t *testing.T) {
 	require.Len(t, res.Unresolved, 1, "unmatched typed send must be surfaced in the ledger")
 }
 
+// PW.1: connect-time join for route-style WS servers. Positive — a JS
+// client's ws_new_connection matches a Go gorilla ws_upgrade node once it
+// carries a path (post-linker.LinkWSUpgradeRoute state).
+func TestWebSocketRule_ConnectRouteStyle_Go(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "client:connect", Type: graph.NodeTypeHTTPClient, Service: "svc-client",
+			Meta: map[string]string{"pattern": "ws_new_connection", "path": "/notifications"}},
+		{ID: "server:upgrade", Type: graph.NodeTypeHTTPHandler, Service: "svc-go",
+			Meta: map[string]string{"pattern": "ws_upgrade", "path": "/notifications", "method": "GET"}},
+	}
+	res := runKind(t, contract.KindWebSocket, nodes)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, graph.EdgeTypeWSConnect, res.Edges[0].Type)
+	assert.Equal(t, "server:upgrade", res.Edges[0].To)
+}
+
+// PW.1: same rule, Python FastAPI shape — ws_upgrade_fastapi captures its
+// own path directly, no linker stamping needed.
+func TestWebSocketRule_ConnectRouteStyle_Python(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "client:connect", Type: graph.NodeTypeHTTPClient, Service: "svc-client",
+			Meta: map[string]string{"pattern": "ws_new_connection", "path": "/updates"}},
+		{ID: "server:ws", Type: graph.NodeTypeHTTPHandler, Service: "svc-py",
+			Meta: map[string]string{"pattern": "ws_upgrade_fastapi", "path": "/updates", "method": "GET"}},
+	}
+	res := runKind(t, contract.KindWebSocket, nodes)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, graph.EdgeTypeWSConnect, res.Edges[0].Type)
+	assert.Equal(t, "server:ws", res.Edges[0].To)
+}
+
+// Negative: a plain HTTP handler at the same path (not ws_upgrade*) must
+// never be joined by the connect-time rule (PW.1 gate 4).
+func TestWebSocketRule_ConnectRouteStyle_PlainHandlerNotMatched(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "client:connect", Type: graph.NodeTypeHTTPClient, Service: "svc-client",
+			Meta: map[string]string{"pattern": "ws_new_connection", "path": "/health"}},
+		{ID: "server:health", Type: graph.NodeTypeHTTPHandler, Service: "svc-go",
+			Meta: map[string]string{"pattern": "gin_route", "path": "/health", "method": "GET"}},
+	}
+	res := runKind(t, contract.KindWebSocket, nodes)
+	assert.Empty(t, res.Edges)
+}
+
 // Negative: non-ws_send_typed publisher must not be a websocket producer.
 func TestWebSocketRule_WrongProducerPattern_NoEdge(t *testing.T) {
 	nodes := []graph.Node{

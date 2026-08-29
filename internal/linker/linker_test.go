@@ -198,6 +198,73 @@ func TestLinkRouteHandlers_ReceiverMatchIsServiceScoped(t *testing.T) {
 	assert.Empty(t, LinkRouteHandlers(nodes), "no handler in this service, so no edge")
 }
 
+// PW.1: the gin_route registration ("path": "/notifications") calls serveWS,
+// whose body contains the bare ws_upgrade node (no path of its own). The
+// pass must copy path+method onto it so contracts/websocket.yaml's
+// connect-time rule can key on it.
+func TestLinkWSUpgradeRoute_StampsPathFromRegisteringRoute(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "app:routes:http_handler:1", Type: graph.NodeTypeHTTPHandler, Label: "GET /notifications",
+			Service: "app", File: "internal/routes/views.go",
+			Meta: map[string]string{"handler": "serveWS", "path": "/notifications", "method": "GET", "pattern": "gin_route"}},
+		{ID: "app:internal/handlers/ws.go:function:serveWS", Type: graph.NodeTypeFunction, Label: "serveWS",
+			Service: "app", File: "internal/handlers/ws.go", Line: 10, EndLine: 20},
+		{ID: "app:internal/handlers/ws.go:http_handler:ws_upgrade:12", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "internal/handlers/ws.go", Line: 12,
+			Meta: map[string]string{"pattern": "ws_upgrade"}},
+	}
+
+	updated := LinkWSUpgradeRoute(nodes)
+
+	require.Len(t, updated, 1)
+	assert.Equal(t, "app:internal/handlers/ws.go:http_handler:ws_upgrade:12", updated[0].ID)
+	assert.Equal(t, "/notifications", updated[0].Meta["path"])
+	assert.Equal(t, "GET", updated[0].Meta["method"])
+}
+
+// A ws_upgrade call outside the registered handler's line range (a
+// different function entirely) must not receive the route's path — the
+// containment check is load-bearing, not decorative.
+func TestLinkWSUpgradeRoute_OutsideSpanNotStamped(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "app:routes:http_handler:1", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "internal/routes/views.go",
+			Meta: map[string]string{"handler": "serveWS", "path": "/notifications", "method": "GET"}},
+		{ID: "app:internal/handlers/ws.go:function:serveWS", Type: graph.NodeTypeFunction, Label: "serveWS",
+			Service: "app", File: "internal/handlers/ws.go", Line: 10, EndLine: 20},
+		// Unrelated function elsewhere in the same file, with its own ws_upgrade call.
+		{ID: "app:internal/handlers/ws.go:function:otherUpgrade", Type: graph.NodeTypeFunction, Label: "otherUpgrade",
+			Service: "app", File: "internal/handlers/ws.go", Line: 30, EndLine: 40},
+		{ID: "app:internal/handlers/ws.go:http_handler:ws_upgrade:32", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "internal/handlers/ws.go", Line: 32,
+			Meta: map[string]string{"pattern": "ws_upgrade"}},
+	}
+
+	updated := LinkWSUpgradeRoute(nodes)
+
+	assert.Empty(t, updated, "the ws_upgrade node at line 32 is not registered by any route")
+}
+
+// A node that already carries a path (Python's ws_upgrade_fastapi shape)
+// must be left untouched, not overwritten.
+func TestLinkWSUpgradeRoute_AlreadyHasPathSkipped(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "app:routes:http_handler:1", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "internal/routes/views.go",
+			Meta: map[string]string{"handler": "serveWS", "path": "/notifications", "method": "GET"}},
+		{ID: "app:internal/handlers/ws.go:function:serveWS", Type: graph.NodeTypeFunction, Label: "serveWS",
+			Service: "app", File: "internal/handlers/ws.go", Line: 10, EndLine: 20},
+		{ID: "app:internal/handlers/ws.go:http_handler:ws_upgrade_fastapi:12", Type: graph.NodeTypeHTTPHandler,
+			Service: "app", File: "internal/handlers/ws.go", Line: 12,
+			Meta: map[string]string{"pattern": "ws_upgrade_fastapi", "path": "/already-set"}},
+	}
+
+	assert.Empty(t, LinkWSUpgradeRoute(nodes))
+}
+
 func TestLinkRouteComponents(t *testing.T) {
 	t.Parallel()
 	route := graph.Node{

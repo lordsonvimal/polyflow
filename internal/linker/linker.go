@@ -27,15 +27,45 @@ import (
 // the label-only lookup only when the qualifier identifies nothing (a package
 // name, or a local variable whose type we can't see).
 func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
-	// Index function/method nodes: service + "\x00" + label → nodeID, plus a
-	// receiver-qualified index: service + "\x00" + lower(receiver) + "\x00" + label.
-	// Go names a handler variable after its type (`baseImageHandler` for
-	// `BaseImageHandler`), so the qualifier is compared case-insensitively.
-	funcIndex := make(map[string]string)
-	recvIndex := make(map[string]string)
-	// byLabel keeps every same-label candidate in node order so an abbreviated
-	// qualifier can still be narrowed; the first entry reproduces funcIndex.
-	byLabel := make(map[string][]*graph.Node)
+	funcIndex, recvIndex, byLabel := buildHandlerFuncIndexes(nodes)
+
+	var edges []graph.Edge
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeHTTPHandler {
+			continue
+		}
+		handlerName, ok := n.Meta["handler"]
+		if !ok || handlerName == "" {
+			continue
+		}
+		calleeID, ok := resolveHandlerCallee(handlerName, n.Service, funcIndex, recvIndex, byLabel)
+		if !ok {
+			continue
+		}
+		edges = append(edges, graph.Edge{
+			ID:   fmt.Sprintf("calls:%s->%s", n.ID, calleeID),
+			From: n.ID,
+			To:   calleeID,
+			Type: graph.EdgeTypeCalls,
+		})
+	}
+	return edges
+}
+
+// buildHandlerFuncIndexes indexes function/method nodes: service + "\x00" +
+// label → nodeID, plus a receiver-qualified index: service + "\x00" +
+// lower(receiver) + "\x00" + label. Go names a handler variable after its
+// type (`baseImageHandler` for `BaseImageHandler`), so the qualifier is
+// compared case-insensitively. byLabel keeps every same-label candidate in
+// node order so an abbreviated qualifier can still be narrowed; the first
+// entry reproduces funcIndex. Shared by LinkRouteHandlers and
+// LinkWSUpgradeRoute (PW.1), which both resolve a route's Meta["handler"]
+// reference to the function/method node it names.
+func buildHandlerFuncIndexes(nodes []graph.Node) (funcIndex, recvIndex map[string]string, byLabel map[string][]*graph.Node) {
+	funcIndex = make(map[string]string)
+	recvIndex = make(map[string]string)
+	byLabel = make(map[string][]*graph.Node)
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
@@ -52,50 +82,125 @@ func LinkRouteHandlers(nodes []graph.Node) []graph.Edge {
 			}
 		}
 	}
+	return funcIndex, recvIndex, byLabel
+}
 
-	var edges []graph.Edge
+// resolveHandlerCallee resolves a route's Meta["handler"] reference
+// ("baseImageHandler.SaveConfig", "serveWS", ...) to the function/method
+// node it names, preferring a receiver-qualified match over the label-only
+// fallback — see LinkRouteHandlers' doc comment for why.
+func resolveHandlerCallee(handlerName, service string, funcIndex, recvIndex map[string]string, byLabel map[string][]*graph.Node) (string, bool) {
+	// Split the receiver off: "baseImageHandler.SaveConfig" → qualifier
+	// "baseImageHandler", label "SaveConfig".
+	qualifier := ""
+	if dot := strings.LastIndex(handlerName, "."); dot >= 0 {
+		qualifier, handlerName = handlerName[:dot], handlerName[dot+1:]
+	}
+	// Only the innermost segment names the value being called:
+	// "s.appConfigHandler.SaveConfig" → "appConfigHandler".
+	if dot := strings.LastIndex(qualifier, "."); dot >= 0 {
+		qualifier = qualifier[dot+1:]
+	}
+	// A qualifier that names a receiver type pins the handler exactly.
+	calleeID, ok := "", false
+	if qualifier != "" {
+		calleeID, ok = recvIndex[service+"\x00"+strings.ToLower(qualifier)+"\x00"+handlerName]
+	}
+	if !ok && qualifier != "" {
+		calleeID, ok = uniqueAbbreviatedReceiver(byLabel[service+"\x00"+handlerName], qualifier)
+	}
+	if !ok {
+		calleeID, ok = funcIndex[service+"\x00"+handlerName]
+	}
+	return calleeID, ok
+}
+
+// LinkWSUpgradeRoute stamps the route path (and method) that registers a
+// Go WebSocket handler function onto the ws_upgrade node inside it (Tier
+// PW.1). Go's gorilla_websocket.yaml `ws_upgrade` pattern classifies the
+// bare `upgrader.Upgrade(w, r, nil)` call site itself — a node with no path
+// of its own — unlike Python's `ws_upgrade_fastapi` decorator, which
+// captures its path directly from the same node that carries the pattern
+// match. The path lives on a separate route-registration node (gin_route,
+// mux route, ...) that LinkRouteHandlers already resolves to this same
+// handler function; this pass reuses that resolution (buildHandlerFuncIndexes
+// + resolveHandlerCallee) and copies path/method onto any ws_upgrade*-tagged
+// http_handler node whose line range falls inside that function, so
+// contracts/websocket.yaml's connect-time rule can key on it like any other
+// producer/consumer pair. A node that already has a path (Python's shape,
+// or a Go node this pass already visited) is left untouched.
+func LinkWSUpgradeRoute(nodes []graph.Node) []graph.Node {
+	var wsTargets []*graph.Node
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeHTTPHandler {
 			continue
 		}
-		handlerName, ok := n.Meta["handler"]
-		if !ok || handlerName == "" {
+		if !strings.HasPrefix(n.Meta["pattern"], "ws_upgrade") {
 			continue
 		}
-		// Split the receiver off: "baseImageHandler.SaveConfig" → qualifier
-		// "baseImageHandler", label "SaveConfig".
-		qualifier := ""
-		if dot := strings.LastIndex(handlerName, "."); dot >= 0 {
-			qualifier, handlerName = handlerName[:dot], handlerName[dot+1:]
-		}
-		// Only the innermost segment names the value being called:
-		// "s.appConfigHandler.SaveConfig" → "appConfigHandler".
-		if dot := strings.LastIndex(qualifier, "."); dot >= 0 {
-			qualifier = qualifier[dot+1:]
-		}
-		// A qualifier that names a receiver type pins the handler exactly.
-		calleeID, ok := "", false
-		if qualifier != "" {
-			calleeID, ok = recvIndex[n.Service+"\x00"+strings.ToLower(qualifier)+"\x00"+handlerName]
-		}
-		if !ok && qualifier != "" {
-			calleeID, ok = uniqueAbbreviatedReceiver(byLabel[n.Service+"\x00"+handlerName], qualifier)
-		}
-		if !ok {
-			calleeID, ok = funcIndex[n.Service+"\x00"+handlerName]
-		}
-		if !ok {
+		if n.Meta["path"] != "" {
 			continue
 		}
-		edges = append(edges, graph.Edge{
-			ID:   fmt.Sprintf("calls:%s->%s", n.ID, calleeID),
-			From: n.ID,
-			To:   calleeID,
-			Type: graph.EdgeTypeCalls,
-		})
+		wsTargets = append(wsTargets, n)
 	}
-	return edges
+	if len(wsTargets) == 0 {
+		return nil
+	}
+
+	funcIndex, recvIndex, byLabel := buildHandlerFuncIndexes(nodes)
+
+	type funcSpan struct {
+		service, file string
+		start, end    int
+	}
+	spans := make(map[string]funcSpan, len(nodes))
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			spans[n.ID] = funcSpan{n.Service, n.File, n.Line, n.EndLine}
+		}
+	}
+
+	var updated []graph.Node
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeHTTPHandler {
+			continue
+		}
+		path := n.Meta["path"]
+		handlerName := n.Meta["handler"]
+		if path == "" || handlerName == "" {
+			continue
+		}
+		calleeID, ok := resolveHandlerCallee(handlerName, n.Service, funcIndex, recvIndex, byLabel)
+		if !ok {
+			continue
+		}
+		sp, ok := spans[calleeID]
+		if !ok {
+			continue
+		}
+		for _, ws := range wsTargets {
+			if ws.Service != sp.service || ws.File != sp.file {
+				continue
+			}
+			if ws.Line < sp.start || (sp.end > 0 && ws.Line > sp.end) {
+				continue
+			}
+			cp := *ws
+			cp.Meta = make(map[string]string, len(ws.Meta)+2)
+			for k, v := range ws.Meta {
+				cp.Meta[k] = v
+			}
+			cp.Meta["path"] = path
+			if m := n.Meta["method"]; m != "" {
+				cp.Meta["method"] = m
+			}
+			updated = append(updated, cp)
+		}
+	}
+	return updated
 }
 
 // uniqueAbbreviatedReceiver narrows same-label handler candidates using a
@@ -328,8 +433,6 @@ func LinkTemplComponents(nodes []graph.Node) []graph.Edge {
 	}
 	return edges
 }
-
-
 
 // stripMeta strips surrounding quotes from a meta value captured by tree-sitter.
 func stripMeta(s string) string {
@@ -637,7 +740,7 @@ func LinkBrokerHints(links []workspace.Link, nodes []graph.Node) ([]graph.Node, 
 	var newNodes []graph.Node
 	var edges []graph.Edge
 	var unresolved []graph.UnresolvedRef
-	minted := make(map[string]bool)  // synthetic channel ID → already appended
+	minted := make(map[string]bool)   // synthetic channel ID → already appended
 	seenEdge := make(map[string]bool) // edge ID → already emitted
 
 	// channelsFor resolves the node(s) a hint for this exchange should meet on.
@@ -919,8 +1022,6 @@ func isBrokerPattern(pattern string) bool {
 		strings.Contains(pattern, "subscribe")
 }
 
-
-
 // LinkSSEClients connects an EventSource connection to the message handlers
 // registered on it in the same file (es.onmessage = …, es.on('message', …)).
 // Without this edge the subscriber floats disconnected from the stream that
@@ -996,5 +1097,3 @@ func LinkSSEPush(nodes []graph.Node, edges []graph.Edge) []graph.Edge {
 	}
 	return out
 }
-
-
