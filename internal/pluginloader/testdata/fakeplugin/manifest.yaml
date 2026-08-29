@@ -1,0 +1,11 @@
+name: fakeplugin
+version: "0.0.1"
+protocol_version: 1
+entrypoint: ./fakeplugin
+
+components:
+  - id: fake
+    package: fakeplugin-marker
+    language: go
+    patterns: patterns/fake.yaml
+    requires: []
