@@ -1,0 +1,4 @@
+{
+  "patterns": ["ws_read_pump_fastapi", "ws_write_pump_fastapi"],
+  "node_types": ["subscriber", "publisher"]
+}
