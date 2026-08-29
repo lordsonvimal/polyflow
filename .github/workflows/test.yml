@@ -18,6 +18,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # internal/parser/rgrammar's cgo preamble #includes the vendored
+      # tree-sitter-r C source (parser.c/scanner.c/tree_sitter/parser.h),
+      # which is gitignored and fetched on demand — see
+      # internal/parser/rgrammar/fetch.sh and the Makefile's r-grammar
+      # target. `go vet ./...` walks that package too, so without this it
+      # fails with a missing-header cgo error on every fresh checkout.
+      - name: Fetch tree-sitter-r grammar
+        run: bash internal/parser/rgrammar/fetch.sh
+
       # tree-sitter grammars require cgo.
       - name: Run go vet
         run: CGO_ENABLED=1 go vet ./...
