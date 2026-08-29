@@ -29,3 +29,29 @@ patterns:
         role: http_path
       - name: name
         role: func_name
+
+  # @app.websocket("/ws") async def handler(websocket: WebSocket): ...
+  # Named with the ws_upgrade_ prefix (not fastapi_route's "route" substring)
+  # so classifyPattern gives it EdgeTypeWSUpgrade instead of generic
+  # EdgeTypeHTTPCall — same distinction Go's gorilla ws_upgrade pattern draws
+  # between a plain HTTP route and a connection-upgrade entry point.
+  - name: ws_upgrade_fastapi
+    query: |
+      (decorated_definition
+        (decorator
+          (call
+            function: (attribute
+              attribute: (identifier) @method
+              (#eq? @method "websocket"))
+            arguments: (argument_list
+              .
+              (string) @path)))
+        (function_definition
+          name: (identifier) @name))
+    captures:
+      - name: method
+        role: http_method
+      - name: path
+        role: http_path
+      - name: name
+        role: func_name

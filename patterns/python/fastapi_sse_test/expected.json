@@ -1,0 +1,4 @@
+{
+  "patterns": ["sse_streaming_response_python"],
+  "node_types": ["http_handler"]
+}

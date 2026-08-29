@@ -25,3 +25,8 @@ def utility():
 @property
 def name(self):
     return self._name
+
+
+class Handler:
+    def websocket(self, path):
+        return path

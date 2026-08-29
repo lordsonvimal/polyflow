@@ -1,4 +1,4 @@
 {
-  "patterns": ["fastapi_route", "fastapi_route", "fastapi_route", "fastapi_route"],
-  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler"]
+  "patterns": ["fastapi_route", "fastapi_route", "fastapi_route", "fastapi_route", "ws_upgrade_fastapi"],
+  "node_types": ["http_handler", "http_handler", "http_handler", "http_handler", "http_handler"]
 }
