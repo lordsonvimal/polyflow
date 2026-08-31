@@ -144,28 +144,39 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	oldEmbedMeta := map[string]string{}
 	var oldStore *graph.SQLiteStore
 	oldSchemaOK := false
-	if !opts.Full {
-		if _, err := os.Stat(finalDB); err == nil {
-			if s, err := graph.NewSQLiteStore(finalDB); err == nil {
-				oldStore = s
-				// Cached results from an older data-model generation are
-				// unusable — ignore them all and re-index from scratch.
-				ver, _ := oldStore.GetMeta(ctx, "schema_version")
-				if ver == graph.SchemaVersion {
-					oldSchemaOK = true
+	if _, err := os.Stat(finalDB); err == nil {
+		if s, err := graph.NewSQLiteStore(finalDB); err == nil {
+			oldStore = s
+			// Cached results from an older data-model generation are
+			// unusable — ignore them all and re-index from scratch.
+			ver, _ := oldStore.GetMeta(ctx, "schema_version")
+			if ver == graph.SchemaVersion {
+				oldSchemaOK = true
+				// The Go-semantic load-mode hint is a pure performance hint —
+				// it only decides whether AnalyzeService bothers trying the
+				// LoadSyntax fast path before falling back to LoadAllSyntax, and
+				// both produce a correct graph. So it's honored even under
+				// --full, where every other cached table is deliberately
+				// ignored.
+				for _, svc := range services {
+					if m, e := oldStore.GetMeta(ctx, "gosem_mode:"+svc.Name); e == nil && m == "allsyntax" {
+						parser.SetGoSemSkipFastPath(svc.Name)
+					}
+				}
+				if !opts.Full {
 					if fp, err := oldStore.GetMeta(ctx, "workspace_fingerprint"); err == nil {
 						oldFingerprint = fp
 					}
-				} else {
-					fmt.Fprintf(logw, "  Schema version changed (%q → %q) — full re-index\n", ver, graph.SchemaVersion)
 				}
+			} else if !opts.Full {
+				fmt.Fprintf(logw, "  Schema version changed (%q → %q) — full re-index\n", ver, graph.SchemaVersion)
 			}
 		}
 	}
 	// loadIncrementalCache pulls the heavy per-file/per-service tables. Called
 	// only once the no-change fast path has been ruled out.
 	loadIncrementalCache := func() {
-		if oldStore == nil || !oldSchemaOK {
+		if oldStore == nil || !oldSchemaOK || opts.Full {
 			return
 		}
 		if hs, err := oldStore.ListFileHashes(ctx); err == nil {
@@ -644,6 +655,17 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 			fmt.Fprintf(logw, "  Semantic analysis: %s...\n", sf.svc.Name)
 			sem := analyzer.AnalyzeService(absSvcPath, sf.svc.Name, fset, knownNodeIDs)
+			// Persist the Go load-mode outcome so the next run skips the
+			// LoadSyntax fast path when it's known to be doomed (see
+			// AnalyzeService / gosemSkipFastPath). Written to the build store,
+			// which becomes finalDB on swap.
+			if sf.svc.Language == "go" {
+				mode := "syntax"
+				if sem.UsedFallbackMode {
+					mode = "allsyntax"
+				}
+				_ = store.SetMeta(ctx, "gosem_mode:"+sf.svc.Name, mode)
+			}
 			if sem.Warning != "" {
 				fmt.Fprintf(logw, "  Warning: %s\n", sem.Warning)
 				semanticWarnings = append(semanticWarnings, sem.Warning)

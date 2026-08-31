@@ -33,6 +33,11 @@ type SemanticResult struct {
 	// an external package (framework callbacks like templ's Visitor). Roots
 	// in this set classify as "callback" rather than "unreachable".
 	Referenced []string
+	// UsedFallbackMode is set by the Go analyzer when the fast LoadSyntax
+	// attempt failed and it fell back to LoadAllSyntax. The indexer persists
+	// this as a per-service hint so the next run skips the doomed fast-path
+	// load (~1.4s on a polyflow-sized module).
+	UsedFallbackMode bool
 }
 
 var serviceAnalyzerRegistry = map[string]ServiceAnalyzer{}
