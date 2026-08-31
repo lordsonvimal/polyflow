@@ -203,19 +203,35 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			}
 		}
 
-		seen := make(map[string]bool)
+		// resolveImportCalls re-parses and walks each JS file — the bulk of this
+		// pass. Files are independent (they only read the shared read-only
+		// indexes), so run them across GOMAXPROCS and merge in file order for a
+		// byte-identical result.
+		var jsFiles []string
 		for _, file := range files {
-			if !isJSFile(file) {
-				continue
+			if isJSFile(file) {
+				jsFiles = append(jsFiles, file)
 			}
-			importEdges, fileUnresolved, fileImported := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile, funcByFileAndLabel, varByFileAndLabel)
-			for _, e := range importEdges {
+		}
+		type fileRes struct {
+			edges      []graph.Edge
+			unresolved []graph.UnresolvedRef
+			imported   map[string]bool
+		}
+		perFile := mapParallel(jsFiles, func(file string) fileRes {
+			e, u, im := resolveImportCalls(file, svcFuncByLabel, svcVarByLabel, funcLinesByFile, funcByFileAndLabel, varByFileAndLabel)
+			return fileRes{e, u, im}
+		})
+		seen := make(map[string]bool)
+		for i, file := range jsFiles {
+			r := perFile[i]
+			for _, e := range r.edges {
 				if !seen[e.ID] {
 					seen[e.ID] = true
 					newEdges = append(newEdges, e)
 				}
 			}
-			for _, u := range fileUnresolved {
+			for _, u := range r.unresolved {
 				u.Service = svcName
 				unresolved = append(unresolved, u)
 			}
@@ -223,7 +239,7 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			// call_ref.File, which is the parser's cwd-relative form — not
 			// whatever absoluteness svcFiles happened to use.
 			relFile := patterns.RelativizeToCwd(file)
-			for name := range fileImported {
+			for name := range r.imported {
 				importedNames[relFile+"\x00"+name] = true
 			}
 		}
