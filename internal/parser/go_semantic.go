@@ -382,6 +382,23 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 	closureParamCounts := make(map[string]int) // siteID+"->"+targetID for closure-param invocations (below)
 	var edges []graph.Edge
 
+	// Index concrete methods by name for interface-invoke resolution. Every
+	// `iface.Method(...)` call site below otherwise rescans all of allFns
+	// (~60k on a repo with many deps) calling matchesInvoke — O(callSites ×
+	// allFns), which profiled as the single biggest cost of the SSA walk
+	// (~1.5s of a polyflow self-index). matchesInvoke's first filter is
+	// `fn.Name() != call.Method.Name()`, so bucketing by name collapses the
+	// candidate set to a handful. Bucket contents only feed the set-valued
+	// callPairs/spawnPairs maps, so map iteration order here can't reach
+	// output.
+	methodsByName := make(map[string][]*ssa.Function)
+	for fn := range allFns {
+		if fn.Synthetic != "" || fn.Signature.Recv() == nil {
+			continue
+		}
+		methodsByName[fn.Name()] = append(methodsByName[fn.Name()], fn)
+	}
+
 	// WS.1: in-service forwarders that construct+return a datastar SSE generator,
 	// so a handler calling the wrapper (not datastar.NewSSE directly) is still
 	// flagged as an SSE streamer.
@@ -547,12 +564,11 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 								renderTargets = append(renderTargets, compID)
 							}
 						}
-						for fn := range allFns {
-							if fn.Synthetic != "" {
-								continue
-							}
-							if matchesInvoke(common, fn) {
-								callees = append(callees, fn)
+						if common.Method != nil {
+							for _, fn := range methodsByName[common.Method.Name()] {
+								if matchesInvoke(common, fn) {
+									callees = append(callees, fn)
+								}
 							}
 						}
 					} else if fn, ok2 := common.Value.(*ssa.Function); ok2 {
