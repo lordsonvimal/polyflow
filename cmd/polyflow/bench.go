@@ -514,7 +514,19 @@ const polyflowNudge = "A `polyflow` MCP server is registered for this session. "
 	"verbose per-hop JSON), so a bounded-but-generous deep call from the true " +
 	"root is cheap and finds one-hop siblings (health checks, error parsing, " +
 	"repository writes) that a series of narrow guesses from the wrong " +
-	"starting points will miss."
+	"starting points will miss. For a \"what else do I need to touch\" " +
+	"question specifically, pass direction=both on the impact call, not the " +
+	"tool's own default (backward only). Backward alone answers \"what " +
+	"breaks if I change this\" — it does NOT include what the target itself " +
+	"reads or dispatches into (an instance variable the target only reads, a " +
+	"service object it calls out to), which is exactly what \"what do I need " +
+	"to touch\" is asking for. Also pass include_noise: [\"mixin\"] " +
+	"when the target is a method on a class that inherits from another class " +
+	"or includes a concern/module — an inherited base class or a Rails " +
+	"before_action/concern is real code you may need to touch (e.g. a base " +
+	"controller's render/auth helper), and it is hidden from the default " +
+	"impact answer as noise because most callers only want the target's own " +
+	"call chain."
 
 // callClaude invokes `claude -p --output-format json` and returns the parsed
 // transcript, or the class and detail of the failure.
