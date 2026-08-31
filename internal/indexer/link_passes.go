@@ -9,6 +9,7 @@ import (
 	contractdata "github.com/lordsonvimal/polyflow/contracts"
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
+	"github.com/lordsonvimal/polyflow/internal/evidence"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/pluginloader"
@@ -75,6 +76,13 @@ type linkPipelineState struct {
 	allEdges      []graph.Edge
 	allUnresolved []graph.UnresolvedRef
 
+	// nodeRef caches node ID → static provenance ref ("<file>:<line>") so
+	// writeEdges can stamp each edge's static Sources as it persists it,
+	// letting the F.0 reconciler skip re-upserting the whole edge table.
+	// Rebuilt whenever allNodes' length changes (a pass added/removed nodes).
+	nodeRef    map[string]string
+	nodeRefLen int
+
 	// targetServices restricts what a scopeCrossService pass's edge-emitting
 	// call persists to edges touching one of these services (see
 	// filterByTargetServices). nil/empty — Run()'s only setting today — is a
@@ -132,9 +140,17 @@ type linkPipelineState struct {
 // writeEdges appends edges to the store and to allEdges — the same helper
 // every pass used inline as a closure before this extraction.
 func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
+	if st.nodeRef == nil || len(st.allNodes) != st.nodeRefLen {
+		st.nodeRef = make(map[string]string, len(st.allNodes))
+		for i := range st.allNodes {
+			st.nodeRef[st.allNodes[i].ID] = evidence.StaticEdgeRef(&st.allNodes[i])
+		}
+		st.nodeRefLen = len(st.allNodes)
+	}
 	bwE := graph.NewBatchWriter(st.store)
 	for i := range edges {
 		e := edges[i]
+		evidence.StampStatic(&e, st.nodeRef[e.From])
 		if err := bwE.AddEdge(st.ctx, &e); err != nil {
 			return err
 		}
