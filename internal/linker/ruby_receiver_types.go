@@ -149,17 +149,23 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFi
 			ix.byName = map[string][]string{}
 		}
 		byDecl := byDeclByService[svcName]
-		for _, a := range asts {
-			for _, d := range collectRubyClassDecls(a.root, a.src, a.file, nil) {
+		declSets := mapParallel(asts, func(a rubyRTFileAST) []rubyDecl {
+			return collectRubyClassDecls(a.root, a.src, a.file, nil)
+		})
+		for _, decls := range declSets {
+			for _, d := range decls {
 				if id, ok := byDecl[declKey(d.file, d.name, d.line)]; ok {
 					ix.byQual[d.qualified()] = append(ix.byQual[d.qualified()], id)
 				}
 			}
 		}
 
+		refSets := mapParallel(asts, func(a rubyRTFileAST) []classMethodCallRef {
+			return scanRubyReceiverTypedCalls(a.root, a.src, a.file, svcName, ivarType, methodReturnType)
+		})
 		var refs []classMethodCallRef
-		for _, a := range asts {
-			refs = append(refs, scanRubyReceiverTypedCalls(a.root, a.src, a.file, svcName, ivarType, methodReturnType)...)
+		for _, s := range refSets {
+			refs = append(refs, s...)
 		}
 		releaseRubyFiles(asts)
 

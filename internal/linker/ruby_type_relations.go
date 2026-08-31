@@ -98,21 +98,26 @@ func LinkRubyTypeRelations(nodes []graph.Node, serviceFiles map[string][]string)
 
 		// Pass 1: every declaration in the service, with the namespace it sits in.
 		// A reference cannot be resolved until the whole service has been read —
-		// the definition it names is usually in another file.
+		// the definition it names is usually in another file. The per-file scan
+		// is parallel; the merge below stays in file order.
+		type rubyTypeScan struct {
+			decls []rubyDecl
+			refs  []rubyTypeRef
+		}
+		scans := mapParallel(filterRubyFiles(files), func(file string) rubyTypeScan {
+			d, r := scanRubyTypes(file, svcName)
+			return rubyTypeScan{decls: d, refs: r}
+		})
 		var refs []rubyTypeRef
-		for _, file := range files {
-			if !isRubyFile(file) {
-				continue
-			}
-			decls, fileRefs := scanRubyTypes(file, svcName)
-			for _, d := range decls {
+		for _, s := range scans {
+			for _, d := range s.decls {
 				id, ok := byDecl[declKey(d.file, d.name, d.line)]
 				if !ok {
 					continue // no node for it; the byName fallback still covers the name
 				}
 				ix.byQual[d.qualified()] = append(ix.byQual[d.qualified()], id)
 			}
-			refs = append(refs, fileRefs...)
+			refs = append(refs, s.refs...)
 		}
 
 		// Pass 2: resolve.

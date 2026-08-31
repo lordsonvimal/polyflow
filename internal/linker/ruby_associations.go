@@ -71,12 +71,12 @@ func LinkRubyAssociations(nodes []graph.Node, serviceFiles map[string][]string) 
 			byName = map[string][]string{}
 		}
 
+		scans := mapParallel(filterRubyFiles(files), func(file string) []classAssociationRef {
+			return scanRubyAssociations(file, svcName)
+		})
 		var refs []classAssociationRef
-		for _, file := range files {
-			if !isRubyFile(file) {
-				continue
-			}
-			refs = append(refs, scanRubyAssociations(file, svcName)...)
+		for _, s := range scans {
+			refs = append(refs, s...)
 		}
 
 		for _, ref := range refs {
