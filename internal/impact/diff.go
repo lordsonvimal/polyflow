@@ -47,6 +47,13 @@ type DiffResult struct {
 	Budget              *budget.Info                 `json:"budget,omitempty"`
 }
 
+// MarshalJSON groups the flat Unresolved list by file — see
+// GroupUnresolvedByFile and Result.MarshalJSON.
+func (r *DiffResult) MarshalJSON() ([]byte, error) {
+	type diffResultAlias DiffResult
+	return marshalWithGroupedUnresolved((*diffResultAlias)(r), r.Unresolved, r.ServicesAffected)
+}
+
 // BuildDiff maps changed spans to graph nodes and computes their union blast
 // radius under opts: ancestors of every changed node merged at minimum depth
 // (<= 0 depth means unlimited), optionally filtered to one service. Spans that
@@ -285,6 +292,13 @@ type DiffSummary struct {
 	UnresolvedNote      string                       `json:"unresolved_note,omitempty"`
 	VerificationSummary graph.VerificationSummary    `json:"verification_summary"`
 	Budget              *budget.Info                 `json:"budget,omitempty"`
+}
+
+// MarshalJSON groups the flat Unresolved list by file — see
+// GroupUnresolvedByFile and Result.MarshalJSON.
+func (s *DiffSummary) MarshalJSON() ([]byte, error) {
+	type diffSummaryAlias DiffSummary
+	return marshalWithGroupedUnresolved((*diffSummaryAlias)(s), s.Unresolved, s.ServicesAffected)
 }
 
 // Summarize rolls the per-node blast radius up into per-file entries.

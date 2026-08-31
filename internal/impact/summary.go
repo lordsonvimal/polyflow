@@ -131,6 +131,13 @@ type Summary struct {
 	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
 }
 
+// MarshalJSON groups the flat Unresolved list by file — see
+// GroupUnresolvedByFile and Result.MarshalJSON.
+func (s *Summary) MarshalJSON() ([]byte, error) {
+	type summaryAlias Summary
+	return marshalWithGroupedUnresolved((*summaryAlias)(s), s.Unresolved, s.ServicesAffected)
+}
+
 // rollupCallers groups blast-radius callers by file, the low-token
 // representation shared by the node-target and diff summaries.
 func rollupCallers(callers []Caller) []FileRollup {

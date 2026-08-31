@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/impact"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
 
@@ -447,16 +448,20 @@ func TestImpactTool_NodeMode(t *testing.T) {
 	cs := connect(t, store, idx)
 
 	var out struct {
-		Target       graph.Node            `json:"target"`
-		TotalCallers int                   `json:"total_callers"`
-		Unresolved   []graph.UnresolvedRef `json:"unresolved"`
+		Target       graph.Node                   `json:"target"`
+		TotalCallers int                          `json:"total_callers"`
+		Unresolved   []impact.UnresolvedFileGroup `json:"unresolved"`
 	}
 	callJSON(t, cs, "impact", map[string]any{"target": "queryDB"}, &out)
 
 	assert.Equal(t, "be:queryDB", out.Target.ID)
 	assert.Equal(t, 2, out.TotalCallers)
+	// Unresolved is now grouped by file (see GroupUnresolvedByFile): a
+	// single-file, single-service ledger is one group with one entry, not a
+	// flat one-element list.
 	require.Len(t, out.Unresolved, 1)
-	assert.Equal(t, "dynDispatch", out.Unresolved[0].Name)
+	require.Len(t, out.Unresolved[0].Entries, 1)
+	assert.Equal(t, "dynDispatch", out.Unresolved[0].Entries[0].Name)
 }
 
 func TestImpactTool_CarriesTrust(t *testing.T) {

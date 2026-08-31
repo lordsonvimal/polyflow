@@ -22,6 +22,15 @@ type FileResult struct {
 	Budget         *budget.Info          `json:"budget,omitempty"`
 }
 
+// MarshalJSON groups the flat Unresolved list by file — see
+// GroupUnresolvedByFile and Result.MarshalJSON. FileResult is always
+// single-service by construction (File/Service name one file in one
+// service), so the per-entry service is always omitted.
+func (r *FileResult) MarshalJSON() ([]byte, error) {
+	type fileResultAlias FileResult
+	return marshalWithGroupedUnresolved((*fileResultAlias)(r), r.Unresolved, []string{r.Service})
+}
+
 // BuildFile computes the file-granularity blast radius of path under opts
 // (Depth, Service, Direction and Policy; the rest do not apply at file
 // granularity). It errors when the file has no nodes in the index.
