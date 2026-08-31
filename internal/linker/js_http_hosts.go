@@ -1,8 +1,6 @@
 package linker
 
 import (
-	"context"
-	"os"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -125,16 +123,8 @@ func parseJSHostFile(file string) *jsHostFile {
 	if !isJSFile(file) {
 		return nil
 	}
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return nil
-	}
-	lang := grammarLangForFile(file)
-	if lang == nil {
-		return nil
-	}
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil || root == nil {
+	src, root, _, ok := jsParse(file)
+	if !ok {
 		return nil
 	}
 	return &jsHostFile{src: src, root: root}

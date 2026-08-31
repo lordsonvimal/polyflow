@@ -1,9 +1,7 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -174,13 +172,8 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 // the wrapper table is only known after all files are collected, so the call
 // sites can't have been captured with this knowledge at parse time.
 func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []graph.Node {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return nil
-	}
-	lang := grammarLangForFile(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
+	src, root, lang, ok := jsParse(file)
+	if !ok {
 		return nil
 	}
 
@@ -283,13 +276,8 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 // scanJSWrapperCallSites' re-parse rationale: the wrapper table two hops
 // out is only known after this same pass has already run once.
 func discoverJSTransitiveWrappers(file string, wrappers map[string]int) map[string]int {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return nil
-	}
-	lang := grammarLangForFile(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil || root == nil {
+	src, root, _, ok := jsParse(file)
+	if !ok {
 		return nil
 	}
 
