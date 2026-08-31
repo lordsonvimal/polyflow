@@ -346,6 +346,48 @@ end
 	}
 }
 
+// TestRubyVariables_NamespacedConstantReceiverCallResolvesSelfMethod covers
+// the Rails "service object" idiom (`Namespace::Class.call(...)`) whose
+// receiver is a `scope_resolution` node, not a bare `constant` — previously
+// unhandled, so `UserLicenses::RetireService.call(...)` never resolved even
+// though the plain `UserCategoryRuleSet.latest_for(...)` shape above already
+// did. Compact declaration spelling (`class UserLicenses::RetireService`)
+// keeps the parser's classTable key identical to the receiver text.
+func TestRubyVariables_NamespacedConstantReceiverCallResolvesSelfMethod(t *testing.T) {
+	t.Parallel()
+	src := `class UserLicensesController
+  def process_update
+    UserLicenses::RetireService.call(user_license: @user_license)
+  end
+end
+
+class UserLicenses::RetireService
+  def self.call(user_license:)
+    true
+  end
+end
+`
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/user_licenses_controller.rb", "shop", []byte(src))
+
+	var call *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "call" {
+			call = &nodes[i]
+		}
+	}
+	if call == nil {
+		t.Fatalf("expected UserLicenses::RetireService.call node; nodes: %+v", nodes)
+	}
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:process_update", "function:call") == nil {
+		t.Errorf("missing calls edge process_update -> UserLicenses::RetireService.call; edges: %+v", edges)
+	}
+	for _, u := range unresolved {
+		if u.Name == "call" {
+			t.Errorf("resolved namespaced-constant-receiver call must not also be ledgered: %+v", u)
+		}
+	}
+}
+
 func TestRubyVariables_ConstantReceiverFrameworkCallNotLedgered(t *testing.T) {
 	t.Parallel()
 	// Product.find_by is a `ClassName.method` call to an ActiveRecord finder

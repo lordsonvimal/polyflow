@@ -77,6 +77,68 @@ end
 	}
 }
 
+// TestLinkRubyClassMethodCalls_NamespacedReceiverResolves covers the exact
+// orion-atlas gap found by E.2's agent bench: `UserLicensesController#update`
+// dispatches to `UserLicenses::RetireService.call(...)`, a cross-file,
+// namespaced receiver (`scope_resolution`, not a bare `constant`). The
+// service class is declared `module UserLicenses; class RetireService`
+// (nesting, not compact `class UserLicenses::RetireService`) — the shape
+// real Rails service objects use — so this also exercises rubyDecl.ns
+// picking the namespace up from the enclosing module rather than the class
+// name text.
+func TestLinkRubyClassMethodCalls_NamespacedReceiverResolves(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	controller := writeRuby(t, dir, "user_licenses_controller.rb", `
+class UserLicensesController
+  def process_update
+    UserLicenses::RetireService.call(user_license: @user_license)
+  end
+end
+`)
+	service := writeRuby(t, dir, "retire_service.rb", `
+module UserLicenses
+  class RetireService
+    def self.call(user_license:)
+      true
+    end
+  end
+end
+`)
+
+	process := classCallFuncNode("svc", controller, "UserLicensesController", "process_update", 3)
+	nodes := []graph.Node{
+		rubyClassNode("svc", controller, "UserLicensesController", 2),
+		process,
+		rubyClassNode("svc", service, "RetireService", 3),
+		classCallFuncNode("svc", service, "RetireService", "call", 4),
+	}
+	serviceFiles := map[string][]string{"svc": {controller, service}}
+
+	edges, unresolved := LinkRubyClassMethodCalls(nodes, serviceFiles)
+
+	var got *graph.Edge
+	for i := range edges {
+		if edges[i].From == process.ID && edges[i].Type == graph.EdgeTypeCalls {
+			got = &edges[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("missing calls edge from process_update; edges: %+v", edges)
+	}
+	wantTo := "svc:" + service + ":function:call:4"
+	if got.To != wantTo {
+		t.Errorf("edge should land on the call method node, got To=%q want %q", got.To, wantTo)
+	}
+	if got.Meta["granularity"] == "class" {
+		t.Errorf("a resolvable method must not fall back to class granularity: %+v", got)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("an unambiguous resolution must not be ledgered: %+v", unresolved)
+	}
+}
+
 // TestLinkRubyClassMethodCalls_FrameworkCallFallsBackToClass covers
 // Product.find_by: Product is a real, cross-file model class, but no
 // repository defines `find_by` — it's an ActiveRecord finder. The edge must

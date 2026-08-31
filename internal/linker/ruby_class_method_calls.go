@@ -330,7 +330,8 @@ func scanRubyClassMethodCalls(file, svcName string) ([]rubyDecl, []classMethodCa
 					case "new", "include", "extend", "prepend":
 						// resolved elsewhere (instantiates/inherits)
 					default:
-						if recv := n.ChildByFieldName("receiver"); recv != nil && recv.Type() == "constant" {
+						if recv := n.ChildByFieldName("receiver"); recv != nil &&
+							(recv.Type() == "constant" || recv.Type() == "scope_resolution") {
 							ref := recv.Content(src)
 							if !sameFile[ref] {
 								refs = append(refs, classMethodCallRef{
