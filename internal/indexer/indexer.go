@@ -695,11 +695,18 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			knownNodeIDs[n.ID] = true
 			allNodes = append(allNodes, n)
 		}
+		semNodeRef := make(map[string]string, len(allNodes))
+		for i := range allNodes {
+			semNodeRef[allNodes[i].ID] = evidence.StaticEdgeRef(&allNodes[i])
+		}
 		for i := range semEdges {
 			e := semEdges[i]
 			if !knownNodeIDs[e.From] || !knownNodeIDs[e.To] {
 				continue
 			}
+			// Stamp static provenance up front (like link_passes.writeEdges) so
+			// the F.0 reconciler doesn't re-upsert every semantic edge.
+			evidence.StampStatic(&e, semNodeRef[e.From])
 			if err := bwSem.AddEdge(ctx, &e); err != nil {
 				return nil, err
 			}
@@ -826,8 +833,32 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 				return nil, fmt.Errorf("persist reconciled node: %w", err)
 			}
 		}
+		// The link/semantic passes already stamped static provenance on every
+		// edge as they wrote it (link_passes.writeEdges / the semantic loop
+		// above), so only re-upsert the edges the reconciler actually changed:
+		// gap edges it minted, and edges a non-static provider confirmed
+		// (Sources grew, VerificationState / VerifiedGranularity moved). On a
+		// static-only fleet that's a handful instead of the whole ~80k table.
+		preByID := make(map[string]*graph.Edge, len(allEdges))
+		for i := range allEdges {
+			preByID[allEdges[i].ID] = &allEdges[i]
+		}
+		// A handful of edge IDs are written more than once with different
+		// Label/Meta (e.g. a dom_target→handler edge minted by two passes).
+		// SQLite is last-write-wins and the reconciler's output order is the
+		// authoritative one, so those must always be re-written; only unique
+		// IDs whose provenance is unchanged can be skipped.
+		idCount := make(map[string]int, len(result.Edges))
+		for i := range result.Edges {
+			idCount[result.Edges[i].ID]++
+		}
 		for i := range result.Edges {
 			e := result.Edges[i]
+			if idCount[e.ID] == 1 {
+				if prev, ok := preByID[e.ID]; ok && evidenceEdgeUnchanged(prev, &e) {
+					continue
+				}
+			}
 			if err := bwEv.AddEdge(ctx, &e); err != nil {
 				return nil, fmt.Errorf("persist reconciled edge: %w", err)
 			}
@@ -1334,6 +1365,27 @@ func stampRootKind(n *graph.Node, kind string) {
 		n.Meta = map[string]string{}
 	}
 	n.Meta["root_kind"] = kind
+}
+
+// evidenceEdgeUnchanged reports whether the F.0 reconciler left an edge's
+// provenance exactly as the link/semantic passes already persisted it — the
+// only fields Reconcile can touch are Sources, VerificationState and
+// VerifiedGranularity (it never rewrites From/To/Type, and mints gap edges
+// under fresh IDs). When true the indexer skips the redundant re-upsert.
+func evidenceEdgeUnchanged(prev, next *graph.Edge) bool {
+	if prev.VerificationState != next.VerificationState ||
+		prev.VerifiedGranularity != next.VerifiedGranularity ||
+		len(prev.Sources) != len(next.Sources) {
+		return false
+	}
+	for i := range prev.Sources {
+		a, b := prev.Sources[i], next.Sources[i]
+		if a.Provider != b.Provider || a.Confidence != b.Confidence || a.Ref != b.Ref ||
+			a.ObservedAt != b.ObservedAt || a.CodeFile != b.CodeFile || a.CodeFunc != b.CodeFunc {
+			return false
+		}
+	}
+	return true
 }
 
 // classifyRoot stamps n's root_kind meta (entrypoint / callback /
