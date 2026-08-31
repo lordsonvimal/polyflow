@@ -56,7 +56,7 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 		jsNodes, jsEdges, jsUnresolved := patterns.MatchToGraph(service, jsResults)
 		setLanguage(jsNodes, "javascript")
 
-		varNodes, varEdges, varUnresolved, jqListeners := extractJSVariables(file, service, "javascript", "javascript", blankedHTML)
+		varNodes, varEdges, varUnresolved, jqListeners := extractJSVariables(file, service, "javascript", "javascript", blankedHTML, nil)
 		stampJQueryHandlers(jsNodes, jqListeners)
 		jsEdges = reattributeJQueryHandlers(jsNodes, jsEdges, jqListeners)
 		jsNodes = mergeJSNodes(jsNodes, varNodes)
@@ -85,7 +85,7 @@ func (p *ERBParser) Parse(file, service string, matcher *patterns.TreeSitterMatc
 	setLanguage(rubyNodes, "ruby")
 
 	// Structural variable pass (constants, class hierarchy, ivar reads/writes).
-	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, virtualRuby)
+	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, virtualRuby, nil)
 
 	nodes := append(htmlNodes, rubyNodes...)
 	nodes = append(nodes, varNodes...)

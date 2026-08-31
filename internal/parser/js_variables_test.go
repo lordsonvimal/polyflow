@@ -44,7 +44,7 @@ func parseJSVarFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	nodes, edges, _, _ := extractJSVariables(file, "web", "javascript", "javascript", src)
+	nodes, edges, _, _ := extractJSVariables(file, "web", "javascript", "javascript", src, nil)
 	return nodes, edges
 }
 
@@ -95,7 +95,7 @@ func TestJSVariables_NestedLocalCallEdgesDoNotCollide(t *testing.T) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	nodes, edges, unresolved, _ := extractJSVariables(file, "web", "javascript", "javascript", src)
+	nodes, edges, unresolved, _ := extractJSVariables(file, "web", "javascript", "javascript", src, nil)
 	_ = unresolved
 
 	var elNodes []graph.Node
@@ -173,7 +173,7 @@ func TestJSVariables_AccessorMethodsStampedJSAccessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	nodes, _, _, _ := extractJSVariables(file, "web", "javascript", "javascript", src)
+	nodes, _, _, _ := extractJSVariables(file, "web", "javascript", "javascript", src, nil)
 
 	var getters, setters, plain int
 	for _, n := range nodes {
@@ -306,7 +306,7 @@ func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
   };
 }
 `)
-	nodes, edges, _, _ := extractJSVariables("move-sync.js", "web", "javascript", "javascript", src)
+	nodes, edges, _, _ := extractJSVariables("move-sync.js", "web", "javascript", "javascript", src, nil)
 
 	if jsNode(nodes, graph.NodeTypeFunction, "enqueue") == nil {
 		t.Fatalf("named function expression enqueue has no backing node; nodes: %+v", nodes)
@@ -334,7 +334,7 @@ func TestJSVariables_NamedFunctionExpressionCapture(t *testing.T) {
 func TestJSVariables_TSTypeAnnotation(t *testing.T) {
 	t.Parallel()
 	src := []byte("const layouts: string[] = [];\nexport const port: number = 4;\n")
-	nodes, _, _, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src)
+	nodes, _, _, _ := extractJSVariables("x.ts", "web", "typescript", "typescript", src, nil)
 
 	l := jsNode(nodes, graph.NodeTypeVariable, "layouts")
 	if l == nil || l.Meta["data_type"] != "string[]" {

@@ -27,7 +27,7 @@ end
 
 func parseRubyVarFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 	t.Helper()
-	nodes, edges, _ := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(rubyVarFixture))
+	nodes, edges, _ := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(rubyVarFixture), nil)
 	return nodes, edges
 }
 
@@ -138,7 +138,7 @@ end
 
 func TestRubyVariables_BareCallResolvesSameClass(t *testing.T) {
 	t.Parallel()
-	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
 		t.Errorf("missing calls edge create -> validate; edges: %+v", edges)
@@ -147,7 +147,7 @@ func TestRubyVariables_BareCallResolvesSameClass(t *testing.T) {
 
 func TestRubyVariables_ExplicitSelfCallResolves(t *testing.T) {
 	t.Parallel()
-	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:notify") == nil {
 		t.Errorf("missing calls edge create -> self.notify; edges: %+v", edges)
@@ -156,7 +156,7 @@ func TestRubyVariables_ExplicitSelfCallResolves(t *testing.T) {
 
 func TestRubyVariables_SameNameDifferentClassDoesNotCollide(t *testing.T) {
 	t.Parallel()
-	nodes, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+	nodes, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture), nil)
 
 	// UserManager#create calls UserManager#notify — must NOT resolve to
 	// OrderManager#notify even though both classes are in the same file and
@@ -184,7 +184,7 @@ func TestRubyVariables_BareCallForwardReferenceResolves(t *testing.T) {
 	t.Parallel()
 	// later_helper is defined below notify() in the file — forward
 	// references must still resolve via the pre-collection pass.
-	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture))
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(rubyCallsFixture), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:notify", "function:later_helper") == nil {
 		t.Errorf("missing forward-reference calls edge notify -> later_helper; edges: %+v", edges)
@@ -207,7 +207,7 @@ func TestRubyVariables_UnresolvableBareCallGoesToLedger(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/controllers/orders_controller.rb", "shop", []byte(src), nil)
 
 	var gotAudit, gotRender bool
 	for _, u := range unresolved {
@@ -240,7 +240,7 @@ func TestRubyVariables_ERBViewBareCallLedgered(t *testing.T) {
 	src := `
   unique_names(workflows)
 `
-	_, _, unresolved := extractRubyVariables("app/views/task_lists/_filters.html.erb", "app", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/views/task_lists/_filters.html.erb", "app", []byte(src), nil)
 
 	var got bool
 	for _, u := range unresolved {
@@ -258,7 +258,7 @@ func TestRubyVariables_ERBViewSelfCallLedgered(t *testing.T) {
 	src := `
   self.current_organization
 `
-	_, _, unresolved := extractRubyVariables("app/views/layouts/_nav.html.erb", "app", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/views/layouts/_nav.html.erb", "app", []byte(src), nil)
 
 	var got bool
 	for _, u := range unresolved {
@@ -279,7 +279,7 @@ func TestRubyVariables_ERBViewLocalNotMistakenForCall(t *testing.T) {
   workflows = @study.workflows
   workflows
 `
-	_, _, unresolved := extractRubyVariables("app/views/studies/_show.html.erb", "app", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/views/studies/_show.html.erb", "app", []byte(src), nil)
 
 	for _, u := range unresolved {
 		if u.Name == "workflows" {
@@ -298,7 +298,7 @@ func TestRubyVariables_TopLevelRubyScriptBareCallNotLedgered(t *testing.T) {
 	src := `
   add_indexes(:users)
 `
-	_, _, unresolved := extractRubyVariables("db/add_index_in_database.rb", "app", []byte(src))
+	_, _, unresolved := extractRubyVariables("db/add_index_in_database.rb", "app", []byte(src), nil)
 
 	for _, u := range unresolved {
 		if u.Name == "add_indexes" {
@@ -325,7 +325,7 @@ class UserCategoryRuleSet
   end
 end
 `
-	nodes, edges, unresolved := extractRubyVariables("app/controllers/license_report_jobs_controller.rb", "shop", []byte(src))
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/license_report_jobs_controller.rb", "shop", []byte(src), nil)
 
 	var latestFor *graph.Node
 	for i := range nodes {
@@ -367,7 +367,7 @@ class UserLicenses::RetireService
   end
 end
 `
-	nodes, edges, unresolved := extractRubyVariables("app/controllers/user_licenses_controller.rb", "shop", []byte(src))
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/user_licenses_controller.rb", "shop", []byte(src), nil)
 
 	var call *graph.Node
 	for i := range nodes {
@@ -401,7 +401,7 @@ func TestRubyVariables_ConstantReceiverFrameworkCallNotLedgered(t *testing.T) {
   end
 end
 `
-	_, edges, unresolved := extractRubyVariables("app/controllers/license_report_jobs_controller.rb", "shop", []byte(src))
+	_, edges, unresolved := extractRubyVariables("app/controllers/license_report_jobs_controller.rb", "shop", []byte(src), nil)
 
 	for _, e := range edges {
 		if e.Type == graph.EdgeTypeCalls && e.From == "shop:app/controllers/license_report_jobs_controller.rb:function:create:2" {
@@ -434,7 +434,7 @@ class Article
   end
 end
 `
-	nodes, edges, unresolved := extractRubyVariables("app/controllers/articles_controller.rb", "shop", []byte(src))
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/articles_controller.rb", "shop", []byte(src), nil)
 
 	var articleSave *graph.Node
 	for i := range nodes {
@@ -478,7 +478,7 @@ func TestRubyVariables_BareIdentifierMemoizationCallResolves(t *testing.T) {
   end
 end
 `
-	_, edges, unresolved := extractRubyVariables("app/controllers/categories_controller.rb", "shop", []byte(src))
+	_, edges, unresolved := extractRubyVariables("app/controllers/categories_controller.rb", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:destroy", "function:category") == nil {
 		t.Errorf("missing calls edge destroy -> category; edges: %+v", edges)
@@ -504,7 +504,7 @@ func TestRubyVariables_BareIdentifierStatementCallResolves(t *testing.T) {
   end
 end
 `
-	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(src))
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
 		t.Errorf("missing calls edge create -> bare statement call validate; edges: %+v", edges)
@@ -528,7 +528,7 @@ func TestRubyVariables_LocalVariableReadNotAttributedAsCall(t *testing.T) {
   end
 end
 `
-	nodes, edges, unresolved := extractRubyVariables("app/services/calculator.rb", "shop", []byte(src))
+	nodes, edges, unresolved := extractRubyVariables("app/services/calculator.rb", "shop", []byte(src), nil)
 
 	var xMethod *graph.Node
 	for i := range nodes {
@@ -570,7 +570,7 @@ func TestRubyVariables_LocalAssignedAfterUseStillNotACall(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/services/widget.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/services/widget.rb", "shop", []byte(src), nil)
 
 	var yMethod *graph.Node
 	for i := range nodes {
@@ -604,7 +604,7 @@ func TestRubyVariables_ParameterNameNotAttributedAsCall(t *testing.T) {
   end
 end
 `
-	nodes, edges, unresolved := extractRubyVariables("app/services/widget.rb", "shop", []byte(src))
+	nodes, edges, unresolved := extractRubyVariables("app/services/widget.rb", "shop", []byte(src), nil)
 
 	var fallback *graph.Node
 	for i := range nodes {
@@ -645,7 +645,7 @@ func TestRubyVariables_ForLoopVariableNotAttributedAsCall(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src), nil)
 
 	var rowMethod *graph.Node
 	for i := range nodes {
@@ -678,7 +678,7 @@ func TestRubyVariables_PatternMatchBindingNotAttributedAsCall(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src), nil)
 
 	var aMethod *graph.Node
 	for i := range nodes {
@@ -712,7 +712,7 @@ func TestRubyVariables_RescueVariableNotAttributedAsCall(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src), nil)
 
 	var eMethod *graph.Node
 	for i := range nodes {
@@ -750,7 +750,7 @@ func TestRubyVariables_MultiAssignTargetsNotAttributedAsCalls(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/services/report.rb", "shop", []byte(src), nil)
 
 	for _, name := range []string{"y", "b"} {
 		var m *graph.Node
@@ -789,7 +789,7 @@ func TestRubyVariables_UnresolvedBareIdentifierIsLedgered(t *testing.T) {
   end
 end
 `
-	_, edges, unresolved := extractRubyVariables("app/services/report.rb", "shop", []byte(src))
+	_, edges, unresolved := extractRubyVariables("app/services/report.rb", "shop", []byte(src), nil)
 
 	for _, e := range edges {
 		if e.Type == graph.EdgeTypeCalls {
@@ -824,7 +824,7 @@ func TestRubyVariables_BareIdentifierHashValueIsLedgered(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/models/organization.rb", "shop", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/models/organization.rb", "shop", []byte(src), nil)
 
 	found := false
 	for _, u := range unresolved {
@@ -852,7 +852,7 @@ func TestRubyVariables_BareIdentifierAsReceiverIsLedgered(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/models/organization.rb", "shop", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/models/organization.rb", "shop", []byte(src), nil)
 
 	found := false
 	for _, u := range unresolved {
@@ -881,7 +881,7 @@ def rename_categories
   puts "renamed"
 end
 `
-	_, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src))
+	_, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "rake_block", "function:rename_categories") == nil {
 		t.Errorf("missing calls edge from task block -> rename_categories; edges: %+v", edges)
@@ -903,7 +903,7 @@ def add_categories
   puts "added"
 end
 `
-	_, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src))
+	_, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "rake_block", "function:add_categories") == nil {
 		t.Errorf("missing calls edge from nested task block -> add_categories; edges: %+v", edges)
@@ -927,7 +927,7 @@ def rename_categories
   puts "renamed"
 end
 `
-	nodes, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("lib/tasks/categories.rake", "shop", []byte(src), nil)
 
 	byID := map[string]bool{}
 	for _, n := range nodes {
@@ -966,7 +966,7 @@ func TestRubyVariables_CallbackBlockBareCallResolves(t *testing.T) {
   end
 end
 `
-	_, edges, _ := extractRubyVariables("app/controllers/change_logs_controller.rb", "shop", []byte(src))
+	_, edges, _ := extractRubyVariables("app/controllers/change_logs_controller.rb", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "callback_block", "function:log_audit_activity") == nil {
 		t.Errorf("missing calls edge from callback block -> log_audit_activity; edges: %+v", edges)
@@ -989,7 +989,7 @@ func TestRubyVariables_CallbackBlockMintsANode(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/controllers/change_logs_controller.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/controllers/change_logs_controller.rb", "shop", []byte(src), nil)
 
 	byID := map[string]bool{}
 	for _, n := range nodes {
@@ -1030,7 +1030,7 @@ func TestRubyVariables_CallbackMethodBareCallStillResolvesNormally(t *testing.T)
   end
 end
 `
-	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(src))
+	_, edges, _ := extractRubyVariables("app/services/user_manager.rb", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:create", "function:validate") == nil {
 		t.Errorf("missing calls edge create -> validate; edges: %+v", edges)
@@ -1055,7 +1055,7 @@ func TestRubyVariables_BareIdentifierAsReceiverResolves(t *testing.T) {
   end
 end
 `
-	_, edges, unresolved := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src))
+	_, edges, unresolved := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:index", "function:memoized_scope") == nil {
 		t.Errorf("missing calls edge index -> memoized_scope (receiver-position bare identifier); edges: %+v", edges)
@@ -1082,7 +1082,7 @@ func TestRubyVariables_SelfReceiverNotTreatedAsBareIdentifierReceiver(t *testing
   end
 end
 `
-	_, edges, _ := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src))
+	_, edges, _ := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src), nil)
 
 	if jsEdge(edges, graph.EdgeTypeCalls, "function:index", "function:memoized_scope") == nil {
 		t.Errorf("missing calls edge index -> memoized_scope via explicit self receiver; edges: %+v", edges)
@@ -1108,7 +1108,7 @@ class Helper
   end
 end
 `
-	nodes, edges, unresolved := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src))
+	nodes, edges, unresolved := extractRubyVariables("app/controllers/roles_controller.rb", "shop", []byte(src), nil)
 
 	var helperMethod *graph.Node
 	for i := range nodes {
@@ -1145,7 +1145,7 @@ func TestRubyVariables_ClassConstantReadMintsEdge(t *testing.T) {
   validates :data_type, inclusion: { in: VALID_DATA_TYPES }
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/models/container_attribute.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/models/container_attribute.rb", "shop", []byte(src), nil)
 
 	var constNode *graph.Node
 	for i := range nodes {
@@ -1179,7 +1179,7 @@ func TestRubyVariables_MethodBodyConstantReadMintsEdge(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("app/models/app_lock.rb", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("app/models/app_lock.rb", "shop", []byte(src), nil)
 
 	var constNode, methodNode *graph.Node
 	for i := range nodes {
@@ -1222,7 +1222,7 @@ func TestRubyVariables_DSLBlockConstantNotOrphanRead(t *testing.T) {
   end
 end
 `
-	nodes, edges, _ := extractRubyVariables("lib/tasks/infra/org_create_and_configure.rake", "shop", []byte(src))
+	nodes, edges, _ := extractRubyVariables("lib/tasks/infra/org_create_and_configure.rake", "shop", []byte(src), nil)
 
 	nodeIDs := map[string]bool{}
 	for _, n := range nodes {
@@ -1256,7 +1256,7 @@ func TestRubyVariables_CrossFileConstantIsLedgered(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/services/data_server_communicator_amqp.rb", "shop", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/services/data_server_communicator_amqp.rb", "shop", []byte(src), nil)
 
 	foundConst, foundClass := false, false
 	for _, u := range unresolved {
@@ -1293,7 +1293,7 @@ func TestRubyVariables_TypedReceiverCallIsLedgered(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/services/org_file_cleaner.rb", "orion", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/services/org_file_cleaner.rb", "orion", []byte(src), nil)
 
 	found := false
 	for _, u := range unresolved {
@@ -1321,7 +1321,7 @@ func TestRubyVariables_IdentifierReceiverCallIsLedgered(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/services/teams_messaging.rb", "orion", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/services/teams_messaging.rb", "orion", []byte(src), nil)
 
 	found := false
 	for _, u := range unresolved {
@@ -1352,7 +1352,7 @@ func TestRubyVariables_CommonMethodNameNotLedgered(t *testing.T) {
   end
 end
 `
-	_, _, unresolved := extractRubyVariables("app/models/article.rb", "orion", []byte(src))
+	_, _, unresolved := extractRubyVariables("app/models/article.rb", "orion", []byte(src), nil)
 
 	for _, u := range unresolved {
 		if u.Kind == "typed_call_ref" && (u.Name == "save" || u.Name == "to_json") {

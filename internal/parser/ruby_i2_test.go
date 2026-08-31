@@ -38,7 +38,7 @@ class Admin < User
   def ban; end
 end
 `)
-	nodes, edges, _ := extractRubyVariables("models.rb", "svc", src)
+	nodes, edges, _ := extractRubyVariables("models.rb", "svc", src, nil)
 
 	if rbNode(nodes, graph.NodeTypeClass, "User") == nil {
 		t.Fatalf("missing class node User; nodes: %+v", nodes)
@@ -72,7 +72,7 @@ class Document
   def save; end
 end
 `)
-	nodes, edges, _ := extractRubyVariables("doc.rb", "svc", src)
+	nodes, edges, _ := extractRubyVariables("doc.rb", "svc", src, nil)
 
 	if rbNode(nodes, graph.NodeTypeClass, "Document") == nil {
 		t.Fatalf("missing class node Document; nodes: %+v", nodes)
@@ -115,7 +115,7 @@ class Factory
   end
 end
 `)
-	nodes, edges, _ := extractRubyVariables("factory.rb", "svc", src)
+	nodes, edges, _ := extractRubyVariables("factory.rb", "svc", src, nil)
 
 	if rbNode(nodes, graph.NodeTypeClass, "Widget") == nil {
 		t.Fatalf("missing class node Widget; nodes: %+v", nodes)
@@ -138,7 +138,7 @@ class MyClass
   include SomeExternalModule
 end
 `)
-	_, edges, unresolved := extractRubyVariables("my.rb", "svc", src)
+	_, edges, unresolved := extractRubyVariables("my.rb", "svc", src, nil)
 
 	for _, e := range edges {
 		if e.Type == graph.EdgeTypeInherits {
@@ -169,7 +169,7 @@ class Foo
   end
 end
 `)
-	_, edges, _ := extractRubyVariables("foo.rb", "svc", src)
+	_, edges, _ := extractRubyVariables("foo.rb", "svc", src, nil)
 
 	for _, e := range edges {
 		if e.Type == graph.EdgeTypeInherits {

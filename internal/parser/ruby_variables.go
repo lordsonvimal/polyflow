@@ -20,14 +20,18 @@ import (
 // edges are inferred confidence — Ruby's dynamism rules out certainty.
 // Block-capture tracking is deliberately skipped in v1: blocks are so
 // pervasive in Ruby that lexical capture edges would be mostly noise.
-func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
+func extractRubyVariables(file, service string, src []byte, sharedRoot *sitter.Node) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef) {
+	root := sharedRoot
+	if root == nil {
+		p := sitter.NewParser()
+		p.SetLanguage(rubysitter.GetLanguage())
+		tree, err := p.ParseCtx(context.Background(), nil, src)
+		if err != nil || tree == nil {
+			return nil, nil, nil
+		}
+		defer tree.Close()
+		root = tree.RootNode()
 	}
-	defer tree.Close()
 
 	ex := &rubyExtractor{
 		file: file, service: service, src: src,
@@ -46,11 +50,11 @@ func extractRubyVariables(file, service string, src []byte) ([]graph.Node, []gra
 	// in the file still resolve (forward references), and local-variable
 	// names per method so a bare identifier read of a local isn't
 	// misattributed as a call to a same-named method (Tier BC).
-	ex.preCollectRubyClasses(tree.RootNode())
-	ex.preCollectRubyMethods(tree.RootNode(), "")
-	ex.preCollectRubyConstants(tree.RootNode(), "")
-	ex.preCollectRubyLocals(tree.RootNode(), "")
-	ex.walk(tree.RootNode(), "", "", "")
+	ex.preCollectRubyClasses(root)
+	ex.preCollectRubyMethods(root, "")
+	ex.preCollectRubyConstants(root, "")
+	ex.preCollectRubyLocals(root, "")
+	ex.walk(root, "", "", "")
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
 	sort.Slice(ex.edges, func(i, j int) bool { return ex.edges[i].ID < ex.edges[j].ID })

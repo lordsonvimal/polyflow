@@ -34,7 +34,7 @@ function Detail() {
 // reactive=resource and carries the loader fn name for the linker join.
 func TestJSY6_ResourceMeta(t *testing.T) {
 	t.Parallel()
-	nodes, _, _, _ := extractJSVariables("Detail.tsx", "web", "typescript", "tsx", []byte(y6Source))
+	nodes, _, _, _ := extractJSVariables("Detail.tsx", "web", "typescript", "tsx", []byte(y6Source), nil)
 
 	var acc *graph.Node
 	for i := range nodes {
@@ -57,7 +57,7 @@ func TestJSY6_ResourceMeta(t *testing.T) {
 // signal→element dom_write edges to a minted element node.
 func TestJSY6_DomWrite(t *testing.T) {
 	t.Parallel()
-	nodes, edges, _, _ := extractJSVariables("Detail.tsx", "web", "typescript", "tsx", []byte(y6Source))
+	nodes, edges, _, _ := extractJSVariables("Detail.tsx", "web", "typescript", "tsx", []byte(y6Source), nil)
 
 	// d() → <span> dom_write
 	if e := edgeFromToSub(edges, graph.EdgeTypeDOMWrite, ":variable:d:", ":element:span:"); e == nil {

@@ -23,7 +23,10 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	// the Go semantic pass's convention — extractRubyVariables and friends
 	// build nodes directly (bypassing the matcher's own relativization).
 	file = patterns.RelativizeToCwd(file)
-	results, err := matcher.Match("ruby", file, src)
+	// Parse once and share the AST across pattern matching and the structural
+	// variable pass, which otherwise each re-parse the same source.
+	sharedRoot, _ := patterns.ParseTree("ruby", src)
+	results, err := matcher.MatchRoot("ruby", file, src, sharedRoot)
 
 	// Tier HH.1: a receiverless `get "…"` only declares a route inside a Rails
 	// routes file. Elsewhere it is a call to a helper named `get`, and admitting
@@ -56,7 +59,7 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	nodes = append(nodes, composeRailsRoutePaths(file, service, src, nodes)...)
 
 	// Structural variable tracking: constants, classes, ivar reads/writes.
-	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, src)
+	varNodes, varEdges, varUnresolved := extractRubyVariables(file, service, src, sharedRoot)
 	nodes = append(nodes, varNodes...)
 	edges = append(edges, varEdges...)
 	unresolved = append(unresolved, varUnresolved...)

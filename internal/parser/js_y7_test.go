@@ -33,7 +33,7 @@ function Toolbar() {
 // (no dangling endpoint, #10), and that unresolved handlers are ledgered (#12).
 func TestJSY7_JSXEvent(t *testing.T) {
 	t.Parallel()
-	nodes, edges, unresolved, _ := extractJSVariables("Toolbar.tsx", "web", "typescript", "tsx", []byte(y7JSXSource))
+	nodes, edges, unresolved, _ := extractJSVariables("Toolbar.tsx", "web", "typescript", "tsx", []byte(y7JSXSource), nil)
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:onRefresh:")
 	if e == nil {
@@ -108,7 +108,7 @@ function Form() {
 // member/store calls and no-op arrows are ledgered (#12).
 func TestJSY7_InlineHandler(t *testing.T) {
 	t.Parallel()
-	_, edges, unresolved, _ := extractJSVariables("Form.tsx", "web", "typescript", "tsx", []byte(y7InlineSource))
+	_, edges, unresolved, _ := extractJSVariables("Form.tsx", "web", "typescript", "tsx", []byte(y7InlineSource), nil)
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:button:", ":function:save:")
 	if e == nil {
@@ -158,7 +158,7 @@ const styles: Ref[] = [];
 // declared-but-never-instantiated TS type is not left dangling.
 func TestJSY7_TypeUses(t *testing.T) {
 	t.Parallel()
-	_, edges, _, _ := extractJSVariables("types.ts", "web", "typescript", "typescript", []byte(y7TypeUseSource))
+	_, edges, _, _ := extractJSVariables("types.ts", "web", "typescript", "typescript", []byte(y7TypeUseSource), nil)
 
 	// Detail interface references Ref in a member type.
 	if e := edgeFromToSub(edges, graph.EdgeTypeUsesType, ":interface:Detail:", ":interface:Ref:"); e == nil {
@@ -189,7 +189,7 @@ function wire(evt) {
 // dynamic-event-name and inline-handler cases (#12).
 func TestJSY7_AddEventListener(t *testing.T) {
 	t.Parallel()
-	_, edges, _, _ := extractJSVariables("wire.ts", "web", "typescript", "typescript", []byte(y7ListenerSource))
+	_, edges, _, _ := extractJSVariables("wire.ts", "web", "typescript", "typescript", []byte(y7ListenerSource), nil)
 
 	e := edgeFromToSub(edges, graph.EdgeTypeDOMListen, ":element:document:", ":function:onScroll:")
 	if e == nil {
