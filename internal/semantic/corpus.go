@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/trace"
@@ -314,6 +317,22 @@ func BuildDocChunks(svcPaths []ServicePath, allNodes []graph.Node) []Entity {
 	return out
 }
 
+// docFileKind classifies a path by extension for the doc extractor dispatch.
+// Returns "" for files with no doc content of interest.
+func docFileKind(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".mdx", ".markdown":
+		return "md"
+	case ".go":
+		return "go"
+	case ".ts", ".tsx", ".js", ".jsx", ".es6":
+		return "js"
+	case ".rb":
+		return "rb"
+	}
+	return ""
+}
+
 // buildFileNodeMap returns a map from file path to a sorted slice of
 // (line, nodeID) pairs, used to find the nearest node for a doc-comment chunk.
 func buildFileNodeMap(allNodes []graph.Node) map[string][]fileNodeEntry {
@@ -356,7 +375,12 @@ func isVendoredDocDir(name string) bool {
 }
 
 func walkServiceDocs(svcPath, service string, fileNodes map[string][]fileNodeEntry) []Entity {
-	var out []Entity
+	// Collect candidate files first, then extract in parallel. The per-file
+	// extractors (especially the JS/TS one) are pure CPU and dominate a cold
+	// index's embed phase; a serial WalkDir over the whole source tree — a
+	// second full pass after the parser already read every file — was ~60% of
+	// the total index time on a mid-size repo.
+	var paths []string
 	_ = filepath.WalkDir(svcPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -370,19 +394,37 @@ func walkServiceDocs(svcPath, service string, fileNodes map[string][]fileNodeEnt
 			}
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(path))
-		switch ext {
-		case ".md", ".mdx", ".markdown":
-			out = append(out, chunkMarkdownFile(path, service)...)
-		case ".go":
-			out = append(out, extractGoDocComments(path, service, fileNodes)...)
-		case ".ts", ".tsx", ".js", ".jsx", ".es6":
-			out = append(out, extractJSDocComments(path, service, fileNodes)...)
-		case ".rb":
-			out = append(out, extractRubyDocComments(path, service, fileNodes)...)
+		if docFileKind(path) != "" {
+			paths = append(paths, path)
 		}
 		return nil
 	})
+
+	perFile := make([][]Entity, len(paths))
+	g := new(errgroup.Group)
+	g.SetLimit(runtime.GOMAXPROCS(0))
+	for i, path := range paths {
+		i, path := i, path
+		g.Go(func() error {
+			switch docFileKind(path) {
+			case "md":
+				perFile[i] = chunkMarkdownFile(path, service)
+			case "go":
+				perFile[i] = extractGoDocComments(path, service, fileNodes)
+			case "js":
+				perFile[i] = extractJSDocComments(path, service, fileNodes)
+			case "rb":
+				perFile[i] = extractRubyDocComments(path, service, fileNodes)
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	var out []Entity
+	for _, chunks := range perFile {
+		out = append(out, chunks...)
+	}
 	return out
 }
 
@@ -586,61 +628,70 @@ func stripCommentPrefixes(lines []string, prefix string) string {
 func extractJSDocBlocks(path, src string, fileNodes map[string][]fileNodeEntry) []Entity {
 	var out []Entity
 	chunkN := 0
-	i := 0
-	rs := []rune(src)
-	n := len(rs)
+	n := len(src)
 
-	lineAt := func(pos int) int {
-		line := 1
-		for j := 0; j < pos && j < n; j++ {
-			if rs[j] == '\n' {
-				line++
-			}
+	// Precompute newline byte offsets once so a line number is an O(log n)
+	// binary search instead of an O(pos) rescan per comment block. The old
+	// code was O(blocks·n) and also allocated the entire file tail as a string
+	// on every block for the declaration check — pathological on large bundled
+	// JS. JSDoc markers are all ASCII, so byte indexing is safe here.
+	var nl []int
+	for i := 0; i < n; i++ {
+		if src[i] == '\n' {
+			nl = append(nl, i)
 		}
-		return line
+	}
+	lineAt := func(pos int) int {
+		return sort.Search(len(nl), func(k int) bool { return nl[k] >= pos }) + 1
 	}
 
-	for i < n {
-		if i+2 < n && rs[i] == '/' && rs[i+1] == '*' && rs[i+2] == '*' {
-			startLine := lineAt(i)
-			i += 3
-			var body []rune
-			for i < n {
-				if i+1 < n && rs[i] == '*' && rs[i+1] == '/' {
-					i += 2
-					break
-				}
-				body = append(body, rs[i])
-				i++
-			}
-			cleaned := cleanJSDocComment(string(body))
-			if cleaned == "" {
-				continue
-			}
-			// Skip whitespace to the next token.
-			j := i
-			for j < n && (rs[j] == ' ' || rs[j] == '\t' || rs[j] == '\r' || rs[j] == '\n') {
-				j++
-			}
-			declLine := lineAt(j)
-			if isJSDecl(string(rs[j:])) {
-				id := fmt.Sprintf("doc:%s:%d", path, chunkN)
-				h := sha256.Sum256([]byte(cleaned))
-				chunkN++
-				nodeID := nearestNodeAt(path, declLine, fileNodes)
-				out = append(out, Entity{
-					ID:          id,
-					Type:        "doc",
-					Text:        cleaned,
-					ContentHash: hex.EncodeToString(h[:]),
-					NodeID:      nodeID,
-					File:        path,
-					Line:        startLine,
-				})
-			}
-		} else {
+	for i := 0; i < n; {
+		if !(i+2 < n && src[i] == '/' && src[i+1] == '*' && src[i+2] == '*') {
+			i++
+			continue
+		}
+		startLine := lineAt(i)
+		i += 3
+		bodyStart := i
+		for i < n && !(i+1 < n && src[i] == '*' && src[i+1] == '/') {
 			i++
 		}
+		body := src[bodyStart:min(i, n)]
+		if i+1 < n {
+			i += 2 // consume closing */
+		} else {
+			i = n
+		}
+		cleaned := cleanJSDocComment(body)
+		if cleaned == "" {
+			continue
+		}
+		// Skip whitespace to the next token.
+		j := i
+		for j < n {
+			if c := src[j]; c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+				break
+			}
+			j++
+		}
+		// isJSDecl only tests a keyword prefix — a small window is enough and
+		// avoids copying the whole file tail.
+		if !isJSDecl(src[j:min(j+32, n)]) {
+			continue
+		}
+		id := fmt.Sprintf("doc:%s:%d", path, chunkN)
+		h := sha256.Sum256([]byte(cleaned))
+		chunkN++
+		nodeID := nearestNodeAt(path, lineAt(j), fileNodes)
+		out = append(out, Entity{
+			ID:          id,
+			Type:        "doc",
+			Text:        cleaned,
+			ContentHash: hex.EncodeToString(h[:]),
+			NodeID:      nodeID,
+			File:        path,
+			Line:        startLine,
+		})
 	}
 	return out
 }
