@@ -1,15 +1,12 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -398,18 +395,12 @@ func filterFamily(kind string) string {
 }
 
 func (ix *filterIndex) scanFile(file, relPrefix string) {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, release, ok := rubyParse(file)
+	if !ok {
 		return
 	}
+	defer release()
 	relFile := strings.TrimPrefix(filepath.ToSlash(file), relPrefix)
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return
-	}
-	defer tree.Close()
 
 	// Actions are a controller concept: only:/except: restrict a filter to some
 	// of a class's public methods, which means something for a dispatchable
@@ -434,7 +425,7 @@ func (ix *filterIndex) scanFile(file, relPrefix string) {
 			markStray(n.NamedChild(i))
 		}
 	}
-	markStray(tree.RootNode())
+	markStray(root)
 
 	var walk func(n *sitter.Node, ns []string)
 	walk = func(n *sitter.Node, ns []string) {
@@ -459,7 +450,7 @@ func (ix *filterIndex) scanFile(file, relPrefix string) {
 			walk(n.NamedChild(i), inner)
 		}
 	}
-	walk(tree.RootNode(), nil)
+	walk(root, nil)
 }
 
 func (ix *filterIndex) collectClass(node *sitter.Node, name string, ns []string, file string, src []byte, isModule, collectActions bool) {

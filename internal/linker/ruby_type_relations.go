@@ -1,15 +1,12 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -187,19 +184,12 @@ type rubyTypeRef struct {
 }
 
 func scanRubyTypes(file, svcName string) ([]rubyDecl, []rubyTypeRef) {
-	src, err := os.ReadFile(file)
+	src, root, release, ok := rubyParse(file)
 	file = patterns.RelativizeToCwd(file)
-	if err != nil {
+	if !ok {
 		return nil, nil
 	}
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil, nil
-	}
-	defer tree.Close()
-	root := tree.RootNode()
+	defer release()
 
 	sameFile := map[string]bool{}
 	var collectNames func(n *sitter.Node)

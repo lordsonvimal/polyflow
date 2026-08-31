@@ -1,15 +1,12 @@
 package linker
 
 import (
-	"context"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/railsinflect"
@@ -181,17 +178,11 @@ type deviseForMapping struct {
 // default-scope node's controller_module is always "" per this phase's own
 // contract (there is no in-repo controller to namespace it against).
 func parseDeviseForMappings(file string) []deviseForMapping {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, release, ok := rubyParse(file)
+	if !ok {
 		return nil
 	}
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil
-	}
-	defer tree.Close()
+	defer release()
 
 	var out []deviseForMapping
 	var walk func(n *sitter.Node)
@@ -215,7 +206,7 @@ func parseDeviseForMappings(file string) []deviseForMapping {
 			walk(n.NamedChild(i))
 		}
 	}
-	walk(tree.RootNode())
+	walk(root)
 	return out
 }
 
@@ -313,18 +304,12 @@ func scanDeviseModelModules(files []string) map[string]map[string]bool {
 		if filepath.Ext(f) != ".rb" || !strings.Contains(filepath.ToSlash(f), "/app/models/") {
 			continue
 		}
-		src, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
 		func() {
-			p := sitter.NewParser()
-			p.SetLanguage(rubysitter.GetLanguage())
-			tree, err := p.ParseCtx(context.Background(), nil, src)
-			if err != nil || tree == nil {
+			src, root, release, ok := rubyParse(f)
+			if !ok {
 				return
 			}
-			defer tree.Close()
+			defer release()
 
 			var className string
 			var walk func(n *sitter.Node)
@@ -355,7 +340,7 @@ func scanDeviseModelModules(files []string) map[string]map[string]bool {
 					walk(n.NamedChild(i))
 				}
 			}
-			walk(tree.RootNode())
+			walk(root)
 		}()
 	}
 	return out

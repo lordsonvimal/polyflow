@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -289,18 +288,11 @@ func LinkRubyImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (
 // parseRubyRequireRelative extracts require_relative specifiers from a Ruby
 // file by walking the tree-sitter AST for call nodes.
 func parseRubyRequireRelative(file string) []string {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, release, ok := rubyParse(file)
+	if !ok {
 		return nil
 	}
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil
-	}
-	defer tree.Close()
-	root := tree.RootNode()
+	defer release()
 
 	var paths []string
 	seen := make(map[string]bool)

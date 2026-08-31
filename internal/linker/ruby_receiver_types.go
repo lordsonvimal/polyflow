@@ -1,15 +1,12 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -164,6 +161,7 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFi
 		for _, a := range asts {
 			refs = append(refs, scanRubyReceiverTypedCalls(a.root, a.src, a.file, svcName, ivarType, methodReturnType)...)
 		}
+		releaseRubyFiles(asts)
 
 		for _, ref := range refs {
 			callEdges, unresolved := emitClassMethodCall(ix, ref, methodsByClass, seen, ox)
@@ -179,32 +177,33 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFi
 // ---------------------------------------------------------------------------
 
 type rubyRTFileAST struct {
-	file string
-	src  []byte
-	root *sitter.Node
-	tree *sitter.Tree
+	file    string
+	src     []byte
+	root    *sitter.Node
+	release func()
 }
 
 // parseRubyFiles parses every file once, reused across this pass's phases —
-// scanRubyClassMethodCalls's per-pass re-parse is fine for one pass, but this
-// one walks each file three times (ivar types, return types, call refs).
+// this pass walks each file several times (ivar types, return types, call
+// refs). Goes through rubyParse so the parse is shared with the other ruby_*
+// passes when the link-phase cache is active. Callers must call release() on
+// every returned entry when done (releaseRubyFiles).
 func parseRubyFiles(files []string) []rubyRTFileAST {
 	out := make([]rubyRTFileAST, 0, len(files))
 	for _, file := range files {
-		src, err := os.ReadFile(file)
-		if err != nil {
+		src, root, release, ok := rubyParse(file)
+		if !ok {
 			continue
 		}
-		rel := patterns.RelativizeToCwd(file)
-		p := sitter.NewParser()
-		p.SetLanguage(rubysitter.GetLanguage())
-		tree, err := p.ParseCtx(context.Background(), nil, src)
-		if err != nil || tree == nil {
-			continue
-		}
-		out = append(out, rubyRTFileAST{file: rel, src: src, root: tree.RootNode(), tree: tree})
+		out = append(out, rubyRTFileAST{file: patterns.RelativizeToCwd(file), src: src, root: root, release: release})
 	}
 	return out
+}
+
+func releaseRubyFiles(asts []rubyRTFileAST) {
+	for _, a := range asts {
+		a.release()
+	}
 }
 
 // collectRubyClassDecls mirrors scanRubyClassMethodCalls's decls collection

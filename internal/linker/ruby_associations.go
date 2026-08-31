@@ -1,14 +1,11 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -158,19 +155,12 @@ var rubyAssociationMacros = map[string]bool{
 // local helper method defined outside a model, the same reasoning
 // scanRubyClassMethodCalls' class-body walk uses.
 func scanRubyAssociations(file, svcName string) []classAssociationRef {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, release, ok := rubyParse(file)
+	if !ok {
 		return nil
 	}
 	file = patterns.RelativizeToCwd(file)
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil
-	}
-	defer tree.Close()
-	root := tree.RootNode()
+	defer release()
 
 	var refs []classAssociationRef
 	var walk func(n *sitter.Node)

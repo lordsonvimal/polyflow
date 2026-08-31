@@ -1,14 +1,11 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -272,19 +269,12 @@ type classMethodCallRef struct {
 // method calls. `new`/`include`/`extend`/`prepend` are excluded: those
 // receiver shapes are already resolved elsewhere (instantiates/inherits).
 func scanRubyClassMethodCalls(file, svcName string) ([]rubyDecl, []classMethodCallRef) {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, release, ok := rubyParse(file)
+	if !ok {
 		return nil, nil
 	}
 	file = patterns.RelativizeToCwd(file)
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil, nil
-	}
-	defer tree.Close()
-	root := tree.RootNode()
+	defer release()
 
 	// Same-file receivers are extractRubyVariables' job; skip them here so
 	// this pass never emits a shadow/duplicate edge for a call the parser
