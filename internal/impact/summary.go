@@ -309,6 +309,22 @@ func (r *Result) ApplyBudget(maxTokens int, forceSummary bool) any {
 	if !forceSummary {
 		if est := budget.Estimate(r); est <= maxTokens {
 			r.Budget = &budget.Info{MaxTokens: maxTokens, EstimatedTokens: est, Level: budget.LevelDetail}
+			if maxTokens > 0 {
+				// trimUnresolved's unresolvedReserve discipline previously only
+				// ran once Summarize() triggered — this fast path (the total
+				// estimate already fits maxTokens) skipped it entirely, so a
+				// large unresolved list rode along untrimmed whenever the
+				// caller's budget was generous enough for the total to still
+				// fit. Confirmed live: an MCP caller passing max_tokens 15000
+				// got back a 128-entry, 16KB unresolved list — 45% of a
+				// 36KB response — because ~9200 estimated tokens is under
+				// 15000, even though that list alone was already over
+				// unresolvedReserve's 25% share. trimUnresolved is a no-op
+				// when the list already fits its share, so this is safe to
+				// always run rather than gating on a second estimate.
+				r.Unresolved = trimUnresolved(r.Unresolved, maxTokens, r.Budget)
+				r.Budget.EstimatedTokens = budget.Estimate(r)
+			}
 			return r
 		}
 	}

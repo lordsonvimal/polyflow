@@ -74,6 +74,47 @@ func TestApplyBudget_SummaryWhenOverBudgetKeepsUnresolvedWhole(t *testing.T) {
 	require.Len(t, s.Unresolved, 1)
 }
 
+// TestApplyBudget_FastPathTrimsOversizedUnresolvedList is the regression
+// case for a live MCP capture: a small blast radius (well under maxTokens on
+// its own) paired with a large unresolved list. The *total* still fits
+// maxTokens, so the pre-fix fast path returned the unresolved list whole —
+// 128 entries, 45% of a 36KB response in the wild — bypassing trimUnresolved
+// entirely, which only ran on the Summarize() path. maxTokens here (2000) is
+// generous enough that the small detail result (~240 estimated tokens) alone
+// is nowhere near the limit, but 60 unresolved refs (~1170 estimated tokens)
+// exceed unresolvedReserve's 25% share (500 tokens) on their own, while the
+// combined total (~1440) still fits comfortably under 2000 — the exact
+// combination the pre-fix fast path let through untrimmed.
+func TestApplyBudget_FastPathTrimsOversizedUnresolvedList(t *testing.T) {
+	idx := fixtureIndex()
+	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
+
+	// AttachUnresolved scopes refs to files actually in the blast radius
+	// (target + callers) — "db.go" is the target's file (see fixtureIndex).
+	const refCount = 60
+	var refs []graph.UnresolvedRef
+	for i := 0; i < refCount; i++ {
+		refs = append(refs, graph.UnresolvedRef{
+			Service: "backend", File: "db.go",
+			Line: i + 1, Name: "dyn", Kind: "call_ref",
+		})
+	}
+	out.AttachUnresolved(refs)
+
+	res := out.ApplyBudget(2000, false)
+
+	detail, ok := res.(*impact.Result)
+	require.True(t, ok, "small blast radius plus a large unresolved list must still keep per-node detail")
+	assert.Equal(t, budget.LevelDetail, detail.Budget.Level, "detail level, not a forced summary rollup")
+	assert.Less(t, len(detail.Unresolved), refCount, "the fast path must trim the unresolved list like the summary path already does")
+	assert.LessOrEqual(t, detail.Budget.EstimatedTokens, 2000)
+	assert.Contains(t, detail.Budget.Note, "omitted to fit the budget",
+		"trimming must be disclosed, not silent")
+	// The true count survives in UnresolvedNote (set before ApplyBudget ever
+	// runs) even though the detail list itself is now shorter.
+	assert.Contains(t, detail.UnresolvedNote, fmt.Sprintf("%d", refCount))
+}
+
 func TestApplyBudget_ForceSummary(t *testing.T) {
 	idx := fixtureIndex()
 	out := impact.Build(idx, idx.Nodes["be:queryDB"], impact.Options{Depth: 10})
