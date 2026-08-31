@@ -147,13 +147,49 @@ var filePathRe = regexp.MustCompile(
 		`(?:go|ts|tsx|js|jsx|mjs|rb|py|yaml|yml|json|md|templ|erb|rake|sh|toml|mod|sum))`,
 )
 
+// blankLineRe splits agent text into blocks on a blank line. A markdown
+// heading and the fenced code block directly beneath it are one block (only
+// a single "\n" separates them), which is exactly the shape negationCueRe
+// needs: the caveat lives in the heading prose, the files it caveats live in
+// the fence.
+var blankLineRe = regexp.MustCompile(`\n[ \t]*\n`)
+
+// negationCueRe matches phrasing an agent uses to name a file while
+// explicitly saying it is NOT part of the answer. Found via orion-atlas's
+// bench precision (0.538 on a task where the agent's own text read "The
+// deeper files... are reached transitively through the job, not through
+// `#create` directly — only relevant if you're changing what the job
+// receives" and every one of those correctly-caveated files still counted
+// as a false positive): ExtractFiles had no concept of negation, only
+// "does a file-shaped token appear anywhere in the text".
+var negationCueRe = regexp.MustCompile(`(?i)(` +
+	`not (?:directly )?(?:relevant|needed|required|necessary)|` +
+	`don'?t need|do not need|no need to|` +
+	`won'?t need|will not need|` +
+	`only (?:relevant|needed|applicable) if|only if you|` +
+	`unless you|not necessary unless|not required unless` +
+	`)`)
+
 // ExtractFiles finds source file paths mentioned in agent response text.
 // Paths are deduplicated and returned in sorted order (rule 2 determinism).
+//
+// Text is split into blocks on blank lines first, and a block containing a
+// negationCueRe match is skipped entirely — coarser than tying the caveat to
+// the specific file names it refers to, but that's the safe direction for a
+// precision metric: undercounting a real hit here is silent (the file just
+// isn't in the returned set, same as never having been mentioned), whereas
+// the status quo before this — no negation awareness — actively scored a
+// file the agent explicitly said not to touch as if it had been recommended.
 func ExtractFiles(text string) []string {
 	seen := make(map[string]bool)
-	for _, m := range filePathRe.FindAllStringSubmatch(text, -1) {
-		if len(m) >= 2 {
-			seen[m[1]] = true
+	for _, block := range blankLineRe.Split(text, -1) {
+		if negationCueRe.MatchString(block) {
+			continue
+		}
+		for _, m := range filePathRe.FindAllStringSubmatch(block, -1) {
+			if len(m) >= 2 {
+				seen[m[1]] = true
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))

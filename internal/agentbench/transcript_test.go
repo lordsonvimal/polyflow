@@ -211,6 +211,73 @@ func TestSessionAssistantText_MissingSession(t *testing.T) {
 	}
 }
 
+// TestExtractFiles_NegatedProseSentenceExcluded covers the em-dash-caveat
+// shape found live on orion-atlas: the cue and the file mentions share one
+// sentence/paragraph, no fence involved.
+func TestExtractFiles_NegatedProseSentenceExcluded(t *testing.T) {
+	text := "The deeper files (`lib/license_reports/report_service.rb`, " +
+		"`lib/license_reports/category_evaluator.rb`) are reached transitively " +
+		"through the job, not through `#create` directly — only relevant if " +
+		"you're changing what the job receives."
+	files := agentbench.ExtractFiles(text)
+	if len(files) != 0 {
+		t.Errorf("negated files must not be extracted, got: %v", files)
+	}
+}
+
+// TestExtractFiles_NegatedHeadingExcludesFollowingFence covers the shape
+// that actually produced orion-atlas's 0.538 precision: the caveat sits in a
+// markdown heading, and the files it caveats are listed in a fenced code
+// block directly beneath it (a single "\n", not a blank line, separates
+// them) — real text captured from a live bench trial's session log.
+func TestExtractFiles_NegatedHeadingExcludesFollowingFence(t *testing.T) {
+	text := "Filtering to files reached via `calls`/`job_enqueue` chains — " +
+		"these are the ones you'd actually need to edit.\n\n" +
+		"**Direct dependencies of `create` (depth 1):**\n" +
+		"```\n" +
+		"app/controllers/api/v1/license_report_jobs_controller.rb\n" +
+		"app/jobs/license_report_creation_job.rb\n" +
+		"```\n\n" +
+		"**Deeper `calls` chain — only if you change what the job produces:**\n" +
+		"```\n" +
+		"app/lib/license_reports/report_service.rb\n" +
+		"app/lib/license_reports/license_report.rb\n" +
+		"app/lib/license_reports/category_evaluator.rb\n" +
+		"app/lib/license_reports/predicate_builder.rb\n" +
+		"```\n"
+	files := agentbench.ExtractFiles(text)
+	want := map[string]bool{
+		"app/controllers/api/v1/license_report_jobs_controller.rb": true,
+		"app/jobs/license_report_creation_job.rb":                  true,
+	}
+	if len(files) != len(want) {
+		t.Errorf("ExtractFiles = %v, want exactly %v (caveated fence must be dropped)", files, want)
+	}
+	for _, f := range files {
+		if !want[f] {
+			t.Errorf("unexpected file survived negation filtering: %q", f)
+		}
+	}
+}
+
+// TestExtractFiles_UnrelatedBlocksStillExtracted guards against the coarse
+// block-level filter over-suppressing: a negation cue in one block must not
+// blank out files named in a different (blank-line-separated) block.
+func TestExtractFiles_UnrelatedBlocksStillExtracted(t *testing.T) {
+	text := "You'll need internal/impact/impact.go.\n\n" +
+		"internal/eval/score.go is not relevant here, don't touch it."
+	files := agentbench.ExtractFiles(text)
+	want := map[string]bool{"internal/impact/impact.go": true}
+	if len(files) != len(want) {
+		t.Errorf("ExtractFiles = %v, want exactly %v", files, want)
+	}
+	for _, f := range files {
+		if !want[f] {
+			t.Errorf("unexpected file: %q", f)
+		}
+	}
+}
+
 func TestExtractFiles_Deduplication(t *testing.T) {
 	text := "internal/a/b.go is important. See also internal/a/b.go."
 	files := agentbench.ExtractFiles(text)
