@@ -16,8 +16,16 @@ func TestSingularize(t *testing.T) {
 		"studies":  "study",
 		"boxes":    "box",
 		"branches": "branch",
+		"classes":  "class",
 		"status":   "status",
 		"user":     "user",
+		// "-se" nouns (single s before the final "es") must lose only the
+		// trailing "s", not "es" — found live via `load_and_authorize_resource`
+		// on UserLicensesController singularizing to "user_licens".
+		"licenses":  "license",
+		"houses":    "house",
+		"phases":    "phase",
+		"responses": "response",
 		"people":   "person",
 		"children": "child",
 		"media":    "medium",

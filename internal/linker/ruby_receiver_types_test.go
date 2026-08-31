@@ -163,6 +163,103 @@ end
 // zero-hop shape: `new(user_license).call` inside `class << self` — no
 // intermediate variable, and `new`'s receiver is implicit self (the
 // enclosing class), not a literal constant name.
+// TestLinkRubyReceiverTypeCalls_CanCanLoadAndAuthorizeResource covers the
+// orion-atlas gap found by E.2's agent bench: `load_and_authorize_resource`
+// never appears as an `@ivar = ...` assignment in the source — CanCanCan
+// assigns it entirely at runtime — so the model it implicitly loads
+// (UserLicense, from `UserLicensesController`) was unreachable from any
+// method that only reads `@user_license`, even though it gates the whole
+// action.
+func TestLinkRubyReceiverTypeCalls_CanCanLoadAndAuthorizeResource(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	controller := writeRuby(t, dir, "user_licenses_controller.rb", `
+class UserLicensesController
+  load_and_authorize_resource
+
+  def param_changed?(attribute)
+    @user_license.send(attribute)
+  end
+end
+`)
+	model := writeRuby(t, dir, "user_license.rb", `
+class UserLicense
+  def retired
+    true
+  end
+end
+`)
+
+	paramChanged := classCallFuncNode("svc", controller, "UserLicensesController", "param_changed?", 5)
+	nodes := []graph.Node{
+		rubyClassNode("svc", controller, "UserLicensesController", 2),
+		paramChanged,
+		rubyClassNode("svc", model, "UserLicense", 2),
+	}
+	serviceFiles := map[string][]string{"svc": {controller, model}}
+
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
+
+	wantTo := "svc:" + model + ":class:UserLicense"
+	found := false
+	for _, e := range edges {
+		if e.From == paramChanged.ID && e.To == wantTo {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a class-granularity edge into UserLicense (no `send` method to land on), got edges=%v", edges)
+	}
+}
+
+// TestLinkRubyReceiverTypeCalls_CanCanClassOption covers the `class:` escape
+// hatch, mirroring LinkRubyAssociations' `class_name:` override: the file
+// name says "widgets", but the macro says otherwise, and the option wins.
+func TestLinkRubyReceiverTypeCalls_CanCanClassOption(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	controller := writeRuby(t, dir, "widgets_controller.rb", `
+class WidgetsController
+  load_and_authorize_resource class: "Gadget"
+
+  def show
+    @widget.name
+  end
+end
+`)
+	model := writeRuby(t, dir, "gadget.rb", `
+class Gadget
+  def name
+    true
+  end
+end
+`)
+
+	show := classCallFuncNode("svc", controller, "WidgetsController", "show", 5)
+	nodes := []graph.Node{
+		rubyClassNode("svc", controller, "WidgetsController", 2),
+		show,
+		rubyClassNode("svc", model, "Gadget", 2),
+		classCallFuncNode("svc", model, "Gadget", "name", 3),
+	}
+	serviceFiles := map[string][]string{"svc": {controller, model}}
+
+	edges, _ := LinkRubyReceiverTypeCalls(nodes, nil, serviceFiles)
+
+	wantTo := "svc:" + model + ":function:name:3"
+	found := false
+	for _, e := range edges {
+		if e.From == show.ID && e.To == wantTo {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an edge into Gadget#name via the class: override, got edges=%v", edges)
+	}
+}
+
 func TestLinkRubyReceiverTypeCalls_ImplicitSelfNewInlineChain(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

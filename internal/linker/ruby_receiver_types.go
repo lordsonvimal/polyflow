@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
 // LinkRubyReceiverTypeCalls resolves method calls whose receiver is a local
@@ -124,6 +126,13 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFi
 		// loop for a pathological mutual-reference case.
 		ivarType := map[string]string{}
 		methodReturnType := map[string]string{}
+		// CanCanCan's load_and_authorize_resource/load_resource implicitly
+		// assign an ivar these bodies never write themselves — a one-shot,
+		// non-iterative seed (no other file's inference feeds it) before the
+		// round loop below, which only concerns chained same-file inference.
+		for _, a := range asts {
+			collectRubyCanCanIvarTypes(a.root, a.src, a.file, ivarType)
+		}
 		for round := 0; round < 3; round++ {
 			for _, a := range asts {
 				collectRubyIvarTypes(a.root, a.src, "", false, ivarType, methodReturnType)
@@ -420,6 +429,103 @@ func collectRubyIvarTypes(node *sitter.Node, src []byte, class string, selfIsCla
 // unbounded in general — see docs/deadcode-false-positive-plan.md DC.5).
 // `class << self` bodies are covered the same as `def self.x` via
 // selfIsClass, tracked the same way scanRubyReceiverTypedCalls tracks it.
+// collectRubyCanCanIvarTypes seeds ivarType for CanCanCan's
+// `load_and_authorize_resource`/`load_resource` class-body macros. Neither
+// call ever appears in the source as an assignment — the ivar they populate
+// (`@user_license` for `UserLicensesController`) is entirely framework
+// magic — so collectRubyIvarTypes' assignment-node scan structurally cannot
+// see it: there is no `@ivar = ...` node in the AST for this pass to walk
+// into. Confirmed live on orion-atlas: `UserLicensesController#update`
+// dispatches on values read off `@user_license` (via `param_changed?`), and
+// without this seed the model it names (app/models/user_license.rb) never
+// enters blast radius even though it gates the entire action.
+//
+// The resource name is read off the file's own name, not the (possibly
+// namespaced) class constant — `controller_name` in real Rails is the
+// underscored, unnamespaced form already, and the file basename gives that
+// directly without needing a PascalCase→snake_case step this package has no
+// other reason to carry. An explicit `class:` option (mirroring
+// LinkRubyAssociations' `class_name:`) overrides the file-derived guess;
+// other CanCanCan options (`instance_name:`, `only:`, `except:`) are left
+// alone — same "naive target or no edge, never a wrong one" bar
+// LinkRubyAssociations sets, not a full CanCanCan implementation.
+func collectRubyCanCanIvarTypes(node *sitter.Node, src []byte, file string, ivarType map[string]string) {
+	base := strings.TrimSuffix(filepath.Base(file), ".rb")
+	if !strings.HasSuffix(base, "_controller") || base == "_controller" {
+		return // not a *_controller.rb file: this macro cannot appear here
+	}
+	resourcePlural := strings.TrimSuffix(base, "_controller")
+	defaultResource := railsinflect.Singularize(resourcePlural)
+
+	seedResource := func(class string, args *sitter.Node) {
+		resource := defaultResource
+		if args != nil {
+			for i := 0; i < int(args.NamedChildCount()); i++ {
+				a := args.NamedChild(i)
+				if a.Type() != "pair" {
+					continue
+				}
+				key := a.ChildByFieldName("key")
+				value := a.ChildByFieldName("value")
+				if key == nil || value == nil {
+					continue
+				}
+				keyText := strings.TrimSuffix(strings.TrimPrefix(key.Content(src), ":"), ":")
+				if keyText == "class" {
+					if cls := extractRubyStringContent(value, src); cls != "" {
+						ivarType[class+"\x00@"+resource] = cls
+					} else if value.Type() == "constant" {
+						ivarType[class+"\x00@"+resource] = value.Content(src)
+					}
+				}
+			}
+		}
+		if _, ok := ivarType[class+"\x00@"+resource]; !ok {
+			ivarType[class+"\x00@"+resource] = snakeToClassName(resource)
+		}
+	}
+
+	var walk func(n *sitter.Node, class string, inMethod bool)
+	walk = func(n *sitter.Node, class string, inMethod bool) {
+		switch n.Type() {
+		case "class", "module":
+			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
+				class = nameNode.Content(src)
+			}
+			inMethod = false
+		case "method", "singleton_method", "block", "do_block":
+			inMethod = true
+		case "call":
+			// The `class:`-option form (`load_and_authorize_resource class:
+			// "Gadget"`) — an argument, even without parens, makes this a
+			// "call" node.
+			if !inMethod && class != "" {
+				if mn := n.ChildByFieldName("method"); mn != nil {
+					switch mn.Content(src) {
+					case "load_and_authorize_resource", "load_resource":
+						seedResource(class, n.ChildByFieldName("arguments"))
+					}
+				}
+			}
+		case "identifier":
+			// The common bare form — no parens, no args — which tree-sitter
+			// parses as a plain identifier statement, not a "call" node (the
+			// same paren-less-zero-arg ambiguity Tier BC documents for the
+			// same-file parser's bare-call handling).
+			if !inMethod && class != "" {
+				switch n.Content(src) {
+				case "load_and_authorize_resource", "load_resource":
+					seedResource(class, nil)
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i), class, inMethod)
+		}
+	}
+	walk(node, "", false)
+}
+
 func collectRubyMethodReturnTypes(node *sitter.Node, src []byte, class string, selfIsClass bool, ivarType, methodReturnType map[string]string) {
 	t := node.Type()
 	if t == "class" || t == "module" {

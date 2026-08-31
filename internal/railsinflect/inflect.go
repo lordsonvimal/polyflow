@@ -40,7 +40,16 @@ func Singularize(s string) string {
 	switch {
 	case strings.HasSuffix(s, "ies") && len(s) > 3:
 		return s[:len(s)-3] + "y"
-	case strings.HasSuffix(s, "ses"), strings.HasSuffix(s, "xes"),
+	// Rails' own rule here is `(x|ch|ss|sh)es$` — note "ss" (double s), not a
+	// bare "s": "classes"/"glasses" double their final consonant before "es"
+	// and need both stripped, but "licenses"/"houses"/"phases"/"responses"
+	// already end their singular in a single "se" and need only the plain
+	// trailing-"s" rule below (found live: "user_licenses" was singularizing
+	// to "user_licens", not "user_license" — this collapsed a whole class of
+	// "-se" nouns, not just that one word). "buses" is the one real word this
+	// loses (Rails hardcodes it as an irregular; not worth one for a name no
+	// repo here uses).
+	case strings.HasSuffix(s, "sses"), strings.HasSuffix(s, "xes"),
 		strings.HasSuffix(s, "zes"), strings.HasSuffix(s, "ches"),
 		strings.HasSuffix(s, "shes"):
 		return s[:len(s)-2]
