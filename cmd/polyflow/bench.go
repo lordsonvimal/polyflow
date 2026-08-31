@@ -485,48 +485,55 @@ const polyflowNudge = "A `polyflow` MCP server is registered for this session. "
 	"For questions about code structure, call graph, or blast radius " +
 	"(\"what would need to change\", \"trace this flow\", \"what calls this\"), " +
 	"call the polyflow MCP tools (search, node lookup, flows, impact) directly " +
-	"instead of searching with Bash/Grep/Read. When answering \"what else do I " +
-	"need to touch\", report only the files that actually require an edit — not " +
-	"every file the impact/blast-radius tool returns. A blast-radius result " +
-	"includes broader reachability context beyond the files that need to change; " +
-	"filter it down before answering, but filter on EDGE TYPE, not on hop " +
-	"count. A file reached purely through `contains` (same-file structure) or " +
-	"`instantiates` (a shared struct/DTO used elsewhere) is usually incidental " +
-	"and safe to drop. A file reached through a chain of `calls` edges is NOT " +
-	"incidental no matter how many hops deep it is — every hop in a `calls` " +
-	"chain from the target is still on the live code path, so a change to the " +
-	"target's behavior or payload can propagate all the way down that chain " +
-	"(e.g. a 3-hop `calls` chain into a message publisher still needs to " +
-	"reflect a changed payload shape). Do not exclude a file just because it " +
-	"looks like \"infrastructure\" or is several `calls` hops away — check " +
-	"what the edge_type actually is before dropping it. For a \"walk me " +
-	"through what happens\" " +
-	"or end-to-end flow question, prefer ONE broad trace/flows/impact call from " +
-	"the real entry point over many small narrowly-scoped calls from guessed " +
-	"intermediate symbols — use a generous depth (e.g. 15-20). Never pass " +
-	"max_tokens: -1 (unlimited): on a large blast radius this produces a " +
-	"response bigger than your own tool-output preview limit, which silently " +
-	"truncates it to ~2KB with no visible warning — worse than polyflow's own " +
-	"truncation, which is bounded and tells you in the response when it cut " +
-	"something. Pass a generous bounded max_tokens instead (10000-20000) so " +
-	"any truncation is polyflow's visible, budget-aware kind, not a silent " +
-	"one. The default response is already compact (arrow-chain text, not " +
-	"verbose per-hop JSON), so a bounded-but-generous deep call from the true " +
-	"root is cheap and finds one-hop siblings (health checks, error parsing, " +
-	"repository writes) that a series of narrow guesses from the wrong " +
-	"starting points will miss. For a \"what else do I need to touch\" " +
-	"question specifically, pass direction=both on the impact call, not the " +
-	"tool's own default (backward only). Backward alone answers \"what " +
-	"breaks if I change this\" — it does NOT include what the target itself " +
-	"reads or dispatches into (an instance variable the target only reads, a " +
-	"service object it calls out to), which is exactly what \"what do I need " +
-	"to touch\" is asking for. Also pass include_noise: [\"mixin\"] " +
-	"when the target is a method on a class that inherits from another class " +
-	"or includes a concern/module — an inherited base class or a Rails " +
-	"before_action/concern is real code you may need to touch (e.g. a base " +
-	"controller's render/auth helper), and it is hidden from the default " +
-	"impact answer as noise because most callers only want the target's own " +
-	"call chain."
+	"instead of searching with Bash/Grep/Read. Never pass max_tokens: -1 " +
+	"(unlimited): on a large blast radius this produces a response bigger " +
+	"than your own tool-output preview limit, which silently truncates it to " +
+	"~2KB with no visible warning — worse than polyflow's own truncation, " +
+	"which is bounded and tells you in the response when it cut something. " +
+	"Pass a generous bounded max_tokens instead (10000-20000) so any " +
+	"truncation is polyflow's visible, budget-aware kind, not a silent one." +
+	"\n\n" +
+	"These two question shapes need OPPOSITE traversal habits — apply the " +
+	"one for the question actually asked, not both at once:" +
+	"\n\n" +
+	"\"What else do I need to touch/change\" (a single target's edit scope): " +
+	"pass direction=both on the impact call, not the tool's own default " +
+	"(backward only) — backward alone answers \"what breaks if I change " +
+	"this\" and misses what the target itself reads or dispatches into (an " +
+	"instance variable the target only reads, a service object it calls out " +
+	"to). Pass include_noise: [\"mixin\"] when the target inherits from " +
+	"another class or includes a concern/module — an inherited base class's " +
+	"render/auth helper is real code you may need to touch, and it is hidden " +
+	"from the default answer as noise because most callers only want the " +
+	"target's own call chain. Then STOP expanding once a `job_enqueue` or " +
+	"`publishes` edge is crossed — the code on the other side of an enqueue " +
+	"or a message publish runs later, in a separate process, decoupled from " +
+	"this edit; only follow it further if the question is specifically about " +
+	"that job's or message's own payload/behavior, not the action that " +
+	"triggers it. Report only the files that actually require an edit for " +
+	"THIS target, not every file the impact/blast-radius result returns — a " +
+	"blast-radius result includes broader reachability context beyond what " +
+	"needs to change. Filter on edge type: a file reached purely through " +
+	"`contains` (same-file structure) or `instantiates` (a shared struct/DTO " +
+	"used elsewhere) is usually incidental and safe to drop; a file reached " +
+	"through a `calls` chain that has NOT crossed a job_enqueue/publishes " +
+	"boundary is on the live code path regardless of hop count and should " +
+	"stay in the answer." +
+	"\n\n" +
+	"\"Walk me through what happens\" / end-to-end flow (tracing one " +
+	"request/message all the way through): the opposite — prefer ONE broad " +
+	"trace/flows/impact call from the real entry point over many small " +
+	"narrowly-scoped calls from guessed intermediate symbols, with a " +
+	"generous depth (e.g. 15-20), and DO follow `calls` chains across a " +
+	"job_enqueue/publishes boundary into the consumer/handler on the other " +
+	"side — that hop is exactly what the question is asking you to trace, " +
+	"not noise to stop at. A 3-hop `calls` chain into a message publisher, " +
+	"and the consumer that receives it, both belong in a flow answer even " +
+	"though the same boundary would be a stopping point for a \"what do I " +
+	"need to touch\" question. A bounded-but-generous deep call from the " +
+	"true root is cheap and finds one-hop siblings (health checks, error " +
+	"parsing, repository writes) that a series of narrow guesses from the " +
+	"wrong starting points will miss."
 
 // callClaude invokes `claude -p --output-format json` and returns the parsed
 // transcript, or the class and detail of the failure.
