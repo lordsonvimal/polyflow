@@ -2,6 +2,7 @@ package linker
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -108,19 +109,15 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFi
 				rubyFiles = append(rubyFiles, f)
 			}
 		}
-
 		asts := parseRubyFiles(rubyFiles)
 
 		// Phases 1-2 (ivar types, then same-class zero-arg method return
-		// types) run for a few rounds so a chained self-factory resolves
-		// regardless of file processing order: round 1 discovers
-		// `AwsFacade.new_instance` returns AwsFacade (direct `Const.new` in
-		// its own body); round 2 then discovers `aws` returns AwsFacade too
-		// (its body is `@aws ||= AwsFacade.new_instance`, only resolvable once
-		// `new_instance`'s return type is known). A fixed 3 rounds is enough
-		// for any chain this repo's evidence showed (at most one indirection
-		// past the literal `Const.new`) without an unbounded/cyclic fixpoint
-		// loop for a pathological mutual-reference case.
+		// types) iterate so a chained self-factory resolves regardless of file
+		// processing order: round 1 discovers `AwsFacade.new_instance` returns
+		// AwsFacade (direct `Const.new` in its own body); a later round then
+		// discovers `aws` returns AwsFacade too (its body is `@aws ||=
+		// AwsFacade.new_instance`, only resolvable once `new_instance`'s
+		// return type is known).
 		ivarType := map[string]string{}
 		methodReturnType := map[string]string{}
 		// CanCanCan's load_and_authorize_resource/load_resource implicitly
@@ -130,12 +127,49 @@ func LinkRubyReceiverTypeCalls(nodes []graph.Node, edges []graph.Edge, serviceFi
 		for _, a := range asts {
 			collectRubyCanCanIvarTypes(a.root, a.src, a.file, ivarType)
 		}
-		for round := 0; round < 3; round++ {
-			for _, a := range asts {
-				collectRubyIvarTypes(a.root, a.src, "", false, ivarType, methodReturnType)
+		// Iterate to a fixed point. Both maps only ever grow — an expression
+		// that didn't resolve in round N can resolve in round N+1 once a
+		// return type it depends on is known, never the reverse — and the
+		// fixed point is unique regardless of visitation order, so each phase
+		// runs in parallel over per-file-local maps that are then merged into
+		// the shared map in (sorted) file order for a deterministic
+		// last-writer. Parallelising drops the within-a-single-phase
+		// cross-file propagation the old serial walk had, which just costs an
+		// extra round or two to make up; the round cap absorbs that (6, up
+		// from the old serial 3), and the no-growth early-exit means a repo
+		// with no chained self-factories — the common case — still stops
+		// after two.
+		mergeSorted := func(dst map[string]string, parts []map[string]string) {
+			for _, p := range parts {
+				keys := make([]string, 0, len(p))
+				for k := range p {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					dst[k] = p[k]
+				}
 			}
-			for _, a := range asts {
-				collectRubyMethodReturnTypes(a.root, a.src, "", false, ivarType, methodReturnType)
+		}
+		for round := 0; round < 6; round++ {
+			before := len(ivarType) + len(methodReturnType)
+			frozenReturns := maps.Clone(methodReturnType)
+			ivarParts := mapParallel(asts, func(a rubyRTFileAST) map[string]string {
+				local := map[string]string{}
+				collectRubyIvarTypes(a.root, a.src, "", false, local, frozenReturns)
+				return local
+			})
+			mergeSorted(ivarType, ivarParts)
+			frozenIvars := maps.Clone(ivarType)
+			frozenReturns = maps.Clone(methodReturnType)
+			retParts := mapParallel(asts, func(a rubyRTFileAST) map[string]string {
+				local := maps.Clone(frozenReturns)
+				collectRubyMethodReturnTypes(a.root, a.src, "", false, frozenIvars, local)
+				return local
+			})
+			mergeSorted(methodReturnType, retParts)
+			if len(ivarType)+len(methodReturnType) == before {
+				break
 			}
 		}
 
