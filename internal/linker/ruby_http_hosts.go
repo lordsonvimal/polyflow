@@ -1,14 +1,11 @@
 package linker
 
 import (
-	"context"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -63,8 +60,8 @@ func ResolveRubyHTTPHosts(nodes []graph.Node, serviceFiles map[string][]string) 
 	fileCache := make(map[string]*rubyFileAST)
 	defer func() {
 		for _, fa := range fileCache {
-			if fa != nil && fa.tree != nil {
-				fa.tree.Close()
+			if fa != nil && fa.release != nil {
+				fa.release()
 			}
 		}
 	}()
@@ -155,17 +152,20 @@ func buildRubyHostRegistry(files []string) map[string]rubyHostInfo {
 	}
 	acc := make(map[string]*entry)
 	// Sort for deterministic first-writer-wins on identical env, stable output.
-	sorted := append([]string(nil), files...)
+	sorted := filterRubyFiles(files)
 	sort.Strings(sorted)
-	for _, f := range sorted {
-		if !isRubyFile(f) {
-			continue
-		}
+	// Parse + extract per file in parallel; fold into acc serially in sorted
+	// order so first-writer-wins stays deterministic.
+	perFile := mapParallel(sorted, func(f string) map[string]rubyHostInfo {
 		fa := parseRubyFileAST(f)
 		if fa == nil {
-			continue
+			return nil
 		}
-		for name, info := range fa.hostMethods() {
+		defer fa.release()
+		return fa.hostMethods()
+	})
+	for _, hm := range perFile {
+		for name, info := range hm {
 			e := acc[name]
 			if e == nil {
 				acc[name] = &entry{info: info}
@@ -178,7 +178,6 @@ func buildRubyHostRegistry(files []string) map[string]rubyHostInfo {
 				e.pathConflict = true
 			}
 		}
-		fa.tree.Close()
 	}
 	out := make(map[string]rubyHostInfo, len(acc))
 	for name, e := range acc {
@@ -206,7 +205,7 @@ type rubyMethodInfo struct {
 
 type rubyFileAST struct {
 	src     []byte
-	tree    *sitter.Tree
+	release func()
 	root    *sitter.Node
 	methods []rubyMethodInfo
 	// currentMethodGuard lets exprEnv descend into the one method node it was
@@ -215,17 +214,11 @@ type rubyFileAST struct {
 }
 
 func parseRubyFileAST(file string) *rubyFileAST {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, release, ok := rubyParse(file)
+	if !ok {
 		return nil
 	}
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil
-	}
-	fa := &rubyFileAST{src: src, tree: tree, root: tree.RootNode()}
+	fa := &rubyFileAST{src: src, root: root, release: release}
 	fa.collectMethods()
 	return fa
 }

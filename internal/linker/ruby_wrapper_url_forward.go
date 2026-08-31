@@ -122,7 +122,7 @@ func ResolveRubyWrapperURLCallSites(nodes []graph.Node, serviceFiles map[string]
 
 		defs := collectRubyMethodDefNodes(fa.root, fa.src)
 		if len(defs) == 0 {
-			fa.tree.Close()
+			fa.release()
 			continue
 		}
 
@@ -139,7 +139,7 @@ func ResolveRubyWrapperURLCallSites(nodes []graph.Node, serviceFiles map[string]
 			wrapperTable[f.WrapperName] = rubyWrapperInfo{ParamName: f.ParamName, IsKeyword: isKw, PositionalIndex: idx, URLKey: f.URLKey}
 		}
 		if len(wrapperTable) == 0 {
-			fa.tree.Close()
+			fa.release()
 			continue
 		}
 
@@ -234,7 +234,7 @@ func ResolveRubyWrapperURLCallSites(nodes []graph.Node, serviceFiles map[string]
 				}
 			}
 		}
-		fa.tree.Close()
+		fa.release()
 	}
 	return newNodes, newEdges
 }
