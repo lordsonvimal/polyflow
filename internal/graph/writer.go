@@ -91,6 +91,13 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 			return fmt.Errorf("prepare fts delete: %w", err)
 		}
 		defer ftsDelete.Close()
+		// Indexed delete for the journalled build path: `rowid` is the fts5
+		// primary key, `id` is UNINDEXED (an id-delete full-scans the FTS).
+		ftsDeleteByRowid, err := tx.PrepareContext(ctx, `DELETE FROM nodes_fts WHERE rowid = ?`)
+		if err != nil {
+			return fmt.Errorf("prepare fts delete by rowid: %w", err)
+		}
+		defer ftsDeleteByRowid.Close()
 		ftsInsert, err := tx.PrepareContext(ctx,
 			`INSERT INTO nodes_fts (id, label, file, service, qualified) VALUES (?, ?, ?, ?, ?)`)
 		if err != nil {
@@ -111,16 +118,23 @@ func (w *BatchWriter) FlushNodes(ctx context.Context) error {
 			// row exists and whether its content would change, so both the
 			// full-scan delete and the insert are skipped when they'd be
 			// no-ops (see SQLiteStore.ftsPlan).
-			del, ins := w.store.ftsPlan(n)
+			key, delRowid, del, ins := w.store.ftsPlan(n)
 			if del {
-				if _, err = ftsDelete.ExecContext(ctx, n.ID); err != nil {
+				if w.store.ftsJournal != nil {
+					if _, err = ftsDeleteByRowid.ExecContext(ctx, delRowid); err != nil {
+						return fmt.Errorf("fts delete %s (rowid %d): %w", n.ID, delRowid, err)
+					}
+				} else if _, err = ftsDelete.ExecContext(ctx, n.ID); err != nil {
 					return fmt.Errorf("fts delete %s: %w", n.ID, err)
 				}
 			}
 			if ins {
-				if _, err = ftsInsert.ExecContext(ctx, n.ID, n.Label, n.File, n.Service, n.QualifiedLabel()); err != nil {
-					return fmt.Errorf("fts insert %s: %w", n.ID, err)
+				res, ierr := ftsInsert.ExecContext(ctx, n.ID, n.Label, n.File, n.Service, n.QualifiedLabel())
+				if ierr != nil {
+					return fmt.Errorf("fts insert %s: %w", n.ID, ierr)
 				}
+				rowid, _ := res.LastInsertId()
+				w.store.recordFTS(n.ID, key, rowid)
 			}
 		}
 		return nil

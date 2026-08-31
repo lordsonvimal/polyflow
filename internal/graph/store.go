@@ -209,7 +209,19 @@ type SQLiteStore struct {
 	// nil for stores opened over a pre-existing DB, which keeps the original
 	// delete-then-insert behavior.
 	ftsMu      sync.Mutex
-	ftsJournal map[string]string // node ID → label\x00file\x00service
+	ftsJournal map[string]ftsEntry // node ID → last-written FTS row content + rowid
+}
+
+// ftsEntry is one node's last-written nodes_fts state: the row-content key
+// (see ftsRowKey) and the fts5 rowid it was inserted under. The rowid lets a
+// content-changing re-upsert delete the stale row by `WHERE rowid = ?` (the
+// fts5 primary key) instead of `WHERE id = ?` — id is UNINDEXED, so an
+// id-delete full-scans the whole FTS content, and the re-upserting passes
+// (rails_nav_helpers, contract_engine, evidence reconciliation) pay that scan
+// per node. Measured: 239 such deletes on orion = 1.8s, one link pass.
+type ftsEntry struct {
+	key   string
+	rowid int64
 }
 
 // ftsRowKey is the nodes_fts row content for a node: the FTS row is a pure
@@ -221,29 +233,39 @@ func ftsRowKey(n *Node) string {
 }
 
 // ftsPlan reports what nodes_fts work a node upsert needs: whether to delete
-// the existing row first, and whether to insert a new one. It records the new
-// content in the journal as a side effect.
+// the existing row first (and its rowid, for an indexed delete), and whether
+// to insert a new one. It has no side effects — the caller must call recordFTS
+// with the new rowid once the insert succeeds.
 //
-// Without a journal (pre-existing DB) it always reports delete+insert, which
-// is what the store did before the journal existed.
-func (s *SQLiteStore) ftsPlan(n *Node) (del, ins bool) {
+// Without a journal (pre-existing DB) it always reports delete+insert with
+// rowid 0, and the caller falls back to deleting by id.
+func (s *SQLiteStore) ftsPlan(n *Node) (key string, delRowid int64, del, ins bool) {
 	if s == nil || s.ftsJournal == nil {
-		return true, true
+		return "", 0, true, true
 	}
-	key := ftsRowKey(n)
+	key = ftsRowKey(n)
 	s.ftsMu.Lock()
 	defer s.ftsMu.Unlock()
 	prev, seen := s.ftsJournal[n.ID]
 	switch {
 	case !seen:
-		s.ftsJournal[n.ID] = key
-		return false, true // nothing to delete: this build has never written this ID
-	case prev == key:
-		return false, false // row already present with exactly this content
+		return key, 0, false, true // nothing to delete: this build has never written this ID
+	case prev.key == key:
+		return key, 0, false, false // row already present with exactly this content
 	default:
-		s.ftsJournal[n.ID] = key
-		return true, true // content changed: replace
+		return key, prev.rowid, true, true // content changed: replace the stale rowid
 	}
+}
+
+// recordFTS updates the journal after a successful nodes_fts insert. A no-op
+// without a journal.
+func (s *SQLiteStore) recordFTS(id, key string, rowid int64) {
+	if s == nil || s.ftsJournal == nil {
+		return
+	}
+	s.ftsMu.Lock()
+	s.ftsJournal[id] = ftsEntry{key: key, rowid: rowid}
+	s.ftsMu.Unlock()
 }
 
 // WarmFTSJournal seeds ftsJournal from the store's current nodes_fts content,
@@ -257,18 +279,19 @@ func (s *SQLiteStore) ftsPlan(n *Node) (del, ins bool) {
 // delete+insert for every node whose content isn't actually changing, which
 // on a large fleet is nearly all of them.
 func (s *SQLiteStore) WarmFTSJournal(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, label, file, service, qualified FROM nodes_fts`)
+	rows, err := s.db.QueryContext(ctx, `SELECT rowid, id, label, file, service, qualified FROM nodes_fts`)
 	if err != nil {
 		return fmt.Errorf("warm fts journal: %w", err)
 	}
 	defer rows.Close()
-	journal := make(map[string]string)
+	journal := make(map[string]ftsEntry)
 	for rows.Next() {
+		var rowid int64
 		var id, label, file, service, qualified string
-		if err := rows.Scan(&id, &label, &file, &service, &qualified); err != nil {
+		if err := rows.Scan(&rowid, &id, &label, &file, &service, &qualified); err != nil {
 			return fmt.Errorf("warm fts journal: scan: %w", err)
 		}
-		journal[id] = label + "\x00" + file + "\x00" + service + "\x00" + qualified
+		journal[id] = ftsEntry{key: label + "\x00" + file + "\x00" + service + "\x00" + qualified, rowid: rowid}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("warm fts journal: %w", err)
@@ -341,7 +364,7 @@ func NewBuildStore(dsn string) (*SQLiteStore, error) {
 	}
 	// The build DB starts empty, so nodes_fts row state is fully determined by
 	// what this store writes — see SQLiteStore.ftsJournal.
-	s.ftsJournal = make(map[string]string)
+	s.ftsJournal = make(map[string]ftsEntry)
 	return s, nil
 }
 
