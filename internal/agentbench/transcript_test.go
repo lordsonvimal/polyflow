@@ -2,6 +2,8 @@ package agentbench_test
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/agentbench"
@@ -142,6 +144,70 @@ func TestExtractFiles_Backtick(t *testing.T) {
 		if !want[f] {
 			t.Errorf("unexpected file: %q", f)
 		}
+	}
+}
+
+func TestSessionTranscriptDir_EscapesSlashes(t *testing.T) {
+	dir := agentbench.SessionTranscriptDir("/Users/lordson", "/Users/lordson/Projects/orion-atlas")
+	want := "/Users/lordson/.claude/projects/-Users-lordson-Projects-orion-atlas"
+	if dir != want {
+		t.Errorf("SessionTranscriptDir = %q, want %q", dir, want)
+	}
+}
+
+// TestSessionAssistantText_ConcatenatesAllTurns is the regression case for
+// the orion-atlas recall-0 finding: `claude -p`'s "result" field is only the
+// last turn, so a session that answers correctly and then takes one more
+// turn to verify a side detail loses the correct earlier answer if scored
+// off "result" alone. Reading the session log and concatenating every
+// assistant text turn recovers it.
+func TestSessionAssistantText_ConcatenatesAllTurns(t *testing.T) {
+	home := t.TempDir()
+	cwd := "/fake/project"
+	sessionDir := agentbench.SessionTranscriptDir(home, cwd)
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("testdata/session_multiturn.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "session_multiturn"
+	if err := os.WriteFile(filepath.Join(sessionDir, sessionID+".jsonl"), fixture, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := agentbench.SessionAssistantText(home, cwd, sessionID)
+	if err != nil {
+		t.Fatalf("SessionAssistantText: %v", err)
+	}
+
+	// The complete first-turn answer must survive even though a narrower
+	// follow-up turn came after it.
+	for _, want := range []string{
+		"app/controllers/api/v1/license_report_jobs_controller.rb",
+		"app/models/license_report_job.rb",
+		"app/jobs/license_report_creation_job.rb",
+		"app/blueprints/license_report_job_blueprint.rb",
+		"config/routes.rb",
+		"spec/factories/license_report_jobs.rb",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("SessionAssistantText missing %q; got: %s", want, text)
+		}
+	}
+
+	files := agentbench.ExtractFiles(text)
+	if len(files) < 6 {
+		t.Errorf("ExtractFiles on full session text returned %d files, want >= 6: %v", len(files), files)
+	}
+}
+
+func TestSessionAssistantText_MissingSession(t *testing.T) {
+	home := t.TempDir()
+	_, err := agentbench.SessionAssistantText(home, "/fake/project", "does-not-exist")
+	if err == nil {
+		t.Error("expected error for missing session file")
 	}
 }
 

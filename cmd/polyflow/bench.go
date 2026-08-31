@@ -564,6 +564,18 @@ func callClaude(_ context.Context, prompt, arm, mcpCfgPath, hookSettingsJSON, mo
 	if perr != nil {
 		return agentbench.Transcript{}, agentbench.FailureTransient, perr.Error()
 	}
+	// tr.Result is only the last turn's text. Prefer the full session log so a
+	// trailing narrow follow-up turn (e.g. "let me check this path exists")
+	// can't erase a correct answer given earlier in the same session — see
+	// SessionAssistantText. Best-effort: fall back to tr.Result as parsed if
+	// the log isn't readable (e.g. HOME/cwd mismatch, log rotated away).
+	if home, herr := os.UserHomeDir(); herr == nil {
+		if cwd, cerr := os.Getwd(); cerr == nil {
+			if full, serr := agentbench.SessionAssistantText(home, cwd, tr.SessionID); serr == nil && full != "" {
+				tr.Result = full
+			}
+		}
+	}
 	return tr, agentbench.FailureNone, ""
 }
 
