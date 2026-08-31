@@ -119,6 +119,14 @@ type Result struct {
 	HiddenByClass map[graph.NoiseClass]int `json:"hidden_by_class,omitempty"`
 }
 
+// MarshalJSON groups the flat Unresolved list by file (see
+// GroupUnresolvedByFile) instead of repeating each entry's file path once
+// per reference.
+func (r *Result) MarshalJSON() ([]byte, error) {
+	type resultAlias Result // same fields, no MarshalJSON: avoids infinite recursion
+	return marshalWithGroupedUnresolved((*resultAlias)(r), r.Unresolved, r.ServicesAffected)
+}
+
 // Options shapes a Build call. The zero value is the historical behaviour
 // (backward, raw walk) so a caller that only wants a blast radius need not
 // think about any of it.
