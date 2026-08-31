@@ -47,13 +47,11 @@ func extractRubyVariables(file, service string, src []byte, sharedRoot *sitter.N
 	}
 	// Pre-collect class names for same-file constant resolution, method
 	// definitions (class-scoped and flat) so calls to a method defined later
-	// in the file still resolve (forward references), and local-variable
-	// names per method so a bare identifier read of a local isn't
-	// misattributed as a call to a same-named method (Tier BC).
-	ex.preCollectRubyClasses(root)
-	ex.preCollectRubyMethods(root, "")
-	ex.preCollectRubyConstants(root, "")
-	ex.preCollectRubyLocals(root, "")
+	// in the file still resolve (forward references), class/module-body
+	// constants, and local-variable names per method so a bare identifier read
+	// of a local isn't misattributed as a call to a same-named method (Tier
+	// BC). One fused traversal — these tables are mutually independent.
+	ex.preCollectRuby(root, "", "")
 	ex.walk(root, "", "", "")
 
 	sort.Slice(ex.nodes, func(i, j int) bool { return ex.nodes[i].ID < ex.nodes[j].ID })
@@ -295,32 +293,29 @@ func rakeBlockLabel(call *sitter.Node, mname string, src []byte) string {
 	return mname
 }
 
-// preCollectRubyClasses scans the AST recursively to build classTable:
-// className → nodeID for all class/module declarations in the file.
-func (ex *rubyExtractor) preCollectRubyClasses(node *sitter.Node) {
-	t := node.Type()
-	if t == "class" || t == "module" {
-		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-			name := nameNode.Content(ex.src)
-			id := fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, rbLine(node))
-			ex.classTable[name] = id
-		}
-	}
-	for i := 0; i < int(node.NamedChildCount()); i++ {
-		ex.preCollectRubyClasses(node.NamedChild(i))
-	}
-}
-
-// preCollectRubyMethods scans the AST recursively to build methodsByClassName
-// and methodsByName: every method/singleton_method definition, keyed by its
-// enclosing class (bare name, matching classTable's simplification) and by
-// its bare name alone. Runs before walk so a call to a method defined later
-// in the same file still resolves.
-func (ex *rubyExtractor) preCollectRubyMethods(node *sitter.Node, class string) {
+// preCollectRuby is the single fused pre-pass that walks the file's AST once
+// and populates every same-file lookup table walk() needs to have complete
+// before it runs: classTable (class/module name → nodeID), methodsByClassName
+// / methodsByName (forward-reference method resolution), constTable
+// (class/module-body-scope constant assignments), and locals (per-method
+// local-variable name sets, so a bare identifier read of a local isn't
+// misattributed as an implicit-self call — Tier BC).
+//
+// It replaces four separate full-tree recursions (preCollectRubyClasses /
+// Methods / Constants / Locals) that were mutually independent — none read a
+// table another populated — so a single traversal threading both `class` and
+// `methodID` produces byte-identical tables. `methodID` is the real scope ID
+// (a methodNodeID, or a dslBlockScopeID for a task/namespace/Rails-callback
+// block body — DC.18/DC.28); the constant branch only needs to know it's
+// non-empty (method/block scope) vs empty (class body).
+func (ex *rubyExtractor) preCollectRuby(node *sitter.Node, class, methodID string) {
 	switch node.Type() {
 	case "class", "module":
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-			class = nameNode.Content(ex.src)
+			name := nameNode.Content(ex.src)
+			class = name
+			id := fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, rbLine(node))
+			ex.classTable[name] = id
 		}
 	case "method", "singleton_method":
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
@@ -330,65 +325,61 @@ func (ex *rubyExtractor) preCollectRubyMethods(node *sitter.Node, class string) 
 				ex.methodsByClassName[class+"\x00"+name] = id
 			}
 			ex.methodsByName[name] = append(ex.methodsByName[name], id)
-		}
-	}
-	for i := 0; i < int(node.NamedChildCount()); i++ {
-		ex.preCollectRubyMethods(node.NamedChild(i), class)
-	}
-}
-
-// preCollectRubyConstants scans the AST recursively to build constTable:
-// every class/module-body-scope constant assignment (`CONST = ...`), keyed by
-// bare name → nodeID (same shape as the node walk's own case "assignment"
-// mints at line ~550). Runs before walk so a constant referenced earlier in
-// the file than its definition (or from a sibling method) still resolves,
-// and so walk's own case "constant" (DC.30) has a table to mint reads edges
-// against — without this, a constant used only as a plain value anywhere
-// (a hash value, array element, method/macro argument, condition — anything
-// but a superclass, mixin argument, or call receiver, the three contexts
-// case "constant" already special-cased) never got a reads edge at all,
-// making every such constant a 100%-false-positive deadcode candidate the
-// instant DC.29's variable-node minting made it visible to the scanner.
-// Confirmed live on orion: 660/2294 (29%) of remaining flags were
-// SCREAMING_CASE constants like ContainerAttribute::VALID_DATA_TYPES, used
-// on the very next line (`validates :data_type, inclusion: { in:
-// VALID_DATA_TYPES }`) but with zero reads edges of any kind.
-func (ex *rubyExtractor) preCollectRubyConstants(node *sitter.Node, methodID string) {
-	switch node.Type() {
-	case "method", "singleton_method":
-		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-			methodID = ex.methodNodeID(nameNode.Content(ex.src), rbLine(node))
-		}
-	case "assignment", "operator_assignment":
-		if methodID == "" {
-			if left := node.ChildByFieldName("left"); left != nil && left.Type() == "constant" {
-				name := left.Content(ex.src)
-				ex.constTable[name] = fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, rbLine(node))
+			methodID = id
+			if params := node.ChildByFieldName("parameters"); params != nil {
+				ex.collectParamNames(params, methodID)
 			}
 		}
 	case "call":
-		// A task/namespace/Rails-callback-registration DSL block (see walk's
-		// "task", "namespace" and railsCallbackBlockMethods cases) creates its
-		// own scope the same way a real method body does: walk never mints a
-		// variable node for a `CONST = ...` inside one (methodID is non-empty
-		// there via dslBlockScopeID). This pass must treat it identically —
-		// otherwise it registers a constTable entry pointing at a node that
-		// will never exist, and a same-block reference resolving it mints a
-		// reads edge to nothing (FK violation), confirmed live on orion's
-		// lib/tasks/infra/org_create_and_configure.rake.
+		// DC.18/DC.28: a `task`/`namespace` or Rails callback-registration DSL
+		// block has no enclosing `def`, so give its body a synthetic
+		// method-like scope — see dslBlockScopeID. Only when not already inside
+		// a method, mirroring both original passes.
 		if methodID == "" {
 			if mn := node.ChildByFieldName("method"); mn != nil {
 				mname := mn.Content(ex.src)
-				if mname == "task" || mname == "namespace" || railsCallbackBlockMethods[mname] {
+				switch {
+				case mname == "task" || mname == "namespace":
 					if block := node.ChildByFieldName("block"); block != nil {
-						methodID = "dsl_block"
+						methodID = ex.dslBlockScopeID("rake_block", block)
+					}
+				case railsCallbackBlockMethods[mname]:
+					if block := node.ChildByFieldName("block"); block != nil {
+						methodID = ex.dslBlockScopeID("callback_block", block)
 					}
 				}
 			}
 		}
+	case "assignment", "operator_assignment":
+		if methodID == "" {
+			// Class/module-body-scope constant: `CONST = ...`. walk's own case
+			// "constant" (DC.30) mints reads edges against this table; a
+			// constant used only as a plain value would otherwise be a
+			// 100%-false-positive deadcode candidate.
+			if left := node.ChildByFieldName("left"); left != nil && left.Type() == "constant" {
+				name := left.Content(ex.src)
+				ex.constTable[name] = fmt.Sprintf("%s:%s:variable:%s:%d", ex.service, ex.file, name, rbLine(node))
+			}
+		} else if left := node.ChildByFieldName("left"); left != nil {
+			ex.collectAssignTargets(left, methodID)
+		}
+	case "block_parameters":
+		ex.collectParamNames(node, methodID)
+	case "for":
+		if pattern := node.ChildByFieldName("pattern"); pattern != nil {
+			ex.collectAssignTargets(pattern, methodID)
+		}
+	case "in_clause":
+		if pattern := node.ChildByFieldName("pattern"); pattern != nil {
+			ex.collectPatternIdentifiers(pattern, methodID)
+		}
+	case "rescue":
+		if v := node.ChildByFieldName("variable"); v != nil {
+			ex.collectPatternIdentifiers(v, methodID)
+		}
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
-		ex.preCollectRubyConstants(node.NamedChild(i), methodID)
+		ex.preCollectRuby(node.NamedChild(i), class, methodID)
 	}
 }
 
@@ -456,72 +447,6 @@ func (ex *rubyExtractor) collectPatternIdentifiers(node *sitter.Node, methodID s
 	}
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		ex.collectPatternIdentifiers(node.NamedChild(i), methodID)
-	}
-}
-
-// preCollectRubyLocals walks the whole tree recording, per method, every
-// name that is a local variable somewhere in that method — conservative in
-// the false-negative direction: a name assigned/bound anywhere in the method
-// (even after a later bare-identifier use) shadows a same-named method for
-// the entire method body, matching preCollectRubyMethods's forward-reference
-// pre-pass shape. Blocks (do...end, {}) are NOT scope boundaries: Ruby
-// blocks read/write the enclosing method's locals, so methodID is carried
-// through unchanged into block_parameters. `for`, `case/in`, and
-// `rescue => e` bindings are covered explicitly (see Risks in the plan doc)
-// since they are also local-variable sites a bare later use must not
-// misattribute as a call.
-func (ex *rubyExtractor) preCollectRubyLocals(node *sitter.Node, methodID string) {
-	switch node.Type() {
-	case "method", "singleton_method":
-		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-			methodID = ex.methodNodeID(nameNode.Content(ex.src), rbLine(node))
-		}
-		if params := node.ChildByFieldName("parameters"); params != nil {
-			ex.collectParamNames(params, methodID)
-		}
-	case "call":
-		// DC.18/DC.28: a `task`/`namespace` or Rails callback-registration
-		// DSL block has no enclosing `def`, so give its body a synthetic
-		// method-like scope the same way walk does below — see
-		// dslBlockScopeID.
-		if methodID == "" {
-			if mn := node.ChildByFieldName("method"); mn != nil {
-				mname := mn.Content(ex.src)
-				switch {
-				case mname == "task" || mname == "namespace":
-					if block := node.ChildByFieldName("block"); block != nil {
-						methodID = ex.dslBlockScopeID("rake_block", block)
-					}
-				case railsCallbackBlockMethods[mname]:
-					if block := node.ChildByFieldName("block"); block != nil {
-						methodID = ex.dslBlockScopeID("callback_block", block)
-					}
-				}
-			}
-		}
-	case "assignment", "operator_assignment":
-		if methodID != "" {
-			if left := node.ChildByFieldName("left"); left != nil {
-				ex.collectAssignTargets(left, methodID)
-			}
-		}
-	case "block_parameters":
-		ex.collectParamNames(node, methodID)
-	case "for":
-		if pattern := node.ChildByFieldName("pattern"); pattern != nil {
-			ex.collectAssignTargets(pattern, methodID)
-		}
-	case "in_clause":
-		if pattern := node.ChildByFieldName("pattern"); pattern != nil {
-			ex.collectPatternIdentifiers(pattern, methodID)
-		}
-	case "rescue":
-		if v := node.ChildByFieldName("variable"); v != nil {
-			ex.collectPatternIdentifiers(v, methodID)
-		}
-	}
-	for i := 0; i < int(node.NamedChildCount()); i++ {
-		ex.preCollectRubyLocals(node.NamedChild(i), methodID)
 	}
 }
 
