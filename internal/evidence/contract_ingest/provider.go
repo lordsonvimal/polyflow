@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -125,33 +126,51 @@ func (p *ContractProvider) Collect(_ context.Context, ws *workspace.WorkspaceCon
 }
 
 // discoverSpecs returns the set of spec files under root that match any of the
-// given doublestar globs and none of the exclude globs, sorted for
-// deterministic order. Globs are matched against the DirFS rooted at root;
-// returned paths are absolute (root joined with the matched relative path).
-// Exclude patterns match against the root-relative path, the same semantics
-// as the indexer's walkService.
+// given globs and none of the exclude globs, sorted for deterministic order.
+// Returned paths are absolute. Exclude patterns match against the
+// root-relative slash path, the same semantics as the indexer's walkService.
+//
+// Every spec glob is `**/<basename-pattern>` (a filename match anywhere in the
+// tree), so this does one exclude-pruned filepath.WalkDir and matches each
+// file's basename — instead of one full-tree doublestar.Glob per glob, which
+// walked node_modules/.git/vendor once per pattern (11× on the default set,
+// ~3.8s of a cold index on a repo with a big node_modules).
 func discoverSpecs(root string, globs, excludes []string) ([]string, error) {
-	fsys := os.DirFS(root)
-	seen := make(map[string]bool)
-	var files []string
+	basePats := make([]string, 0, len(globs))
+	for _, g := range globs {
+		basePats = append(basePats, path.Base(filepath.ToSlash(g)))
+	}
 
-	for _, glob := range globs {
-		// Convert OS path globs to forward-slash form for io/fs.
-		fsGlob := filepath.ToSlash(glob)
-		matches, err := doublestar.Glob(fsys, fsGlob)
-		if err != nil {
-			return nil, err
+	var files []string
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		for _, m := range matches {
-			if excludedPath(m, excludes) {
-				continue
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			rel = p
+		}
+		rel = filepath.ToSlash(rel)
+		if rel != "." && excludedPath(rel, excludes) {
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
-			abs := filepath.Join(root, m)
-			if !seen[abs] {
-				seen[abs] = true
-				files = append(files, abs)
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		base := d.Name()
+		for _, bp := range basePats {
+			if matched, _ := doublestar.Match(bp, base); matched {
+				files = append(files, p)
+				break
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(files)
 	return files, nil
