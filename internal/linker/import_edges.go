@@ -1,9 +1,7 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -119,13 +117,8 @@ func LinkJSImportEdges(nodes []graph.Node, serviceFiles map[string][]string) (ne
 // Returns relative imports (starting with ./ or ../) and the count of external
 // (bare-specifier / npm) imports.
 func parseJSImportSources(file string) (relative []string, externalCount int) {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return
-	}
-	lang := grammarLangForFile(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
+	src, root, lang, ok := jsParse(file)
+	if !ok {
 		return
 	}
 

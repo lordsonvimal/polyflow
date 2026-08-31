@@ -1,9 +1,7 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -219,11 +217,10 @@ func LinkJSTypeRelations(nodes []graph.Node, priorEdges []graph.Edge, serviceFil
 }
 
 func resolveJSTypeRelations(file, svcName string, classTable map[string]string, fileDecls []lineNode, constructorByClass map[string]string, existingEdges, seen map[string]bool, svcFileSet map[string]bool, fileClassIndex map[string]map[string]string, defaultExportCache map[string]string, globalClassByName map[string]string) ([]graph.Edge, []graph.UnresolvedRef) {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, lang, ok := jsParse(file)
+	if !ok {
 		return nil, nil
 	}
-	lang := grammarLangForFile(file)
 	// file arrives absolute (serviceFiles carries the raw walked paths,
 	// never relativized — unlike the main per-file parse path, which applies
 	// this same conversion in javascript.go). Every node/ref ID this pass
@@ -231,12 +228,8 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 	// or a cross-file edge like `instantiates` points at an ID nothing
 	// wrote — a FOREIGN KEY constraint failure at write time (confirmed
 	// indexing GitNexus's own repo: every cross-file new_expression hit
-	// this). os.ReadFile/grammarLangForFile above still need the real path.
+	// this). Reading the file above still needs the real path.
 	relFile := patterns.RelativizeToCwd(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
-		return nil, nil
-	}
 
 	// Extract import bindings: localName → exportedName (same as resolveImportCalls).
 	type importBinding struct {
@@ -816,13 +809,8 @@ func constDeclFunctionID(n *sitter.Node, svcName, relFile string, src []byte) (s
 // anonymous grammar token (not a field on export_statement), so its presence
 // must be checked positionally among the unnamed children.
 func findDefaultExportClassName(file string) string {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return ""
-	}
-	lang := grammarLangForFile(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
+	src, root, _, ok := jsParse(file)
+	if !ok {
 		return ""
 	}
 

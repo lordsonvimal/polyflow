@@ -1,9 +1,7 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -267,23 +265,17 @@ type varTarget struct {
 }
 
 func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByLabel map[string]varTarget, funcLinesByFile map[string][]lineNode, funcByFileAndLabel, varByFileAndLabel map[string]string) ([]graph.Edge, []graph.UnresolvedRef, map[string]bool) {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, lang, ok := jsParse(file)
+	if !ok {
 		return nil, nil, nil
 	}
-	// The caller may pass an absolute path (needed for os.ReadFile above), but
+	// The caller may pass an absolute path (needed to read the file), but
 	// every node's File field — and every lookup key below — uses the
 	// cwd-relative form the parser mints (patterns.RelativizeToCwd, see
 	// javascript.go). Without this, funcLinesByFile/funcByFileAndLabel/
 	// varByFileAndLabel lookups silently miss and every call site in the file
 	// resolves to no enclosing function, dropping the edge entirely.
 	file = patterns.RelativizeToCwd(file)
-
-	lang := grammarLangForFile(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
-		return nil, nil, nil
-	}
 
 	// --- Extract import bindings: localName → set of exported names from that module ---
 	// We care about two forms:

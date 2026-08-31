@@ -725,6 +725,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// source tree (~7 passes) and dominates the cold-index link phase.
 	linker.EnableRubyTreeCache()
 	defer linker.DisableRubyTreeCache()
+	linker.EnableJSTreeCache()
+	defer linker.DisableJSTreeCache()
 	for _, pass := range buildLinkPasses(linkState) {
 		if err := pass.exec(); err != nil {
 			return nil, fmt.Errorf("link pass %s: %w", pass.name, err)

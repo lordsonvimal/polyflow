@@ -1,9 +1,7 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
@@ -290,16 +288,11 @@ func collectParamProperties(ctor *sitter.Node, classID string, src []byte, field
 // every `<receiver>.<method>(...)` call site whose receiver's type it can
 // pin down.
 func resolveJSReceiverTypeCalls(file, svcName string, classByLabel, ifaceByLabel map[string]string, methodsByClass map[string]map[string]string, ancestorChain func(string) []string, implementersByInterface map[string][]string, seen map[string]bool) []graph.Edge {
-	src, err := os.ReadFile(file)
-	if err != nil {
+	src, root, _, ok := jsParse(file)
+	if !ok {
 		return nil
 	}
-	lang := grammarLangForFile(file)
 	relFile := patterns.RelativizeToCwd(file)
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
-		return nil
-	}
 
 	fieldType := make(map[string]string) // classID+"."+fieldName -> typeName
 	collectClassFieldTypes(root, src, svcName, relFile, fieldType)

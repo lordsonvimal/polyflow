@@ -1,9 +1,7 @@
 package linker
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -82,13 +80,8 @@ func LinkJSLazyImportCalls(nodes []graph.Node, serviceFiles map[string][]string)
 			if !isJSFile(file) {
 				continue
 			}
-			src, err := os.ReadFile(file)
-			if err != nil {
-				continue
-			}
-			lang := grammarLangForFile(file)
-			root, err := sitter.ParseCtx(context.Background(), src, lang)
-			if err != nil {
+			src, root, _, ok := jsParse(file)
+			if !ok {
 				continue
 			}
 			relFile := patterns.RelativizeToCwd(file)
