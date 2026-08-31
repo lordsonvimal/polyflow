@@ -720,6 +720,11 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			c.Close()
 		}
 	}()
+	// Share one Ruby tree-sitter parse across every ruby_* / rails_* link pass
+	// for this run — otherwise each pass re-reads and re-parses the whole Ruby
+	// source tree (~7 passes) and dominates the cold-index link phase.
+	linker.EnableRubyTreeCache()
+	defer linker.DisableRubyTreeCache()
 	for _, pass := range buildLinkPasses(linkState) {
 		if err := pass.exec(); err != nil {
 			return nil, fmt.Errorf("link pass %s: %w", pass.name, err)
