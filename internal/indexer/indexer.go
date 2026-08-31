@@ -104,6 +104,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if progress == nil {
 		progress = func(int, int) {}
 	}
+	clk := newPhaseClock(logw)
 
 	if err := os.MkdirAll(opts.DBDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s: %w", opts.DBDir, err)
@@ -304,6 +305,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	for _, sf := range allSvcFiles {
 		stats.TotalFiles += len(sf.files)
 	}
+	clk.mark("scan (walk+deps+toolchain)")
 
 	// ── Hash pre-pass + no-change fast path ──────────────────────────────────
 	// Hash every file up front. If the workspace fingerprint (config + file
@@ -348,6 +350,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		_ = g.Wait()
 	}
+	clk.mark("hash pre-pass")
 	hashes := map[string]string{}         // file → content hash
 	fileData := map[string][]byte{}       // file → pre-read bytes, consumed+pruned per service below
 	svcHashLines := map[string][]string{} // semantic cache key input
@@ -398,6 +401,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 			stats.SkippedFiles = stats.TotalFiles
 			stats.Elapsed = time.Since(start)
+			clk.done()
 			fmt.Fprintf(logw, "  No changes since last index — graph reused.\n")
 			if oldStore != nil {
 				oldStore.Close()
@@ -599,6 +603,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	if err := store.UpsertFileHashes(ctx, fhBatch); err != nil {
 		return nil, err
 	}
+	clk.mark("parse")
 
 	knownNodeIDs := make(map[string]bool, len(allNodes))
 	for _, n := range allNodes {
@@ -683,6 +688,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 	}
 
+	clk.mark("semantic (go/packages)")
+
 	if len(semanticWarnings) > 0 {
 		warningsJSON, _ := json.Marshal(semanticWarnings)
 		_ = store.SetMeta(ctx, "semantic_warnings", string(warningsJSON))
@@ -723,6 +730,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	allUnresolved = linkState.allUnresolved
 	handshakeResolved := linkState.handshakeResolved
 	pluginCoverageNotes := linkState.pluginCoverageNotes
+	clk.mark("link passes")
 
 	// ── Root classification ──────────────────────────────────────────────────
 	// With the full edge set assembled, function/method nodes with no incoming
@@ -806,6 +814,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		// K.6 just linked come back reported as unresolvable.
 		allUnresolved = linker.DropResolvedRefs(allUnresolved, handshakeResolved)
 	}
+	clk.mark("root classify + evidence")
 
 	// ── Embed pass (S.0) ─────────────────────────────────────────────────────
 	// Produce or update vector embeddings for every finalized node.
@@ -828,6 +837,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 		}
 	}
+
+	clk.mark("embed")
 
 	// ── Recall gauge ─────────────────────────────────────────────────────────
 	// Persist the blind-spot ledger so `polyflow status` can report exactly
@@ -944,6 +955,8 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		fmt.Fprintf(logw, "  Warning: open graph for stats: %v\n", err)
 	}
 	stats.Elapsed = time.Since(start)
+	clk.mark("finalize + atomic swap")
+	clk.done()
 	return stats, nil
 }
 
@@ -1117,12 +1130,15 @@ func runEmbedPass(
 		fmt.Fprintf(logw, "  Embedder changed (%s → %s): re-embedding all entities\n", storedID, embedderID)
 	}
 
+	eclk := newPhaseClock(logw)
+
 	// ── Build corpus entities (S.1) ─────────────────────────────────────────
 	// 1. Node cards — richer one-line card: label type service file [meta].
 	nodeEntities := make([]semantic.Entity, len(allNodes))
 	for i := range allNodes {
 		nodeEntities[i] = semantic.BuildNodeCard(&allNodes[i])
 	}
+	eclk.mark("embed: node cards")
 
 	// 2. Flow-chain documents — one per distinct chain from each entrypoint.
 	idx := graph.NewAdjacencyIndex()
@@ -1133,6 +1149,7 @@ func runEmbedPass(
 		idx.AddEdge(&allEdges[i])
 	}
 	chainEntities := semantic.BuildFlowChains(idx)
+	eclk.mark("embed: flow chains")
 
 	// 3. Doc chunks — markdown files + code doc-comments from service dirs.
 	var svcPaths []semantic.ServicePath
@@ -1146,6 +1163,7 @@ func runEmbedPass(
 		}
 	}
 	docEntities := semantic.BuildDocChunks(svcPaths, allNodes)
+	eclk.mark("embed: doc chunks")
 
 	// Combine all entities; dedupe by ID (node cards win over chain/doc on
 	// collision — in practice IDs are namespaced and never collide).
@@ -1217,6 +1235,7 @@ func runEmbedPass(
 	if err := g.Wait(); err != nil {
 		return err
 	}
+	eclk.mark("embed: vector compute")
 
 	// Flatten in batch order and upsert everything in a SINGLE transaction.
 	// The previous code committed once per 256-entity batch (~150 fsync'd
@@ -1231,6 +1250,7 @@ func runEmbedPass(
 	if uErr := sem.BatchUpsertEmbeddings(ctx, allBatch, allVecs, embedderID); uErr != nil {
 		return fmt.Errorf("upsert embeddings: %w", uErr)
 	}
+	eclk.mark("embed: vector + FTS upsert")
 	return nil
 }
 
