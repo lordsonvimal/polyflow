@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -150,13 +151,29 @@ type compiledQuery struct {
 	pattern *Pattern
 }
 
+// querySet is the compiled form of one (patternLang @ grammarLang) pattern
+// group. `individual` keeps a per-pattern compiled query (registry order);
+// `combined` is every pattern's query source concatenated into one
+// sitter.Query so a single cursor.Exec walks the tree once instead of once
+// per pattern (a .jsx file otherwise runs ~100 separate Execs). `byIndex`
+// maps a match's PatternIndex within `combined` back to its Pattern —
+// repeated per sub-pattern for the rare .scm file that holds more than one
+// top-level pattern. `combined` is nil when concatenation didn't round-trip
+// (pattern count mismatch), and execQueries falls back to the per-pattern
+// loop.
+type querySet struct {
+	individual []compiledQuery
+	combined   *sitter.Query
+	byIndex    []*Pattern
+}
+
 // TreeSitterMatcher runs tree-sitter queries against source files.
 type TreeSitterMatcher struct {
 	registry *Registry
 	versions map[string]string // package -> resolved version (for match metadata)
 	mu       sync.Mutex
-	// compiled queries cached per language: language -> patternName -> compiledQuery
-	compiled map[string][]compiledQuery
+	// compiled queries cached per "patternLang@grammarLang" key.
+	compiled map[string]*querySet
 
 	// DatastarVariant is the toolchain RuleVariant for the resolved datastar version
 	// (e.g. "datastar-v1"). Set by the indexer; read by the templ parser to select
@@ -168,7 +185,7 @@ type TreeSitterMatcher struct {
 func NewTreeSitterMatcher(reg *Registry) *TreeSitterMatcher {
 	return &TreeSitterMatcher{
 		registry: reg,
-		compiled: make(map[string][]compiledQuery),
+		compiled: make(map[string]*querySet),
 	}
 }
 
@@ -288,20 +305,23 @@ func ParseTree(grammarLang string, src []byte) (*sitter.Node, error) {
 	return sitter.ParseCtx(context.Background(), src, lang)
 }
 
-// getCompiledQueries returns cached compiled queries for patternLang compiled against grammarLang.
-// The cache key includes both so jsx patterns compiled against tsx grammar don't collide with
-// the same patterns compiled against typescript grammar.
-func (m *TreeSitterMatcher) getCompiledQueries(patternLang, grammarLang string, lang *sitter.Language) []compiledQuery {
+// getQuerySet returns the cached compiled query set for patternLang compiled
+// against grammarLang. The cache key includes both so jsx patterns compiled
+// against the tsx grammar don't collide with the same patterns compiled
+// against typescript.
+func (m *TreeSitterMatcher) getQuerySet(patternLang, grammarLang string, lang *sitter.Language) *querySet {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	cacheKey := patternLang + "@" + grammarLang
-	if cqs, ok := m.compiled[cacheKey]; ok {
-		return cqs
+	if qs, ok := m.compiled[cacheKey]; ok {
+		return qs
 	}
 
 	patterns := m.registry.List(patternLang)
-	cqs := make([]compiledQuery, 0, len(patterns))
+	qs := &querySet{individual: make([]compiledQuery, 0, len(patterns))}
+	var combinedSrc []byte
+	subCounts := make([]uint32, 0, len(patterns))
 	for _, p := range patterns {
 		if len(p.Grammars) > 0 && !slices.Contains(p.Grammars, grammarLang) {
 			// Grammar-restricted pattern (e.g. a formal_parameters shape
@@ -314,10 +334,40 @@ func (m *TreeSitterMatcher) getCompiledQueries(patternLang, grammarLang string, 
 			log.Printf("patterns: failed to compile query %q for language %q against grammar %q: %v", p.Name, patternLang, grammarLang, err)
 			continue
 		}
-		cqs = append(cqs, compiledQuery{query: q, pattern: p})
+		qs.individual = append(qs.individual, compiledQuery{query: q, pattern: p})
+		subCounts = append(subCounts, q.PatternCount())
+		combinedSrc = append(combinedSrc, p.Query...)
+		combinedSrc = append(combinedSrc, '\n')
 	}
-	m.compiled[cacheKey] = cqs
-	return cqs
+
+	// Concatenate every already-validated pattern into one query so a single
+	// cursor.Exec matches them all in one tree traversal. Each piece compiled
+	// on its own above, so the whole should too; if it doesn't, or the
+	// sub-pattern count doesn't add up, leave combined nil and execQueries
+	// runs the per-pattern loop.
+	if combined, err := sitter.NewQuery(combinedSrc, lang); err == nil {
+		var total uint32
+		for _, c := range subCounts {
+			total += c
+		}
+		if combined.PatternCount() == total {
+			qs.combined = combined
+			qs.byIndex = make([]*Pattern, 0, total)
+			for i, c := range subCounts {
+				for j := uint32(0); j < c; j++ {
+					qs.byIndex = append(qs.byIndex, qs.individual[i].pattern)
+				}
+			}
+		} else {
+			log.Printf("patterns: combined query for %s@%s has %d patterns, expected %d — using per-pattern path", patternLang, grammarLang, combined.PatternCount(), total)
+			combined.Close()
+		}
+	} else {
+		log.Printf("patterns: combined query for %s@%s failed to compile (%v) — using per-pattern path", patternLang, grammarLang, err)
+	}
+
+	m.compiled[cacheKey] = qs
+	return qs
 }
 
 // MatchWithGrammar runs patterns registered under patternLang but parses with the
@@ -335,8 +385,8 @@ func (m *TreeSitterMatcher) MatchWithGrammarRoot(patternLang, grammarLang, file 
 	if lang == nil {
 		return nil, nil
 	}
-	cqs := m.getCompiledQueries(patternLang, grammarLang, lang)
-	if len(cqs) == 0 {
+	qs := m.getQuerySet(patternLang, grammarLang, lang)
+	if len(qs.individual) == 0 {
 		return nil, nil
 	}
 	if root == nil {
@@ -346,7 +396,7 @@ func (m *TreeSitterMatcher) MatchWithGrammarRoot(patternLang, grammarLang, file 
 			return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
 		}
 	}
-	return m.execQueries(cqs, root, src, file, grammarLang)
+	return m.execQueries(qs, root, src, file, grammarLang)
 }
 
 // Match runs registered patterns for the language against the source bytes.
@@ -363,8 +413,8 @@ func (m *TreeSitterMatcher) MatchRoot(language, file string, src []byte, root *s
 		return nil, nil
 	}
 
-	cqs := m.getCompiledQueries(language, language, lang)
-	if len(cqs) == 0 {
+	qs := m.getQuerySet(language, language, lang)
+	if len(qs.individual) == 0 {
 		return nil, nil
 	}
 
@@ -376,7 +426,7 @@ func (m *TreeSitterMatcher) MatchRoot(language, file string, src []byte, root *s
 		}
 	}
 
-	return m.execQueries(cqs, root, src, file, language)
+	return m.execQueries(qs, root, src, file, language)
 }
 
 // indexCwd is the canonicalized process working directory, resolved once —
@@ -546,8 +596,7 @@ func filterPredicatesCached(q *sitter.Query, m *sitter.QueryMatch, input []byte)
 	return qm
 }
 
-func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, src []byte, file, grammarLang string) ([]MatchResult, error) {
-	var results []MatchResult
+func (m *TreeSitterMatcher) execQueries(qs *querySet, root *sitter.Node, src []byte, file, grammarLang string) ([]MatchResult, error) {
 	testDSLFamily := testDSLLangFamily(grammarLang)
 	// `file` arrives absolute (the indexer walks services from an absolute
 	// root so os.ReadFile works regardless of process cwd). Every other node
@@ -559,197 +608,250 @@ func (m *TreeSitterMatcher) execQueries(cqs []compiledQuery, root *sitter.Node, 
 	// at the workspace root.
 	file = RelativizeToCwd(file)
 
-	for _, cq := range cqs {
-		cursor := sitter.NewQueryCursor()
-		cursor.Exec(cq.query, root)
+	// One cursor, re-Exec'd: NewQueryCursor allocates a C cursor and the old
+	// code minted (then leaked — it never Close()d) one per pattern per file.
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
 
+	pc := &patternCtx{m: m, src: src, file: file, grammarLang: grammarLang, testDSLFamily: testDSLFamily}
+
+	if qs.combined != nil {
+		// Fast path: one cursor.Exec matches every pattern in a single tree
+		// traversal instead of one traversal per pattern. Matches come back
+		// interleaved across patterns, so tag each with its pattern's registry
+		// rank and stable-sort back to the per-pattern-major order the callers
+		// (MatchToGraph's proximity linking, node-ID dedup) were written
+		// against.
+		cursor.Exec(qs.combined, root)
+		type ranked struct {
+			rank int
+			mr   MatchResult
+		}
+		var tagged []ranked
 		for {
 			m2, ok := cursor.NextMatch()
 			if !ok {
 				break
 			}
-			// Apply predicate filtering (handles #eq? and #match? predicates).
-			// filterPredicatesCached, not cursor.FilterPredicates: the
-			// upstream implementation calls regexp.MustCompile fresh for
-			// every single match (see filterPredicatesCached's doc comment),
-			// which profiled at ~13% of total allocations on a real fleet
-			// index. cq.query's pattern text is static, so caching by that
-			// text is entirely safe and avoids forking the dependency.
-			m2 = filterPredicatesCached(cq.query, m2, src)
-			if m2 == nil || len(m2.Captures) == 0 {
+			idx := int(m2.PatternIndex)
+			if idx >= len(qs.byIndex) {
 				continue
 			}
+			pat := qs.byIndex[idx]
+			if mr, keep := pc.handleMatch(m2, qs.combined, pat); keep {
+				tagged = append(tagged, ranked{rank: idx, mr: mr})
+			}
+		}
+		sort.SliceStable(tagged, func(i, j int) bool { return tagged[i].rank < tagged[j].rank })
+		results := make([]MatchResult, len(tagged))
+		for i := range tagged {
+			results[i] = tagged[i].mr
+		}
+		return results, nil
+	}
 
-			// A comment between two arguments is a named sibling, so it can bind
-			// to an anchored `(_)` capture and shift every later capture by one.
-			// Re-align before any capture text is read.
-			matchCaps, ok2 := repairCommentCaptures(m2.Captures, cq.query.CaptureNameForId)
-			if !ok2 {
-				continue
+	// Fallback: per-pattern loop (combined query unavailable for this set).
+	var results []MatchResult
+	for _, cq := range qs.individual {
+		cursor.Exec(cq.query, root)
+		for {
+			m2, ok := cursor.NextMatch()
+			if !ok {
+				break
 			}
+			if mr, keep := pc.handleMatch(m2, cq.query, cq.pattern); keep {
+				results = append(results, mr)
+			}
+		}
+	}
+	return results, nil
+}
 
-			// Build capture map: capture name -> text.
-			// Captures whose name starts with "_" are positional only: they
-			// contribute line-range information (e.g. @_def spanning a whole
-			// function body) but their text is not stored, so declaration
-			// bodies never leak into node meta.
-			captures := make(map[string]string, len(matchCaps))
-			var keyNodes map[string]*sitter.Node
-			var minLine int = -1
-			var minLineNamed int = -1
-			var defEndLine int
-			var anchor *sitter.Node
-			for _, cap := range matchCaps {
-				if anchor == nil {
-					anchor = cap.Node
-				}
-				name := cq.query.CaptureNameForId(cap.Index)
-				row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
-				if strings.HasPrefix(name, "_") {
-					// Positional-only capture: it marks the span of the whole
-					// declaration, so its end row bounds the definition body.
-					if endRow := int(cap.Node.EndPoint().Row) + 1; endRow > defEndLine {
-						defEndLine = endRow
-					}
-				} else {
-					captures[name] = cap.Node.Content(src)
-					if keyWalkerKeyCaptureNames[name] {
-						if keyNodes == nil {
-							keyNodes = make(map[string]*sitter.Node, 1)
-						}
-						keyNodes[name] = cap.Node
-					}
-					// Prefer the line of a real (non-positional) capture: an
-					// underscore-prefixed anchor can sit on a different line
-					// (e.g. a `member do` block-opening keyword) than the
-					// actual matched content (e.g. a verb call several lines
-					// into the block), which would otherwise collapse every
-					// match in the block onto the anchor's line and collide
-					// their node IDs.
-					if minLineNamed < 0 || row < minLineNamed {
-						minLineNamed = row
-					}
-				}
-				if minLine < 0 || row < minLine {
-					minLine = row
-				}
-			}
-			if minLineNamed >= 0 {
-				minLine = minLineNamed
-			}
+// patternCtx carries the per-file invariants handleMatch needs, so the match
+// body reads the same whether it's driven by the combined query or the
+// per-pattern fallback loop.
+type patternCtx struct {
+	m             *TreeSitterMatcher
+	src           []byte
+	file          string
+	grammarLang   string
+	testDSLFamily string
+}
 
-			// Apply Match filters if defined
-			if len(cq.pattern.Match) > 0 {
-				skip := false
-				for capName, allowed := range cq.pattern.Match {
-					val, ok := captures[capName]
-					if !ok {
-						skip = true
-						break
-					}
-					if !slices.Contains(allowed, val) {
-						skip = true
-						break
-					}
-				}
-				if skip {
-					continue
-				}
-			}
+// handleMatch turns one raw tree-sitter QueryMatch into a MatchResult, or
+// reports keep=false when predicate/Match filtering or a pattern-specific
+// guard drops it. `q` is the query the match came from (combined or
+// individual) — every capture-name / predicate lookup must go through it, not
+// a sibling query, because capture and string IDs are query-local.
+func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *Pattern) (MatchResult, bool) {
+	src := pc.src
+	// Apply predicate filtering (handles #eq? and #match? predicates).
+	// filterPredicatesCached, not cursor.FilterPredicates: the upstream
+	// implementation calls regexp.MustCompile fresh for every single match
+	// (see filterPredicatesCached's doc comment), which profiled at ~13% of
+	// total allocations on a real fleet index.
+	m2 = filterPredicatesCached(q, m2, src)
+	if m2 == nil || len(m2.Captures) == 0 {
+		return MatchResult{}, false
+	}
 
-			if minLine < 0 {
-				minLine = 0
-			}
+	// A comment between two arguments is a named sibling, so it can bind
+	// to an anchored `(_)` capture and shift every later capture by one.
+	// Re-align before any capture text is read.
+	matchCaps, ok2 := repairCommentCaptures(m2.Captures, q.CaptureNameForId)
+	if !ok2 {
+		return MatchResult{}, false
+	}
 
-			// X.2: delayed_job's `.delay`/`handle_asynchronously` sites have an
-			// implicit-self receiver — the join target is the enclosing class,
-			// not text in the match itself. Capture it here where the AST is
-			// still available (MatchToGraph only sees flat capture text).
-			if grammarLang == "ruby" && anchor != nil &&
-				(cq.pattern.Name == "dj_delay" || cq.pattern.Name == "dj_handle_asynchronously") {
-				if cls := rubyEnclosingClassName(anchor, src); cls != "" {
-					captures["dj_class"] = cls
-				}
+	// Build capture map: capture name -> text.
+	// Captures whose name starts with "_" are positional only: they
+	// contribute line-range information (e.g. @_def spanning a whole
+	// function body) but their text is not stored, so declaration
+	// bodies never leak into node meta.
+	captures := make(map[string]string, len(matchCaps))
+	var keyNodes map[string]*sitter.Node
+	var minLine int = -1
+	var minLineNamed int = -1
+	var defEndLine int
+	var anchor *sitter.Node
+	for _, cap := range matchCaps {
+		if anchor == nil {
+			anchor = cap.Node
+		}
+		name := q.CaptureNameForId(cap.Index)
+		row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
+		if strings.HasPrefix(name, "_") {
+			// Positional-only capture: it marks the span of the whole
+			// declaration, so its end row bounds the definition body.
+			if endRow := int(cap.Node.EndPoint().Row) + 1; endRow > defEndLine {
+				defEndLine = endRow
 			}
+		} else {
+			captures[name] = cap.Node.Content(src)
+			if keyWalkerKeyCaptureNames[name] {
+				if keyNodes == nil {
+					keyNodes = make(map[string]*sitter.Node, 1)
+				}
+				keyNodes[name] = cap.Node
+			}
+			// Prefer the line of a real (non-positional) capture: an
+			// underscore-prefixed anchor can sit on a different line
+			// (e.g. a `member do` block-opening keyword) than the
+			// actual matched content (e.g. a verb call several lines
+			// into the block), which would otherwise collapse every
+			// match in the block onto the anchor's line and collide
+			// their node IDs.
+			if minLineNamed < 0 || row < minLineNamed {
+				minLineNamed = row
+			}
+		}
+		if minLine < 0 || row < minLine {
+			minLine = row
+		}
+	}
+	if minLineNamed >= 0 {
+		minLine = minLineNamed
+	}
 
-			// jquery_ajax_options_typed's @method captures a string/property-key
-			// value node directly (`type: "POST"`) rather than routing through
-			// the KeyWalker like @url does, so it keeps its raw quoted text
-			// ("POST" with the quote characters) unless stripped here — and an
-			// unstripped value never matches contracts/http.yaml's bare "POST"
-			// route meta, defeating the whole point of capturing it.
-			if cq.pattern.Name == "jquery_ajax_options_typed" {
-				if v, ok := captures["method"]; ok {
-					captures["method"] = strings.ToUpper(strings.Trim(v, `"'`+"`"))
-				}
+	// Apply Match filters if defined
+	if len(pat.Match) > 0 {
+		for capName, allowed := range pat.Match {
+			val, ok := captures[capName]
+			if !ok || !slices.Contains(allowed, val) {
+				return MatchResult{}, false
 			}
-
-			// WB.4: these two patterns only capture the call site + argument
-			// identifier (tree-sitter queries can't do arithmetic to derive a
-			// positional index). Walk up from @arg_name to the nearest enclosing
-			// function and check whether the identifier is genuinely one of its
-			// own parameters — if so inject wrapper_name/param_index; if not
-			// (an ordinary local variable passed to fetch/axios, not a forwarded
-			// param) drop the match entirely so no bookkeeping node is created.
-			if cq.pattern.Name == "wrapper_url_positional_fetch_call" || cq.pattern.Name == "wrapper_url_positional_axios_call" ||
-				cq.pattern.Name == "wrapper_url_key_axios_config_call" || cq.pattern.Name == "wrapper_url_shorthand_axios_config_call" {
-				var argNode *sitter.Node
-				for _, cap := range matchCaps {
-					if cq.query.CaptureNameForId(cap.Index) == "arg_name" {
-						argNode = cap.Node
-						break
-					}
-				}
-				if argNode == nil {
-					continue
-				}
-				wname, idx, ok := jsWrapperParamIndex(argNode, src)
-				if !ok {
-					continue
-				}
-				captures["wrapper_name"] = wname
-				captures["param_index"] = strconv.Itoa(idx)
-			}
-
-			// WB.4: producer_alias_url_call no longer anchors @url to the first
-			// argument (a wrapper's URL param may forward at any position), so
-			// a call site with multiple string/template literal args now emits
-			// one match per literal. The linker (EnrichAliases) needs each
-			// candidate's positional index to pick the right one via
-			// wrapperURLTable, which tree-sitter can't emit directly.
-			if cq.pattern.Name == "producer_alias_url_call" {
-				var urlNode *sitter.Node
-				for _, cap := range matchCaps {
-					if cq.query.CaptureNameForId(cap.Index) == "url" {
-						urlNode = cap.Node
-						break
-					}
-				}
-				if urlNode != nil && urlNode.Parent() != nil {
-					captures["arg_index"] = strconv.Itoa(namedChildIndex(urlNode.Parent(), urlNode))
-				}
-			}
-
-			mr := MatchResult{
-				PatternName: cq.pattern.Name,
-				Captures:    captures,
-				Line:        minLine,
-				EndLine:     defEndLine,
-				File:        file,
-				IsTestDSL:   testDSLFamily != "" && anchor != nil && inTestDSLScope(anchor, src, testDSLFamily),
-				KeyNodes:    keyNodes,
-				Src:         src,
-				Lang:        keyWalkerLangFor(grammarLang),
-			}
-			if cq.pattern.Package != "" {
-				mr.Package = cq.pattern.Package
-				mr.ResolvedVersion = m.versions[cq.pattern.Package]
-			}
-			results = append(results, mr)
 		}
 	}
 
-	return results, nil
+	if minLine < 0 {
+		minLine = 0
+	}
+
+	// X.2: delayed_job's `.delay`/`handle_asynchronously` sites have an
+	// implicit-self receiver — the join target is the enclosing class,
+	// not text in the match itself. Capture it here where the AST is
+	// still available (MatchToGraph only sees flat capture text).
+	if pc.grammarLang == "ruby" && anchor != nil &&
+		(pat.Name == "dj_delay" || pat.Name == "dj_handle_asynchronously") {
+		if cls := rubyEnclosingClassName(anchor, src); cls != "" {
+			captures["dj_class"] = cls
+		}
+	}
+
+	// jquery_ajax_options_typed's @method captures a string/property-key
+	// value node directly (`type: "POST"`) rather than routing through
+	// the KeyWalker like @url does, so it keeps its raw quoted text
+	// ("POST" with the quote characters) unless stripped here — and an
+	// unstripped value never matches contracts/http.yaml's bare "POST"
+	// route meta, defeating the whole point of capturing it.
+	if pat.Name == "jquery_ajax_options_typed" {
+		if v, ok := captures["method"]; ok {
+			captures["method"] = strings.ToUpper(strings.Trim(v, `"'`+"`"))
+		}
+	}
+
+	// WB.4: these two patterns only capture the call site + argument
+	// identifier (tree-sitter queries can't do arithmetic to derive a
+	// positional index). Walk up from @arg_name to the nearest enclosing
+	// function and check whether the identifier is genuinely one of its
+	// own parameters — if so inject wrapper_name/param_index; if not
+	// (an ordinary local variable passed to fetch/axios, not a forwarded
+	// param) drop the match entirely so no bookkeeping node is created.
+	if pat.Name == "wrapper_url_positional_fetch_call" || pat.Name == "wrapper_url_positional_axios_call" ||
+		pat.Name == "wrapper_url_key_axios_config_call" || pat.Name == "wrapper_url_shorthand_axios_config_call" {
+		var argNode *sitter.Node
+		for _, cap := range matchCaps {
+			if q.CaptureNameForId(cap.Index) == "arg_name" {
+				argNode = cap.Node
+				break
+			}
+		}
+		if argNode == nil {
+			return MatchResult{}, false
+		}
+		wname, idx, ok := jsWrapperParamIndex(argNode, src)
+		if !ok {
+			return MatchResult{}, false
+		}
+		captures["wrapper_name"] = wname
+		captures["param_index"] = strconv.Itoa(idx)
+	}
+
+	// WB.4: producer_alias_url_call no longer anchors @url to the first
+	// argument (a wrapper's URL param may forward at any position), so
+	// a call site with multiple string/template literal args now emits
+	// one match per literal. The linker (EnrichAliases) needs each
+	// candidate's positional index to pick the right one via
+	// wrapperURLTable, which tree-sitter can't emit directly.
+	if pat.Name == "producer_alias_url_call" {
+		var urlNode *sitter.Node
+		for _, cap := range matchCaps {
+			if q.CaptureNameForId(cap.Index) == "url" {
+				urlNode = cap.Node
+				break
+			}
+		}
+		if urlNode != nil && urlNode.Parent() != nil {
+			captures["arg_index"] = strconv.Itoa(namedChildIndex(urlNode.Parent(), urlNode))
+		}
+	}
+
+	mr := MatchResult{
+		PatternName: pat.Name,
+		Captures:    captures,
+		Line:        minLine,
+		EndLine:     defEndLine,
+		File:        pc.file,
+		IsTestDSL:   pc.testDSLFamily != "" && anchor != nil && inTestDSLScope(anchor, src, pc.testDSLFamily),
+		KeyNodes:    keyNodes,
+		Src:         src,
+		Lang:        keyWalkerLangFor(pc.grammarLang),
+	}
+	if pat.Package != "" {
+		mr.Package = pat.Package
+		mr.ResolvedVersion = pc.m.versions[pat.Package]
+	}
+	return mr, true
 }
 
 // MatchToNodes converts raw match results into typed graph nodes and edges.
