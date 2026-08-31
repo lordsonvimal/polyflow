@@ -6,8 +6,11 @@ package agentbench
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // Transcript is the parsed result of one `claude -p --output-format json` run.
@@ -73,6 +76,66 @@ func ParseTranscript(data []byte) (Transcript, error) {
 		IsError:      env.IsError,
 		SessionID:    env.SessionID,
 	}, nil
+}
+
+// SessionTranscriptDir returns the directory Claude Code stores session logs
+// in for a given working directory, mirroring the CLI's own escaping: every
+// "/" in the absolute path becomes "-".
+func SessionTranscriptDir(homeDir, cwd string) string {
+	return filepath.Join(homeDir, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"))
+}
+
+// sessionLine is the subset of a Claude Code session-log JSONL entry needed
+// to pull assistant text out of it. Most lines (tool_use, tool_result, meta
+// events) don't match "assistant" and are skipped rather than erroring.
+type sessionLine struct {
+	Type    string `json:"type"`
+	Message struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"message"`
+}
+
+// SessionAssistantText reads the Claude Code session log for sessionID and
+// concatenates the text of every assistant turn, in order.
+//
+// `claude -p --output-format json`'s "result" field is only the *last*
+// turn's text. An agent that finds the full answer via a tool call and then
+// takes one more turn to verify a side detail (e.g. "does this spec file
+// exist?") has its complete earlier answer invisible to anything reading
+// just the envelope, even though the session log still has it. This reads
+// the log directly so a trailing narrow follow-up can't erase an otherwise-
+// correct answer.
+func SessionAssistantText(homeDir, cwd, sessionID string) (string, error) {
+	path := filepath.Join(SessionTranscriptDir(homeDir, cwd), sessionID+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry sessionLine
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue // non-message lines (summaries, meta events) aren't this shape
+		}
+		if entry.Type != "assistant" {
+			continue
+		}
+		for _, c := range entry.Message.Content {
+			if c.Type == "text" && c.Text != "" {
+				sb.WriteString(c.Text)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	return sb.String(), nil
 }
 
 // filePathRe matches relative source-file paths in agent text.
