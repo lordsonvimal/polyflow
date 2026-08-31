@@ -183,11 +183,44 @@ func (a *GoSemanticAnalyzer) AnalyzeService(dir, service string, fset *token.Fil
 	// recovered by analyzeServiceWithMode — get one retry under LoadAllSyntax
 	// before falling back to tree-sitter-only. The retry only fires on the
 	// rarer error/panic path, so it doesn't cost the common case anything.
-	if result, ok := a.analyzeServiceWithMode(dir, service, fset, knownNodes, packages.LoadSyntax, true); ok {
-		return result
+	//
+	// gosemSkipFastPath is a persisted per-service hint (set by the indexer
+	// from the previous run's outcome): a module whose LoadSyntax attempt
+	// panicked last time — polyflow itself, gotify — pays that ~1.4s doomed
+	// load on every cold/--full index otherwise. Skipping straight to
+	// LoadAllSyntax can only change *timing*: it's the same load the fallback
+	// would run anyway.
+	if !gosemSkipFastPath(service) {
+		if result, ok := a.analyzeServiceWithMode(dir, service, fset, knownNodes, packages.LoadSyntax, true); ok {
+			return result
+		}
 	}
 	result, _ := a.analyzeServiceWithMode(dir, service, fset, knownNodes, packages.LoadAllSyntax, false)
+	result.UsedFallbackMode = true
 	return result
+}
+
+// goSemFastPathSkip holds the persisted per-service "skip LoadSyntax" hints,
+// seeded by the indexer before the semantic pass. The semantic pass is
+// single-threaded, but SetGoSemSkipFastPath runs during setup on another
+// goroutine path, so guard it.
+var goSemFastPathSkip = struct {
+	mu sync.RWMutex
+	m  map[string]bool
+}{m: map[string]bool{}}
+
+// SetGoSemSkipFastPath records that `service`'s LoadSyntax fast path is known
+// to fail, so AnalyzeService should go straight to LoadAllSyntax.
+func SetGoSemSkipFastPath(service string) {
+	goSemFastPathSkip.mu.Lock()
+	goSemFastPathSkip.m[service] = true
+	goSemFastPathSkip.mu.Unlock()
+}
+
+func gosemSkipFastPath(service string) bool {
+	goSemFastPathSkip.mu.RLock()
+	defer goSemFastPathSkip.mu.RUnlock()
+	return goSemFastPathSkip.m[service]
 }
 
 // analyzeServiceWithMode loads dir under mode and runs the full semantic
