@@ -45,6 +45,17 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 		producers, consumers := partitionNodes(nodes, rule)
 		producers = dedupeProducers(producers, rule.Producer)
 
+		// The candidate set and its indexes are a pure function of
+		// (targetSvc, prod.Service) within a rule — spec, norms and the
+		// constant parts of env don't vary per producer. Rebuilding them for
+		// every producer was ~50% of this pass (buildConsumerIndexes alone was
+		// 0.6s on orion); most producers in a rule share a key, so memoize.
+		type candSet struct {
+			cands []*graph.Node
+			idx   consumerIndexes
+		}
+		candCache := make(map[string]candSet)
+
 		for _, prod := range producers {
 			// G.6: dynamic key → surface to ledger, never silently drop
 			if prod.Meta["key_dynamic"] == "true" {
@@ -67,9 +78,15 @@ func (e *Engine) Link(nodes []graph.Node, rules []Rule, links []workspace.Link) 
 				Links:       links,
 			}
 
-			cands := filterByService(consumers, targetSvc)
-			cands = filterBySameServicePolicy(cands, rule.Edge.SameService, prod.Service)
-			idx := buildConsumerIndexes(cands, rule.Consumer, norms, env)
+			ck := targetSvc + "\x00" + prod.Service
+			cs, cached := candCache[ck]
+			if !cached {
+				cs.cands = filterByService(consumers, targetSvc)
+				cs.cands = filterBySameServicePolicy(cs.cands, rule.Edge.SameService, prod.Service)
+				cs.idx = buildConsumerIndexes(cs.cands, rule.Consumer, norms, env)
+				candCache[ck] = cs
+			}
+			cands, idx := cs.cands, cs.idx
 
 			// A relative URL in browser-executed code resolves against the
 			// origin that served the page. Prefer — rather than force — the
