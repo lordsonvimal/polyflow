@@ -834,7 +834,16 @@ func (ex *rubyExtractor) walk(node *sitter.Node, class, classID, methodID string
 				switch {
 				case receiver.Content(ex.src) == "self":
 					// implicit self; lookupClass stays the enclosing class
-				case receiver.Type() == "constant":
+				case receiver.Type() == "constant" || receiver.Type() == "scope_resolution":
+					// Namespaced (`A::B.method`) resolves the same as a bare
+					// constant when the callee is declared compactly in this
+					// file (`class A::B`) — classTable is keyed off the
+					// declaration's literal name text, which matches for that
+					// spelling. A `module A; class B` nesting spelling isn't
+					// matched here (classTable holds "B", not "A::B"); that
+					// shape is the linker's job — LinkRubyClassMethodCalls
+					// resolves it cross-file via rubyTypeIndex, which is
+					// namespace-nesting-aware.
 					lookupClass = receiver.Content(ex.src)
 				case receiver.Type() == "identifier":
 					// DC.24: a bare identifier filling the *receiver* slot
