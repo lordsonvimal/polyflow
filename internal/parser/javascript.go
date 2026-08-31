@@ -29,7 +29,7 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	// directly (bypassing the matcher's own relativization).
 	file = patterns.RelativizeToCwd(file)
 
-	grammarLang := patterns.DetectJSGrammar(file, src, grammarLanguage(file))
+	grammarLang, sharedRoot := patterns.DetectJSGrammarWithRoot(file, src, grammarLanguage(file))
 	// Language tag for nodes: tsx/jsx files are still "typescript"/"javascript" at the language level.
 	// Deliberately NOT re-derived from grammarLang: a Flow-typed .js file
 	// upgraded to the typescript grammar (DetectJSGrammar) is still
@@ -59,7 +59,7 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 	// so proximity-based edge linking works across pattern sets.
 	var allResults []patterns.MatchResult
 	for _, patLang := range patternLangs {
-		results, matchErr := matcher.MatchWithGrammar(patLang, grammarLang, file, src)
+		results, matchErr := matcher.MatchWithGrammarRoot(patLang, grammarLang, file, src, sharedRoot)
 		if matchErr != nil && err == nil {
 			err = matchErr
 		}
@@ -73,7 +73,7 @@ func (p *JavaScriptParser) Parse(file, service string, matcher *patterns.TreeSit
 
 	// Structural variable tracking: module vars, classes, reads/writes,
 	// closure captures, flows. Lower confidence than the Go semantic pass.
-	varNodes, varEdges, varUnresolved, jqListeners := extractJSVariables(file, service, langTag, grammarLang, src)
+	varNodes, varEdges, varUnresolved, jqListeners := extractJSVariables(file, service, langTag, grammarLang, src, sharedRoot)
 
 	// Tier K.4: hand the matcher's jQuery event nodes the handler the structural
 	// pass just minted, so LinkDOMDefinitions can close element→handler once it

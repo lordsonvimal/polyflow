@@ -26,23 +26,27 @@ import (
 // (Tier K.4). They are not graph objects yet: the element a selector names lives
 // in another file, so the join is the linker's, and javascript.go stamps them
 // onto the pattern matcher's dom_target nodes on the way out.
-func extractJSVariables(file, service, langTag, grammarLang string, src []byte) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, []jqListener) {
-	var lang *sitter.Language
-	switch grammarLang {
-	case "typescript":
-		lang = tssitter.GetLanguage()
-	case "tsx":
-		lang = tsxsitter.GetLanguage()
-	default:
-		lang = jssitter.GetLanguage()
+func extractJSVariables(file, service, langTag, grammarLang string, src []byte, sharedRoot *sitter.Node) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, []jqListener) {
+	root := sharedRoot
+	if root == nil {
+		var lang *sitter.Language
+		switch grammarLang {
+		case "typescript":
+			lang = tssitter.GetLanguage()
+		case "tsx":
+			lang = tsxsitter.GetLanguage()
+		default:
+			lang = jssitter.GetLanguage()
+		}
+		p := sitter.NewParser()
+		p.SetLanguage(lang)
+		tree, err := p.ParseCtx(context.Background(), nil, src)
+		if err != nil || tree == nil {
+			return nil, nil, nil, nil
+		}
+		defer tree.Close()
+		root = tree.RootNode()
 	}
-	p := sitter.NewParser()
-	p.SetLanguage(lang)
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return nil, nil, nil, nil
-	}
-	defer tree.Close()
 
 	ex := &jsExtractor{
 		file: file, service: service, langTag: langTag, src: src,
@@ -54,7 +58,6 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte) 
 		nodeSeen:   map[string]bool{},
 		edgeSeen:   map[string]bool{},
 	}
-	root := tree.RootNode()
 	ex.preCollectClasses(root)
 	ex.collectTopLevel(root)
 	ex.collectLocalFns(root)

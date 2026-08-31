@@ -37,7 +37,7 @@ func parseJSSignalFixture(t *testing.T) ([]graph.Node, []graph.Edge) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	nodes, edges, _, _ := extractJSVariables(file, "web", "typescript", "typescript", src)
+	nodes, edges, _, _ := extractJSVariables(file, "web", "typescript", "typescript", src, nil)
 	return nodes, edges
 }
 
@@ -116,7 +116,7 @@ func TestJSVariables_ModuleLevelReactiveAttribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	nodes, edges, _, _ := extractJSVariables(file, "web", "typescript", "typescript", src)
+	nodes, edges, _, _ := extractJSVariables(file, "web", "typescript", "typescript", src, nil)
 
 	if e := jsEdge(edges, graph.EdgeTypeReads, "variable:filtered", "variable:items"); e == nil {
 		t.Fatalf("expected reads edge filtered → items (memo body); edges: %+v", edges)
@@ -149,7 +149,7 @@ func TestJSVariables_DefaultParamReadsModuleConst(t *testing.T) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(file)
-	_, edges, _, _ := extractJSVariables(file, "web", "typescript", "typescript", src)
+	_, edges, _, _ := extractJSVariables(file, "web", "typescript", "typescript", src, nil)
 
 	if e := jsEdge(edges, graph.EdgeTypeReads, "function:scale", "variable:MAX_DIM"); e == nil {
 		t.Fatalf("expected reads edge scale → MAX_DIM (default param value); edges: %+v", edges)

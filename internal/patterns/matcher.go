@@ -241,17 +241,51 @@ func languageFor(lang string) *sitter.Language {
 // nodes, but tree-sitter's error recovery keeps the surrounding function
 // structure — the part every pattern here actually anchors on — intact.
 func DetectJSGrammar(file string, src []byte, defaultGrammar string) string {
+	g, _ := DetectJSGrammarWithRoot(file, src, defaultGrammar)
+	return g
+}
+
+// DetectJSGrammarWithRoot is DetectJSGrammar that also returns a parsed root
+// for the resolved grammar, so a caller that then runs pattern matching and
+// structural variable extraction over the same file can share one parse
+// instead of re-parsing per pass. root is nil only when parsing failed
+// outright; callers fall back to their own parse in that case.
+func DetectJSGrammarWithRoot(file string, src []byte, defaultGrammar string) (grammar string, root *sitter.Node) {
 	if defaultGrammar != "javascript" {
-		return defaultGrammar
+		lang := languageFor(defaultGrammar)
+		if lang == nil {
+			return defaultGrammar, nil
+		}
+		r, err := sitter.ParseCtx(context.Background(), src, lang)
+		if err != nil {
+			return defaultGrammar, nil
+		}
+		return defaultGrammar, r
 	}
-	root, err := sitter.ParseCtx(context.Background(), src, jssitter.GetLanguage())
-	if err != nil || root == nil {
-		return defaultGrammar
+	r, err := sitter.ParseCtx(context.Background(), src, jssitter.GetLanguage())
+	if err != nil || r == nil {
+		return defaultGrammar, r
 	}
-	if root.HasError() {
-		return "typescript"
+	if r.HasError() {
+		ts, err := sitter.ParseCtx(context.Background(), src, tssitter.GetLanguage())
+		if err != nil {
+			return "typescript", nil
+		}
+		return "typescript", ts
 	}
-	return defaultGrammar
+	return defaultGrammar, r
+}
+
+// ParseTree parses src with the tree-sitter grammar for grammarLang. Callers
+// running several pattern-language passes over one file parse once here and
+// pass the root to MatchWithGrammarRoot / MatchRoot rather than re-parsing per
+// pass. Returns nil (no error) for an unknown grammar.
+func ParseTree(grammarLang string, src []byte) (*sitter.Node, error) {
+	lang := languageFor(grammarLang)
+	if lang == nil {
+		return nil, nil
+	}
+	return sitter.ParseCtx(context.Background(), src, lang)
 }
 
 // getCompiledQueries returns cached compiled queries for patternLang compiled against grammarLang.
@@ -290,6 +324,13 @@ func (m *TreeSitterMatcher) getCompiledQueries(patternLang, grammarLang string, 
 // grammar for grammarLang. This lets TypeScript files use JavaScript patterns
 // (fetch, axios) compiled against the TypeScript grammar, which is a superset.
 func (m *TreeSitterMatcher) MatchWithGrammar(patternLang, grammarLang, file string, src []byte) ([]MatchResult, error) {
+	return m.MatchWithGrammarRoot(patternLang, grammarLang, file, src, nil)
+}
+
+// MatchWithGrammarRoot is MatchWithGrammar with an already-parsed root (from
+// ParseTree / DetectJSGrammarWithRoot using the same grammarLang). A nil root
+// falls back to parsing here, so callers can pass whatever they have.
+func (m *TreeSitterMatcher) MatchWithGrammarRoot(patternLang, grammarLang, file string, src []byte, root *sitter.Node) ([]MatchResult, error) {
 	lang := languageFor(grammarLang)
 	if lang == nil {
 		return nil, nil
@@ -298,15 +339,24 @@ func (m *TreeSitterMatcher) MatchWithGrammar(patternLang, grammarLang, file stri
 	if len(cqs) == 0 {
 		return nil, nil
 	}
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
-		return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
+	if root == nil {
+		var err error
+		root, err = sitter.ParseCtx(context.Background(), src, lang)
+		if err != nil {
+			return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
+		}
 	}
 	return m.execQueries(cqs, root, src, file, grammarLang)
 }
 
 // Match runs registered patterns for the language against the source bytes.
 func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchResult, error) {
+	return m.MatchRoot(language, file, src, nil)
+}
+
+// MatchRoot is Match with an already-parsed root (from ParseTree using the
+// same language). A nil root falls back to parsing here.
+func (m *TreeSitterMatcher) MatchRoot(language, file string, src []byte, root *sitter.Node) ([]MatchResult, error) {
 	lang := languageFor(language)
 	if lang == nil {
 		// unknown language: return empty results, not an error
@@ -318,10 +368,12 @@ func (m *TreeSitterMatcher) Match(language, file string, src []byte) ([]MatchRes
 		return nil, nil
 	}
 
-	// Parse the source
-	root, err := sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil {
-		return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
+	if root == nil {
+		var err error
+		root, err = sitter.ParseCtx(context.Background(), src, lang)
+		if err != nil {
+			return nil, fmt.Errorf("tree-sitter parse %s: %w", file, err)
+		}
 	}
 
 	return m.execQueries(cqs, root, src, file, language)
