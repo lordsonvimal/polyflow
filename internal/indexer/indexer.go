@@ -724,6 +724,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		if err := pass.exec(); err != nil {
 			return nil, fmt.Errorf("link pass %s: %w", pass.name, err)
 		}
+		clk.mark("  link: " + pass.name)
 	}
 	allNodes = linkState.allNodes
 	allEdges = linkState.allEdges
