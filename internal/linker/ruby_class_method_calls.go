@@ -92,20 +92,24 @@ func LinkRubyClassMethodCalls(nodes []graph.Node, serviceFiles map[string][]stri
 		}
 		byDecl := byDeclByService[svcName]
 
+		type cmcScan struct {
+			decls []rubyDecl
+			refs  []classMethodCallRef
+		}
+		scans := mapParallel(filterRubyFiles(files), func(file string) cmcScan {
+			d, r := scanRubyClassMethodCalls(file, svcName)
+			return cmcScan{decls: d, refs: r}
+		})
 		var refs []classMethodCallRef
-		for _, file := range files {
-			if !isRubyFile(file) {
-				continue
-			}
-			decls, fileRefs := scanRubyClassMethodCalls(file, svcName)
-			for _, d := range decls {
+		for _, s := range scans {
+			for _, d := range s.decls {
 				id, ok := byDecl[declKey(d.file, d.name, d.line)]
 				if !ok {
 					continue
 				}
 				ix.byQual[d.qualified()] = append(ix.byQual[d.qualified()], id)
 			}
-			refs = append(refs, fileRefs...)
+			refs = append(refs, s.refs...)
 		}
 
 		for _, ref := range refs {
