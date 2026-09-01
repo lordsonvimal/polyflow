@@ -292,10 +292,18 @@ function toElements(d: GraphData): object[] {
   // stub — should degrade to "edge not drawn", not a broken canvas.
   const nodeIds = new Set(d.nodes.map((n) => n.id));
   const edges = d.edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to));
+  // meta is spread FIRST so the canonical fields below always win: an
+  // `element` node's meta carries its DOM `id` attribute (e.g. "links-tab-link"),
+  // and letting that spread last silently overwrote cytoscape's `data.id` with
+  // the wrong value — the node then registered under the DOM id, every edge
+  // pointing at its real node id resolved to a "nonexistent target", and
+  // cytoscape threw and wedged the whole canvas. Same hazard for edge meta
+  // (id/source/target/type).
   return [
     ...d.nodes.map((n) => ({
       group: "nodes",
       data: {
+        ...(n.meta ?? {}),
         id: n.id,
         label: nodeDisplayLabel(n),
         type: n.type,
@@ -304,12 +312,12 @@ function toElements(d: GraphData): object[] {
         line: n.line,
         language: n.language,
         ...(n.parent ? { parent: n.parent } : {}),
-        ...(n.meta ?? {}),
       },
     })),
     ...edges.map((e) => ({
       group: "edges",
       data: {
+        ...(e.meta ?? {}),
         id: e.id,
         source: e.from,
         target: e.to,
@@ -317,7 +325,6 @@ function toElements(d: GraphData): object[] {
         ...(e.label ? { label: e.label } : {}),
         ...(e.confidence ? { confidence: e.confidence } : {}),
         ...(e.verificationState ? { verification_state: e.verificationState } : {}),
-        ...(e.meta ?? {}),
       },
     })),
   ];
