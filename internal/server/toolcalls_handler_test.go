@@ -57,6 +57,30 @@ func TestAudit_RecordsUICall(t *testing.T) {
 	}
 }
 
+func TestAudit_SkipsCaptureStatusPoll(t *testing.T) {
+	srv, _ := buildTestServerWithOps(t)
+
+	// The SPA polls this endpoint every 2s; it must not land in tool_calls.
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/api/capture/status", nil)
+		srv.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	req := httptest.NewRequest("GET", "/api/toolcalls", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	var resp struct {
+		Calls []map[string]any `json:"calls"`
+		Total int              `json:"total"`
+	}
+	decodeJSON(t, w.Body.Bytes(), &resp)
+	for _, c := range resp.Calls {
+		if c["tool"] == "GET /api/capture/status" {
+			t.Fatalf("capture/status poll should not be audited, got: %+v", resp.Calls)
+		}
+	}
+}
+
 func TestAudit_RecordsErrorStatus(t *testing.T) {
 	srv, _ := buildTestServerWithOps(t)
 

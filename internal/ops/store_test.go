@@ -161,6 +161,38 @@ func TestListCalls_FiltersAndPagination(t *testing.T) {
 	assert.Equal(t, "ui", list.Calls[0].Source)
 }
 
+func TestListCalls_GrandTotalAndFacetCounts(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	mustRecord := func(source, status string) {
+		_, _, err := s.RecordCall(ctx, ops.Call{Source: source, Tool: "t", Params: "{}", Status: status})
+		require.NoError(t, err)
+	}
+	mustRecord("cli", "ok")
+	mustRecord("cli", "error")
+	mustRecord("mcp", "ok")
+	mustRecord("ui", "ok")
+	mustRecord("ui", "ok")
+
+	// Filter by source=ui: Total reflects the filter, GrandTotal ignores it,
+	// the source facet is computed WITHOUT the source filter (so all three
+	// sources show), the status facet WITH it (only ui rows).
+	list, err := s.ListCalls(ctx, ops.ListFilter{Source: "ui"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, list.Total)
+	assert.Equal(t, 5, list.GrandTotal)
+	assert.Equal(t, map[string]int{"cli": 2, "mcp": 1, "ui": 2}, list.Counts.Source)
+	assert.Equal(t, map[string]int{"ok": 2}, list.Counts.Status)
+
+	// No filter: both facets span everything.
+	list, err = s.ListCalls(ctx, ops.ListFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 5, list.GrandTotal)
+	assert.Equal(t, map[string]int{"ok": 4, "error": 1}, list.Counts.Status)
+	assert.Equal(t, map[string]int{"cli": 2, "mcp": 1, "ui": 2}, list.Counts.Source)
+}
+
 func TestDeleteAll(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

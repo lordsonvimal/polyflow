@@ -65,6 +65,30 @@ describe("ToolCallsTab", () => {
     });
   });
 
+  it("shows the grand total and per-facet counts, switching to 'N of M' when filtered", async () => {
+    (globalThis as any).fetch = fakeFetch({
+      "GET /api/toolcalls": {
+        calls: [row()],
+        total: 42,
+        page: 1,
+        grand_total: 90,
+        counts: { source: { mcp: 42, cli: 40, ui: 8 }, status: { ok: 80, error: 10 } },
+      },
+    });
+    dispose = render(() => <ToolCallsTab />, container);
+
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="toolcalls-count-summary"]')!.textContent).toBe("90 calls"),
+    );
+    expect(container.querySelector('[data-testid="toolcalls-filter-source-mcp-count"]')!.textContent).toBe("42");
+    expect(container.querySelector('[data-testid="toolcalls-filter-source-ui-count"]')!.textContent).toBe("8");
+
+    (container.querySelector('[data-testid="toolcalls-filter-source-cli"]') as HTMLElement).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="toolcalls-count-summary"]')!.textContent).toBe("42 of 90 calls"),
+    );
+  });
+
   it("expands a row into Input/Output panes with highlight marks", async () => {
     (globalThis as any).fetch = fakeFetch({ "GET /api/toolcalls": { calls: [row()], total: 1, page: 1 } });
     dispose = render(() => <ToolCallsTab />, container);
