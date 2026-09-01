@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 
+	sitter "github.com/smacker/go-tree-sitter"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
@@ -169,6 +171,24 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 	}
 
 	// 4. rewrite.
+	localSrc := map[string][]byte{}
+	localRoot := map[string]*sitter.Node{}
+	localSource := func(file, name string, line int) string {
+		root, ok := localRoot[file]
+		if !ok {
+			src, r, _, parsed := jsParse(file)
+			if parsed {
+				localSrc[file], localRoot[file] = src, r
+				root = r
+			}
+			localRoot[file] = root // cache even nil
+		}
+		if root == nil {
+			return ""
+		}
+		return jsLastAssignmentBefore(root, localSrc[file], name, line)
+	}
+
 	var changed []graph.Node
 	for i := range nodes {
 		n := &nodes[i]
@@ -178,10 +198,16 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 		prop := leadingJSIdent(firstNonEmpty(n.Meta["url_expr"], n.Meta["key_dynamic_raw"]))
 		// Only a `*_url`/`*_path`/`*_uri` identifier is taken as the prop itself.
 		// A bare `url` at the call site is far more often a local variable
-		// (`const url = some_url_prop.replace(...)`) shadowing the prop — resolving
-		// it to the same-named prop is a silent mismatch, so abstain.
+		// (`const url = some_url_prop.replace(...)`) shadowing the prop, so follow
+		// one hop of local assignment: `const url = add_lro_details_url.replace(…)`
+		// → `add_lro_details_url`. Anything past one hop, or a non-prop source,
+		// still abstains.
 		if !hasURLSuffix(prop) {
-			continue
+			if src := leadingJSIdent(localSource(n.File, prop, n.Line)); hasURLSuffix(src) {
+				prop = src
+			} else {
+				continue
+			}
 		}
 		var resolved string
 		conflict := false
@@ -249,6 +275,36 @@ func leadingJSIdent(expr string) string {
 		return ""
 	}
 	return expr[:i]
+}
+
+// jsLastAssignmentBefore returns the verbatim source of the right-hand side of
+// the last `name = <rhs>` / `const name = <rhs>` above line, or "".
+func jsLastAssignmentBefore(root *sitter.Node, src []byte, name string, line int) string {
+	best, bestRow := "", -1
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n == nil {
+			return
+		}
+		row := int(n.StartPoint().Row) + 1
+		if row < line {
+			var lhs, rhs *sitter.Node
+			switch n.Type() {
+			case "variable_declarator":
+				lhs, rhs = n.ChildByFieldName("name"), n.ChildByFieldName("value")
+			case "assignment_expression":
+				lhs, rhs = n.ChildByFieldName("left"), n.ChildByFieldName("right")
+			}
+			if lhs != nil && rhs != nil && lhs.Type() == "identifier" && lhs.Content(src) == name && row > bestRow {
+				best, bestRow = strings.TrimSpace(rhs.Content(src)), row
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(root)
+	return best
 }
 
 func hasURLSuffix(id string) bool {

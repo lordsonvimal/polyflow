@@ -262,6 +262,17 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		}
 		return
 	case "get", "post", "put", "patch", "delete":
+		// A bare `post :add_details` sitting directly inside a `resources` block
+		// (no `member`/`collection` wrapper, no `on:` keyword — those are handled
+		// by the matcher's *_verb_route_inline patterns) is a member route by
+		// Rails convention: POST /lros/:id/add_details, helper
+		// add_details_client_api_v1_lro. The matcher has no pattern for it, so
+		// synthesize it here the way emitRESTRoutes synthesizes the implicit CRUD.
+		if nestParam != "" && keywordSegment(n, w.src, "on") == "" {
+			if action, ok := firstPositionalSymbol(n, w.src); ok {
+				w.emitResourceScopedVerb(n, prefix, mod, names, strings.ToUpper(method), action)
+			}
+		}
 		composeAndStamp(n, w.src, prefix, mod, names, w.byLine)
 		return
 	}
@@ -660,6 +671,86 @@ func firstPositionalSegment(call *sitter.Node, src []byte) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// firstPositionalSymbol extracts a verb call's first positional argument only
+// when it is a bare symbol (`post :add_details`), the shape of a resource-scoped
+// member action. A string-path argument inside a `resources` block is a
+// different, rarer form that Rails does not scope to `:id`, so it is left out.
+func firstPositionalSymbol(call *sitter.Node, src []byte) (string, bool) {
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return "", false
+	}
+	for i := 0; i < int(args.ChildCount()); i++ {
+		c := args.Child(i)
+		if c == nil || !c.IsNamed() {
+			continue
+		}
+		if c.Type() == "simple_symbol" {
+			return strings.TrimPrefix(string(src[c.StartByte():c.EndByte()]), ":"), true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// emitResourceScopedVerb synthesizes the member route a bare `post :action`
+// inside a `resources` block declares — `POST /<prefix>/:id/action`, named
+// `action_<singular>` — which no matcher pattern produces.
+func (w *routeWalker) emitResourceScopedVerb(call *sitter.Node, prefix, mod []string, names nameScope, method, action string) {
+	if action == "" {
+		return
+	}
+	segs := append([]string{}, prefix...)
+	segs = append(segs, ":id", action)
+	path := "/" + strings.Join(segs, "/")
+	key := method + " " + path
+	if w.seen[key] {
+		return
+	}
+	w.seen[key] = true
+	line := int(call.StartPoint().Row) + 1
+	w.out = append(w.out, graph.Node{
+		ID:       w.service + ":" + w.file + ":" + string(graph.NodeTypeHTTPHandler) + ":" + key + ":" + strconv.Itoa(line),
+		Type:     graph.NodeTypeHTTPHandler,
+		Label:    key,
+		Service:  w.service,
+		File:     w.file,
+		Line:     line,
+		EndLine:  line,
+		Language: "ruby",
+		Meta: map[string]string{
+			"pattern":           "resource_scoped_verb_route",
+			"path":              path,
+			"full_path":         path,
+			"method":            method,
+			"action":            action,
+			"resource":          names.plural,
+			"controller_module": strings.Join(mod, "/"),
+			// A bare verb in a `resources` block is scoped like a nested route:
+			// Rails names it `<resource>_<action>` (client_api_v1_lro_add_details),
+			// not the `<action>_<resource>` of a `member do` block. An `as:`
+			// overrides outright.
+			"route_helper": resourceScopedHelperName(keywordSegment(call, w.src, "as"), action, names.memberBase()),
+		},
+	})
+}
+
+// resourceScopedHelperName names a bare-verb-in-`resources` member route:
+// `<base>_<action>` (client_api_v1_lro + add_details), or `as:` verbatim under
+// the enclosing name prefix. Returns "" when there is no resource base.
+func resourceScopedHelperName(as, action, base string) string {
+	if base == "" {
+		return ""
+	}
+	if as != "" {
+		return base + "_" + as
+	}
+	if action == "" {
+		return ""
+	}
+	return base + "_" + action
 }
 
 // composeAndStamp builds the full absolute path for a verb call (get/post/…)
