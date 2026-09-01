@@ -131,6 +131,45 @@ export function load() {
 	assert.True(t, removeIDs[aliasDupID], "producer_alias_url_call duplicate should be marked for removal")
 }
 
+// TestLinkJSAPIWrapperCalls_ForwardedParamResolvesToSoleLiteral is JP.2:
+// `function loadFolders() { return list("/app/folders"); }` calls a wrapper
+// (`list(url) { return apiGet(url); }`) whose own body forwards its `url`
+// parameter. The wrapper call site's argument is the parameter, but the
+// wrapper is called exactly once with a single literal — so the minted node
+// should carry that literal, not fall to dynamic.
+func TestLinkJSAPIWrapperCalls_ForwardedParamResolvesToSoleLiteral(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+function list(url: string) {
+  return apiGet(url);
+}
+
+export function loadFolders() {
+  return list("/app/folders");
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "svc", paths)
+	serviceFiles := map[string][]string{"svc": paths}
+
+	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	var sawListSite bool
+	for _, n := range newNodes {
+		if n.Meta["wrapper"] == "list" {
+			sawListSite = true
+			assert.Equal(t, "/app/folders", n.Meta["url"],
+				"list(url) call site should adopt loadFolders's sole literal argument")
+			assert.Empty(t, n.Meta["key_dynamic"])
+		}
+	}
+	assert.True(t, sawListSite, "list was not discovered as a transitive wrapper of apiGet")
+}
+
 // TestLinkJSAPIWrapperCalls_NestedClosureNotAttributed guards the "do not
 // descend into a nested closure" rule: a callback defined INSIDE a wrapper
 // candidate that itself forwards a parameter must not make the OUTER

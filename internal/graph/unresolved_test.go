@@ -35,6 +35,29 @@ func TestUnresolvedInFiles_NoMatchIsEmptyNotNil(t *testing.T) {
 	assert.Equal(t, "[]", string(data))
 }
 
+func TestDropExternalFrameworkRefs(t *testing.T) {
+	idx := NewAdjacencyIndex()
+	idx.AddNode(&Node{ID: "1", Label: "FileListing", Type: NodeTypeClass})
+	idx.AddNode(&Node{ID: "2", Label: "Component", Type: NodeTypeClass}) // a real in-repo class
+
+	refs := []UnresolvedRef{
+		{File: "a.jsx", Name: "React.Component", Kind: "inherits_unresolved"},   // drop
+		{File: "a.jsx", Name: "Store.PureComponent", Kind: "inherits_unresolved"}, // drop (namespace)
+		{File: "a.jsx", Name: "Component", Kind: "inherits_unresolved"},          // keep — declared in repo
+		{File: "a.jsx", Name: "Select", Kind: "jsx_component_unresolved"},        // drop — react-select
+		{File: "a.jsx", Name: "FileListing", Kind: "jsx_component_unresolved"},   // keep — declared
+		{File: "a.jsx", Name: "For", Kind: "jsx_framework_component"},            // drop
+		{File: "a.jsx", Name: "buildThing", Kind: "call_ref"},                   // keep — untouched kind
+	}
+
+	got := DropExternalFrameworkRefs(refs, idx)
+	var names []string
+	for _, r := range got {
+		names = append(names, r.Name)
+	}
+	assert.Equal(t, []string{"Component", "FileListing", "buildThing"}, names)
+}
+
 func TestUnresolvedNote(t *testing.T) {
 	assert.Empty(t, UnresolvedNote(0))
 	assert.Contains(t, UnresolvedNote(3), "verify these 3 unresolved references manually")

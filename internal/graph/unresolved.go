@@ -1,6 +1,9 @@
 package graph
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // UnresolvedInFiles scopes the blind-spot ledger to a traversal: it returns
 // the refs whose file appears in the given set, preserving input order. The
@@ -81,6 +84,66 @@ func RetractResolvedRefs(refs []UnresolvedRef, nodes []Node, edges []Edge) []Unr
 		out = append(out, r)
 	}
 	return out
+}
+
+// DropExternalFrameworkRefs (JP.3) removes ledger entries that name a
+// third-party framework symbol the indexer can never resolve because its
+// source is not in the workspace — an `extends React.Component`, a `<Select>`
+// from react-select, a `<For>` from a JSX runtime. RetractResolvedRefs has no
+// witness for these, so they are permanent by construction; mixed into an
+// agent-facing "verify these N unresolved references manually" list they read
+// as real blind spots and cost tokens.
+//
+// This trims only the query-time surface (investigate / flows / deadcode).
+// The raw ledger is untouched in the DB and in `polyflow status --unresolved`.
+func DropExternalFrameworkRefs(refs []UnresolvedRef, idx *AdjacencyIndex) []UnresolvedRef {
+	if len(refs) == 0 {
+		return refs
+	}
+	declared := map[string]bool{}
+	if idx != nil {
+		for _, n := range idx.Nodes {
+			switch n.Type {
+			case NodeTypeFunction, NodeTypeMethod, NodeTypeClass, NodeTypeComponent:
+				declared[n.Label] = true
+			}
+		}
+	}
+	out := make([]UnresolvedRef, 0, len(refs))
+	for _, r := range refs {
+		if isExternalFrameworkRef(r, declared) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func isExternalFrameworkRef(r UnresolvedRef, declared map[string]bool) bool {
+	switch r.Kind {
+	case "jsx_framework_component":
+		// A deliberate framework abstention (Show/For/Match/Tab/…) — the
+		// linker already decided there is no user declaration. Never a
+		// workspace blind spot.
+		return true
+	case "jsx_component_unresolved":
+		// A capitalized single-identifier JSX tag with no declaration node
+		// anywhere is a third-party component (react-select `Select`,
+		// react-window `FixedSizeList`).
+		return !strings.Contains(r.Name, ".") && !declared[r.Name]
+	case "inherits_unresolved":
+		if strings.HasSuffix(r.Name, ".Component") || strings.HasSuffix(r.Name, ".PureComponent") {
+			return true // React.Component, namespace-imported <ns>.Component
+		}
+		switch r.Name {
+		case "React.Component", "React.PureComponent", "React.Fragment", "HTMLElement":
+			return true
+		case "Component", "PureComponent":
+			return !declared[r.Name]
+		}
+		return false
+	}
+	return false
 }
 
 // UnresolvedNote renders the agent-facing warning attached to query output
