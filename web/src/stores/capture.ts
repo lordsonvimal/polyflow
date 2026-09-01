@@ -45,8 +45,20 @@ const [fusePrompt, setFusePrompt] = createSignal<FusePrompt | null>(null);
 // CLI or another tab) — used only to default the stop button's target.
 const [uiSession, setUiSession] = createSignal<string | null>(null);
 
-const STATUS_POLL_MS = 2000;
-let pollTimer: ReturnType<typeof setInterval> | undefined;
+// Adaptive poll cadence: while a capture is running we want near-live span
+// counts, but when idle the poll exists only to discover a capture started
+// from the CLI or another tab — a slow tick is plenty and keeps this
+// endpoint from dominating the server's tool-call audit log.
+const STATUS_POLL_ACTIVE_MS = 2000;
+const STATUS_POLL_IDLE_MS = 30000;
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let polling = false;
+
+function currentPollMs(): number {
+  return activeSessions().length > 0 || captureState() === "active"
+    ? STATUS_POLL_ACTIVE_MS
+    : STATUS_POLL_IDLE_MS;
+}
 
 function parseErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -76,14 +88,31 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
+function scheduleNextPoll(): void {
+  if (!polling) return;
+  pollTimer = setTimeout(() => {
+    void refreshStatus().finally(scheduleNextPoll);
+  }, currentPollMs());
+}
+
 function startPolling(): void {
-  if (pollTimer) return;
-  pollTimer = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
+  if (polling) return;
+  polling = true;
+  scheduleNextPoll();
 }
 
 function stopPolling(): void {
-  if (pollTimer) clearInterval(pollTimer);
+  polling = false;
+  if (pollTimer) clearTimeout(pollTimer);
   pollTimer = undefined;
+}
+
+// When a capture becomes active (or stops), re-arm the timer immediately so
+// the cadence switches without waiting out the current — possibly 30s — tick.
+function repollNow(): void {
+  if (!polling) return;
+  if (pollTimer) clearTimeout(pollTimer);
+  scheduleNextPoll();
 }
 
 async function start(session: string, httpPort = 4318, grpcPort = 4317): Promise<boolean> {
@@ -195,11 +224,14 @@ connectionStore.onEvent((ev) => {
   const session = (ev as { session?: string }).session;
   const spansReceived = (ev as { spans_received?: number }).spans_received;
   if (!session || spansReceived === undefined) return;
+  const wasIdle = captureState() === "idle";
   setCaptureState((prev) => (prev === "idle" ? "active" : prev));
   setActiveSessions((prev) => {
     if (!prev.some((s) => s.session === session)) return prev;
     return prev.map((s) => (s.session === session ? { ...s, spans_received: spansReceived } : s));
   });
+  // A capture just came alive — switch the poll off its slow idle cadence now.
+  if (wasIdle) repollNow();
 });
 
 export const captureStore = {

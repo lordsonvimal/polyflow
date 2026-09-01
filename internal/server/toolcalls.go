@@ -37,9 +37,11 @@ func (s *Server) handleListToolCalls(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"calls": result.Calls,
-		"total": result.Total,
-		"page":  result.Page,
+		"calls":       result.Calls,
+		"total":       result.Total,
+		"page":        result.Page,
+		"grand_total": result.GrandTotal,
+		"counts":      result.Counts,
 	})
 }
 

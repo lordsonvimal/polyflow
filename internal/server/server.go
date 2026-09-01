@@ -356,6 +356,13 @@ func (s *Server) registerRoutes() {
 	// getting silently corrupted (invalid UTF-8 replaced with U+FFFD)
 	// whenever that row is later JSON-marshaled for the toolcalls API or the
 	// live-tail SSE broadcast.
+	//
+	// GET /api/capture/status is also excluded: the SPA polls it on a timer
+	// (see web/src/stores/capture.ts) purely to mirror externally-started
+	// capture sessions, so auditing it floods the retention window and evicts
+	// the mcp/cli rows the log exists for. It is a non-mutating read with no
+	// diagnostic value; the meaningful capture events are the POST
+	// start/stop/ingest routes below, which stay audited.
 	s.handle("GET /api/graph", s.handleGraph)
 	s.handle("GET /api/graph/search", s.handleSearch)
 	s.handle("GET /api/graph/trace", s.handleTrace)
@@ -398,7 +405,7 @@ func (s *Server) registerRoutes() {
 	s.handle("POST /api/context/bundle", s.handleContextBundle)
 	s.handle("POST /api/capture/start", s.handleCaptureStart)
 	s.handle("POST /api/capture/stop", s.handleCaptureStop)
-	s.handle("GET /api/capture/status", s.handleCaptureStatus)
+	s.mux.HandleFunc("GET /api/capture/status", s.handleCaptureStatus) // unaudited: high-frequency SPA poll, see registerRoutes comment
 	s.handle("POST /api/capture/ingest", s.handleCaptureIngest)
 	s.handle("GET /api/runtime/flows", s.handleRuntimeFlows)
 	s.handle("GET /api/runtime/coverage", s.handleRuntimeCoverage)

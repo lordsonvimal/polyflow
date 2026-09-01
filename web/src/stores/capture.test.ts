@@ -65,6 +65,39 @@ describe("captureStore", () => {
     captureStore.stopPolling();
   });
 
+  it("polls slowly while idle and fast once a session is active", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = ((globalThis as any).fetch = fakeFetch({
+        "/api/capture/status": { active: [], sessions: [] },
+      }));
+      captureStore.startPolling();
+
+      // Idle cadence is 30s: nothing within the 2s "active" window.
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(28_000);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // A session appears -> subsequent ticks use the 2s cadence.
+      (globalThis as any).fetch = fakeFetch({
+        "/api/capture/status": {
+          active: [{ session: "s1", since: "now", spans_received: 0, http_port: 4318, grpc_port: 4317 }],
+          sessions: [],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(30_000); // one idle tick to discover it
+      const activeSpy = (globalThis as any).fetch as ReturnType<typeof vi.fn>;
+      const before = activeSpy.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(activeSpy.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      captureStore.stopPolling();
+      vi.useRealTimers();
+    }
+  });
+
   it("409 port conflict surfaces an error toast and stays idle", async () => {
     (globalThis as any).fetch = fakeFetch({
       "/api/capture/start": { status: 409, body: JSON.stringify({ error: "port 4318 in use", port: 4318 }) },

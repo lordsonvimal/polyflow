@@ -337,6 +337,20 @@ type ListResult struct {
 	Calls []ToolCall
 	Total int
 	Page  int
+	// GrandTotal is the row count with no filter at all — what the UI shows
+	// as "N calls" / "Clear all N calls" regardless of the active filters.
+	GrandTotal int
+	// Counts are per-facet breakdowns: each map is computed with every
+	// active filter applied EXCEPT the faceted dimension itself, so the UI
+	// can label each source/status chip with how many rows selecting it
+	// would show.
+	Counts ListCounts
+}
+
+// ListCounts holds the per-facet row-count breakdowns in a ListResult.
+type ListCounts struct {
+	Source map[string]int `json:"source"`
+	Status map[string]int `json:"status"`
 }
 
 // ListCalls returns a filtered, paginated, newest-first page of tool_calls.
@@ -353,38 +367,77 @@ func (s *Store) ListCalls(ctx context.Context, f ListFilter) (ListResult, error)
 		limit = 1000
 	}
 
-	var where []string
-	var args []any
-	if f.Source != "" {
-		where = append(where, "source = ?")
-		args = append(args, f.Source)
-	}
-	if f.Tool != "" {
-		where = append(where, "tool = ?")
-		args = append(args, f.Tool)
-	}
-	if f.Status != "" {
-		where = append(where, "status = ?")
-		args = append(args, f.Status)
-	}
-	if f.Since != "" {
-		where = append(where, "ts >= ?")
-		args = append(args, f.Since)
-	}
-	if f.Q != "" {
-		where = append(where, "(params LIKE ? OR result LIKE ? OR error LIKE ?)")
-		like := "%" + f.Q + "%"
-		args = append(args, like, like, like)
+	// buildWhere assembles the WHERE clause from the active filters, skipping
+	// the one named in skip (""=none) so faceted counts can exclude their
+	// own dimension.
+	buildWhere := func(skip string) (string, []any) {
+		var where []string
+		var args []any
+		if f.Source != "" && skip != "source" {
+			where = append(where, "source = ?")
+			args = append(args, f.Source)
+		}
+		if f.Tool != "" && skip != "tool" {
+			where = append(where, "tool = ?")
+			args = append(args, f.Tool)
+		}
+		if f.Status != "" && skip != "status" {
+			where = append(where, "status = ?")
+			args = append(args, f.Status)
+		}
+		if f.Since != "" {
+			where = append(where, "ts >= ?")
+			args = append(args, f.Since)
+		}
+		if f.Q != "" {
+			where = append(where, "(params LIKE ? OR result LIKE ? OR error LIKE ?)")
+			like := "%" + f.Q + "%"
+			args = append(args, like, like, like)
+		}
+		if len(where) == 0 {
+			return "", nil
+		}
+		return "WHERE " + strings.Join(where, " AND "), args
 	}
 
-	whereClause := ""
-	if len(where) > 0 {
-		whereClause = "WHERE " + strings.Join(where, " AND ")
-	}
+	whereClause, args := buildWhere("")
 
 	var total int
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tool_calls "+whereClause, args...).Scan(&total); err != nil {
 		return ListResult{}, fmt.Errorf("count tool_calls: %w", err)
+	}
+
+	var grandTotal int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tool_calls").Scan(&grandTotal); err != nil {
+		return ListResult{}, fmt.Errorf("count tool_calls (grand total): %w", err)
+	}
+
+	groupCount := func(col, skip string) (map[string]int, error) {
+		wc, wargs := buildWhere(skip)
+		out := map[string]int{}
+		rows, err := s.db.QueryContext(ctx, "SELECT "+col+", COUNT(*) FROM tool_calls "+wc+" GROUP BY "+col, wargs...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var k string
+			var n int
+			if err := rows.Scan(&k, &n); err != nil {
+				return nil, err
+			}
+			out[k] = n
+		}
+		return out, rows.Err()
+	}
+
+	counts := ListCounts{}
+	var cerr error
+	if counts.Source, cerr = groupCount("source", "source"); cerr != nil {
+		return ListResult{}, fmt.Errorf("facet source counts: %w", cerr)
+	}
+	if counts.Status, cerr = groupCount("status", "status"); cerr != nil {
+		return ListResult{}, fmt.Errorf("facet status counts: %w", cerr)
 	}
 
 	query := `SELECT id, ts, source, tool, params, duration_ms, status, error, result, result_bytes, result_truncated,
@@ -414,7 +467,7 @@ func (s *Store) ListCalls(ctx context.Context, f ListFilter) (ListResult, error)
 		return ListResult{}, err
 	}
 
-	return ListResult{Calls: calls, Total: total, Page: page}, nil
+	return ListResult{Calls: calls, Total: total, Page: page, GrandTotal: grandTotal, Counts: counts}, nil
 }
 
 // ErrProfileNotFound is returned by GetToolCallProfile/GetJobProfile when the

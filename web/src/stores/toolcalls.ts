@@ -32,6 +32,11 @@ export interface ToolCallRow {
   profile: ProfileStats;
 }
 
+export interface ToolCallCounts {
+  source: Record<string, number>;
+  status: Record<string, number>;
+}
+
 export interface ToolCallFilters {
   source: string; // "" | mcp | cli | ui
   tool: string;
@@ -46,6 +51,13 @@ const PAGE_LIMIT = 50;
 const [filters, setFiltersRaw] = createSignal<ToolCallFilters>({ ...DEFAULT_FILTERS });
 const [rows, setRows] = createSignal<ToolCallRow[]>([]);
 const [total, setTotal] = createSignal(0);
+// grandTotal: every stored row, ignoring the active filters. counts: per-facet
+// breakdowns (each computed with the other filters applied) so each source/
+// status chip can show how many rows picking it would surface. Both come from
+// GET /api/toolcalls and are kept roughly live between fetches — exact again on
+// the next filter change or page load.
+const [grandTotal, setGrandTotal] = createSignal(0);
+const [counts, setCounts] = createSignal<ToolCallCounts>({ source: {}, status: {} });
 const [page, setPage] = createSignal(1);
 const [loading, setLoading] = createSignal(false);
 const [paused, setPaused] = createSignal(false);
@@ -84,10 +96,13 @@ async function fetchPage(pageN: number, opts: { markGapIfNonContiguous?: boolean
   setLoading(true);
   const prevMax = maxSeenId;
   try {
-    const data = await apiFetchJSON<{ calls: ToolCallRow[]; total: number; page: number }>(
-      `/api/toolcalls?${buildParams(filters(), pageN)}`,
-      { silent: true },
-    );
+    const data = await apiFetchJSON<{
+      calls: ToolCallRow[];
+      total: number;
+      page: number;
+      grand_total?: number;
+      counts?: ToolCallCounts;
+    }>(`/api/toolcalls?${buildParams(filters(), pageN)}`, { silent: true });
     const calls = data.calls ?? [];
     if (pageN === 1) {
       setRows(calls);
@@ -102,6 +117,8 @@ async function fetchPage(pageN: number, opts: { markGapIfNonContiguous?: boolean
     if (calls.length > 0) maxSeenId = Math.max(maxSeenId, calls[0].id);
     setTotal(data.total ?? 0);
     setPage(data.page ?? pageN);
+    setGrandTotal(data.grand_total ?? data.total ?? 0);
+    setCounts(data.counts ?? { source: {}, status: {} });
   } catch (err) {
     notificationsStore.add({
       id: `toolcalls-fetch-err-${Date.now()}`,
@@ -171,6 +188,16 @@ function prepend(row: ToolCallRow): void {
   setTotal((t) => t + 1);
 }
 
+// Keep the facet counts roughly live for a row, whether or not it matches the
+// active filter (the counts are filter-independent tallies). Faceting drift
+// from eviction is tolerated — the next fetchPage corrects it.
+function bumpFacets(row: ToolCallRow, delta: number): void {
+  setCounts((c) => ({
+    source: { ...c.source, [row.source]: Math.max(0, (c.source[row.source] ?? 0) + delta) },
+    status: { ...c.status, [row.status]: Math.max(0, (c.status[row.status] ?? 0) + delta) },
+  }));
+}
+
 function togglePause(): void {
   setPaused((p) => {
     const next = !p;
@@ -189,6 +216,8 @@ function flushBuffer(): void {
 }
 
 function handleToolCall(call: ToolCallRow): void {
+  setGrandTotal((t) => t + 1);
+  bumpFacets(call, +1);
   if (!matchesFilters(call, filters())) return;
   if (paused()) {
     buffer = [call, ...buffer];
@@ -201,6 +230,11 @@ function handleToolCall(call: ToolCallRow): void {
 
 function handleEvicted(ids: number[]): void {
   const idSet = new Set(ids);
+  // Adjust facet counts for the evicted rows we actually hold (source/status
+  // known); grandTotal drops by the full id count regardless. Any residual
+  // facet drift is corrected on the next fetchPage.
+  [...rows(), ...buffer].filter((row) => idSet.has(row.id)).forEach((row) => bumpFacets(row, -1));
+  setGrandTotal((t) => Math.max(0, t - ids.length));
   setRows((r) => r.filter((row) => !idSet.has(row.id)));
   if (buffer.length > 0) {
     buffer = buffer.filter((row) => !idSet.has(row.id));
@@ -214,6 +248,8 @@ async function clearAll(): Promise<void> {
     await apiFetch("/api/toolcalls", { method: "DELETE", silent: true });
     setRows([]);
     setTotal(0);
+    setGrandTotal(0);
+    setCounts({ source: {}, status: {} });
     setPage(1);
     buffer = [];
     setBufferedCount(0);
@@ -269,6 +305,8 @@ export const toolCallsStore = {
   filters,
   rows,
   total,
+  grandTotal,
+  counts,
   loading,
   paused,
   bufferedCount,
@@ -287,6 +325,8 @@ export const toolCallsStore = {
     setFiltersRaw({ ...DEFAULT_FILTERS });
     setRows([]);
     setTotal(0);
+    setGrandTotal(0);
+    setCounts({ source: {}, status: {} });
     setPage(1);
     setLoading(false);
     setPaused(false);

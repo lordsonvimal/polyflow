@@ -279,6 +279,17 @@ export default function ToolCallsTab() {
     setExpandedId((cur) => (cur === id ? null : id));
   }
 
+  const filterActive = createMemo(() => {
+    const f = toolCallsStore.filters();
+    return Boolean(f.source || f.tool || f.status || f.q) || f.time !== "all";
+  });
+
+  const countSummary = createMemo(() =>
+    filterActive()
+      ? `${toolCallsStore.total()} of ${toolCallsStore.grandTotal()} calls`
+      : `${toolCallsStore.grandTotal()} call${toolCallsStore.grandTotal() === 1 ? "" : "s"}`,
+  );
+
   return (
     <div data-testid="toolcalls-tab" class="p-2 text-xs text-neutral-300 flex flex-col h-full gap-2">
       <div class="flex items-center gap-2 flex-wrap shrink-0">
@@ -291,6 +302,9 @@ export default function ToolCallsTab() {
                 onClick={() => toggleSource(s)}
               >
                 {SOURCE_LABEL[s]}
+                <span data-testid={`toolcalls-filter-source-${s}-count`} class="ml-1 opacity-60 tabular-nums">
+                  {toolCallsStore.counts().source[s] ?? 0}
+                </span>
               </button>
             )}
           </For>
@@ -313,8 +327,8 @@ export default function ToolCallsTab() {
           onChange={(e) => toolCallsStore.setFilters({ status: e.currentTarget.value })}
         >
           <option value="">any status</option>
-          <option value="ok">ok</option>
-          <option value="error">error</option>
+          <option value="ok">ok ({toolCallsStore.counts().status["ok"] ?? 0})</option>
+          <option value="error">error ({toolCallsStore.counts().status["error"] ?? 0})</option>
         </select>
 
         <div class="flex gap-1">
@@ -357,6 +371,9 @@ export default function ToolCallsTab() {
             +{toolCallsStore.bufferedCount()} new
           </button>
         </Show>
+        <span data-testid="toolcalls-count-summary" class="text-neutral-500 tabular-nums">
+          {countSummary()}
+        </span>
         <button data-testid="toolcalls-download" class="text-neutral-400 hover:text-white ml-auto" onClick={toolCallsStore.downloadFiltered}>
           Download
         </button>
@@ -364,7 +381,7 @@ export default function ToolCallsTab() {
           when={!confirmingClear()}
           fallback={
             <span class="flex items-center gap-1">
-              <span class="text-neutral-400">Clear all {toolCallsStore.total()} calls?</span>
+              <span class="text-neutral-400">Clear all {toolCallsStore.grandTotal()} calls?</span>
               <button
                 data-testid="toolcalls-clear-confirm"
                 class="text-red-400 hover:text-red-300"
