@@ -2,6 +2,12 @@
 // invoking edges and variable/const nodes with zero inbound reads: a
 // fixed-shape, full-graph scan rather than an ad-hoc query language, matching
 // the rest of polyflow's tool set.
+//
+// Two opt-in extensions widen the scan (see Options): IncludeTypes (DC.29)
+// adds struct/interface/type_alias declarations with no inbound type-use edge,
+// and Transitive (DC.28) switches the predicate from "zero inbound edge" to
+// "unreachable from any live root", catching a dead cluster whose members
+// call each other.
 package deadcode
 
 import (
@@ -34,6 +40,32 @@ type Result struct {
 type Options struct {
 	Service string // "" = every service
 	File    string // "" = every file
+
+	// Transitive (DC.28) switches the callable/type predicate from
+	// "zero inbound invoking edge" to "not reachable from any live root".
+	// Live roots are the same nodes the per-node carve-outs already spare
+	// (entrypoints, framework callbacks, reflect-dispatched methods, test
+	// functions); a BFS forward over invokingEdgeTypes (plus typeUseEdgeTypes
+	// when IncludeTypes is set) marks everything they can reach. A function
+	// whose only callers are themselves unreachable is then flagged too —
+	// the single-hop scan misses a whole dead cluster the moment its members
+	// call each other.
+	//
+	// Off by default: it is only as sound as the call graph is complete, and
+	// Ruby call resolution in particular is partial enough (see the
+	// ruby-call-resolution notes) that a transitive scan there flags large
+	// live subtrees whose one real entry edge the indexer never minted. Safe
+	// on Go/TS services; treat Ruby output as a lead, not a verdict.
+	Transitive bool
+
+	// IncludeTypes (DC.29) adds struct/interface/type_alias declaration nodes
+	// to the scan: a type with no inbound type-use edge (see typeUseEdgeTypes)
+	// and no live method hanging off it is unreferenced. Off by default so the
+	// existing function/method/variable/view output is unchanged. NodeTypeClass
+	// is deliberately excluded — a JS/TS/Ruby class doubles as a component and
+	// a method bag, with the render-tree and Ruby-resolution caveats that
+	// implies; struct/interface/type_alias are plain type declarations.
+	IncludeTypes bool
 
 	// UnresolvedRefs is the graph's blind-spot ledger (graph.Store.
 	// ListUnresolvedRefs), used only by the DC.27 Rails-view branch to
@@ -69,16 +101,48 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 	var items []Item
 	liveRailsRoutes := railsRouteTargets(idx)
 	dynDispatches := railsDynamicRenderTargets(opts.UnresolvedRefs)
+	var reachable map[string]bool
+	if opts.Transitive {
+		reachable = liveReachable(idx, opts.IncludeTypes)
+	}
 	for _, n := range idx.Nodes {
 		isCallable := n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeComponent
 		isRailsView := n.Type == graph.NodeTypeFile && isRailsViewFile(n.File)
-		if !isCallable && n.Type != graph.NodeTypeVariable && !isRailsView {
+		isType := opts.IncludeTypes && isTypeDecl(n.Type)
+		if !isCallable && n.Type != graph.NodeTypeVariable && !isRailsView && !isType {
 			continue
 		}
 		if opts.Service != "" && n.Service != opts.Service {
 			continue
 		}
 		if opts.File != "" && n.File != opts.File {
+			continue
+		}
+		if isType {
+			// A test-only helper type (a fixture struct, a mock's interface)
+			// is dead by construction the same way a test function is.
+			if graph.IsTestFilePath(n.File) {
+				continue
+			}
+			dead := !hasTypeUse(idx, n.ID)
+			if opts.Transitive {
+				dead = !reachable[n.ID]
+			}
+			// A struct whose type is never named but whose methods are still
+			// called (through a value obtained some other way — an embedding
+			// parent, a factory returning an interface) is not dead. Check the
+			// contained callables under the same predicate as the scan itself.
+			if dead && !typeHasLiveMethod(idx, n.ID, opts, reachable) {
+				items = append(items, Item{
+					ID:      n.ID,
+					Label:   n.Label,
+					Type:    string(n.Type),
+					Service: n.Service,
+					File:    n.File,
+					Line:    n.Line,
+					EndLine: n.EndLine,
+				})
+			}
 			continue
 		}
 		if isRailsView {
@@ -170,7 +234,11 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 		if n.Meta[graph.MetaReflectDispatched] == "true" {
 			continue
 		}
-		if hasCaller(idx, n.ID) {
+		if opts.Transitive {
+			if reachable[n.ID] {
+				continue
+			}
+		} else if hasCaller(idx, n.ID) {
 			continue
 		}
 		items = append(items, Item{
@@ -292,6 +360,131 @@ func hasReader(idx *graph.AdjacencyIndex, id string) bool {
 		}
 	}
 	return false
+}
+
+// typeUseEdgeTypes are the edge types that represent a real reference to a
+// type declaration (struct/interface/type_alias), the type-node analogue of
+// invokingEdgeTypes. A `contains` edge (file→type, type→method) is structural
+// and never qualifies.
+//
+//   - uses_type: a function/variable names the type in a signature, field, or
+//     local declaration.
+//   - instantiates: a function constructs a value of the type.
+//   - inherits: an embedding struct / subclass names it as a base.
+//   - implements: a struct declares (or Go-structurally satisfies) the
+//     interface.
+//   - returns / consumes: a handler marshals it as a response body / a client
+//     decodes a response into it — the type is live across the wire even with
+//     no in-language `uses_type`.
+//   - response_of: the type is the matched mirror of a DTO in another service.
+//   - references: a SQL table's FOREIGN KEY points at it.
+var typeUseEdgeTypes = map[graph.EdgeType]bool{
+	graph.EdgeTypeUsesType:     true,
+	graph.EdgeTypeInstantiates: true,
+	graph.EdgeTypeInherits:     true,
+	graph.EdgeTypeImplements:   true,
+	graph.EdgeTypeReturns:      true,
+	graph.EdgeTypeConsumes:     true,
+	graph.EdgeTypeResponseOf:   true,
+	graph.EdgeTypeReferences:   true,
+}
+
+// isTypeDecl reports whether t is a plain type declaration eligible for the
+// DC.29 unreferenced-type scan. NodeTypeClass is excluded on purpose — see
+// Options.IncludeTypes.
+func isTypeDecl(t graph.NodeType) bool {
+	return t == graph.NodeTypeStruct || t == graph.NodeTypeInterface || t == graph.NodeTypeTypeAlias
+}
+
+// hasTypeUse reports whether the type node id has at least one inbound
+// type-use edge (see typeUseEdgeTypes).
+func hasTypeUse(idx *graph.AdjacencyIndex, id string) bool {
+	for _, e := range idx.InEdges[id] {
+		if typeUseEdgeTypes[e.Type] {
+			return true
+		}
+	}
+	return false
+}
+
+// typeHasLiveMethod reports whether any method/function contained by the type
+// node id is itself reached — under the same predicate (transitive or
+// single-hop) the caller is scanning with. A struct nobody names by type but
+// whose methods are still called via an interface value or an embedding
+// parent is not dead.
+func typeHasLiveMethod(idx *graph.AdjacencyIndex, id string, opts Options, reachable map[string]bool) bool {
+	for _, e := range idx.OutEdges[id] {
+		if e.Type != graph.EdgeTypeContains {
+			continue
+		}
+		m := idx.Nodes[e.To]
+		if m == nil || (m.Type != graph.NodeTypeMethod && m.Type != graph.NodeTypeFunction) {
+			continue
+		}
+		if opts.Transitive {
+			if reachable[e.To] {
+				return true
+			}
+		} else if hasCaller(idx, e.To) {
+			return true
+		}
+	}
+	return false
+}
+
+// liveReachable returns the set of node IDs reachable from a live root by a
+// forward BFS over invokingEdgeTypes (plus typeUseEdgeTypes when
+// includeTypes). A live root is any node that is not itself a dead-code
+// candidate — every entrypoint, framework callback, reflect-dispatched or
+// test callable, and every non-callable/non-type structural anchor
+// (http_handler, route, worker, subscriber, DOM element, file, …). Anything
+// the walk does not reach is dead: its only inbound invocations, if any, come
+// from other unreachable nodes.
+func liveReachable(idx *graph.AdjacencyIndex, includeTypes bool) map[string]bool {
+	live := make(map[string]bool, len(idx.Nodes))
+	queue := make([]string, 0, len(idx.Nodes))
+	enqueue := func(id string) {
+		if !live[id] {
+			live[id] = true
+			queue = append(queue, id)
+		}
+	}
+	for id, n := range idx.Nodes {
+		if isLiveRoot(n) {
+			enqueue(id)
+		}
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, e := range idx.OutEdges[cur] {
+			if invokingEdgeTypes[e.Type] || (includeTypes && typeUseEdgeTypes[e.Type]) {
+				enqueue(e.To)
+			}
+		}
+	}
+	return live
+}
+
+// isLiveRoot classifies a node as an anchor the transitive walk starts from.
+// Callables must earn root status the same way the per-node carve-outs spare
+// them (entrypoint / callback / reflect-dispatched / test); type and variable
+// nodes are never roots (they must be reached to count as live); everything
+// else — the non-candidate node types that own real invoking edges — always
+// anchors whatever it points at.
+func isLiveRoot(n *graph.Node) bool {
+	switch n.Type {
+	case graph.NodeTypeFunction, graph.NodeTypeMethod, graph.NodeTypeComponent:
+		if _, skippedRootKind, ok := graph.ClassifyEntrypoint(n); ok || skippedRootKind == "callback" {
+			return true
+		}
+		return graph.IsTestFilePath(n.File) || n.Meta[graph.MetaReflectDispatched] == "true"
+	case graph.NodeTypeStruct, graph.NodeTypeInterface, graph.NodeTypeTypeAlias,
+		graph.NodeTypeClass, graph.NodeTypeVariable:
+		return false
+	default:
+		return true
+	}
 }
 
 // isRailsViewFile reports whether file is a candidate for the DC.27 dead-view

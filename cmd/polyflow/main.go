@@ -2060,20 +2060,24 @@ func runImpact(cmd *cobra.Command, args []string) error {
 // ─── deadcode ────────────────────────────────────────────────────────────────
 
 var (
-	deadcodeService string
-	deadcodeFile    string
-	deadcodeFormat  string
+	deadcodeService      string
+	deadcodeFile         string
+	deadcodeFormat       string
+	deadcodeTransitive   bool
+	deadcodeIncludeTypes bool
 )
 
 func initDeadcodeFlags() {
 	deadcodeCmd.Flags().StringVar(&deadcodeService, "service", "", "restrict the scan to a specific service")
 	deadcodeCmd.Flags().StringVar(&deadcodeFile, "file", "", "restrict the scan to a specific file")
 	deadcodeCmd.Flags().StringVar(&deadcodeFormat, "format", "text", "output format: text or json")
+	deadcodeCmd.Flags().BoolVar(&deadcodeTransitive, "transitive", false, "also flag callables/types reachable only from other dead code (sound on Go/TS; a lead only on Ruby)")
+	deadcodeCmd.Flags().BoolVar(&deadcodeIncludeTypes, "include-types", false, "also flag struct/interface/type_alias declarations with no inbound type-use edge")
 }
 
 var deadcodeCmd = &cobra.Command{
 	Use:   "deadcode",
-	Short: "List function/method nodes with zero inbound calls edges",
+	Short: "List function/method/variable/view nodes with no live inbound edge (--include-types, --transitive extend the scan)",
 	RunE:  runDeadcode,
 }
 
@@ -2094,14 +2098,20 @@ func runDeadcode(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	out := deadcode.Build(idx, deadcode.Options{Service: deadcodeService, File: deadcodeFile, UnresolvedRefs: unresolved})
+	out := deadcode.Build(idx, deadcode.Options{
+		Service:        deadcodeService,
+		File:           deadcodeFile,
+		Transitive:     deadcodeTransitive,
+		IncludeTypes:   deadcodeIncludeTypes,
+		UnresolvedRefs: unresolved,
+	})
 	if deadcodeFormat == "json" {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
 	for _, f := range out.Functions {
 		fmt.Fprintf(os.Stdout, "%-8s %-60s %s:%d\n", f.Type, f.Label, f.File, f.Line)
 	}
-	fmt.Fprintf(os.Stdout, "\nTotal: %d zero-caller functions/methods\n", out.Total)
+	fmt.Fprintf(os.Stdout, "\nTotal: %d dead-code candidate(s)\n", out.Total)
 	return nil
 }
 

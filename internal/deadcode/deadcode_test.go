@@ -428,6 +428,111 @@ func TestBuild_VariableInTestFileNotFlagged(t *testing.T) {
 	}
 }
 
+// ─── DC.29: unreferenced type declarations (IncludeTypes) ─────────────────────
+
+func has(out *deadcode.Result, id string) bool {
+	for _, f := range out.Functions {
+		if f.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuild_StructNotFlaggedByDefault(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:orphan_type", Type: graph.NodeTypeStruct, Label: "EligibleUser", Service: "backend", File: "svc.go", Line: 50})
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	assert.False(t, has(out, "be:orphan_type"), "a struct must not be flagged unless IncludeTypes is set")
+}
+
+func TestBuild_UnreferencedStructFlaggedWithIncludeTypes(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:orphan_type", Type: graph.NodeTypeStruct, Label: "EligibleUser", Service: "backend", File: "svc.go", Line: 50})
+
+	out := deadcode.Build(idx, deadcode.Options{IncludeTypes: true})
+	assert.True(t, has(out, "be:orphan_type"), "a struct with no inbound type-use edge must be flagged under IncludeTypes")
+}
+
+func TestBuild_StructWithUsesTypeEdgeNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:used_type", Type: graph.NodeTypeStruct, Label: "Config", Service: "backend", File: "svc.go", Line: 50})
+	idx.AddEdge(&graph.Edge{ID: "et1", From: "be:used", To: "be:used_type", Type: graph.EdgeTypeUsesType})
+
+	out := deadcode.Build(idx, deadcode.Options{IncludeTypes: true})
+	assert.False(t, has(out, "be:used_type"), "a struct named by a uses_type edge is referenced")
+}
+
+func TestBuild_StructWithLiveMethodNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:iface_type", Type: graph.NodeTypeStruct, Label: "Handler", Service: "backend", File: "svc.go", Line: 50})
+	idx.AddNode(&graph.Node{ID: "be:iface_method", Type: graph.NodeTypeMethod, Label: "Serve", Service: "backend", File: "svc.go", Line: 55})
+	idx.AddEdge(&graph.Edge{ID: "et2", From: "be:iface_type", To: "be:iface_method", Type: graph.EdgeTypeContains})
+	idx.AddEdge(&graph.Edge{ID: "et3", From: "be:handler", To: "be:iface_method", Type: graph.EdgeTypeCalls})
+
+	out := deadcode.Build(idx, deadcode.Options{IncludeTypes: true})
+	assert.False(t, has(out, "be:iface_type"), "a struct with a still-called method is not dead even with no uses_type edge")
+}
+
+func TestBuild_StructInTestFileNotFlagged(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:fixture_type", Type: graph.NodeTypeStruct, Label: "fakeStore", Service: "backend", File: "svc_test.go", Line: 12})
+
+	out := deadcode.Build(idx, deadcode.Options{IncludeTypes: true})
+	assert.False(t, has(out, "be:fixture_type"), "a struct declared in a test file must not be flagged")
+}
+
+// ─── DC.28: transitive reachability (Transitive) ─────────────────────────────
+
+func TestBuild_TransitiveFlagsCalleeOfDeadFunction(t *testing.T) {
+	idx := fixtureIndex()
+	// be:orphan (dead, zero inbound) --calls--> be:helper. Single-hop: helper
+	// has a caller so it clears. Transitive: its only caller is unreachable.
+	idx.AddNode(&graph.Node{ID: "be:helper", Type: graph.NodeTypeFunction, Label: "helper", Service: "backend", File: "orphan.go", Line: 60})
+	idx.AddEdge(&graph.Edge{ID: "tr1", From: "be:orphan", To: "be:helper", Type: graph.EdgeTypeCalls})
+
+	base := deadcode.Build(idx, deadcode.Options{})
+	assert.False(t, has(base, "be:helper"), "single-hop scan clears a function that has any caller")
+
+	out := deadcode.Build(idx, deadcode.Options{Transitive: true})
+	assert.True(t, has(out, "be:helper"), "transitive scan flags a function whose only caller is itself dead")
+	assert.True(t, has(out, "be:orphan"))
+}
+
+func TestBuild_TransitiveKeepsEntrypointReachableAlive(t *testing.T) {
+	idx := fixtureIndex()
+	// be:handler (http_handler root) --calls--> be:used --calls--> be:deep
+	idx.AddNode(&graph.Node{ID: "be:deep", Type: graph.NodeTypeFunction, Label: "deep", Service: "backend", File: "used.go", Line: 40})
+	idx.AddEdge(&graph.Edge{ID: "tr2", From: "be:used", To: "be:deep", Type: graph.EdgeTypeCalls})
+
+	out := deadcode.Build(idx, deadcode.Options{Transitive: true})
+	assert.False(t, has(out, "be:used"), "reachable from an entrypoint")
+	assert.False(t, has(out, "be:deep"), "transitively reachable from an entrypoint")
+}
+
+func TestBuild_TransitiveTypeLiveWhenReachedFromEntrypoint(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:dto", Type: graph.NodeTypeStruct, Label: "Response", Service: "backend", File: "used.go", Line: 70})
+	idx.AddEdge(&graph.Edge{ID: "tr3", From: "be:used", To: "be:dto", Type: graph.EdgeTypeUsesType})
+
+	out := deadcode.Build(idx, deadcode.Options{Transitive: true, IncludeTypes: true})
+	assert.False(t, has(out, "be:dto"), "a type named by an entrypoint-reachable function is live")
+}
+
+func TestBuild_TransitiveTypeDeadWhenOnlyDeadFunctionNamesIt(t *testing.T) {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "be:deadfn", Type: graph.NodeTypeFunction, Label: "deadfn", Service: "backend", File: "orphan.go", Line: 80})
+	idx.AddNode(&graph.Node{ID: "be:deaddto", Type: graph.NodeTypeStruct, Label: "DeadDTO", Service: "backend", File: "orphan.go", Line: 90})
+	idx.AddEdge(&graph.Edge{ID: "tr4", From: "be:deadfn", To: "be:deaddto", Type: graph.EdgeTypeUsesType})
+
+	base := deadcode.Build(idx, deadcode.Options{IncludeTypes: true})
+	assert.False(t, has(base, "be:deaddto"), "single-hop: the type has a uses_type edge so it clears")
+
+	out := deadcode.Build(idx, deadcode.Options{Transitive: true, IncludeTypes: true})
+	assert.True(t, has(out, "be:deaddto"), "transitive: its only referencing function is dead")
+}
+
 func TestBuild_EmptyResultIsEmptySliceNotNil(t *testing.T) {
 	idx := graph.NewAdjacencyIndex()
 	idx.AddNode(&graph.Node{ID: "be:handler", Type: graph.NodeTypeHTTPHandler, Label: "GET /x", Service: "backend", File: "h.go", Line: 1})
