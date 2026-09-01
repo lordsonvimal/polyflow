@@ -80,6 +80,54 @@ func TestLinkReactPropURLs_ResolvesPropFedEndpoint(t *testing.T) {
 	assert.NotContains(t, byLine, 40, "bare `url` identifier must abstain")
 }
 
+func TestLinkReactPropURLs_JSXToJSXTemplateLiteralProp(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	child := filepath.Join(dir, "JobDetailModal.jsx")
+	require.NoError(t, os.WriteFile(child, []byte(`import React from "react";
+import { apiGet } from "../services/ApiServices";
+export function JobDetailModal({ onClose, url, updateKey }) {
+  const load = () => apiGet(url).then((r) => r.data);
+  return <div onClick={load}>{onClose}</div>;
+}
+`), 0o644))
+	parent := filepath.Join(dir, "ProgressiveFeedbackCard.jsx")
+	require.NoError(t, os.WriteFile(parent, []byte(`import React from "react";
+import { JobDetailModal } from "./JobDetailModal";
+export function ProgressiveFeedbackCard({ lroInfo }) {
+  return (
+    <JobDetailModal onClose={() => {}} url={`+"`/app/lro/${lroInfo.lroId}?study_id=${lroInfo.studyId}`"+`} />
+  );
+}
+`), 0o644))
+
+	nodes := []graph.Node{
+		{
+			ID: "n:routes:http_handler:lro_show", Type: graph.NodeTypeHTTPHandler, Service: "orion", File: "config/routes.rb",
+			Meta: map[string]string{"route_helper": "lro", "path": "/app/lro/:id", "method": "GET"},
+		},
+		{
+			ID: "js:" + child + ":function:JobDetailModal:3", Type: graph.NodeTypeFunction, Label: "JobDetailModal",
+			Service: "js", File: child, Meta: map[string]string{"name": "JobDetailModal"},
+		},
+		{
+			ID: "js:" + parent + ":function:ProgressiveFeedbackCard:3", Type: graph.NodeTypeFunction, Label: "ProgressiveFeedbackCard",
+			Service: "js", File: parent, Meta: map[string]string{"name": "ProgressiveFeedbackCard"},
+		},
+		{
+			ID: "js:" + child + ":http_client:x", Type: graph.NodeTypeHTTPClient, Service: "js", File: child, Line: 4, Language: "javascript",
+			Meta: map[string]string{"pattern": "js_api_wrapper_call_site", "wrapper": "apiGet", "url_expr": "url", "key_dynamic": "true", "key_dynamic_raw": "url"},
+		},
+	}
+
+	changed := linker.LinkReactPropURLs(nodes, map[string][]string{"js": {child, parent}})
+	require.Len(t, changed, 1)
+	assert.Equal(t, "/app/lro/*", changed[0].Meta["url"])
+	assert.Equal(t, "GET", changed[0].Meta["method"])
+	assert.NotEqual(t, "true", changed[0].Meta["key_dynamic"])
+	assert.Equal(t, "react_prop_url", changed[0].Meta["path_resolved_via"])
+}
+
 func TestLinkReactPropURLs_OneHopLocalAssignment(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

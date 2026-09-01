@@ -2,6 +2,8 @@ package linker
 
 import (
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -117,6 +119,12 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 		}
 		propURL[k] = url
 	}
+	// 2b. JSX → JSX prop forwarding. Not every URL prop originates on the Rails
+	// side: `<JobDetailModal url={`/app/lro/${lroId}?study_id=${sid}`} />` in one
+	// component passes a literal/template path straight to another. The child's
+	// `apiGet(url)` call site is still minted `key_dynamic`.
+	scanJSXPropURLs(serviceFiles, record)
+
 	erbSeen := map[string]bool{}
 	for _, files := range serviceFiles {
 		for _, f := range files {
@@ -154,26 +162,41 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 		svcSet[nodes[i].Service] = true
 	}
 	compsByFile := map[string]map[string]bool{}
+	addComp := func(f, sym string) {
+		if f == "" || sym == "" {
+			return
+		}
+		if compsByFile[f] == nil {
+			compsByFile[f] = map[string]bool{}
+		}
+		compsByFile[f][sym] = true
+	}
 	for svc := range svcSet {
 		ci := newComponentIndex(nodes, svc)
 		for sym, ids := range ci.bySymbol {
 			for _, id := range ids {
-				f := nodeFile[id]
-				if f == "" {
-					continue
-				}
-				if compsByFile[f] == nil {
-					compsByFile[f] = map[string]bool{}
-				}
-				compsByFile[f][sym] = true
+				addComp(nodeFile[id], sym)
 			}
+		}
+	}
+	// A JSX component that only forwards a prop to another (JobDetailModal) is
+	// often never registered on `window` — newComponentIndex can't see it. Fall
+	// back to its function/class declaration: a Capitalized top-level name in
+	// the file it's defined in. record()'s conflict guard covers name clashes.
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeClass {
+			continue
+		}
+		if l := n.Label; l != "" && l[0] >= 'A' && l[0] <= 'Z' {
+			addComp(n.File, l)
 		}
 	}
 
 	// 4. rewrite.
 	localSrc := map[string][]byte{}
 	localRoot := map[string]*sitter.Node{}
-	localSource := func(file, name string, line int) string {
+	fileTree := func(file string) (*sitter.Node, []byte) {
 		root, ok := localRoot[file]
 		if !ok {
 			src, r, _, parsed := jsParse(file)
@@ -183,10 +206,24 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 			}
 			localRoot[file] = root // cache even nil
 		}
+		return root, localSrc[file]
+	}
+	localSource := func(file, name string, line int) string {
+		root, src := fileTree(file)
 		if root == nil {
 			return ""
 		}
-		return jsLastAssignmentBefore(root, localSrc[file], name, line)
+		return jsLastAssignmentBefore(root, src, name, line)
+	}
+	// isPropParam reports whether name is bound by a destructuring pattern in
+	// file — a component prop parameter (`({ url }) => …`) or a `const { url } =
+	// props`. Distinguishes a genuine prop reference from a same-named local.
+	isPropParam := func(file, name string) bool {
+		root, src := fileTree(file)
+		if root == nil {
+			return false
+		}
+		return jsDestructuresName(root, src, name)
 	}
 
 	var changed []graph.Node
@@ -205,9 +242,13 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 		if !hasURLSuffix(prop) {
 			if src := leadingJSIdent(localSource(n.File, prop, n.Line)); hasURLSuffix(src) {
 				prop = src
-			} else {
+			} else if !isPropParam(n.File, prop) {
+				// Not a `*_url` prop, no one-hop local assignment from one, and
+				// not a destructured prop parameter — abstain (local-var risk).
 				continue
 			}
+			// else: `function JobDetailModal({ url }) { apiGet(url) }` — the
+			// bare identifier is the prop parameter itself.
 		}
 		var resolved string
 		conflict := false
@@ -242,6 +283,149 @@ func LinkReactPropURLs(nodes []graph.Node, serviceFiles map[string][]string) []g
 		changed = append(changed, *n)
 	}
 	return changed
+}
+
+// jsxPropURLQuery captures `<Component prop={"..."|`...`} />` and
+// `<Component prop="..." />` — a string or template literal passed as a JSX
+// attribute value.
+const jsxPropURLQuery = `
+[
+  (jsx_opening_element
+    name: (_) @tag
+    (jsx_attribute (property_identifier) @prop (jsx_expression [(string) (template_string)] @val)))
+  (jsx_self_closing_element
+    name: (_) @tag
+    (jsx_attribute (property_identifier) @prop (jsx_expression [(string) (template_string)] @val)))
+  (jsx_opening_element
+    name: (_) @tag
+    (jsx_attribute (property_identifier) @prop (string) @val))
+  (jsx_self_closing_element
+    name: (_) @tag
+    (jsx_attribute (property_identifier) @prop (string) @val))
+]`
+
+// scanJSXPropURLs walks every .jsx/.tsx file for JSX elements that pass a
+// literal or template-literal path as a prop (`<Modal url={`/app/lro/${id}`} />`)
+// and feeds each (component, prop, resolved-path) to record.
+func scanJSXPropURLs(serviceFiles map[string][]string, record func(comp, prop, url string)) {
+	seen := map[string]bool{}
+	for _, files := range serviceFiles {
+		for _, f := range files {
+			if ext := strings.ToLower(filepath.Ext(f)); ext != ".jsx" && ext != ".tsx" {
+				continue
+			}
+			if graph.IsTestFilePath(f) {
+				continue // a test's `<Modal url="/fixture" />` isn't a real forward
+			}
+			if seen[f] {
+				continue
+			}
+			seen[f] = true
+			src, root, lang, ok := jsParse(f)
+			if !ok {
+				continue
+			}
+			q, err := compiledQuery(jsxPropURLQuery, lang)
+			if err != nil {
+				continue
+			}
+			cur := sitter.NewQueryCursor()
+			cur.Exec(q, root)
+			for {
+				m, ok := cur.NextMatch()
+				if !ok {
+					break
+				}
+				caps := map[string]string{}
+				for _, c := range m.Captures {
+					caps[q.CaptureNameForId(c.Index)] = c.Node.Content(src)
+				}
+				tag, prop, val := caps["tag"], caps["prop"], caps["val"]
+				if i := strings.LastIndexByte(tag, '.'); i >= 0 {
+					tag = tag[i+1:]
+				}
+				if tag == "" || prop == "" || tag[0] < 'A' || tag[0] > 'Z' {
+					continue // lowercase tag = HTML element
+				}
+				if u, ok := resolveJSPropURL(val); ok {
+					record(tag, prop, u)
+				}
+			}
+		}
+	}
+}
+
+var reTemplateSubst = regexp.MustCompile(`\$\{[^{}]*\}`)
+
+// resolveJSPropURL turns a JS string / template-literal source into a
+// root-relative wildcard path: `"/app/lro/5"` → `/app/lro/5`,
+// `` `/app/lro/${id}?study_id=${s}` `` → `/app/lro/*`. Anything not starting
+// with a literal `/` (a bare identifier, an interpolation-led template) fails.
+func resolveJSPropURL(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 2 || raw[0] != raw[len(raw)-1] {
+		return "", false
+	}
+	var body string
+	switch raw[0] {
+	case '"', '\'':
+		body = raw[1 : len(raw)-1]
+	case '`':
+		body = reTemplateSubst.ReplaceAllString(raw[1:len(raw)-1], "*")
+	default:
+		return "", false
+	}
+	if !strings.HasPrefix(body, "/") {
+		return "", false
+	}
+	if i := strings.IndexAny(body, "?#"); i >= 0 {
+		body = body[:i]
+	}
+	segs := strings.Split(body, "/")
+	for i, s := range segs {
+		if strings.Contains(s, "*") {
+			segs[i] = "*"
+		}
+	}
+	body = strings.TrimRight(strings.Join(segs, "/"), "/")
+	if body == "" {
+		return "", false
+	}
+	return body, true
+}
+
+// jsDestructuresName reports whether name appears as a key in any object
+// destructuring pattern in the tree (`({ name }) => …`, `const { name } = x`).
+func jsDestructuresName(root *sitter.Node, src []byte, name string) bool {
+	found := false
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n == nil || found {
+			return
+		}
+		if n.Type() == "object_pattern" {
+			for i := 0; i < int(n.ChildCount()); i++ {
+				c := n.Child(i)
+				switch c.Type() {
+				case "shorthand_property_identifier_pattern":
+					if c.Content(src) == name {
+						found = true
+						return
+					}
+				case "pair_pattern":
+					if k := c.ChildByFieldName("key"); k != nil && k.Content(src) == name {
+						found = true
+						return
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(root)
+	return found
 }
 
 // colonToWildcard turns a Rails route path template into the client-side
