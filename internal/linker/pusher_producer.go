@@ -121,6 +121,13 @@ func EnrichPusherProducers(nodes []graph.Node, serviceFiles map[string][]string)
 	}
 	sort.Strings(svcFilesSorted)
 
+	// PU.2d — cross-file mixin holders. `class C; include M; @pusher =
+	// PusherClient.new(obj, "chan"); end` in one file, with the actual
+	// `@pusher.notify_x(...)` calls living in `module M` in another. A same-file
+	// scan (PU.2c) can't see across the include; resolve the channel from the
+	// holder class and carry it to every `module M` body.
+	holderByModule := collectPusherMixinHolders(svcFilesSorted, eventByMethod, constVals, hashConstVals)
+
 	seen := map[string]bool{}
 	for _, file := range svcFilesSorted {
 		if graph.IsTestFilePath(file) {
@@ -133,59 +140,68 @@ func EnrichPusherProducers(nodes []graph.Node, serviceFiles map[string][]string)
 		svc := fileSvc[file]
 		relFile := patterns.RelativizeToCwd(file)
 
-		for _, cs := range findPusherNewCallSites(fa, eventByMethod) {
-			chanSeg := resolvePusherChannelSegment(cs.channelArg, fa.src, cs.className, constVals, hashConstVals)
-			if chanSeg == "" {
-				continue
+		eventOf := func(className, methodName string, eventArg *sitter.Node) string {
+			switch methodName {
+			case "push", "trigger", "trigger_async":
+				return pusherLiteralOrConst(eventArg, fa.src, className, constVals)
+			default:
+				return eventByMethod[className][methodName]
 			}
-			for _, m := range cs.methods {
-				event := ""
-				switch m.name {
-				case "push", "trigger", "trigger_async":
-					event = pusherLiteralOrConst(m.eventArg, fa.src, cs.className, constVals)
-				default:
-					event = eventByMethod[cs.className][m.name]
-				}
-				if event == "" {
-					continue
-				}
-				line := m.line
-				id := fmt.Sprintf("%s:%s:publisher:pusher_trigger_forward:%s:%d", svc, relFile, m.name, line)
-				if seen[id] {
-					continue
-				}
-				seen[id] = true
+		}
+		mintForward := func(className, methodName, chanSeg, event string, line int) {
+			if event == "" || chanSeg == "" {
+				return
+			}
+			id := fmt.Sprintf("%s:%s:publisher:pusher_trigger_forward:%s:%d", svc, relFile, methodName, line)
+			if seen[id] {
+				return
+			}
+			seen[id] = true
 
-				meta := map[string]string{
+			newNodes = append(newNodes, graph.Node{
+				ID:       id,
+				Type:     graph.NodeTypePublisher,
+				Label:    chanSeg + " " + event,
+				Service:  svc,
+				File:     relFile,
+				Line:     line,
+				Language: "ruby",
+				Meta: map[string]string{
 					"pattern":      "pusher_trigger_forward",
 					"channel":      chanSeg,
 					"event":        event,
 					"package":      "pusher",
 					"fn":           "trigger",
 					"resolved_via": "pusher_producer_forward",
-					"wrapper":      cs.className,
-				}
-				newNodes = append(newNodes, graph.Node{
-					ID:       id,
-					Type:     graph.NodeTypePublisher,
-					Label:    chanSeg + " " + event,
-					Service:  svc,
-					File:     relFile,
-					Line:     line,
-					Language: "ruby",
-					Meta:     meta,
+					"wrapper":      className,
+				},
+			})
+			if fn := enclosingFn(relFile, line); fn != "" {
+				newEdges = append(newEdges, graph.Edge{
+					ID:         fmt.Sprintf("%s->%s:pusher_producer_forward", fn, id),
+					From:       fn,
+					To:         id,
+					Type:       graph.EdgeTypeCalls,
+					Confidence: graph.ConfidenceInferred,
+					Meta:       map[string]string{"via": "pusher_producer_forward"},
 				})
-				if fn := enclosingFn(relFile, line); fn != "" {
-					newEdges = append(newEdges, graph.Edge{
-						ID:         fmt.Sprintf("%s->%s:pusher_producer_forward", fn, id),
-						From:       fn,
-						To:         id,
-						Type:       graph.EdgeTypeCalls,
-						Confidence: graph.ConfidenceInferred,
-						Meta:       map[string]string{"via": "pusher_producer_forward"},
-					})
-				}
 			}
+		}
+
+		for _, cs := range findPusherNewCallSites(fa, eventByMethod) {
+			chanSeg := resolvePusherChannelSegment(cs.channelArg, fa.src, cs.className, constVals, hashConstVals)
+			if chanSeg == "" {
+				continue
+			}
+			for _, m := range cs.methods {
+				mintForward(cs.className, m.name, chanSeg, eventOf(cs.className, m.name, m.eventArg), m.line)
+			}
+		}
+
+		if len(holderByModule) > 0 {
+			walkPusherMixinModules(fa, holderByModule, func(h pusherMixinHolder, mc receiverCall) {
+				mintForward(h.className, mc.method, h.chanSeg, eventOf(h.className, mc.method, pusherArgAt(mc.node, 1)), mc.line)
+			})
 		}
 		fa.release()
 	}
@@ -526,6 +542,123 @@ func findPusherIvarCalls(scope *sitter.Node, ivar, base string, src []byte) []re
 	}
 	walk(scope)
 	return out
+}
+
+// pusherMixinHolder records that some class holds an ivar-bound PusherClient
+// instance (`@pusher = PusherClient.new(_, "chan")`) AND `include`s a module —
+// so `@pusher.notify_x` calls found in that module's body belong to `chanSeg`.
+type pusherMixinHolder struct {
+	ivar, base, className, chanSeg string
+}
+
+// collectPusherMixinHolders scans every service file for `class C; include M;
+// @ivar = <PusherClass>.new(...); end` shapes and returns module name ->
+// holder. First wins on a name collision (deterministic — files are sorted).
+func collectPusherMixinHolders(
+	files []string,
+	eventByMethod map[string]map[string]string,
+	constVals map[string]map[string]string,
+	hashConstVals map[string]map[string]map[string]string,
+) map[string]pusherMixinHolder {
+	isPusherClass := func(name string) bool { _, ok := eventByMethod[name]; return ok }
+	out := map[string]pusherMixinHolder{}
+	for _, file := range files {
+		if graph.IsTestFilePath(file) {
+			continue
+		}
+		fa := parseRubyFileAST(file)
+		if fa == nil {
+			continue
+		}
+		var walkClass func(n *sitter.Node)
+		walkClass = func(n *sitter.Node) {
+			if n.Type() == "class" {
+				var mods []string
+				var h pusherMixinHolder
+				var scan func(m *sitter.Node)
+				scan = func(m *sitter.Node) {
+					switch m.Type() {
+					case "class", "module":
+						if !m.Equal(n) {
+							return // don't bleed into a nested definition
+						}
+					case "call":
+						if mn := m.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "include" {
+							if a := pusherArgAt(m, 0); a != nil {
+								if name := constNameOf(a, fa.src); name != "" {
+									mods = append(mods, name)
+								}
+							}
+						}
+					case "assignment":
+						l := m.ChildByFieldName("left")
+						r := m.ChildByFieldName("right")
+						if h.ivar == "" && l != nil && l.Type() == "instance_variable" && r != nil && r.Type() == "call" {
+							if _, cls, chanArg := pusherNewExpr(r, fa.src, isPusherClass); cls != "" {
+								if seg := resolvePusherChannelSegment(chanArg, fa.src, cls, constVals, hashConstVals); seg != "" {
+									h.ivar = l.Content(fa.src)
+									h.base = strings.TrimPrefix(h.ivar, "@")
+									h.className, h.chanSeg = cls, seg
+								}
+							}
+						}
+					}
+					for i := 0; i < int(m.NamedChildCount()); i++ {
+						scan(m.NamedChild(i))
+					}
+				}
+				scan(n)
+				if h.ivar != "" {
+					for _, mod := range mods {
+						if _, dup := out[mod]; !dup {
+							out[mod] = h
+						}
+					}
+				}
+			}
+			for i := 0; i < int(n.NamedChildCount()); i++ {
+				walkClass(n.NamedChild(i))
+			}
+		}
+		walkClass(fa.root)
+		fa.release()
+	}
+	return out
+}
+
+// walkPusherMixinModules finds every `module M` in fa whose name is a known
+// holder and reports each `@ivar.notify_x` / `base.notify_x` call in its body.
+func walkPusherMixinModules(fa *rubyFileAST, holders map[string]pusherMixinHolder, emit func(pusherMixinHolder, receiverCall)) {
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "module" {
+			if nm := n.ChildByFieldName("name"); nm != nil {
+				if h, ok := holders[nm.Content(fa.src)]; ok {
+					if body := n.ChildByFieldName("body"); body != nil {
+						for _, mc := range findPusherIvarCalls(body, h.ivar, h.base, fa.src) {
+							emit(h, mc)
+						}
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(fa.root)
+}
+
+func constNameOf(n *sitter.Node, src []byte) string {
+	switch n.Type() {
+	case "constant":
+		return n.Content(src)
+	case "scope_resolution":
+		if nm := n.ChildByFieldName("name"); nm != nil {
+			return nm.Content(src)
+		}
+	}
+	return ""
 }
 
 func enclosingScopeNode(n *sitter.Node) *sitter.Node {
