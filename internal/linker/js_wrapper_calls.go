@@ -42,7 +42,15 @@ import (
 // callee is a bare identifier matching one of those names, minting an
 // http_client node from the argument at the wrapper's own forwarded
 // position — literal or identifier either way.
-func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Node, []graph.Edge) {
+//
+// RT.5: `producer_alias_url_call` (patterns/javascript/producer_alias.yaml) also
+// matches `apiGet("/literal")` — the wrapper name looks like a producer alias and
+// its literal URL arg satisfies the pattern — so a wrapper call with a literal
+// URL is captured twice: once here (richer: url_expr, key_dynamic handling, the
+// template-truncation walk) and once as a bare producer_alias_url_call. When both
+// land on the same call site the wrapper node is strictly better, so the
+// producer_alias_url_call duplicate is returned for removal.
+func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Node, []graph.Edge, map[string]bool) {
 	// service -> wrapperName -> URL param index
 	wrapperParamIndex := map[string]map[string]int{}
 	// file -> enclosing function/method ranges, for attributing each new
@@ -79,7 +87,7 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 		}
 	}
 	if len(wrapperParamIndex) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Discovered wrapperParamIndex above is single-hop: it only knows a
@@ -163,7 +171,25 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 			}
 		}
 	}
-	return newNodes, newEdges
+
+	// RT.5: drop the producer_alias_url_call http_client duplicate at any call
+	// site a wrapper node now covers (same service + file + line).
+	wrapperSites := map[string]bool{}
+	for _, n := range newNodes {
+		wrapperSites[fmt.Sprintf("%s\x00%s\x00%d", n.Service, n.File, n.Line)] = true
+	}
+	removeIDs := map[string]bool{}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeHTTPClient || n.Meta["pattern"] != "producer_alias_url_call" {
+			continue
+		}
+		if wrapperSites[fmt.Sprintf("%s\x00%s\x00%d", n.Service, n.File, n.Line)] {
+			removeIDs[n.ID] = true
+		}
+	}
+
+	return newNodes, newEdges, removeIDs
 }
 
 // scanJSWrapperCallSites re-parses file and returns one http_client node per
