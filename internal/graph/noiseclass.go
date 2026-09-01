@@ -89,7 +89,12 @@ func ClassifyEdgeNoise(e *Edge, src, dst *Node) NoiseClass {
 	if structuralEdgeTypes[e.Type] { // query.go:33-38, existing map, same package
 		return NoiseContainment
 	}
-	if dst != nil && dst.Type == NodeTypeElement { // model.go:25
+	if e.Type != EdgeTypeDOMContract && dst != nil &&
+		(dst.Type == NodeTypeElement || dst.Type == NodeTypeDOMTarget) { // model.go:25,31
+		// A dom_target (bare selector / event-binding pivot) is the same kind of
+		// render-tree plumbing as the element it resolves to — "what does the
+		// page look like", not "what does this call". A dom_contract edge is the
+		// exception: it's the IA.5 component→JS-site link and must stay visible.
 		return NoiseRenderTree
 	}
 	if (src != nil && isTestFile(src.File)) || (dst != nil && isTestFile(dst.File)) {

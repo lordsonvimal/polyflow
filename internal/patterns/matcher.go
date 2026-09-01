@@ -1244,6 +1244,11 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			} else {
 				label = strings.ToUpper(verb)
 			}
+		} else if sel, ok := r.Captures["selector"]; ok {
+			// jQuery / DOM selector call sites ($("#save"), querySelector(".x")):
+			// label with the selector text, never the bare "$" / "querySelector"
+			// callee the fn branch below would otherwise pick.
+			label = stripStringLiteral(sel)
 		} else if fn, ok := r.Captures["fn"]; ok {
 			// For goroutine fn captures: use the identifier only, not the full closure body.
 			// If the captured fn spans multiple lines it's a func_literal — label it "func()".

@@ -51,6 +51,7 @@ var wantLinkPasses = []struct {
 	{"templ_scripts", scopeSameServiceOnly},
 	{"dom_definitions", scopeSameServiceOnly},
 	{"dom_contracts", scopeSameServiceOnly},
+	{"dom_declutter", scopeSameServiceOnly},
 	{"containment", scopeSameServiceOnly},
 	{"ensure_scanned_files", scopeSameServiceOnly},
 	{"js_lazy_import_calls", scopeSameServiceOnly},
