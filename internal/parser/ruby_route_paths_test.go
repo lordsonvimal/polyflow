@@ -122,6 +122,41 @@ end
 	require.Equal(t, "GET", collection[0].Meta["method"])
 }
 
+// TestComposeRailsRoutePaths_BareVerbInResourcesBlock covers the third member
+// idiom: a bare `post :add_details` sitting directly in a `resources` block —
+// no `member`/`collection` wrapper, no `on:` keyword. Rails scopes it to the
+// member `:id`; the matcher has no pattern for it, so composeRailsRoutePaths
+// must synthesize the node (orion's client_api/v1 lros: add_details,
+// send_last_mile).
+func TestComposeRailsRoutePaths_BareVerbInResourcesBlock(t *testing.T) {
+	t.Parallel()
+	src := `Rails.application.routes.draw do
+  namespace :client_api do
+    namespace :v1 do
+      resources :lros do
+        post :add_details
+        post :send_last_mile
+      end
+    end
+  end
+end
+`
+	nodes := parseRubyRoutes(t, src)
+	got := routeNode(nodes, "resource_scoped_verb_route")
+	require.Len(t, got, 2)
+	byPath := map[string]*graph.Node{}
+	for _, n := range got {
+		byPath[n.Meta["path"]] = n
+	}
+	require.Contains(t, byPath, "/client_api/v1/lros/:id/add_details")
+	ad := byPath["/client_api/v1/lros/:id/add_details"]
+	require.Equal(t, "POST", ad.Meta["method"])
+	require.Equal(t, "client_api_v1_lro_add_details", ad.Meta["route_helper"])
+	require.Equal(t, "client_api/v1", ad.Meta["controller_module"])
+	require.Equal(t, "lros", ad.Meta["resource"])
+	require.Equal(t, "client_api_v1_lro_send_last_mile", byPath["/client_api/v1/lros/:id/send_last_mile"].Meta["route_helper"])
+}
+
 // parseRubyAt runs the RubyParser on inline source at a caller-chosen path
 // relative to a temp dir, so the routes-file gates can be exercised directly.
 func parseRubyAt(t *testing.T, rel, src string) []graph.Node {
