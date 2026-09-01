@@ -32,6 +32,15 @@ const (
 // fleet: `/health` resolves in 3 services (7 handlers) and `/login` in 2 (8
 // handlers), both suppressed; `/user-apps` resolves in 1 (2 handlers) and links.
 //
+// Generic REST-namespace segments (`api`, `v1`, `v2`, …) are not counted: every
+// service that exposes an HTTP API mounts something under `/api/v1`, so
+// `*/api/v1/users` pins a service no better than `*/users` does — measured on the
+// juniper fleet, `/api/v1/users` resolves in two services (willow and
+// orion-atlas) because both are Rails apps with the same versioned-API
+// convention. Stripping the namespace segments makes that a one-literal path the
+// contract engine can suppress on fan-out, instead of a three-literal path it
+// trusts.
+//
 // A known host is self-discriminating, so one literal segment is strong there.
 //
 // This lives in graph rather than in the parser that first minted the stamp
@@ -48,6 +57,10 @@ func PathEvidence(pattern string) string {
 		if strings.HasSuffix(seg, ":") {
 			continue
 		}
+		// Generic REST-namespace segments name a convention, not a route.
+		if isAPINamespaceSegment(seg) {
+			continue
+		}
 		literals++
 	}
 	switch {
@@ -58,4 +71,24 @@ func PathEvidence(pattern string) string {
 	default:
 		return PathEvidenceWeak
 	}
+}
+
+// isAPINamespaceSegment reports whether seg is a generic REST-namespace token
+// (`api`, `rest`, or a version marker like `v1`/`v2`) rather than a segment that
+// names a resource. These appear in front of nearly every HTTP API and so carry
+// no information about which service a call targets.
+func isAPINamespaceSegment(seg string) bool {
+	l := strings.ToLower(seg)
+	if l == "api" || l == "rest" {
+		return true
+	}
+	if len(l) >= 2 && l[0] == 'v' {
+		for _, r := range l[1:] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
