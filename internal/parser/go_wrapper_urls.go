@@ -39,8 +39,11 @@ import (
 // honest ledger for callers that pass a non-literal path — nothing is replaced.
 //
 // Scope: `net/http.NewRequest` / `NewRequestWithContext` with a `path` (or
-// `base+path`) parameter, resolved across exactly one call boundary. Sprintf-
-// composed URLs and resty/other-client wrappers are follow-ups.
+// `base+path`) parameter, resolved across one or two call boundaries. The
+// forwarded path argument may be a bare literal or a caller-composed
+// fmt.Sprintf/concat expression (resolveWrapperCallPath) — the latter is the
+// dominant shape once a client method needs path parameters
+// (`/api/v1/app-access/%s/%s/grant`). resty/other-client wrappers are follow-ups.
 
 // wrapperInfo records a function whose request-URL derives from one of its own
 // parameters.
@@ -108,13 +111,14 @@ func extractWrapperURLs(
 				if w.urlParamIndex >= len(common.Args) {
 					continue
 				}
-				lit, ok := ssaConstString(common.Args[w.urlParamIndex])
+				path, tag, evidence, ok := resolveWrapperCallPath(w.base, common.Args[w.urlParamIndex])
 				if !ok {
-					// Non-literal path — the wrapper's own dynamic node already
-					// ledgers this call (X.1 key_dynamic); skip silently.
+					// Either a fully dynamic path (field load, bare parameter,
+					// helper call) — the wrapper's own dynamic node already
+					// ledgers it (X.1 key_dynamic) — or a probe-convention path
+					// (`*/health`) that names no service; skip silently.
 					continue
 				}
-				path := composeWrapperURL(w.base, lit)
 				method := w.methodConst
 				if w.methodIndex >= 0 && w.methodIndex < len(common.Args) {
 					if m, ok := ssaConstString(common.Args[w.methodIndex]); ok {
@@ -129,11 +133,7 @@ func extractWrapperURLs(
 					pos = fset.Position(caller.Pos())
 				}
 				file := relPath(pos.Filename)
-				// Graded the same way as the sprintf/concat path: a wrapper
-				// called with "/health" onto an opaque base is the same
-				// convention-not-a-route problem, and grading it here is what
-				// keeps the two synthesis paths from disagreeing.
-				node, edge, ok := emitResolvedClient(service, file, pos, callerID, callee.Name(), path, method, "wrapper_url", pathEvidence(path), seen)
+				node, edge, ok := emitResolvedClient(service, file, pos, callerID, callee.Name(), path, method, tag, evidence, seen)
 				if !ok {
 					continue
 				}
@@ -731,6 +731,46 @@ func composeWrapperURL(base, lit string) string {
 	default:
 		return base + lit
 	}
+}
+
+// resolveWrapperCallPath renders the path argument at a wrapper call site into a
+// match-ready pattern joined with the wrapper's static base, and grades it. It
+// accepts two shapes:
+//
+//   - a bare string constant —
+//     c.doWithRetry(http.MethodPost, "/api/v1/service/apps/register", body)
+//   - a path composed in the caller (fmt.Sprintf / concatenation) and forwarded
+//     in — path := fmt.Sprintf("/api/v1/app-access/%s/%s/grant", a, b)
+//     c.doWithRetry(http.MethodPost, path, payload)
+//
+// The second shape is the same composition extractComposedURLs handles, but that
+// pass only inspects URLs built in the same function as http.NewRequest; in a
+// typed API client the http.NewRequest is one or two hops down inside the
+// wrapper, so this is the only pass positioned to recover it.
+//
+// ok is false for a fully dynamic path (field load, helper call, bare parameter
+// — left on the wrapper's own key_dynamic ledger) and for a path that grades to
+// no evidence (`*/health` behind an opaque host — a probe convention, not a
+// route), matching extractComposedURLs' own guard.
+func resolveWrapperCallPath(base string, urlArg ssa.Value) (path, tag, evidence string, ok bool) {
+	if lit, isConst := ssaConstString(urlArg); isConst {
+		path, tag = composeWrapperURL(base, lit), "wrapper_url"
+	} else {
+		composedTag, tagged := composedURLTag(urlArg)
+		if !tagged {
+			return "", "", "", false
+		}
+		pattern, _, pathOK := composedRequestPath(urlArg)
+		if !pathOK {
+			return "", "", "", false
+		}
+		path, tag = composeWrapperURL(base, pattern), composedTag
+	}
+	evidence = pathEvidence(path)
+	if evidence == pathEvidenceNone {
+		return "", "", "", false
+	}
+	return path, tag, evidence, true
 }
 
 // ssaConstString returns the string value of a constant SSA value, unwrapping
