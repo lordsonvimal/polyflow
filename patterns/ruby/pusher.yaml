@@ -1,10 +1,26 @@
+# Gated on the `pusher` gem: `trigger` is a common method name that would
+# misfire on unrelated Ruby (ActiveRecord callbacks, state machines) without
+# the dependency gate.
+#
+# The receiver is an alternation, not a bare (identifier): real server-side
+# code chains off a factory — `PusherClient.new_pusher_client.trigger(...)`
+# (a (call) receiver) or `Pusher::Client.new(...).trigger(...)`
+# (a (scope_resolution) then (call)). The 3-argument arity
+# (channel, event, data) is what keeps this specific.
 language: ruby
 version: "1"
+package: pusher
 patterns:
   - name: pusher_trigger
     query: |
       (call
-        receiver: (identifier) @pusher
+        receiver: [
+          (identifier)
+          (constant)
+          (instance_variable)
+          (call)
+          (scope_resolution)
+        ] @pusher
         method: (identifier) @fn
         (#eq? @fn "trigger")
         arguments: (argument_list
@@ -24,7 +40,13 @@ patterns:
   - name: pusher_trigger_async
     query: |
       (call
-        receiver: (identifier) @pusher
+        receiver: [
+          (identifier)
+          (constant)
+          (instance_variable)
+          (call)
+          (scope_resolution)
+        ] @pusher
         method: (identifier) @fn
         (#eq? @fn "trigger_async")
         arguments: (argument_list

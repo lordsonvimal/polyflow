@@ -1,2 +1,5 @@
 pusher.trigger('orders', 'order:updated', { data: 1 })
 pusher.trigger_async('orders', 'order:updated', {})
+PusherClient.new_pusher_client.trigger(channel_name, event_type, body)
+Pusher::Client.new(config).trigger('folder-status', 'folder_refresh', payload)
+@pusher.trigger('lro_update', 'lro_details', body)

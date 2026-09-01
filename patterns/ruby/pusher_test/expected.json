@@ -1,1 +1,1 @@
-{"patterns": ["pusher_trigger", "pusher_trigger_async"], "node_types": ["publisher", "publisher"]}
+{"patterns": ["pusher_trigger", "pusher_trigger_async", "pusher_trigger", "pusher_trigger", "pusher_trigger"], "node_types": ["publisher", "publisher", "publisher", "publisher", "publisher"]}
