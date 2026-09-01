@@ -49,6 +49,34 @@ patterns:
         role: http_method
       - name: url
         role: http_url
+  # `Request.execute(method: method, url: url, ...)` — the same keyword form as
+  # above, but called through an unqualified `Request` constant because the
+  # enclosing class did `include RestClient` (orion-vega-agent's
+  # NordicImportWatcher::Connection#execute). `Request` alone is a generic
+  # constant, so the match is gated on RestClient::Request.execute's exact
+  # signature: the leading `method:` and `url:` keyword pair. The positional
+  # `Request.execute(foo, bar)` shape in the negative fixture must not match.
+  - name: rest_client_request_included
+    query: |
+      (call
+        receiver: (constant) @cls
+        (#eq? @cls "Request")
+        method: (identifier) @fn
+        (#match? @fn "^(execute|new)$")
+        arguments: (argument_list
+          (pair
+            key: (hash_key_symbol) @_mkey
+            (#eq? @_mkey "method")
+            value: (_) @method)
+          (pair
+            key: (hash_key_symbol) @_ukey
+            (#eq? @_ukey "url")
+            value: (_) @url)))
+    captures:
+      - name: method
+        role: http_method
+      - name: url
+        role: http_url
   # `RestClient.get(url, headers)` / `RestClient.post(url, payload)` — the bare
   # constant receiver, as opposed to the `RestClient::Resource` scope_resolution
   # form above. These were previously matched only by httparty.yaml's un-gated
