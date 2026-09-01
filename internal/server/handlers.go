@@ -615,12 +615,19 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 			if e.Type == graph.EdgeTypeContains && containsChildren[id] > 1 {
 				continue // structural backbone, not a visible canvas edge at file scope
 			}
-			edges = append(edges, e)
 			if !inFile[e.To] {
-				if ext, ok := idx.Nodes[e.To]; ok {
-					addBoundary(ext)
+				// The endpoint lives outside this file, so it needs a boundary
+				// stub. If it isn't in the loaded graph at all (e.g. a linker
+				// minted the edge but a stale in-memory index is missing the
+				// target node), drop the edge — emitting it would hand the
+				// canvas an edge with a nonexistent target and wedge it.
+				ext, ok := idx.Nodes[e.To]
+				if !ok {
+					continue
 				}
+				addBoundary(ext)
 			}
+			edges = append(edges, e)
 		}
 		for _, e := range idx.InEdges[id] {
 			if inFile[e.From] {
@@ -629,10 +636,12 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 			if e.Type == graph.EdgeTypeContains && containsChildren[e.From] > 1 {
 				continue
 			}
-			edges = append(edges, e)
-			if ext, ok := idx.Nodes[e.From]; ok {
-				addBoundary(ext)
+			ext, ok := idx.Nodes[e.From]
+			if !ok {
+				continue // source node not in the loaded graph — see note above
 			}
+			addBoundary(ext)
+			edges = append(edges, e)
 		}
 	}
 
