@@ -345,3 +345,25 @@ function go() {
 
 	assert.True(t, dynamic)
 }
+
+// TestJSTemplate_QueryStringTernaryTruncates — actions.jsx:
+// `apiGet(`/app/folders/${dirId}/get_json_children${skip ? "?notified=true" : ""}`)`.
+// The trailing `${...}` can only be a query string, so the reconstruction stops
+// at the path boundary instead of emitting a `*` that no route matches.
+func TestJSTemplate_QueryStringTernaryTruncates(t *testing.T) {
+	src := "\nfunction go(dirId, skip) {\n  $.get(`/app/folders/${dirId}/get_json_children${skip ? \"?notified=true\" : \"\"}`);\n}\n"
+	got, dynamic := walkURL(t, src, 0)
+
+	assert.False(t, dynamic)
+	assert.Equal(t, []string{"/app/folders/*/get_json_children"}, got)
+}
+
+// TestJSTemplate_PathSegmentTernaryStaysWildcard — a ternary that yields real
+// path segments is still a hole, not a truncation point.
+func TestJSTemplate_PathSegmentTernaryStaysWildcard(t *testing.T) {
+	src := "\nfunction go(x) {\n  $.get(`/app/folders/${x ? \"a\" : \"b\"}/children`);\n}\n"
+	got, dynamic := walkURL(t, src, 0)
+
+	assert.False(t, dynamic)
+	assert.Equal(t, []string{"/app/folders/*/children"}, got)
+}
