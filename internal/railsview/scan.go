@@ -30,6 +30,15 @@ type ReactComponent struct {
 	Name    string // component name, or the raw expression when Dynamic
 	Line    int
 	Dynamic bool
+	Props   []ReactProp // the props hash, keys with their raw Ruby value expression
+}
+
+// ReactProp is one `name: <value>` entry of a react_component props hash. Value
+// is the verbatim Ruby expression — a string literal, a `*_url`/`*_path` route
+// helper call, or anything else — left for the linker to resolve.
+type ReactProp struct {
+	Name  string
+	Value string
 }
 
 // nonViewRenderKeys are the `render` spellings that produce a response body
@@ -97,6 +106,81 @@ func ScanRenders(src []byte) []Render {
 		}
 	}
 	return out
+}
+
+// parseReactProps reconstructs the props hash from a react_component call's
+// arguments after the component name — either an explicit `{ … }` literal or a
+// bare trailing keyword list — and splits it into name/value pairs. The value
+// is kept verbatim; a pair whose key is not a plain identifier (a splat, a
+// computed key) is skipped rather than guessed.
+func parseReactProps(rest []string) []ReactProp {
+	var kept []string
+	for _, p := range rest {
+		if strings.TrimSpace(p) != "" {
+			kept = append(kept, p)
+		}
+	}
+	blob := strings.Trim(strings.TrimSpace(strings.Join(kept, ",")), ", \t\n\r")
+	if strings.HasPrefix(blob, "{") {
+		blob = strings.TrimSpace(strings.TrimPrefix(blob, "{"))
+		if i := strings.LastIndexByte(blob, '}'); i >= 0 {
+			blob = strings.TrimSpace(blob[:i])
+		}
+	}
+	blob = strings.Trim(blob, ", \t\n\r")
+	if blob == "" {
+		return nil
+	}
+	var out []ReactProp
+	for _, part := range SplitTopLevel(blob) {
+		if name, val, ok := splitKwPair(strings.TrimSpace(part)); ok {
+			out = append(out, ReactProp{Name: name, Value: val})
+		}
+	}
+	return out
+}
+
+// splitKwPair splits `name: <value>` or `:name => <value>` into its identifier
+// key and verbatim value expression. The `:` scan skips `::` so a value like
+// `pusher_config(channel: PusherClient::CHANNELS[:x])` keys on `pusherConfig`,
+// not on the nested `channel:`.
+func splitKwPair(part string) (name, val string, ok bool) {
+	if strings.HasPrefix(part, ":") {
+		if i := strings.Index(part, "=>"); i > 0 {
+			n := strings.TrimSpace(part[1:i])
+			if isPlainIdent(n) {
+				return n, strings.TrimSpace(part[i+2:]), true
+			}
+		}
+		return "", "", false
+	}
+	for i := 0; i < len(part); i++ {
+		if part[i] != ':' {
+			continue
+		}
+		if i+1 < len(part) && part[i+1] == ':' {
+			i++
+			continue
+		}
+		n := strings.TrimSpace(part[:i])
+		if !isPlainIdent(n) {
+			return "", "", false
+		}
+		return n, strings.TrimSpace(part[i+1:]), true
+	}
+	return "", "", false
+}
+
+func isPlainIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !IsRubyNameByte(s[i]) {
+			return false
+		}
+	}
+	return s[0] < '0' || s[0] > '9'
 }
 
 // renderViewKeys are the keyword arguments that name a view. `action:` is a
@@ -170,6 +254,9 @@ func ScanReactComponents(src []byte) []ReactComponent {
 			rc.Name = lit
 		} else {
 			rc.Name, rc.Dynamic = expr, true
+		}
+		if len(parts) > 1 {
+			rc.Props = parseReactProps(parts[1:])
 		}
 		out = append(out, rc)
 	}

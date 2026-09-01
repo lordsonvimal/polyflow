@@ -145,10 +145,30 @@ func TestScanReactComponents_Literals(t *testing.T) {
 </div>`))
 
 	require.Equal(t, []ReactComponent{
-		{Name: "ContainerTypesContainer", Line: 2},
-		{Name: "DirTreeContainer", Line: 4},
+		{Name: "ContainerTypesContainer", Line: 2, Props: []ReactProp{{Name: "container_types", Value: "@container_types"}}},
+		{Name: "DirTreeContainer", Line: 4, Props: []ReactProp{{Name: "root", Value: "@root"}}},
 		{Name: "OnboardingTip", Line: 7},
 	}, ScanReactComponents(ruby))
+}
+
+func TestScanReactComponents_URLProps(t *testing.T) {
+	_, ruby := SplitERB([]byte(`<%= react_component(
+      "UppyUploader",
+      {
+        create_lro_url: "/client_api/v1/lros",
+        sign_part_url: sign_part_folder_fast_uploads_url(@folder),
+        pusherConfig: pusher_config(channel: PusherClient::CHANNELS[:x], event: E),
+        dest_folder_id: @folder.id,
+      },
+    ) %>`))
+	got := ScanReactComponents(ruby)
+	require.Len(t, got, 1)
+	require.Equal(t, []ReactProp{
+		{Name: "create_lro_url", Value: `"/client_api/v1/lros"`},
+		{Name: "sign_part_url", Value: "sign_part_folder_fast_uploads_url(@folder)"},
+		{Name: "pusherConfig", Value: "pusher_config(channel: PusherClient::CHANNELS[:x], event: E)"},
+		{Name: "dest_folder_id", Value: "@folder.id"},
+	}, got[0].Props)
 }
 
 func TestScanReactComponents_DynamicIsFlagged(t *testing.T) {

@@ -849,6 +849,26 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, viewUnresolved...)
 			return nil
 		}},
+		// React prop URL forwarding: resolve a `js_api_wrapper_call_site`
+		// http_client whose URL is a component prop set on the Rails side
+		// (`react_component("X", { some_url: foo_path })`) to the route that prop
+		// names, so the contract engine can join the frontend call to its API
+		// handler. Cross-service (ERB and JSX are often separate services); runs
+		// after rails_views + js_api_wrapper_calls, before the contract engine.
+		{"react_prop_urls", scopeCrossService, func() error {
+			svcFiles := st.svcFilesOf()
+			changed := linker.LinkReactPropURLs(st.allNodes, svcFiles)
+			if len(changed) == 0 {
+				return nil
+			}
+			for i := range changed {
+				n := changed[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		{"ruby_import_edges", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			rubyImportEdges, rubyImportUnresolved := linker.LinkRubyImportEdges(st.allNodes, svcFiles)
