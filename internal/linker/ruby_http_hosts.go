@@ -151,20 +151,7 @@ func buildRubyHostRegistry(files []string) map[string]rubyHostInfo {
 		pathConflict bool
 	}
 	acc := make(map[string]*entry)
-	// Sort for deterministic first-writer-wins on identical env, stable output.
-	sorted := filterRubyFiles(files)
-	sort.Strings(sorted)
-	// Parse + extract per file in parallel; fold into acc serially in sorted
-	// order so first-writer-wins stays deterministic.
-	perFile := mapParallel(sorted, func(f string) map[string]rubyHostInfo {
-		fa := parseRubyFileAST(f)
-		if fa == nil {
-			return nil
-		}
-		defer fa.release()
-		return fa.hostMethods()
-	})
-	for _, hm := range perFile {
+	fold := func(hm map[string]rubyHostInfo) {
 		for name, info := range hm {
 			e := acc[name]
 			if e == nil {
@@ -179,19 +166,61 @@ func buildRubyHostRegistry(files []string) map[string]rubyHostInfo {
 			}
 		}
 	}
-	out := make(map[string]rubyHostInfo, len(acc))
-	for name, e := range acc {
-		if e.conflict {
+	resolve := func() map[string]rubyHostInfo {
+		out := make(map[string]rubyHostInfo, len(acc))
+		for name, e := range acc {
+			if e.conflict {
+				continue
+			}
+			info := e.info
+			if e.pathConflict {
+				info.path = ""
+				info.params = nil
+			}
+			out[name] = info
+		}
+		return out
+	}
+
+	// Sort for deterministic first-writer-wins on identical env, stable output.
+	sorted := filterRubyFiles(files)
+	sort.Strings(sorted)
+	// Parse once; keep the ASTs for the L.1 delegate pass below.
+	asts := mapParallel(sorted, parseRubyFileAST)
+	defer func() {
+		for _, fa := range asts {
+			if fa != nil {
+				fa.release()
+			}
+		}
+	}()
+
+	// Pass 1: direct host methods + attr-exposed env-derived host names.
+	for _, fa := range asts {
+		if fa != nil {
+			fold(fa.hostMethods())
+		}
+	}
+	// Pass 2 (L.1): a file that `delegate`s a host-ish name inherits that name's
+	// env once pass 1 has resolved it from the defining file, so re-run just the
+	// delegating files with the resolved name→env as an overlay. One extra
+	// round; a name still ambiguous after pass 1 (conflict) is not carried.
+	resolved := resolve()
+	for _, fa := range asts {
+		if fa == nil {
 			continue
 		}
-		info := e.info
-		if e.pathConflict {
-			info.path = ""
-			info.params = nil
+		overlay := map[string]string{}
+		for _, name := range fa.delegateHostNames() {
+			if info, ok := resolved[name]; ok && info.env != "" {
+				overlay[name] = info.env
+			}
 		}
-		out[name] = info
+		if len(overlay) > 0 {
+			fold(fa.hostMethodsWith(overlay))
+		}
 	}
-	return out
+	return resolve()
 }
 
 // ── per-file AST + resolution ───────────────────────────────────────────────
@@ -211,6 +240,8 @@ type rubyFileAST struct {
 	// currentMethodGuard lets exprEnv descend into the one method node it was
 	// handed while still refusing to cross into any *other* nested definition.
 	currentMethodGuard *sitter.Node
+	// symInlineActive bounds envSymAccessor to a single inline (no re-entry).
+	symInlineActive bool
 }
 
 func parseRubyFileAST(file string) *rubyFileAST {
@@ -280,7 +311,22 @@ func (fa *rubyFileAST) enclosingMethod(line int) *rubyMethodInfo {
 // @lyra_host → ENV). The env var remains the gate: a method with a path but no
 // single env var is not a host method and is not registered.
 func (fa *rubyFileAST) hostMethods() map[string]rubyHostInfo {
+	return fa.hostMethodsWith(nil)
+}
+
+// hostMethodsWith is hostMethods with an optional name→env overlay merged into
+// the same-file map before resolution. The two-pass registry build (L.1) uses
+// it to re-run one file's host detection once a `delegate`d name's env is known
+// from another file: `Connection#target_url` derives its host from a bare `url`
+// that is `delegate :url, to: :config`, invisible until `Config#url`'s env has
+// been resolved elsewhere.
+func (fa *rubyFileAST) hostMethodsWith(overlay map[string]string) map[string]rubyHostInfo {
 	nameEnv := fa.fileNameEnv()
+	for k, v := range overlay {
+		if _, ok := nameEnv[k]; !ok {
+			nameEnv[k] = v
+		}
+	}
 	namePath := fa.fileNamePath()
 	out := make(map[string]rubyHostInfo)
 	for i := range fa.methods {
@@ -299,7 +345,163 @@ func (fa *rubyFileAST) hostMethods() map[string]rubyHostInfo {
 		path, _ := fa.pathTemplate(m.node, namePath, params, 0)
 		out[m.name] = rubyHostInfo{env: env, path: path, params: m.params}
 	}
+	// L.1: a host-ish name exposed only through attr_reader/attr_accessor whose
+	// backing ivar is env-derived (`Config`: `attr_accessor(*OPTION_VARS)` +
+	// `@url = config_val(:url)` → ENV["URL"]). The env-derived requirement is the
+	// guard: an attr backed by a DB column or a plain option leaves nameEnv
+	// untouched and never registers.
+	for name := range fa.attrNames() {
+		if !hostishName(name) {
+			continue
+		}
+		if _, taken := out[name]; taken {
+			continue
+		}
+		if env := nameEnv[name]; env != "" {
+			out[name] = rubyHostInfo{env: env}
+		}
+	}
 	return out
+}
+
+// attrNames returns every symbol named by an `attr_reader`/`attr_accessor`/
+// `attr_writer` call in the file, resolving a `*CONST` splat against a same-file
+// `CONST = %i[…]` / `%w[…]` symbol-array literal.
+func (fa *rubyFileAST) attrNames() map[string]bool {
+	consts := fa.symbolArrayConsts()
+	out := make(map[string]bool)
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "call" || n.Type() == "command" {
+			if mn := n.ChildByFieldName("method"); mn != nil {
+				switch mn.Content(fa.src) {
+				case "attr_reader", "attr_accessor", "attr_writer":
+					if args := n.ChildByFieldName("arguments"); args != nil {
+						for i := 0; i < int(args.NamedChildCount()); i++ {
+							c := args.NamedChild(i)
+							if c.Type() == "splat_argument" {
+								if cc := c.NamedChild(0); cc != nil && cc.Type() == "constant" {
+									for _, s := range consts[cc.Content(fa.src)] {
+										out[s] = true
+									}
+								}
+								continue
+							}
+							if s := rubySymbolNodeName(c, fa.src); s != "" {
+								out[s] = true
+							}
+						}
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(fa.root)
+	return out
+}
+
+// symbolArrayConsts maps a same-file `CONST = %i[a b c]` (optionally `.freeze`d)
+// to its member names.
+func (fa *rubyFileAST) symbolArrayConsts() map[string][]string {
+	out := make(map[string][]string)
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "assignment" {
+			left := n.ChildByFieldName("left")
+			right := n.ChildByFieldName("right")
+			if left != nil && right != nil && left.Type() == "constant" {
+				// Peel a trailing `.freeze`.
+				r := right
+				if r.Type() == "call" {
+					if mn := r.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "freeze" {
+						if rc := r.ChildByFieldName("receiver"); rc != nil {
+							r = rc
+						} else if r.NamedChildCount() > 0 {
+							r = r.NamedChild(0)
+						}
+					}
+				}
+				if r.Type() == "symbol_array" || r.Type() == "string_array" {
+					var names []string
+					for i := 0; i < int(r.NamedChildCount()); i++ {
+						if s := rubySymbolNodeName(r.NamedChild(i), fa.src); s != "" {
+							names = append(names, s)
+						}
+					}
+					out[left.Content(fa.src)] = names
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(fa.root)
+	return out
+}
+
+// delegateHostNames returns the host-ish method names this file forwards with a
+// bare `delegate :name, …, to: :target` (ActiveSupport). Only the name is
+// needed: the two-pass registry looks it up against every service file's
+// resolved host methods.
+func (fa *rubyFileAST) delegateHostNames() []string {
+	var out []string
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "call" || n.Type() == "command" {
+			if mn := n.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "delegate" {
+				if args := n.ChildByFieldName("arguments"); args != nil {
+					hasTo := false
+					var names []string
+					for i := 0; i < int(args.NamedChildCount()); i++ {
+						c := args.NamedChild(i)
+						if c.Type() == "pair" {
+							if k := c.ChildByFieldName("key"); k != nil &&
+								strings.TrimSuffix(k.Content(fa.src), ":") == "to" {
+								hasTo = true
+							}
+							continue
+						}
+						if s := rubySymbolNodeName(c, fa.src); s != "" && hostishName(s) {
+							names = append(names, s)
+						}
+					}
+					if hasTo {
+						out = append(out, names...)
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(fa.root)
+	return out
+}
+
+// symbolName returns the bare name of a `simple_symbol` (`:url` → "url"),
+// `bare_symbol`, or `hash_key_symbol` node, or "".
+func rubySymbolNodeName(n *sitter.Node, src []byte) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
+	case "simple_symbol":
+		return strings.TrimPrefix(n.Content(src), ":")
+	case "hash_key_symbol":
+		return strings.TrimSuffix(n.Content(src), ":")
+	case "bare_symbol":
+		if c := n.NamedChild(0); c != nil {
+			return c.Content(src)
+		}
+	case "string_content":
+		return n.Content(src)
+	}
+	return ""
 }
 
 // fileNamePath is the path-carrying twin of fileNameEnv: it resolves every
@@ -521,6 +723,13 @@ func (fa *rubyFileAST) exprEnv(n *sitter.Node, nameEnv map[string]string) string
 			if env, ok := nameEnv[strings.TrimPrefix(n.Content(fa.src), "@")]; ok {
 				seen[env] = true
 			}
+		case "call", "method_call":
+			// L.1.3: `config_val(:url)` where `def config_val(opt)` reads
+			// `ENV[opt.to_s.upcase]` — inline one same-file accessor, substituting
+			// the symbol argument.
+			if v := fa.envSymAccessor(n); v != "" {
+				seen[v] = true
+			}
 		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
 			walk(n.NamedChild(i))
@@ -538,6 +747,137 @@ func (fa *rubyFileAST) exprEnv(n *sitter.Node, nameEnv map[string]string) string
 	return ""
 }
 
+// envSymAccessor resolves `helper(:sym)` — a receiver-less call whose sole
+// argument is a symbol — when the same file defines `def helper(opt)` (exactly
+// one positional param) with a body that reads `ENV[opt…]` / `ENV.fetch(opt…)`,
+// optionally through `.to_s`/`.upcase`/`.downcase`. Returns the substituted env
+// var name (`:url` via `opt.to_s.upcase` → "URL"), or "". Bounded to a single
+// inline (no re-entry) so a helper that itself calls another accessor abstains.
+func (fa *rubyFileAST) envSymAccessor(n *sitter.Node) string {
+	if fa.symInlineActive {
+		return ""
+	}
+	if n.ChildByFieldName("receiver") != nil {
+		return ""
+	}
+	mn := n.ChildByFieldName("method")
+	args := n.ChildByFieldName("arguments")
+	if mn == nil || args == nil || args.NamedChildCount() != 1 {
+		return ""
+	}
+	sym := rubySymbolNodeName(args.NamedChild(0), fa.src)
+	if sym == "" {
+		return ""
+	}
+	fnName := mn.Content(fa.src)
+	var mi *rubyMethodInfo
+	for i := range fa.methods {
+		if fa.methods[i].name == fnName && len(fa.methods[i].params) == 1 {
+			mi = &fa.methods[i]
+			break
+		}
+	}
+	if mi == nil {
+		return ""
+	}
+	fa.symInlineActive = true
+	transform, ok := fa.findEnvParamRead(mi.node, mi.params[0])
+	fa.symInlineActive = false
+	if !ok {
+		return ""
+	}
+	return applySymCase(sym, transform)
+}
+
+// findEnvParamRead reports whether method reads `ENV[param…]` / `ENV.fetch(param…)`
+// and returns the `.to_s`/`.upcase`/`.downcase` chain applied to param at that
+// read (joined by "."). Does not descend into nested defs.
+func (fa *rubyFileAST) findEnvParamRead(method *sitter.Node, param string) (string, bool) {
+	var found string
+	var ok bool
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if ok || n == nil {
+			return
+		}
+		if n != method && (n.Type() == "method" || n.Type() == "singleton_method") {
+			return
+		}
+		var idx *sitter.Node
+		switch n.Type() {
+		case "element_reference":
+			if obj := n.ChildByFieldName("object"); obj != nil && obj.Content(fa.src) == "ENV" &&
+				n.NamedChildCount() >= 2 {
+				idx = n.NamedChild(1)
+			}
+		case "call", "method_call":
+			recv := n.ChildByFieldName("receiver")
+			m := n.ChildByFieldName("method")
+			if recv != nil && recv.Content(fa.src) == "ENV" && m != nil && m.Content(fa.src) == "fetch" {
+				if a := n.ChildByFieldName("arguments"); a != nil && a.NamedChildCount() > 0 {
+					idx = a.NamedChild(0)
+				}
+			}
+		}
+		if idx != nil {
+			if chain, base := rubyMethodChain(idx, fa.src); base == param {
+				found, ok = strings.Join(chain, "."), true
+				return
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(method)
+	return found, ok
+}
+
+// rubyMethodChain peels a `base.m1.m2` call expression into its trailing method
+// names (outermost last) and the base identifier: `option.to_s.upcase` →
+// (["to_s","upcase"], "option"). A non-identifier base yields ("", "").
+func rubyMethodChain(n *sitter.Node, src []byte) ([]string, string) {
+	var chain []string
+	for n != nil {
+		switch n.Type() {
+		case "identifier":
+			// Reverse: we collected outermost-first.
+			for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+				chain[i], chain[j] = chain[j], chain[i]
+			}
+			return chain, n.Content(src)
+		case "call", "method_call":
+			m := n.ChildByFieldName("method")
+			r := n.ChildByFieldName("receiver")
+			if m == nil || r == nil {
+				return nil, ""
+			}
+			chain = append(chain, m.Content(src))
+			n = r
+		default:
+			return nil, ""
+		}
+	}
+	return nil, ""
+}
+
+// applySymCase applies a `.to_s`/`.upcase`/`.downcase` chain to a symbol name.
+func applySymCase(sym, transform string) string {
+	for _, op := range strings.Split(transform, ".") {
+		switch op {
+		case "upcase":
+			sym = strings.ToUpper(sym)
+		case "downcase":
+			sym = strings.ToLower(sym)
+		case "", "to_s", "to_str", "to_sym", "intern", "freeze":
+			// no-op on a bare name
+		default:
+			return "" // an op we don't model — abstain
+		}
+	}
+	return sym
+}
+
 // resolveHostExpr resolves a call-site URL expression to an env var and the
 // literal path the host method appends, via the registry, following (bounded) a
 // local assignment or a method-parameter's same-file caller argument. The env
@@ -548,12 +888,23 @@ func (fa *rubyFileAST) resolveHostExpr(expr string, method *rubyMethodInfo, reg 
 		return "", ""
 	}
 	e := stripToS(expr)
-	if m := finalMethodName(e); m != "" {
-		if info, ok := reg[m]; ok {
-			return info.env, fillRubyParamHoles(info, e)
+	id := bareIdent(e)
+
+	// A bare identifier that is locally bound — assigned in this method or one of
+	// its parameters — is a *variable*, and its binding is stronger evidence than
+	// a same-named registry entry. Trace the binding first so a generic host name
+	// (L.1 can register a bare `url` from an env-backed `attr_accessor`) does not
+	// shadow `url = server_api_url("…")`.
+	localBound := id != "" && method != nil &&
+		(fa.assignmentRHS(method.node, id) != "" || paramIndex(method, id) >= 0)
+
+	if !localBound {
+		if m := finalMethodName(e); m != "" {
+			if info, ok := reg[m]; ok {
+				return info.env, fillRubyParamHoles(info, e)
+			}
 		}
 	}
-	id := bareIdent(e)
 	if id == "" || method == nil {
 		return "", ""
 	}
@@ -564,21 +915,28 @@ func (fa *rubyFileAST) resolveHostExpr(expr string, method *rubyMethodInfo, reg 
 		}
 	}
 	// (3) method parameter → same-file caller argument.
-	idx := paramIndex(method, id)
-	if idx < 0 {
-		return "", ""
+	if idx := paramIndex(method, id); idx >= 0 {
+		for _, call := range fa.bareCallsTo(method.name) {
+			arg := fa.positionalArg(call, idx)
+			if arg == "" {
+				continue
+			}
+			callerMethod := fa.enclosingMethod(int(call.StartPoint().Row) + 1)
+			if callerMethod == method {
+				continue // a method calling itself — avoid a trivial loop
+			}
+			if env, path := fa.resolveHostExpr(arg, callerMethod, reg, depth+1); env != "" {
+				return env, path
+			}
+		}
 	}
-	for _, call := range fa.bareCallsTo(method.name) {
-		arg := fa.positionalArg(call, idx)
-		if arg == "" {
-			continue
-		}
-		callerMethod := fa.enclosingMethod(int(call.StartPoint().Row) + 1)
-		if callerMethod == method {
-			continue // a method calling itself — avoid a trivial loop
-		}
-		if env, path := fa.resolveHostExpr(arg, callerMethod, reg, depth+1); env != "" {
-			return env, path
+	// A locally-bound name whose binding/caller trace did not resolve can still
+	// be a registry host method — an env-backed accessor referenced bare
+	// (`url`, `delegate`d to a config object). Tried last so a real local
+	// binding always wins.
+	if localBound {
+		if info, ok := reg[id]; ok {
+			return info.env, info.path
 		}
 	}
 	return "", ""
