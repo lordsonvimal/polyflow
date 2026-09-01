@@ -10,8 +10,10 @@ import (
 )
 
 type deadcodeInput struct {
-	Service string `json:"service,omitempty" jsonschema:"restrict the scan to this service"`
-	File    string `json:"file,omitempty" jsonschema:"restrict the scan to this file"`
+	Service      string `json:"service,omitempty" jsonschema:"restrict the scan to this service"`
+	File         string `json:"file,omitempty" jsonschema:"restrict the scan to this file"`
+	Transitive   bool   `json:"transitive,omitempty" jsonschema:"also flag callables/types reachable only from other dead code — sound on Go/TS, a lead only on Ruby (partial call graph)"`
+	IncludeTypes bool   `json:"include_types,omitempty" jsonschema:"also flag struct/interface/type_alias declarations with no inbound type-use edge"`
 }
 
 func (s *Server) deadcode(ctx context.Context, req *mcp.CallToolRequest, in deadcodeInput) (*mcp.CallToolResult, any, error) {
@@ -27,6 +29,12 @@ func (s *Server) deadcode(ctx context.Context, req *mcp.CallToolRequest, in dead
 		}
 	}
 	unresolved = graph.DropExternalFrameworkRefs(unresolved, idx)
-	out := deadcode.Build(idx, deadcode.Options{Service: in.Service, File: in.File, UnresolvedRefs: unresolved})
+	out := deadcode.Build(idx, deadcode.Options{
+		Service:        in.Service,
+		File:           in.File,
+		Transitive:     in.Transitive,
+		IncludeTypes:   in.IncludeTypes,
+		UnresolvedRefs: unresolved,
+	})
 	return jsonResult(out)
 }

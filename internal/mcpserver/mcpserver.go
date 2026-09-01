@@ -298,13 +298,17 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "deadcode",
-		Description: "List function/method nodes with zero inbound calls edges, excluding nodes " +
-			"already classified as entry points (HTTP handlers, routes, workers, subscribers, gRPC/" +
-			"GraphQL handlers, and functions tagged as entrypoints). A candidate list for removal, not " +
-			"a certainty: dynamic dispatch, reflection, exported package-public API, and other call " +
-			"shapes the static graph can't see all show up here as false positives — verify a hit " +
-			"before deleting it, the same way you would with any other polyflow answer's unresolved " +
-			"section. Scope with service/file to narrow a large-fleet scan.",
+		Description: "List function/method/variable nodes with no live inbound edge (a caller, a reader), " +
+			"plus dead Rails views, excluding nodes already classified as entry points (HTTP handlers, " +
+			"routes, workers, subscribers, gRPC/GraphQL handlers, and functions tagged as entrypoints). " +
+			"Set include_types to also flag struct/interface/type_alias declarations nothing references. " +
+			"Set transitive to flag code reachable only from other dead code (a function whose only " +
+			"callers are themselves dead) — sound on Go/TS, a lead only on Ruby where the static call " +
+			"graph is partial. A candidate list for removal, not a certainty: dynamic dispatch, " +
+			"reflection, exported package-public API, and other call shapes the static graph can't see " +
+			"all show up here as false positives — verify a hit before deleting it, the same way you " +
+			"would with any other polyflow answer's unresolved section. Scope with service/file to " +
+			"narrow a large-fleet scan.",
 	}, auditTool(s, "deadcode", s.deadcode))
 
 	mcp.AddTool(srv, &mcp.Tool{
