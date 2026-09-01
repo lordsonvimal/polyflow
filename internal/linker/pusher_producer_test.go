@@ -55,6 +55,27 @@ class ExecutionHistory
 end
 `
 
+// An ivar-held instance assigned in one method, invoked from others via an
+// attr_reader (bare name) and directly (@ivar).
+const pusherIvarFixture = `# frozen_string_literal: true
+class FolderCopier
+  def initialize(destination)
+    @pusher = PusherClient.new(destination, "folder-status")
+  end
+
+  attr_reader :pusher
+
+  def run
+    notify_progress
+    @pusher.notify_folder_refresh(1)
+  end
+
+  def notify_progress
+    pusher.notify_lro_details([1, 2])
+  end
+end
+`
+
 func writeFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -103,6 +124,29 @@ func TestEnrichPusherProducers_ResolvesChannelAndEvent(t *testing.T) {
 	}
 	assert.Contains(t, edgeTargets, "svc:execution_history.rb:method:refresh:3")
 	assert.Contains(t, edgeTargets, "svc:execution_history.rb:method:lro:7")
+}
+
+func TestEnrichPusherProducers_IvarHeldInstance(t *testing.T) {
+	dir := t.TempDir()
+	wrapper := writeFile(t, dir, "pusher_client.rb", pusherWrapperFixture)
+	caller := writeFile(t, dir, "folder_copier.rb", pusherIvarFixture)
+
+	nodes := []graph.Node{
+		{ID: "svc:pusher_client.rb:publisher:pusher_trigger:20", Type: graph.NodeTypePublisher,
+			File: wrapper, Line: 20, Meta: map[string]string{"pattern": "pusher_trigger", "key_dynamic": "true"}},
+		{ID: "svc:folder_copier.rb:method:run:9", Type: graph.NodeTypeMethod, File: caller, Line: 9, EndLine: 12},
+		{ID: "svc:folder_copier.rb:method:notify_progress:14", Type: graph.NodeTypeMethod, File: caller, Line: 14, EndLine: 16},
+	}
+
+	newNodes, _ := linker.EnrichPusherProducers(nodes, map[string][]string{"svc": {wrapper, caller}})
+
+	got := map[string]string{}
+	for _, n := range newNodes {
+		assert.Equal(t, "folder-status", n.Meta["channel"], "the ivar's .new channel arg")
+		got[n.Meta["event"]] = n.ID
+	}
+	assert.Contains(t, got, "folder_refresh", "@pusher.notify_folder_refresh reached")
+	assert.Contains(t, got, "lro_details", "pusher.notify_lro_details (attr_reader) reached")
 }
 
 func TestEnrichPusherProducers_NoHubNoWork(t *testing.T) {

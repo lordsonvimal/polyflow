@@ -379,14 +379,31 @@ func findPusherNewCallSites(fa *rubyFileAST, eventByMethod map[string]map[string
 				// assigned: `lhs = Class.new(...)` then `lhs.notify_x(...)`
 				if a := ascendToAssignment(n); a != nil {
 					if lhs := a.ChildByFieldName("left"); lhs != nil {
-						lhsName := lhs.Content(fa.src)
-						scope := enclosingScopeNode(a)
-						for _, mc := range findReceiverCalls(scope, lhsName, fa.src) {
-							m := mc.method
-							if notifyish(cls, m) {
+						addMethod := func(mc receiverCall) {
+							if notifyish(cls, mc.method) {
 								site.methods = append(site.methods, pusherNotifyCall{
-									name: m, line: mc.line, eventArg: pusherArgAt(mc.node, 1),
+									name: mc.method, line: mc.line, eventArg: pusherArgAt(mc.node, 1),
 								})
+							}
+						}
+						switch lhs.Type() {
+						case "identifier":
+							// same-scope local var
+							scope := enclosingScopeNode(a)
+							for _, mc := range findReceiverCalls(scope, lhs.Content(fa.src), fa.src) {
+								addMethod(mc)
+							}
+						case "instance_variable":
+							// ivar held across methods: `@pusher = Class.new(...)` in
+							// one method, `@pusher.notify_x` / `pusher.notify_x`
+							// (attr_reader) in others of the SAME class body. Cross-file
+							// (module-mixed) holders are PU.2d, not handled here.
+							ivar := lhs.Content(fa.src)
+							base := strings.TrimPrefix(ivar, "@")
+							if body := enclosingClassBody(a); body != nil {
+								for _, mc := range findPusherIvarCalls(body, ivar, base, fa.src) {
+									addMethod(mc)
+								}
 							}
 						}
 					}
@@ -458,13 +475,57 @@ func pusherArgAt(call *sitter.Node, i int) *sitter.Node {
 func ascendToAssignment(n *sitter.Node) *sitter.Node {
 	for cur := n.Parent(); cur != nil; cur = cur.Parent() {
 		switch cur.Type() {
-		case "assignment":
+		case "assignment", "operator_assignment": // `x = ...` / `@x ||= ...`
 			return cur
 		case "method", "class", "module", "do_block", "block":
 			return nil
 		}
 	}
 	return nil
+}
+
+// enclosingClassBody returns the body of the nearest enclosing class/module.
+func enclosingClassBody(n *sitter.Node) *sitter.Node {
+	for cur := n.Parent(); cur != nil; cur = cur.Parent() {
+		if cur.Type() == "class" || cur.Type() == "module" {
+			return cur.ChildByFieldName("body")
+		}
+	}
+	return nil
+}
+
+// findPusherIvarCalls returns every `@ivar.method(...)` or `base.method(...)`
+// call anywhere in scope — the reader forms an ivar-held instance is invoked
+// through (`@pusher.notify_x` directly, or `pusher.notify_x` via an
+// `attr_reader :pusher`, which shares the ivar's bare name).
+func findPusherIvarCalls(scope *sitter.Node, ivar, base string, src []byte) []receiverCall {
+	var out []receiverCall
+	if scope == nil {
+		return out
+	}
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "call" {
+			if r := n.ChildByFieldName("receiver"); r != nil {
+				rc := r.Content(src)
+				if (r.Type() == "instance_variable" && rc == ivar) ||
+					(r.Type() == "identifier" && rc == base) {
+					if mn := n.ChildByFieldName("method"); mn != nil {
+						out = append(out, receiverCall{
+							method: mn.Content(src),
+							line:   int(n.StartPoint().Row) + 1,
+							node:   n,
+						})
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(scope)
+	return out
 }
 
 func enclosingScopeNode(n *sitter.Node) *sitter.Node {
