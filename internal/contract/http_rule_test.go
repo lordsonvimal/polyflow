@@ -244,6 +244,37 @@ func TestHTTPRule_APICall_NoSharedAnchor_Unresolved(t *testing.T) {
 		"unrelated same-shape routes must not match on wildcards alone")
 }
 
+// Most-specific match wins: a wildcarded client path anchors on every literal
+// it shares with a route, and the route sharing the most literals wins. The JS
+// call `"/app/" + objectType + "/" + id + "/actions"` normalizes to
+// `/app/*/*/actions`; it must reach `/app/folders/*/actions` and
+// `/app/files/*/actions` (anchor: `app` + `actions`) but NOT
+// `/app/impact_analyses/*/*` (anchor: `app` alone, with the literal `actions`
+// landing opposite a route param).
+func TestHTTPRule_APICall_MostSpecificWildcardAnchorWins(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "c1", Type: graph.NodeTypeHTTPClient, Service: "app",
+			Meta: map[string]string{"method": "GET", "path": "/app/*/*/actions", "datastar": "true"}},
+		{ID: "h_folders", Type: graph.NodeTypeHTTPHandler, Service: "app",
+			Meta: map[string]string{"method": "GET", "path": "/app/folders/:id/actions"}},
+		{ID: "h_files", Type: graph.NodeTypeHTTPHandler, Service: "app",
+			Meta: map[string]string{"method": "GET", "path": "/app/files/:id/actions"}},
+		{ID: "h_impact", Type: graph.NodeTypeHTTPHandler, Service: "app",
+			Meta: map[string]string{"method": "GET", "path": "/app/impact_analyses/:object/:id"}},
+		{ID: "h_dep", Type: graph.NodeTypeHTTPHandler, Service: "app",
+			Meta: map[string]string{"method": "GET", "path": "/app/dependency/:object/:id"}},
+	}
+	res := runHTTP(t, nodes, nil)
+	to := map[string]bool{}
+	for _, e := range res.Edges {
+		to[e.To] = true
+	}
+	assert.True(t, to["h_folders"], "must reach folders#actions")
+	assert.True(t, to["h_files"], "must reach files#actions")
+	assert.False(t, to["h_impact"], "must not reach impact_analyses (weaker anchor)")
+	assert.False(t, to["h_dep"], "must not reach dependencies (weaker anchor)")
+}
+
 // Negative: no nodes at all — both variants produce no output.
 func TestHTTPRule_EmptyNodes(t *testing.T) {
 	res := runHTTP(t, nil, nil)

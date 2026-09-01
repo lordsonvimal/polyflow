@@ -977,20 +977,44 @@ func sameServiceAllowed(policy string, prod, cons *graph.Node) bool {
 // Wildcard segment matching must operate only on the '/'-prefixed path portion
 // so that non-path fields (e.g. the HTTP method) do not create false shared
 // anchors between semantically different routes.
+//
+// Most-specific match wins: when a wildcarded key matches several routes, only
+// those sharing the *most* non-boilerplate literal segments with the key are
+// kept. `/app/*/*/actions` (JS `"/app/"+objectType+"/"+id+"/actions"`) matches
+// both `/app/folders/*/actions` (anchors on `app` + `actions`) and
+// `/app/impact_analyses/*/*` (anchors on `app` alone, with the key's literal
+// `actions` falling opposite a route param) — keeping only the higher-scoring
+// set drops the second, which is how Rails routing itself would dispatch.
 func wildcardScan(key string, idx consumerIndexes) []*graph.Node {
 	keyPath, keyPrefix := splitAtFirstSlash(key)
 	if !hasLiteralSegment(keyPath) {
 		return nil
 	}
-	var hits []*graph.Node
+	type scoredKey struct {
+		consKey string
+		score   int
+	}
+	var matched []scoredKey
+	best := 0
 	for _, consKey := range idx.normKeys {
 		consPath, consPrefix := splitAtFirstSlash(consKey)
 		if keyPrefix != consPrefix {
 			continue // method (or other prefix field) mismatch
 		}
 		if pathMatchesPattern(keyPath, consPath) {
-			hits = append(hits, idx.norm[consKey]...)
+			s := wildcardAnchorScore(keyPath, consPath)
+			matched = append(matched, scoredKey{consKey, s})
+			if s > best {
+				best = s
+			}
 		}
+	}
+	var hits []*graph.Node
+	for _, m := range matched {
+		if m.score < best {
+			continue
+		}
+		hits = append(hits, idx.norm[m.consKey]...)
 	}
 	return hits
 }
