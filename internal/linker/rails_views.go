@@ -61,12 +61,15 @@ func LinkRailsViews(nodes []graph.Node, serviceFiles map[string][]string) (newNo
 	}
 	sort.Strings(svcNames) // bug-class #2: map order must never reach output
 
+	// Cross-service: a `react_component("Foo")` mount in the Rails service names
+	// a JSX component that lives in the sibling `js` service. Scan every service.
+	components := newComponentIndex(nodes)
+
 	for _, svc := range svcNames {
 		idx := newViewIndex(serviceFiles[svc])
 		if len(idx.byLogical) == 0 {
 			continue // no app/views tree: not a Rails app
 		}
-		components := newComponentIndex(nodes, svc)
 
 		u := linkTemplates(svc, idx, components, files, addEdge, &newNodes)
 		unresolved = append(unresolved, u...)
@@ -324,6 +327,11 @@ func linkControllerActions(
 	}
 	sort.Strings(ctrlFiles) // bug-class #2
 
+	// The layout wrapping an action is the nearest class-level `layout` up the
+	// controller ancestry; ApplicationController's declaration is the fallback
+	// every other controller inherits.
+	appLayout, appLayoutOK := applicationControllerLayout(ctrlFiles)
+
 	for _, f := range ctrlFiles {
 		acts := byFile[f]
 		sort.Slice(acts, func(i, j int) bool { return acts[i].line < acts[j].line })
@@ -333,12 +341,14 @@ func linkControllerActions(
 			continue
 		}
 		renders := railsview.ScanRenders(src)
+		layoutDecls := railsview.ScanLayouts(src)
 		ctrlPath, ok := controllerPath(f)
 		if !ok {
 			continue
 		}
 
 		for _, a := range acts {
+			var viewTargets []string
 			// A `layout:`-only render does *not* replace the convention: Rails
 			// still renders <action>.html.erb, just inside that layout. Only a
 			// named template or partial suppresses it.
@@ -380,22 +390,125 @@ func linkControllerActions(
 					continue
 				}
 				for _, t := range targets {
-					addEdge(a.id, files.ensure(svc, t), "render "+r.Spec, graph.EdgeTypeRenders,
+					tid := files.ensure(svc, t)
+					addEdge(a.id, tid, "render "+r.Spec, graph.EdgeTypeRenders,
 						map[string]string{"mechanism": "explicit", "spec": r.Spec})
+					if r.Kind != railsview.RenderLayout {
+						viewTargets = append(viewTargets, tid)
+					}
 				}
 			}
-			if namedTemplate {
-				continue
+			if !namedTemplate {
+				// Convention. Only emitted when the file exists, which is also
+				// what keeps private helper methods out: `def set_user` has no
+				// view.
+				for _, t := range idx.resolve(f, path.Join(ctrlPath, a.name), false) {
+					tid := files.ensure(svc, t)
+					addEdge(a.id, tid, a.name, graph.EdgeTypeRenders,
+						map[string]string{"mechanism": "convention", "spec": path.Join(ctrlPath, a.name)})
+					viewTargets = append(viewTargets, tid)
+				}
 			}
-			// Convention. Only emitted when the file exists, which is also what
-			// keeps private helper methods out: `def set_user` has no view.
-			for _, t := range idx.resolve(f, path.Join(ctrlPath, a.name), false) {
-				addEdge(a.id, files.ensure(svc, t), a.name, graph.EdgeTypeRenders,
-					map[string]string{"mechanism": "convention", "spec": path.Join(ctrlPath, a.name)})
-			}
+			unresolved = append(unresolved, linkActionLayout(
+				svc, f, a.id, a.name, layoutDecls, appLayout, appLayoutOK, viewTargets, idx, files, addEdge)...)
 		}
 	}
 	return unresolved
+}
+
+// linkActionLayout wires an action to the layout that wraps it (Tier RC.2) and
+// the layout back to the action's own template via `yield` (Tier RC.3), so a
+// trace from the http_handler reaches the layout subtree — where the
+// page-global react_component mounts (PusherConnectionContainer, _head, …) live.
+func linkActionLayout(
+	svc, file, actionID, action string,
+	fileDecls []railsview.LayoutDecl,
+	appDecl railsview.LayoutDecl, appOK bool,
+	viewTargets []string,
+	idx *viewIndex,
+	files *fileNodeIndex,
+	addEdge func(from, to, label string, et graph.EdgeType, meta map[string]string),
+) (unresolved []graph.UnresolvedRef) {
+	// The layout wraps a *rendered view*. An action that renders none (a private
+	// helper method, a `head :ok` responder, a redirect) has no layout — and
+	// this is also what keeps `category_params` and friends out.
+	if len(viewTargets) == 0 {
+		return
+	}
+
+	decl, fromFile, have := railsview.LayoutDecl{}, false, false
+	for i := len(fileDecls) - 1; i >= 0; i-- {
+		if fileDecls[i].Applies(action) {
+			decl, fromFile, have = fileDecls[i], true, true
+			break
+		}
+	}
+	if !have && appOK {
+		decl, have = appDecl, true
+	}
+
+	layoutName := "application" // Rails convention when nothing is declared
+	switch {
+	case have && decl.None:
+		return // `layout false` — the action renders bare
+	case have && decl.Name != "":
+		layoutName = decl.Name
+	case have && decl.Dynamic:
+		// `layout :method` / a proc picks one per request. Ledger it only when
+		// this controller declares it — an inherited dynamic default would
+		// ledger once per action across the whole app for no new information.
+		if fromFile {
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: svc, File: file, Line: decl.Line, Name: action, Kind: "controller_layout_dynamic",
+			})
+		}
+		return
+	}
+
+	targets := idx.resolve(file, path.Join("layouts", layoutName), false)
+	if len(targets) == 0 {
+		// A declaration that names a layout we cannot find is a real gap; a
+		// missing `layouts/application` just means this app has no global
+		// layout (an API-only or mailer-only tree) — stay silent, same rule as
+		// the convention-template edge above.
+		if have && decl.Name != "" {
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: svc, File: file, Name: layoutName, Kind: "controller_layout_unresolved",
+			})
+		}
+		return
+	}
+	for _, lt := range targets {
+		lid := files.ensure(svc, lt)
+		addEdge(actionID, lid, "layout "+layoutName, graph.EdgeTypeRenders,
+			map[string]string{"mechanism": "layout", "layout": layoutName})
+		for _, vt := range viewTargets {
+			addEdge(lid, vt, "yield", graph.EdgeTypeRenders,
+				map[string]string{"mechanism": "yield", "layout": layoutName})
+		}
+	}
+	return unresolved
+}
+
+// applicationControllerLayout scans app/controllers/application_controller.rb
+// for its class-level `layout` declaration, the default every controller that
+// declares none of its own inherits.
+func applicationControllerLayout(ctrlFiles []string) (railsview.LayoutDecl, bool) {
+	for _, f := range ctrlFiles {
+		if filepath.Base(filepath.ToSlash(f)) != "application_controller.rb" {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			return railsview.LayoutDecl{}, false
+		}
+		decls := railsview.ScanLayouts(src)
+		if len(decls) == 0 {
+			return railsview.LayoutDecl{}, false
+		}
+		return decls[len(decls)-1], true
+	}
+	return railsview.LayoutDecl{}, false
 }
 
 func isControllerFile(file string) bool {
@@ -457,7 +570,17 @@ func controllersMarkerIndex(s string) int {
 // registry can.
 type componentIndex struct{ bySymbol map[string][]string }
 
-func newComponentIndex(nodes []graph.Node, svc string) *componentIndex {
+// newComponentIndex builds the data-react-class → JSX map. Passing one or more
+// service names restricts the scan to those services; passing none scans every
+// service — the mount lives in the Rails service but the component it names is
+// almost always in a sibling JS service (orion splits app/javascript into its
+// own `js` service), so the cross-service (no-filter) form is what wires
+// `react_component` to its implementation.
+func newComponentIndex(nodes []graph.Node, svcs ...string) *componentIndex {
+	svcSet := map[string]bool{}
+	for _, s := range svcs {
+		svcSet[s] = true
+	}
 	// symbol → files that register it, and (file,label) → implementation node.
 	regFiles := map[string][]string{}
 	implID := map[string]string{}
@@ -465,7 +588,10 @@ func newComponentIndex(nodes []graph.Node, svc string) *componentIndex {
 
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Service != svc || n.Meta["is_test"] == "true" {
+		if len(svcSet) > 0 && !svcSet[n.Service] {
+			continue
+		}
+		if n.Meta["is_test"] == "true" {
 			continue
 		}
 		switch n.Type {

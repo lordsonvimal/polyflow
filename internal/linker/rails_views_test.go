@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -335,4 +336,102 @@ func TestLinkRailsViews_Deterministic(t *testing.T) {
 		require.Equal(t, firstU, u)
 	}
 	require.Len(t, firstE, 3) // two partials + the react_component mount point
+}
+
+// TestLinkRailsViews_ReactComponentCrossService: the `react_component` mount
+// lives in the Rails service but the JSX it names lives in a sibling `js`
+// service (orion's split). The component_impl edge must still be wired.
+func TestLinkRailsViews_ReactComponentCrossService(t *testing.T) {
+	t.Parallel()
+	root, all := stylesheetFixture(t, map[string]string{
+		"app/views/apps/index.html.erb":               `<%= react_component("AppsContainer") %>`,
+		"app/javascript/containers/AppsContainer.jsx": `export function AppsContainer() {}`,
+	})
+	var erb, jsx []string
+	for _, f := range all {
+		if strings.Contains(f, "/app/javascript/") {
+			jsx = append(jsx, f)
+		} else {
+			erb = append(erb, f)
+		}
+	}
+	jsxFile := filepath.Join(root, "app/javascript/containers/AppsContainer.jsx")
+	nodes := append(fileNodesFor("orion", erb), fileNodesFor("js", jsx)...)
+	nodes = append(nodes,
+		graph.Node{ID: "js:fn:apps", Type: graph.NodeTypeFunction, Label: "AppsContainer", Service: "js", File: jsxFile, Line: 1},
+		graph.Node{ID: "js:glob:apps", Type: graph.NodeTypeVariable, Label: "AppsContainer", Service: "js", File: jsxFile, Line: 1,
+			Meta: map[string]string{"global_symbol": "AppsContainer", "scope": "global"}},
+	)
+
+	_, edges, _ := LinkRailsViews(nodes, map[string][]string{"orion": erb, "js": jsx})
+
+	var got string
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeComponentImpl {
+			got = e.To
+		}
+	}
+	require.Equal(t, "js:fn:apps", got)
+}
+
+// TestLinkRailsViews_ControllerLayoutChain: a class-level `layout` on the
+// controller (and inherited from ApplicationController) resolves to
+// app/views/layouts/<name>, and the layout is wired back to the action's own
+// template via `yield`.
+func TestLinkRailsViews_ControllerLayoutChain(t *testing.T) {
+	t.Parallel()
+	root, files := stylesheetFixture(t, map[string]string{
+		"app/controllers/application_controller.rb": `class ApplicationController < ActionController::Base
+  layout "application"
+end`,
+		"app/controllers/apps_controller.rb": `class AppsController < ApplicationController
+  layout "sidebar_layout", except: %i[raw]
+
+  def index
+  end
+
+  def raw
+  end
+end`,
+		"app/controllers/pages_controller.rb": `class PagesController < ApplicationController
+  def home
+  end
+end`,
+		"app/views/layouts/application.html.erb":    `<%= yield %>`,
+		"app/views/layouts/sidebar_layout.html.erb": `<%= yield %>`,
+		"app/views/apps/index.html.erb":             `<h1>apps</h1>`,
+		"app/views/apps/raw.html.erb":               `<h1>raw</h1>`,
+		"app/views/pages/home.html.erb":             `<h1>home</h1>`,
+	})
+	svc := "orion"
+	act := func(ctrl, cls, name string, line, end int) graph.Node {
+		f := filepath.Join(root, "app/controllers/"+ctrl)
+		return graph.Node{
+			ID: svc + ":" + f + ":function:" + name, Type: graph.NodeTypeFunction, Label: name,
+			Service: svc, File: f, Line: line,
+			Meta: map[string]string{"class": cls, "end_line": strconv.Itoa(end)},
+		}
+	}
+	nodes := append(fileNodesFor(svc, files),
+		act("apps_controller.rb", "AppsController", "index", 4, 5),
+		act("apps_controller.rb", "AppsController", "raw", 7, 8),
+		act("pages_controller.rb", "PagesController", "home", 2, 3),
+	)
+
+	_, edges, unresolved := LinkRailsViews(nodes, map[string][]string{svc: files})
+
+	lid := func(name string) string {
+		return fileID(svc, filepath.Join(root, "app/views/layouts/"+name+".html.erb"))
+	}
+	vid := func(p string) string { return fileID(svc, filepath.Join(root, "app/views/"+p)) }
+
+	// except: %i[raw] — index gets sidebar_layout, raw falls back to application.
+	require.Contains(t, rendersFrom(edges, act("apps_controller.rb", "AppsController", "index", 4, 5).ID), lid("sidebar_layout"))
+	require.Contains(t, rendersFrom(edges, act("apps_controller.rb", "AppsController", "raw", 7, 8).ID), lid("application"))
+	// pages inherits ApplicationController's `layout "application"`.
+	require.Contains(t, rendersFrom(edges, act("pages_controller.rb", "PagesController", "home", 2, 3).ID), lid("application"))
+	// yield: the layout renders the action's template.
+	require.Contains(t, rendersFrom(edges, lid("sidebar_layout")), vid("apps/index.html.erb"))
+	require.Contains(t, rendersFrom(edges, lid("application")), vid("pages/home.html.erb"))
+	require.Empty(t, unresolved)
 }
