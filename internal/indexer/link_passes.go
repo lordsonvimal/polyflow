@@ -744,6 +744,20 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, contractUnresolved...)
 			return nil
 		}},
+		// Declutter the DOM layer: fold bare jQuery/querySelector "$" nodes into
+		// direct caller→element edges, then drop element nodes nothing selects.
+		// Must run after every DOM-linking pass (dom_definitions, dom_contracts)
+		// and before containment, so an orphan element is simply edge-less.
+		{"dom_declutter", scopeSameServiceOnly, func() error {
+			foldEdges, foldRemove := linker.FoldDOMSelectors(st.allNodes, st.allEdges)
+			if err := st.writeEdges(foldEdges); err != nil {
+				return err
+			}
+			if err := st.deleteNodes(foldRemove); err != nil {
+				return err
+			}
+			return st.deleteNodes(linker.PruneOrphanElements(st.allNodes, st.allEdges))
+		}},
 		// Structural backbone: service→file→declaration + struct→method contains
 		// edges (mints synthetic service/file nodes, so persist them before wiring).
 		{"containment", scopeSameServiceOnly, func() error {
