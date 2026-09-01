@@ -433,3 +433,81 @@ end
 		t.Fatalf("non-ruby / already-resolved nodes must be skipped, got %d", len(changed))
 	}
 }
+
+// TestResolveRubyHTTPHosts_DelegateAttrEnv covers L.1: the host is a bare `url`
+// that is `delegate :url, to: :config`, and `Config#url` is an attr_accessor
+// (via a `*CONST` splat) backed by `@url = config_val(:url)` whose helper reads
+// `ENV[option.to_s.upcase]`. The whole chain lives across three files.
+func TestResolveRubyHTTPHosts_DelegateAttrEnv(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	config := writeRuby(t, dir, "config.rb", `
+module W
+  class Config
+    OPTION_VARS = %i[dry_run url verbose].freeze
+    attr_accessor(*OPTION_VARS, :errors)
+    def initialize(options: {})
+      @url = config_val(:url)
+    end
+    def config_val(option)
+      options[option] || ENV[option.to_s.upcase] || DEFAULT_SETTINGS[option]
+    end
+  end
+end
+`)
+	conn := writeRuby(t, dir, "connection.rb", `
+module W
+  class Connection
+    delegate :url, to: :config
+    def execute(method, url, payload, headers, raw: false)
+      response = Request.execute(method: method, url: url, payload: payload)
+    end
+  end
+end
+`)
+	nodes := []graph.Node{httpClientNode(conn, 6, "url")}
+	svcFiles := map[string][]string{"svc": {config, conn}}
+
+	changed := ResolveRubyHTTPHosts(nodes, svcFiles)
+	if len(changed) != 1 {
+		t.Fatalf("expected 1 resolved node, got %d", len(changed))
+	}
+	if got := nodes[0].Meta["host_env_var"]; got != "URL" {
+		t.Errorf("host_env_var = %q, want URL", got)
+	}
+	if got := nodes[0].Meta["key_dynamic_raw"]; got != `ENV.fetch("URL")` {
+		t.Errorf("key_dynamic_raw = %q, want ENV.fetch(\"URL\")", got)
+	}
+}
+
+// TestResolveRubyHTTPHosts_DelegateNoEnv: a delegated host-ish name with no
+// env-derived definition anywhere must not resolve (no fabricated host).
+func TestResolveRubyHTTPHosts_DelegateNoEnv(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	config := writeRuby(t, dir, "config.rb", `
+class Config
+  attr_accessor :url
+  def initialize(row)
+    @url = row.fetch(:url) # a DB value, not ENV
+  end
+end
+`)
+	conn := writeRuby(t, dir, "connection.rb", `
+class Connection
+  delegate :url, to: :config
+  def execute(method, url)
+    Request.execute(method: method, url: url)
+  end
+end
+`)
+	nodes := []graph.Node{httpClientNode(conn, 5, "url")}
+	svcFiles := map[string][]string{"svc": {config, conn}}
+
+	if changed := ResolveRubyHTTPHosts(nodes, svcFiles); len(changed) != 0 {
+		t.Fatalf("no env anywhere → must abstain, got %d resolved", len(changed))
+	}
+	if nodes[0].Meta["host_env_var"] != "" {
+		t.Errorf("host_env_var must stay empty, got %q", nodes[0].Meta["host_env_var"])
+	}
+}
