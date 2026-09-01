@@ -358,6 +358,48 @@ func TestBuild_ComponentTypeNotFlaggedWhenRendered(t *testing.T) {
 	}
 }
 
+// templGeneratedIndex adds a `.templ` component, its generated `*_templ.go`
+// twin, and the LinkTemplComponents bridge (twin --component_impl(via=
+// templ_generated)--> component). handlerCall, when true, wires a real
+// handler --calls--> twin so the pair is reachable.
+func templGeneratedIndex(handlerCall bool) *graph.AdjacencyIndex {
+	idx := fixtureIndex()
+	idx.AddNode(&graph.Node{ID: "svc:comp", Type: graph.NodeTypeComponent, Label: "Toast", Service: "backend", Language: "templ", File: "components/toast.templ", Line: 3})
+	idx.AddNode(&graph.Node{ID: "svc:twin", Type: graph.NodeTypeFunction, Label: "Toast", Service: "backend", Language: "go", File: "components/toast_templ.go", Line: 12})
+	idx.AddEdge(&graph.Edge{ID: "ci1", From: "svc:twin", To: "svc:comp", Type: graph.EdgeTypeComponentImpl, Meta: map[string]string{"via": "templ_generated"}})
+	if handlerCall {
+		idx.AddEdge(&graph.Edge{ID: "hc1", From: "be:handler", To: "svc:twin", Type: graph.EdgeTypeCalls})
+	}
+	return idx
+}
+
+func TestBuild_TemplGeneratedBridgeIsTransparent_DeadComponentFlagged(t *testing.T) {
+	idx := templGeneratedIndex(false)
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	var comp, twin bool
+	for _, f := range out.Functions {
+		switch f.ID {
+		case "svc:comp":
+			comp = true
+		case "svc:twin":
+			twin = true
+		}
+	}
+	assert.True(t, comp, "an unrendered .templ component must be flagged despite the generated-twin component_impl edge")
+	assert.False(t, twin, "the generated *_templ.go twin is represented by its component, not flagged separately")
+}
+
+func TestBuild_TemplGeneratedBridgeIsTransparent_LiveComponentNotFlagged(t *testing.T) {
+	idx := templGeneratedIndex(true)
+
+	out := deadcode.Build(idx, deadcode.Options{})
+	for _, f := range out.Functions {
+		assert.NotEqual(t, "svc:comp", f.ID, "a component whose generated twin is called by a handler must not be flagged")
+		assert.NotEqual(t, "svc:twin", f.ID, "the generated twin is never flagged directly")
+	}
+}
+
 func TestBuild_VariableFlaggedWhenZeroReaders(t *testing.T) {
 	idx := fixtureIndex()
 	idx.AddNode(&graph.Node{ID: "be:dead_const", Type: graph.NodeTypeVariable, Label: "MaxRetries", Service: "backend", File: "config.go", Line: 8, Meta: map[string]string{"kind": "const", "scope": "package"}})
