@@ -178,6 +178,26 @@ func EnrichPusherConsumers(nodes []graph.Node, serviceFiles map[string][]string)
 		release()
 	}
 
+	// PU.5 — thin bridge from each ERB subscriber to the browser's Pusher
+	// singleton entry point. The channel/event strings never survive into JS
+	// (the React layer is a pure pass-through of the `pusherConfig` prop), so
+	// the contract engine can't join the ERB node to the runtime
+	// `pusher_subscribe_client` node; without this edge a forward trace from a
+	// Rails `notify_*` dead-ends at the ERB view. Every `pusher_config` prop is
+	// ultimately handed to `PusherConnection.subscribe(config, callback)`.
+	if singleton := findPusherSubscribeSingleton(nodes); singleton != "" {
+		for _, n := range newNodes {
+			newEdges = append(newEdges, graph.Edge{
+				ID:         fmt.Sprintf("%s->%s:pusher_subscribe_singleton", n.ID, singleton),
+				From:       n.ID,
+				To:         singleton,
+				Type:       graph.EdgeTypeCalls,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"via": "pusher_subscribe_singleton"},
+			})
+		}
+	}
+
 	sort.Slice(newNodes, func(a, b int) bool { return newNodes[a].ID < newNodes[b].ID })
 	sort.Slice(newEdges, func(a, b int) bool {
 		if newEdges[a].From != newEdges[b].From {
@@ -186,6 +206,26 @@ func EnrichPusherConsumers(nodes []graph.Node, serviceFiles map[string][]string)
 		return newEdges[a].To < newEdges[b].To
 	})
 	return newNodes, newEdges
+}
+
+// findPusherSubscribeSingleton returns the id of the `subscribe` function in
+// `common/PusherConnection/PusherConnection.{jsx,tsx}` — the one entry point
+// every browser Pusher subscription funnels through. Empty if the repo has no
+// such module (non-orion services).
+func findPusherSubscribeSingleton(nodes []graph.Node) string {
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeFunction {
+			continue
+		}
+		if graph.IsTestFilePath(n.File) || !strings.Contains(n.File, "PusherConnection") {
+			continue
+		}
+		if strings.Contains(n.ID, ":function:subscribe:") {
+			return n.ID
+		}
+	}
+	return ""
 }
 
 // parsePusherRubySource parses a raw Ruby byte slice (the virtual-Ruby view of

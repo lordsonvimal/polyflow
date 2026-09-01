@@ -68,6 +68,35 @@ func TestEnrichPusherConsumers_ResolvesChannelAndEvent(t *testing.T) {
 	assert.Equal(t, 3, containsTo, "every ERB subscriber is contained by its file node")
 }
 
+func TestEnrichPusherConsumers_BridgesToJSSingleton(t *testing.T) {
+	dir := t.TempDir()
+	wrapper := writeFile(t, dir, "pusher_client.rb", pusherWrapperFixture)
+	view := writeFile(t, dir, "index.html.erb", pusherERBFixture)
+
+	singleton := "js:app/javascript/components/common/PusherConnection/PusherConnection.jsx:function:subscribe:170"
+	nodes := []graph.Node{
+		{ID: "svc:pusher_client.rb:publisher:pusher_trigger:20", Type: graph.NodeTypePublisher,
+			File: wrapper, Line: 20, Meta: map[string]string{"pattern": "pusher_trigger", "key_dynamic": "true"}},
+		{ID: "svc:index.html.erb:file", Type: graph.NodeTypeFile, Service: "svc", File: view},
+		{ID: singleton, Type: graph.NodeTypeFunction, Line: 170,
+			File: "app/javascript/components/common/PusherConnection/PusherConnection.jsx"},
+		{ID: "js:.../PusherConnection.test.jsx:function:subscribe:9", Type: graph.NodeTypeFunction, Line: 9,
+			File: "app/javascript/components/common/PusherConnection/PusherConnection.test.jsx"},
+	}
+
+	newNodes, newEdges := linker.EnrichPusherConsumers(nodes, map[string][]string{"svc": {wrapper, view}})
+
+	bridged := map[string]bool{}
+	for _, e := range newEdges {
+		if e.Meta["via"] == "pusher_subscribe_singleton" {
+			assert.Equal(t, singleton, e.To, "bridges to the real singleton, not the test file")
+			assert.Equal(t, graph.EdgeTypeCalls, e.Type)
+			bridged[e.From] = true
+		}
+	}
+	assert.Len(t, bridged, len(newNodes), "every minted ERB subscriber gets a singleton bridge edge")
+}
+
 func TestEnrichPusherConsumers_NoHubNoWork(t *testing.T) {
 	dir := t.TempDir()
 	view := writeFile(t, dir, "index.html.erb", pusherERBFixture)
