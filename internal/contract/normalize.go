@@ -425,6 +425,29 @@ func isBoilerplateSegment(seg string) bool {
 // and rejecting it costs true positives without buying precision — the
 // boilerplate rule above already rejects the whole measured false-positive
 // fan-out on its own.
+// wildcardAnchorScore counts the segments where key and pattern agree
+// literal↔literal on a non-boilerplate value. It ranks the specificity of a
+// wildcard_anchored match so the most-specific route wins when one wildcarded
+// key matches several (see wildcardScan). Callers only compare scores, so the
+// absolute value carries no meaning.
+func wildcardAnchorScore(key, pattern string) int {
+	ks := splitPath(key)
+	ps := splitPath(pattern)
+	if len(ks) != len(ps) {
+		return 0
+	}
+	score := 0
+	for i := range ks {
+		if ks[i] == "*" || ps[i] == "*" {
+			continue
+		}
+		if ks[i] == ps[i] && !isBoilerplateSegment(ks[i]) {
+			score++
+		}
+	}
+	return score
+}
+
 func pathMatchesPattern(key, pattern string) bool {
 	ks := splitPath(key)
 	ps := splitPath(pattern)
