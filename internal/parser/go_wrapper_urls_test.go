@@ -256,6 +256,115 @@ func exercise() error {
 	}
 }
 
+// TestWrapperURL_ComposedCallSitePath: once a client method needs path
+// parameters it builds the path with fmt.Sprintf / concatenation in the caller
+// and forwards the local into the wrapper — the dominant real shape
+// (maple-manager's WillowClient). resolveWrapperCallPath must recover the
+// literal segments the same way it does for a bare-literal call site, while a
+// probe-convention path (`/health`) and a fully dynamic one still mint nothing.
+func TestWrapperURL_ComposedCallSitePath(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/composedcall\n\ngo 1.25.0\n",
+		"client.go": `package client
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+)
+
+type Client struct{ baseURL string }
+
+func (c *Client) GrantBulk(sourceApp, sourceAppID string) error {
+	path := fmt.Sprintf("/api/v1/app-access/%s/%s/grant", url.PathEscape(sourceApp), url.PathEscape(sourceAppID))
+	return c.doWithRetry(http.MethodPost, path, nil)
+}
+
+func (c *Client) GrantUser(camUserID string) error {
+	path := "/api/v1/users/" + url.PathEscape(camUserID) + "/apps"
+	return c.doWithRetry(http.MethodPost, path, nil)
+}
+
+func (c *Client) HealthCheck() error {
+	return c.doWithRetry(http.MethodGet, "/api/v1/health", nil)
+}
+
+func (c *Client) Dynamic(p string) error {
+	return c.doWithRetry(http.MethodGet, p, nil)
+}
+
+func (c *Client) doWithRetry(method, path string, body any) error {
+	req, err := http.NewRequest(method, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	_ = req
+	return nil
+}
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	known := map[string]bool{
+		"svc:client.go:method:GrantBulk:11":   true,
+		"svc:client.go:method:GrantUser:16":   true,
+		"svc:client.go:method:HealthCheck:21": true,
+		"svc:client.go:method:Dynamic:25":     true,
+		"svc:client.go:method:doWithRetry:29": true,
+	}
+	a := &GoSemanticAnalyzer{}
+	res := a.AnalyzeService(dir, "svc", token.NewFileSet(), known)
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
+	}
+
+	synth := map[string]graph.Node{} // path -> node
+	for _, n := range res.Nodes {
+		if n.Type == graph.NodeTypeHTTPClient && n.Meta["synthesized"] != "" {
+			synth[n.Meta["path"]] = n
+		}
+	}
+
+	want := map[string]string{
+		"*/api/v1/app-access/*/*/grant": "sprintf_url",
+		"*/api/v1/users/*/apps":         "concat_url",
+	}
+	if len(synth) != len(want) {
+		t.Fatalf("expected %d synth producers, got %d: %+v", len(want), len(synth), synth)
+	}
+	for path, tag := range want {
+		n, ok := synth[path]
+		if !ok {
+			t.Fatalf("missing synth producer %q; got %+v", path, synth)
+		}
+		if n.Meta["synthesized"] != tag {
+			t.Errorf("%q: synthesized=%q, want %q", path, n.Meta["synthesized"], tag)
+		}
+		if n.Meta["method"] != "POST" {
+			t.Errorf("%q: method=%q, want POST", path, n.Meta["method"])
+		}
+		if n.Meta["via_wrapper"] != "doWithRetry" {
+			t.Errorf("%q: via_wrapper=%q, want doWithRetry", path, n.Meta["via_wrapper"])
+		}
+	}
+
+	// `*/api/v1/health` grades to no evidence — probe convention, not a route.
+	for path, n := range synth {
+		if n.Meta["via_wrapper"] == "HealthCheck" || path == "*/api/v1/health" {
+			t.Errorf("health-probe wrapper call wrongly resolved: %q -> %+v", path, n)
+		}
+		if n.Meta["via_wrapper"] == "Dynamic" {
+			t.Errorf("fully dynamic wrapper call wrongly resolved: %q", path)
+		}
+	}
+}
+
 // TestWrapperURL_Determinism: two runs produce byte-identical node/edge ID sets.
 func TestWrapperURL_Determinism(t *testing.T) {
 	dir := wrapperModule(t)

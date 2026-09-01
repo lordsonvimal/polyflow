@@ -126,10 +126,6 @@ func TestSprintfURL_ResolvesLiteralPathPrefix(t *testing.T) {
 		"*/client_api/v1/folders/details_by_path": "GetFolderByPath",
 		"*/api/v1/users":                          "LookupUserByEmail",
 		"*/v1/*/*/detail":                         "FetchResourceDetail",
-		// One literal segment behind an opaque host is emitted too, marked
-		// weak: whether `*/health` names a route or a convention depends on how
-		// many services answer to it, which only the contract engine can see.
-		"*/health": "HealthCheck",
 	}
 	if len(synth) != len(want) {
 		t.Fatalf("expected %d synth producers, got %d: %+v", len(want), len(synth), synth)
@@ -158,15 +154,13 @@ func TestSprintfURL_ResolvesLiteralPathPrefix(t *testing.T) {
 		}
 	}
 
-	// The single-segment caller is emitted, but must carry both markers: the
-	// engine needs `path_evidence` to suppress it when the path spans services,
-	// and the ceiling keeps a surviving edge from being promoted to `verified`
-	// on spec evidence alone.
-	if got := synth["*/health"].Meta["path_evidence"]; got != "weak" {
-		t.Errorf("*/health: path_evidence=%q, want weak", got)
-	}
-	if got := synth["*/health"].Meta["confidence_ceiling"]; got != graph.ConfidencePartial {
-		t.Errorf("*/health: confidence_ceiling=%q, want %q", got, graph.ConfidencePartial)
+	// A path whose only literal segment is a probe-convention token (`*/health`)
+	// grades to no evidence — every service implements it — so no producer is
+	// minted at all, rather than emitting a weak node and leaning on the
+	// contract engine's fan-out suppression (which fails when indexing gaps
+	// leave exactly one candidate handler).
+	if n, ok := synth["*/health"]; ok {
+		t.Errorf("*/health probe convention wrongly resolved: %+v", n)
 	}
 	// `api` and `v1` are generic REST-namespace segments, so `*/api/v1/users`
 	// pins a service no better than `*/users` — one real literal behind an
@@ -468,10 +462,15 @@ func TestPathEvidence(t *testing.T) {
 		{"namespace + one literal", "*/api/v1/users", pathEvidenceWeak},
 		{"version segment then one literal", "*/v1/*/*/detail", pathEvidenceWeak},
 		{"namespace + one literal, opaque host", "http://*/api/things", pathEvidenceWeak},
+		// A probe-convention path behind an opaque host is no evidence at all —
+		// every service implements `/health`, `/healthz`, `/api/v1/health`, so it
+		// names no service and mints no producer.
+		{"health probe, opaque host", "*/health", pathEvidenceNone},
+		{"namespaced health probe, opaque host", "*/api/v1/healthz", pathEvidenceNone},
+		{"fully literal health host still strong", "http://atlas/api/v1/health", pathEvidenceStrong},
 		// Weak, not rejected: the engine suppresses these only when the path
-		// resolves in more than one service. On the juniper fleet that
-		// suppresses `*/health` (3 services) and keeps `*/user-apps` (1).
-		{"generic single segment, opaque host", "*/health", pathEvidenceWeak},
+		// resolves in more than one service. On the juniper fleet that keeps
+		// `*/user-apps` (1 service).
 		{"single segment, opaque host", "*/payment_links", pathEvidenceWeak},
 		{"real endpoint, single segment", "*/user-apps", pathEvidenceWeak},
 		{"single literal after wildcards", "*/*/*/messages", pathEvidenceWeak},

@@ -49,6 +49,7 @@ const (
 // cannot import the parser.
 func PathEvidence(pattern string) string {
 	literals := 0
+	healthOnly := true
 	for _, seg := range strings.Split(pattern, "/") {
 		if seg == "" || strings.Contains(seg, "*") {
 			continue
@@ -62,15 +63,42 @@ func PathEvidence(pattern string) string {
 			continue
 		}
 		literals++
+		if !isHealthProbeSegment(seg) {
+			healthOnly = false
+		}
 	}
 	switch {
 	case literals == 0:
 		return PathEvidenceNone
-	case literals >= 2 || !strings.Contains(pattern, "*"):
+	case !strings.Contains(pattern, "*"):
+		// A known/literal host is self-discriminating.
+		return PathEvidenceStrong
+	case healthOnly:
+		// Behind an opaque host, a path whose only literal segments are
+		// health/liveness probe tokens (`*/health`, `*/api/v1/healthz`) names a
+		// convention every service of every framework implements, not a route —
+		// no better at pinning a service than a bare method. Grade it as no
+		// evidence so it never mints a cross-service producer; when indexing
+		// gaps leave exactly one candidate handler, the contract engine's
+		// fan-out suppression (which needs >1) cannot catch the wrong edge.
+		return PathEvidenceNone
+	case literals >= 2:
 		return PathEvidenceStrong
 	default:
 		return PathEvidenceWeak
 	}
+}
+
+// isHealthProbeSegment reports whether seg is a conventional health/liveness/
+// readiness probe token. These endpoints exist in nearly every HTTP service and
+// so carry no information about which service a call targets.
+func isHealthProbeSegment(seg string) bool {
+	switch strings.ToLower(seg) {
+	case "health", "healthz", "healthcheck", "livez", "liveness",
+		"readyz", "readiness", "ping", "heartbeat":
+		return true
+	}
+	return false
 }
 
 // isAPINamespaceSegment reports whether seg is a generic REST-namespace token
