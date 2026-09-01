@@ -773,7 +773,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// require a literal at the call site and never fire otherwise.
 		{"js_api_wrapper_calls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			wrapperNodes, wrapperEdges := linker.LinkJSAPIWrapperCalls(st.allNodes, svcFiles)
+			wrapperNodes, wrapperEdges, dupIDs := linker.LinkJSAPIWrapperCalls(st.allNodes, svcFiles)
 			for i := range wrapperNodes {
 				n := wrapperNodes[i]
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
@@ -784,7 +784,12 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			return st.writeEdges(wrapperEdges)
+			if err := st.writeEdges(wrapperEdges); err != nil {
+				return err
+			}
+			// RT.5: remove producer_alias_url_call duplicates now covered by a
+			// wrapper call-site node.
+			return st.deleteNodes(dupIDs)
 		}},
 		// Tier K.5: stylesheet @import graph + containment for the selector and
 		// @font-face nodes the stylesheet parser mints.

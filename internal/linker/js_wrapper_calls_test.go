@@ -76,7 +76,7 @@ export function fetchGraph(params: string) {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	var sawOuterCallSite bool
 	for _, n := range newNodes {
@@ -89,6 +89,46 @@ export function fetchGraph(params: string) {
 	assert.True(t, sawOuterCallSite,
 		"outer was not discovered as a transitive wrapper of inner, which itself wraps fetch")
 	_ = dir
+}
+
+// TestLinkJSAPIWrapperCalls_DedupesProducerAliasDuplicate is RT.5: a wrapper
+// called with a literal URL (`apiGet("/app/things")`) is captured both as a
+// producer_alias_url_call (any `ident("literal")`) and, richer, as a wrapper
+// call site. The producer_alias_url_call duplicate at the same call site must
+// be returned for removal.
+func TestLinkJSAPIWrapperCalls_DedupesProducerAliasDuplicate(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+export function load() {
+  return apiGet("/app/things");
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "svc", paths)
+	serviceFiles := map[string][]string{"svc": paths}
+
+	var aliasDupID string
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient && n.Meta["pattern"] == "producer_alias_url_call" {
+			aliasDupID = n.ID
+		}
+	}
+	require.NotEmpty(t, aliasDupID, "fixture should produce a producer_alias_url_call node for apiGet(\"/app/things\")")
+
+	newNodes, _, removeIDs := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	var wrapperAtSameSite bool
+	for _, n := range newNodes {
+		if n.Meta["wrapper"] == "apiGet" && n.Meta["url"] == "/app/things" {
+			wrapperAtSameSite = true
+		}
+	}
+	require.True(t, wrapperAtSameSite, "apiGet call site should mint a wrapper http_client node")
+	assert.True(t, removeIDs[aliasDupID], "producer_alias_url_call duplicate should be marked for removal")
 }
 
 // TestLinkJSAPIWrapperCalls_NestedClosureNotAttributed guards the "do not
@@ -112,7 +152,7 @@ function outer(unrelated: string) {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	for _, n := range newNodes {
 		assert.NotEqual(t, "outer", n.Meta["wrapper"],
