@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/lordsonvimal/polyflow/internal/deadcode"
+	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
 type deadcodeInput struct {
@@ -25,6 +26,7 @@ func (s *Server) deadcode(ctx context.Context, req *mcp.CallToolRequest, in dead
 			return nil, nil, err
 		}
 	}
+	unresolved = graph.DropExternalFrameworkRefs(unresolved, idx)
 	out := deadcode.Build(idx, deadcode.Options{Service: in.Service, File: in.File, UnresolvedRefs: unresolved})
 	return jsonResult(out)
 }

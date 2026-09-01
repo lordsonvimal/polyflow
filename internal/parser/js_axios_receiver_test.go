@@ -113,6 +113,47 @@ function BatchesTable() {
 	assert.Equal(t, "/app/favorites", httpClients(nodes)[0].Meta["url"])
 }
 
+// TestLodashGetIsNotAnHTTPCall — JP.1: `_.get(cfg, path)` matches
+// axios_instance_call and is not caught by the local-container check (the
+// receiver is an imported binding, not a `new Map()`). URL-shape / instance
+// evidence is what rejects it.
+func TestLodashGetIsNotAnHTTPCall(t *testing.T) {
+	t.Parallel()
+	nodes := parseJSSource(t, "cfg.jsx", `
+import _ from "lodash";
+function pick(customConfig) {
+  return _.get(customConfig, ["display", "title"]);
+}
+`)
+	assert.Empty(t, httpClients(nodes), "lodash _.get is not an HTTP call")
+}
+
+// TestParamContainerMethodsAreNotHTTPCalls — JP.1: a Map passed in as a
+// parameter (elementsToReactRoots) — no local `new Map()` for the container
+// check to see. `.get`/`.delete` with a non-URL argument must still drop.
+func TestParamContainerMethodsAreNotHTTPCalls(t *testing.T) {
+	t.Parallel()
+	nodes := parseJSSource(t, "roots.jsx", `
+function detach(elementsToReactRoots, element) {
+  elementsToReactRoots.get(element);
+  elementsToReactRoots.delete(element);
+}
+`)
+	assert.Empty(t, httpClients(nodes))
+}
+
+// TestBareAxiosBindingReceiverIsKept — JP.1: a call through `const http =
+// axios` is a real request even when the URL is a dynamic parameter.
+func TestBareAxiosBindingReceiverIsKept(t *testing.T) {
+	t.Parallel()
+	nodes := parseJSSource(t, "bare.js", `
+import axios from "axios";
+const http = axios;
+function load(p) { return http.get(p); }
+`)
+	require.Len(t, httpClients(nodes), 1)
+}
+
 // TestAxiosInstanceReceiverIsKept — the pattern's whole reason for existing.
 func TestAxiosInstanceReceiverIsKept(t *testing.T) {
 	t.Parallel()

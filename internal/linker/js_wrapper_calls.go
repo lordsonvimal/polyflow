@@ -278,6 +278,21 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 				label = "branch_enum"
 			}
 		}
+		// JP.2: the forwarded argument is often a parameter of the enclosing
+		// function (`function load(url) { return apiGet(url); }`). When that
+		// enclosing function is itself called exactly once in this file with a
+		// single literal at that position, adopt the literal rather than
+		// abstaining. Anything ambiguous or non-literal stays dynamic — these
+		// are frequently runtime values (`entry.url` from a fetched payload).
+		if meta["key_dynamic"] == "true" && urlArg.Type() == "identifier" {
+			if lit, ok := jsResolveForwardedParamURL(callNode, root, src, urlArg.Content(src)); ok {
+				delete(meta, "key_dynamic")
+				delete(meta, "key_dynamic_raw")
+				meta["url"] = lit
+				meta["url_via"] = "enclosing_param_forward"
+				label = lit
+			}
+		}
 		out = append(out, graph.Node{
 			ID:       id,
 			Type:     graph.NodeTypeHTTPClient,
@@ -290,6 +305,111 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 		})
 	}
 	return out
+}
+
+// jsResolveForwardedParamURL (JP.2) handles `function load(url) { apiGet(url) }`:
+// when callNode's forwarded argument is a parameter of the enclosing function
+// and that function is called exactly once in this file with a single static
+// URL literal at the matching position, it returns that literal. Any ambiguity
+// (0, or >1 distinct literals, or a non-literal argument anywhere) abstains.
+func jsResolveForwardedParamURL(callNode, root *sitter.Node, src []byte, paramName string) (string, bool) {
+	var fnName string
+	var params *sitter.Node
+	for cur := callNode.Parent(); cur != nil; cur = cur.Parent() {
+		switch cur.Type() {
+		case "function_declaration", "method_definition", "function_expression":
+			params = cur.ChildByFieldName("parameters")
+			if nm := cur.ChildByFieldName("name"); nm != nil {
+				fnName = nm.Content(src)
+			}
+		case "arrow_function":
+			params = cur.ChildByFieldName("parameters")
+			if decl := cur.Parent(); decl != nil && decl.Type() == "variable_declarator" {
+				if nm := decl.ChildByFieldName("name"); nm != nil {
+					fnName = nm.Content(src)
+				}
+			}
+		}
+		if params != nil {
+			break
+		}
+	}
+	if fnName == "" || params == nil {
+		return "", false
+	}
+	paramIdx := -1
+	for i := 0; i < int(params.NamedChildCount()); i++ {
+		p := params.NamedChild(i)
+		if p.Type() == "required_parameter" || p.Type() == "optional_parameter" {
+			if inner := p.ChildByFieldName("pattern"); inner != nil {
+				p = inner
+			}
+		}
+		if p.Type() == "identifier" && p.Content(src) == paramName {
+			paramIdx = i
+			break
+		}
+	}
+	if paramIdx < 0 {
+		return "", false
+	}
+
+	seen := map[string]bool{}
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n == nil {
+			return
+		}
+		if n.Type() == "call_expression" {
+			if fn := n.ChildByFieldName("function"); fn != nil && fn.Type() == "identifier" && fn.Content(src) == fnName {
+				if args := n.ChildByFieldName("arguments"); args != nil && paramIdx < int(args.NamedChildCount()) {
+					if lit, ok := jsStaticURLLiteral(args.NamedChild(paramIdx), src); ok {
+						seen[lit] = true
+					} else {
+						seen["\x00non-literal"] = true
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(root)
+	if len(seen) != 1 {
+		return "", false
+	}
+	for lit := range seen {
+		if lit == "\x00non-literal" {
+			return "", false
+		}
+		return lit, true
+	}
+	return "", false
+}
+
+// jsStaticURLLiteral returns the address text of a string / substitution-free
+// template literal node when it looks like a URL path, else abstains.
+func jsStaticURLLiteral(n *sitter.Node, src []byte) (string, bool) {
+	if n == nil {
+		return "", false
+	}
+	var lit string
+	switch n.Type() {
+	case "string":
+		lit = strings.Trim(n.Content(src), `"'`)
+	case "template_string":
+		if strings.Contains(n.Content(src), "${") {
+			return "", false
+		}
+		lit = strings.Trim(n.Content(src), "`")
+	default:
+		return "", false
+	}
+	if strings.HasPrefix(lit, "/") || strings.HasPrefix(lit, "http://") || strings.HasPrefix(lit, "https://") {
+		return lit, true
+	}
+	return "", false
 }
 
 // discoverJSTransitiveWrappers re-parses file and returns wrapper-name ->

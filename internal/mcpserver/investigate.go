@@ -101,7 +101,7 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 	if err != nil {
 		return nil, nil, err
 	}
-	ctxRes.AttachUnresolved(unresolvedAll)
+	ctxRes.AttachUnresolved(graph.DropExternalFrameworkRefs(unresolvedAll, idx))
 	ctxRes.FinalizeEpistemic()
 	ctxRes.InlineSnippets(".", investigateNeighborLines)
 

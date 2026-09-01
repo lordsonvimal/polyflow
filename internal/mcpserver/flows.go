@@ -138,7 +138,7 @@ func (s *Server) flows(ctx context.Context, req *mcp.CallToolRequest, in flowsIn
 			}
 		}
 	}
-	unresolved := graph.UnresolvedInFiles(unresolvedAll, files)
+	unresolved := graph.UnresolvedInFiles(graph.DropExternalFrameworkRefs(unresolvedAll, idx), files)
 
 	out := &flowsOutput{
 		Flows:            flowPaths,

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"regexp"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -30,11 +31,22 @@ import (
 // 1b, where an http_client competes with other node kinds at the same
 // file:line.
 func dropNonHTTPJSMatches(results []patterns.MatchResult) []patterns.MatchResult {
+	axiosInstances := collectAxiosInstanceNames(results)
 	out := results[:0]
 	for _, r := range results {
 		switch r.PatternName {
 		case "axios_instance_call":
 			if isContainerReceiverCall(r) {
+				continue
+			}
+			// JP.1: axios_instance.yaml's query is any `ident.get/post/...(x)`
+			// call, gated only on the *service* depending on axios anywhere —
+			// so `foldersMap.get(id)` (Map), `_.get(cfg, path)` (lodash),
+			// `params.set(k, v)` (URLSearchParams) all match and each mints a
+			// bogus http_client node plus a `config_not_found` ledger entry
+			// (31 of 32 such nodes on orion). Keep the node only when there
+			// is real HTTP evidence at this call site.
+			if !axiosInstanceCallHasHTTPEvidence(r, axiosInstances) {
 				continue
 			}
 			// jQuery's global `$`/`jQuery` is never an axios instance, but
@@ -99,6 +111,100 @@ func isNonAddressJSString(raw string) bool {
 		return true
 	}
 	return !strings.ContainsAny(s, "/.:")
+}
+
+// axiosBindingRe recognises the ways a file binds a name to axios (or an
+// axios instance) so that `name.get(url)` is a real request:
+//   import client from "axios"          require("axios")
+//   const api = axios                   const api = axios.create({...})
+var axiosBindingRe = []*regexp.Regexp{
+	regexp.MustCompile(`import\s+(\w+)\s*(?:,\s*\{[^}]*\})?\s+from\s+['"]axios['"]`),
+	regexp.MustCompile(`(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"]axios['"]\s*\)`),
+	regexp.MustCompile(`(?:const|let|var)\s+(\w+)\s*=\s*axios\b`),
+}
+
+// collectAxiosInstanceNames returns the set of local identifiers that name
+// axios or an axios instance in the file these match results came from —
+// `axios_create_with_baseurl`'s own capture plus the plain-binding forms
+// axiosBindingRe covers.
+func collectAxiosInstanceNames(results []patterns.MatchResult) map[string]bool {
+	names := map[string]bool{}
+	var src []byte
+	for i := range results {
+		if results[i].PatternName == "axios_create_with_baseurl" {
+			if n := results[i].Captures["instance_name"]; n != "" {
+				names[n] = true
+			}
+		}
+		if src == nil && len(results[i].Src) > 0 {
+			src = results[i].Src
+		}
+	}
+	if src != nil {
+		text := string(src)
+		for _, re := range axiosBindingRe {
+			for _, m := range re.FindAllStringSubmatch(text, -1) {
+				if len(m) > 1 && m[1] != "" {
+					names[m[1]] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
+// axiosInstanceCallHasHTTPEvidence reports whether an axios_instance_call match
+// carries enough signal to be a real outbound request: the receiver is a known
+// axios instance, or the URL argument is URL-shaped, or it is a body-bearing
+// write (`api.post(url, body)` — a Map/Set method never takes that shape).
+func axiosInstanceCallHasHTTPEvidence(r patterns.MatchResult, axiosInstances map[string]bool) bool {
+	if axiosInstances[r.Captures["via_alias"]] {
+		return true
+	}
+	if jsURLShapedArg(r.Captures["url"]) {
+		return true
+	}
+	switch r.Captures["method"] {
+	case "post", "put", "patch":
+		return jsAxiosCallArgCount(r) >= 2
+	}
+	return false
+}
+
+// jsURLShapedArg reports whether raw (an axios_instance_call url capture) looks
+// like an address: a string/template literal whose first static character is
+// `/`, `?`, or an http(s):// scheme, or a template literal that contains a `/`
+// path separator outside its substitutions.
+func jsURLShapedArg(raw string) bool {
+	s := strings.TrimSpace(raw)
+	lit := strings.Trim(s, `"'`+"`")
+	if strings.HasPrefix(lit, "/") || strings.HasPrefix(lit, "?") ||
+		strings.HasPrefix(lit, "http://") || strings.HasPrefix(lit, "https://") {
+		return true
+	}
+	if strings.HasPrefix(s, "`") && strings.Contains(lit, "/") {
+		return true
+	}
+	return false
+}
+
+// jsAxiosCallArgCount climbs from the retained url node to the enclosing call
+// and returns its argument count (0 when unavailable).
+func jsAxiosCallArgCount(r patterns.MatchResult) int {
+	arg := r.KeyNodes["url"]
+	if arg == nil {
+		return 0
+	}
+	for cur := arg.Parent(); cur != nil; cur = cur.Parent() {
+		if cur.Type() != "call_expression" {
+			continue
+		}
+		if a := cur.ChildByFieldName("arguments"); a != nil {
+			return int(a.NamedChildCount())
+		}
+		return 0
+	}
+	return 0
 }
 
 func isContainerReceiverCall(r patterns.MatchResult) bool {
