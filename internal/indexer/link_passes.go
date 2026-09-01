@@ -505,6 +505,30 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(pubEdges)
 		}},
+		// Tier PU.3: the Pusher consumer half. Mint one `subscriber` node per
+		// resolvable ERB `pusher_config(channel:, event:)` /
+		// `render "shared/pusher", pusher_channel:` call site — the browser's
+		// channel/event arrive as a server-built prop and never appear as JS
+		// literals, so the keyed consumer node lives on the ERB call site.
+		// Runs before the contract engine so contracts/pusher.yaml joins these
+		// to the PU.2 producer nodes.
+		{"pusher_consumer_erb", scopeSameServiceOnly, func() error {
+			subNodes, subEdges := linker.EnrichPusherConsumers(st.allNodes, st.svcFilesOf())
+			if len(subNodes) == 0 {
+				return nil
+			}
+			for i := range subNodes {
+				n := subNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(subEdges)
+		}},
 		// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
 		// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
 		// the downstream config_resolve provider can bind them (or ledger a *named*

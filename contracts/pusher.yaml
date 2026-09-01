@@ -49,3 +49,49 @@ contracts:
       id_prefix: pusher
       same_service: keep
     unmatched: ledger
+
+  # PU.4 — the Rails↔ERB path. PU.2 mints `pusher_trigger_forward` publisher
+  # nodes (one per `PusherClient.new(obj, <chan>).notify_x` call site) with a
+  # static channel SEGMENT + event; PU.3 mints `pusher_subscribe_erb`
+  # subscriber nodes from ERB `pusher_config(channel:, event:)` call sites the
+  # same way. The runtime channel is `"#{Rails.env}.<seg>.#{id}"`, so the full
+  # string never joins — the segment + the event name are the only static
+  # rendezvous. Key on BOTH: two views on one channel listening for different
+  # events are different consumers.
+  - kind: pusher
+    producer:
+      node: publisher
+      where: {pattern: pusher_trigger_forward}
+      key: [channel, event]
+    consumer:
+      node: subscriber
+      where: {pattern: pusher_subscribe_erb}
+      key: [channel, event]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: pusher_trigger
+      id_prefix: pusher
+      same_service: keep
+    unmatched: drop
+
+  # The `render "shared/pusher", pusher_channel: ...` partial path carries a
+  # channel but no event (the browser binds whatever event the mounted
+  # component wants), so it can only key on channel — every producer on that
+  # channel is a real sender to this subscriber.
+  - kind: pusher
+    producer:
+      node: publisher
+      where: {pattern: pusher_trigger_forward}
+      key: [channel]
+    consumer:
+      node: subscriber
+      where: {pattern: pusher_subscribe_erb_channel}
+      key: [channel]
+    normalizers: [quote_strip]
+    match: [exact, normalized]
+    edge:
+      type: pusher_trigger
+      id_prefix: pusher
+      same_service: keep
+    unmatched: drop
