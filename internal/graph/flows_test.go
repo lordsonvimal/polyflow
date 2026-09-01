@@ -87,6 +87,22 @@ func TestEntrypoints_Structure(t *testing.T) {
 	assert.Equal(t, 1, result.Skipped[0].Count)
 }
 
+func TestEntrypoints_TestFileExcluded(t *testing.T) {
+	idx := graph.NewAdjacencyIndex()
+	idx.AddNode(&graph.Node{ID: "real", Type: graph.NodeTypeHTTPHandler, Label: "RealHandler", Service: "svc-a", File: "handlers.go", Line: 10})
+	idx.AddNode(&graph.Node{ID: "spec", Type: graph.NodeTypeHTTPHandler, Label: "FakeHandler", Service: "svc-a", File: "spec/support/fake_app_spec.rb", Line: 3})
+	idx.AddNode(&graph.Node{ID: "sub", Type: graph.NodeTypeSubscriber, Label: "FixtureConsumer", Service: "svc-a", File: "internal/queue/consumer_test.go", Line: 8})
+
+	result := graph.Entrypoints(idx, "", "")
+
+	require.Len(t, result.Entrypoints, 1)
+	assert.Equal(t, "real", result.Entrypoints[0].NodeID)
+
+	require.Len(t, result.Skipped, 1)
+	assert.Equal(t, "test_file", result.Skipped[0].Type)
+	assert.Equal(t, 2, result.Skipped[0].Count)
+}
+
 func TestEntrypoints_KindFilter(t *testing.T) {
 	idx := buildFlowsIndex()
 	result := graph.Entrypoints(idx, "", "subscriber")

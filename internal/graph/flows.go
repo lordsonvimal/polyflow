@@ -80,6 +80,14 @@ func Entrypoints(idx *AdjacencyIndex, service, kind string) EntrypointsResult {
 			}
 			continue
 		}
+		// Test-defined handlers/routes/subscribers (in-spec Sinatra apps,
+		// fixture workers, mock gRPC servers) are not a production entry
+		// surface. Exclude them, but bucket the count so the denominator
+		// stays honest (rule 12).
+		if IsTestFilePath(n.File) {
+			skipped["test_file"]++
+			continue
+		}
 		items = append(items, EntrypointItem{
 			NodeID:  n.ID,
 			Kind:    k,

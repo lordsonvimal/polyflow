@@ -32,9 +32,10 @@ type entrypointEntry struct {
 }
 
 type entrypointsOutput struct {
-	Entrypoints []entrypointEntry `json:"entrypoints"`
-	Total       int               `json:"total"`
-	Truncated   bool              `json:"truncated,omitempty"`
+	Entrypoints     []entrypointEntry `json:"entrypoints"`
+	Total           int               `json:"total"`
+	Truncated       bool              `json:"truncated,omitempty"`
+	SkippedTestFile int               `json:"skipped_test_file,omitempty"`
 }
 
 func (s *Server) entrypoints(ctx context.Context, req *mcp.CallToolRequest, in entrypointsInput) (*mcp.CallToolResult, any, error) {
@@ -47,11 +48,18 @@ func (s *Server) entrypoints(ctx context.Context, req *mcp.CallToolRequest, in e
 	queueNames := resolveSubscriberQueues(idx)
 
 	var all []entrypointEntry
+	var skippedTestFile int
 	for _, n := range idx.Nodes {
 		if !entrypointNodeTypes[n.Type] {
 			continue
 		}
 		if in.Type != "" && string(n.Type) != in.Type {
+			continue
+		}
+		// Test-defined handlers are not a production entry surface; exclude
+		// them but report the count so the total stays honest.
+		if graph.IsTestFilePath(n.File) {
+			skippedTestFile++
 			continue
 		}
 		if in.Service != "" && n.Service != in.Service {
@@ -96,7 +104,7 @@ func (s *Server) entrypoints(ctx context.Context, req *mcp.CallToolRequest, in e
 		return all[i].ID < all[j].ID
 	})
 
-	out := entrypointsOutput{Total: len(all)}
+	out := entrypointsOutput{Total: len(all), SkippedTestFile: skippedTestFile}
 	limit := in.Limit
 	switch {
 	case limit < 0:
