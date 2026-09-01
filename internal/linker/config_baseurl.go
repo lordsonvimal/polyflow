@@ -108,8 +108,15 @@ func ResolveConfigBaseURLPaths(nodes []graph.Node, svcPaths map[string]string) [
 		// edge this pass exists to create — and a stale confidence_ceiling would
 		// cap a now-ordinary match at `partial`. Only the ceiling that came with
 		// the weak stamp is cleared; other passes set it for other reasons.
+		// A config-supplied prefix names a concrete deploy target: the value it
+		// was read from carried a real host (configURLPathPrefix requires one).
+		// That is the discrimination the weak stamp was hedging the absence of,
+		// so once a prefix with at least one concrete (non-param, non-wildcard)
+		// segment is composed on, drop the stamp — regardless of how many
+		// literal segments the final path counts. A purely templated prefix
+		// (`/:tenant`) adds no such certainty and is left alone.
 		if n.Meta["path_evidence"] == graph.PathEvidenceWeak &&
-			graph.PathEvidence(composed) == graph.PathEvidenceStrong {
+			(graph.PathEvidence(composed) == graph.PathEvidenceStrong || prefixHasConcreteSegment(prefix)) {
 			delete(n.Meta, "path_evidence")
 			if n.Meta["confidence_ceiling"] == graph.ConfidencePartial {
 				delete(n.Meta, "confidence_ceiling")
@@ -155,6 +162,19 @@ func configBaseURLSource(n *graph.Node) (envVar, literal string) {
 // because an alternative path is a fabricated route rather than a hedge.
 // (config_resolve fans out one edge per value; it can, because it emits a
 // service-less record, not a join.)
+// prefixHasConcreteSegment reports whether a composed path prefix contains at
+// least one segment that names something concrete — not a route parameter
+// (`:id`) and not a wildcard.
+func prefixHasConcreteSegment(prefix string) bool {
+	for _, seg := range strings.Split(prefix, "/") {
+		if seg == "" || seg == "*" || strings.HasPrefix(seg, ":") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func configPathPrefix(vals []configsrc.Value) (prefix, ref string, ok bool) {
 	if len(vals) == 0 {
 		return "", "", false

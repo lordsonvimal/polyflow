@@ -168,12 +168,15 @@ func TestSprintfURL_ResolvesLiteralPathPrefix(t *testing.T) {
 	if got := synth["*/health"].Meta["confidence_ceiling"]; got != graph.ConfidencePartial {
 		t.Errorf("*/health: confidence_ceiling=%q, want %q", got, graph.ConfidencePartial)
 	}
-	// A multi-segment path is strong evidence and carries neither marker.
-	if got := synth["*/api/v1/users"].Meta["path_evidence"]; got != "" {
-		t.Errorf("*/api/v1/users: path_evidence=%q, want unset", got)
+	// `api` and `v1` are generic REST-namespace segments, so `*/api/v1/users`
+	// pins a service no better than `*/users` — one real literal behind an
+	// opaque host. It carries both markers and the engine suppresses it when
+	// the path spans services (willow and orion-atlas both serve it).
+	if got := synth["*/api/v1/users"].Meta["path_evidence"]; got != "weak" {
+		t.Errorf("*/api/v1/users: path_evidence=%q, want weak", got)
 	}
-	if got := synth["*/api/v1/users"].Meta["confidence_ceiling"]; got != "" {
-		t.Errorf("*/api/v1/users: confidence_ceiling=%q, want unset", got)
+	if got := synth["*/api/v1/users"].Meta["confidence_ceiling"]; got != graph.ConfidencePartial {
+		t.Errorf("*/api/v1/users: confidence_ceiling=%q, want %q", got, graph.ConfidencePartial)
 	}
 
 	// Each synth node must be attributed to its caller via a calls edge tagged sprintf_url.
@@ -456,9 +459,15 @@ func TestPathEvidence(t *testing.T) {
 		want    string
 	}{
 		{"named API surface", "*/client_api/v1/users", pathEvidenceStrong},
-		{"wildcards between literals", "*/v1/*/*/detail", pathEvidenceStrong},
-		{"two literals with opaque host", "http://*/api/things", pathEvidenceStrong},
+		{"two real literals past the namespace", "*/api/v1/service/apps", pathEvidenceStrong},
 		{"fully literal single segment", "/health", pathEvidenceStrong},
+		// `api`/`v1`/`v2` are generic REST-namespace tokens and do not count as
+		// discriminating literals: `*/api/v1/users` pins a service no better
+		// than `*/users`, and `*/v1/*/*/detail` / `http://*/api/things` each
+		// leave one real literal behind an opaque host.
+		{"namespace + one literal", "*/api/v1/users", pathEvidenceWeak},
+		{"version segment then one literal", "*/v1/*/*/detail", pathEvidenceWeak},
+		{"namespace + one literal, opaque host", "http://*/api/things", pathEvidenceWeak},
 		// Weak, not rejected: the engine suppresses these only when the path
 		// resolves in more than one service. On the juniper fleet that
 		// suppresses `*/health` (3 services) and keeps `*/user-apps` (1).
