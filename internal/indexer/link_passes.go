@@ -501,6 +501,30 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
+		// Tier L.2: for a Ruby http_client whose host ruby_http_hosts resolved but
+		// whose path stayed key_dynamic because the sink is polymorphic (one
+		// `execute`/`request` helper reached from several entry methods via
+		// keyword args + `delegate`), mint one node per (entry method, endpoint
+		// constant) pair. Runs after ruby_http_hosts (needs host_env_var), before
+		// ApplyHints + the contract engine.
+		{"ruby_poly_path_sites", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			polyNodes, polyEdges := linker.ResolveRubyPolymorphicPathSites(st.allNodes, svcFiles)
+			if len(polyNodes) == 0 {
+				return nil
+			}
+			for i := range polyNodes {
+				n := polyNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(polyEdges)
+		}},
 		// J.2b: the Go analogue — stamp Meta["env_var"] on Go http_client nodes
 		// whose base URL traces back to an os.Getenv read, so ApplyHints (J.2c)
 		// can turn a workspace `hint: SOME_URL` into a target_service allowlist.
