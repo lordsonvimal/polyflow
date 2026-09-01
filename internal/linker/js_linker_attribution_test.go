@@ -196,3 +196,47 @@ const App = () => {
 	assert.True(t, importedNames[file+"\x00missingHelper"])
 	assert.True(t, importedNames[file+"\x00createSignal"], "external imports still suppress matcher candidates")
 }
+
+// TestLinkJS_ClassComponentIsRendersTarget — RT.1: orion's FilesFolders tree
+// components are `export default class Tree extends React.Component`. Pass 1
+// must redirect the JSX usage-proxy renders edge to the class declaration node,
+// not drop it as jsx_component_unresolved.
+func TestLinkJS_ClassComponentIsRendersTarget(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "DirTree.jsx")
+	require.NoError(t, os.WriteFile(parent, []byte("export default class DirTree extends React.Component {}\n"), 0o644))
+	child := filepath.Join(dir, "Tree.jsx")
+	require.NoError(t, os.WriteFile(child, []byte("export default class Tree extends React.Component {}\n"), 0o644))
+
+	classDeclID := "js:" + child + ":class:Tree:1"
+	nodes := []graph.Node{
+		{
+			ID: "js:" + parent + ":class:DirTree:1", Type: graph.NodeTypeClass,
+			Label: "DirTree", Service: "js", File: parent, Line: 1,
+			Meta: map[string]string{"end_line": "1"},
+		},
+		{
+			ID: classDeclID, Type: graph.NodeTypeClass,
+			Label: "Tree", Service: "js", File: child, Line: 1,
+			Meta: map[string]string{"end_line": "1"},
+		},
+		{
+			ID: "js:" + parent + ":component:Tree:1", Type: graph.NodeTypeComponent,
+			Label: "Tree", Service: "js", File: parent, Line: 1,
+		},
+	}
+	edges := []graph.Edge{
+		{ID: "e1", From: "js:" + parent + ":class:DirTree:1", To: "js:" + parent + ":component:Tree:1", Type: graph.EdgeTypeRenders},
+	}
+
+	newEdges, removeIDs, unresolved, _ := NewJSLinker().LinkJS(nodes, edges, map[string][]string{"js": {parent, child}})
+
+	require.Len(t, newEdges, 1)
+	assert.Equal(t, classDeclID, newEdges[0].To)
+	assert.Equal(t, "js:"+parent+":class:DirTree:1", newEdges[0].From)
+	assert.True(t, removeIDs["js:"+parent+":component:Tree:1"])
+	for _, u := range unresolved {
+		assert.NotEqual(t, "jsx_component_unresolved", u.Kind)
+	}
+}

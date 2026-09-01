@@ -41,16 +41,22 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 		nodeByID[nodes[i].ID] = &nodes[i]
 	}
 
-	// Index function/method declaration nodes by service+label (prefer same service).
+	// Index function/method/class declaration nodes by service+label (prefer same
+	// service). A JSX tag is always Capitalized, so a class whose label matches
+	// the tag (an `export default class Tree extends React.Component`) is a valid
+	// component target — Pass 1's renders-edge redirect points at it just as it
+	// would a function component.
 	// key: service + "\x00" + label → nodeID
 	funcByServiceLabel := make(map[string]string)
+	funcByServiceFileLabel := make(map[string]string) // service+file+label — same-file collision preference
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeClass {
 			key := n.Service + "\x00" + n.Label
 			if _, exists := funcByServiceLabel[key]; !exists {
 				funcByServiceLabel[key] = n.ID
 			}
+			funcByServiceFileLabel[n.Service+"\x00"+n.File+"\x00"+n.Label] = n.ID
 		}
 	}
 
@@ -96,8 +102,12 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			continue
 		}
 
-		// Find the declaration node: same label, function type, same service.
-		declID, ok := funcByServiceLabel[n.Service+"\x00"+n.Label]
+		// Find the declaration node: same label, function/class type, same service.
+		// A same-file declaration wins over a same-service one on label collision.
+		declID, ok := funcByServiceFileLabel[n.Service+"\x00"+n.File+"\x00"+n.Label]
+		if !ok {
+			declID, ok = funcByServiceLabel[n.Service+"\x00"+n.Label]
+		}
 		if !ok {
 			// No matching declaration — could be an external library component,
 			// or a real resolution miss; either way the renders edge is dropped
@@ -141,7 +151,7 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			if n.Service != svcName {
 				continue
 			}
-			if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeClass {
 				if _, exists := svcFuncByLabel[n.Label]; !exists {
 					svcFuncByLabel[n.Label] = n.ID
 				}
@@ -156,7 +166,7 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 			if n.Service != svcName {
 				continue
 			}
-			if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod {
+			if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeClass {
 				funcByFileAndLabel[n.File+"\x00"+n.Label] = n.ID
 			}
 		}

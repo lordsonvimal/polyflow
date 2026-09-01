@@ -124,12 +124,60 @@ func jsReconstructTemplateString(node *sitter.Node, src []byte) string {
 		case "`":
 			continue
 		case "template_substitution":
+			// A substitution whose every static branch is "" or a query/fragment
+			// (`${skip ? "?notified=true" : ""}`) is not a path segment — emitting
+			// a trailing "*" here blocks the route match. Truncate the URL at this
+			// point instead: drop the hole and everything after it.
+			if jsSubstitutionIsQueryOnly(child, src) {
+				return out.String()
+			}
 			out.WriteString("*")
 		default: // string_fragment or other literal text chunk
 			out.WriteString(string(src[child.StartByte():child.EndByte()]))
 		}
 	}
 	return out.String()
+}
+
+// jsSubstitutionIsQueryOnly reports whether a `${...}` template substitution can
+// only ever contribute a query string or fragment — every static branch of it is
+// the empty string or begins with "?" or "#". Such a hole marks the end of the
+// path portion of the URL, so the reconstruction truncates there rather than
+// leaving a path wildcard that no route will match.
+func jsSubstitutionIsQueryOnly(sub *sitter.Node, src []byte) bool {
+	var inner *sitter.Node
+	for i := 0; i < int(sub.ChildCount()); i++ {
+		c := sub.Child(i)
+		if c == nil {
+			continue
+		}
+		if t := c.Type(); t == "${" || t == "}" {
+			continue
+		}
+		inner = c
+		break
+	}
+	if inner == nil {
+		return false
+	}
+	var ok func(n *sitter.Node) bool
+	ok = func(n *sitter.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch n.Type() {
+		case "string", "template_string":
+			lit := stripKeyLiteral(string(src[n.StartByte():n.EndByte()]))
+			return lit == "" || strings.HasPrefix(lit, "?") || strings.HasPrefix(lit, "#")
+		case "ternary_expression":
+			return ok(n.ChildByFieldName("consequence")) && ok(n.ChildByFieldName("alternative"))
+		case "parenthesized_expression":
+			return ok(n.NamedChild(0))
+		default:
+			return false
+		}
+	}
+	return ok(inner)
 }
 
 // jsConcatMaxOperands bounds a `+` chain by the number of operands rather
