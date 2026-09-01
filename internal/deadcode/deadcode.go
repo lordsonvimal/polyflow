@@ -234,6 +234,15 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 		if n.Meta[graph.MetaReflectDispatched] == "true" {
 			continue
 		}
+		// A generated `*_templ.go` twin function is not source anyone edits or
+		// deletes — its `.templ` component is the entity a dead-code report
+		// should name. When the twin carries the LinkTemplComponents bridge
+		// (outbound component_impl, meta.via=templ_generated) let the component
+		// branch speak for it and skip the generated function here, so a dead
+		// component surfaces once (as the .templ node) rather than twice.
+		if isGeneratedTemplTwin(idx, n) {
+			continue
+		}
 		if opts.Transitive {
 			if reachable[n.ID] {
 				continue
@@ -317,6 +326,13 @@ func Build(idx *graph.AdjacencyIndex, opts Options) *Result {
 // react_component had zero inbound edges of any other type and were flagged
 // dead despite being the page's actual React root.
 //
+// The templ variant of this edge (LinkTemplComponents, meta.via=
+// "templ_generated") is the exception: its source is the component's generated
+// `*_templ.go` twin, which exists for every `.templ` file regardless of whether
+// anything renders it. hasCaller treats that edge as transparent — following
+// through to the twin's own callers — and Build skips the twin function itself
+// (isGeneratedTemplTwin) so a dead component surfaces once, as the .templ node.
+//
 // EdgeTypeDOMListen (a jQuery/vanilla-JS event registration — `$(el).on(...)`,
 // `el.addEventListener(...)`) is a genuine invocation the same way a direct
 // call is: the browser's event loop calls the handler, not a literal call
@@ -340,11 +356,53 @@ var invokingEdgeTypes = map[graph.EdgeType]bool{
 }
 
 // hasCaller reports whether n has at least one inbound invoking edge.
+//
+// A `component_impl` edge minted by LinkTemplComponents (meta.via=
+// "templ_generated") is treated as transparent rather than as an invocation:
+// its source is the component's generated `*_templ.go` twin, which exists for
+// every `.templ` file whether or not anything renders it, so counting it as a
+// caller would make no templ component ever qualify as dead. Instead we follow
+// through to whether that twin is itself reached. The react_rails variant of
+// `component_impl` (real ERB mount point as source) keeps counting directly.
 func hasCaller(idx *graph.AdjacencyIndex, id string) bool {
-	for _, e := range idx.InEdges[id] {
-		if invokingEdgeTypes[e.Type] {
+	return hasCallerVisiting(idx, id, nil)
+}
+
+// isGeneratedTemplTwin reports whether n is the generated `*_templ.go` function
+// that LinkTemplComponents bridged to a `.templ` component (outbound
+// component_impl, meta.via=templ_generated). The component node stands in for it
+// in the scan.
+func isGeneratedTemplTwin(idx *graph.AdjacencyIndex, n *graph.Node) bool {
+	if n.Type != graph.NodeTypeFunction || !strings.HasSuffix(n.File, "_templ.go") {
+		return false
+	}
+	for _, e := range idx.OutEdges[n.ID] {
+		if e.Type == graph.EdgeTypeComponentImpl && e.Meta["via"] == "templ_generated" {
 			return true
 		}
+	}
+	return false
+}
+
+func hasCallerVisiting(idx *graph.AdjacencyIndex, id string, seen map[string]bool) bool {
+	for _, e := range idx.InEdges[id] {
+		if !invokingEdgeTypes[e.Type] {
+			continue
+		}
+		if e.Type == graph.EdgeTypeComponentImpl && e.Meta["via"] == "templ_generated" {
+			if seen[e.From] {
+				continue
+			}
+			if seen == nil {
+				seen = map[string]bool{}
+			}
+			seen[id] = true
+			if hasCallerVisiting(idx, e.From, seen) {
+				return true
+			}
+			continue
+		}
+		return true
 	}
 	return false
 }
