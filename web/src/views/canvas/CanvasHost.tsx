@@ -286,6 +286,12 @@ function buildStylesheet(): object[] {
 }
 
 function toElements(d: GraphData): object[] {
+  // Defence in depth: cytoscape throws (and wedges the whole canvas) on an
+  // edge whose source/target node isn't in the same batch. A scope resolver
+  // that returns a dangling edge — e.g. a stale index missing a boundary
+  // stub — should degrade to "edge not drawn", not a broken canvas.
+  const nodeIds = new Set(d.nodes.map((n) => n.id));
+  const edges = d.edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to));
   return [
     ...d.nodes.map((n) => ({
       group: "nodes",
@@ -301,7 +307,7 @@ function toElements(d: GraphData): object[] {
         ...(n.meta ?? {}),
       },
     })),
-    ...d.edges.map((e) => ({
+    ...edges.map((e) => ({
       group: "edges",
       data: {
         id: e.id,
