@@ -35,6 +35,7 @@ var wantLinkPasses = []struct {
 	{"ruby_sole_definer_calls", scopeSameServiceOnly},
 	{"ruby_wrapper_url_call_sites", scopeSameServiceOnly},
 	{"pusher_producer_forward", scopeSameServiceOnly},
+	{"pusher_consumer_erb", scopeSameServiceOnly},
 	{"ruby_http_hosts", scopeSameServiceOnly},
 	{"ruby_poly_path_sites", scopeSameServiceOnly},
 	{"go_http_hosts", scopeSameServiceOnly},

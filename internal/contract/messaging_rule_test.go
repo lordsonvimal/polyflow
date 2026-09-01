@@ -483,6 +483,48 @@ func TestPusherRule_DifferentChannel_NoEdge(t *testing.T) {
 	assert.Empty(t, res.Edges)
 }
 
+// PU.4 positive: a PU.2 forward producer joins a PU.3 ERB consumer on the
+// [channel, event] pair, same service.
+func TestPusherRule_ForwardToERB_ChannelEvent(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "ng:pub", Type: graph.NodeTypePublisher, Service: "orion",
+			Meta: map[string]string{"pattern": "pusher_trigger_forward", "channel": "folder-status", "event": "folder_refresh"}},
+		{ID: "ng:sub", Type: graph.NodeTypeSubscriber, Service: "orion",
+			Meta: map[string]string{"pattern": "pusher_subscribe_erb", "channel": "folder-status", "event": "folder_refresh"}},
+	}
+	res := runKind(t, contract.KindPusher, nodes)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, "pusher:ng:pub->ng:sub", res.Edges[0].ID)
+	assert.Equal(t, graph.EdgeTypePusherTrigger, res.Edges[0].Type)
+}
+
+// PU.4 negative: same channel, different event → no edge (two views on one
+// channel listening for different events are different consumers).
+func TestPusherRule_ForwardToERB_EventMismatch(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "ng:pub", Type: graph.NodeTypePublisher, Service: "orion",
+			Meta: map[string]string{"pattern": "pusher_trigger_forward", "channel": "lyra_progress", "event": "job_complete"}},
+		{ID: "ng:sub", Type: graph.NodeTypeSubscriber, Service: "orion",
+			Meta: map[string]string{"pattern": "pusher_subscribe_erb", "channel": "lyra_progress", "event": "batch_refreshed"}},
+	}
+	res := runKind(t, contract.KindPusher, nodes)
+	assert.Empty(t, res.Edges)
+}
+
+// PU.4 positive: the render-partial path keys on channel alone, so every
+// producer on that channel reaches the channel-only ERB subscriber.
+func TestPusherRule_ForwardToERB_ChannelOnly(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "ng:pub", Type: graph.NodeTypePublisher, Service: "orion",
+			Meta: map[string]string{"pattern": "pusher_trigger_forward", "channel": "job-logs", "event": "job_logs"}},
+		{ID: "ng:sub", Type: graph.NodeTypeSubscriber, Service: "orion",
+			Meta: map[string]string{"pattern": "pusher_subscribe_erb_channel", "channel": "job-logs"}},
+	}
+	res := runKind(t, contract.KindPusher, nodes)
+	require.Len(t, res.Edges, 1)
+	assert.Equal(t, graph.EdgeTypePusherTrigger, res.Edges[0].Type)
+}
+
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 // Positive: typed sender links to the matching dispatch case by message_type.
