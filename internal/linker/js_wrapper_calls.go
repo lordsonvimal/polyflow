@@ -293,6 +293,21 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 				label = lit
 			}
 		}
+		// JG.2: pin the HTTP verb from the wrapper name (`apiPut` → PUT) so the
+		// contract match keys on [method, path] instead of falling through
+		// http.yaml's method_fallback, which tries every verb and lets a
+		// `PUT …/unlock` client match a `GET /users/unlock` route. Same
+		// name→verb mapping react_prop_urls.go already applies to the
+		// prop-resolved variant of these nodes.
+		if meta["method"] == "" {
+			if mth := jsWrapperMethod(callee); mth != "" {
+				meta["method"] = mth
+				meta["method_resolved_via"] = "js_wrapper_name"
+				if meta["url"] != "" && label == meta["url"] {
+					label = mth + " " + meta["url"]
+				}
+			}
+		}
 		out = append(out, graph.Node{
 			ID:       id,
 			Type:     graph.NodeTypeHTTPClient,

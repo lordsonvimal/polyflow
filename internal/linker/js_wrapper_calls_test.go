@@ -198,3 +198,49 @@ function outer(unrelated: string) {
 			"outer must not be attributed as a wrapper via its nested closure's own forwarding")
 	}
 }
+
+// TestLinkJSAPIWrapperCalls_MethodFromWrapperName is JG.2: a wrapper whose
+// name carries an HTTP verb (`apiPut`) stamps Meta["method"] on the minted
+// http_client node, so the contract match keys on [method, path] instead of
+// falling through http.yaml's method_fallback (which would let a
+// `PUT .../unlock` client match a `GET /users/unlock` route).
+func TestLinkJSAPIWrapperCalls_MethodFromWrapperName(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"ApiServices.js": `export function apiPut(url, body) {
+  return fetch(url, { method: "PUT", body });
+}
+export function apiGet(url) {
+  return fetch(url);
+}
+`,
+		"Container.jsx": `import { apiPut, apiGet } from "./ApiServices";
+
+function unlock(baseUrl, id) {
+  return apiPut(` + "`${baseUrl}/${id}/unlock`" + `);
+}
+function load(baseUrl) {
+  return apiGet(` + "`${baseUrl}/list`" + `);
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "svc", paths)
+	serviceFiles := map[string][]string{"svc": paths}
+
+	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	var sawPut, sawGet bool
+	for _, n := range newNodes {
+		switch n.Meta["wrapper"] {
+		case "apiPut":
+			sawPut = true
+			assert.Equal(t, "PUT", n.Meta["method"])
+			assert.Equal(t, "js_wrapper_name", n.Meta["method_resolved_via"])
+		case "apiGet":
+			sawGet = true
+			assert.Equal(t, "GET", n.Meta["method"])
+		}
+	}
+	assert.True(t, sawPut, "apiPut call site not minted")
+	assert.True(t, sawGet, "apiGet call site not minted")
+}

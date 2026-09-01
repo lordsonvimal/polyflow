@@ -205,3 +205,21 @@ func TestEngine_StrongPathEvidence_UnaffectedByWeakRule(t *testing.T) {
 	require.Len(t, result.Edges, 2, "strong evidence still fans out")
 	assert.ElementsMatch(t, []string{"link:c1->h1", "link:c1->h2"}, edgeIDs(result.Edges))
 }
+
+// JG.2: a JS wrapper-call producer with the verb pinned from its wrapper name
+// (`apiPut` → method=PUT) must not match a route of a different verb. Before
+// method stamping the producer carried no method, so http.yaml's
+// method_fallback tried every verb and a `PUT .../unlock` client matched a
+// devise `GET /users/unlock` route in an unrelated service.
+func TestEngine_WrapperMethodBlocksVerbMismatch(t *testing.T) {
+	withMethod := []graph.Node{
+		client("c1", "js", "PUT", "/app/application_groups/*/unlock",
+			"path_evidence", "weak"),
+		handler("h1", "atlas", "GET", "/users/unlock"), // devise default, wrong verb
+	}
+	e := &contract.Engine{}
+	result := e.Link(withMethod, []contract.Rule{httpRule("skip", contract.UnmatchedUnknownEdge)}, nil)
+	require.Len(t, result.Edges, 1)
+	assert.Equal(t, "unresolved", result.Edges[0].To,
+		"a PUT client must not link a GET route")
+}

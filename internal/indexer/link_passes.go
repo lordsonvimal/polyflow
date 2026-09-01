@@ -935,6 +935,28 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
+		// JG.1: grade path-evidence on JS/TS http_client producers whose host
+		// segment is still an opaque wildcard after every host resolver above
+		// (ResolveJSHTTPHosts, ResolveConfigBaseURLPaths, LinkReactPropURLs).
+		// The Go SSA-wrapper pass stamps this inline; JS/TS producers were
+		// ungraded, so the contract engine's weak-path fan-out suppressor never
+		// fired for them and a `*/*/unlock` client matched a devise route in an
+		// unrelated fleet service. Mutates the working copy in place so
+		// ApplyHints/EnrichRouteGroups carry the grade to the contract engine;
+		// re-persists so the stored graph carries it too.
+		{"js_http_grade", scopeCrossService, func() error {
+			changed := linker.GradeJSHTTPProducers(st.allNodes)
+			if len(changed) == 0 {
+				return nil
+			}
+			for i := range changed {
+				n := changed[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		{"ruby_import_edges", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
 			rubyImportEdges, rubyImportUnresolved := linker.LinkRubyImportEdges(st.allNodes, svcFiles)
