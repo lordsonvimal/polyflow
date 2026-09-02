@@ -339,7 +339,7 @@ func TestLinkDatastores(t *testing.T) {
 		{ID: "other:q", Type: graph.NodeTypeDatastore, Service: "other",
 			Meta: map[string]string{"kind": "call", "op": "query"}}, // no store in service
 	}
-	edges := LinkDatastores(nodes)
+	edges := LinkDatastores(nodes, nil)
 	require.Len(t, edges, 2)
 
 	byFrom := map[string]graph.Edge{}
@@ -362,7 +362,7 @@ func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
 		{ID: "m:q", Type: graph.NodeTypeDatastore, Service: "m",
 			Meta: map[string]string{"kind": "call", "op": "query"}},
 	}
-	edges := LinkDatastores(nodes)
+	edges := LinkDatastores(nodes, nil)
 	require.Len(t, edges, 2, "ambiguous engine: edge to each store")
 	for _, e := range edges {
 		assert.Equal(t, graph.ConfidencePartial, e.Confidence)
@@ -384,13 +384,31 @@ func TestLinkDatastores_GormSkipsNonGormEngine(t *testing.T) {
 		{ID: "r:exec", Type: graph.NodeTypeDatastore, Service: "svc",
 			Meta: map[string]string{"kind": "call", "op": "persist", "pattern": "sql_exec"}},
 	}
-	edges := LinkDatastores(nodes)
+	edges := LinkDatastores(nodes, nil)
 	byFrom := map[string][]string{}
 	for _, e := range edges {
 		byFrom[e.From] = append(byFrom[e.From], e.To)
 	}
 	assert.Equal(t, []string{"s:pg"}, byFrom["g:create"], "GORM call: gorm engine only")
 	assert.ElementsMatch(t, []string{"s:pg", "s:my"}, byFrom["r:exec"], "raw sql: every engine")
+}
+
+// TestLinkDatastores_SkipsCallWithTableEdge: a call node that already reaches
+// a concrete table gets no generic engine edge.
+func TestLinkDatastores_SkipsCallWithTableEdge(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "s:pg", Type: graph.NodeTypeDatastore, Service: "svc", Meta: map[string]string{"kind": "store"}},
+		{ID: "t:settings", Type: graph.NodeTypeTable, Service: "svc"},
+		{ID: "c:resolved", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist"}},
+		{ID: "c:bare", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "query"}},
+	}
+	existing := []graph.Edge{{From: "c:resolved", To: "t:settings", Type: graph.EdgeTypePersists}}
+	edges := LinkDatastores(nodes, existing)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "c:bare", edges[0].From)
 }
 
 // TestLinkTables verifies Y.3c: a datastore call node's SQL is parsed to its

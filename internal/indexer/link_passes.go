@@ -994,9 +994,6 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, sqlUnresolved...)
 			return nil
 		}},
-		{"datastores", scopeSameServiceOnly, func() error {
-			return st.writeEdges(linker.LinkDatastores(st.allNodes))
-		}},
 		// Y.3c: parse table names out of datastore call SQL and terminate each
 		// query/persist at a real table entity (mints table nodes).
 		{"tables", scopeSameServiceOnly, func() error {
@@ -1024,6 +1021,13 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			st.allUnresolved = append(st.allUnresolved, gormUnresolved...)
 			return nil
+		}},
+		// Terminate any datastore call node that "tables" / "gorm_model_tables"
+		// left unresolved at its service's logical DB engine. Runs last of the
+		// three so a call with a concrete table edge is not also fanned onto an
+		// (ambiguous) engine node.
+		{"datastores", scopeSameServiceOnly, func() error {
+			return st.writeEdges(linker.LinkDatastores(st.allNodes, st.allEdges))
 		}},
 		// Y.4: join server response DTOs to the client interfaces that mirror their
 		// JSON shape (cross-language response_of). Runs after all returns/consumes

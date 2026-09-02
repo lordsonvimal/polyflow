@@ -91,7 +91,7 @@ func fixtureGraph(t *testing.T) ([]graph.Node, []graph.Edge) {
 	jsEdges, _, _, _ := linker.NewJSLinker().LinkJS(allNodes, allEdges, svcFiles)
 	allEdges = append(allEdges, jsEdges...)
 	allEdges = append(allEdges, linker.LinkRouteHandlers(allNodes)...)
-	allEdges = append(allEdges, linker.LinkDatastores(allNodes)...)
+	allEdges = append(allEdges, linker.LinkDatastores(allNodes, nil)...)
 	allEdges = append(allEdges, linker.LinkSSEClients(allNodes)...)
 
 	// Broker hint pass, as a workspace links: entry would drive it — the

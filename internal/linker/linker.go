@@ -451,7 +451,24 @@ func stripMeta(s string) string {
 // dependencies). When a service has multiple engines the edge targets each —
 // static analysis cannot tell which engine a *gorm.DB instance points at, so
 // those extra edges carry confidence "partial" instead of "inferred".
-func LinkDatastores(nodes []graph.Node) []graph.Edge {
+func LinkDatastores(nodes []graph.Node, existing []graph.Edge) []graph.Edge {
+	// A call node that already terminates at a concrete table (LinkTables /
+	// LinkGormModelTables ran first) needs no generic engine edge — the table
+	// is strictly more informative, and the engine is ambiguous anyway when a
+	// service wires more than one (prod postgres + test sqlite).
+	hasTableEdge := make(map[string]bool)
+	tableID := make(map[string]bool)
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeTable {
+			tableID[nodes[i].ID] = true
+		}
+	}
+	for _, e := range existing {
+		if (e.Type == graph.EdgeTypeQueries || e.Type == graph.EdgeTypePersists) && tableID[e.To] {
+			hasTableEdge[e.From] = true
+		}
+	}
+
 	storesByService := make(map[string][]string)
 	gormStoresByService := make(map[string][]string)
 	for i := range nodes {
@@ -468,6 +485,9 @@ func LinkDatastores(nodes []graph.Node) []graph.Edge {
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type != graph.NodeTypeDatastore || n.Meta["kind"] != "call" {
+			continue
+		}
+		if hasTableEdge[n.ID] {
 			continue
 		}
 		stores := storesByService[n.Service]
