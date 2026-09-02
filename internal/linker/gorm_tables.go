@@ -238,6 +238,29 @@ func LinkGormModelTables(nodes []graph.Node) (newEdges []graph.Edge, unresolved 
 					}
 				}
 			}
+			// A `db.Model(&models.ExecConfig{}).Where(…).UpdateColumn(…)` chain:
+			// the finisher node sits a couple lines below the .Model()/.Table()
+			// that names the target. Scan back over the chain statement.
+			if table == "" {
+				src, ok := fileCache[n.File]
+				if !ok {
+					src, _ = os.ReadFile(n.File)
+					fileCache[n.File] = src
+				}
+				from := n.Line - 6
+				if from < 1 {
+					from = 1
+				}
+				if kind, name := gormChainModel(sourceSpan(src, from, n.Line)); name != "" {
+					if strings.EqualFold(kind, "Table") {
+						if len(schemaByService[n.Service][name]) > 0 || len(schemaAnyService[name]) > 0 {
+							table = name
+						}
+					} else if t := tableForModel(n.Service, name); t != "" {
+						model, table = name, t
+					}
+				}
+			}
 			if table == "" {
 				if m, t := enclosingModelTable(n.Service, n.File, n.Line); t != "" {
 					model, table = m, t
@@ -429,6 +452,18 @@ func localVarType(span, name string) string {
 		return m[1]
 	}
 	return ""
+}
+
+var gormChainModelRe = regexp.MustCompile(`\.(Model|Table)\(\s*["` + "`" + `]?[\*&]?(?:\[\])?(?:\w+\.)?(\w+)`)
+
+// gormChainModel pulls the model type or literal table out of a `.Model(&X{})`
+// / `.Table("x")` call within a chain statement span. Returns ("Model", "X")
+// or ("Table", "x"); ("", "") when neither appears.
+func gormChainModel(span string) (kind, name string) {
+	if m := gormChainModelRe.FindStringSubmatch(span); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
 }
 
 func isGoIdent(s string) bool {

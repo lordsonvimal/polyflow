@@ -179,6 +179,30 @@ func TestLinkGormModelTables_LocalVarType(t *testing.T) {
 	}
 }
 
+// TestLinkGormModelTables_ChainModelScan: a `db.Model(&models.ExecConfig{}).
+// Where(…).UpdateColumn(…)` inside a plain func (no receiver) resolves via the
+// .Model() argument scanned out of the chain statement.
+func TestLinkGormModelTables_ChainModelScan(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	modelFile := filepath.Join(dir, "exec_config.go")
+	mustWrite(t, modelFile, "package models\n\nfunc (ExecConfig) TableName() string {\n\treturn \"maple_exec_configs\"\n}\n")
+	repoFile := filepath.Join(dir, "exec_config_repository.go")
+	mustWrite(t, repoFile, "package repository\n\nfunc makeCurrentTx(db *gorm.DB, id string) error {\n\treturn db.Model(&models.ExecConfig{}).\n\t\tWhere(\"config_id = ?\", id).\n\t\tUpdateColumn(\"is_current\", false).Error\n}\n")
+
+	nodes := []graph.Node{
+		makeSQLTableNode("t:exec", "maple-manager", "db/schema.sql", "maple_exec_configs"),
+		{ID: "m:tn", Type: graph.NodeTypeMethod, Label: "TableName", Service: "maple-manager",
+			File: modelFile, Line: 3, EndLine: 5, Meta: map[string]string{"receiver": "ExecConfig"}},
+		{ID: "d:uc", Type: graph.NodeTypeDatastore, Service: "maple-manager", File: repoFile, Line: 6,
+			Meta: map[string]string{"kind": "call", "op": "persist", "pattern": "gorm_persist_chain"}},
+	}
+	edges, unresolved := LinkGormModelTables(nodes)
+	if len(unresolved) != 0 || len(edges) != 1 || edges[0].To != "t:exec" {
+		t.Fatalf("want 1 edge to t:exec, got %d/%d %+v", len(edges), len(unresolved), edges)
+	}
+}
+
 func TestStripReceiverSuffix(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
