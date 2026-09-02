@@ -53,6 +53,11 @@ import (
 func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Node, []graph.Edge, map[string]bool) {
 	// service -> wrapperName -> URL param index
 	wrapperParamIndex := map[string]map[string]int{}
+	// service -> wrapperName -> HTTP verb the wrapper's own body pins on its
+	// fetch/axios call (`fetch(url, {method:"POST"})`). Beats the name-derived
+	// verb (jsWrapperMethod) at the call site: a wrapper called `postSSEAndReload`
+	// or `runAction` has no verb in its name but its body proves POST.
+	wrapperMethod := map[string]map[string]string{}
 	// file -> enclosing function/method ranges, for attributing each new
 	// http_client node to its containing function with a calls edge — the
 	// same line-range containment technique LinkGinMiddleware uses to find
@@ -85,6 +90,14 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 		if _, exists := wrapperParamIndex[n.Service][wname]; !exists {
 			wrapperParamIndex[n.Service][wname] = idx
 		}
+		if m := n.Meta["wrapper_method"]; m != "" {
+			if wrapperMethod[n.Service] == nil {
+				wrapperMethod[n.Service] = map[string]string{}
+			}
+			if _, exists := wrapperMethod[n.Service][wname]; !exists {
+				wrapperMethod[n.Service][wname] = m
+			}
+		}
 	}
 	if len(wrapperParamIndex) == 0 {
 		return nil, nil, nil
@@ -107,15 +120,26 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 		if len(wrappers) == 0 {
 			continue
 		}
+		if wrapperMethod[svc] == nil {
+			wrapperMethod[svc] = map[string]string{}
+		}
+		methods := wrapperMethod[svc]
 		for hop := 0; hop < 5; hop++ {
 			added := false
 			for _, file := range files {
 				if !isJSFile(file) {
 					continue
 				}
-				for name, idx := range discoverJSTransitiveWrappers(file, wrappers) {
+				for name, fact := range discoverJSTransitiveWrappers(file, wrappers) {
 					if _, exists := wrappers[name]; !exists {
-						wrappers[name] = idx
+						wrappers[name] = fact.paramIndex
+						// A wrapper of a wrapper inherits the inner wrapper's
+						// verb unless it was already known from its own body.
+						if _, ok := methods[name]; !ok {
+							if m := methods[fact.via]; m != "" {
+								methods[name] = m
+							}
+						}
 						added = true
 					}
 				}
@@ -152,7 +176,7 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 			if !isJSFile(file) {
 				continue
 			}
-			for _, n := range scanJSWrapperCallSites(svc, file, wrappers) {
+			for _, n := range scanJSWrapperCallSites(svc, file, wrappers, wrapperMethod[svc]) {
 				if seenID[n.ID] {
 					continue
 				}
@@ -197,7 +221,7 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 // documented reason for re-parsing instead of reading a pattern-emitted node:
 // the wrapper table is only known after all files are collected, so the call
 // sites can't have been captured with this knowledge at parse time.
-func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []graph.Node {
+func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyMethods map[string]string) []graph.Node {
 	src, root, lang, ok := jsParse(file)
 	if !ok {
 		return nil
@@ -300,9 +324,13 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int) []gra
 		// name→verb mapping react_prop_urls.go already applies to the
 		// prop-resolved variant of these nodes.
 		if meta["method"] == "" {
-			if mth := jsWrapperMethod(callee); mth != "" {
+			mth, via := bodyMethods[callee], "js_wrapper_body"
+			if mth == "" {
+				mth, via = jsWrapperMethod(callee), "js_wrapper_name"
+			}
+			if mth != "" {
 				meta["method"] = mth
-				meta["method_resolved_via"] = "js_wrapper_name"
+				meta["method_resolved_via"] = via
 				if meta["url"] != "" && label == meta["url"] {
 					label = mth + " " + meta["url"]
 				}
@@ -436,13 +464,21 @@ func jsStaticURLLiteral(n *sitter.Node, src []byte) (string, bool) {
 // name set instead of a hardcoded "fetch"/"axios" match. Mirrors
 // scanJSWrapperCallSites' re-parse rationale: the wrapper table two hops
 // out is only known after this same pass has already run once.
-func discoverJSTransitiveWrappers(file string, wrappers map[string]int) map[string]int {
+// jsTransitiveWrapper is a discovered wrapper-of-a-wrapper: the forwarded
+// parameter index in the outer function, plus the name of the inner wrapper it
+// forwards to (so the caller can inherit that inner wrapper's HTTP verb).
+type jsTransitiveWrapper struct {
+	paramIndex int
+	via        string
+}
+
+func discoverJSTransitiveWrappers(file string, wrappers map[string]int) map[string]jsTransitiveWrapper {
 	src, root, _, ok := jsParse(file)
 	if !ok {
 		return nil
 	}
 
-	out := map[string]int{}
+	out := map[string]jsTransitiveWrapper{}
 	var walkDefs func(n *sitter.Node)
 	walkDefs = func(n *sitter.Node) {
 		if n == nil {
@@ -460,8 +496,8 @@ func discoverJSTransitiveWrappers(file string, wrappers map[string]int) map[stri
 			}
 		}
 		if params != nil && name != nil {
-			if _, idx, ok := jsForwardedParamCall(n, params, wrappers, src); ok {
-				out[name.Content(src)] = idx
+			if inner, idx, ok := jsForwardedParamCall(n, params, wrappers, src); ok {
+				out[name.Content(src)] = jsTransitiveWrapper{paramIndex: idx, via: inner}
 			}
 		}
 		for i := 0; i < int(n.ChildCount()); i++ {
