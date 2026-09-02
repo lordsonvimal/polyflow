@@ -14,24 +14,13 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 )
 
-// searchScoped is handleSearch's federation-scope decision, mirroring
-// cmd/polyflow's runFederatedOrLocalSearch and internal/mcpserver's search
-// tool exactly: service == "" federates across every locally-resolved
-// fleet member (GR.3's default), a non-empty service narrows to just that
-// one member (falling back to the local Searcher if it isn't a wired fleet
-// member), and no fleetSearchers at all (not a fleet member) is just the
-// local Searcher.
+// searchScoped is handleSearch's federation-scope decision, delegated to
+// semantic.ScopedSearch so the web UI, the MCP search tool, and the CLI
+// search command behave identically: service == "" is the current
+// workspace only (Tier GR.7 — fleet-wide search is now opt-in), service ==
+// "*" federates across the fleet, and a member name narrows to that member.
 func (s *Server) searchScoped(ctx context.Context, local *semantic.Searcher, fleet map[string]*semantic.Searcher, q, service string, limit int) (semantic.Response, error) {
-	if service != "" {
-		if sr, ok := fleet[service]; ok {
-			return sr.Search(ctx, q, limit)
-		}
-		return local.Search(ctx, q, limit)
-	}
-	if len(fleet) > 1 {
-		return semantic.FederatedSearch(ctx, fleet, q, limit)
-	}
-	return local.Search(ctx, q, limit)
+	return semantic.ScopedSearch(ctx, local, fleet, q, service, limit)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

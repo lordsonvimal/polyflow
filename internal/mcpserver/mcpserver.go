@@ -204,7 +204,9 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"natural language. Leads with the matching nodes, each carrying an inline source " +
 			"snippet — so one call shows you the code, no separate read needed. A flows hit's " +
 			"entry node is the starting point for trace. Use this to find the exact node before " +
-			"calling context, impact, or trace.",
+			"calling context, impact, or trace. Searches the current workspace by " +
+			"default; pass service='*' to search the whole fleet, or service='<member>' " +
+			"to scope to one fleet member.",
 	}, auditTool(s, "search", s.search))
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -549,7 +551,7 @@ type searchInput struct {
 	Query   string `json:"query" jsonschema:"search query (matches node labels and file paths)"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"max results (default 20)"`
 	Kind    string `json:"kind,omitempty" jsonschema:"restrict results: 'file' for file search, or a node type (function, method, variable, http_handler, ...)"`
-	Service string `json:"service,omitempty" jsonschema:"when this workspace is a fleet member (Tier GR): narrow search to just this one member instead of federating across the whole fleet"`
+	Service string `json:"service,omitempty" jsonschema:"search scope: empty (default) = the current workspace only; '*' = federate across the whole fleet; a fleet member name = just that member"`
 }
 
 type searchOutput struct {
@@ -557,24 +559,12 @@ type searchOutput struct {
 	Files []graph.FileSummary `json:"files,omitempty"`
 }
 
-// runSearch is the search tool's retrieval step, factored out so it can
-// choose between a single Searcher and GR.3's fleet federation: default
-// (service == "") federates across every locally-resolved fleet member via
-// semantic.FederatedSearch when more than one is wired; service narrows to
-// just that one member (falling back to the local Searcher if service isn't
-// a wired fleet member, e.g. a plain non-fleet workspace).
+// runSearch is the search tool's retrieval step. Scope is decided by
+// semantic.ScopedSearch (shared with the web handler and CLI): service ==
+// "" is the current workspace only, service == "*" federates across the
+// fleet, and a member name narrows to that one member.
 func (s *Server) runSearch(ctx context.Context, searcher *semantic.Searcher, query, service string, limit int) (semantic.Response, error) {
-	fleet := s.fleetSearchersSnapshot()
-	if service != "" {
-		if sr, ok := fleet[service]; ok {
-			return sr.Search(ctx, query, limit)
-		}
-		return searcher.Search(ctx, query, limit)
-	}
-	if len(fleet) > 1 {
-		return semantic.FederatedSearch(ctx, fleet, query, limit)
-	}
-	return searcher.Search(ctx, query, limit)
+	return semantic.ScopedSearch(ctx, searcher, s.fleetSearchersSnapshot(), query, service, limit)
 }
 
 func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {

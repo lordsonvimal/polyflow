@@ -49,6 +49,7 @@ func FederatedSearch(ctx context.Context, searchers map[string]*Searcher, q stri
 
 	perMember := make(map[string]Response, len(names))
 	var notes []string
+	var healthy, degraded []string
 	for _, svc := range names {
 		resp, err := searchers[svc].Search(ctx, q, limit)
 		if err != nil {
@@ -61,6 +62,30 @@ func FederatedSearch(ctx context.Context, searchers map[string]*Searcher, q stri
 		if resp.Semantic != "" {
 			notes = append(notes, svc+": "+resp.Semantic)
 		}
+		// A member whose vector arm is unavailable (no embeddings indexed /
+		// skipped / embedder error — search.go stamps all of these
+		// "unavailable: …") contributes only lexical hits. Merged into a
+		// pool that other members answered semantically, those lexical
+		// token-matches sort alongside real semantic hits (every RRF
+		// rank-1 score is ~1/(k+1) regardless of match quality), so one
+		// stale member poisons the whole fleet's ranking. Drop such
+		// members from the merge as long as at least one member is
+		// healthy; if every member is degraded, keep them all (a
+		// uniformly-lexical ranking is at least internally fair).
+		if strings.HasPrefix(resp.Semantic, "unavailable") {
+			degraded = append(degraded, svc)
+		} else {
+			healthy = append(healthy, svc)
+		}
+	}
+
+	mergeNames := names
+	if len(healthy) > 0 && len(degraded) > 0 {
+		mergeNames = healthy
+		notes = append([]string{
+			"excluded from ranking (no embeddings — run 'polyflow index' in each): " +
+				strings.Join(degraded, ", "),
+		}, notes...)
 	}
 
 	pick := func(r Response, section string) []Hit {
@@ -74,7 +99,7 @@ func FederatedSearch(ctx context.Context, searchers map[string]*Searcher, q stri
 		}
 	}
 	merge := func(section string) []Hit {
-		return mergeAcrossMembers(names, perMember, pick, section, limit)
+		return mergeAcrossMembers(mergeNames, perMember, pick, section, limit)
 	}
 
 	return Response{
@@ -134,6 +159,35 @@ func mergeAcrossMembers(names []string, perMember map[string]Response, pick func
 		out = out[:limit]
 	}
 	return out
+}
+
+// ScopedSearch is the shared federation-scope decision for every search
+// entry point (the MCP search tool, the web /api/graph/search handler, and
+// the CLI search command), so all three behave identically. The service
+// argument selects the scope:
+//
+//	""            → the current workspace only (the local Searcher). DEFAULT.
+//	"*" / "fleet" → federate across every locally-resolved fleet member.
+//	"<name>"      → just that one fleet member (local Searcher if unknown).
+//
+// Before Tier GR.7 the default ("") federated fleet-wide; that surfaced
+// unrelated repos on every query and let embedding-less members flood the
+// ranking (see FederatedSearch). Fleet-wide search is now opt-in.
+func ScopedSearch(ctx context.Context, local *Searcher, fleet map[string]*Searcher, q, service string, limit int) (Response, error) {
+	switch service {
+	case "":
+		return local.Search(ctx, q, limit)
+	case "*", "fleet", "all":
+		if len(fleet) > 1 {
+			return FederatedSearch(ctx, fleet, q, limit)
+		}
+		return local.Search(ctx, q, limit)
+	default:
+		if sr, ok := fleet[service]; ok {
+			return sr.Search(ctx, q, limit)
+		}
+		return local.Search(ctx, q, limit)
+	}
 }
 
 func tagService(hits []Hit, svc string) {
