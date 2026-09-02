@@ -577,6 +577,18 @@ func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph.Unresol
 		}
 
 		targets := byName[table]
+		if len(targets) == 0 && strings.HasSuffix(n.File, "_test.go") {
+			// A test fixture (`db.Exec("DELETE FROM exec_configs")`) commonly
+			// uses an un-prefixed / throwaway table name that no schema
+			// declares — minting a synthetic node for it produces a phantom
+			// table (e.g. `exec_configs` beside the real `maple_exec_configs`).
+			// Ledger and move on; production SQL still mints as before.
+			unresolved = append(unresolved, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: table, Kind: "sql_table_test_unresolved",
+			})
+			continue
+		}
 		if len(targets) == 0 {
 			// No schema declaration indexed anywhere in this workspace —
 			// today's synthetic-mint behavior, unchanged.
