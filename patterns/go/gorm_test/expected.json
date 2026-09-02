@@ -1,4 +1,4 @@
 {
-  "patterns": ["gorm_open", "gorm_query", "gorm_query", "gorm_query", "gorm_persist", "gorm_persist", "gorm_persist", "gorm_persist_table"],
-  "node_types": ["datastore", "datastore", "datastore", "datastore", "datastore", "datastore", "datastore", "datastore"]
+  "patterns": ["gorm_open", "gorm_query", "gorm_query", "gorm_query", "gorm_persist", "gorm_persist", "gorm_persist", "gorm_persist_table", "gorm_persist_chain"],
+  "node_types": ["datastore", "datastore", "datastore", "datastore", "datastore", "datastore", "datastore", "datastore", "datastore"]
 }

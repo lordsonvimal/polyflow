@@ -120,6 +120,53 @@ func TestLinkGormModelTables_PreferSchemaSQL(t *testing.T) {
 	}
 }
 
+// TestLinkGormModelTables_EnclosingReceiver: a chain-form write whose
+// finisher arg is an unresolvable column map resolves via the enclosing
+// *ExecConfigRepository method receiver.
+func TestLinkGormModelTables_EnclosingReceiver(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	modelFile := filepath.Join(dir, "exec_config.go")
+	mustWrite(t, modelFile, "package models\n\nfunc (ExecConfig) TableName() string {\n\treturn \"maple_exec_configs\"\n}\n")
+
+	nodes := []graph.Node{
+		makeSQLTableNode("t:exec", "maple-manager", "db/schema.sql", "maple_exec_configs"),
+		{ID: "m:tn", Type: graph.NodeTypeMethod, Label: "TableName", Service: "maple-manager",
+			File: modelFile, Line: 3, EndLine: 5, Meta: map[string]string{"receiver": "ExecConfig"}},
+		{ID: "m:update", Type: graph.NodeTypeMethod, Label: "UpdateColumns", Service: "maple-manager",
+			File: "repo/exec_config_repository.go", Line: 52, EndLine: 60,
+			Meta: map[string]string{"receiver": "ExecConfigRepository"}},
+		{ID: "d:upd", Type: graph.NodeTypeDatastore, Service: "maple-manager",
+			File: "repo/exec_config_repository.go", Line: 53,
+			Meta: map[string]string{"kind": "call", "op": "persist", "pattern": "gorm_persist_chain"}},
+	}
+	edges, unresolved := LinkGormModelTables(nodes)
+	if len(unresolved) != 0 || len(edges) != 1 {
+		t.Fatalf("want 1 edge 0 unresolved, got %d/%d %+v", len(edges), len(unresolved), unresolved)
+	}
+	if edges[0].From != "d:upd" || edges[0].To != "t:exec" ||
+		edges[0].Type != graph.EdgeTypePersists || edges[0].Meta["model"] != "ExecConfig" {
+		t.Errorf("bad edge: %+v", edges[0])
+	}
+}
+
+func TestStripReceiverSuffix(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"ExecConfigRepository": "ExecConfig",
+		"UserService":          "User",
+		"*AppConfigRepo":       "AppConfig",
+		"AuditStore":           "Audit",
+		"Handler":              "",
+		"User":                 "",
+	}
+	for in, want := range cases {
+		if got := stripReceiverSuffix(in); got != want {
+			t.Errorf("stripReceiverSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestGormTableConvention(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
