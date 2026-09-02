@@ -252,24 +252,27 @@ func grepPatternSymbols(pattern string) []string {
 // of candidate identifiers, tried in order), or "" if this call isn't one we
 // care about. toolName disambiguates the native Grep tool (a "pattern" arg,
 // no shell command to parse) from Bash, whose tool_input shape it shares
-// (both have no file_path).
-func extractTarget(toolName string, toolInput map[string]any) (mode, file string, symbols []string) {
+// (both have no file_path). dir is a location hint for DB resolution — a
+// Bash-grep path argument (`grep -rn Foo ../other-repo/`), so a symbol
+// greped into another indexed repo resolves against that repo's graph rather
+// than the session cwd's; "" when the call carries no such hint.
+func extractTarget(toolName string, toolInput map[string]any) (mode, file string, symbols []string, dir string) {
 	if fp, ok := toolInput["file_path"].(string); ok && fp != "" {
-		return "file", fp, nil
+		return "file", fp, nil, ""
 	}
 	if toolName == "Grep" {
 		pattern, _ := toolInput["pattern"].(string)
 		if pattern == "" {
-			return "", "", nil
+			return "", "", nil, ""
 		}
 		if candidates := grepPatternSymbols(pattern); len(candidates) > 0 {
-			return "symbol", "", candidates
+			return "symbol", "", candidates, ""
 		}
-		return "", "", nil
+		return "", "", nil, ""
 	}
 	command, _ := toolInput["command"].(string)
 	if command == "" {
-		return "", "", nil
+		return "", "", nil, ""
 	}
 	for _, seg := range commandSegments(command) {
 		if len(seg) == 0 {
@@ -287,7 +290,7 @@ func extractTarget(toolName string, toolInput map[string]any) (mode, file string
 				}
 				pattern := strings.Trim(seg[i+1], `"'`)
 				if pattern != "" && !hookGlobRe.MatchString(pattern) {
-					return "filename", pattern, nil
+					return "filename", pattern, nil, ""
 				}
 			}
 			continue
@@ -300,23 +303,62 @@ func extractTarget(toolName string, toolInput map[string]any) (mode, file string
 		}
 		if hookGrepCmds[cmdName] && len(rest) > 0 {
 			if candidates := grepPatternSymbols(rest[0]); len(candidates) > 0 {
-				return "symbol", "", candidates
+				// rest[1:] are grep's path operands; the first is enough of a
+				// location hint to resolve which repo's index to query.
+				hint := ""
+				if len(rest) > 1 {
+					hint = strings.Trim(rest[1], `"'`)
+				}
+				return "symbol", "", candidates, hint
 			}
 			continue
 		}
 		if hookFileViewCmds[cmdName] {
 			for _, tok := range rest {
 				if strings.Contains(tok, "/") || hookFileExtRe.MatchString(tok) {
-					return "file", tok, nil
+					return "file", tok, nil, ""
 				}
 			}
 		}
 	}
-	return "", "", nil
+	return "", "", nil, ""
 }
 
 func findPolyflowDB(startDir string) string {
 	return queryresolve.FindLocalDB(startDir)
+}
+
+// hookSearchDir picks the directory to resolve a .polyflow DB from: the
+// target's own directory, so a Read/grep of a file living in another indexed
+// repo resolves that repo's graph instead of the session cwd's. The file
+// target is already absolutised against cwd by the caller; dirHint (a native
+// Grep tool's `path` arg, or a Bash-grep path operand from extractTarget) is
+// absolutised here. Bare `find -name` filenames and path-less greps have no
+// location hint and fall back to cwd, whose walk-up already covers the
+// same-repo case.
+func hookSearchDir(mode, file, dirHint, cwd string) string {
+	if mode == "file" && filepath.IsAbs(file) {
+		return filepath.Dir(file)
+	}
+	if dirHint != "" {
+		p := dirHint
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(cwd, p)
+		}
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return filepath.Dir(p)
+		}
+		return p
+	}
+	return cwd
+}
+
+// hookRepoRoot returns the workspace root that owns dbPath — the parent of
+// its .polyflow/ dir (meta.DBDir is a single path segment) — so file paths
+// are made repo-relative against the index actually being queried, not the
+// session cwd, which may be a different repo or a subdirectory of one.
+func hookRepoRoot(dbPath string) string {
+	return filepath.Dir(filepath.Dir(dbPath))
 }
 
 // findFleetBridgeDB resolves startDir's fleet bridge.db (GR.3), if any,
@@ -553,23 +595,48 @@ func runHookContextInject(in *os.File, out *os.File) {
 		return
 	}
 
-	mode, file, symbols := extractTarget(payload.ToolName, payload.ToolInput)
+	mode, file, symbols, dirHint := extractTarget(payload.ToolName, payload.ToolInput)
 	if mode == "" {
 		return
+	}
+	// The native Grep tool carries its search root as tool_input.path; a
+	// Bash grep's path operand comes back as dirHint from extractTarget.
+	if dirHint == "" {
+		if p, ok := payload.ToolInput["path"].(string); ok {
+			dirHint = p
+		}
 	}
 
 	cwd := payload.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
+	// Absolutise a relative file target (Bash `cat foo/bar.go`,
+	// `head ../other-repo/x.go`) against the session cwd so a `../`-escaping
+	// path is attributed to the repo it actually lands in, and so a same-repo
+	// hit dedupes whether the agent named the path relatively or absolutely.
+	if mode == "file" && file != "" && !filepath.IsAbs(file) {
+		file = filepath.Join(cwd, file)
+	}
+
 	target := file
 	if mode == "symbol" {
 		target = strings.Join(symbols, "|")
 	}
-	dbPath := findPolyflowDB(cwd)
+
+	// Resolve the .polyflow DB from the target's own location, not just the
+	// session cwd: a Read/Grep of an absolute path in another repo that has
+	// its own index should surface THAT repo's graph. Falls back to cwd for
+	// relative paths, bare `find -name` filenames, and path-less greps.
+	searchDir := hookSearchDir(mode, file, dirHint, cwd)
+	dbPath := findPolyflowDB(searchDir)
+	if dbPath == "" && searchDir != cwd {
+		dbPath = findPolyflowDB(cwd)
+	}
 	if dbPath == "" {
 		return
 	}
+	repoRoot := hookRepoRoot(dbPath)
 
 	sessionID := payload.SessionID
 	if sessionID == "" {
@@ -577,15 +644,18 @@ func runHookContextInject(in *os.File, out *os.File) {
 	}
 
 	// Normalize file-mode keys to a repo-relative path so `cat foo/bar.go`
-	// and a later Read of the absolute path dedupe against each other.
+	// and a later Read of the absolute path dedupe against each other; prefix
+	// the owning repo root so the same relative path in two different repos
+	// (touched in one session) doesn't collide into a single dedupe entry.
+	keyBase := repoRoot + "|"
 	var dedupeKey string
 	switch mode {
 	case "file":
-		dedupeKey = "file:" + hookRelPath(file, cwd)
+		dedupeKey = "file:" + keyBase + hookRelPath(file, repoRoot)
 	case "filename":
-		dedupeKey = "filename:" + target
+		dedupeKey = "filename:" + keyBase + target
 	default:
-		dedupeKey = "symbol:" + target
+		dedupeKey = "symbol:" + keyBase + target
 	}
 	if hookAlreadySeen(sessionID, dedupeKey) {
 		return
@@ -596,7 +666,7 @@ func runHookContextInject(in *os.File, out *os.File) {
 	// be able to delay or block the real tool call it's piggybacking on, so
 	// it runs on its own goroutine against a deadline instead of inline.
 	resultCh := make(chan string, 1)
-	go func() { resultCh <- runHookQuery(dbPath, mode, file, symbols, cwd) }()
+	go func() { resultCh <- runHookQuery(dbPath, mode, file, symbols, repoRoot) }()
 
 	select {
 	case block := <-resultCh:
@@ -641,7 +711,7 @@ func runHookContextInject(in *os.File, out *os.File) {
 // fail open).
 var runHookQuery = defaultHookQuery
 
-func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) string {
+func defaultHookQuery(dbPath, mode, file string, symbols []string, repoRoot string) string {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return ""
@@ -659,7 +729,7 @@ func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) s
 	// failure just means no cross-service augmentation this call, not a
 	// broken hook.
 	hasBridge := false
-	if bridgePath := findFleetBridgeDB(cwd); bridgePath != "" {
+	if bridgePath := findFleetBridgeDB(repoRoot); bridgePath != "" {
 		if _, err := db.Exec("ATTACH DATABASE ? AS bridge", bridgePath); err == nil {
 			hasBridge = true
 		}
@@ -695,9 +765,9 @@ func defaultHookQuery(dbPath, mode, file string, symbols []string, cwd string) s
 			unresolvedNote = fmt.Sprintf(" | %d unresolved refs in this file", n)
 		}
 	default:
-		parts = fileContext(db, file, cwd, hasBridge)
+		parts = fileContext(db, file, repoRoot, hasBridge)
 		label = fmt.Sprintf("file '%s'", file)
-		if n := unresolvedRefCount(db, hookRelPath(file, cwd)); n > 0 {
+		if n := unresolvedRefCount(db, hookRelPath(file, repoRoot)); n > 0 {
 			unresolvedNote = fmt.Sprintf(" | %d unresolved refs in this file", n)
 		}
 	}

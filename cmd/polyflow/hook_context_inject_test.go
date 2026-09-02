@@ -61,7 +61,7 @@ func TestExtractTarget_NativeGrepTool(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mode, _, symbols := extractTarget("Grep", tt.toolInput)
+			mode, _, symbols, _ := extractTarget("Grep", tt.toolInput)
 			if mode != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
 			}
@@ -78,31 +78,52 @@ func TestExtractTarget_NativeGrepTool(t *testing.T) {
 // the native Grep tool or `Bash grep`, so a repeated lookup via either path
 // only injects context once per session.
 func TestExtractTarget_GrepAndBashShareDedupeKey(t *testing.T) {
-	_, _, grepSymbols := extractTarget("Grep", map[string]any{"pattern": "sendHeartbeat"})
-	_, _, bashSymbols := extractTarget("Bash", map[string]any{"command": "grep -rn sendHeartbeat ."})
+	_, _, grepSymbols, _ := extractTarget("Grep", map[string]any{"pattern": "sendHeartbeat"})
+	_, _, bashSymbols, _ := extractTarget("Bash", map[string]any{"command": "grep -rn sendHeartbeat ."})
 	if !reflect.DeepEqual(grepSymbols, bashSymbols) {
 		t.Fatalf("Grep symbols %v != Bash-grep symbols %v", grepSymbols, bashSymbols)
 	}
 }
 
 func TestExtractTarget_BashToolUnaffected(t *testing.T) {
-	mode, file, symbols := extractTarget("Bash", map[string]any{"command": "cat internal/graph/model.go"})
+	mode, file, symbols, _ := extractTarget("Bash", map[string]any{"command": "cat internal/graph/model.go"})
 	if mode != "file" || file != "internal/graph/model.go" || symbols != nil {
 		t.Fatalf("mode=%q file=%q symbols=%v", mode, file, symbols)
 	}
 }
 
 func TestExtractTarget_FindConcreteName(t *testing.T) {
-	mode, file, symbols := extractTarget("Bash", map[string]any{"command": `find . -name "model.go"`})
+	mode, file, symbols, _ := extractTarget("Bash", map[string]any{"command": `find . -name "model.go"`})
 	if mode != "filename" || file != "model.go" || symbols != nil {
 		t.Fatalf("mode=%q file=%q symbols=%v", mode, file, symbols)
 	}
 }
 
 func TestExtractTarget_FindWildcardIgnored(t *testing.T) {
-	mode, _, _ := extractTarget("Bash", map[string]any{"command": "find . -name *.go"})
+	mode, _, _, _ := extractTarget("Bash", map[string]any{"command": "find . -name *.go"})
 	if mode != "" {
 		t.Fatalf("expected wildcard find pattern to be ignored, got mode=%q", mode)
+	}
+}
+
+func TestExtractTarget_BashGrepPathHint(t *testing.T) {
+	tests := []struct {
+		command  string
+		wantSyms []string
+		wantDir  string
+	}{
+		{"grep -rn sendHeartbeat ../other-repo/internal", []string{"sendHeartbeat"}, "../other-repo/internal"},
+		{"grep -rn sendHeartbeat .", []string{"sendHeartbeat"}, "."},
+		{"grep -rn sendHeartbeat", []string{"sendHeartbeat"}, ""},
+		{`rg "foo\|bar" "../a b/src"`, []string{"foo", "bar"}, "../a b/src"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			mode, _, syms, dir := extractTarget("Bash", map[string]any{"command": tt.command})
+			if mode != "symbol" || !reflect.DeepEqual(syms, tt.wantSyms) || dir != tt.wantDir {
+				t.Fatalf("mode=%q syms=%v dir=%q", mode, syms, dir)
+			}
+		})
 	}
 }
 
@@ -463,6 +484,105 @@ func TestRunHookContextInject_GeminiCLIPayloadShape(t *testing.T) {
 	// Gemini CLI's documented shape.
 	if !strings.Contains(out, `"hookEventName":"PostToolUse"`) {
 		t.Fatalf("expected hookSpecificOutput.hookEventName=PostToolUse in output, got %q", out)
+	}
+}
+
+// TestRunHookContextInject_CrossRepoTargetPath proves cwd-independent DB
+// resolution: the session is rooted in repo A, but a Read of an absolute path
+// inside repo B (which has its own .polyflow index) surfaces B's graph, not
+// A's — and reports nothing at all when B has no index rather than
+// mis-attributing an A node.
+func TestRunHookContextInject_CrossRepoTargetPath(t *testing.T) {
+	repoA := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoA, ".polyflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbA := newHookTestDB(t, "app/a.go", 0)
+	if err := os.Rename(dbA, filepath.Join(repoA, ".polyflow", "graph.db")); err != nil {
+		t.Fatal(err)
+	}
+
+	repoB := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoB, ".polyflow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A node whose label is unique to repo B so a hit can only come from B's DB.
+	dbBPath := filepath.Join(repoB, ".polyflow", "graph.db")
+	bdb, err := sql.Open("sqlite", dbBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bdb.Exec(graph.Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bdb.Exec(
+		`INSERT INTO nodes (id, type, label, service, file, line, end_line, language) VALUES ('b1', 'function', 'RepoBOnlySymbol', 'svcb', 'lib/b.go', 1, 5, 'go')`); err != nil {
+		t.Fatal(err)
+	}
+	bdb.Close()
+
+	session := fmt.Sprintf("crossrepo-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, session+".json")) })
+
+	out := runHookForTest(t, hookPayload{
+		ToolName:  "Read",
+		ToolInput: map[string]any{"file_path": filepath.Join(repoB, "lib/b.go")},
+		Cwd:       repoA,
+		SessionID: session,
+	})
+	if !strings.Contains(out, "RepoBOnlySymbol") {
+		t.Fatalf("expected repo B's graph for a cross-repo Read, got %q", out)
+	}
+	if strings.Contains(out, "lib/b.go") && strings.Contains(out, "app/a.go") {
+		t.Fatalf("repo A's graph leaked into a cross-repo Read: %q", out)
+	}
+
+	// Same via a relative `../`-escaping Bash path: still attributed to repo B.
+	rel, err := filepath.Rel(repoA, filepath.Join(repoB, "lib/b.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionRel := fmt.Sprintf("crossrepo-rel-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, sessionRel+".json")) })
+	outRel := runHookForTest(t, hookPayload{
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "cat " + rel},
+		Cwd:       repoA,
+		SessionID: sessionRel,
+	})
+	if !strings.Contains(outRel, "RepoBOnlySymbol") {
+		t.Fatalf("expected repo B's graph for a relative cross-repo cat, got %q", outRel)
+	}
+
+	// Same via a Bash grep whose path operand points into repo B.
+	relDir, err := filepath.Rel(repoA, repoB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionGrep := fmt.Sprintf("crossrepo-grep-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, sessionGrep+".json")) })
+	outGrep := runHookForTest(t, hookPayload{
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "grep -rn RepoBOnlySymbol " + relDir},
+		Cwd:       repoA,
+		SessionID: sessionGrep,
+	})
+	if !strings.Contains(outGrep, "RepoBOnlySymbol") {
+		t.Fatalf("expected repo B's graph for a cross-repo grep, got %q", outGrep)
+	}
+
+	// A path in a repo with no index injects nothing (not a mis-attributed A node).
+	repoC := t.TempDir()
+	sessionC := fmt.Sprintf("crossrepo-noindex-%d", time.Now().UnixNano())
+	t.Cleanup(func() { os.Remove(filepath.Join(hookSeenDir, sessionC+".json")) })
+	outC := runHookForTest(t, hookPayload{
+		ToolName:  "Read",
+		ToolInput: map[string]any{"file_path": filepath.Join(repoC, "app/a.go")},
+		Cwd:       repoA,
+		SessionID: sessionC,
+	})
+	if outC != "" {
+		t.Fatalf("expected no injection for a path in an unindexed repo, got %q", outC)
 	}
 }
 
