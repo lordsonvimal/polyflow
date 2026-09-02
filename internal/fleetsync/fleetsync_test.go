@@ -126,6 +126,35 @@ func TestResolveService_CleanLocalMatch_NoClone(t *testing.T) {
 	assert.True(t, isEmptyDir(t, scratch))
 }
 
+// TestResolveService_CleanLocalMatch_Unindexed_IndexesInPlace covers the
+// `polyflow fleet sync` bug: a registered checkout at the right SHA whose
+// graph.db was never built must be indexed in place (no scratch re-clone)
+// so the returned path actually exists for the bridge build to open.
+func TestResolveService_CleanLocalMatch_Unindexed_IndexesInPlace(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	dbPath := filepath.Join(localDir, meta.DBDir, meta.DBFile)
+	require.NoFileExists(t, dbPath)
+
+	scratch := t.TempDir()
+	got, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.Equal(t, dbPath, got)
+	assert.FileExists(t, dbPath, "an unindexed clean checkout must be indexed in place")
+	assert.True(t, isEmptyDir(t, scratch), "indexing in place must not clone")
+}
+
 func TestResolveService_DirtyLocalMatch_ReusesLocal(t *testing.T) {
 	bareURL, sha := newBareRepo(t)
 	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
@@ -226,10 +255,38 @@ func TestResolveService_NoLocalEntry_CacheHit_NoClone(t *testing.T) {
 }
 
 // TestResolveStatus_CleanLocalMatch_ReportsLocalNoClone is GR.5's read-only
-// counterpart to TestResolveService_CleanLocalMatch_NoClone: same clean
-// checkout, but ResolveStatus must report it via Source=="local" without
-// ever touching ScratchDir — a status view has no step 4.
+// counterpart to TestResolveService_CleanLocalMatch_NoClone: a clean
+// checkout whose graph.db is on disk reports Source=="local" without ever
+// touching ScratchDir — a status view has no step 4.
 func TestResolveStatus_CleanLocalMatch_ReportsLocalNoClone(t *testing.T) {
+	bareURL, sha := newBareRepo(t)
+	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
+
+	localDir := filepath.Join(t.TempDir(), "local")
+	cloneAt(t, bareURL, localDir)
+
+	dbPath := filepath.Join(localDir, meta.DBDir, meta.DBFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+
+	regPath := newRegistryPath(t)
+	require.NoError(t, registry.Sync(regPath, "svc", localDir))
+
+	st, err := fleetsync.ResolveStatus(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: regPath,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, st.SHA)
+	assert.Equal(t, "local", st.Source)
+	assert.Equal(t, localDir, st.LocalPath)
+}
+
+// TestResolveStatus_CleanLocalMatch_Unindexed_ReportsLocalUnindexed covers a
+// registered checkout at the right SHA whose graph.db was never built (or,
+// for a Subpath member, whose per-service shard a whole-workspace index
+// never wrote): status reports Source=="local-unindexed" so the operator
+// knows the next sync will index it in place rather than clone.
+func TestResolveStatus_CleanLocalMatch_Unindexed_ReportsLocalUnindexed(t *testing.T) {
 	bareURL, sha := newBareRepo(t)
 	svc := fleetconfig.Service{Name: "svc", Git: bareURL, Ref: "main"}
 
@@ -244,7 +301,7 @@ func TestResolveStatus_CleanLocalMatch_ReportsLocalNoClone(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, sha, st.SHA)
-	assert.Equal(t, "local", st.Source)
+	assert.Equal(t, "local-unindexed", st.Source)
 	assert.Equal(t, localDir, st.LocalPath)
 }
 

@@ -69,7 +69,22 @@ func ResolveService(ctx context.Context, svc fleetconfig.Service, refOverride st
 	// at the right SHA still matches; see isCleanCheckoutAt.
 	if entry, ok := reg.Lookup(svc.Name); ok {
 		if clean, cleanErr := isCleanCheckoutAt(ctx, entry.LocalPath, sha); cleanErr == nil && clean {
-			return dbPathFor(entry.LocalPath, svc), sha, nil
+			db := dbPathFor(entry.LocalPath, svc)
+			if _, statErr := os.Stat(db); statErr == nil {
+				return db, sha, nil
+			}
+			// Registered at the right SHA but the graph.db isn't there. This
+			// is the common "checkout exists, was never indexed" case — and,
+			// for a Subpath (monorepo) member, the very common case of a
+			// whole-workspace `polyflow index` having written only the
+			// unified graph.db, never the per-service
+			// .polyflow/services/<name>/graph.db shard a fleet sync reads.
+			// Index the already-local, already-correct checkout in place
+			// rather than falling through to step 4's scratch re-clone.
+			if idxErr := indexLocalCheckout(ctx, entry.LocalPath, svc); idxErr != nil {
+				return "", "", fmt.Errorf("index local checkout for %s at %s: %w", svc.Name, entry.LocalPath, idxErr)
+			}
+			return db, sha, nil
 		}
 	}
 
@@ -105,11 +120,14 @@ type MemberStatus struct {
 	Service string
 	Ref     string
 	SHA     string
-	// Source is "local" (a clean checkout at SHA is already registered),
-	// "cache" (opts.CacheDir has a copy keyed by this SHA), or "unresolved"
-	// (neither hit — the next `fleet sync` would have to clone).
+	// Source is "local" (a clean checkout at SHA is already registered and
+	// its graph.db is on disk), "local-unindexed" (a clean checkout at SHA
+	// is registered but its graph.db — or, for a Subpath member, its
+	// per-service shard — was never built; the next `fleet sync` will index
+	// it in place, no clone), "cache" (opts.CacheDir has a copy keyed by
+	// this SHA), or "unresolved" (none hit — the next `fleet sync` clones).
 	Source string
-	// LocalPath is set only when Source == "local".
+	// LocalPath is set when Source == "local" or "local-unindexed".
 	LocalPath string
 }
 
@@ -143,6 +161,9 @@ func ResolveStatus(ctx context.Context, svc fleetconfig.Service, refOverride str
 	if entry, ok := reg.Lookup(svc.Name); ok {
 		if clean, cleanErr := isCleanCheckoutAt(ctx, entry.LocalPath, sha); cleanErr == nil && clean {
 			st.Source = "local"
+			if _, statErr := os.Stat(dbPathFor(entry.LocalPath, svc)); statErr != nil {
+				st.Source = "local-unindexed"
+			}
 			st.LocalPath = entry.LocalPath
 			return st, nil
 		}
@@ -263,11 +284,32 @@ func cloneAndIndex(ctx context.Context, svc fleetconfig.Service, ref, regPath st
 		return "", fmt.Errorf("git clone %s@%s: %w: %s", svc.Git, ref, err, strings.TrimSpace(string(cloneOut)))
 	}
 
-	wsRoot := cloneDir
+	if err := indexLocalCheckout(ctx, cloneDir, svc); err != nil {
+		return "", err
+	}
+
+	if persistentScratch {
+		if err := registry.Sync(regPath, svc.Name, cloneDir); err != nil {
+			return "", fmt.Errorf("sync registry: %w", err)
+		}
+	}
+
+	return dbPathFor(cloneDir, svc), nil
+}
+
+// indexLocalCheckout runs the FR.2 indexing pipeline against an on-disk
+// workspace checkout at wsRoot, writing the graph.db a fleet sync will read
+// for svc: the unified .polyflow/graph.db for a Subpath-less member, or the
+// per-service .polyflow/services/<name>/graph.db shard for a Subpath member
+// (the same layout `polyflow index <service>` writes). Shared by
+// cloneAndIndex (fresh clone) and ResolveService's step 2 (an
+// already-local, already-correct checkout that was never indexed, or whose
+// per-service shard a whole-workspace index never produced).
+func indexLocalCheckout(ctx context.Context, wsRoot string, svc fleetconfig.Service) error {
 	wsConfigPath := filepath.Join(wsRoot, meta.ConfigFile)
 	cfg, err := workspace.Load(wsConfigPath)
 	if err != nil {
-		return "", fmt.Errorf("load cloned workspace config %s: %w", wsConfigPath, err)
+		return fmt.Errorf("load workspace config %s: %w", wsConfigPath, err)
 	}
 
 	dbDir := filepath.Join(wsRoot, meta.DBDir)
@@ -284,16 +326,9 @@ func cloneAndIndex(ctx context.Context, svc fleetconfig.Service, ref, regPath st
 		NoEmbed:       true,
 		ContractsDir:  wsRoot,
 	}); err != nil {
-		return "", fmt.Errorf("index %s: %w", svc.Name, err)
+		return fmt.Errorf("index %s: %w", svc.Name, err)
 	}
-
-	if persistentScratch {
-		if err := registry.Sync(regPath, svc.Name, wsRoot); err != nil {
-			return "", fmt.Errorf("sync registry: %w", err)
-		}
-	}
-
-	return filepath.Join(dbDir, meta.DBFile), nil
+	return nil
 }
 
 // copyToCache populates the build cache with a freshly built graph.db so a
