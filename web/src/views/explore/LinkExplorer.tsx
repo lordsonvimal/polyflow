@@ -33,6 +33,7 @@ export interface LinkRow {
   cross_service?: boolean;
   confidence?: string;
   verification_state?: string;
+  synthetic?: boolean;
   depth: number;
   via?: string[];
 }
@@ -247,6 +248,14 @@ export default function LinkExplorer(props: { nodeId: string }) {
                           <span class="flex items-center gap-1.5 min-w-0">
                             <Show when={dot()}>{(d) => <span class={`w-1.5 h-1.5 rounded-full shrink-0 ${d().class}`} title={d().title} />}</Show>
                             <span class="text-neutral-200 truncate" title={row.label}>{displayLabel(row.label)}</span>
+                            <Show when={row.synthetic}>
+                              <span
+                                class="shrink-0 px-1 rounded text-[10px] leading-4 text-amber-400 border border-amber-700/60"
+                                title="schema not in workspace — external / unindexed table"
+                              >
+                                external
+                              </span>
+                            </Show>
                           </span>
                           <span class="flex items-center gap-1 shrink-0">
                             <Show when={row.depth === 1}>

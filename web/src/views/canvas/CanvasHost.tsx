@@ -233,6 +233,19 @@ function buildStylesheet(): object[] {
       selector: "node[stub = 'true']",
       style: { "background-opacity": 0.35, "border-width": 1, "border-style": "dashed", "border-color": "#6b7280" },
     },
+    // A `table` node with no CREATE TABLE in the workspace — the schema lives
+    // in a legacy source DB or a service that isn't indexed (linker stamps
+    // meta.synthetic="true", meta.schema="external"). Hollow amber-dashed so
+    // it reads as "real table, schema not here", not a first-class entity.
+    {
+      selector: "node[synthetic = 'true']",
+      style: {
+        "background-opacity": 0.25,
+        "border-width": 2,
+        "border-style": "dashed",
+        "border-color": "#f59e0b",
+      },
+    },
     // UN.5: nodes with no visible edge under the active lens dim to 30%
     // rather than disappear (lenses.ts's applyLens) — orientation is kept
     // until the user opts into "hide unlinked". Opacity alone read as
