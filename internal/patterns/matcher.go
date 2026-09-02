@@ -815,6 +815,9 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 		}
 		captures["wrapper_name"] = wname
 		captures["param_index"] = strconv.Itoa(idx)
+		if mth := jsWrapperCallMethod(argNode, src); mth != "" {
+			captures["wrapper_method"] = mth
+		}
 	}
 
 	// WB.4: producer_alias_url_call no longer anchors @url to the first
@@ -1066,6 +1069,77 @@ func jsWrapperParamIndex(argNode *sitter.Node, src []byte) (wrapperName string, 
 		return "", -1, false
 	}
 	return "", -1, false
+}
+
+// jsWrapperCallMethod extracts the HTTP verb a wrapper body's fetch/axios call
+// pins explicitly — `fetch(url, {method:"POST"})`, `axios.post(url)`,
+// `axios({url, method:"PUT"})` — so a call to the wrapper can key the contract
+// match on [method, path] rather than falling through http.yaml's
+// method_fallback (which tries every verb and lets a POST-only client match a
+// GET route that shares a path). argNode is the URL identifier inside that
+// call. Empty when there is no explicit verb: a bare `fetch(url)` is GET at
+// runtime, but we abstain and let method_fallback + anchor-scoring decide
+// rather than assert it.
+func jsWrapperCallMethod(argNode *sitter.Node, src []byte) string {
+	call := argNode.Parent()
+	for call != nil && call.Type() != "call_expression" {
+		call = call.Parent()
+	}
+	if call == nil {
+		return ""
+	}
+	if fn := call.ChildByFieldName("function"); fn != nil && fn.Type() == "member_expression" {
+		if obj := fn.ChildByFieldName("object"); obj != nil && obj.Content(src) == "axios" {
+			if prop := fn.ChildByFieldName("property"); prop != nil {
+				if v := strings.ToUpper(prop.Content(src)); v != "REQUEST" {
+					return v
+				}
+			}
+		}
+	}
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return ""
+	}
+	for i := 0; i < int(args.NamedChildCount()); i++ {
+		if v := jsObjectHTTPMethodValue(args.NamedChild(i), src); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// jsObjectHTTPMethodValue returns the string value of an object literal's
+// `method:` (fetch/axios) or `type:` (jQuery-style) key when it is a plain
+// string/template literal, uppercased; "" otherwise.
+func jsObjectHTTPMethodValue(obj *sitter.Node, src []byte) string {
+	if obj == nil || obj.Type() != "object" {
+		return ""
+	}
+	for i := 0; i < int(obj.NamedChildCount()); i++ {
+		pair := obj.NamedChild(i)
+		if pair.Type() != "pair" {
+			continue
+		}
+		key := pair.ChildByFieldName("key")
+		if key == nil {
+			continue
+		}
+		switch strings.Trim(key.Content(src), "\"'`") {
+		case "method", "type":
+		default:
+			continue
+		}
+		val := pair.ChildByFieldName("value")
+		if val == nil || (val.Type() != "string" && val.Type() != "template_string") {
+			return ""
+		}
+		if strings.Contains(val.Content(src), "${") {
+			return ""
+		}
+		return strings.ToUpper(strings.Trim(val.Content(src), "\"'`"))
+	}
+	return ""
 }
 
 // jsParamIdentifier returns the plain identifier a formal_parameters child

@@ -235,7 +235,9 @@ function load(baseUrl) {
 		case "apiPut":
 			sawPut = true
 			assert.Equal(t, "PUT", n.Meta["method"])
-			assert.Equal(t, "js_wrapper_name", n.Meta["method_resolved_via"])
+			// The body pins `{ method: "PUT" }` explicitly, so body detection
+			// wins over the name-derived verb (both agree here).
+			assert.Equal(t, "js_wrapper_body", n.Meta["method_resolved_via"])
 		case "apiGet":
 			sawGet = true
 			assert.Equal(t, "GET", n.Meta["method"])
@@ -243,4 +245,49 @@ function load(baseUrl) {
 	}
 	assert.True(t, sawPut, "apiPut call site not minted")
 	assert.True(t, sawGet, "apiGet call site not minted")
+}
+
+// TestLinkJSAPIWrapperCalls_MethodFromWrapperBody: a wrapper whose NAME carries
+// no verb (`postSSEAndReload`, `runAction`) still gets Meta["method"] when its
+// own body pins `fetch(url, { method: "POST" })` — and a wrapper-of-a-wrapper
+// inherits it.
+func TestLinkJSAPIWrapperCalls_MethodFromWrapperBody(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"actions.js": `export function postSSEAndReload(url, body) {
+  return fetch(url, { method: "POST", body });
+}
+export function runAction(url) {
+  return postSSEAndReload(url, {});
+}
+`,
+		"page.jsx": `import { postSSEAndReload, runAction } from "./actions";
+
+function markActive(id) {
+  return postSSEAndReload(` + "`/maple/app-configs/${id}/do-mark-active`" + `);
+}
+function restore(id) {
+  return runAction(` + "`/maple/app-configs/${id}/do-restore`" + `);
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "svc", paths)
+	serviceFiles := map[string][]string{"svc": paths}
+
+	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	var sawDirect, sawTransitive bool
+	for _, n := range newNodes {
+		switch n.Meta["wrapper"] {
+		case "postSSEAndReload":
+			sawDirect = true
+			assert.Equal(t, "POST", n.Meta["method"])
+			assert.Equal(t, "js_wrapper_body", n.Meta["method_resolved_via"])
+		case "runAction":
+			sawTransitive = true
+			assert.Equal(t, "POST", n.Meta["method"], "wrapper-of-a-wrapper inherits the inner verb")
+		}
+	}
+	assert.True(t, sawDirect, "postSSEAndReload call site not minted")
+	assert.True(t, sawTransitive, "runAction call site not minted")
 }
