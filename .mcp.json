@@ -2,7 +2,7 @@
   "mcpServers": {
     "polyflow": {
       "type": "stdio",
-      "command": "/Users/lordson/Projects/polyflow/dist/polyflow",
+      "command": "/usr/local/bin/polyflow",
       "args": [
         "mcp"
       ],

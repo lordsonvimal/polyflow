@@ -739,3 +739,15 @@ func TestRun_SingleServiceCLILayout(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(rootDBDir, "services", "frontend"))
 	assert.NoFileExists(t, filepath.Join(rootDBDir, meta.DBFile), "single-service index must not write/merge into the fleet graph.db")
 }
+
+// TestIsMinifiedAsset_YarnPnP — Yarn PnP generated runtime files must be
+// excluded so that Node.js internals like StringPrototypeStartsWith("/") are
+// not indexed as http_client nodes, which would produce false GET / edges.
+func TestIsMinifiedAsset_YarnPnP(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{".pnp.cjs", ".pnp.loader.mjs", ".pnp.js"} {
+		assert.True(t, isMinifiedAsset("/project/"+name), name+" should be excluded")
+	}
+	assert.False(t, isMinifiedAsset("/project/src/app.tsx"), "source file must not be excluded")
+	assert.True(t, isMinifiedAsset("/project/vendor.min.js"), "minified asset still excluded")
+}
