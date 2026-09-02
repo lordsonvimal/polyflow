@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -68,6 +69,97 @@ func TestFederatedSearch_SingleMember_StillTagsService(t *testing.T) {
 	}
 	if resp.Nodes[0].Entity.Service != "svc" {
 		t.Errorf("expected Service=svc even with one member, got %q", resp.Nodes[0].Entity.Service)
+	}
+}
+
+// TestFederatedSearch_ExcludesEmbeddinglessMembers: a member whose vector
+// arm is unavailable (no embeddings indexed) must not contribute lexical
+// hits to a ranking that a healthy member answered semantically. Its hits
+// are dropped from the merge and it's named in the Semantic note.
+func TestFederatedSearch_ExcludesEmbeddinglessMembers(t *testing.T) {
+	dbHealthy := openTestDB(t)
+	seedNode(t, dbHealthy, &graph.Node{
+		ID: "healthy:fn:handleUser", Type: graph.NodeTypeFunction,
+		Label: "handleUser", Service: "healthy", File: "user.go", Line: 1,
+	}, []float32{1, 0, 0, 0})
+	srHealthy := NewSearcher(NewStore(dbHealthy), &stubEmbedder{dims: 4, vec: []float32{1, 0, 0, 0}}, nil)
+
+	dbStale := openTestDB(t)
+	seedNode(t, dbStale, &graph.Node{
+		// Matches the "user" query lexically via the user.go filename token,
+		// exactly like the healthy member's hit — but this DB has no
+		// embeddings, so the match is lexical-only.
+		ID: "stale:fn:randomThing", Type: graph.NodeTypeFunction,
+		Label: "randomThing", Service: "stale", File: "user.go", Line: 1,
+	}, nil)
+	// Simulate a member that was indexed without embeddings.
+	if _, err := dbStale.Exec(`DELETE FROM embeddings`); err != nil {
+		t.Fatal(err)
+	}
+	srStale := NewSearcher(NewStore(dbStale), &stubEmbedder{dims: 4, vec: []float32{1, 0, 0, 0}}, nil)
+
+	resp, err := FederatedSearch(context.Background(), map[string]*Searcher{
+		"healthy": srHealthy,
+		"stale":   srStale,
+	}, "user", 10)
+	if err != nil {
+		t.Fatalf("federated search: %v", err)
+	}
+	for _, h := range resp.Nodes {
+		if h.Entity.Service == "stale" {
+			t.Errorf("embedding-less member 'stale' must be excluded from the merge, got hit %q", h.Entity.ID)
+		}
+	}
+	if !strings.Contains(resp.Semantic, "stale") {
+		t.Errorf("Semantic note must name the excluded member, got %q", resp.Semantic)
+	}
+}
+
+// TestScopedSearch_DefaultIsWorkspaceLocal: service == "" must hit only the
+// local Searcher even when fleet members are wired (GR.7 — fleet search is
+// opt-in via service "*").
+func TestScopedSearch_DefaultIsWorkspaceLocal(t *testing.T) {
+	dbLocal := openTestDB(t)
+	seedNode(t, dbLocal, &graph.Node{
+		ID: "local:fn:doThing", Type: graph.NodeTypeFunction,
+		Label: "doThing", Service: "local", File: "thing.go", Line: 1,
+	}, nil)
+	local := NewSearcher(NewStore(dbLocal), nil, nil)
+
+	dbOther := openTestDB(t)
+	seedNode(t, dbOther, &graph.Node{
+		ID: "other:fn:doThing", Type: graph.NodeTypeFunction,
+		Label: "doThing", Service: "other", File: "thing.go", Line: 1,
+	}, nil)
+	fleet := map[string]*Searcher{
+		"local": local,
+		"other": NewSearcher(NewStore(dbOther), nil, nil),
+	}
+
+	ctx := context.Background()
+
+	local1, err := ScopedSearch(ctx, local, fleet, "doThing", "", 10)
+	if err != nil {
+		t.Fatalf("scoped search: %v", err)
+	}
+	for _, h := range local1.Nodes {
+		if h.Entity.ID == "other:fn:doThing" {
+			t.Errorf("default scope leaked a fleet-member hit: %q", h.Entity.ID)
+		}
+	}
+
+	all, err := ScopedSearch(ctx, local, fleet, "doThing", "*", 10)
+	if err != nil {
+		t.Fatalf("scoped search '*': %v", err)
+	}
+	var sawOther bool
+	for _, h := range all.Nodes {
+		if h.Entity.ID == "other:fn:doThing" {
+			sawOther = true
+		}
+	}
+	if !sawOther {
+		t.Errorf("service='*' must federate: expected an 'other' hit, got %+v", all.Nodes)
 	}
 }
 

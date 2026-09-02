@@ -29,19 +29,27 @@ type Entry =
   | { group: "service"; item: ServiceEntry }
   | { group: "command"; item: Command };
 
-async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
+type SymbolResult = { entries: SymbolEntry[]; note: string };
+
+async function fetchSymbols(parsed: ParsedQuery, fleetScope: boolean): Promise<SymbolResult> {
   // A bare "kind:x service:y" query (no free text — e.g. the Stack panel's
   // per-kind bar-chart click) is still a real symbol search; only a totally
   // empty query (nothing typed, no chips) has nothing to search for.
-  if (!parsed.text && !parsed.chips.kind) return [];
+  if (!parsed.text && !parsed.chips.kind) return { entries: [], note: "" };
   const params = new URLSearchParams({ limit: String(RESULT_LIMIT) });
   if (parsed.text) params.set("q", parsed.text);
   if (parsed.chips.kind) params.set("kind", parsed.chips.kind);
+  // Scope: an explicit `service:` chip wins; otherwise the Fleet toggle
+  // sends "*" (federate the whole fleet). Default (no chip, toggle off) is
+  // the current workspace only — the server treats an absent service param
+  // as workspace-local (semantic.ScopedSearch).
   if (parsed.chips.service) params.set("service", parsed.chips.service);
+  else if (fleetScope) params.set("service", "*");
   try {
     const r = await fetch(`/api/graph/search?${params}`);
-    if (!r.ok) return [];
+    if (!r.ok) return { entries: [], note: "" };
     const data = await r.json();
+    const note: string = Array.isArray(data) ? "" : (data.semantic ?? "");
     let out: SymbolEntry[];
     if (Array.isArray(data)) {
       out = data.map((n: any) => ({
@@ -82,9 +90,9 @@ async function fetchSymbols(parsed: ParsedQuery): Promise<SymbolEntry[]> {
       });
     }
     if (parsed.chips.service) out = out.filter(s => s.service === parsed.chips.service);
-    return out.slice(0, RESULT_LIMIT);
+    return { entries: out.slice(0, RESULT_LIMIT), note };
   } catch {
-    return [];
+    return { entries: [], note: "" };
   }
 }
 
@@ -161,6 +169,10 @@ export default function Palette() {
   const [services, setServices] = createSignal<ServiceEntry[]>([]);
   const [cmds, setCmds] = createSignal<Command[]>([]);
   const [highlight, setHighlight] = createSignal(0);
+  // Search scope: false = current workspace only (default), true = the whole
+  // fleet. Mirrors the `service` param on /api/graph/search.
+  const [fleetScope, setFleetScope] = createSignal(false);
+  const [semanticNote, setSemanticNote] = createSignal("");
 
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let seq = 0;
@@ -177,14 +189,21 @@ export default function Palette() {
     if (!parsed.text && !parsed.chips.kind && !parsed.chips.service) {
       setSymbols([]);
       setFiles([]);
+      setSemanticNote("");
       return;
     }
     const mySeq = ++seq;
-    Promise.all([fetchSymbols(parsed), fetchFiles(parsed)]).then(([s, f]) => {
+    Promise.all([fetchSymbols(parsed, fleetScope()), fetchFiles(parsed)]).then(([s, f]) => {
       if (mySeq !== seq) return; // a newer keystroke already superseded this request
-      setSymbols(s);
+      setSymbols(s.entries);
+      setSemanticNote(s.note);
       setFiles(f);
     });
+  }
+
+  function toggleFleetScope() {
+    setFleetScope(v => !v);
+    runSearch(query());
   }
 
   function onInput(v: string) {
@@ -258,6 +277,7 @@ export default function Palette() {
     setSymbols([]);
     setFiles([]);
     setServices([]);
+    setSemanticNote("");
     setHighlight(0);
   }
 
@@ -322,6 +342,32 @@ export default function Palette() {
             onInput={(e) => onInput(e.currentTarget.value)}
             onKeyDown={onKeyDown}
           />
+          <div class="flex items-center gap-1 px-3 py-1.5 border-b border-neutral-800 text-xs">
+            <span class="text-neutral-500 mr-1">Scope</span>
+            <button
+              data-testid="palette-scope-workspace"
+              class={`px-2 py-0.5 rounded ${!fleetScope() ? "bg-neutral-700 text-neutral-100" : "text-neutral-400 hover:text-neutral-200"}`}
+              onClick={() => { if (fleetScope()) toggleFleetScope(); }}
+            >
+              This workspace
+            </button>
+            <button
+              data-testid="palette-scope-fleet"
+              class={`px-2 py-0.5 rounded ${fleetScope() ? "bg-neutral-700 text-neutral-100" : "text-neutral-400 hover:text-neutral-200"}`}
+              onClick={() => { if (!fleetScope()) toggleFleetScope(); }}
+            >
+              Entire fleet
+            </button>
+          </div>
+          <Show when={semanticNote()}>
+            <div
+              data-testid="palette-semantic-note"
+              class="px-3 py-1 border-b border-neutral-800 text-[11px] text-amber-500/90 truncate"
+              title={semanticNote()}
+            >
+              {semanticNote()}
+            </div>
+          </Show>
           <div class="max-h-96 overflow-y-auto overflow-x-hidden text-sm">
             <Show when={query().trim() === ""}>
               <Group label="RECENT">

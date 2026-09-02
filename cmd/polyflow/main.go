@@ -690,7 +690,7 @@ func initSearchFlags() {
 	searchCmd.Flags().StringVar(&searchFormat, "format", "table", "output format: table or json")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "max results")
 	searchCmd.Flags().StringVar(&searchKind, "kind", "", "restrict results: 'file' or a node type (function, variable, http_handler, …)")
-	searchCmd.Flags().StringVar(&searchService, "service", "", "when this workspace is a fleet member (Tier GR): narrow search to just this one member instead of federating across the whole fleet")
+	searchCmd.Flags().StringVar(&searchService, "service", "", "search scope: empty (default) = current workspace only; '*' = federate across the whole fleet; a fleet member name = just that member")
 }
 
 var searchCmd = &cobra.Command{
@@ -885,11 +885,10 @@ func buildFleetSearchers(emb semantic.Embedder, synonyms map[string][]string) (m
 	return searchers, closeAll, nil
 }
 
-// runFederatedOrLocalSearch is the CLI search command's retrieval step,
-// mirroring internal/mcpserver's runSearch: service == "" federates across
-// every locally-resolved fleet member by default (GR.3's federation-scope
-// decision); a non-empty service narrows to just that one member, falling
-// back to the local Searcher if it isn't a wired fleet member.
+// runFederatedOrLocalSearch is the CLI search command's retrieval step.
+// Scope is decided by semantic.ScopedSearch (shared with the MCP tool and
+// web handler): service == "" is the current workspace only, "*" federates
+// across the fleet, a member name narrows to that member.
 func runFederatedOrLocalSearch(ctx context.Context, local *semantic.Searcher, emb semantic.Embedder, synonyms map[string][]string, query, service string, limit int) (semantic.Response, error) {
 	fleet, closeFleet, err := buildFleetSearchers(emb, synonyms)
 	if err != nil {
@@ -897,16 +896,7 @@ func runFederatedOrLocalSearch(ctx context.Context, local *semantic.Searcher, em
 	}
 	defer closeFleet()
 
-	if service != "" {
-		if sr, ok := fleet[service]; ok {
-			return sr.Search(ctx, query, limit)
-		}
-		return local.Search(ctx, query, limit)
-	}
-	if len(fleet) > 1 {
-		return semantic.FederatedSearch(ctx, fleet, query, limit)
-	}
-	return local.Search(ctx, query, limit)
+	return semantic.ScopedSearch(ctx, local, fleet, query, service, limit)
 }
 
 // resolveEmbedder builds the Embedder from a workspace config.
