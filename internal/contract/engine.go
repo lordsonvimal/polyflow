@@ -157,6 +157,15 @@ func findDynamicKeyField(prod *graph.Node, spec EndpointSpec) string {
 		if prod.Meta[field] != "" {
 			continue
 		}
+		// An empty `method` when method_fallback is configured is not the
+		// dynamic key the branch_enum candidates fill — it is the fallback's
+		// job. Injecting a URL candidate string into the method field yields
+		// a guaranteed non-match and drops the call to `unresolved` even
+		// though its path candidates resolve cleanly (config-actions.js's
+		// `markConfigInactive`: method AND url are both ternaries).
+		if field == "method" && len(spec.MethodFallback) > 0 {
+			continue
+		}
 		hasFallback := false
 		for _, fb := range spec.KeyFallbacks[field] {
 			if prod.Meta[fb] != "" {
@@ -201,7 +210,7 @@ func matchProducerWithKeyOverride(
 		rawKey := strings.Join(rawFields, " ")
 		normKey := strings.Join(normFields, " ")
 
-		hits, _, matchMeta := findMatches(rawKey, normKey, rule.Match, idx)
+		hits, _, matchMeta, _ := findMatches(rawKey, normKey, rule.Match, idx)
 		emitted := false
 		for _, hit := range hits {
 			if !sameServiceAllowed(rule.Edge.SameService, prod, hit) {
@@ -251,12 +260,59 @@ func mergeOverrides(a, b map[string]string) map[string]string {
 	return merged
 }
 
+// bestMethodOverride probes each method_fallback verb against the consumer
+// index and returns the one whose match is strongest. ok is false when no
+// verb matched anything (the caller then keeps the full list so behaviour is
+// unchanged for the genuinely-unresolvable case). Ties — including the common
+// case where several verbs match the same route set equally well — resolve to
+// the earliest override, preserving the method_fallback list's own ordering.
+func bestMethodOverride(
+	prod *graph.Node,
+	rule Rule,
+	norms []Normalizer,
+	env NormalizeEnv,
+	idx consumerIndexes,
+	overrides []map[string]string,
+) (map[string]string, bool) {
+	bestQ := -1
+	var best map[string]string
+	for _, override := range overrides {
+		rawFields := buildRawFields(prod, rule.Producer, override)
+		if keyIsEmpty(rawFields) {
+			continue
+		}
+		normFields := applyNormsToFields(rawFields, norms, env)
+		if keyVoided(rawFields, normFields) {
+			continue
+		}
+		hits, _, _, q := findMatches(strings.Join(rawFields, " "), strings.Join(normFields, " "), rule.Match, idx)
+		eligible := false
+		for _, hit := range hits {
+			if sameServiceAllowed(rule.Edge.SameService, prod, hit) {
+				eligible = true
+				break
+			}
+		}
+		if eligible && q > bestQ {
+			bestQ, best = q, override
+		}
+	}
+	return best, best != nil
+}
+
 // matchProducer tries all candidate (method-override, tier) combinations for
 // one producer. Every consumer sharing the matched key receives an edge —
 // recall over precision: two services exposing the same route, or N hub
 // subscribers on one broadcast channel, all get linked instead of first-seen
-// winning silently. Returns true if at least one edge was emitted; the
-// method-override loop stops at the first override that produced edges.
+// winning silently. Returns true if at least one edge was emitted.
+//
+// When the producer's HTTP verb is unknown and method_fallback supplies a
+// list of verbs to try, the verbs are NOT raced first-hit-wins: a client
+// that omits its method is not asserting GET. Every verb is probed and the
+// one whose match is strongest (exact > normalized > wildcard, ties broken
+// by literal-anchor count then fallback order) is the one that emits edges.
+// Racing them let `POST /maple/app-configs/:id/do-restore` lose to a same-shape
+// `GET /maple/ws/build-logs/:id` purely because GET is tried first.
 func matchProducer(
 	prod *graph.Node,
 	rule Rule,
@@ -265,7 +321,13 @@ func matchProducer(
 	idx consumerIndexes,
 	result *Result,
 ) bool {
-	for _, override := range candidateMethodOverrides(prod, rule.Producer) {
+	overrides := candidateMethodOverrides(prod, rule.Producer)
+	if len(overrides) > 1 {
+		if best, ok := bestMethodOverride(prod, rule, norms, env, idx, overrides); ok {
+			overrides = []map[string]string{best}
+		}
+	}
+	for _, override := range overrides {
 		rawFields := buildRawFields(prod, rule.Producer, override)
 		if keyIsEmpty(rawFields) {
 			continue
@@ -277,7 +339,7 @@ func matchProducer(
 		rawKey := strings.Join(rawFields, " ")
 		normKey := strings.Join(normFields, " ")
 
-		hits, confidence, matchMeta := findMatches(rawKey, normKey, rule.Match, idx)
+		hits, confidence, matchMeta, _ := findMatches(rawKey, normKey, rule.Match, idx)
 
 		// Collect the hits that pass the same-service policy first, so fan-out
 		// ambiguity can be judged before edges are emitted (recall is preserved:
@@ -423,28 +485,36 @@ func distinctTargetServices(hits []*graph.Node) int {
 // returns every consumer on the first tier that hits, plus the corresponding
 // confidence string and any tier-specific match metadata. Consumers are
 // returned in node-input order (stable).
-func findMatches(rawKey, normKey string, tiers []MatchTier, idx consumerIndexes) ([]*graph.Node, string, map[string]string) {
+func findMatches(rawKey, normKey string, tiers []MatchTier, idx consumerIndexes) ([]*graph.Node, string, map[string]string, int) {
+	// quality ranks how strong the match is, for callers that must choose
+	// between competing matches on the same producer (matchProducer's
+	// method_fallback picking one verb among several). Tier dominates; within
+	// the wildcard tier the literal-anchor count breaks ties — a POST route
+	// that agrees on `/maple` + `/do-restore` must beat a GET route that agrees
+	// on `/maple` alone, which the tier and the key-only anchor_ratio meta
+	// cannot express.
+	const qExact, qNormalized = 1 << 20, 1 << 10
 	for _, tier := range tiers {
 		switch tier {
 		case TierExact:
 			if hs := idx.exact[rawKey]; len(hs) > 0 {
-				return hs, graph.ConfidenceStatic, nil
+				return hs, graph.ConfidenceStatic, nil, qExact
 			}
 		case TierNormalized:
 			if hs := idx.norm[normKey]; len(hs) > 0 {
-				return hs, graph.ConfidenceInferred, nil
+				return hs, graph.ConfidenceInferred, nil, qNormalized
 			}
 		case TierWildcardAnchored:
-			if hs := wildcardScan(normKey, idx); len(hs) > 0 {
-				return hs, graph.ConfidenceInferred, wildcardMatchMeta(normKey)
+			if hs, anchor := wildcardScan(normKey, idx); len(hs) > 0 {
+				return hs, graph.ConfidenceInferred, wildcardMatchMeta(normKey), anchor
 			}
 		case TierExchangeOnly:
 			if hs := exchangeOnlyScan(normKey, idx); len(hs) > 0 {
-				return hs, graph.ConfidencePartial, nil
+				return hs, graph.ConfidencePartial, nil, 1
 			}
 		}
 	}
-	return nil, "", nil
+	return nil, "", nil, 0
 }
 
 // wildcardMatchMeta records the anchor strength of a TierWildcardAnchored
@@ -985,10 +1055,10 @@ func sameServiceAllowed(policy string, prod, cons *graph.Node) bool {
 // `/app/impact_analyses/*/*` (anchors on `app` alone, with the key's literal
 // `actions` falling opposite a route param) — keeping only the higher-scoring
 // set drops the second, which is how Rails routing itself would dispatch.
-func wildcardScan(key string, idx consumerIndexes) []*graph.Node {
+func wildcardScan(key string, idx consumerIndexes) ([]*graph.Node, int) {
 	keyPath, keyPrefix := splitAtFirstSlash(key)
 	if !hasLiteralSegment(keyPath) {
-		return nil
+		return nil, 0
 	}
 	type scoredKey struct {
 		consKey string
@@ -1016,7 +1086,7 @@ func wildcardScan(key string, idx consumerIndexes) []*graph.Node {
 		}
 		hits = append(hits, idx.norm[m.consKey]...)
 	}
-	return hits
+	return hits, best
 }
 
 // exchangeOnlyScan matches on the first key field alone (the exchange) when the

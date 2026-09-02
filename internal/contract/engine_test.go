@@ -528,3 +528,29 @@ func TestEngine_FilelessNodesStillLink(t *testing.T) {
 	require.Len(t, result.Edges, 1)
 	assert.Equal(t, "h1", result.Edges[0].To)
 }
+
+// A method-less client (verb omitted at the call site) must not be raced
+// first-hit-wins across method_fallback: `GET` is tried first, but a POST
+// route that shares two literal anchors with the wildcarded key must beat a
+// GET route that shares only the common prefix. Regression for
+// `/maple/*/*/do-restore` linking to `GET /maple/ws/build-logs/:id`.
+func TestEngine_MethodFallback_PicksBestAnchoredVerb(t *testing.T) {
+	nodes := []graph.Node{
+		client("c1", "svc", "", "/maple/*/*/do-restore"),
+		handler("g1", "svc", "GET", "/maple/ws/build-logs/:id"),
+		handler("g2", "svc", "GET", "/maple/pdv/snapshots/:id"),
+		handler("p1", "svc", "POST", "/maple/app-configs/:id/do-restore"),
+		handler("p2", "svc", "POST", "/maple/exec-configs/:id/do-restore"),
+	}
+	e := &contract.Engine{}
+	result := e.Link(nodes, []contract.Rule{httpRule("keep", contract.UnmatchedUnknownEdge)}, nil)
+
+	got := map[string]bool{}
+	for _, edge := range result.Edges {
+		if edge.Type == graph.EdgeTypeHTTPCall {
+			got[edge.To] = true
+		}
+	}
+	assert.True(t, got["p1"] && got["p2"], "POST do-restore routes must be linked")
+	assert.False(t, got["g1"] || got["g2"], "unrelated GET routes must not be linked")
+}

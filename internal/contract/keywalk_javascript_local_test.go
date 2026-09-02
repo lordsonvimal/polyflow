@@ -60,6 +60,70 @@ func walkURL(t *testing.T, src string, nth int) ([]string, bool) {
 	return contract.KeyWalkerFor("javascript").WalkKey(node, b, noConsts)
 }
 
+func walkURLConsts(t *testing.T, src string, nth int, consts contract.ConstResolver) ([]string, bool) {
+	t.Helper()
+	node, b := urlArgAt(t, src, nth)
+	return contract.KeyWalkerFor("javascript").WalkKey(node, b, consts)
+}
+
+// A file-scoped constant table routinely holds one arbitrary binding of a
+// name like `url` (every action handler in the file declares its own). The
+// lexically-nearest binding must win over that table, not the reverse —
+// otherwise `deleteConfigFromDetail`'s `const url` reads as
+// `fetchDependentApps`'s.
+func TestJSLocalBinding_LocalWinsOverConstTable(t *testing.T) {
+	src := "" +
+		"function fetchDependentApps() {\n" +
+		"  const url = `/api/v1/things/${id}/dependent-apps`;\n" +
+		"  $.get(url);\n" +
+		"}\n" +
+		"function deleteThing() {\n" +
+		"  const url = `/api/v1/things/${id}`;\n" +
+		"  $.get(url);\n" +
+		"}\n"
+	consts := func(name string) (string, bool) {
+		if name == "url" {
+			return "/api/v1/things/*/dependent-apps", true
+		}
+		return "", false
+	}
+	got, dyn := walkURLConsts(t, src, 1, consts)
+	assert.False(t, dyn)
+	assert.Equal(t, []string{"/api/v1/things/*"}, got)
+}
+
+// A name bound to a formal parameter is a local binding to a caller-supplied
+// value: unknowable here, and specifically NOT a licence to fall through to a
+// same-named file constant.
+func TestJSLocalBinding_ParamShadowsConstTable(t *testing.T) {
+	src := "" +
+		"const url = `/api/v1/fallback`;\n" +
+		"function wrap(url) {\n" +
+		"  $.get(url);\n" +
+		"}\n"
+	consts := func(name string) (string, bool) {
+		if name == "url" {
+			return "/api/v1/fallback", true
+		}
+		return "", false
+	}
+	_, dyn := walkURLConsts(t, src, 0, consts)
+	assert.True(t, dyn)
+}
+
+// A genuine module-level constant with no local shadow still resolves through
+// the widening lexical search — the const-table fallback is not the only way.
+func TestJSLocalBinding_ModuleConstStillResolves(t *testing.T) {
+	src := "" +
+		"const BASE = `/api/v1/base`;\n" +
+		"function go() {\n" +
+		"  $.get(BASE);\n" +
+		"}\n"
+	got, dyn := walkURL(t, src, 0)
+	assert.False(t, dyn)
+	assert.Equal(t, []string{"/api/v1/base"}, got)
+}
+
 // TestJSLocalBinding_WorkedExample is deliverables.js:748 verbatim — the
 // single most common shape in the corpus.
 func TestJSLocalBinding_WorkedExample(t *testing.T) {

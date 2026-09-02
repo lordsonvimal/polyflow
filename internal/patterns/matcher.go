@@ -1662,6 +1662,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// pattern is registered first, so it wins.
 	seenClientLines := make(map[string]string) // "file:line" → winning pattern name
 	seenNavPaths := make(map[string]bool)      // "file\x00path" → true
+	keptClientIdx := make(map[string]int)      // "file:line" → index into filtered of the surviving http_client node
 	filtered := nodes[:0]
 	for i := range nodes {
 		n := nodes[i]
@@ -1697,7 +1698,18 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 				// different pattern already claimed the line) is dropped exactly
 				// as before.
 				if !(isObjCallCandidate && won == n.Meta["pattern"]) {
-					continue // drop: already have an http_client node for this line
+					// Before dropping a rival pattern's node, salvage any key
+					// meta it resolved that the winner lacks. Two patterns
+					// routinely match one call site with complementary detail —
+					// `fetch(url, {method})` matches both `fetch_call` (URL, no
+					// verb) and `fetch_with_options` (URL + verb); registry
+					// order alone must not decide that the verb is lost. Only
+					// empty fields on the winner are filled, so the
+					// first-registered pattern still wins every contested field.
+					if ki, ok := keptClientIdx[key]; ok {
+						mergeClientKeyMeta(&filtered[ki], &n)
+					}
+					continue
 				}
 			}
 			if n.Meta["nav_link"] == "true" {
@@ -1713,6 +1725,7 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 			if _, seen := seenClientLines[key]; !seen {
 				seenClientLines[key] = n.Meta["pattern"]
+				keptClientIdx[key] = len(filtered)
 			}
 		}
 		filtered = append(filtered, n)
@@ -2934,6 +2947,39 @@ func tryResolveOne(raw string, fileConsts map[string]string) (string, string) {
 // key fields should be routed through the language KeyWalker (X.1a): HTTP
 // clients, pub/sub publishers and subscribers, and AMQP channels (both
 // producer and consumer side share NodeTypeChannel).
+// mergeClientKeyMeta backfills key-routing meta fields (`method`, `url`,
+// `path`) that are empty on dst from a same-call-site duplicate node src that
+// is about to be dropped by the http_client dedup. Contested (both non-empty)
+// fields are left untouched — the first-registered pattern still wins them.
+// When a verb is newly adopted and dst's label was the bare URL, the label is
+// upgraded to "VERB url" to match how single-pattern verb+url nodes read.
+func mergeClientKeyMeta(dst, src *graph.Node) {
+	if dst.Meta == nil || src.Meta == nil {
+		return
+	}
+	for _, f := range []string{"method", "url", "path"} {
+		sv := stripStringLiteral(src.Meta[f])
+		if sv == "" || dst.Meta[f] != "" {
+			continue
+		}
+		if f == "method" {
+			if v, ok := normalizeHTTPVerb(sv); ok {
+				sv = v
+			}
+		}
+		dst.Meta[f] = sv
+	}
+	if m := dst.Meta["method"]; m != "" {
+		endpoint := dst.Meta["url"]
+		if endpoint == "" {
+			endpoint = dst.Meta["path"]
+		}
+		if endpoint != "" && (dst.Label == endpoint || dst.Label == "url" || dst.Label == "path") {
+			dst.Label = m + " " + endpoint
+		}
+	}
+}
+
 func isKeyWalkerNode(t graph.NodeType) bool {
 	switch t {
 	case graph.NodeTypeHTTPClient, graph.NodeTypePublisher, graph.NodeTypeSubscriber, graph.NodeTypeChannel:

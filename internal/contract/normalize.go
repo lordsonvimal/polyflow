@@ -430,6 +430,80 @@ func isBoilerplateSegment(seg string) bool {
 // wildcard_anchored match so the most-specific route wins when one wildcarded
 // key matches several (see wildcardScan). Callers only compare scores, so the
 // absolute value carries no meaning.
+// segMatch compares one path segment from a wildcarded key against the
+// aligned pattern segment. A segment is one of: a literal (`configs`), a
+// full wildcard (`*`, from a whole interpolated segment or a route param), or
+// a PARTIAL wildcard (`*-configs`, from `` `${configType}-configs` `` — the
+// interpolation replaced only part of the segment). Partial wildcards match a
+// literal by their fixed prefix/suffix, exactly how a router would bind
+// `/maple/exec-configs/…` to a client building `/maple/${t}-configs/…`.
+//
+// hasWild reports whether the key side carried any wildcard (full or partial).
+// anchor is the literal text the two sides agree on for scoring — the whole
+// segment for a literal↔literal match, the fixed part for a partial-wildcard
+// match, "" when nothing concrete is shared.
+func segMatch(keySeg, patSeg string) (matched, hasWild bool, anchor string) {
+	if keySeg == patSeg {
+		if keySeg == "*" {
+			return true, true, ""
+		}
+		return true, false, keySeg
+	}
+	kPre, kSuf, kPartial := splitGlob(keySeg)
+	pPre, pSuf, pPartial := splitGlob(patSeg)
+	switch {
+	case keySeg == "*":
+		return true, true, ""
+	case patSeg == "*":
+		// A concrete (or partially concrete) key segment landing on a route
+		// parameter is a legitimate bind, but it is NOT a shared anchor: the
+		// route validates nothing about it. Matches old behaviour — the anchor
+		// must come from a literal↔literal (or glob↔literal) agreement
+		// elsewhere.
+		return true, kPartial, ""
+	case kPartial && pPartial:
+		// both interpolated the same shape — agree only if the fixed parts do
+		if kPre == pPre && kSuf == pSuf && (kPre != "" || kSuf != "") {
+			return true, true, kPre + kSuf
+		}
+		return false, true, ""
+	case kPartial:
+		if globFits(patSeg, kPre, kSuf) {
+			return true, true, kPre + kSuf
+		}
+		return false, true, ""
+	case pPartial:
+		if globFits(keySeg, pPre, pSuf) {
+			return true, false, pPre + pSuf
+		}
+		return false, false, ""
+	default:
+		return false, false, ""
+	}
+}
+
+// splitGlob splits a single-`*` segment into (prefix, suffix, isPartialGlob).
+// A bare "*" or a segment with no "*" is not a partial glob.
+func splitGlob(seg string) (pre, suf string, partial bool) {
+	i := strings.IndexByte(seg, '*')
+	if i < 0 || seg == "*" {
+		return "", "", false
+	}
+	// only the common single-`*` shape from template reconstruction
+	if strings.IndexByte(seg[i+1:], '*') >= 0 {
+		return "", "", false
+	}
+	return seg[:i], seg[i+1:], true
+}
+
+// globFits reports whether a literal segment fits a glob's fixed prefix/suffix.
+func globFits(literal, pre, suf string) bool {
+	if literal == "" || literal == "*" || len(literal) < len(pre)+len(suf) {
+		return false
+	}
+	return strings.HasPrefix(literal, pre) && strings.HasSuffix(literal, suf) && (pre != "" || suf != "")
+}
+
 func wildcardAnchorScore(key, pattern string) int {
 	ks := splitPath(key)
 	ps := splitPath(pattern)
@@ -438,10 +512,8 @@ func wildcardAnchorScore(key, pattern string) int {
 	}
 	score := 0
 	for i := range ks {
-		if ks[i] == "*" || ps[i] == "*" {
-			continue
-		}
-		if ks[i] == ps[i] && !isBoilerplateSegment(ks[i]) {
+		matched, _, anchor := segMatch(ks[i], ps[i])
+		if matched && anchor != "" && !isBoilerplateSegment(anchor) {
 			score++
 		}
 	}
@@ -457,18 +529,15 @@ func pathMatchesPattern(key, pattern string) bool {
 	keyHasWild := false
 	discriminating := false
 	for i := range ks {
-		kw := ks[i] == "*"
-		pw := ps[i] == "*"
-		if kw {
+		matched, hasWild, anchor := segMatch(ks[i], ps[i])
+		if !matched {
+			return false
+		}
+		if hasWild {
 			keyHasWild = true
 		}
-		if !kw && !pw {
-			if ks[i] != ps[i] {
-				return false
-			}
-			if !isBoilerplateSegment(ks[i]) {
-				discriminating = true
-			}
+		if anchor != "" && !isBoilerplateSegment(anchor) {
+			discriminating = true
 		}
 	}
 	if !keyHasWild {
