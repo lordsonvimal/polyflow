@@ -429,6 +429,52 @@ func TestJavaScriptParser_TSX_ImperativeCalls(t *testing.T) {
 	assert.True(t, hasCallsEdge, "expected calls edge from Notification to fetchWarnings")
 }
 
+// TestJavaScriptParser_GlobalAssignFuncBody: calls inside a
+// `window.maple.X = async function(){}` body attribute to that function, not the
+// file's (module) node.
+func TestJavaScriptParser_GlobalAssignFuncBody(t *testing.T) {
+	t.Parallel()
+	m := mustMatcher(t)
+	p := parser.ForFile("testdata/global_assign.js")
+	require.NotNil(t, p)
+
+	nodes, edges, _, err := p.Parse("testdata/global_assign.js", service, m, nil)
+	require.NoError(t, err)
+
+	var openFn *graph.Node
+	for i := range nodes {
+		if nodes[i].Label == "openAppConfigForEdit" {
+			openFn = &nodes[i]
+		}
+	}
+	require.NotNil(t, openFn, "expected openAppConfigForEdit node")
+	assert.Equal(t, "openAppConfigForEdit", openFn.Meta["global_symbol"])
+	assert.Greater(t, openFn.EndLine, openFn.Line, "node must span the assigned function body")
+
+	var toFetch, toPopulate bool
+	for _, e := range edges {
+		if e.Type != graph.EdgeTypeCalls || e.From != openFn.ID {
+			continue
+		}
+		if strings.Contains(e.To, "_fetchAppConfig") {
+			toFetch = true
+		}
+		if strings.Contains(e.To, "_populateAppConfigEditForm") {
+			toPopulate = true
+		}
+	}
+	assert.True(t, toFetch, "openAppConfigForEdit should call _fetchAppConfig")
+	assert.True(t, toPopulate, "openAppConfigForEdit should call _populateAppConfigEditForm")
+
+	// The wrong (module) -> _fetchAppConfig attribution must not appear.
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && strings.Contains(e.From, ":function:(module):") &&
+			strings.Contains(e.To, "_fetchAppConfig") {
+			t.Errorf("call misattributed to (module): %s -> %s", e.From, e.To)
+		}
+	}
+}
+
 // BenchmarkWorkerPool_100Files measures parsing 100 fixture files concurrently.
 func BenchmarkWorkerPool_100Files(b *testing.B) {
 	reg, err := patterns.DefaultRegistry(patternsDir)

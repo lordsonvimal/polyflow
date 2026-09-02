@@ -890,6 +890,18 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 			// attributes there instead of to (module).
 			frame.fnName, frame.fnLine = h.fnName, h.fnLine
 			selfAttributed = true
+		} else if asn := node.Parent(); asn != nil && asn.Type() == "assignment_expression" {
+			// `window.maple.openAppConfigForEdit = async function(){ _fetchAppConfig() }`
+			// — an anonymous function assigned to a window-rooted member path.
+			// stampGlobalSymbols mints a node keyed on the leaf name at the
+			// assignment line; attribute the body there so its call sites don't
+			// all fall through to (module).
+			if left := asn.ChildByFieldName("left"); left != nil && left.Type() == "member_expression" {
+				if _, leaf, ok := globalMemberPath(left, ex.src); ok {
+					frame.fnName, frame.fnLine = leaf, tsLine(asn)
+					selfAttributed = true
+				}
+			}
 		}
 		// Materialise the function node when this frame attributes to the
 		// function node itself. The pattern matcher only emits nodes for
@@ -900,15 +912,20 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		// edges."from" FK. addNode dedups, so this is a no-op for the cases
 		// the matcher already covers.
 		if selfAttributed {
+			end := tsEndLine(node)
+			if end < frame.fnLine {
+				end = frame.fnLine
+			}
 			n := graph.Node{
 				ID:      ex.fnNodeID(frame.fnName, frame.fnLine),
 				Type:    graph.NodeTypeFunction,
 				Label:   frame.fnName,
-				Service: ex.service, File: ex.file, Line: frame.fnLine, EndLine: frame.fnLine,
+				Service: ex.service, File: ex.file, Line: frame.fnLine, EndLine: end,
 				Language: ex.langTag,
+				Meta:     map[string]string{"end_line": fmt.Sprintf("%d", end)},
 			}
 			if isAccessorMethod(node) {
-				n.Meta = map[string]string{"js_accessor": "true"}
+				n.Meta["js_accessor"] = "true"
 			}
 			ex.addNode(n)
 		}

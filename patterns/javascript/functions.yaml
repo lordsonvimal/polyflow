@@ -54,6 +54,23 @@ patterns:
       - name: ref
         role: func_ref
 
+  # window.maple.openAppConfigForEdit = async function (id) { ... } — a function
+  # assigned to a member-expression target (window-namespaced registration, the
+  # dominant maple-manager / datastar idiom, plus `this.handler = () => {}` in
+  # class constructors). Without a node here the matcher had no scope to
+  # attribute the body's call sites to, so every call inside fell through to
+  # the file's (module) node and the function read as having no outgoing calls.
+  # @_def spans the assignment so enclosing-function attribution is bounded.
+  - name: global_assign_func
+    query: |
+      (assignment_expression
+        left: (member_expression
+          property: (property_identifier) @name)
+        right: [(function_expression) (arrow_function)]) @_def
+    captures:
+      - name: name
+        role: func_name
+
   # foo() {} — ES6 method shorthand. tree-sitter uses the same
   # method_definition node whether this sits in an object literal
   # (`{ foo() {} }`) or a class body (`class X { foo() {} }`), so one pattern

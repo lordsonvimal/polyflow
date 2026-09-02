@@ -13,3 +13,7 @@ class Foo {
 
 function parseDepPrefix(s) {}
 var PREFIXES = [{ test: /^dep:/i, parse: parseDepPrefix }];
+
+window.maple.openAppConfigForEdit = async function (id) {
+  return _fetchAppConfig(id);
+};
