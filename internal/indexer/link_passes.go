@@ -1014,6 +1014,17 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, tableUnresolved...)
 			return st.writeEdges(tableEdges)
 		}},
+		// Tier GT: terminate GORM datastore call nodes (no literal SQL) at
+		// the schema-declared table their Go model maps to. Runs after
+		// "tables" so every CREATE TABLE node already exists in st.allNodes.
+		{"gorm_model_tables", scopeSameServiceOnly, func() error {
+			gormEdges, gormUnresolved := linker.LinkGormModelTables(st.allNodes)
+			if err := st.writeEdges(gormEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, gormUnresolved...)
+			return nil
+		}},
 		// Y.4: join server response DTOs to the client interfaces that mirror their
 		// JSON shape (cross-language response_of). Runs after all returns/consumes
 		// edges are collected so it can gate on server-declared response structs.

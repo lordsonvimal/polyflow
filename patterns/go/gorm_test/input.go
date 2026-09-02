@@ -23,4 +23,10 @@ func saveUser(db *gorm.DB, u *User) {
 	db.Create(u2)
 	db.Save(&u.Profile)
 	db.Delete(&stale)
+	db.Updates(&u.Profile)
+}
+
+func auditRows(db *gorm.DB) {
+	var rows []Audit
+	db.Table("audits").Find(&rows)
 }

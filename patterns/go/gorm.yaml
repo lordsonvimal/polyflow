@@ -63,13 +63,17 @@ patterns:
       - name: target
         role: query_target
 
-  # Persistence: db.Create(&user), db.Save(&user), db.Delete(&user)
+  # Persistence: db.Create(&user), db.Save(&user), db.Delete(&user),
+  # db.Updates(&user). The table-bearing .Model(&X{}) call in a longer
+  # chain (db.Model(&X{}).Where(...).Updates(...)) sits too many hops from
+  # the finisher for a single tree-sitter query — that shape is v2 of the
+  # GORM table-linking tier (docs/gorm-table-linking-plan.md).
   - name: gorm_persist
     query: |
       (call_expression
         function: (selector_expression
           field: (field_identifier) @fn
-          (#match? @fn "^(Create|Save|Delete)$"))
+          (#match? @fn "^(Create|Save|Delete|Update|Updates|UpdateColumn|UpdateColumns)$"))
         arguments: (argument_list
           .
           (unary_expression) @target))
@@ -78,3 +82,23 @@ patterns:
         role: gorm_op
       - name: target
         role: persist_target
+
+  # Explicit table selection: db.Table("audits").Find(&x) /
+  # db.Table("maple_exec_configs").Where(...).Updates(...). The literal is an
+  # exact table name — LinkGormModelTables consumes meta["table_name"]
+  # directly, skipping model→table resolution. Name prefix "gorm_persist"
+  # so classifyPattern classifies it NodeTypeDatastore + EdgeTypePersists
+  # without a new case (op is a hint only; the query/persist distinction is
+  # not knowable from .Table() alone).
+  - name: gorm_persist_table
+    query: |
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @fn
+          (#eq? @fn "Table"))
+        arguments: (argument_list
+          .
+          (interpreted_string_literal) @table_name))
+    captures:
+      - name: table_name
+        role: table_name
