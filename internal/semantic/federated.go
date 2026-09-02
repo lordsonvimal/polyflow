@@ -136,24 +136,32 @@ func mergeAcrossMembers(names []string, perMember map[string]Response, pick func
 	}
 	sort.Strings(ids)
 
-	out := make([]Hit, 0, len(byID))
+	accs := make([]*acc, 0, len(byID))
 	for _, id := range ids {
-		a := byID[id]
-		a.hit.Score = roundScore(a.score)
-		out = append(out, a.hit)
+		accs = append(accs, byID[id])
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		iEx := out[i].Retrieval == "exact"
-		jEx := out[j].Retrieval == "exact"
+	// Sort on the raw accumulated RRF score, not the rounded display value.
+	// Rounded to 3dp the top few ranks collapse (1/(60+1)..1/(60+4) all round
+	// to 0.016), which would silently reorder the fleet-wide head alphabetically
+	// by entity ID instead of by relevance.
+	sort.Slice(accs, func(i, j int) bool {
+		iEx := accs[i].hit.Retrieval == "exact"
+		jEx := accs[j].hit.Retrieval == "exact"
 		if iEx != jEx {
 			return iEx
 		}
-		if out[i].Score != out[j].Score {
-			return out[i].Score > out[j].Score
+		if accs[i].score != accs[j].score {
+			return accs[i].score > accs[j].score
 		}
-		return out[i].Entity.ID < out[j].Entity.ID
+		return accs[i].hit.Entity.ID < accs[j].hit.Entity.ID
 	})
+
+	out := make([]Hit, 0, len(accs))
+	for _, a := range accs {
+		a.hit.Score = roundScore(a.score)
+		out = append(out, a.hit)
+	}
 
 	if len(out) > limit {
 		out = out[:limit]

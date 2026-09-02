@@ -163,6 +163,60 @@ func TestScopedSearch_DefaultIsWorkspaceLocal(t *testing.T) {
 	}
 }
 
+// TestMergeAcrossMembers_OrdersByRawScoreNotRoundedTie is a regression test
+// for the fleet-wide head collapsing to alphabetical entity-ID order. RRF
+// scores for the first few ranks round to the same 3dp value
+// (1/(60+1)=0.016393, 1/(60+2)=0.016129 → both "0.016"), so sorting on the
+// rounded display score made the tie-break (entity ID) decide the head. The
+// merge must sort on the raw accumulated score: a better rank in any member
+// must outrank a worse rank even when its entity ID sorts later.
+func TestMergeAcrossMembers_OrdersByRawScoreNotRoundedTie(t *testing.T) {
+	pick := func(r Response, section string) []Hit {
+		if section == "nodes" {
+			return r.Nodes
+		}
+		return nil
+	}
+
+	perMember := map[string]Response{
+		// "mA" contributes the best hit at rank 0 (1/61 = 0.016393).
+		"mA": {Nodes: []Hit{
+			{Entity: Entity{ID: "zzz:fn:best"}, Retrieval: "semantic"},
+		}},
+		// "mB" contributes "aaa:fn:worse" at rank 1 (1/62 = 0.016129) — a
+		// distinct raw score but the *same* 3dp value (0.016) as the best hit,
+		// and an entity ID that sorts first. Under the old rounded-score sort
+		// the whole 0.016 bucket tied and "aaa:fn:worse" won the head on ID.
+		// The rank-0 filler ties the best hit on raw score, so it carries an
+		// ID that sorts after it to keep the raw tie-break unambiguous.
+		"mB": {Nodes: []Hit{
+			{Entity: Entity{ID: "zzz:fn:zfiller"}, Retrieval: "semantic"},
+			{Entity: Entity{ID: "aaa:fn:worse"}, Retrieval: "semantic"},
+		}},
+	}
+
+	out := mergeAcrossMembers([]string{"mA", "mB"}, perMember, pick, "nodes", 10)
+
+	if len(out) != 3 {
+		t.Fatalf("expected 3 merged hits, got %d: %+v", len(out), out)
+	}
+	if out[0].Entity.ID != "zzz:fn:best" {
+		t.Errorf("head must be the better-ranked hit regardless of entity ID; got %q (full order: %s)",
+			out[0].Entity.ID, hitIDs(out))
+	}
+	if !(out[0].Score >= out[1].Score && out[1].Score >= out[2].Score) {
+		t.Errorf("merged hits must be in non-increasing score order, got %s", hitIDs(out))
+	}
+}
+
+func hitIDs(hits []Hit) string {
+	ids := make([]string, len(hits))
+	for i, h := range hits {
+		ids[i] = h.Entity.ID
+	}
+	return strings.Join(ids, ", ")
+}
+
 func TestFederatedSearch_NoSearchers_Errors(t *testing.T) {
 	_, err := FederatedSearch(context.Background(), map[string]*Searcher{}, "q", 10)
 	if err == nil {
