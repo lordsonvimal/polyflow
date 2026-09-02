@@ -884,6 +884,13 @@ func (a *GoSemanticAnalyzer) analyzeServiceWithMode(dir, service string, fset *t
 	allNodes = append(allNodes, sprintfNodes...)
 	edges = append(edges, sprintfEdges...)
 
+	// Tier DS.1: HTTP requests embedded as JS `fetch(...)` text inside a script
+	// a handler ships to the browser via datastar's sse.ExecuteScript(...). The
+	// URL placeholder is resolved back through the Sprintf vararg that fed it.
+	scriptNodes, scriptEdges := extractDatastarScriptURLs(service, dir, fset, inService, resolveFunc)
+	allNodes = append(allNodes, scriptNodes...)
+	edges = append(edges, scriptEdges...)
+
 	// Tier X.14: sibling to X.7 on the server side — HTTP routes registered
 	// through a local wrapper (e.g. an audit/logging decorator around
 	// mux.HandleFunc) whose path/handler are parameters, invisible to the
