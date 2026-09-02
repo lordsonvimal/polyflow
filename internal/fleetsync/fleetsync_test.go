@@ -77,6 +77,30 @@ func pushNewCommit(t *testing.T, bareURL string) string {
 	return runGit(t, workDir, "rev-parse", "HEAD")
 }
 
+// newWorktreeRepo creates a standalone (non-bare) git working tree with a
+// first commit, and returns its path and HEAD SHA. commitConfig controls
+// whether polyflow.yml is part of that commit; when false it is left as an
+// uncommitted file in the working tree.
+func newWorktreeRepo(t *testing.T, commitConfig bool) (dir, sha string) {
+	t.Helper()
+	dir = filepath.Join(t.TempDir(), "wt")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644))
+	if commitConfig {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "polyflow.yml"), []byte(polyflowYML), 0o644))
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+	if !commitConfig {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "polyflow.yml"), []byte(polyflowYML), 0o644))
+	}
+	return dir, runGit(t, dir, "rev-parse", "HEAD")
+}
+
 func cloneAt(t *testing.T, bareURL, dest string) {
 	t.Helper()
 	runGit(t, "", "clone", bareURL, dest)
@@ -340,6 +364,95 @@ func TestResolveStatus_NoLocalNoCache_ReportsUnresolvedNoClone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sha, st.SHA)
 	assert.Equal(t, "unresolved", st.Source)
+}
+
+// TestResolveService_LocalGitPath_UsesWorktreeInPlace_NoClone covers step 0:
+// a fleet member whose git URL is a path to a checkout on this machine is
+// read in place — no registry entry needed, no ls-remote, no scratch clone.
+func TestResolveService_LocalGitPath_UsesWorktreeInPlace_NoClone(t *testing.T) {
+	wtDir, sha := newWorktreeRepo(t, true)
+	svc := fleetconfig.Service{Name: "svc", Git: wtDir, Ref: "main"}
+
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.Equal(t, filepath.Join(wtDir, meta.DBDir, meta.DBFile), dbPath)
+	assert.FileExists(t, dbPath, "a local worktree member must be indexed in place")
+	assert.True(t, isEmptyDir(t, scratch), "a local worktree member must not clone")
+
+	// A second call reuses the graph.db already on disk — still no clone.
+	_, _, err = fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.True(t, isEmptyDir(t, scratch))
+}
+
+// TestResolveService_LocalGitPath_UncommittedPolyflowYML_Honored is the bug
+// this step fixes: polyflow.yml present in the working tree but never
+// committed (so absent from any ref a clone would check out) still resolves.
+func TestResolveService_LocalGitPath_UncommittedPolyflowYML_Honored(t *testing.T) {
+	wtDir, sha := newWorktreeRepo(t, false)
+	// polyflow.yml is on disk but not in any commit — a clone of "main" would
+	// not contain it.
+	require.Equal(t, "", runGit(t, wtDir, "log", "--oneline", "-1", "--", "polyflow.yml"))
+	svc := fleetconfig.Service{Name: "svc", Git: wtDir, Ref: "main"}
+
+	scratch := t.TempDir()
+	dbPath, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.FileExists(t, dbPath)
+	assert.True(t, isEmptyDir(t, scratch))
+}
+
+// TestResolveService_FileURLGitPath_UsesWorktreeInPlace proves a "file://"
+// URL is treated the same as a plain path.
+func TestResolveService_FileURLGitPath_UsesWorktreeInPlace(t *testing.T) {
+	wtDir, sha := newWorktreeRepo(t, true)
+	svc := fleetconfig.Service{Name: "svc", Git: "file://" + wtDir, Ref: "main"}
+
+	scratch := t.TempDir()
+	_, resolvedSHA, err := fleetsync.ResolveService(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+		ScratchDir:   scratch,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, resolvedSHA)
+	assert.True(t, isEmptyDir(t, scratch))
+}
+
+// TestResolveStatus_LocalGitPath_ReportsLocal is step 0's read-only
+// counterpart: report the worktree's HEAD and whether its graph.db exists.
+func TestResolveStatus_LocalGitPath_ReportsLocal(t *testing.T) {
+	wtDir, sha := newWorktreeRepo(t, true)
+	svc := fleetconfig.Service{Name: "svc", Git: wtDir, Ref: "main"}
+
+	st, err := fleetsync.ResolveStatus(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sha, st.SHA)
+	assert.Equal(t, "local-unindexed", st.Source)
+	assert.Equal(t, wtDir, st.LocalPath)
+
+	dbPath := filepath.Join(wtDir, meta.DBDir, meta.DBFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+
+	st, err = fleetsync.ResolveStatus(context.Background(), svc, "", fleetsync.ResolveOptions{
+		RegistryPath: newRegistryPath(t),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "local", st.Source)
 }
 
 func TestResolveService_NoLocalEntry_CacheMiss_ClonesAndPopulatesCache(t *testing.T) {

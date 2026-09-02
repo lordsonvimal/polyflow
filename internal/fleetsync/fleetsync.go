@@ -37,14 +37,35 @@ type ResolveOptions struct {
 	ScratchDir string
 }
 
-// ResolveService implements the four-step algorithm from "The resolver"
-// above: resolve the ref to a SHA, check the local registry for a clean
-// checkout at that SHA, check the build cache, and only then clone+index.
-// refOverride empty means "use the fleet definition's default ref."
+// ResolveService implements the algorithm from "The resolver" above. Step 0:
+// if svc.Git points at a git working tree on this machine, read that
+// checkout in place (working tree and all). Otherwise the four remote steps:
+// resolve the ref to a SHA, check the local registry for a clean checkout at
+// that SHA, check the build cache, and only then clone+index. refOverride
+// empty means "use the fleet definition's default ref."
 func ResolveService(ctx context.Context, svc fleetconfig.Service, refOverride string, opts ResolveOptions) (dbPath string, resolvedSHA string, err error) {
 	ref := svc.Ref
 	if refOverride != "" {
 		ref = refOverride
+	}
+
+	// Step 0: a local working tree. When svc.Git is a path to a git checkout
+	// on this machine (rather than a real remote URL), the operator has opted
+	// into local-dev semantics — read that checkout as it is on disk, so an
+	// uncommitted polyflow.yml is honoured, with no ls-remote and no scratch
+	// clone. The resolved SHA is the checkout's current HEAD.
+	if wt, ok := localWorktree(ctx, svc.Git); ok {
+		headSHA, headErr := gitHeadSHA(ctx, wt)
+		if headErr != nil {
+			return "", "", headErr
+		}
+		db := dbPathFor(wt, svc)
+		if _, statErr := os.Stat(db); statErr != nil {
+			if idxErr := indexLocalCheckout(ctx, wt, svc); idxErr != nil {
+				return "", "", fmt.Errorf("index local worktree for %s at %s: %w", svc.Name, wt, idxErr)
+			}
+		}
+		return db, headSHA, nil
 	}
 
 	sha, err := lsRemoteSHA(ctx, svc.Git, ref)
@@ -131,13 +152,29 @@ type MemberStatus struct {
 	LocalPath string
 }
 
-// ResolveStatus mirrors ResolveService's steps 1–3 (resolve ref to a SHA,
-// check the local registry, check the build cache) but never falls through
-// to step 4's clone.
+// ResolveStatus mirrors ResolveService's step 0 (local working tree) and
+// steps 1–3 (resolve ref to a SHA, check the local registry, check the build
+// cache) but never falls through to step 4's clone — and, unlike
+// ResolveService, never indexes in place, since a status view has no side
+// effects.
 func ResolveStatus(ctx context.Context, svc fleetconfig.Service, refOverride string, opts ResolveOptions) (*MemberStatus, error) {
 	ref := svc.Ref
 	if refOverride != "" {
 		ref = refOverride
+	}
+
+	// Step 0: a local working tree — see ResolveService. Report its current
+	// HEAD as the SHA and whether its graph.db exists yet.
+	if wt, ok := localWorktree(ctx, svc.Git); ok {
+		headSHA, headErr := gitHeadSHA(ctx, wt)
+		if headErr != nil {
+			return nil, headErr
+		}
+		st := &MemberStatus{Service: svc.Name, Ref: ref, SHA: headSHA, LocalPath: wt, Source: "local"}
+		if _, statErr := os.Stat(dbPathFor(wt, svc)); statErr != nil {
+			st.Source = "local-unindexed"
+		}
+		return st, nil
 	}
 
 	sha, err := lsRemoteSHA(ctx, svc.Git, ref)
@@ -201,6 +238,46 @@ func lsRemoteSHA(ctx context.Context, gitURL, ref string) (string, error) {
 		return "", fmt.Errorf("unexpected git ls-remote output %q", line)
 	}
 	return fields[0], nil
+}
+
+// localWorktree reports whether gitURL identifies a git working tree on this
+// machine (rather than a remote to clone). A plain filesystem path or a
+// "file://" URL both qualify; anything with another URL scheme
+// ("https://…", "ssh://…") or scp-style "host:path" does not, and neither
+// does a bare repository (no working tree, so no polyflow.yml to read in
+// place). Returns the absolute path to the work-tree root.
+func localWorktree(ctx context.Context, gitURL string) (string, bool) {
+	path := strings.TrimPrefix(gitURL, "file://")
+	if path == gitURL {
+		// No file:// prefix: reject any other scheme and scp-style syntax.
+		if strings.Contains(path, "://") {
+			return "", false
+		}
+		if i := strings.IndexByte(path, ':'); i >= 0 && !filepath.IsAbs(path) {
+			return "", false
+		}
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	if info, statErr := os.Stat(abs); statErr != nil || !info.IsDir() {
+		return "", false
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", abs, "rev-parse", "--is-inside-work-tree").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return "", false
+	}
+	return abs, true
+}
+
+// gitHeadSHA returns the commit SHA that dir's HEAD points at.
+func gitHeadSHA(ctx context.Context, dir string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("git -C %s rev-parse HEAD: %w", dir, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func isSHA(s string) bool {
