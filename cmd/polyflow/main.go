@@ -2710,6 +2710,8 @@ func fleetMemberStatusLine(st *fleetsync.MemberStatus) string {
 	switch st.Source {
 	case "local":
 		return fmt.Sprintf("resolved %s@%s, local checkout matches (%s)", st.Ref, sha, st.LocalPath)
+	case "local-unindexed":
+		return fmt.Sprintf("resolved %s@%s, local checkout matches but not indexed yet — next sync will index in place (%s)", st.Ref, sha, st.LocalPath)
 	case "cache":
 		return fmt.Sprintf("resolved %s@%s, resolved from build cache", st.Ref, sha)
 	default:
