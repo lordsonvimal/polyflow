@@ -77,24 +77,87 @@ const jsMaxScopeHops = 6
 //     not in scope and are skipped, so a sibling handler's `url` never leaks
 //     into this one.
 func jsResolveLocalBinding(use *sitter.Node, src []byte, name string) *sitter.Node {
+	v, _ := jsResolveLocalBindingStatus(use, src, name)
+	return v
+}
+
+// jsResolveLocalBindingStatus is jsResolveLocalBinding with a second return
+// distinguishing "no local binding anywhere" (found=nil, ambiguous=false —
+// the name is external/imported/ambient, a caller may fall back to a coarser
+// resolver) from "bound locally but not to a single knowable value"
+// (found=nil, ambiguous=true — the name IS a local, so a file-global guess
+// would be just as unsound as guessing here; the caller should stop).
+func jsResolveLocalBindingStatus(use *sitter.Node, src []byte, name string) (found *sitter.Node, ambiguous bool) {
 	if use == nil || name == "" {
-		return nil
+		return nil, false
 	}
 	scope := jsEnclosingScope(use)
 	for hops := 0; scope != nil && hops < jsMaxScopeHops; hops++ {
-		found, count := jsFindBinding(scope, use, src, name)
+		f, count := jsFindBinding(scope, use, src, name)
 		if count == 1 {
-			return found
+			return f, false
 		}
 		if count > 1 {
-			return nil // reassigned in the scope that owns it — not knowable
+			return nil, true // reassigned in the scope that owns it — not knowable
+		}
+		// A formal parameter of an enclosing function IS a local binding —
+		// to a value supplied by the caller, i.e. not knowable here. Report
+		// it as ambiguous rather than "no local binding" so a caller does not
+		// fall through to a file-global constant table and resolve `url` (the
+		// parameter) to some unrelated `const url` elsewhere in the file.
+		if jsScopeBindsParam(scope, src, name) {
+			return nil, true
 		}
 		if scope.Type() == "program" {
-			return nil
+			return nil, false
 		}
 		scope = jsEnclosingScope(scope)
 	}
-	return nil
+	return nil, false
+}
+
+// jsScopeBindsParam reports whether scope is a function whose parameter list
+// declares name (plain, defaulted, or rest — destructured patterns are not a
+// single-identifier binding and are left to the generic resolver).
+func jsScopeBindsParam(scope *sitter.Node, src []byte, name string) bool {
+	switch scope.Type() {
+	case "function_declaration", "function_expression", "generator_function",
+		"generator_function_declaration", "arrow_function", "method_definition":
+	default:
+		return false
+	}
+	// `x => x` — single bare-identifier parameter in the `parameter` field.
+	if p := scope.ChildByFieldName("parameter"); p != nil && p.Type() == "identifier" &&
+		string(src[p.StartByte():p.EndByte()]) == name {
+		return true
+	}
+	params := scope.ChildByFieldName("parameters")
+	if params == nil {
+		return false
+	}
+	var hit bool
+	var visit func(n *sitter.Node)
+	visit = func(n *sitter.Node) {
+		if n == nil || hit {
+			return
+		}
+		switch n.Type() {
+		case "object_pattern", "array_pattern":
+			return // destructured — not a single-identifier binding
+		case "identifier", "shorthand_property_identifier_pattern":
+			if string(src[n.StartByte():n.EndByte()]) == name {
+				hit = true
+			}
+			return
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			visit(n.NamedChild(i))
+		}
+	}
+	for i := 0; i < int(params.NamedChildCount()); i++ {
+		visit(params.NamedChild(i))
+	}
+	return hit
 }
 
 // jsEnclosingScope returns the nearest scope-introducing ancestor of n,

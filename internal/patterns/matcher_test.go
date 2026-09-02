@@ -1088,3 +1088,33 @@ func TestDetectJSGrammar_AlreadyTypeScript_Unchanged(t *testing.T) {
 	got := patterns.DetectJSGrammar("services/ApiServices.tsx", src, "tsx")
 	assert.Equal(t, "tsx", got, "a .tsx file already uses a type-aware grammar and must not be re-routed")
 }
+
+// fetch(url, { method: "DELETE" }) matches both fetch_call (URL, no verb) and
+// fetch_with_options (URL + verb). The same-call-site http_client dedup keeps
+// the first-registered pattern (fetch_call); it must still salvage the verb
+// the dropped fetch_with_options match resolved, or every method-aware fetch
+// through a URL variable loses its verb and mis-links via method_fallback.
+func TestMatchToGraph_FetchOptionsMethodSurvivesDedup(t *testing.T) {
+	reg, err := patterns.DefaultRegistry("../../patterns")
+	require.NoError(t, err)
+	m := patterns.NewTreeSitterMatcher(reg)
+
+	src := []byte("async function del(id) {\n" +
+		"  const url = `/api/v1/things/${id}`;\n" +
+		"  const r = await fetch(url, { method: \"DELETE\", credentials: \"include\" });\n" +
+		"}\n")
+	results, err := m.Match("javascript", "x.js", src)
+	require.NoError(t, err)
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+
+	var got *graph.Node
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeHTTPClient {
+			require.Nil(t, got, "expected exactly one http_client node, got a second: %+v", nodes[i])
+			got = &nodes[i]
+		}
+	}
+	require.NotNil(t, got)
+	assert.Equal(t, "DELETE", got.Meta["method"])
+	assert.Equal(t, "/api/v1/things/*", got.Meta["url"])
+}

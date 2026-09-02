@@ -58,6 +58,16 @@ func TestPathMatchesPattern_WildcardAnchoring(t *testing.T) {
 		{"concrete url binds trailing param", "/api/v1/users/123", "/api/v1/users/*", true},
 		{"concrete url all-boilerplate prefix", "/api/v1/123", "/api/v1/*", true},
 
+		// Partial wildcard: `` `/api/v1/${configType}-configs/${id}/dependent-apps` ``
+		// reconstructs to a segment `*-configs`, not a bare `*`. Its fixed
+		// `-configs` suffix is a real anchor and must bind the route literals
+		// `exec-configs` / `app-configs` — while still rejecting `ws` etc.
+		{"partial wildcard binds exec-configs", "/api/v1/*-configs/*/dependent-apps", "/api/v1/exec-configs/*/dependent-apps", true},
+		{"partial wildcard binds app-configs", "/api/v1/*-configs/*/dependent-apps", "/api/v1/app-configs/*/dependent-apps", true},
+		{"partial wildcard rejects ws build-logs", "/api/v1/*-configs/*/dependent-apps", "/api/v1/ws/build-logs/*", false},
+		{"partial wildcard suffix must match", "/maple/*-configs/x", "/maple/roles/x", false},
+		{"partial wildcard do-revert", "/maple/*-configs/*/v/*/do-revert", "/maple/app-configs/*/v/*/do-revert", true},
+
 		// Unchanged basics.
 		{"length mismatch", "/api/v1/users", "/api/v1/users/*", false},
 		{"literal conflict", "/api/v1/users/*", "/api/v1/teams/*", false},

@@ -74,15 +74,22 @@ func walkJSExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int) 
 		return nil, true
 
 	case "identifier":
-		// Shape (b): constant reference — resolve via ConstResolver
 		name := string(src[node.StartByte():node.EndByte()])
+		// Lexical scope wins over the file-global constant table. A name like
+		// `url` is routinely bound once per function across a file (every
+		// action handler builds its own), and the const table — being
+		// file-scoped — keeps only one arbitrary binding of it. Resolving the
+		// binding the call site actually stands in is both the C.1 common
+		// shape (`const url = "/app/…" + id` a few lines up) and the only
+		// sound answer; the const table is the fallback for names with no
+		// local binding at all (module imports, ambient globals).
+		if v, ambiguous := jsResolveLocalBindingStatus(node, src, name); v != nil {
+			return walkJSExpr(v, src, consts, depth+1)
+		} else if ambiguous {
+			return nil, true
+		}
 		if v, ok := consts(name); ok {
 			return []string{v}, false
-		}
-		// C.1: the dominant real shape is not a file constant but a
-		// function-local `var url = "/app/…" + id` a few lines up.
-		if v := jsResolveLocalBinding(node, src, name); v != nil {
-			return walkJSExpr(v, src, consts, depth+1)
 		}
 		return nil, true
 
