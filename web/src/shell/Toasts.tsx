@@ -16,7 +16,7 @@ function ToastRow(props: { toast: Toast }) {
       class={`flex flex-col gap-1 px-3 py-2 rounded border text-xs shadow-lg max-w-sm pointer-events-auto ${KIND_STYLES[props.toast.kind]}`}
     >
       <div class="flex items-start gap-2">
-        <span class="flex-1">{props.toast.message}</span>
+        <span class="flex-1 min-w-0 break-words">{props.toast.message}</span>
         <Show when={props.toast.action}>
           {(action) => (
             <button

@@ -384,6 +384,21 @@ func TestHandleNodeSource_FileMissing(t *testing.T) {
 	}
 }
 
+func TestHandleNodeSource_NoSourceLocation(t *testing.T) {
+	// Synthesized nodes (AMQP channels, resolved http_client producers) have
+	// an empty File — that must be a clean 404, not a 500 from ReadFile("").
+	nodes := []*graph.Node{
+		{ID: "ch1", Type: graph.NodeTypeChannel, Label: "build.submit", Service: "maple-manager"},
+	}
+	srv := buildTestServer(t, nodes, nil)
+	req := httptest.NewRequest("GET", "/api/node/ch1/source?range=1&context=5", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for node with no source, got %d: %s", w.Code, w.Body)
+	}
+}
+
 // --- NewDev + CORS ---
 
 func TestNewDev_CORSHeader(t *testing.T) {

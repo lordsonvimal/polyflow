@@ -337,6 +337,16 @@ func (s *Server) handleNodeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Synthesized nodes (AMQP channels, resolved http_client producers, …)
+	// carry no source file. Reading "" resolves to the checkout root and
+	// os.ReadFile returns "is a directory" — report the real condition as a
+	// 404 instead of a 500 so the detail panel shows a clean "no source"
+	// message and apiFetch's 5xx toast never fires.
+	if strings.TrimSpace(node.File) == "" {
+		writeError(w, http.StatusNotFound, "node has no source location: "+id)
+		return
+	}
+
 	src, err := os.ReadFile(s.resolveSourcePath(node.Service, node.File))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read source file: %s", err))
