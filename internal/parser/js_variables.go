@@ -1855,10 +1855,19 @@ func (ex *jsExtractor) stampGlobalSymbols(root *sitter.Node) {
 			} else {
 				nodeID := ex.fnNodeID(leaf, lineNo)
 				if !ex.nodeSeen[nodeID] {
+					// Span the assigned function body, not just the assignment
+					// line — otherwise containment-based enclosing-function
+					// attribution (end_line) never credits this node with the
+					// calls in its body (`window.maple.X = async function(){ y() }`),
+					// so every call site inside falls through to the module node.
+					endNo := tsEndLine(right)
+					if endNo < lineNo {
+						endNo = lineNo
+					}
 					newNodes = append(newNodes, graph.Node{
 						ID: nodeID, Type: graph.NodeTypeFunction, Label: leaf,
-						Service: ex.service, File: ex.file, Line: lineNo, EndLine: lineNo, Language: ex.langTag,
-						Meta: map[string]string{"global_symbol": leaf, "global_path": dotted},
+						Service: ex.service, File: ex.file, Line: lineNo, EndLine: endNo, Language: ex.langTag,
+						Meta: map[string]string{"global_symbol": leaf, "global_path": dotted, "end_line": fmt.Sprintf("%d", endNo)},
 					})
 				}
 			}
