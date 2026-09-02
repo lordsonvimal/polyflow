@@ -590,8 +590,11 @@ func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph.Unresol
 			continue
 		}
 		if len(targets) == 0 {
-			// No schema declaration indexed anywhere in this workspace —
-			// today's synthetic-mint behavior, unchanged.
+			// No CREATE TABLE for this name anywhere in the workspace — the
+			// code queries a table whose schema lives outside it (a legacy
+			// source DB, another service not in the workspace). Mint a node so
+			// the query isn't a dead end, but tag it synthetic so the UI and
+			// audits can tell it apart from a schema-declared table.
 			tid := tableID(n.Service, table)
 			if !seen[tid] {
 				seen[tid] = true
@@ -601,7 +604,7 @@ func LinkTables(nodes []graph.Node) ([]graph.Node, []graph.Edge, []graph.Unresol
 					Label:    table,
 					Service:  n.Service,
 					Language: n.Language,
-					Meta:     map[string]string{"name": table},
+					Meta:     map[string]string{"name": table, "synthetic": "true", "schema": "external"},
 				})
 			}
 			targets = []string{tid}
