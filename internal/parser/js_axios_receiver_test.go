@@ -166,3 +166,56 @@ function load(id) {
 
 	assert.Len(t, httpClients(nodes), 1)
 }
+
+// TestReactRouterNavigateIsNotAnHTTPCall — navigate("/dashboard") from
+// useNavigate() is SPA routing, not an outbound HTTP request. Without the
+// gate, BrowserSameOrigin tries own-service first; when the SPA has no
+// server-side route for the path the engine falls through and matches a
+// same-path handler on a different fleet service.
+func TestReactRouterNavigateIsNotAnHTTPCall(t *testing.T) {
+	t.Parallel()
+	nodes := parseJSSource(t, "login.tsx", `
+import { useNavigate } from "react-router-dom";
+function LoginPage() {
+  const navigate = useNavigate();
+  function onSuccess() {
+    navigate("/dashboard");
+    navigate("/users");
+  }
+}
+`)
+	assert.Empty(t, httpClients(nodes), "React Router navigate() is not an HTTP call")
+}
+
+// TestReactRouterNavigateDoesNotDropRealAxiosCall — the navigate gate must not
+// suppress a real axios call in the same file.
+func TestReactRouterNavigateDoesNotDropRealAxiosCall(t *testing.T) {
+	t.Parallel()
+	nodes := parseJSSource(t, "page.tsx", `
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+function Page() {
+  const navigate = useNavigate();
+  async function load() {
+    await axios.get("/api/v1/users");
+    navigate("/dashboard");
+  }
+}
+`)
+	clients := httpClients(nodes)
+	require.Len(t, clients, 1, "only the axios.get should survive")
+	assert.Equal(t, "/api/v1/users", clients[0].Meta["url"])
+}
+
+// TestUnboundNavigateCallIsKept — a navigate() call whose binding is NOT from
+// useNavigate() must stay as an http_client (could be a custom wrapper named
+// navigate that makes real requests).
+func TestUnboundNavigateCallIsKept(t *testing.T) {
+	t.Parallel()
+	nodes := parseJSSource(t, "wrapper.tsx", `
+function Page() {
+  navigate("/dashboard");
+}
+`)
+	require.Len(t, httpClients(nodes), 1, "unbound navigate is kept as http_client")
+}

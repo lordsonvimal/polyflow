@@ -47,6 +47,19 @@ patterns:
     captures:
       - name: alias_name
         role: alias_var_name
+  # React Router v5/v6: `const navigate = useNavigate()` or
+  # `const history = useHistory()`. Lets dropNonHTTPJSMatches identify
+  # navigate(path) calls as SPA routing actions, not outbound HTTP requests.
+  - name: react_router_navigate_binding
+    query: |
+      (variable_declarator
+        name: (identifier) @alias_name
+        value: (call_expression
+          function: (identifier) @hook
+          (#match? @hook "^(useNavigate|useHistory)$")))
+    captures:
+      - name: alias_name
+        role: alias_var_name
   - name: producer_alias_url_call
     query: |
       (call_expression

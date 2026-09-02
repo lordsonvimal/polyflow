@@ -227,6 +227,95 @@ func TestApplyHints_BareEnvVarName_RubyHostEnvVar(t *testing.T) {
 	}
 }
 
+// Tier JH literal-host gate: a node with host_default_literal pointing to an
+// external domain (no link rule claims it) must be marked key_dynamic so the
+// contract engine ledgers it rather than path-matching it across the fleet.
+func TestApplyHints_HostDefaultLiteralUnclaimed(t *testing.T) {
+	t.Parallel()
+	// No link rules — the domain "https://atlas-dev.example.internal" is
+	// external and unclaimed.
+	nodes := []graph.Node{
+		{
+			ID:      "c1",
+			Service: "orion-atlas",
+			Type:    graph.NodeTypeHTTPClient,
+			Meta: map[string]string{
+				"path":                 "*/api/v1/users",
+				"host_default_literal": "https://atlas-dev.example.internal",
+			},
+		},
+	}
+	result := ApplyHints(nil, nodes, nil)
+	if got := result[0].Meta["key_dynamic"]; got != "true" {
+		t.Errorf("unclaimed host_default_literal: key_dynamic = %q, want true", got)
+	}
+	if got := result[0].Meta["target_service"]; got != "" {
+		t.Errorf("unclaimed host_default_literal: target_service = %q, want empty", got)
+	}
+}
+
+// A NAME=URL hint whose URL prefix matches host_default_literal claims the node
+// and sets target_service instead of marking it dynamic.
+func TestApplyHints_HostDefaultLiteralClaimed(t *testing.T) {
+	t.Parallel()
+	links := []workspace.Link{
+		{From: "orion-atlas", To: "atlas-backend", Hint: "ATLAS_DOMAIN=https://atlas-dev.example.internal"},
+	}
+	nodes := []graph.Node{
+		{
+			ID:      "c1",
+			Service: "orion-atlas",
+			Type:    graph.NodeTypeHTTPClient,
+			Meta: map[string]string{
+				"path":                 "*/api/v1/users",
+				"host_default_literal": "https://atlas-dev.example.internal",
+			},
+		},
+	}
+	result := ApplyHints(links, nodes, nil)
+	if got := result[0].Meta["target_service"]; got != "atlas-backend" {
+		t.Errorf("claimed host_default_literal: target_service = %q, want atlas-backend", got)
+	}
+	if got := result[0].Meta["key_dynamic"]; got != "" {
+		t.Errorf("claimed host_default_literal: key_dynamic = %q, want empty", got)
+	}
+}
+
+// Already-attributed nodes (target_service or key_dynamic set) must not be
+// touched by the literal-host gate.
+func TestApplyHints_HostDefaultLiteralSkipsAttributed(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{
+			ID:      "c1",
+			Service: "svc",
+			Type:    graph.NodeTypeHTTPClient,
+			Meta: map[string]string{
+				"path":                 "*/api/v1/users",
+				"host_default_literal": "https://external.example.com",
+				"target_service":       "already-set",
+			},
+		},
+		{
+			ID:      "c2",
+			Service: "svc",
+			Type:    graph.NodeTypeHTTPClient,
+			Meta: map[string]string{
+				"path":                 "*/api/v1/users",
+				"host_default_literal": "https://external.example.com",
+				"key_dynamic":          "true",
+			},
+		},
+	}
+	result := ApplyHints(nil, nodes, nil)
+	if got := result[0].Meta["key_dynamic"]; got != "" {
+		t.Errorf("already-attributed: key_dynamic unexpectedly set to %q", got)
+	}
+	if got := result[1].Meta["target_service"]; got != "" {
+		t.Errorf("already-dynamic: target_service unexpectedly set to %q", got)
+	}
+}
+
 // A base_url is direct evidence of the target; an env-var name is an inference
 // from deploy config. When both rules fire, base_url wins.
 func TestApplyHints_EnvVarDoesNotOverrideBaseURL(t *testing.T) {
