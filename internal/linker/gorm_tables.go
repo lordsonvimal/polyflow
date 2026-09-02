@@ -118,6 +118,43 @@ func LinkGormModelTables(nodes []graph.Node) (newEdges []graph.Edge, unresolved 
 			methodsByFile[n.File] = append(methodsByFile[n.File], n)
 		}
 	}
+	// Callable scopes (methods + plain funcs) for recovering a local var's
+	// declared type: `var setting models.Setting` … db.Create(&setting).
+	callableByFile := make(map[string][]*graph.Node)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeFunction {
+			callableByFile[n.File] = append(callableByFile[n.File], n)
+		}
+	}
+	localModelIdent := func(file string, line int, varName string) string {
+		if varName == "" {
+			return ""
+		}
+		var best *graph.Node
+		for _, m := range callableByFile[file] {
+			end := m.EndLine
+			if end < m.Line {
+				end = m.Line
+			}
+			if line < m.Line || line > end {
+				continue
+			}
+			if best == nil || m.Line > best.Line {
+				best = m
+			}
+		}
+		if best == nil {
+			return ""
+		}
+		src, ok := fileCache[file]
+		if !ok {
+			src, _ = os.ReadFile(file)
+			fileCache[file] = src
+		}
+		return localVarType(sourceSpan(src, best.Line, best.EndLine), varName)
+	}
+
 	// tableForModel resolves a model struct name to a schema table, applying
 	// the TableName() map then the schema-gated convention. "" if neither.
 	tableForModel := func(service, model string) string {
@@ -191,6 +228,15 @@ func LinkGormModelTables(nodes []graph.Node) (newEdges []graph.Edge, unresolved 
 			if ident != "" && unicode.IsUpper([]rune(ident)[0]) {
 				model = ident
 				table = tableForModel(n.Service, model)
+			}
+			// A lower-case local (`&setting`) — recover its declared type from
+			// the enclosing function body (`var setting models.Setting`).
+			if table == "" && ident != "" && unicode.IsLower([]rune(ident)[0]) {
+				if lm := localModelIdent(n.File, n.Line, ident); lm != "" {
+					if t := tableForModel(n.Service, lm); t != "" {
+						model, table = lm, t
+					}
+				}
 			}
 			if table == "" {
 				if m, t := enclosingModelTable(n.Service, n.File, n.Line); t != "" {
@@ -369,6 +415,20 @@ func gormModelIdent(target string) string {
 		return ""
 	}
 	return s
+}
+
+// localVarType finds `var <name> <Type>` or `<name> :=/= <Type>{…}` within a
+// function-body span and returns the unqualified type identifier ("" if none).
+func localVarType(span, name string) string {
+	if span == "" || name == "" {
+		return ""
+	}
+	q := regexp.QuoteMeta(name)
+	re := regexp.MustCompile(`(?m)(?:\bvar\s+` + q + `\s+|\b` + q + `\s*:?=\s*)[\*&]?(?:\[\])?(?:\w+\.)?([A-Z]\w*)`)
+	if m := re.FindStringSubmatch(span); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 func isGoIdent(s string) bool {

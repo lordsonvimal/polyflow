@@ -150,6 +150,35 @@ func TestLinkGormModelTables_EnclosingReceiver(t *testing.T) {
 	}
 }
 
+// TestLinkGormModelTables_LocalVarType: r.db.Create(&setting) where the
+// enclosing method declares `var setting models.Setting` resolves through the
+// Setting model's TableName().
+func TestLinkGormModelTables_LocalVarType(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	modelFile := filepath.Join(dir, "setting.go")
+	mustWrite(t, modelFile, "package models\n\nfunc (Setting) TableName() string {\n\treturn \"maple_app_settings\"\n}\n")
+	repoFile := filepath.Join(dir, "settings_repository.go")
+	mustWrite(t, repoFile, "package repository\n\nfunc (r *SettingsRepository) GetOrCreate() error {\n\tvar setting models.Setting\n\tif err := r.db.Create(&setting).Error; err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n")
+
+	nodes := []graph.Node{
+		makeSQLTableNode("t:s", "maple-manager", "db/schema.sql", "maple_app_settings"),
+		{ID: "m:tn", Type: graph.NodeTypeMethod, Label: "TableName", Service: "maple-manager",
+			File: modelFile, Line: 3, EndLine: 5, Meta: map[string]string{"receiver": "Setting"}},
+		{ID: "m:goc", Type: graph.NodeTypeMethod, Label: "GetOrCreate", Service: "maple-manager",
+			File: repoFile, Line: 3, EndLine: 9, Meta: map[string]string{"receiver": "SettingsRepository"}},
+		{ID: "d:c", Type: graph.NodeTypeDatastore, Service: "maple-manager", File: repoFile, Line: 5,
+			Meta: map[string]string{"kind": "call", "op": "persist", "target": "&setting"}},
+	}
+	edges, unresolved := LinkGormModelTables(nodes)
+	if len(unresolved) != 0 || len(edges) != 1 {
+		t.Fatalf("want 1 edge 0 unresolved, got %d/%d %+v", len(edges), len(unresolved), unresolved)
+	}
+	if edges[0].To != "t:s" || edges[0].Type != graph.EdgeTypePersists || edges[0].Meta["model"] != "Setting" {
+		t.Errorf("bad edge: %+v", edges[0])
+	}
+}
+
 func TestStripReceiverSuffix(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
