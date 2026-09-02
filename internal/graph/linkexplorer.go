@@ -19,7 +19,11 @@ type LinkRow struct {
 	CrossService      bool     `json:"cross_service,omitempty"`
 	Confidence        string   `json:"confidence,omitempty"`
 	VerificationState string   `json:"verification_state,omitempty"`
-	Depth             int      `json:"depth"`
+	// Synthetic is true for a node the linker minted without a source
+	// declaration — e.g. a `table` whose CREATE TABLE lives in an external /
+	// unindexed schema (meta.synthetic="true").
+	Synthetic bool `json:"synthetic,omitempty"`
+	Depth     int  `json:"depth"`
 	// Via holds the intermediate node labels between the selected node and
 	// this row, root-exclusive/row-exclusive, only set when Depth > 1 (UF.8's
 	// "via X → Y" depth grouping).
@@ -127,6 +131,7 @@ func LinkExplorerAdjacency(idx *AdjacencyIndex, nodeID, direction string, depth,
 			CrossService:      start.Service != "" && n.Service != "" && start.Service != n.Service,
 			Confidence:        p.via.Confidence,
 			VerificationState: p.via.VerificationState,
+			Synthetic:         n.Meta["synthetic"] == "true",
 			Depth:             p.depth,
 		}
 		if p.depth > 1 {
