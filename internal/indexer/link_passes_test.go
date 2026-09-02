@@ -67,6 +67,7 @@ var wantLinkPasses = []struct {
 	{"sql_reference_edges", scopeSameServiceOnly},
 	{"datastores", scopeSameServiceOnly},
 	{"tables", scopeSameServiceOnly},
+	{"gorm_model_tables", scopeSameServiceOnly},
 	{"response_shapes", scopeCrossService},
 	{"resource_signals", scopeSameServiceOnly},
 	{"sse_clients", scopeSameServiceOnly},
