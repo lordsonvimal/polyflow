@@ -464,6 +464,29 @@ func TestLinkTables(t *testing.T) {
 	assert.False(t, pragmaHasEdge, "PRAGMA must not fabricate a table edge")
 }
 
+// TestLinkTables_TestFileNoPhantom: an un-prefixed table name in a _test.go
+// fixture that no schema declares is ledgered, not minted as a phantom node.
+// The same SQL in production code still mints.
+func TestLinkTables_TestFileNoPhantom(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "svc:t", Type: graph.NodeTypeDatastore, Service: "svc", File: "repo/x_test.go", Line: 79,
+			Meta: map[string]string{"kind": "call", "op": "persist", "sql": "`DELETE FROM exec_configs`"}},
+		{ID: "svc:p", Type: graph.NodeTypeDatastore, Service: "svc", File: "repo/x.go", Line: 12,
+			Meta: map[string]string{"kind": "call", "op": "persist", "sql": "`DELETE FROM widgets`"}},
+	}
+	tableNodes, edges, unresolved := LinkTables(nodes)
+	byLabel := map[string]bool{}
+	for _, n := range tableNodes {
+		byLabel[n.Label] = true
+	}
+	assert.False(t, byLabel["exec_configs"], "no phantom from a _test.go fixture")
+	assert.True(t, byLabel["widgets"], "production SQL still mints")
+	assert.Len(t, edges, 1)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "sql_table_test_unresolved", unresolved[0].Kind)
+}
+
 // TestLinkTables_SQ2ReconcilesSchemaDeclaredTable verifies SQ2: when a
 // schema-declared graph.NodeTypeTable node (minted by internal/parser/sql.go
 // from a real CREATE TABLE) is already present, a datastore call querying the
