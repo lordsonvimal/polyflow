@@ -241,11 +241,19 @@ func LinkJSGlobals(
 		if importedNames[u.File+"\x00"+u.Name] {
 			continue // import explains this name — no global fallback
 		}
-		tbl := svcGlobals[u.Service]
-		if tbl == nil {
-			continue
+		_, isGlobal := svcGlobals[u.Service][u.Name]
+		// Fallback: a plain module-scope function never assigned to window[.ns]
+		// (so it never entered svcGlobals) — a same-service helper called from a
+		// window.maple.X body or another file. Only take the unambiguous case here
+		// to avoid fanning out edges to every same-named definition in the
+		// service; ambiguous names stay in the ledger.
+		localOK := false
+		if !isGlobal {
+			if a := svcAttr[u.Service]; a != nil && len(a.funcByLabel[u.Name]) == 1 {
+				localOK = true
+			}
 		}
-		if _, ok := tbl[u.Name]; !ok {
+		if !isGlobal && !localOK {
 			continue
 		}
 		sortedRefs = append(sortedRefs, uKey{u.Service, u.File, u.Name, u.Line})
@@ -269,7 +277,11 @@ func LinkJSGlobals(
 		if fromID == "" {
 			continue
 		}
-		emitGlobalEdges(fromID, ref.name, ref.svc)
+		if _, isGlobal := svcGlobals[ref.svc][ref.name]; isGlobal {
+			emitGlobalEdges(fromID, ref.name, ref.svc)
+		} else if !emitLocalEdges(fromID, ref.name, svcAttr[ref.svc]) {
+			continue
+		}
 		globallyResolved[ref.file+"\x00"+ref.name] = true
 	}
 

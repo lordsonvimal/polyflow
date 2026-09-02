@@ -56,6 +56,42 @@ func TestLinkJSGlobals_BasicResolution(t *testing.T) {
 	assert.Empty(t, collisions)
 }
 
+// TestLinkJSGlobals_LocalHelperFallback: a call_ref for a plain module-scope
+// helper (never assigned to window[.ns]) called from a window.maple.X body
+// resolves to the sole same-service definition via the funcByLabel fallback.
+func TestLinkJSGlobals_LocalHelperFallback(t *testing.T) {
+	t.Parallel()
+	helperFile := "/svc/helpers.js"
+	mainFile := "/svc/main.js"
+
+	helperFn := graph.Node{
+		ID: "svc:" + helperFile + ":function:_fetchAppConfig:5", Type: graph.NodeTypeFunction,
+		Label: "_fetchAppConfig", Service: "svc", File: helperFile, Line: 5,
+	}
+	// window.maple.openAppConfigForEdit = async function(){ ... } — global node
+	// whose body span must cover the call site on line 12.
+	globalFn := graph.Node{
+		ID: "svc:" + mainFile + ":function:openAppConfigForEdit:10", Type: graph.NodeTypeFunction,
+		Label: "openAppConfigForEdit", Service: "svc", File: mainFile, Line: 10,
+		Meta: map[string]string{"global_symbol": "openAppConfigForEdit", "end_line": "20"},
+	}
+
+	unresolved := []graph.UnresolvedRef{
+		{Service: "svc", File: mainFile, Line: 12, Name: "_fetchAppConfig", Kind: "call_ref"},
+	}
+	svcFiles := map[string][]string{"svc": {helperFile, mainFile}}
+
+	edges, resolved, collisions := LinkJSGlobals(
+		[]graph.Node{helperFn, globalFn}, unresolved, nil, svcFiles)
+
+	require.Len(t, edges, 1, "one edge: openAppConfigForEdit → _fetchAppConfig")
+	assert.Equal(t, globalFn.ID, edges[0].From)
+	assert.Equal(t, helperFn.ID, edges[0].To)
+	assert.Equal(t, "local_function", edges[0].Meta["via"])
+	assert.True(t, resolved[mainFile+"\x00_fetchAppConfig"])
+	assert.Empty(t, collisions)
+}
+
 // TestLinkJSGlobals_Collision: same global name in two files →
 // two candidate edges + one global_collision ledger entry.
 func TestLinkJSGlobals_Collision(t *testing.T) {

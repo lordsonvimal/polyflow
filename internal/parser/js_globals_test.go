@@ -123,6 +123,31 @@ window.maple.save = function() { return 1; }
 	assert.Equal(t, graph.NodeTypeFunction, found.Type)
 }
 
+// TestStampGlobalSymbols_NestedWindowAssignBodySpan: the minted node spans the
+// assigned function body (end_line), so calls in the body attribute to it.
+func TestStampGlobalSymbols_NestedWindowAssignBodySpan(t *testing.T) {
+	t.Parallel()
+	src := `window.maple = window.maple || {};
+window.maple.openAppConfigForEdit = async function (configId) {
+  var config = await _fetchAppConfig(configId);
+  return config;
+};
+`
+	nodes, _, _ := parseJS(t, src)
+
+	var found *graph.Node
+	for i := range nodes {
+		if nodes[i].Meta["global_path"] == "window.maple.openAppConfigForEdit" {
+			found = &nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, 2, found.Line)
+	assert.GreaterOrEqual(t, found.EndLine, 5, "node must span the function body")
+	assert.Equal(t, "5", found.Meta["end_line"])
+}
+
 // TestStampGlobalSymbols_WrappedInIIFE: a namespaced registration inside an
 // IIFE still resolves via the recursive assignment walk.
 func TestStampGlobalSymbols_WrappedInIIFE(t *testing.T) {
