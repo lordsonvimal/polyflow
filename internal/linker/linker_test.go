@@ -369,6 +369,30 @@ func TestLinkDatastores_MultiEnginePartialConfidence(t *testing.T) {
 	}
 }
 
+// TestLinkDatastores_GormSkipsNonGormEngine: a GORM call site is not fanned
+// out onto an engine that only has a raw database/sql driver (a stray
+// go-sql-driver/mysql), but a plain sql_* call still reaches every engine.
+func TestLinkDatastores_GormSkipsNonGormEngine(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{ID: "s:pg", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "store", "engine": "postgres", "orm": "gorm"}},
+		{ID: "s:my", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "store", "engine": "mysql", "driver": "go-sql-driver"}},
+		{ID: "g:create", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist", "package": "gorm.io/gorm", "pattern": "gorm_persist"}},
+		{ID: "r:exec", Type: graph.NodeTypeDatastore, Service: "svc",
+			Meta: map[string]string{"kind": "call", "op": "persist", "pattern": "sql_exec"}},
+	}
+	edges := LinkDatastores(nodes)
+	byFrom := map[string][]string{}
+	for _, e := range edges {
+		byFrom[e.From] = append(byFrom[e.From], e.To)
+	}
+	assert.Equal(t, []string{"s:pg"}, byFrom["g:create"], "GORM call: gorm engine only")
+	assert.ElementsMatch(t, []string{"s:pg", "s:my"}, byFrom["r:exec"], "raw sql: every engine")
+}
+
 // TestLinkTables verifies Y.3c: a datastore call node's SQL is parsed to its
 // table, one table node is minted per (service, name), and the query/persist
 // terminates at that real entity (callNode → table). Statements with no

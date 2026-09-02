@@ -453,10 +453,14 @@ func stripMeta(s string) string {
 // those extra edges carry confidence "partial" instead of "inferred".
 func LinkDatastores(nodes []graph.Node) []graph.Edge {
 	storesByService := make(map[string][]string)
+	gormStoresByService := make(map[string][]string)
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Type == graph.NodeTypeDatastore && n.Meta["kind"] == "store" {
 			storesByService[n.Service] = append(storesByService[n.Service], n.ID)
+			if strings.Contains(n.Meta["orm"], "gorm") {
+				gormStoresByService[n.Service] = append(gormStoresByService[n.Service], n.ID)
+			}
 		}
 	}
 
@@ -467,6 +471,15 @@ func LinkDatastores(nodes []graph.Node) []graph.Edge {
 			continue
 		}
 		stores := storesByService[n.Service]
+		// A GORM call site can only reach an engine GORM has a dialect driver
+		// for — don't fan it out onto a raw database/sql-only engine (e.g. a
+		// stray go-sql-driver/mysql in the dependency tree).
+		isGorm := n.Meta["package"] == "gorm.io/gorm" || strings.HasPrefix(n.Meta["pattern"], "gorm_")
+		if isGorm {
+			if g := gormStoresByService[n.Service]; len(g) > 0 {
+				stores = g
+			}
+		}
 		edgeType := graph.EdgeTypeQueries
 		if n.Meta["op"] == "persist" {
 			edgeType = graph.EdgeTypePersists
