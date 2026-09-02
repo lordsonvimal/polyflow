@@ -32,6 +32,7 @@ import (
 // file:line.
 func dropNonHTTPJSMatches(results []patterns.MatchResult) []patterns.MatchResult {
 	axiosInstances := collectAxiosInstanceNames(results)
+	navigateAliases := collectNavigateAliasNames(results)
 	out := results[:0]
 	for _, r := range results {
 		switch r.PatternName {
@@ -66,6 +67,16 @@ func dropNonHTTPJSMatches(results []patterns.MatchResult) []patterns.MatchResult
 				continue
 			}
 		case "producer_alias_url_call", "producer_alias_obj_call":
+			// React Router navigate()/history.push() calls are SPA routing
+			// actions executed entirely in the browser — they never issue an
+			// outbound HTTP request. Treating them as http_client nodes causes
+			// BrowserSameOrigin to try the producer's own service first; when
+			// the SPA has no server-side route for the path, the engine falls
+			// through and matches a same-path handler on a different fleet
+			// service, creating a false cross-service edge.
+			if navigateAliases[r.Captures["via_alias"]] {
+				continue
+			}
 			// An empty URL literal is not an address. The node could never
 			// match a route, so it is pure search and footer noise — and,
 			// being typed http_client, it reads to an agent as a real
@@ -205,6 +216,44 @@ func jsAxiosCallArgCount(r patterns.MatchResult) int {
 		return 0
 	}
 	return 0
+}
+
+// navigateBindingRe recognises the ways a file binds a name to a React Router
+// navigate function so that `name("/path")` is SPA routing, not an HTTP call:
+//
+//	const navigate = useNavigate()
+//	const history = useHistory()
+var navigateBindingRe = []*regexp.Regexp{
+	regexp.MustCompile(`(?:const|let|var)\s+(\w+)\s*=\s*useNavigate\s*\(`),
+	regexp.MustCompile(`(?:const|let|var)\s+(\w+)\s*=\s*useHistory\s*\(`),
+}
+
+// collectNavigateAliasNames returns the set of local identifiers that name a
+// React Router navigate function in the file these match results came from.
+func collectNavigateAliasNames(results []patterns.MatchResult) map[string]bool {
+	names := map[string]bool{}
+	var src []byte
+	for i := range results {
+		if results[i].PatternName == "react_router_navigate_binding" {
+			if n := results[i].Captures["alias_name"]; n != "" {
+				names[n] = true
+			}
+		}
+		if src == nil && len(results[i].Src) > 0 {
+			src = results[i].Src
+		}
+	}
+	if src != nil {
+		text := string(src)
+		for _, re := range navigateBindingRe {
+			for _, m := range re.FindAllStringSubmatch(text, -1) {
+				if len(m) > 1 && m[1] != "" {
+					names[m[1]] = true
+				}
+			}
+		}
+	}
+	return names
 }
 
 func isContainerReceiverCall(r patterns.MatchResult) bool {

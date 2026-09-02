@@ -121,6 +121,37 @@ func ApplyHints(links []workspace.Link, nodes []graph.Node, edges []graph.Edge) 
 		}
 	}
 
+	// Tier JH literal-host gate: a JS/TS node whose host resolved to a
+	// module-level string constant (host_default_literal) matches only by path —
+	// the wildcard prefix bypasses every service-attribution check, so `*/login`
+	// from a React app that calls https://atlas.example.com/login ends up matching
+	// POST /login on every fleet service that exposes one. If no link rule has
+	// claimed the literal domain (via a NAME=<URL> hint), the domain is external
+	// or unrecognised — mark the node dynamic so the contract engine ledgers it
+	// instead of fan-matching it across the fleet.
+	for i := range result {
+		n := &result[i]
+		lit := n.Meta["host_default_literal"]
+		if lit == "" || n.Meta["key_dynamic"] == "true" || n.Meta["target_service"] != "" {
+			continue
+		}
+		// A NAME=<URL> hint whose URL is a prefix of the literal claims it.
+		for _, r := range rules {
+			if r.from != n.Service || r.hintURL == "" {
+				continue
+			}
+			if strings.HasPrefix(lit, r.hintURL) {
+				n.Meta = ensureMeta(n.Meta)
+				n.Meta["target_service"] = r.to
+				break
+			}
+		}
+		if n.Meta["target_service"] == "" {
+			n.Meta = ensureMeta(n.Meta)
+			n.Meta["key_dynamic"] = "true"
+		}
+	}
+
 	return result
 }
 
