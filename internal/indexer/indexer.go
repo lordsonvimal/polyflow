@@ -1548,14 +1548,22 @@ func stampReflectDispatched(nodes []graph.Node, reflectMethods map[string]map[st
 }
 
 // isMinifiedAsset reports whether path is a minified/bundled vendor asset
-// (e.g. datastar.min.js) rather than authored source. These ship pre-built,
-// often as a single line of mangled identifiers with no stable call edges
-// back to application code; parsing them as ordinary source floods the graph
-// (and the deadcode scan in particular) with thousands of phantom
-// zero-caller nodes for library internals nobody wrote or calls directly.
+// (e.g. datastar.min.js) or a generated runtime file (e.g. Yarn PnP loader)
+// rather than authored source. These ship pre-built, often as a single line
+// of mangled identifiers with no stable call edges back to application code;
+// parsing them as ordinary source floods the graph (and the deadcode scan in
+// particular) with thousands of phantom zero-caller nodes for library
+// internals nobody wrote or calls directly.
 func isMinifiedAsset(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
-	return strings.HasSuffix(base, ".min.js") || strings.HasSuffix(base, ".min.css")
+	if strings.HasSuffix(base, ".min.js") || strings.HasSuffix(base, ".min.css") {
+		return true
+	}
+	// Yarn PnP generated runtime files (.pnp.cjs, .pnp.loader.mjs, .pnp.js):
+	// module-resolution shims that contain Node.js internals like
+	// StringPrototypeStartsWith("/") which producer_alias_url_call captures as
+	// http_client nodes with url "/", producing false GET / cross-service edges.
+	return base == ".pnp.cjs" || base == ".pnp.loader.mjs" || base == ".pnp.js"
 }
 
 func walkService(root string, excludes []string) ([]string, map[string]int, error) {
