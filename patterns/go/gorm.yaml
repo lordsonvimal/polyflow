@@ -63,11 +63,8 @@ patterns:
       - name: target
         role: query_target
 
-  # Persistence: db.Create(&user), db.Save(&user), db.Delete(&user),
-  # db.Updates(&user). The table-bearing .Model(&X{}) call in a longer
-  # chain (db.Model(&X{}).Where(...).Updates(...)) sits too many hops from
-  # the finisher for a single tree-sitter query — that shape is v2 of the
-  # GORM table-linking tier (docs/gorm-table-linking-plan.md).
+  # Persistence, &pointer form: db.Create(&user), db.Save(&user),
+  # db.Delete(&user), db.Updates(&user).
   - name: gorm_persist
     query: |
       (call_expression
@@ -82,6 +79,30 @@ patterns:
         role: gorm_op
       - name: target
         role: persist_target
+
+  # Persistence, chain form: db.Model(&X{}).Where(...).Updates(cols) /
+  # tx.Where(...).Delete(&x). Repository code overwhelmingly writes this way
+  # and the finisher's argument is a plain column map, not a &pointer — so
+  # gorm_persist above never fires. GORM-ness is proven here by the
+  # immediately-preceding chain method (Where/Model/…), which no unrelated
+  # `.Create` call has. No @target: LinkGormModelTables resolves the table
+  # from the enclosing <Model>Repository / <Model>Service receiver (and from
+  # the .Model(&X{}) type when the chain method is Model).
+  - name: gorm_persist_chain
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (call_expression
+            function: (selector_expression
+              field: (field_identifier) @chain
+              (#match? @chain "^(Where|Model|Session|Table|Scopes|Not|Or|Joins|Preload|Select|Omit|Clauses|Unscoped|Order|Limit|Offset|Group|Having|Distinct|Begin)$")))
+          field: (field_identifier) @fn
+          (#match? @fn "^(Create|Save|Delete|Update|Updates|UpdateColumn|UpdateColumns)$")))
+    captures:
+      - name: chain
+        role: gorm_chain
+      - name: fn
+        role: gorm_op
 
   # Explicit table selection: db.Table("audits").Find(&x) /
   # db.Table("maple_exec_configs").Where(...).Updates(...). The literal is an

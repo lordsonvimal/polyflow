@@ -30,3 +30,7 @@ func auditRows(db *gorm.DB) {
 	var rows []Audit
 	db.Table("audits").Find(&rows)
 }
+
+func updateUser(db *gorm.DB, cols map[string]any) {
+	db.Model(&User{}).Where("id = ?", 1).Updates(cols)
+}

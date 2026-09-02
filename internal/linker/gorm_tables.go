@@ -108,6 +108,53 @@ func LinkGormModelTables(nodes []graph.Node) (newEdges []graph.Edge, unresolved 
 		}
 	}
 
+	// Enclosing-method index: file -> methods with a receiver, so an
+	// unresolvable local target (r.db.Create(config)) can fall back to the
+	// <Model>Repository / <Model>Service receiver that owns the call.
+	methodsByFile := make(map[string][]*graph.Node)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type == graph.NodeTypeMethod && n.Meta["receiver"] != "" {
+			methodsByFile[n.File] = append(methodsByFile[n.File], n)
+		}
+	}
+	// tableForModel resolves a model struct name to a schema table, applying
+	// the TableName() map then the schema-gated convention. "" if neither.
+	tableForModel := func(service, model string) string {
+		if model == "" {
+			return ""
+		}
+		if mt := modelTable[service]; mt != nil {
+			if t := mt[model]; t != "" {
+				return t
+			}
+		}
+		if conv := gormTableConvention(model); len(schemaByService[service][conv]) > 0 {
+			return conv
+		}
+		return ""
+	}
+	enclosingModelTable := func(service, file string, line int) (model, table string) {
+		var best *graph.Node
+		for _, m := range methodsByFile[file] {
+			end := m.EndLine
+			if end < m.Line {
+				end = m.Line
+			}
+			if line < m.Line || line > end {
+				continue
+			}
+			if best == nil || m.Line > best.Line {
+				best = m
+			}
+		}
+		if best == nil {
+			return "", ""
+		}
+		cand := stripReceiverSuffix(best.Meta["receiver"])
+		return cand, tableForModel(service, cand)
+	}
+
 	seenEdge := make(map[string]bool)
 	seenLedger := make(map[string]bool)
 	ledger := func(svc, file string, line int, name, kind string) {
@@ -132,27 +179,28 @@ func LinkGormModelTables(nodes []graph.Node) (newEdges []graph.Edge, unresolved 
 		switch {
 		case n.Meta["table_name"] != "":
 			table = patterns.StripStringLiteral(n.Meta["table_name"])
+			// Drop a trailing SQL alias: .Table("maple_config_packages AS cp").
+			if f := strings.Fields(table); len(f) > 0 {
+				table = f[0]
+			}
 		default:
-			model = gormModelIdent(n.Meta["target"])
-			if model == "" {
-				continue
-			}
-			// A lower-case identifier is a local variable, not an exported
-			// model — its type needs SSA (v2). Skip without ledgering to
-			// keep the ledger signal clean.
-			if r := []rune(model)[0]; !unicode.IsUpper(r) {
-				continue
-			}
-			if mt := modelTable[n.Service]; mt != nil {
-				table = mt[model]
+			ident := gormModelIdent(n.Meta["target"])
+			// An exported identifier is (probably) a model type — resolve it
+			// directly. A lower-case local, a column map, or an empty capture
+			// falls through to the enclosing-receiver heuristic.
+			if ident != "" && unicode.IsUpper([]rune(ident)[0]) {
+				model = ident
+				table = tableForModel(n.Service, model)
 			}
 			if table == "" {
-				if conv := gormTableConvention(model); len(schemaByService[n.Service][conv]) > 0 {
-					table = conv
+				if m, t := enclosingModelTable(n.Service, n.File, n.Line); t != "" {
+					model, table = m, t
 				}
 			}
 			if table == "" {
-				ledger(n.Service, n.File, n.Line, model, "gorm_model_unresolved")
+				if model != "" {
+					ledger(n.Service, n.File, n.Line, model, "gorm_model_unresolved")
+				}
 				continue
 			}
 		}
@@ -173,6 +221,20 @@ func LinkGormModelTables(nodes []graph.Node) (newEdges []graph.Edge, unresolved 
 		edgeType := graph.EdgeTypeQueries
 		if n.Meta["op"] == "persist" {
 			edgeType = graph.EdgeTypePersists
+		}
+		// A .Table("x") call is classified persist by pattern name but is
+		// just as often a scoped read (.Table("x").Where(...).Find(&y)).
+		// Re-read the statement and downgrade to queries when only read
+		// finishers appear.
+		if n.Meta["pattern"] == "gorm_persist_table" {
+			src, ok := fileCache[n.File]
+			if !ok {
+				src, _ = os.ReadFile(n.File)
+				fileCache[n.File] = src
+			}
+			if stmt := sourceSpan(src, n.Line, n.Line+4); stmt != "" && !gormStmtWrites(stmt) {
+				edgeType = graph.EdgeTypeQueries
+			}
 		}
 		for _, tid := range targets {
 			eid := fmt.Sprintf("%s:%s->%s:gorm", string(edgeType), n.ID, tid)
@@ -217,6 +279,52 @@ func preferSchemaSQL(nodes []graph.Node, ids []string) []string {
 	}
 	return ids
 }
+
+// gormReceiverSuffixes are the noun endings a GORM data-access type name
+// carries around its model: ExecConfigRepository -> ExecConfig,
+// UserService -> User. Ordered longest-first so "Repositories" wins over
+// "Repository" etc.
+var gormReceiverSuffixes = []string{
+	"Repositories", "Repository", "Repo", "Storage", "Store", "DAO", "Dao",
+	"Service", "Svc", "Manager", "Mgr", "Gorm", "Model", "DB", "Db",
+}
+
+// stripReceiverSuffix removes one trailing data-access suffix from a
+// receiver type name. Returns "" if nothing is stripped (a bare "Foo"
+// receiver is not evidence that the model is "Foo").
+func stripReceiverSuffix(recv string) string {
+	recv = strings.TrimPrefix(recv, "*")
+	for _, s := range gormReceiverSuffixes {
+		if len(recv) > len(s) && strings.HasSuffix(recv, s) {
+			return recv[:len(recv)-len(s)]
+		}
+	}
+	return ""
+}
+
+// sourceSpan returns lines [startLine, endLine] (1-based, inclusive) joined.
+func sourceSpan(src []byte, startLine, endLine int) string {
+	if len(src) == 0 || startLine <= 0 {
+		return ""
+	}
+	lines := strings.Split(string(src), "\n")
+	if startLine > len(lines) {
+		return ""
+	}
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+	if endLine < startLine {
+		endLine = startLine
+	}
+	return strings.Join(lines[startLine-1:endLine], "\n")
+}
+
+var gormWriteVerbRe = regexp.MustCompile(`\.(Create|Save|Delete|Update|Updates|UpdateColumn|UpdateColumns|FirstOrCreate|Association)\b`)
+
+// gormStmtWrites reports whether a GORM chain statement contains a mutation
+// finisher.
+func gormStmtWrites(stmt string) bool { return gormWriteVerbRe.MatchString(stmt) }
 
 var gormReturnLiteralRe = regexp.MustCompile("return\\s+[\"`]([^\"`]+)[\"`]")
 
