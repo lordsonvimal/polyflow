@@ -1,6 +1,11 @@
 # Raw database/sql call sites: sql.Open + query/exec with SQL string
-# literals. Ungated (stdlib); the SQL-string first argument is the
-# shape-level guard against unrelated Query/Exec methods.
+# literals. Ungated (stdlib). The method names (Query/QueryRow/Exec/…) are
+# shared by unrelated APIs — e.g. a web framework's request-param getter
+# `c.Query("q")` or `u.Query()` — so a bare string-literal first argument is
+# NOT a sufficient guard: `"q"` is a string literal too. Every query/exec
+# pattern additionally requires the literal to begin with a SQL statement
+# keyword (#match? @sql), which is what actually distinguishes a real SQL
+# call site from a look-alike method with a short string argument.
 language: go
 version: "1"
 patterns:
@@ -32,7 +37,8 @@ patterns:
           (#match? @fn "^(Query|QueryRow)$"))
         arguments: (argument_list
           .
-          [(interpreted_string_literal) (raw_string_literal)] @sql))
+          [(interpreted_string_literal) (raw_string_literal)] @sql
+          (#match? @sql "(?i)^[\"`][[:space:](]*(SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE|UPSERT|WITH|CALL|EXPLAIN|ANALYZE|PRAGMA|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|SET|SHOW|VALUES|BEGIN|START|COMMIT|ROLLBACK|SAVEPOINT|LOCK|UNLOCK|COPY|LOAD|DECLARE|FETCH|LISTEN|NOTIFY|VACUUM|REINDEX|REFRESH)[^A-Za-z]")))
     captures:
       - name: fn
         role: sql_op
@@ -50,7 +56,8 @@ patterns:
           .
           (identifier) @ctx
           .
-          [(interpreted_string_literal) (raw_string_literal)] @sql))
+          [(interpreted_string_literal) (raw_string_literal)] @sql
+          (#match? @sql "(?i)^[\"`][[:space:](]*(SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE|UPSERT|WITH|CALL|EXPLAIN|ANALYZE|PRAGMA|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|SET|SHOW|VALUES|BEGIN|START|COMMIT|ROLLBACK|SAVEPOINT|LOCK|UNLOCK|COPY|LOAD|DECLARE|FETCH|LISTEN|NOTIFY|VACUUM|REINDEX|REFRESH)[^A-Za-z]")))
     captures:
       - name: fn
         role: sql_op
@@ -66,7 +73,8 @@ patterns:
           (#eq? @fn "Exec"))
         arguments: (argument_list
           .
-          [(interpreted_string_literal) (raw_string_literal)] @sql))
+          [(interpreted_string_literal) (raw_string_literal)] @sql
+          (#match? @sql "(?i)^[\"`][[:space:](]*(SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE|UPSERT|WITH|CALL|EXPLAIN|ANALYZE|PRAGMA|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|SET|SHOW|VALUES|BEGIN|START|COMMIT|ROLLBACK|SAVEPOINT|LOCK|UNLOCK|COPY|LOAD|DECLARE|FETCH|LISTEN|NOTIFY|VACUUM|REINDEX|REFRESH)[^A-Za-z]")))
     captures:
       - name: fn
         role: sql_op
@@ -84,7 +92,8 @@ patterns:
           .
           (identifier) @ctx
           .
-          [(interpreted_string_literal) (raw_string_literal)] @sql))
+          [(interpreted_string_literal) (raw_string_literal)] @sql
+          (#match? @sql "(?i)^[\"`][[:space:](]*(SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE|UPSERT|WITH|CALL|EXPLAIN|ANALYZE|PRAGMA|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|SET|SHOW|VALUES|BEGIN|START|COMMIT|ROLLBACK|SAVEPOINT|LOCK|UNLOCK|COPY|LOAD|DECLARE|FETCH|LISTEN|NOTIFY|VACUUM|REINDEX|REFRESH)[^A-Za-z]")))
     captures:
       - name: fn
         role: sql_op

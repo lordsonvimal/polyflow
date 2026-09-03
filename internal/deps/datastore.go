@@ -49,6 +49,13 @@ func DatastoreNodes(service string, ds []Dependency) []graph.Node {
 		if !ok {
 			continue
 		}
+		// A driver marked `// indirect` in go.mod is pulled in transitively and
+		// is not imported by this module — inferring a datastore from it mints a
+		// phantom engine node (e.g. a stray go-sql-driver/mysql that no code
+		// here ever calls). Only count drivers the module actually depends on.
+		if d.Indirect {
+			continue
+		}
 		a := engines[info.engine]
 		if a == nil {
 			a = &agg{}
