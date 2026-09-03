@@ -51,11 +51,11 @@ func TestLinkSprocketsAssets_DirectiveGraph(t *testing.T) {
 	_, edges, unresolved := LinkSprocketsAssets(fileNodesFor(svc, files), map[string][]string{svc: files})
 
 	require.Equal(t, []string{
-		filepath.Join(js, "vega/vega.js"),
-		filepath.Join(js, "vega/deep/nested.js"), // require_tree is recursive
 		filepath.Join(js, "components/modal.js"),
 		filepath.Join(js, "studies.es6"), // logical path resolved through .es6
 		filepath.Join(js, "utility/common.js"),
+		filepath.Join(js, "vega/deep/nested.js"), // require_tree is recursive
+		filepath.Join(js, "vega/vega.js"),
 	}, assetTargets(edges, svc, app))
 
 	// The node_modules require has no indexed target: ledgered, never invented
