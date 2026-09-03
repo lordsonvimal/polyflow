@@ -5,7 +5,7 @@ import { handleIntent } from "../../interaction/gestures";
 import { scopeStore } from "../../stores/scope";
 import { selectionStore } from "../../stores/selection";
 import { treeStore } from "../../stores/tree";
-import { parseQuery, parseNodeCard, type ParsedQuery } from "./query";
+import { parseQuery, parseNodeCard, toggleKindChip, KIND_FILTERS, type ParsedQuery } from "./query";
 import { formatLocation, displayLabel } from "../../lib/location";
 import { linkExplorerStore } from "../../stores/linkExplorer";
 
@@ -29,13 +29,16 @@ type Entry =
   | { group: "service"; item: ServiceEntry }
   | { group: "command"; item: Command };
 
-type SymbolResult = { entries: SymbolEntry[]; note: string };
+// note   — the server's vector-arm availability message (semantic).
+// advisory — result-quality advisory: the server's "no strong match" note,
+//   or a scope error (e.g. an unknown service: chip).
+type SymbolResult = { entries: SymbolEntry[]; note: string; advisory: string };
 
 async function fetchSymbols(parsed: ParsedQuery, fleetScope: boolean): Promise<SymbolResult> {
   // A bare "kind:x service:y" query (no free text — e.g. the Stack panel's
   // per-kind bar-chart click) is still a real symbol search; only a totally
   // empty query (nothing typed, no chips) has nothing to search for.
-  if (!parsed.text && !parsed.chips.kind) return { entries: [], note: "" };
+  if (!parsed.text && !parsed.chips.kind) return { entries: [], note: "", advisory: "" };
   const params = new URLSearchParams({ limit: String(RESULT_LIMIT) });
   if (parsed.text) params.set("q", parsed.text);
   if (parsed.chips.kind) params.set("kind", parsed.chips.kind);
@@ -47,9 +50,16 @@ async function fetchSymbols(parsed: ParsedQuery, fleetScope: boolean): Promise<S
   else if (fleetScope) params.set("service", "*");
   try {
     const r = await fetch(`/api/graph/search?${params}`);
-    if (!r.ok) return { entries: [], note: "" };
+    if (!r.ok) {
+      // A 400 here is almost always an unknown `service:` chip — the server
+      // now rejects it (and lists the valid members) instead of silently
+      // returning workspace-local results.
+      const err = await r.json().catch(() => null);
+      return { entries: [], note: "", advisory: err?.error ?? "" };
+    }
     const data = await r.json();
     const note: string = Array.isArray(data) ? "" : (data.semantic ?? "");
+    const advisory: string = Array.isArray(data) ? "" : (data.note ?? "");
     let out: SymbolEntry[];
     if (Array.isArray(data)) {
       out = data.map((n: any) => ({
@@ -90,9 +100,9 @@ async function fetchSymbols(parsed: ParsedQuery, fleetScope: boolean): Promise<S
       });
     }
     if (parsed.chips.service) out = out.filter(s => s.service === parsed.chips.service);
-    return { entries: out.slice(0, RESULT_LIMIT), note };
+    return { entries: out.slice(0, RESULT_LIMIT), note, advisory };
   } catch {
-    return { entries: [], note: "" };
+    return { entries: [], note: "", advisory: "" };
   }
 }
 
@@ -173,6 +183,8 @@ export default function Palette() {
   // fleet. Mirrors the `service` param on /api/graph/search.
   const [fleetScope, setFleetScope] = createSignal(false);
   const [semanticNote, setSemanticNote] = createSignal("");
+  const [advisory, setAdvisory] = createSignal("");
+  const activeKind = () => parseQuery(query()).chips.kind ?? "";
 
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let seq = 0;
@@ -190,6 +202,7 @@ export default function Palette() {
       setSymbols([]);
       setFiles([]);
       setSemanticNote("");
+      setAdvisory("");
       return;
     }
     const mySeq = ++seq;
@@ -197,6 +210,7 @@ export default function Palette() {
       if (mySeq !== seq) return; // a newer keystroke already superseded this request
       setSymbols(s.entries);
       setSemanticNote(s.note);
+      setAdvisory(s.advisory);
       setFiles(f);
     });
   }
@@ -278,6 +292,7 @@ export default function Palette() {
     setFiles([]);
     setServices([]);
     setSemanticNote("");
+    setAdvisory("");
     setHighlight(0);
   }
 
@@ -359,6 +374,20 @@ export default function Palette() {
               Entire fleet
             </button>
           </div>
+          <div class="flex items-center gap-1 px-3 py-1.5 border-b border-neutral-800 text-xs flex-wrap">
+            <span class="text-neutral-500 mr-1">Only</span>
+            <For each={KIND_FILTERS}>
+              {(kf) => (
+                <button
+                  data-testid={`palette-kind-${kf.kind}`}
+                  class={`px-2 py-0.5 rounded ${activeKind() === kf.kind ? "bg-neutral-700 text-neutral-100" : "text-neutral-400 hover:text-neutral-200"}`}
+                  onClick={() => onInput(toggleKindChip(query(), kf.kind))}
+                >
+                  {kf.label}
+                </button>
+              )}
+            </For>
+          </div>
           <Show when={semanticNote()}>
             <div
               data-testid="palette-semantic-note"
@@ -366,6 +395,15 @@ export default function Palette() {
               title={semanticNote()}
             >
               {semanticNote()}
+            </div>
+          </Show>
+          <Show when={advisory()}>
+            <div
+              data-testid="palette-advisory"
+              class="px-3 py-1 border-b border-neutral-800 text-[11px] text-sky-400/90"
+              title={advisory()}
+            >
+              {advisory()}
             </div>
           </Show>
           <div class="max-h-96 overflow-y-auto overflow-x-hidden text-sm">

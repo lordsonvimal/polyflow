@@ -169,6 +169,30 @@ describe("Palette", () => {
     expect(scopeStore.stack().at(-1)).toEqual({ kind: "service", service: "railssvc" });
   });
 
+  it("kind quick-filter chip toggles a kind: token into the query", async () => {
+    vi.useFakeTimers();
+    type("do-build");
+    await vi.advanceTimersByTimeAsync(150);
+
+    const chip = container.querySelector('[data-testid="palette-kind-http_handler"]') as HTMLButtonElement;
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    expect(input().value).toBe("kind:http_handler do-build");
+  });
+
+  it("renders the server's 'no strong match' advisory", async () => {
+    vi.useFakeTimers();
+    type("wobble");
+    await vi.advanceTimersByTimeAsync(150);
+
+    deferred["/api/graph/search?wobble"]({ nodes: [], flows: [], docs: [], semantic: "", note: "no strong match for \"wobble\"" });
+    deferred["/api/files?wobble"]({ files: [] });
+    await flush();
+
+    expect(container.querySelector('[data-testid="palette-advisory"]')?.textContent).toContain("no strong match");
+  });
+
   it("openWithQuery (UN.4 number click-navigate) pre-fills the search box and consumes the pending query once", async () => {
     vi.useFakeTimers();
     paletteStore.close();
