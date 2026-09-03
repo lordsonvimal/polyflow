@@ -107,6 +107,54 @@ func identExact(label, q string) bool {
 	return false
 }
 
+// labelCoversQuery reports whether label contains the *whole* query, not just
+// one word it happens to share.
+//
+// For an identifier-shaped query ("do-build") the query's normalized form
+// must appear as a CONTIGUOUS run in the normalized label. This is the fix
+// for "do-build" ranking "POST /docker-builds/:id/do-cancel" as a strong hit:
+// that label only has "build" (via "builds") and "do" (via "do-cancel")
+// scattered across the path — normalizeIdent gives "...dockerbuildsbuildid
+// docancel", which does not contain "dobuild" — whereas a real
+// "POST /x/do_build" normalizes to "...dobuild" and does.
+//
+// For a plain multi-word query ("cancel build order") every word must still
+// appear as a word of the label (coversAllQueryWords).
+func labelCoversQuery(label, q string) bool {
+	if label == "" {
+		return false
+	}
+	if looksLikeIdent(q) {
+		nq := normalizeIdent(q)
+		return len(nq) >= 4 && strings.Contains(normalizeIdent(label), nq)
+	}
+	return coversAllQueryWords(label, identTokens(q))
+}
+
+// LabelRelevance scores how directly label answers query q, for the FTS-only
+// (kind-filtered) search path that does not run the hybrid ranker:
+//
+//	2 — identifier-exact (label, or a route's last segment, is the query)
+//	1 — the label contains the whole query
+//	0 — only incidental shared-token overlap (what BM25 alone rewards)
+//
+// Callers stable-sort their FTS hits by this descending so a real match
+// floats above lexical cousins ("do-build" vs "do-cancel").
+func LabelRelevance(label, q string) int {
+	switch {
+	case identExact(label, q):
+		return 2
+	case labelCoversQuery(label, q):
+		return 1
+	default:
+		return 0
+	}
+}
+
+// IdentifierQuery reports whether q is a single symbol-shaped term (an
+// exported view of looksLikeIdent for the server's FTS-only path).
+func IdentifierQuery(q string) bool { return looksLikeIdent(q) }
+
 // coversAllQueryWords reports whether every sub-word of the query appears as a
 // word of label — matched exactly (case-insensitive) for short words, or as a
 // >=4-char prefix for longer ones. Only meaningful for multi-word queries; a

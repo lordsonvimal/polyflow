@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -623,6 +624,11 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 			}
 		}
 		nodes = filtered
+		// FTS-only path: re-sort by how directly each label answers the query
+		// so a real match beats a lexical cousin ("do-build" vs "do-cancel").
+		sort.SliceStable(nodes, func(i, j int) bool {
+			return semantic.LabelRelevance(nodes[i].Label, in.Query) > semantic.LabelRelevance(nodes[j].Label, in.Query)
+		})
 		if len(nodes) > limit {
 			nodes = nodes[:limit]
 		}
