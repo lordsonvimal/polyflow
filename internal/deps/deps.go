@@ -32,6 +32,7 @@ type Dependency struct {
 	Name      string `json:"name"`      // module path, npm name, or gem name
 	Version   string `json:"version"`   // exact resolved version (no range)
 	Kind      string `json:"kind"`      // prod | dev
+	Indirect  bool   `json:"indirect,omitempty"` // go.mod `// indirect`: pulled in transitively, not imported by this module
 }
 
 // Resolve inspects dir for every supported manifest and returns all resolved
@@ -111,6 +112,7 @@ func resolveGoMod(path string) ([]Dependency, error) {
 			Name:      r.Mod.Path,
 			Version:   r.Mod.Version,
 			Kind:      KindProd, // go.mod does not distinguish dev deps
+			Indirect:  r.Indirect,
 		})
 	}
 	return out, nil

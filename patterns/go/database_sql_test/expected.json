@@ -1,4 +1,4 @@
 {
-  "patterns": ["sql_open", "sql_query", "sql_query", "sql_exec", "sql_exec"],
-  "node_types": ["datastore", "datastore", "datastore", "datastore", "datastore"]
+  "patterns": ["sql_open", "sql_query", "sql_query", "sql_query", "sql_query", "sql_exec", "sql_exec"],
+  "node_types": ["datastore", "datastore", "datastore", "datastore", "datastore", "datastore", "datastore"]
 }
