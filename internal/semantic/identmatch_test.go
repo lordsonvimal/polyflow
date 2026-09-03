@@ -54,6 +54,20 @@ func TestIdentExact(t *testing.T) {
 	}
 }
 
+func TestLabelCoversQuery(t *testing.T) {
+	// Identifier query: needs the whole thing contiguously, not scattered.
+	if !labelCoversQuery("POST /api/x/do_build", "do-build") {
+		t.Error("do_build route should cover do-build")
+	}
+	if labelCoversQuery("POST /docker-builds/:build_id/do-cancel", "do-build") {
+		t.Error("do-cancel route must NOT cover do-build (scattered do + builds)")
+	}
+	// Plain multi-word query: per-word coverage.
+	if !labelCoversQuery("cancelBuildOrder", "cancel build order") {
+		t.Error("cancelBuildOrder should cover the words cancel/build/order")
+	}
+}
+
 func TestCoversAllQueryWords(t *testing.T) {
 	q := identTokens("do-build") // ["do","build"]
 	if !coversAllQueryWords("POST /api/x/do_build", q) {
@@ -127,6 +141,42 @@ func TestSearch_WeakResultsTrimmedAndNoted(t *testing.T) {
 	}
 	if resp.Note == "" {
 		t.Error("weak results should carry a Note advisory")
+	}
+}
+
+// TestSearch_IdentifierQueryWeakWhenOnlyLexicalCousins: "do-build" with no
+// real do-build endpoint should NOT present the lexically-adjacent "do-cancel"
+// handler as a strong answer just because both retrieval arms land on it — it
+// should trim and flag the weak match.
+func TestSearch_IdentifierQueryWeakWhenOnlyLexicalCousins(t *testing.T) {
+	db := openTestDB(t)
+	sem := NewStore(db)
+
+	seedNode(t, db, &graph.Node{
+		ID: "h:do_cancel", Type: graph.NodeTypeHTTPHandler,
+		Label: "POST /docker-builds/:build_id/do-cancel", Service: "builds-manager", File: "r.go", Line: 1,
+	}, []float32{1, 0, 0, 0})
+	for i := 0; i < 6; i++ {
+		seedNode(t, db, &graph.Node{
+			ID: fmt.Sprintf("fn:post%d", i), Type: graph.NodeTypeFunction,
+			Label:   fmt.Sprintf("http.MethodPost /docker-builds/build-%d/do-cancel", i),
+			Service: "builds", File: "client_test.go", Line: i + 1,
+		}, []float32{1, 0, 0, 0})
+	}
+
+	sr := NewSearcher(sem, &stubEmbedder{dims: 4, vec: []float32{1, 0, 0, 0}}, nil)
+	resp, err := sr.Search(context.Background(), "do-build", 20)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(resp.Nodes) > 0 && resp.Nodes[0].Retrieval == "exact" {
+		t.Errorf("do-cancel must not be an exact match for do-build")
+	}
+	if len(resp.Nodes) > weakNodeCap {
+		t.Errorf("weak identifier query should cap at %d, got %d", weakNodeCap, len(resp.Nodes))
+	}
+	if resp.Note == "" {
+		t.Error("weak identifier query should carry a Note")
 	}
 }
 

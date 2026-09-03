@@ -209,6 +209,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		nodes = filtered
+		// The kind-filtered path is FTS-only (no hybrid ranker), so BM25 alone
+		// decides order — which floats lexical cousins ("do-cancel") over a real
+		// match. Re-sort by how directly each label answers the query.
+		sort.SliceStable(nodes, func(i, j int) bool {
+			return semantic.LabelRelevance(nodes[i].Label, q) > semantic.LabelRelevance(nodes[j].Label, q)
+		})
 		if len(nodes) > limit {
 			nodes = nodes[:limit]
 		}

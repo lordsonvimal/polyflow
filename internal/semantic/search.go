@@ -222,7 +222,7 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 	case len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact":
 		nodeCap = min(exactMatchNodeCap, limit)
 		flowCap, docCap = exactMatchFlowCap, exactMatchDocCap
-	case hasNodeHit(fused) && !hasStrongNodeAnchor(fused):
+	case hasNodeHit(fused) && !hasStrongNodeAnchor(fused, q):
 		// No exact hit, nothing corroborated by both arms, nothing matching the
 		// whole query — the ranked tail is a lexical guess, not an answer.
 		// Trim it hard and say so rather than paying tokens for red herrings.
@@ -402,15 +402,24 @@ func hasNodeHit(fused []fusedEntry) bool {
 }
 
 // hasStrongNodeAnchor reports whether any node hit is trustworthy on its own
-// terms: an exact/identifier match, a hit both retrieval arms agreed on, or a
-// hit whose label contains the whole query. Its absence means the ranked list
-// is a lexical guess (see Response.Note / weakNodeCap).
-func hasStrongNodeAnchor(fused []fusedEntry) bool {
+// terms. Its absence means the ranked list is a lexical guess (see
+// Response.Note / weakNodeCap).
+//
+// An exact/identifier match or whole-query coverage always qualifies. Bare
+// both-arms corroboration only qualifies for a descriptive (non-identifier)
+// query: when the caller typed a specific symbol name like "do-build", both
+// arms agreeing on a lexically-similar-but-wrong node ("do-cancel") is not
+// evidence the query was answered — it's the noise the caller asked to cut.
+func hasStrongNodeAnchor(fused []fusedEntry, q string) bool {
+	identQ := looksLikeIdent(q)
 	for _, e := range fused {
 		if e.entityType != "node" {
 			continue
 		}
-		if e.retrieval == "exact" || e.bothArms || e.fullCover {
+		if e.retrieval == "exact" || e.fullCover {
+			return true
+		}
+		if !identQ && e.bothArms {
 			return true
 		}
 	}
@@ -500,8 +509,6 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		}
 	}
 
-	queryWords := identTokens(q)
-
 	out := make([]fusedEntry, 0, len(combined))
 	for id, e := range combined {
 		score := 0.0
@@ -519,7 +526,7 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 			retrieval:  retrievalLabel(e.ftsRank, e.vecRank, e.label, e.nodeType, q),
 			nodeType:   e.nodeType,
 			bothArms:   e.ftsRank > 0 && e.vecRank > 0,
-			fullCover:  e.entityType == "node" && coversAllQueryWords(e.label, queryWords),
+			fullCover:  e.entityType == "node" && labelCoversQuery(e.label, q),
 		})
 	}
 
