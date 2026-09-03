@@ -45,6 +45,12 @@ const (
 	exactMatchDocCap  = 1
 )
 
+// weakNodeCap bounds the node section when no hit had a strong anchor (see
+// hasStrongNodeAnchor / Response.Note). A handful of best-effort guesses is
+// useful; twenty BM25 near-misses on a single common query stem is the noise
+// the caller asked search to cut.
+const weakNodeCap = 5
+
 // ShapeSearchResponse applies the shared search-surface ergonomics used by both
 // the CLI and the MCP tool (IA §2/§3): cap the flow/doc sections so nodes stay
 // visible, and inline a few source lines per node so the first call shows code.
@@ -89,6 +95,12 @@ type Response struct {
 	Flows    []Hit  `json:"flows"`
 	Docs     []Hit  `json:"docs"`
 	Semantic string `json:"semantic"` // "" when active | "unavailable: <reason>"
+	// Note is a caller-facing advisory about result quality, distinct from
+	// Semantic (which is only about vector-arm availability). It is set when
+	// no node hit had a strong anchor — no exact match, no hit corroborated
+	// by both retrieval arms, nothing containing the whole query — so the
+	// ranked list is a best-effort lexical guess rather than a real answer.
+	Note string `json:"note,omitempty"`
 }
 
 // Searcher performs hybrid FTS+vector retrieval over the entity corpus.
@@ -205,15 +217,21 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 	// on a common bare word like "heartbeat"), and zeroing flows outright then
 	// silently discards the one answer that would have actually helped.
 	nodeCap, flowCap, docCap := limit, limit, limit
-	if len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact" {
-		nodeCap = exactMatchNodeCap
-		if nodeCap > limit {
-			nodeCap = limit
-		}
+	note := ""
+	switch {
+	case len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact":
+		nodeCap = min(exactMatchNodeCap, limit)
 		flowCap, docCap = exactMatchFlowCap, exactMatchDocCap
+	case hasNodeHit(fused) && !hasStrongNodeAnchor(fused):
+		// No exact hit, nothing corroborated by both arms, nothing matching the
+		// whole query — the ranked tail is a lexical guess, not an answer.
+		// Trim it hard and say so rather than paying tokens for red herrings.
+		nodeCap = min(weakNodeCap, limit)
+		note = "no strong match for \"" + q + "\" — showing closest lexical guesses; " +
+			"try a more specific name, or add kind:/service: to narrow"
 	}
 
-	resp := Response{Semantic: semanticNote}
+	resp := Response{Semantic: semanticNote, Note: note}
 	nodeLim, flowLim, docLim := 0, 0, 0
 	for _, e := range fused {
 		if nodeLim >= nodeCap && flowLim >= flowCap && docLim >= docCap {
@@ -363,6 +381,40 @@ type fusedEntry struct {
 	score      float64
 	retrieval  string
 	nodeType   string
+	// bothArms is true when this entity was returned by both the lexical and
+	// the vector arm — a corroboration signal a single-arm RRF score cannot
+	// express (every single-arm rank-1 hit scores the same 1/(k+1)).
+	bothArms bool
+	// fullCover is true when the entity's label contains every sub-word of a
+	// multi-word query. It sorts such hits above ones that only share one
+	// common word ("cancel-build" vs "do-build" for the query "do-build").
+	fullCover bool
+}
+
+// hasNodeHit reports whether any fused entry is a node.
+func hasNodeHit(fused []fusedEntry) bool {
+	for _, e := range fused {
+		if e.entityType == "node" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasStrongNodeAnchor reports whether any node hit is trustworthy on its own
+// terms: an exact/identifier match, a hit both retrieval arms agreed on, or a
+// hit whose label contains the whole query. Its absence means the ranked list
+// is a lexical guess (see Response.Note / weakNodeCap).
+func hasStrongNodeAnchor(fused []fusedEntry) bool {
+	for _, e := range fused {
+		if e.entityType != "node" {
+			continue
+		}
+		if e.retrieval == "exact" || e.bothArms || e.fullCover {
+			return true
+		}
+	}
+	return false
 }
 
 // declarationPriority ranks graph.NodeType strings so a real declaration
@@ -399,7 +451,24 @@ func declarationPriority(nodeType string) int {
 // caller that hasn't wired NodeType) defaults to eligible so this only ever
 // narrows the floor for node hits that name a type explicitly.
 func exactEligible(nodeType string) bool {
-	return nodeType == "" || declarationPriority(nodeType) == 0
+	if nodeType == "" {
+		return true
+	}
+	switch graph.NodeType(nodeType) {
+	case graph.NodeTypeFunction, graph.NodeTypeMethod, graph.NodeTypeClass, graph.NodeTypeStruct,
+		graph.NodeTypeInterface, graph.NodeTypeComponent,
+		// Route/handler labels ("POST /api/x/do_build") and messaging endpoints
+		// are as specific as a declaration name — an exact/identifier match on
+		// one names exactly one thing, so they belong on the floor too. This is
+		// what lets "do-build" pin its endpoint instead of losing the
+		// exact/non-exact tier split to a bare "build" token collision.
+		graph.NodeTypeHTTPHandler, graph.NodeTypeHTTPClient, graph.NodeTypeRoute,
+		graph.NodeTypeWorker, graph.NodeTypePublisher, graph.NodeTypeSubscriber,
+		graph.NodeTypeChannel:
+		return true
+	default:
+		return false
+	}
 }
 
 // rrfFuse merges FTS and vector hit lists using Reciprocal Rank Fusion (k=60).
@@ -431,6 +500,8 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		}
 	}
 
+	queryWords := identTokens(q)
+
 	out := make([]fusedEntry, 0, len(combined))
 	for id, e := range combined {
 		score := 0.0
@@ -447,6 +518,8 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 			score:      score,
 			retrieval:  retrievalLabel(e.ftsRank, e.vecRank, e.label, e.nodeType, q),
 			nodeType:   e.nodeType,
+			bothArms:   e.ftsRank > 0 && e.vecRank > 0,
+			fullCover:  e.entityType == "node" && coversAllQueryWords(e.label, queryWords),
 		})
 	}
 
@@ -467,6 +540,12 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		if iEx != jEx {
 			return iEx
 		}
+		// Whole-query coverage: a hit containing every query word outranks one
+		// that only shares a common stem. No-op for single-word queries (both
+		// fullCover are false) and when nothing covers the query (all false).
+		if ei.fullCover != ej.fullCover {
+			return ei.fullCover
+		}
 		if pi, pj := declarationPriority(ei.nodeType), declarationPriority(ej.nodeType); pi != pj {
 			return pi < pj
 		}
@@ -479,7 +558,7 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 }
 
 func retrievalLabel(ftsRank, vecRank int, label, nodeType, q string) string {
-	if exactEligible(nodeType) && isExact(label, q) {
+	if exactEligible(nodeType) && (isExact(label, q) || identExact(label, q)) {
 		return "exact"
 	}
 	switch {

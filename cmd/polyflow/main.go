@@ -798,6 +798,9 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if resp.Semantic != "" {
 		fmt.Printf("  [semantic: %s]\n", resp.Semantic)
 	}
+	if resp.Note != "" {
+		fmt.Printf("  [%s]\n", resp.Note)
+	}
 	if len(resp.Nodes) > 0 {
 		fmt.Println("  NODES")
 		for _, h := range resp.Nodes {

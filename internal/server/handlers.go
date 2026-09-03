@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -113,6 +114,7 @@ type enrichedSearchResponse struct {
 	Flows    []semantic.Hit `json:"flows"`
 	Docs     []semantic.Hit `json:"docs"`
 	Semantic string         `json:"semantic"`
+	Note     string         `json:"note,omitempty"`
 }
 
 func enrichSearchResponse(resp semantic.Response, idx *graph.AdjacencyIndex) enrichedSearchResponse {
@@ -121,6 +123,7 @@ func enrichSearchResponse(resp semantic.Response, idx *graph.AdjacencyIndex) enr
 		Flows:    resp.Flows,
 		Docs:     resp.Docs,
 		Semantic: resp.Semantic,
+		Note:     resp.Note,
 	}
 	for i, hit := range resp.Nodes {
 		eh := enrichedHit{Hit: hit}
@@ -174,7 +177,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if sr != nil && kind == "" {
 		resp, err := s.searchScoped(r.Context(), sr, fleet, q, service, limit)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			status := http.StatusInternalServerError
+			if errors.Is(err, semantic.ErrUnknownSearchScope) {
+				status = http.StatusBadRequest
+			}
+			writeError(w, status, err.Error())
 			return
 		}
 		s.idxMu.RLock()

@@ -2,10 +2,18 @@ package semantic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// ErrUnknownSearchScope is returned by ScopedSearch when the caller passes a
+// service scope that is neither empty, a fleet-wide alias ("*"/"fleet"/"all"),
+// nor a known fleet member. Entry points map it to a 400-class error instead
+// of silently searching the local workspace and returning results the caller
+// never asked for.
+var ErrUnknownSearchScope = errors.New("unknown search scope")
 
 // FederatedSearch runs the same query against multiple fleet members' own
 // Searchers (docs/global-fleet-registry-plan.md, GR.3's "search's federation
@@ -194,7 +202,21 @@ func ScopedSearch(ctx context.Context, local *Searcher, fleet map[string]*Search
 		if sr, ok := fleet[service]; ok {
 			return sr.Search(ctx, q, limit)
 		}
-		return local.Search(ctx, q, limit)
+		// Before GR.7's follow-up this fell through to local.Search, so a
+		// typo'd or stale member name silently returned the current
+		// workspace's results — the caller had no signal the scope was wrong.
+		members := make([]string, 0, len(fleet))
+		for name := range fleet {
+			members = append(members, name)
+		}
+		sort.Strings(members)
+		known := "none configured for this workspace"
+		if len(members) > 0 {
+			known = strings.Join(members, ", ")
+		}
+		return Response{}, fmt.Errorf(
+			"%w %q: known fleet members: %s (omit service for this workspace, or use '*' for the whole fleet)",
+			ErrUnknownSearchScope, service, known)
 	}
 }
 
