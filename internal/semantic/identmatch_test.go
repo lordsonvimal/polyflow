@@ -27,6 +27,22 @@ func TestLooksLikeIdent(t *testing.T) {
 	}
 }
 
+func TestQueryTargetsTest(t *testing.T) {
+	cases := map[string]bool{
+		"cancel build test":       true,
+		"route registration spec": true,
+		"StartBuild test":         true,
+		"do-build":                false,
+		"latest build":            false, // "latest" must not false-positive
+		"":                        false,
+	}
+	for in, want := range cases {
+		if got := QueryTargetsTest(in); got != want {
+			t.Errorf("QueryTargetsTest(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestNormalizeIdent(t *testing.T) {
 	for _, in := range []string{"do-build", "do_build", "DoBuild", "do.build", "DO/BUILD"} {
 		if got := normalizeIdent(in); got != "dobuild" {

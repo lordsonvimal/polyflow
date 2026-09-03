@@ -155,6 +155,19 @@ func LabelRelevance(label, q string) int {
 // exported view of looksLikeIdent for the server's FTS-only path).
 func IdentifierQuery(q string) bool { return looksLikeIdent(q) }
 
+// QueryTargetsTest reports whether the caller explicitly asked about test code
+// ("cancel build spec", "route registration test"). When true, search must not
+// demote test-file hits below production ones — the caller wants them.
+func QueryTargetsTest(q string) bool {
+	for _, t := range identTokens(q) {
+		switch t {
+		case "test", "tests", "spec", "specs", "testcase", "testcases":
+			return true
+		}
+	}
+	return false
+}
+
 // coversAllQueryWords reports whether every sub-word of the query appears as a
 // word of label — matched exactly (case-insensitive) for short words, or as a
 // >=4-char prefix for longer ones. Only meaningful for multi-word queries; a

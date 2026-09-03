@@ -283,6 +283,47 @@ func TestFTS5PrefixQuery(t *testing.T) {
 	}
 }
 
+func TestFTS5IdentPhraseQuery(t *testing.T) {
+	cases := map[string]string{
+		"do-build":         `"do build"`,
+		"do.build":         `"do build"`,
+		"cancel build job": `"cancel build job"`,
+		"do_build":         "", // underscore stays inside the token (matches the FTS tokenizer)
+		"build":            "", // single token — nothing to anchor
+		"DoBuild":          "", // camelCase yields one token; prefix query handles it
+		"":                 "",
+		"...:::":           "",
+	}
+	for in, want := range cases {
+		if got := graph.FTS5IdentPhraseQuery(in); got != want {
+			t.Errorf("FTS5IdentPhraseQuery(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSearchNodesIdentPhrase_ContiguousOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	real := &graph.Node{ID: "svc:routes.go:http_handler:POST /dsw/app-configs/:id/v/:v/do-build:10",
+		Type: graph.NodeTypeHTTPHandler, Label: "POST /dsw/app-configs/:id/v/:v/do-build",
+		Service: "svc", File: "routes.go", Line: 10}
+	cousin := &graph.Node{ID: "svc:cancel.go:http_handler:POST /dsw/docker-builds/:id/do-cancel:20",
+		Type: graph.NodeTypeHTTPHandler, Label: "POST /dsw/docker-builds/:id/do-cancel",
+		Service: "svc", File: "cancel.go", Line: 20}
+	for _, n := range []*graph.Node{real, cousin} {
+		if err := s.UpsertNode(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.SearchNodesIdentPhrase(ctx, "do-build", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != real.ID {
+		t.Fatalf("expected only the do-build handler, got %+v", got)
+	}
+}
+
 func TestSearchNodes_PunctuatedQueryDoesNotError(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -1269,7 +1269,15 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// engine and coverage denominators would treat as a real endpoint.
 		demoteTestDSL := (r.IsTestDSL || graph.IsTestFilePath(r.File)) &&
 			(nodeType == graph.NodeTypeHTTPClient ||
-				nodeType == graph.NodeTypePublisher || nodeType == graph.NodeTypeSubscriber)
+				nodeType == graph.NodeTypePublisher || nodeType == graph.NodeTypeSubscriber ||
+				// A route registered inside a handler test (`r.POST("/x/do-build",
+				// h.Start)`) is test scaffolding, not a real endpoint: as an
+				// http_handler it lands in flows, the contract engine, and palette
+				// search ranked alongside production routes of the same name. Demote
+				// it the same way: it stays indexed as an is_test calls node (so a
+				// caller→it edge is still emitted) but no longer counts as an
+				// endpoint.
+				nodeType == graph.NodeTypeHTTPHandler)
 		if demoteTestDSL {
 			nodeType = graph.NodeTypeFunction
 		}

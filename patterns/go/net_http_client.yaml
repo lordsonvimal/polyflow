@@ -30,9 +30,15 @@ patterns:
       - name: url
         role: http_url
   - name: http_new_request
+    # Scoped to net/http's package identifier: httptest.NewRequest has the same
+    # (method, target, body) shape but builds an inbound *server-side* request
+    # for a handler test — it makes no outbound call, so classifying it as an
+    # http_client mints a bogus endpoint whose label is a URL string literal.
     query: |
       (call_expression
         function: (selector_expression
+          operand: (identifier) @pkg
+          (#eq? @pkg "http")
           field: (field_identifier) @fn
           (#eq? @fn "NewRequest"))
         arguments: (argument_list

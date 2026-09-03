@@ -700,6 +700,26 @@ var searchCmd = &cobra.Command{
 	RunE:  runSearch,
 }
 
+// phraseBoostNodes rescues an identifier query ("do-build") on the FTS-only
+// node path: it folds in the contiguous-phrase matches (which BM25 over a big
+// corpus buries under every "build" node) and re-sorts by how directly each
+// label answers the query. A no-op for non-identifier queries.
+func phraseBoostNodes(ctx context.Context, store *graph.SQLiteStore, query string, base []*graph.Node, limit int) []*graph.Node {
+	if !semantic.IdentifierQuery(query) {
+		return base
+	}
+	if pn, err := store.SearchNodesIdentPhrase(ctx, query, limit*10); err == nil {
+		base = graph.MergeNodeLists(pn, base)
+	}
+	sort.SliceStable(base, func(i, j int) bool {
+		return semantic.LabelRelevance(base[i].Label, query) > semantic.LabelRelevance(base[j].Label, query)
+	})
+	if len(base) > limit {
+		base = base[:limit]
+	}
+	return base
+}
+
 func runSearch(cmd *cobra.Command, args []string) error {
 	dbPath := filepath.Join(meta.DBDir, meta.DBFile)
 	store, err := graph.NewSQLiteStore(dbPath)
@@ -737,6 +757,14 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+		// Phrase-anchor an identifier query ("do-build") so the real endpoint
+		// isn't buried past fetchLimit by BM25 over every "build" node before
+		// the kind filter and relevance re-sort see it.
+		if semantic.IdentifierQuery(args[0]) {
+			if pn, perr := store.SearchNodesIdentPhrase(ctx, args[0], fetchLimit); perr == nil {
+				nodes = graph.MergeNodeLists(pn, nodes)
+			}
+		}
 		filtered := nodes[:0]
 		for _, n := range nodes {
 			if string(n.Type) == searchKind {
@@ -744,6 +772,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 			}
 		}
 		nodes = filtered
+		// FTS-only path: re-sort by how directly each label answers the query
+		// so a real match beats a lexical cousin ("do-build" vs "do-cancel").
+		sort.SliceStable(nodes, func(i, j int) bool {
+			return semantic.LabelRelevance(nodes[i].Label, args[0]) > semantic.LabelRelevance(nodes[j].Label, args[0])
+		})
 		if len(nodes) > searchLimit {
 			nodes = nodes[:searchLimit]
 		}
@@ -780,6 +813,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	// flood and inline snippets. Shared with the MCP search tool.
 	if len(resp.Nodes) == 0 {
 		if nodes, nerr := store.SearchNodes(ctx, args[0], searchLimit); nerr == nil {
+			nodes = phraseBoostNodes(ctx, store, args[0], nodes, searchLimit)
 			for _, n := range nodes {
 				resp.Nodes = append(resp.Nodes, semantic.Hit{
 					Entity:    semantic.Entity{ID: n.ID, Type: "node", NodeID: n.ID, File: n.File, Line: n.Line},
