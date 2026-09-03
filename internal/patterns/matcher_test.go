@@ -369,6 +369,41 @@ func TestMatch_MatchFilter(t *testing.T) {
 	}
 }
 
+// TestMatch_GinBlockNestedEmptyPrefixGroup covers a real-world shape: a
+// middleware-only group (`x := r.Group("", mw1, mw2)`) whose routes sit inside
+// a bare `{ }` scoping block. Both the route and the group must still be
+// captured so EnrichRouteGroups can compose `POST /.../do-build`.
+func TestMatch_GinBlockNestedEmptyPrefixGroup(t *testing.T) {
+	reg := mustLoadRegistry(t, "../../patterns/go/gin_routes.yaml")
+	m := patterns.NewTreeSitterMatcher(reg)
+	src := []byte(`package main
+func setup(root *gin.RouterGroup) {
+	cfgManage := root.Group("", featureGuard(repo), middleware.RequirePermission(pc, "app_configs.manage"))
+	{
+		cfgManage.POST("/app-configs/:config_id/v/:version/do-build", h.StartBuild)
+	}
+}
+`)
+	results, err := m.Match("go", "r.go", src)
+	require.NoError(t, err)
+
+	var gotRoute, gotGroup bool
+	for _, r := range results {
+		switch r.PatternName {
+		case "gin_route":
+			gotRoute = true
+			assert.Equal(t, "cfgManage", r.Captures["router"])
+			assert.Contains(t, r.Captures["path"], "do-build")
+		case "gin_route_group":
+			gotGroup = true
+			assert.Equal(t, "cfgManage", r.Captures["var_name"])
+			assert.Equal(t, "root", r.Captures["receiver"])
+		}
+	}
+	assert.True(t, gotRoute, "gin_route must match the block-nested do-build call")
+	assert.True(t, gotGroup, "gin_route_group must match the empty-prefix group")
+}
+
 func TestMatchToGraph_AMQPChannelSynthesis(t *testing.T) {
 	results := []patterns.MatchResult{
 		{

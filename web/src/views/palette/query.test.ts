@@ -28,8 +28,8 @@ describe("parseQuery", () => {
 
 describe("toggleKindChip", () => {
   it("adds a kind chip, preserving free text and service", () => {
-    expect(toggleKindChip("do-build service:juniper", "http_handler"))
-      .toBe("kind:http_handler service:juniper do-build");
+    expect(toggleKindChip("do-build service:orders", "http_handler"))
+      .toBe("kind:http_handler service:orders do-build");
   });
 
   it("clears the chip when the same kind is toggled again", () => {
