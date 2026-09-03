@@ -165,6 +165,20 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 	if ftsErr != nil {
 		return Response{}, fmt.Errorf("fts search: %w", ftsErr)
 	}
+	// Identifier phrase boost: an OR-of-prefixes query for "do-build" ranks by
+	// BM25 over every node containing "do" or "build", which on a large corpus
+	// pushes the one route actually named ".../do-build" past the retrieval
+	// quota before fusion ever sees it. Pull the contiguous-phrase matches back
+	// into the pool so the exact/coverage tiers in rrfFuse can float them up.
+	if phrase := graph.FTS5IdentPhraseQuery(q); phrase != "" {
+		// Per-type, not pooled: a pooled ORDER BY rank fills the whole window
+		// with flow chains (their short cards match the phrase heavily) and
+		// returns zero nodes — the same starvation FTSSearchPerType exists to
+		// prevent. mergeIdentPhraseHits keeps only the node rows.
+		if pHits, pErr := sr.Store.FTSSearchPerType(ctx, phrase, perType); pErr == nil {
+			ftsHits = mergeIdentPhraseHits(ftsHits, pHits)
+		}
+	}
 
 	// ── Vector arm ───────────────────────────────────────────────────────────
 	semanticNote := ""
@@ -219,7 +233,8 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 	nodeCap, flowCap, docCap := limit, limit, limit
 	note := ""
 	switch {
-	case len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact":
+	case len(fused) > 0 && fused[0].entityType == "node" && fused[0].retrieval == "exact" &&
+		(!fused[0].isTest || QueryTargetsTest(q)):
 		nodeCap = min(exactMatchNodeCap, limit)
 		flowCap, docCap = exactMatchFlowCap, exactMatchDocCap
 	case hasNodeHit(fused) && !hasStrongNodeAnchor(fused, q):
@@ -389,6 +404,11 @@ type fusedEntry struct {
 	// multi-word query. It sorts such hits above ones that only share one
 	// common word ("cancel-build" vs "do-build" for the query "do-build").
 	fullCover bool
+	// isTest is true when the node lives in a test/spec file. Test-file hits
+	// sort below otherwise-equivalent production hits (unless the query itself
+	// targets tests) so a route registered only in a handler test never
+	// outranks the real endpoint of the same name.
+	isTest bool
 }
 
 // hasNodeHit reports whether any fused entry is a node.
@@ -412,8 +432,17 @@ func hasNodeHit(fused []fusedEntry) bool {
 // evidence the query was answered — it's the noise the caller asked to cut.
 func hasStrongNodeAnchor(fused []fusedEntry, q string) bool {
 	identQ := looksLikeIdent(q)
+	allowTest := QueryTargetsTest(q)
 	for _, e := range fused {
 		if e.entityType != "node" {
+			continue
+		}
+		// A hit that only exists in a test/spec file is not evidence the query
+		// was answered — unless the caller asked about tests. Otherwise
+		// "do-build" matching a route registered in a handler test would
+		// suppress the "no strong match" advisory that should point the caller
+		// at the missing production endpoint.
+		if e.isTest && !allowTest {
 			continue
 		}
 		if e.retrieval == "exact" || e.fullCover {
@@ -489,15 +518,25 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		entityType string
 		label      string
 		nodeType   string
+		file       string
 		ftsRank    int
 		vecRank    int
 	}
 	combined := make(map[string]*entry)
 	for _, h := range ftsHits {
+		if e, ok := combined[h.EntityID]; ok {
+			// A phrase-boost hit (merged into ftsHits) may repeat an entity the
+			// prefix arm already returned — keep the better (lower) rank.
+			if h.Rank > 0 && (e.ftsRank == 0 || h.Rank < e.ftsRank) {
+				e.ftsRank = h.Rank
+			}
+			continue
+		}
 		combined[h.EntityID] = &entry{
 			entityType: h.EntityType,
 			label:      h.Label,
 			nodeType:   h.NodeType,
+			file:       h.File,
 			ftsRank:    h.Rank,
 		}
 	}
@@ -527,6 +566,7 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 			nodeType:   e.nodeType,
 			bothArms:   e.ftsRank > 0 && e.vecRank > 0,
 			fullCover:  e.entityType == "node" && labelCoversQuery(e.label, q),
+			isTest:     e.entityType == "node" && e.file != "" && graph.IsTestFilePath(e.file),
 		})
 	}
 
@@ -540,6 +580,7 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 	// needs to win on relevance over noise it never gets to out-score
 	// directly, since RRF rewards a generic word's broad co-occurrence over a
 	// specific compound identifier's narrower, exact-topic match.
+	demoteTest := !QueryTargetsTest(q)
 	sort.Slice(out, func(i, j int) bool {
 		ei, ej := out[i], out[j]
 		iEx := ei.retrieval == "exact"
@@ -553,6 +594,12 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		if ei.fullCover != ej.fullCover {
 			return ei.fullCover
 		}
+		// Production before test: within the same exact/coverage tier, a route
+		// or symbol that only exists in a handler test must not outrank the
+		// real thing of the same name. Skipped when the query targets tests.
+		if demoteTest && ei.isTest != ej.isTest {
+			return ej.isTest
+		}
 		if pi, pj := declarationPriority(ei.nodeType), declarationPriority(ej.nodeType); pi != pj {
 			return pi < pj
 		}
@@ -562,6 +609,21 @@ func rrfFuse(ftsHits []ftsHit, vecHits []rawVecHit, q string) []fusedEntry {
 		return ei.entityID < ej.entityID
 	})
 	return out
+}
+
+// mergeIdentPhraseHits appends phrase-anchored node hits to the per-type FTS
+// hit list. rrfFuse dedups by entity ID and keeps the better (lower) rank, so a
+// phrase hit for an entity the prefix arm already returned only ever improves
+// its standing, and a phrase hit for a new entity enters the pool at its phrase
+// rank. Non-node phrase hits are dropped — the boost exists only to rescue node
+// retrieval.
+func mergeIdentPhraseHits(base, phrase []ftsHit) []ftsHit {
+	for _, h := range phrase {
+		if h.EntityType == "node" {
+			base = append(base, h)
+		}
+	}
+	return base
 }
 
 func retrievalLabel(ftsRank, vecRank int, label, nodeType, q string) string {

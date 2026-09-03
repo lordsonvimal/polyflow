@@ -39,3 +39,31 @@ func FTS5PrefixQuery(query string) string {
 	}
 	return strings.Join(parts, " OR ")
 }
+
+// FTS5IdentPhraseQuery builds a phrase-anchored FTS5 MATCH expression: the
+// query's word tokens must occur as a CONTIGUOUS run in the indexed text, so
+// "do build" matches a label ending ".../do-build" but not one merely
+// containing "docker-builds" and "do-cancel" scattered across a path. Returns
+// "" for a query that yields fewer than two tokens — a single token has no
+// phrase to anchor and FTS5PrefixQuery already covers it.
+//
+// This is the retrieval-side complement to the ranker's whole-query coverage
+// check: an OR-of-prefixes query buries a compound symbol like "do-build"
+// under every node sharing one common word ("build"), often past the fetch
+// limit, so the ranker never gets to see it. The phrase query pulls it back
+// into the candidate pool.
+func FTS5IdentPhraseQuery(query string) string {
+	var b strings.Builder
+	for _, r := range query {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	tokens := strings.Fields(b.String())
+	if len(tokens) < 2 {
+		return ""
+	}
+	return `"` + strings.Join(tokens, " ") + `"`
+}

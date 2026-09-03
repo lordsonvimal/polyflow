@@ -59,6 +59,7 @@ func minVerificationPasses(state, minVerification string) bool {
 // Store is the subset of graph.SQLiteStore the MCP tools need.
 type Store interface {
 	SearchNodes(ctx context.Context, query string, limit int) ([]*graph.Node, error)
+	SearchNodesIdentPhrase(ctx context.Context, query string, limit int) ([]*graph.Node, error)
 	ListUnresolvedRefs(ctx context.Context) ([]graph.UnresolvedRef, error)
 	GetMeta(ctx context.Context, key string) (string, error)
 }
@@ -591,6 +592,17 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 		// has matches. Backfill from the node-only index before shaping.
 		if len(resp.Nodes) == 0 {
 			if nodes, nerr := store.SearchNodes(ctx, in.Query, limit); nerr == nil {
+				if semantic.IdentifierQuery(in.Query) {
+					if pn, perr := store.SearchNodesIdentPhrase(ctx, in.Query, limit*10); perr == nil {
+						nodes = graph.MergeNodeLists(pn, nodes)
+					}
+					sort.SliceStable(nodes, func(i, j int) bool {
+						return semantic.LabelRelevance(nodes[i].Label, in.Query) > semantic.LabelRelevance(nodes[j].Label, in.Query)
+					})
+					if len(nodes) > limit {
+						nodes = nodes[:limit]
+					}
+				}
 				for _, n := range nodes {
 					resp.Nodes = append(resp.Nodes, semantic.Hit{
 						Entity:    semantic.Entity{ID: n.ID, Type: "node", NodeID: n.ID, File: n.File, Line: n.Line},
@@ -617,6 +629,14 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 		return nil, nil, err
 	}
 	if in.Kind != "" {
+		// Phrase-anchor an identifier query so the real symbol isn't buried
+		// past fetchLimit by BM25 before the kind filter and LabelRelevance
+		// re-sort see it ("do-build" vs a corpus full of "build" nodes).
+		if semantic.IdentifierQuery(in.Query) {
+			if pn, perr := store.SearchNodesIdentPhrase(ctx, in.Query, fetchLimit); perr == nil {
+				nodes = graph.MergeNodeLists(pn, nodes)
+			}
+		}
 		filtered := nodes[:0]
 		for _, n := range nodes {
 			if string(n.Type) == in.Kind {
@@ -626,6 +646,17 @@ func (s *Server) search(ctx context.Context, req *mcp.CallToolRequest, in search
 		nodes = filtered
 		// FTS-only path: re-sort by how directly each label answers the query
 		// so a real match beats a lexical cousin ("do-build" vs "do-cancel").
+		sort.SliceStable(nodes, func(i, j int) bool {
+			return semantic.LabelRelevance(nodes[i].Label, in.Query) > semantic.LabelRelevance(nodes[j].Label, in.Query)
+		})
+		if len(nodes) > limit {
+			nodes = nodes[:limit]
+		}
+	} else if semantic.IdentifierQuery(in.Query) {
+		// Same rescue for the unfiltered FTS-only path (no hybrid Searcher).
+		if pn, perr := store.SearchNodesIdentPhrase(ctx, in.Query, fetchLimit); perr == nil {
+			nodes = graph.MergeNodeLists(pn, nodes)
+		}
 		sort.SliceStable(nodes, func(i, j int) bool {
 			return semantic.LabelRelevance(nodes[i].Label, in.Query) > semantic.LabelRelevance(nodes[j].Label, in.Query)
 		})

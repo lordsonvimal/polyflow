@@ -155,6 +155,7 @@ type Store interface {
 	GetNode(ctx context.Context, id string) (*Node, error)
 	GetEdge(ctx context.Context, id string) (*Edge, error)
 	SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error)
+	SearchNodesIdentPhrase(ctx context.Context, query string, limit int) ([]*Node, error)
 	ListNodesByType(ctx context.Context, nodeType, service string, limit int) ([]*Node, error)
 	ListEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
 	ListEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
@@ -499,6 +500,59 @@ func (s *SQLiteStore) SearchNodes(ctx context.Context, query string, limit int) 
 		LIMIT ?`, ftsQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search nodes: %w", err)
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// MergeNodeLists concatenates two node result lists, keeping the first
+// occurrence of each node ID and preserving primary's order ahead of
+// secondary's. Used to fold a high-precision phrase-match list in front of a
+// broad prefix-match list without introducing duplicates.
+func MergeNodeLists(primary, secondary []*Node) []*Node {
+	if len(primary) == 0 {
+		return secondary
+	}
+	seen := make(map[string]bool, len(primary)+len(secondary))
+	out := make([]*Node, 0, len(primary)+len(secondary))
+	for _, n := range primary {
+		if n == nil || seen[n.ID] {
+			continue
+		}
+		seen[n.ID] = true
+		out = append(out, n)
+	}
+	for _, n := range secondary {
+		if n == nil || seen[n.ID] {
+			continue
+		}
+		seen[n.ID] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// SearchNodesIdentPhrase runs a phrase-anchored FTS5 match (see
+// FTS5IdentPhraseQuery) so a compound identifier the caller typed ("do-build")
+// stays in the candidate set instead of being buried, past the fetch limit, by
+// every node that merely shares one of its words ("build"). Returns nil (not an
+// error) for a query that has no phrase to anchor — a single token, or nothing
+// usable. The exact-label and test-file ordering matches SearchNodes so a
+// caller can concatenate the two result lists.
+func (s *SQLiteStore) SearchNodesIdentPhrase(ctx context.Context, query string, limit int) ([]*Node, error) {
+	ftsQuery := FTS5IdentPhraseQuery(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT n.id, n.type, n.label, n.service, n.file, n.line, n.end_line, n.language, n.meta
+		FROM nodes n
+		JOIN nodes_fts f ON f.id = n.id
+		WHERE nodes_fts MATCH ?
+		ORDER BY (lower(n.label) = lower(?)) DESC, `+testFileRankPenalty+` ASC, rank, n.id
+		LIMIT ?`, ftsQuery, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search nodes (ident phrase): %w", err)
 	}
 	defer rows.Close()
 	return scanNodes(rows)

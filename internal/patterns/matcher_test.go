@@ -404,6 +404,42 @@ func setup(root *gin.RouterGroup) {
 	assert.True(t, gotGroup, "gin_route_group must match the empty-prefix group")
 }
 
+func TestMatchToGraph_TestFileRouteDemotedToFunction(t *testing.T) {
+	// A route registered inside a handler test is test scaffolding: it must not
+	// be an http_handler node (which would land in flows / the contract engine
+	// / palette search ranked with production routes), but stays indexed as an
+	// is_test calls node.
+	results := []patterns.MatchResult{{
+		PatternName: "gin_route",
+		File:        "views/start_build_handler_test.go",
+		Line:        10,
+		Captures:    map[string]string{"router": "r", "method": "POST", "path": "/app-configs/:id/v/:v/do-build", "handler": "h.StartAppBuild"},
+	}}
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	if nodes[0].Type != graph.NodeTypeFunction {
+		t.Errorf("test-file route should demote to function, got %s", nodes[0].Type)
+	}
+	if nodes[0].Meta[graph.MetaIsTest] != "true" {
+		t.Errorf("demoted test-file route should be stamped is_test")
+	}
+}
+
+func TestMatchToGraph_ProductionRouteStaysHandler(t *testing.T) {
+	results := []patterns.MatchResult{{
+		PatternName: "gin_route",
+		File:        "routes/views.go",
+		Line:        10,
+		Captures:    map[string]string{"router": "r", "method": "POST", "path": "/app-configs/:id/v/:v/do-build", "handler": "h.StartAppBuild"},
+	}}
+	nodes, _, _ := patterns.MatchToGraph("svc", results)
+	if len(nodes) != 1 || nodes[0].Type != graph.NodeTypeHTTPHandler {
+		t.Fatalf("production route must stay http_handler, got %+v", nodes)
+	}
+}
+
 func TestMatchToGraph_AMQPChannelSynthesis(t *testing.T) {
 	results := []patterns.MatchResult{
 		{

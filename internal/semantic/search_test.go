@@ -262,6 +262,50 @@ func TestRRFFuse_ExactMatchLabel(t *testing.T) {
 	}
 }
 
+func TestRRFFuse_ProductionOutranksTestFileRoute(t *testing.T) {
+	// Both label-match "do-build" exactly (route last segment), but one is
+	// registered only in a handler test. Production must sort first.
+	fts := []ftsHit{
+		{EntityID: "t", EntityType: "node", Rank: 1, Label: "POST /x/v/1/do-build",
+			NodeType: string(graph.NodeTypeHTTPHandler), File: "views/start_build_handler_test.go"},
+		{EntityID: "p", EntityType: "node", Rank: 2, Label: "POST /dsw/app-configs/:id/v/:v/do-build",
+			NodeType: string(graph.NodeTypeHTTPHandler), File: "routes/views.go"},
+	}
+	fused := rrfFuse(fts, nil, "do-build")
+	if fused[0].entityID != "p" {
+		t.Fatalf("production route should rank first, got order %s,%s", fused[0].entityID, fused[1].entityID)
+	}
+	// hasStrongNodeAnchor must key on the production hit, not the test one.
+	if !hasStrongNodeAnchor(fused, "do-build") {
+		t.Error("production exact route should be a strong anchor")
+	}
+}
+
+func TestRRFFuse_TestOnlyMatch_NotStrongAnchor(t *testing.T) {
+	fts := []ftsHit{
+		{EntityID: "t", EntityType: "node", Rank: 1, Label: "POST /x/do-build",
+			NodeType: string(graph.NodeTypeHTTPHandler), File: "handler_test.go"},
+	}
+	fused := rrfFuse(fts, nil, "do-build")
+	if hasStrongNodeAnchor(fused, "do-build") {
+		t.Error("a test-only match must not suppress the weak-match advisory")
+	}
+}
+
+func TestHasStrongNodeAnchor_TestHitAllowedWhenQueryTargetsTests(t *testing.T) {
+	// Same exact test-file hit, but the query itself names "test": the
+	// demotion is lifted and the hit counts as an anchor.
+	fused := []fusedEntry{
+		{entityID: "t", entityType: "node", retrieval: "exact", isTest: true},
+	}
+	if hasStrongNodeAnchor(fused, "do-build") {
+		t.Error("test hit should be demoted for a plain query")
+	}
+	if !hasStrongNodeAnchor(fused, "do-build test") {
+		t.Error("test hit should anchor when the query targets tests")
+	}
+}
+
 func TestRRFFuse_FanOut_MultipleEntitiesSameKey(t *testing.T) {
 	// Bug-class rule 1: fan-out — two entities sharing a match must both appear.
 	fts := []ftsHit{

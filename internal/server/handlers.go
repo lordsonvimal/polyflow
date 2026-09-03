@@ -202,6 +202,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind != "" {
+		// Phrase-anchor an identifier query ("do-build") so the real endpoint
+		// isn't buried past fetchLimit by BM25 over every "build" node before
+		// the kind filter and LabelRelevance re-sort even see it.
+		if semantic.IdentifierQuery(q) {
+			if pn, perr := s.db.SearchNodesIdentPhrase(r.Context(), q, fetchLimit); perr == nil {
+				nodes = graph.MergeNodeLists(pn, nodes)
+			}
+		}
 		filtered := nodes[:0]
 		for _, n := range nodes {
 			if string(n.Type) == kind {
@@ -212,6 +220,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		// The kind-filtered path is FTS-only (no hybrid ranker), so BM25 alone
 		// decides order — which floats lexical cousins ("do-cancel") over a real
 		// match. Re-sort by how directly each label answers the query.
+		sort.SliceStable(nodes, func(i, j int) bool {
+			return semantic.LabelRelevance(nodes[i].Label, q) > semantic.LabelRelevance(nodes[j].Label, q)
+		})
+		if len(nodes) > limit {
+			nodes = nodes[:limit]
+		}
+	} else if semantic.IdentifierQuery(q) {
+		// Same rescue for the unfiltered FTS-only path (no hybrid Searcher wired).
+		if pn, perr := s.db.SearchNodesIdentPhrase(r.Context(), q, fetchLimit); perr == nil {
+			nodes = graph.MergeNodeLists(pn, nodes)
+		}
 		sort.SliceStable(nodes, func(i, j int) bool {
 			return semantic.LabelRelevance(nodes[i].Label, q) > semantic.LabelRelevance(nodes[j].Label, q)
 		})

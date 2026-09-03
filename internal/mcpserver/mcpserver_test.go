@@ -40,6 +40,12 @@ func (f *fakeStore) SearchNodes(_ context.Context, query string, limit int) ([]*
 	return out, nil
 }
 
+func (f *fakeStore) SearchNodesIdentPhrase(ctx context.Context, query string, limit int) ([]*graph.Node, error) {
+	// The fake's substring match already behaves like a phrase anchor closely
+	// enough for handler tests; reuse it.
+	return f.SearchNodes(ctx, query, limit)
+}
+
 func (f *fakeStore) ListUnresolvedRefs(_ context.Context) ([]graph.UnresolvedRef, error) {
 	return f.unresolved, nil
 }
