@@ -77,3 +77,16 @@ services:
 		t.Fatalf("did not expect a registry entry for internal service name %q", "svc-a")
 	}
 }
+
+// TestRunIndex_AllRejectsServiceArg guards the `polyflow index --all` +
+// positional-service combination — the two are mutually exclusive since
+// --all fans out over the whole machine registry, not one workspace.
+func TestRunIndex_AllRejectsServiceArg(t *testing.T) {
+	indexAll = true
+	t.Cleanup(func() { indexAll = false })
+
+	err := runIndex(indexCmd, []string{"some-service"})
+	if err == nil {
+		t.Fatal("expected error when --all is combined with a service argument")
+	}
+}

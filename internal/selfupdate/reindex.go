@@ -22,7 +22,7 @@ type RepoResult struct {
 // a standalone `polyflow index`. An entry whose LocalPath no longer exists
 // (moved or deleted checkout) is skipped, not treated as failure — the
 // registry doesn't get to veto a machine's actual filesystem state.
-func ReindexAll(ctx context.Context, polyflowBin, regPath string, full bool, out io.Writer) ([]RepoResult, error) {
+func ReindexAll(ctx context.Context, polyflowBin, regPath string, full bool, out io.Writer, extraArgs ...string) ([]RepoResult, error) {
 	reg, err := registry.Load(regPath)
 	if err != nil {
 		return nil, fmt.Errorf("load registry: %w", err)
@@ -42,6 +42,7 @@ func ReindexAll(ctx context.Context, polyflowBin, regPath string, full bool, out
 		if full {
 			args = append(args, "--full")
 		}
+		args = append(args, extraArgs...)
 		err := runStreamed(ctx, e.LocalPath, out, polyflowBin, args...)
 		results = append(results, RepoResult{Name: e.Service, Err: err})
 		if err != nil {

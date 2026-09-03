@@ -7,6 +7,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +20,7 @@ var (
 	updateCheck       bool
 	updateIncremental bool
 	updateRepoPath    string
+	updateForce       bool
 )
 
 var updateCmd = &cobra.Command{
@@ -37,6 +40,7 @@ func init() {
 	updateCmd.Flags().BoolVar(&updateCheck, "check", false, "check whether polyflow's source is behind its remote, without pulling or rebuilding")
 	updateCmd.Flags().BoolVar(&updateIncremental, "incremental", false, "reindex incrementally instead of the default full re-parse")
 	updateCmd.Flags().StringVar(&updateRepoPath, "repo-path", "", "path to the polyflow source checkout (default: $POLYFLOW_REPO, else the machine registry, else walk up from cwd for its go.mod)")
+	updateCmd.Flags().BoolVar(&updateForce, "force", false, "when the local checkout has diverged from its remote (e.g. after a force-push), hard-reset it to the upstream, discarding local-only commits")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -69,9 +73,28 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("Pulling %s...\n", repoDir)
-	if err := selfupdate.Pull(ctx, repoDir, os.Stdout); err != nil {
-		return err
+	if status.Diverged() {
+		local, logErr := selfupdate.LocalOnlyCommits(ctx, repoDir)
+		if logErr != nil {
+			return logErr
+		}
+		if !updateForce {
+			return fmt.Errorf("%s has diverged from its remote: %d local commit(s) not on the upstream, %d upstream commit(s) not local — "+
+				"a fast-forward is impossible (this is what causes git's \"Need to specify how to reconcile divergent branches\").\n"+
+				"Local-only commits that `--force` would discard:\n%s\n"+
+				"Re-run `polyflow update --force` to hard-reset to the upstream, or reconcile %s by hand first",
+				repoDir, status.Ahead, status.Behind, indentLines(local), repoDir)
+		}
+		fmt.Printf("%s has diverged from its remote — discarding %d local-only commit(s):\n%s\n", repoDir, status.Ahead, indentLines(local))
+		fmt.Printf("Hard-resetting %s to upstream...\n", repoDir)
+		if err := selfupdate.ResetToUpstream(ctx, repoDir, os.Stdout); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("Fast-forwarding %s...\n", repoDir)
+		if err := selfupdate.Pull(ctx, repoDir, os.Stdout); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println("\nBuilding (make install)...")
@@ -79,9 +102,16 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	polyflowBin, err := os.Executable()
-	if err != nil {
-		polyflowBin = "polyflow"
+	// Resolve the just-built binary fresh from PATH rather than reusing
+	// os.Executable(): `make install` may have removed-and-replaced the file
+	// backing the running process, leaving os.Executable() pointing at a path
+	// that's now stale (or, on some platforms, suffixed " (deleted)") — every
+	// subsequent reindex/fleet-sync subprocess would then fail to exec.
+	polyflowBin := "polyflow"
+	if p, lookErr := exec.LookPath("polyflow"); lookErr == nil {
+		polyflowBin = p
+	} else if p, exeErr := os.Executable(); exeErr == nil {
+		polyflowBin = p
 	}
 	regPath, err := registry.DefaultPath()
 	if err != nil {
@@ -123,9 +153,27 @@ func runUpdateCheck(cmd *cobra.Command) error {
 		fmt.Printf("up to date (%s)\n", status.LocalSHA)
 		return nil
 	}
+	if status.Diverged() {
+		fmt.Printf("diverged: %d commit(s) ahead, %d behind — local %s, remote %s\n", status.Ahead, status.Behind, status.LocalSHA, status.RemoteSHA)
+		fmt.Println("run `polyflow update --force` to hard-reset to the remote (discards local-only commits)")
+		return nil
+	}
 	fmt.Printf("outdated: %d commit(s) behind — local %s, remote %s\n", status.Behind, status.LocalSHA, status.RemoteSHA)
 	fmt.Println("run `polyflow update` to pull, rebuild, and reindex")
 	return nil
+}
+
+// indentLines prefixes each line with two spaces for readable multi-line
+// error/status output; returns "(none)" for empty input.
+func indentLines(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "  (none)"
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 func printResultSummary(label string, results []selfupdate.RepoResult) {
