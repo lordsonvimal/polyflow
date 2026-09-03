@@ -45,6 +45,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/pluginloader"
 	"github.com/lordsonvimal/polyflow/internal/queryresolve"
 	"github.com/lordsonvimal/polyflow/internal/registry"
+	"github.com/lordsonvimal/polyflow/internal/selfupdate"
 	"github.com/lordsonvimal/polyflow/internal/semantic"
 	"github.com/lordsonvimal/polyflow/internal/server"
 	"github.com/lordsonvimal/polyflow/internal/sidecar"
@@ -246,10 +247,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 // ─── index ───────────────────────────────────────────────────────────────────
 
 var (
-	indexWorkspace string
-	indexWorkers   int
-	indexFull      bool
-	indexNoEmbed   bool
+	indexWorkspace  string
+	indexWorkers    int
+	indexFull       bool
+	indexNoEmbed    bool
+	indexAll        bool
+	indexAllNoFleet bool
 )
 
 func initIndexFlags() {
@@ -257,16 +260,25 @@ func initIndexFlags() {
 	indexCmd.Flags().IntVar(&indexWorkers, "workers", runtime.GOMAXPROCS(0), "parser worker pool size")
 	indexCmd.Flags().BoolVar(&indexFull, "full", false, "force a full re-parse, ignoring the incremental cache")
 	indexCmd.Flags().BoolVar(&indexNoEmbed, "no-embed", false, "skip the embedding pass (search runs FTS-only; semantic: unavailable)")
+	indexCmd.Flags().BoolVar(&indexAll, "all", false, "reindex every repo in this machine's registry, each in its own workspace (honors --full/--workers/--no-embed)")
+	indexCmd.Flags().BoolVar(&indexAllNoFleet, "no-fleet-sync", false, "with --all, skip rebuilding each fleet's cross-service bridge.db after reindexing")
 }
 
 var indexCmd = &cobra.Command{
 	Use:   "index [service]",
-	Short: "Parse and index all services in the workspace, or a single service",
+	Short: "Parse and index all services in the workspace, a single service, or every registered repo (--all)",
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runIndex,
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
+	if indexAll {
+		if len(args) > 0 {
+			return fmt.Errorf("index: --all cannot be combined with a service argument")
+		}
+		return runIndexAll(cmd)
+	}
+
 	cfg, err := workspace.Load(indexWorkspace)
 	if err != nil {
 		return err
@@ -367,6 +379,75 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+// runIndexAll implements `polyflow index --all`: reindex every repo in this
+// machine's registry, each as its own workspace, by re-invoking `polyflow
+// index` in that repo's LocalPath. Missing checkouts are skipped, not fatal;
+// one repo's failure doesn't abort the rest, but the command exits non-zero
+// if any failed. --full/--workers/--no-embed are forwarded to each run.
+// Unless --no-fleet-sync is set, every fleet this machine has resolved then
+// has its cross-service bridge.db rebuilt, same as `polyflow update` does.
+func runIndexAll(cmd *cobra.Command) error {
+	bin, err := os.Executable()
+	if err != nil || bin == "" {
+		bin = "polyflow"
+	}
+	regPath, err := registry.DefaultPath()
+	if err != nil {
+		return err
+	}
+
+	var extra []string
+	if cmd.Flags().Changed("workers") {
+		extra = append(extra, "--workers", strconv.Itoa(indexWorkers))
+	}
+	if indexNoEmbed {
+		extra = append(extra, "--no-embed")
+	}
+
+	results, err := selfupdate.ReindexAll(cmd.Context(), bin, regPath, indexFull, os.Stdout, extra...)
+	if err != nil {
+		return err
+	}
+
+	failed := 0
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+		}
+	}
+	fmt.Printf("\n--- index --all: %d ok, %d failed (of %d) ---\n", len(results)-failed, failed, len(results))
+	for _, r := range results {
+		if r.Err != nil {
+			fmt.Printf("  FAILED %s: %v\n", r.Name, r.Err)
+		}
+	}
+
+	fleetFailed := 0
+	if !indexAllNoFleet {
+		fmt.Println("\nSyncing fleets...")
+		fleetResults, ferr := selfupdate.SyncAllFleets(cmd.Context(), bin, regPath, os.Stdout)
+		if ferr != nil {
+			return ferr
+		}
+		for _, r := range fleetResults {
+			if r.Err != nil {
+				fleetFailed++
+			}
+		}
+		fmt.Printf("--- fleets: %d ok, %d failed (of %d) ---\n", len(fleetResults)-fleetFailed, fleetFailed, len(fleetResults))
+		for _, r := range fleetResults {
+			if r.Err != nil {
+				fmt.Printf("  FAILED %s: %v\n", r.Name, r.Err)
+			}
+		}
+	}
+
+	if failed > 0 || fleetFailed > 0 {
+		return fmt.Errorf("index --all: %d repo(s), %d fleet(s) failed", failed, fleetFailed)
+	}
 	return nil
 }
 
@@ -1025,7 +1106,7 @@ var (
 	statusMinConfidence string
 	statusTrend         bool
 	statusTrendN        int
-	statusWS         string
+	statusWS            string
 )
 
 func initStatusFlags() {

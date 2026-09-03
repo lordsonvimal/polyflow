@@ -144,9 +144,37 @@ func restoreGitkeep(repoDir string) error {
 	return nil
 }
 
-// Pull runs `git pull` in repoDir, streaming output to out.
+// Pull fast-forwards repoDir's checkout to its upstream, streaming output to
+// out. It uses `git merge --ff-only` rather than a plain `git pull` so it
+// never depends on the user's `pull.rebase` / `pull.ff` config — an unset
+// config plus a diverged branch (e.g. after someone force-pushed the remote)
+// makes bare `git pull` abort with "Need to specify how to reconcile
+// divergent branches", which is exactly the case ResetToUpstream handles.
+// The upstream ref is assumed already fetched (CheckOutdated does that).
 func Pull(ctx context.Context, repoDir string, out io.Writer) error {
-	return runStreamed(ctx, repoDir, out, "git", "-C", repoDir, "pull")
+	return runStreamed(ctx, repoDir, out, "git", "-C", repoDir, "merge", "--ff-only", "@{u}")
+}
+
+// ResetToUpstream hard-resets repoDir's checkout to its upstream, discarding
+// any local-only commits. It's the recovery path when the branch has
+// diverged from the remote (a force-push) and so can't fast-forward.
+// `polyflow update` only calls this behind an explicit --force, and only
+// after IsDirty has confirmed the working tree is clean, so nothing
+// uncommitted is at stake — but committed local-only work would be lost,
+// which is why LocalOnlyCommits is shown to the user first.
+func ResetToUpstream(ctx context.Context, repoDir string, out io.Writer) error {
+	return runStreamed(ctx, repoDir, out, "git", "-C", repoDir, "reset", "--hard", "@{u}")
+}
+
+// LocalOnlyCommits returns the one-line log of commits present in repoDir's
+// checkout but not on its upstream — i.e. what a ResetToUpstream would throw
+// away. Empty string means none.
+func LocalOnlyCommits(ctx context.Context, repoDir string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", repoDir, "log", "--oneline", "@{u}..HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("git log @{u}..HEAD: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // Build runs `make install` in repoDir, streaming output to out — the same
@@ -197,10 +225,17 @@ type Status struct {
 	LocalSHA  string
 	RemoteSHA string
 	Behind    int
+	Ahead     int
 }
 
 // Outdated reports whether the remote has commits the local checkout lacks.
 func (s *Status) Outdated() bool { return s.Behind > 0 }
+
+// Diverged reports whether the local checkout and its upstream have each
+// moved on independently — the classic post-force-push state, where a
+// fast-forward is impossible and only a hard reset (or manual rebase) can
+// reconcile them.
+func (s *Status) Diverged() bool { return s.Behind > 0 && s.Ahead > 0 }
 
 // CheckOutdated fetches repoDir's upstream and compares HEAD against it,
 // without pulling or rebuilding — so `polyflow update --check` is safe to run
@@ -217,15 +252,25 @@ func CheckOutdated(ctx context.Context, repoDir string) (*Status, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve upstream (is a remote tracking branch configured?): %w", err)
 	}
-	behindOut, err := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-list", "--count", "HEAD..@{u}").Output()
+	// One `rev-list --count --left-right A...B` gives both sides of the
+	// divergence at once: "<ahead>\t<behind>".
+	countOut, err := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-list", "--count", "--left-right", "HEAD...@{u}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git rev-list: %w", err)
 	}
-	behind, err := strconv.Atoi(strings.TrimSpace(string(behindOut)))
-	if err != nil {
-		return nil, fmt.Errorf("parse rev-list count: %w", err)
+	fields := strings.Fields(string(countOut))
+	if len(fields) != 2 {
+		return nil, fmt.Errorf("parse rev-list count: unexpected output %q", strings.TrimSpace(string(countOut)))
 	}
-	return &Status{LocalSHA: shortSHA(localSHA), RemoteSHA: shortSHA(remoteSHA), Behind: behind}, nil
+	ahead, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return nil, fmt.Errorf("parse ahead count: %w", err)
+	}
+	behind, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return nil, fmt.Errorf("parse behind count: %w", err)
+	}
+	return &Status{LocalSHA: shortSHA(localSHA), RemoteSHA: shortSHA(remoteSHA), Behind: behind, Ahead: ahead}, nil
 }
 
 func revParse(ctx context.Context, dir, ref string) (string, error) {
