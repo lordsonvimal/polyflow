@@ -614,9 +614,6 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// contracts/pusher.yaml can join these to the ERB consumer side.
 		{"pusher_producer_forward", scopeSameServiceOnly, func() error {
 			pubNodes, pubEdges := linker.EnrichPusherProducers(st.allNodes, st.svcFilesOf())
-			if len(pubNodes) == 0 {
-				return nil
-			}
 			for i := range pubNodes {
 				n := pubNodes[i]
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
@@ -624,9 +621,14 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				}
 				st.allNodes = append(st.allNodes, n)
 			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
+			if len(pubNodes) > 0 {
+				if err := st.bw.Flush(st.ctx); err != nil {
+					return err
+				}
 			}
+			// PU.2e: `pusher(msg, status)` helper call sites → the canonical
+			// PusherClient trigger publisher, across `include`d concerns.
+			pubEdges = append(pubEdges, linker.EnrichPusherHelperCalls(st.allNodes, st.svcFilesOf())...)
 			return st.writeEdges(pubEdges)
 		}},
 		// Tier PU.3: the Pusher consumer half. Mint one `subscriber` node per
