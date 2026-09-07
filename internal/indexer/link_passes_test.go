@@ -21,6 +21,7 @@ var wantLinkPasses = []struct {
 	name  string
 	scope passScope
 }{
+	{"js_hoc", scopeSameServiceOnly},
 	{"js_link", scopeSameServiceOnly},
 	{"js_globals", scopeSameServiceOnly},
 	{"js_type_relations", scopeSameServiceOnly},

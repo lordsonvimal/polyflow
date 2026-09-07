@@ -245,6 +245,27 @@ func (st *linkPipelineState) svcFilesOf() map[string][]string {
 // link_passes_test.go).
 func buildLinkPasses(st *linkPipelineState) []namedPass {
 	return insertPluginPasses(st, []namedPass{
+		// JCM.6: unwrap HOC wrapper identity (observer / memo / forwardRef …) —
+		// stamps Meta["hoc"] and Meta["component"] so js_link Pass 1's render-
+		// target index and JCM.7 can see the real component. Must precede js_link.
+		{"js_hoc", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			hocNodes := linker.LinkJSHOC(st.allNodes, svcFiles)
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for i := range hocNodes {
+				n := hocNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				if idx, ok := byID[n.ID]; ok {
+					st.allNodes[idx] = n
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		// JS/TS component + import-aware linking.
 		{"js_link", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()

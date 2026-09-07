@@ -51,7 +51,11 @@ func (l *JSLinker) LinkJS(nodes []graph.Node, edges []graph.Edge, serviceFiles m
 	funcByServiceFileLabel := make(map[string]string) // service+file+label — same-file collision preference
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeClass {
+		// A HOC-wrapped inline component (`const C = observer(props => …)`, Tier
+		// JCM.6) stays a `variable` node but is stamped Meta["component"]="true";
+		// it is a valid `renders` redirect target just like a function component.
+		if n.Type == graph.NodeTypeFunction || n.Type == graph.NodeTypeMethod || n.Type == graph.NodeTypeClass ||
+			(n.Type == graph.NodeTypeVariable && n.Meta["component"] == "true") {
 			key := n.Service + "\x00" + n.Label
 			if _, exists := funcByServiceLabel[key]; !exists {
 				funcByServiceLabel[key] = n.ID
