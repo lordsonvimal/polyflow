@@ -117,6 +117,163 @@ function mapDispatchToProps(dispatch) {
 	}
 }
 
+// TestLinkJSRedux_SpreadBoundDispatch covers `this.props.setFoo(1)` where the
+// container spreads bindActionCreators output straight into props (no `actions:`
+// namespace). The creator name must still resolve to the AC module.
+func TestLinkJSRedux_SpreadBoundDispatch(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"constants/ActionTypes.jsx": `import keyMirror from "keymirror";
+export default keyMirror({ SET_FOO: null });
+`,
+		"actions/AC.jsx": `import ActionTypes from "../constants/ActionTypes";
+import actionCreator from "redux-action-utils";
+export default {
+  setFoo: actionCreator(ActionTypes.SET_FOO, "payload"),
+};
+`,
+		"components/Widget.jsx": `import AC from "../actions/AC";
+import { bindActionCreators } from "redux";
+class Widget extends React.Component {
+  onClick = () => {
+    this.props.setFoo(1);
+  };
+}
+function mapDispatchToProps(dispatch) {
+  return { ...bindActionCreators(AC, dispatch) };
+}
+`,
+	})
+	onClick := jsFuncNode("svc", p["components/Widget.jsx"], "onClick", 4)
+	_, edges := LinkJSRedux([]graph.Node{onClick}, map[string][]string{
+		"svc": {p["constants/ActionTypes.jsx"], p["actions/AC.jsx"], p["components/Widget.jsx"]},
+	})
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.From == onClick.ID &&
+			e.Meta["redux"] == "props_bound_dispatch" && e.Meta["tier"] == "jcm3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing props_bound_dispatch edge from onClick; edges=%+v", edges)
+	}
+}
+
+// TestLinkJSRedux_DispatchCall covers the explicit `dispatch(AC.x(…))` shape.
+func TestLinkJSRedux_DispatchCall(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"constants/ActionTypes.jsx": `import keyMirror from "keymirror";
+export default keyMirror({ SET_FOO: null });
+`,
+		"actions/AC.jsx": `import ActionTypes from "../constants/ActionTypes";
+import actionCreator from "redux-action-utils";
+export default {
+  setFoo: actionCreator(ActionTypes.SET_FOO, "payload"),
+};
+`,
+		"components/Panel.jsx": `import AC from "../actions/AC";
+class Panel extends React.Component {
+  onClick = () => {
+    this.props.dispatch(AC.setFoo(1));
+  };
+}
+`,
+	})
+	onClick := jsFuncNode("svc", p["components/Panel.jsx"], "onClick", 3)
+	_, edges := LinkJSRedux([]graph.Node{onClick}, map[string][]string{
+		"svc": {p["constants/ActionTypes.jsx"], p["actions/AC.jsx"], p["components/Panel.jsx"]},
+	})
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeCalls && e.From == onClick.ID &&
+			e.Meta["redux"] == "dispatch_call" && e.Meta["tier"] == "jcm3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing dispatch_call edge from onClick; edges=%+v", edges)
+	}
+}
+
+// TestLinkJSRedux_DispatchObjectLiteral covers `dispatch({ type: ActionTypes.X })`
+// (the common hooks-era shape) linking the dispatch site to the action type even
+// when the reducer lives outside a reducers/ directory.
+func TestLinkJSRedux_DispatchObjectLiteral(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"constants/ActionTypes.jsx": `import keyMirror from "keymirror";
+export default keyMirror({ SET_FOO: null });
+`,
+		"hooks/useThing.jsx": `import ActionTypes from "../constants/ActionTypes";
+function setFoo(dispatch, v) {
+  dispatch({ type: ActionTypes.SET_FOO, payload: v });
+}
+`,
+	})
+	site := jsFuncNode("svc", p["hooks/useThing.jsx"], "setFoo", 2)
+	newNodes, edges := LinkJSRedux([]graph.Node{site}, map[string][]string{
+		"svc": {p["constants/ActionTypes.jsx"], p["hooks/useThing.jsx"]},
+	})
+	var typeID string
+	for _, n := range newNodes {
+		if n.Label == "SET_FOO" {
+			typeID = n.ID
+		}
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeReferences && e.From == site.ID && e.To == typeID &&
+			e.Meta["redux"] == "dispatch_type" && e.Meta["tier"] == "jcm3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing dispatch_type edge setFoo -> SET_FOO; edges=%+v", edges)
+	}
+}
+
+// TestLinkJSRedux_CombineReducers covers the slice-map → store containment,
+// including the `combineReducers(mapVar)` indirection.
+func TestLinkJSRedux_CombineReducers(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"reducers/FooReducer.jsx": `export default function FooReducer(state, action) {
+  return state;
+}
+`,
+		"containers/Root.jsx": `import { combineReducers } from "redux";
+import FooReducer from "../reducers/FooReducer";
+const reducersMap = { foo: FooReducer };
+export default combineReducers(reducersMap);
+`,
+	})
+	reducer := jsFuncNode("svc", p["reducers/FooReducer.jsx"], "FooReducer", 1)
+	newNodes, edges := LinkJSRedux([]graph.Node{reducer}, map[string][]string{
+		"svc": {p["reducers/FooReducer.jsx"], p["containers/Root.jsx"]},
+	})
+	var storeID string
+	for _, n := range newNodes {
+		if n.Label == "redux_store" && n.Meta["redux"] == "store" {
+			storeID = n.ID
+		}
+	}
+	if storeID == "" {
+		t.Fatalf("no redux_store node minted; nodes=%+v", newNodes)
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeContains && e.From == storeID && e.To == reducer.ID &&
+			e.Meta["redux"] == "reducer_slice" && e.Meta["tier"] == "jcm3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing redux_store --contains--> FooReducer; edges=%+v", edges)
+	}
+}
+
 // TestLinkJSRedux_NoReduxNoEdges guards against false positives on a plain
 // component file with a switch statement unrelated to action types.
 func TestLinkJSRedux_NoReduxNoEdges(t *testing.T) {
