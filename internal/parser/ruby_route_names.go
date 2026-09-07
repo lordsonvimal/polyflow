@@ -34,10 +34,20 @@ import (
 //	  member     do get :sync end   → sync_user_path
 //	  collection do get :recent end → recent_users_path
 //	end
+//
+// collection is kept apart from plural even though it is usually equal to it,
+// because the two are read by callers that want different things. plural is the
+// resource as *declared* — emitResourceScopedVerb puts it in Meta["resource"],
+// where the route→controller resolver reads it as a controller name. collection
+// is the resource as Rails *names* it, which for a word whose singular and
+// plural coincide gains an `_index` suffix (sso → sso_index). Folding the
+// suffix into plural named four of cedar's routes after a controller that does
+// not exist; a field serving two readers has to say which one it is answering.
 type nameScope struct {
-	parent   []string // name segments above the innermost resource
-	singular string   // innermost resource, singular form ("" if not in one)
-	plural   string   // innermost resource, plural form ("" if not in one)
+	parent     []string // name segments above the innermost resource
+	singular   string   // innermost resource, singular form ("" if not in one)
+	plural     string   // innermost resource, plural as declared ("" if not in one)
+	collection string   // innermost resource, Rails' collection *name*
 }
 
 // descend enters a construct that contributes a literal name segment
@@ -55,8 +65,10 @@ func (ns nameScope) descend(seg string) nameScope {
 // enterResource enters a `resources`/`resource` block. The declaration's own
 // name base is read at the *call site* scope (see restHelperName); this is the
 // scope its children see.
-func (ns nameScope) enterResource(singular, plural string) nameScope {
-	return nameScope{parent: ns.flattened(), singular: singular, plural: plural}
+func (ns nameScope) enterResource(singular, plural, collection string) nameScope {
+	return nameScope{
+		parent: ns.flattened(), singular: singular, plural: plural, collection: collection,
+	}
 }
 
 // flattened folds the innermost resource's singular form into parent, copying
@@ -81,12 +93,14 @@ func (ns nameScope) memberBase() string {
 	return joinName(append(ns.parentCopy(), ns.singular))
 }
 
-// collectionBase is the plural counterpart of memberBase.
+// collectionBase is the plural counterpart of memberBase. It reads collection
+// rather than plural: a collection route is named off Rails' collection name,
+// so `resources :sso do collection do get :bulk end end` is bulk_sso_index_path.
 func (ns nameScope) collectionBase() string {
-	if ns.plural == "" {
+	if ns.collection == "" {
 		return ""
 	}
-	return joinName(append(ns.parentCopy(), ns.plural))
+	return joinName(append(ns.parentCopy(), ns.collection))
 }
 
 func (ns nameScope) parentCopy() []string {
@@ -117,14 +131,20 @@ func joinName(segs []string) string {
 //
 // create shares index's name and update/destroy share show's, exactly as
 // `rails routes` prints them.
-func restHelperName(ns nameScope, action, singular, plural string) string {
+//
+// collection is the resource's collection name rather than its bare plural:
+// the caller has already applied Rails' `_index` disambiguation for resources
+// whose singular and plural are the same word (sso → sso_index). It arrives
+// pre-resolved because only the walker knows whether the declaration was
+// `resources` or `resource`, and the rule applies to just the former.
+func restHelperName(ns nameScope, action, singular, collection string) string {
 	base := ns.flattened()
 	switch action {
 	case "index", "create":
-		if plural == "" {
+		if collection == "" {
 			return ""
 		}
-		return joinName(append(base, plural))
+		return joinName(append(base, collection))
 	case "new", "edit":
 		if singular == "" {
 			return ""

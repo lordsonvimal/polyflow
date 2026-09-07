@@ -199,3 +199,165 @@ end`))
 	assert.Equal(t, "api_users", names["GET /api/users"])
 	assert.Equal(t, "users", names["GET /users"])
 }
+
+// TestRouteNames_UncountableResourceGetsIndexSuffix is Rails'
+// `collection_name` rule (CN): when a resource's singular and plural are the
+// same word, one name cannot mean both the collection and a member, so the
+// collection takes an `_index` suffix. Six of cedar's declarations are shaped
+// this way, and until this landed every view writing sso_index_path resolved to
+// nothing while the route sat in the graph under the member's name.
+func TestRouteNames_UncountableResourceGetsIndexSuffix(t *testing.T) {
+	t.Parallel()
+	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
+  namespace :organization_admin do
+    resources :sso
+  end
+  resources :help, only: [:index, :show]
+end`))
+
+	assert.Equal(t, "organization_admin_sso_index", names["GET /organization_admin/sso"])
+	assert.Equal(t, "organization_admin_sso_index", names["POST /organization_admin/sso"])
+	// The member keeps the bare name — that is the whole point of the suffix.
+	assert.Equal(t, "organization_admin_sso", names["GET /organization_admin/sso/:id"])
+	assert.Equal(t, "organization_admin_sso", names["DELETE /organization_admin/sso/:id"])
+	assert.Equal(t, "new_organization_admin_sso", names["GET /organization_admin/sso/new"])
+
+	assert.Equal(t, "help_index", names["GET /help"])
+	assert.Equal(t, "help", names["GET /help/:id"])
+}
+
+// TestRouteNames_CountableResourceUnaffected is the regression guard: the
+// suffix must appear only where singular and plural genuinely collide. A rule
+// that fired one word too widely would rename every collection helper in the
+// graph at once.
+func TestRouteNames_CountableResourceUnaffected(t *testing.T) {
+	t.Parallel()
+	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
+  resources :folders
+  resources :studies
+end`))
+
+	assert.Equal(t, "folders", names["GET /folders"])
+	assert.Equal(t, "folder", names["GET /folders/:id"])
+	assert.Equal(t, "studies", names["GET /studies"])
+	assert.Equal(t, "study", names["GET /studies/:id"])
+}
+
+// TestRouteNames_SingletonKeepsSingularName. `resource :session` has no
+// collection at all, and ActionDispatch's SingletonResource overrides
+// collection_name back to the singular — so the `_index` rule, whose trigger
+// (singular == plural) a singleton always satisfies, must not reach it.
+func TestRouteNames_SingletonKeepsSingularName(t *testing.T) {
+	t.Parallel()
+	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
+  resource :session, only: [:new, :create, :destroy]
+  resource :sso, only: [:show]
+end`))
+
+	assert.Equal(t, "session", names["POST /session"])
+	assert.Equal(t, "session", names["DELETE /session"])
+	assert.Equal(t, "new_session", names["GET /session/new"])
+	assert.Equal(t, "sso", names["GET /sso"])
+}
+
+// TestRouteNames_UncountableCollectionBlock. A collection verb route is named
+// off the same collection_name, so the suffix has to reach it too:
+// `collection do get :bulk end` inside `resources :sso` is bulk_sso_index_path.
+func TestRouteNames_UncountableCollectionBlock(t *testing.T) {
+	t.Parallel()
+	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
+  resources :sso do
+    collection do
+      get :bulk
+    end
+    member do
+      get :audit
+    end
+  end
+end`))
+
+	assert.Equal(t, "bulk_sso_index", names["GET /sso/bulk"])
+	// A member route is named off the singular, which the suffix never touches.
+	assert.Equal(t, "audit_sso", names["GET /sso/:id/audit"])
+}
+
+// TestRouteNames_StringActionInMemberBlockIsPrefixed. Rails accepts a verb
+// action as either a symbol (`get :download`) or a string (`get "download"`),
+// and names both identically. The string form is matched by http_verb_route
+// rather than member_verb_route, and http_verb_route could previously only see
+// the `on:` keyword — so the lexical `member do ... end` form fell through to
+// literal-path naming and put the qualifier behind the action instead of in
+// front of it. A name that is right except for word order resolves nothing.
+func TestRouteNames_StringActionInMemberBlockIsPrefixed(t *testing.T) {
+	t.Parallel()
+	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
+  resources :standards do
+    resources :standard_export_templates, only: [:index] do
+      member { get "download" }
+    end
+    collection { get "recent" }
+  end
+end`))
+
+	assert.Equal(t, "download_standard_standard_export_template",
+		names["GET /standards/:standard_id/standard_export_templates/:id/download"])
+	assert.Equal(t, "recent_standards", names["GET /standards/recent"])
+}
+
+// TestRouteNames_LiteralRouteOutsideAnyBlockUnchanged is the counterweight: the
+// lexical fallback must not fire where there is no member/collection block, or
+// every scoped literal route in the graph would be renamed after a resource it
+// merely sits near.
+func TestRouteNames_LiteralRouteOutsideAnyBlockUnchanged(t *testing.T) {
+	t.Parallel()
+	names := namesOf(parseRubyRoutes(t, `Rails.application.routes.draw do
+  scope "app" do
+    get "audit_logs", to: "audits#index"
+  end
+  resources :folders do
+    get "sibling", to: "folders#sibling"
+  end
+end`))
+
+	assert.Equal(t, "audit_logs", names["GET /app/audit_logs"])
+	// Directly inside a resource block but in neither member nor collection:
+	// Rails names it off the path, under the resource's name prefix.
+	assert.Equal(t, "folder_sibling", names["GET /folders/sibling"])
+}
+
+// TestRouteNames_UncountableResourceKeepsControllerName is the regression the
+// `_index` rule caused on its first pass. A bare verb inside a `resources`
+// block records Meta["resource"] for the route→controller resolver, and it read
+// the same nameScope field the collection *name* lives in — so every one of
+// `resources :saml_org`'s four member verbs started claiming to be served by
+// SamlOrgIndexController, a class no app has ever had.
+func TestRouteNames_UncountableResourceKeepsControllerName(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resources :saml_org, path: "saml", only: :index do
+    get :sso
+    post :acs
+  end
+end`)
+
+	resources := map[string]string{}
+	names := map[string]string{}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeHTTPHandler || n.Meta["path"] == "" {
+			continue
+		}
+		key := n.Meta["method"] + " " + n.Meta["path"]
+		resources[key] = n.Meta["resource"]
+		names[key] = n.Meta["route_helper"]
+	}
+
+	// The controller is named after the resource as declared, never after the
+	// `_index`-suffixed route name.
+	assert.Equal(t, "saml_org", resources["GET /saml_org/:id/sso"])
+	assert.Equal(t, "saml_org", resources["POST /saml_org/:id/acs"])
+	assert.Equal(t, "saml_org", resources["GET /saml_org"])
+	// The route names still take the suffix where Rails does.
+	assert.Equal(t, "saml_org_index", names["GET /saml_org"])
+	assert.Equal(t, "saml_org_sso", names["GET /saml_org/:id/sso"])
+}

@@ -1315,6 +1315,18 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			label = stripStringLiteral(url)
 		} else if path, ok := r.Captures["path"]; ok {
 			label = stripStringLiteral(path)
+		} else if helper, ok := r.Captures["helper"]; ok {
+			// Rails nav helpers (`link_to "x", folder_path`, `redirect_to
+			// root_path`, `form_with url: session_path`) name their destination
+			// through a method call rather than spelling a URL, so there is no
+			// path/url capture to label with. Without this branch the label fell
+			// through to the pattern name and every such node in the graph read
+			// "nav_link_rails_redirect_helper" — identical in search output, and
+			// a lie about the node's content regardless of whether the helper
+			// later resolves. ResolveRailsNavHelpers overwrites this with
+			// "GET /path" once it finds the route; the helper expression is what
+			// the ones it cannot find should say.
+			label = stripStringLiteral(helper)
 		} else if callee, ok := r.Captures["callee"]; ok {
 			label = stripStringLiteral(callee)
 		} else if verb, ok := r.Captures["verb"]; ok {
@@ -1396,6 +1408,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 
 		if demoteTestDSL {
 			meta[graph.MetaIsTest] = "true"
+			// Also record *why* it is a function node. is_test alone cannot say:
+			// a real `def` inside a spec file carries it too, and that one is a
+			// definition. See MetaDemotedComm.
+			meta[graph.MetaDemotedComm] = "true"
 		}
 
 		// External-service call sites: record which cloud service (derived

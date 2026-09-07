@@ -117,6 +117,21 @@ const (
 // contract engine and coverage denominators are not.
 const MetaIsTest = "is_test"
 
+// MetaDemotedComm marks a node that carries NodeTypeFunction only because X.0
+// demoted it there: it is a *call site* — a `redirect_to`, a `fetch`, a
+// `publish` inside test scope — and never a definition of anything.
+//
+// The distinction has teeth because name-keyed resolution indexes ask "is there
+// exactly one function called X in this service" and a demoted site answers yes
+// under whatever its call expression is named. Tier CN made that concrete: once
+// a Rails nav producer was labelled with its route helper instead of its pattern
+// name, `redirect_to data_steward_home_path` in one spec file became the sole
+// service-wide "definition" of data_steward_home_path, and fifteen unrelated
+// feature specs acquired a calls edge into it. Definition indexes must skip
+// these; caller→site and blast-radius edges still want them, which is why the
+// demotion itself stays.
+const MetaDemotedComm = "demoted_comm"
+
 // MetaReflectDispatched marks a method the indexer determined is invoked by
 // a framework or the standard library through an interface value or
 // reflection rather than a literal call site (GORM's TableName/Before*/

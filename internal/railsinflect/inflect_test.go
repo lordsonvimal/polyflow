@@ -26,9 +26,9 @@ func TestSingularize(t *testing.T) {
 		"houses":    "house",
 		"phases":    "phase",
 		"responses": "response",
-		"people":   "person",
-		"children": "child",
-		"media":    "medium",
+		"people":    "person",
+		"children":  "child",
+		"media":     "medium",
 		// Deliberately not inflected: the -ves rule that would give "leaf"
 		// gives "archif" and "mof" for the names real apps actually use.
 		"archives": "archive",

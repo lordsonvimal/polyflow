@@ -149,6 +149,70 @@ end
 	assert.Contains(t, got, "redirect_path")
 }
 
+// TestRedirectNav_LabelIsTheHelperNotThePatternName is Tier CN's guard against
+// a whole class of defect, not one node's cosmetics. Every capture branch in the
+// matcher's label chain ends at `label = r.PatternName`, so any producer whose
+// informative capture is not spelled url/path/name/callee silently labels itself
+// with its own pattern. That is how 114 nodes on the audit corpus — every
+// unresolved Rails nav helper across link_to, form_with and redirect_to — came to
+// read "nav_link_rails_redirect_helper" and look identical in search output.
+//
+// Asserted across all three helper patterns, and asserted as "never the pattern
+// name" rather than only "equals the helper", because the fallback is what
+// re-introduces the bug if a future capture rename quietly stops matching.
+func TestRedirectNav_LabelIsTheHelperNotThePatternName(t *testing.T) {
+	t.Parallel()
+	got := parseRubyController(t, `
+class ThingsController < ApplicationController
+  def create
+    redirect_to folder_path(@folder), notice: t("folders.created")
+  end
+
+  def destroy
+    redirect_to dashboard_path
+  end
+end
+`)
+	for _, helper := range []string{"folder_path", "dashboard_path"} {
+		n, ok := got[helper]
+		require.True(t, ok, "no nav producer for %s; got %v", helper, keysOf(got))
+		assert.Equal(t, helper, n.Label)
+		assert.NotEqual(t, n.Meta["pattern"], n.Label,
+			"node labelled with its own pattern name")
+	}
+}
+
+// TestNavHelper_LabelAcrossPatterns covers the link_to and form_with families,
+// which share the same label defect and the same fix. A view is where most of
+// them live.
+func TestNavHelper_LabelAcrossPatterns(t *testing.T) {
+	t.Parallel()
+	m := mustMatcher(t)
+	file := filepath.Join(t.TempDir(), "index.html.erb")
+	require.NoError(t, os.WriteFile(file, []byte(`
+<%= link_to "Edit", edit_folder_path(@folder) %>
+<%= form_with url: session_path do |f| %>
+<% end %>
+`), 0o644))
+
+	p := parser.ForFile(file)
+	require.NotNil(t, p)
+	nodes, _, _, err := p.Parse(file, "svc", m, nil)
+	require.NoError(t, err)
+
+	byHelper := map[string]graph.Node{}
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPClient && n.Meta["helper"] != "" {
+			byHelper[n.Meta["helper"]] = n
+		}
+	}
+	for _, helper := range []string{"edit_folder_path", "session_path"} {
+		n, ok := byHelper[helper]
+		require.True(t, ok, "no nav producer for %s; got %v", helper, keysOf(byHelper))
+		assert.Equal(t, helper, n.Label)
+	}
+}
+
 func keysOf(m map[string]graph.Node) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

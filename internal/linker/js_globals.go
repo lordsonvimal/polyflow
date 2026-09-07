@@ -186,14 +186,32 @@ func LinkJSGlobals(
 			if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeMethod {
 				continue
 			}
+			// A test-demoted comm site is typed function but defines nothing —
+			// it is a `redirect_to`/`fetch`/`publish` expression that X.0 kept
+			// in the graph for blast radius. The two label indexes below answer
+			// "where is the thing called X defined", so listing a call site in
+			// them makes it a resolution target for every caller that names the
+			// same symbol: one spec's `redirect_to data_steward_home_path`
+			// became the corpus's sole "definition" of that helper and drew
+			// calls edges from fifteen unrelated feature specs.
+			//
+			// funcLinesByFile below is deliberately still fed. That one is the
+			// *attribution* index — which enclosing scope owns a given line —
+			// and a demoted site is a poor answer there too, but a different
+			// and separately-measurable one. Changing both at once moves JS
+			// test-file edge attribution in the same breath as a Rails naming
+			// fix, and neither number stays readable.
+			definition := n.Meta[graph.MetaDemotedComm] != "true"
 			key := n.File + "\x00" + n.Label
-			if _, exists := a.funcByFileAndLabel[key]; !exists {
+			if _, exists := a.funcByFileAndLabel[key]; definition && !exists {
 				a.funcByFileAndLabel[key] = n.ID
 			}
 			if n.Label == "(module)" || n.Label == "$" || n.Label == "$$" {
 				continue // JCM.5: jQuery/Zepto stub, never a real call target
 			}
-			a.funcByLabel[n.Label] = append(a.funcByLabel[n.Label], globalEntry{nodeID: n.ID, file: n.File})
+			if definition {
+				a.funcByLabel[n.Label] = append(a.funcByLabel[n.Label], globalEntry{nodeID: n.ID, file: n.File})
+			}
 			end := 0
 			if v, ok := n.Meta["end_line"]; ok {
 				fmt.Sscanf(v, "%d", &end)

@@ -297,3 +297,100 @@ func join(ss []string) string {
 	}
 	return out
 }
+
+// TestResolveRailsNavHelpers_FanOutReplacesTheOriginal is the node-hygiene half
+// of Tier CN. A helper naming more than one route emits one candidate per route,
+// and every candidate used to get a freshly minted ID. The caller updates in
+// place when it recognises the ID and appends when it does not
+// (internal/indexer/link_passes.go's rails_nav_helpers pass), so the original
+// unresolved node survived alongside its own candidates — still labelled with
+// its pattern name, still carrying `helper`, and dangling permanently because
+// nothing downstream matches a node with no path.
+//
+// The first candidate therefore keeps the original's ID. The assertion is on
+// the ID set rather than the count so a future change cannot satisfy it by
+// dropping a candidate instead of reusing the ID.
+func TestResolveRailsNavHelpers_FanOutReplacesTheOriginal(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		makeRouteNode("r1", "svc", "routes.rb", 1, "session", "POST", "/session"),
+		makeRouteNode("r2", "svc", "routes.rb", 2, "session", "DELETE", "/session"),
+		makeNavHelperNode("c1", "svc", "views/new.erb", 11, "session_path"),
+	}
+
+	updated, unresolved := ResolveRailsNavHelpers(nodes)
+
+	ids := map[string]graph.Node{}
+	for _, n := range updated {
+		if _, dup := ids[n.ID]; dup {
+			t.Errorf("duplicate candidate ID %q: two candidates collapse to one node in the store", n.ID)
+		}
+		ids[n.ID] = n
+	}
+	if _, ok := ids["c1"]; !ok {
+		t.Errorf("original node c1 was not replaced by a candidate; got IDs %v", sortedIDs(ids))
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 candidates for the two /session routes, got %d: %v", len(ids), sortedIDs(ids))
+	}
+
+	// Both routes share a path and differ only by method, which is exactly the
+	// pair a path-only candidate ID could not tell apart.
+	methods := map[string]bool{}
+	for _, n := range ids {
+		methods[n.Meta["method"]] = true
+		if n.Meta["path"] != "/session" {
+			t.Errorf("candidate %s has path %q, want /session", n.ID, n.Meta["path"])
+		}
+		if n.Meta["helper"] != "" {
+			t.Errorf("candidate %s still carries the unresolved helper marker", n.ID)
+		}
+		if n.Meta["via"] != "rails_helper_candidate" {
+			t.Errorf("candidate %s not marked as a fan-out candidate", n.ID)
+		}
+	}
+	if !methods["POST"] || !methods["DELETE"] {
+		t.Errorf("expected one candidate per method, got %v", methods)
+	}
+
+	var collisions int
+	for _, u := range unresolved {
+		if u.Kind == "rails_helper_collision" {
+			collisions++
+		}
+	}
+	if collisions != 1 {
+		t.Errorf("expected exactly 1 rails_helper_collision ledger entry, got %d", collisions)
+	}
+}
+
+// TestResolveRailsNavHelpers_SingleMatchKeepsID guards the ordinary path: a
+// helper naming one route must still resolve in place, with no candidate suffix
+// anywhere in sight.
+func TestResolveRailsNavHelpers_SingleMatchKeepsID(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		makeRouteNode("r1", "svc", "routes.rb", 1, "reports", "GET", "/app/reports"),
+		makeNavHelperNode("c1", "svc", "views/index.erb", 5, "reports_path"),
+	}
+
+	updated, _ := ResolveRailsNavHelpers(nodes)
+	if len(updated) != 1 || updated[0].ID != "c1" {
+		t.Fatalf("expected exactly one in-place update of c1, got %v", updated)
+	}
+	if updated[0].Meta["via"] == "rails_helper_candidate" {
+		t.Error("a single match must not be marked as a fan-out candidate")
+	}
+	if updated[0].Label != "GET /app/reports" {
+		t.Errorf("label = %q, want the resolved route", updated[0].Label)
+	}
+}
+
+func sortedIDs(m map[string]graph.Node) []string {
+	out := make([]string, 0, len(m))
+	for id := range m {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}

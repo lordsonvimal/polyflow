@@ -451,3 +451,47 @@ func TestSplitHandlerStatements(t *testing.T) {
 	assert.Equal(t, []string{"a()", "b()"}, splitHandlerStatements(" a() ; b() ; "))
 	assert.Empty(t, splitHandlerStatements(""))
 }
+
+// TestLinkJSGlobals_DemotedCommSiteIsNotADefinition. X.0 keeps a comm site
+// found in test scope in the graph as a NodeTypeFunction so blast radius can
+// still answer "which tests break". That node is a call site, not a definition,
+// and the service-wide label index behind emitLocalEdges is a *definition*
+// index — indexing the site there makes every caller that happens to name the
+// same symbol resolve into a spec file.
+//
+// Not hypothetical: Tier CN relabelled Rails nav producers with their route
+// helper (they had been labelled with their own pattern name, which nothing
+// ever calls), and a single `redirect_to data_steward_home_path` inside one
+// controller spec immediately became the corpus's sole definition of that
+// helper, pulling in fifteen calls edges from unrelated feature specs.
+func TestLinkJSGlobals_DemotedCommSiteIsNotADefinition(t *testing.T) {
+	t.Parallel()
+	nodes := []graph.Node{
+		{
+			ID: "svc:spec/a_spec.rb:function:home_path:35", Type: graph.NodeTypeFunction,
+			Label: "home_path", Service: "svc", File: "spec/a_spec.rb", Line: 35, Language: "ruby",
+			Meta: map[string]string{
+				"pattern":             "nav_link_rails_redirect_helper",
+				"helper":              "home_path",
+				graph.MetaIsTest:      "true",
+				graph.MetaDemotedComm: "true",
+			},
+		},
+		{
+			ID: "svc:spec/b_spec.rb:function:visit_home:10", Type: graph.NodeTypeFunction,
+			Label: "visit_home", Service: "svc", File: "spec/b_spec.rb", Line: 10, Language: "ruby",
+			Meta: map[string]string{"end_line": "12"},
+		},
+	}
+	unresolved := []graph.UnresolvedRef{
+		{Service: "svc", File: "spec/b_spec.rb", Line: 11, Name: "home_path", Kind: "call_ref"},
+	}
+
+	edges, _, _ := LinkJSGlobals(nodes, unresolved, nil,
+		map[string][]string{"svc": {"spec/a_spec.rb", "spec/b_spec.rb"}})
+	for _, e := range edges {
+		if e.To == "svc:spec/a_spec.rb:function:home_path:35" {
+			t.Errorf("resolved a call into a demoted comm site: %+v", e)
+		}
+	}
+}

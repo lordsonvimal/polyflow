@@ -173,7 +173,7 @@ func ResolveRailsNavHelpers(nodes []graph.Node) (updatedNodes []graph.Node, unre
 			}
 		}
 
-		for _, r := range matching {
+		for i, r := range matching {
 			updated := copyNode(n)
 			updated.Meta["path"] = r.Path
 			updated.Meta["method"] = r.Method
@@ -190,8 +190,26 @@ func ResolveRailsNavHelpers(nodes []graph.Node) (updatedNodes []graph.Node, unre
 			updated.Label = label
 
 			if len(matching) > 1 {
-				// Fan-out: emit candidate copies per distinct path.
-				updated.ID = fmt.Sprintf("%s:candidate:%s", n.ID, r.Path)
+				// Fan-out: one candidate per distinct route.
+				//
+				// The first candidate keeps the original node's ID so it
+				// *replaces* the unresolved node rather than sitting beside it.
+				// The caller updates in place when the ID is known and appends
+				// when it is not (internal/indexer/link_passes.go's
+				// rails_nav_helpers pass), so minting a fresh ID for every
+				// candidate left the original behind: still labelled with its
+				// pattern name, still carrying `helper`, and dangling forever
+				// because nothing downstream could match it. Same replace-in-
+				// place discipline a node-mutating pass owes the graph.
+				//
+				// The suffix carries the method as well as the path. It did not,
+				// and `session_path` — which Rails maps to both POST /session and
+				// DELETE /session — minted two candidates with one ID, so the
+				// store kept whichever arrived last and the other route silently
+				// lost its client.
+				if i > 0 {
+					updated.ID = fmt.Sprintf("%s:candidate:%s:%s", n.ID, r.Method, r.Path)
+				}
 				updated.Meta["via"] = "rails_helper_candidate"
 			}
 			updatedNodes = append(updatedNodes, updated)

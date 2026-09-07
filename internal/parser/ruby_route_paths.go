@@ -64,7 +64,7 @@ func composeRailsRoutePaths(file, service string, src []byte, nodes []graph.Node
 		byLine:  byLine,
 		seen:    map[string]bool{},
 	}
-	w.walk(tree.RootNode(), nil, nil, nameScope{}, "", false)
+	w.walk(tree.RootNode(), nil, nil, nameScope{}, "", false, "")
 	return w.out
 }
 
@@ -183,15 +183,22 @@ func dropNonRoutesFileRouteMatches(file string, results []patterns.MatchResult) 
 // `namespace` and `scope`, which redefine the controller module and so end the
 // enclosing resource's claim on where the controller lives.
 //
+// onScope is the fifth (Tier CN): "member", "collection", or "" for the
+// lexically enclosing block. Rails lets a verb route say which of the two it
+// belongs to either by keyword (`get "x", on: :member`) or by position
+// (`member do get "x" end`), and only the keyword form is visible to
+// verbRouteHelperName from the call node alone. Like singular it is reset by
+// namespace/scope/resource, which open a new naming context.
+//
 // names is the third stack, for Rails route *names* (`study_deliverable_path`).
 // It agrees with neither of the other two — see nameScope.
-func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope, nestParam string, singular bool) {
+func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope, nestParam string, singular bool, onScope string) {
 	if n == nil {
 		return
 	}
 	if n.Type() != "call" {
 		for i := 0; i < int(n.ChildCount()); i++ {
-			w.walk(n.Child(i), prefix, mod, names, nestParam, singular)
+			w.walk(n.Child(i), prefix, mod, names, nestParam, singular, onScope)
 		}
 		return
 	}
@@ -212,7 +219,7 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 	case "namespace":
 		seg, ok := firstPositionalSegment(n, w.src)
 		if ok && blockNode != nil {
-			w.walk(blockBody(blockNode), append(base, seg), appendSeg(mod, seg), names.descend(seg), "", false)
+			w.walk(blockBody(blockNode), append(base, seg), appendSeg(mod, seg), names.descend(seg), "", false, "")
 		}
 		return
 	case "scope":
@@ -228,7 +235,7 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		}
 		pathSeg, modSeg := scopeSegments(n, w.src)
 		w.walk(blockBody(blockNode), appendSeg(base, pathSeg), appendSeg(mod, modSeg),
-			names.descend(keywordSegment(n, w.src, "as")), "", false)
+			names.descend(keywordSegment(n, w.src, "as")), "", false, "")
 		return
 	case "resources", "resource":
 		seg, ok := firstPositionalSegment(n, w.src)
@@ -248,6 +255,23 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		if plural {
 			singularName = railsinflect.Singularize(nameSeg)
 		}
+		// Rails disambiguates a resource whose singular and plural forms
+		// are the same word by suffixing the *collection* name with
+		// `_index`: `resources :sso` generates sso_index_path for the
+		// collection and sso_path for a member, because one name cannot
+		// mean both. This is ActionDispatch's own `collection_name` rule,
+		// not a heuristic — and it is not rare enough to skip (cedar
+		// declares six such resources: help, sso, saml_org, collaborate,
+		// flagging, mappings_metadata). Getting it wrong costs every view
+		// that writes sso_index_path.
+		//
+		// It applies to `resources` only. A singleton has no collection and
+		// SingletonResource overrides collection_name back to the singular,
+		// so `resource :session` stays session_path.
+		collectionName := pluralName
+		if plural && singularName == pluralName {
+			collectionName = pluralName + "_index"
+		}
 		// `controller:` names the controller outright, overriding the resource
 		// name entirely: `resources :studies, controller: "containers"`
 		// serves ContainersController. A namespaced value
@@ -261,10 +285,10 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 				ctrlSeg = c[slash+1:]
 			}
 		}
-		w.emitRESTRoutes(n, scope, ctrlMod, names, ctrlSeg, singularName, pluralName, plural, ctrlExplicit)
+		w.emitRESTRoutes(n, scope, ctrlMod, names, ctrlSeg, singularName, collectionName, plural, ctrlExplicit)
 		if blockNode != nil {
 			w.walk(blockBody(blockNode), scope, mod,
-				names.enterResource(singularName, pluralName), nestingParam(seg, plural), !plural)
+				names.enterResource(singularName, pluralName, collectionName), nestingParam(seg, plural), !plural, "")
 		}
 		return
 	case "devise_for":
@@ -275,12 +299,12 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		return
 	case "member":
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), mod, names, "", singular)
+			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), mod, names, "", singular, "member")
 		}
 		return
 	case "collection":
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), prefix, mod, names, "", singular)
+			w.walk(blockBody(blockNode), prefix, mod, names, "", singular, "collection")
 		}
 		return
 	case "get", "post", "put", "patch", "delete":
@@ -295,11 +319,11 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 				w.emitResourceScopedVerb(n, prefix, mod, names, strings.ToUpper(method), action)
 			}
 		}
-		composeAndStamp(n, w.src, prefix, mod, names, w.byLine, singular)
+		composeAndStamp(n, w.src, prefix, mod, names, w.byLine, singular, onScope)
 		return
 	}
 	if blockNode != nil {
-		w.walk(blockBody(blockNode), prefix, mod, names, nestParam, singular)
+		w.walk(blockBody(blockNode), prefix, mod, names, nestParam, singular, onScope)
 	}
 }
 
@@ -403,7 +427,7 @@ var pluralRESTActions = []restAction{
 //
 // A singular `resource :profile` has no index and no `:id`: there is only ever one
 // of it, so show/update/destroy address the collection path directly.
-func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, names nameScope, seg, singular, pluralName string, plural, ctrlExplicit bool) {
+func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, names nameScope, seg, singular, collectionName string, plural, ctrlExplicit bool) {
 	only, hasOnly, except := restActionFilters(call, w.src)
 	if hasOnly && len(only) == 0 {
 		// `resources :users, only: []` declares the resource purely as a nesting
@@ -463,7 +487,7 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 			// looking this up (BuildRailsHelperMap), never by rebuilding a
 			// path from the resource name — that reconstruction cannot see
 			// the enclosing `scope "app"` and got every orion route wrong.
-			"route_helper": restHelperName(names, a.name, singular, pluralName),
+			"route_helper": restHelperName(names, a.name, singular, collectionName),
 		}
 		if ctrlExplicit {
 			meta["controller_explicit"] = "true"
@@ -797,7 +821,7 @@ func resourceScopedHelperName(as, action, base string) string {
 // own line (matcher.go's r.Line for member_verb_route/collection_verb_route
 // is the innermost named capture's line — the verb call itself — not the
 // enclosing member/collection block's line).
-func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names nameScope, byLine map[int]*graph.Node, singular bool) {
+func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names nameScope, byLine map[int]*graph.Node, singular bool, onScope string) {
 	line := int(call.StartPoint().Row) + 1
 	node, ok := byLine[line]
 	if !ok {
@@ -829,7 +853,7 @@ func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names 
 	// pathHelperName would derive `app_audit_logs` from the composed
 	// "/app/audit_logs" instead of `audit_logs` from the literal "audit_logs".
 	if _, done := node.Meta["route_helper"]; !done {
-		if h := verbRouteHelperName(call, src, node, names); h != "" {
+		if h := verbRouteHelperName(call, src, node, names, onScope); h != "" {
 			node.Meta["route_helper"] = h
 		}
 	}
@@ -979,7 +1003,7 @@ func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names 
 // Returns "" when the route has no name Rails would generate — a member route
 // with no enclosing resource, or a literal path with a dynamic segment. A
 // nameless route is correct; an invented name would shadow a real helper.
-func verbRouteHelperName(call *sitter.Node, src []byte, node *graph.Node, names nameScope) string {
+func verbRouteHelperName(call *sitter.Node, src []byte, node *graph.Node, names nameScope, onScope string) string {
 	as := keywordSegment(call, src, "as")
 
 	switch node.Meta["pattern"] {
@@ -994,7 +1018,20 @@ func verbRouteHelperName(call *sitter.Node, src []byte, node *graph.Node, names 
 		// inside `resources :task_reports` is collection_study_task_reports,
 		// not study_task_report_collection.
 		literalName := pathHelperName(nameScope{}, node.Meta["path"])
-		switch keywordSegment(call, src, "on") {
+		// `on:` is one of two ways to say the same thing. The other is lexical
+		// position — `resources :x do member do get "download" end end` — and
+		// the string-literal form lands here rather than in member_verb_route
+		// above because the *_verb_route patterns key on a symbol argument.
+		// Without onScope this branch saw no `on:`, fell through to the plain
+		// literal-path naming, and produced the qualifier as a *suffix*
+		// (standard_export_template_download) where Rails puts it in front
+		// (download_standard_export_template). A name that is right except for
+		// word order resolves nothing at all.
+		on := keywordSegment(call, src, "on")
+		if on == "" {
+			on = onScope
+		}
+		switch on {
 		case "member":
 			return qualifyVerbName(as, literalName, names.memberBase())
 		case "collection":
