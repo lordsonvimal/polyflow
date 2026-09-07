@@ -43,6 +43,7 @@ var wantLinkPasses = []struct {
 	{"ruby_http_hosts", scopeSameServiceOnly},
 	{"ruby_poly_path_sites", scopeSameServiceOnly},
 	{"go_http_hosts", scopeSameServiceOnly},
+	{"js_prop_clients", scopeSameServiceOnly},
 	{"js_http_hosts", scopeSameServiceOnly},
 	{"config_baseurl", scopeSameServiceOnly},
 	{"route_handlers", scopeSameServiceOnly},

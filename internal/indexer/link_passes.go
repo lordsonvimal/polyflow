@@ -714,6 +714,38 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
+		// SPA.4: prop-injected HTTP-client wrapper. Mints http_client nodes for
+		// `this.props.ajaxStatus.get(msg, url)` call sites (URL KeyWalked) so the
+		// contract engine joins them to Rails routes. Runs before js_http_hosts
+		// (a template-host URL it emits still gets its host recovered) and well
+		// before the contract engine.
+		{"js_prop_clients", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			pcNodes, pcEdges, pcLedger := linker.LinkJSPropClients(st.allNodes, svcFiles)
+			st.allUnresolved = append(st.allUnresolved, pcLedger...)
+			if len(pcNodes) == 0 {
+				return st.writeEdges(pcEdges)
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for i := range pcNodes {
+				n := pcNodes[i]
+				if _, exists := byID[n.ID]; exists {
+					continue
+				}
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+				byID[n.ID] = len(st.allNodes) - 1
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(pcEdges)
+		}},
 		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
 		// JS/TS client at all, so this is the only source of Meta["env_var"] /
 		// Meta["host_default_literal"] for JS/TS nodes — must also run before
