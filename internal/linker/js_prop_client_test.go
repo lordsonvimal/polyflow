@@ -128,6 +128,93 @@ func TestLinkJSPropClients_BareUnrelatedGetNoNode(t *testing.T) {
 	}
 }
 
+// urlsOf returns the Meta["url"] of every http_client node minted.
+func urlsOf(nodes []graph.Node) []string {
+	var out []string
+	for i := range nodes {
+		if nodes[i].Type == graph.NodeTypeHTTPClient {
+			out = append(out, nodes[i].Meta["url"])
+		}
+	}
+	return out
+}
+
+func TestDynamicURLBuilder_TemplateReturn(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"common/ComponentWithAjaxStatus.jsx": ajaxStatusHOC,
+		"grids/T.jsx": `import ComponentWithAjaxStatus from "../common/ComponentWithAjaxStatus";
+const getDataURL = (t) => ` + "`/api/${t}s`" + `;
+class T extends React.Component {
+  load() {
+    this.props.ajaxStatus.get("loading", getDataURL(this.props.type));
+  }
+}
+export default ComponentWithAjaxStatus(T);
+`,
+	})
+	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/T.jsx"]}})
+	if got := urlsOf(nodes); len(got) != 1 || got[0] != "/api/*s" {
+		t.Errorf("urls = %v, want [/api/*s]; ledger=%+v", got, ledger)
+	}
+}
+
+func TestDynamicURLBuilder_SwitchReturns(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"common/ComponentWithAjaxStatus.jsx": ajaxStatusHOC,
+		"grids/S.jsx": `import ComponentWithAjaxStatus from "../common/ComponentWithAjaxStatus";
+function getDataURL(t) {
+  switch (t) {
+    case "a": return "/api/a";
+    case "b": return "/api/b";
+  }
+}
+class S extends React.Component {
+  load() {
+    this.props.ajaxStatus.get("loading", getDataURL(this.props.type));
+  }
+}
+export default ComponentWithAjaxStatus(S);
+`,
+	})
+	nodes, _, _ := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/S.jsx"]}})
+	got := urlsOf(nodes)
+	want := map[string]bool{"/api/a": true, "/api/b": true}
+	if len(got) != 2 || !want[got[0]] || !want[got[1]] {
+		t.Errorf("urls = %v, want /api/a + /api/b", got)
+	}
+}
+
+func TestDynamicURLBuilder_Opaque(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"common/ComponentWithAjaxStatus.jsx": ajaxStatusHOC,
+		"grids/O.jsx": `import ComponentWithAjaxStatus from "../common/ComponentWithAjaxStatus";
+const getDataURL = (t) => buildIt(t);
+class O extends React.Component {
+  load() {
+    this.props.ajaxStatus.get("loading", getDataURL(this.props.type));
+  }
+}
+export default ComponentWithAjaxStatus(O);
+`,
+	})
+	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/O.jsx"]}})
+	if got := urlsOf(nodes); len(got) != 0 {
+		t.Errorf("opaque builder minted nodes: %v", got)
+	}
+	found := false
+	for _, u := range ledger {
+		if u.Kind == "dynamic_url_builder" && u.Name == "getDataURL" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want dynamic_url_builder ledger naming getDataURL; got %+v", ledger)
+	}
+}
+
 func TestLinkJSPropClients_DynamicURLLedger(t *testing.T) {
 	t.Parallel()
 	_, p := writeReduxFixture(t, map[string]string{
@@ -151,11 +238,11 @@ export default ComponentWithAjaxStatus(G);
 	}
 	found := false
 	for _, u := range ledger {
-		if u.Kind == "prop_client_dynamic_url" {
+		if u.Kind == "dynamic_url_builder" && u.Name == "getDataURL" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected prop_client_dynamic_url ledger entry; got %+v", ledger)
+		t.Errorf("expected dynamic_url_builder ledger entry for getDataURL; got %+v", ledger)
 	}
 }

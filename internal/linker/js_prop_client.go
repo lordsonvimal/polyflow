@@ -2,6 +2,7 @@ package linker
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -29,8 +30,13 @@ import (
 // as it does for a jQuery `$.ajax` client. A `calls` edge from the enclosing
 // function is emitted so a trace from the React component reaches the call.
 //
-// Non-literal URLs (`getDataURL(type)`) are ledgered `prop_client_dynamic_url`
-// — a visible blind spot for SPA.5, never a silent drop.
+// SPA.5 — dynamic URL-builder functions. When the URL argument is a call to a
+// local/imported function (`getDataURL(type)`) whose body is a set of literal /
+// template / switch returns, dynamicURLBuilder synthesises the distinct path
+// shapes (`${p}` → `*`, ≤6) and mints one http_client per shape. An opaque
+// builder is ledgered `dynamic_url_builder` (naming the function); a >6-way
+// fan-out is ledgered `dynamic_url_fanout` and mints nothing. Anything else
+// stays `prop_client_dynamic_url` — a visible blind spot, never a silent drop.
 
 // propClientMethod records, for one method of a prop-client, where its URL
 // argument sits: a positional string arg (URLArgIndex, URLOptKey == "") or the
@@ -89,8 +95,9 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 
 	walker := contract.KeyWalkerFor("javascript")
 
-	// --- pass 1: discover prop-client specs per service ---
+	// --- pass 1: discover prop-client specs + URL-builder functions per service ---
 	specsBySvc := make(map[string]map[string]propClientSpec)
+	fnDefsBySvc := make(map[string]map[string]fnDef)
 	type parsedFile struct {
 		rel  string
 		svc  string
@@ -118,6 +125,16 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 				svc = svcOfFile[rel]
 			}
 			files = append(files, parsedFile{rel: rel, svc: svc, src: src, root: root})
+			indexFnDefs(root, src, func(name string, fn *sitter.Node) {
+				m := fnDefsBySvc[svc]
+				if m == nil {
+					m = make(map[string]fnDef)
+					fnDefsBySvc[svc] = m
+				}
+				if _, exists := m[name]; !exists {
+					m[name] = fnDef{node: fn, src: src}
+				}
+			})
 			if spec, ok := detectPropClientSpec(root, src, rel); ok {
 				m := specsBySvc[svc]
 				if m == nil {
@@ -158,24 +175,7 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 					}
 				}
 			case "call_expression":
-				if spec, method, urlNode, siteVerb, line, ok := propClientCallSite(n, pf.src, specs, fileText, propsNames); ok {
-					_ = spec
-					cands, dyn := walkerKey(walker, urlNode, pf.src)
-					if dyn || len(cands) == 0 {
-						ledger = append(ledger, graph.UnresolvedRef{
-							Service: pf.svc, File: pf.rel, Line: line,
-							Name: "(dynamic)", Kind: "prop_client_dynamic_url",
-						})
-						break
-					}
-					path := cands[0]
-					if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "*") {
-						ledger = append(ledger, graph.UnresolvedRef{
-							Service: pf.svc, File: pf.rel, Line: line,
-							Name: path, Kind: "prop_client_dynamic_url",
-						})
-						break
-					}
+				if _, method, urlNode, siteVerb, line, ok := propClientCallSite(n, pf.src, specs, fileText, propsNames); ok {
 					verb := method.Verb
 					if siteVerb != "" {
 						verb = siteVerb
@@ -183,22 +183,60 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 					if verb == "" {
 						verb = "GET"
 					}
-					id := fmt.Sprintf("%s:%s:http_client:prop_client:%d", pf.svc, pf.rel, line)
-					if !mintSeen[id] {
+
+					cands, dyn := walkerKey(walker, urlNode, pf.src)
+
+					// each mint request is one distinct path shape to emit.
+					type mintReq struct {
+						path  string
+						cands []string
+					}
+					var reqs []mintReq
+
+					if !dyn && len(cands) > 0 &&
+						(strings.HasPrefix(cands[0], "/") || strings.HasPrefix(cands[0], "*")) {
+						reqs = append(reqs, mintReq{path: cands[0], cands: cands})
+					} else if shapes, fname, kind := dynamicURLBuilder(urlNode, pf.src, fnDefsBySvc[pf.svc], walker); kind == "shapes" {
+						for _, sh := range shapes {
+							reqs = append(reqs, mintReq{path: sh, cands: []string{sh}})
+						}
+					} else {
+						name := "(dynamic)"
+						k := "prop_client_dynamic_url"
+						switch {
+						case fname != "":
+							name, k = fname, kind
+						case len(cands) > 0:
+							name = cands[0]
+						}
+						ledger = append(ledger, graph.UnresolvedRef{
+							Service: pf.svc, File: pf.rel, Line: line,
+							Name: name, Kind: k,
+						})
+					}
+
+					for ri, req := range reqs {
+						id := fmt.Sprintf("%s:%s:http_client:prop_client:%d", pf.svc, pf.rel, line)
+						if len(reqs) > 1 {
+							id = fmt.Sprintf("%s:%d", id, ri)
+						}
+						if mintSeen[id] {
+							continue
+						}
 						mintSeen[id] = true
 						meta := map[string]string{
 							"pattern": "prop_client",
 							"method":  verb,
-							"url":     path,
+							"url":     req.path,
 							"spa":     "prop_client",
 						}
-						if len(cands) > 1 {
-							meta["key_candidates"] = contract.MarshalKeyCandidates(cands)
+						if len(req.cands) > 1 {
+							meta["key_candidates"] = contract.MarshalKeyCandidates(req.cands)
 						}
 						newNodes = append(newNodes, graph.Node{
 							ID:       id,
 							Type:     graph.NodeTypeHTTPClient,
-							Label:    verb + " " + path,
+							Label:    verb + " " + req.path,
 							Service:  pf.svc,
 							File:     pf.rel,
 							Line:     line,
@@ -225,6 +263,123 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 		walk(pf.root, "(module)")
 	}
 	return newNodes, edges, ledger
+}
+
+// ── SPA.5: dynamic URL-builder functions ────────────────────────────────────
+
+// fnDef is a parsed function/arrow definition kept for URL-builder resolution.
+type fnDef struct {
+	node *sitter.Node
+	src  []byte
+}
+
+// indexFnDefs emits every named function definition in a file: `function f(){}`,
+// `const f = () => {}`, and class-field arrows.
+func indexFnDefs(root *sitter.Node, src []byte, emit func(name string, fn *sitter.Node)) {
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		switch n.Type() {
+		case "function_declaration", "generator_function_declaration":
+			if nm := n.ChildByFieldName("name"); nm != nil {
+				emit(nm.Content(src), n)
+			}
+		case "variable_declarator", "public_field_definition", "field_definition":
+			if v := n.ChildByFieldName("value"); v != nil {
+				switch v.Type() {
+				case "arrow_function", "function_expression", "function":
+					if nm := n.ChildByFieldName("name"); nm != nil {
+						emit(nm.Content(src), v)
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+}
+
+// dynamicURLBuilder handles the SPA.5 case: the URL argument is `builder(args)`.
+// Returns kind "shapes" with the distinct static path shapes the builder can
+// return; "dynamic_url_fanout" (naming the fn) when there are >6; and
+// "dynamic_url_builder" (naming the fn) when the builder is opaque or unknown.
+// kind "" means the argument is not a plain function call at all.
+func dynamicURLBuilder(urlNode *sitter.Node, src []byte, defs map[string]fnDef, w contract.KeyWalker) (shapes []string, fnName, kind string) {
+	if urlNode == nil || urlNode.Type() != "call_expression" {
+		return nil, "", ""
+	}
+	callee := urlNode.ChildByFieldName("function")
+	if callee == nil || callee.Type() != "identifier" {
+		return nil, "", ""
+	}
+	name := callee.Content(src)
+	def, ok := defs[name]
+	if !ok {
+		return nil, name, "dynamic_url_builder"
+	}
+	sh, ok := synthURLBuilderShapes(w, def.node, def.src)
+	if !ok || len(sh) == 0 {
+		return nil, name, "dynamic_url_builder"
+	}
+	if len(sh) > 6 {
+		return nil, name, "dynamic_url_fanout"
+	}
+	return sh, name, "shapes"
+}
+
+// synthURLBuilderShapes resolves a URL-builder function body to the set of
+// distinct static path shapes it returns (template holes → `*`). ok=false when
+// any returned expression is non-static or not root-relative.
+func synthURLBuilderShapes(w contract.KeyWalker, fn *sitter.Node, src []byte) ([]string, bool) {
+	body := fn.ChildByFieldName("body")
+	if body == nil {
+		return nil, false
+	}
+	var rets []*sitter.Node
+	if body.Type() != "statement_block" {
+		rets = append(rets, body) // arrow with expression body
+	} else {
+		var walk func(n *sitter.Node)
+		walk = func(n *sitter.Node) {
+			switch n.Type() {
+			case "function_declaration", "function_expression", "arrow_function", "function":
+				return // don't descend into nested functions
+			case "return_statement":
+				if n.NamedChildCount() > 0 {
+					rets = append(rets, n.NamedChild(0))
+				}
+			}
+			for i := 0; i < int(n.NamedChildCount()); i++ {
+				walk(n.NamedChild(i))
+			}
+		}
+		for i := 0; i < int(body.NamedChildCount()); i++ {
+			walk(body.NamedChild(i))
+		}
+	}
+	if len(rets) == 0 {
+		return nil, false
+	}
+	set := make(map[string]bool)
+	for _, r := range rets {
+		cands, dyn := walkerKey(w, r, src)
+		if dyn || len(cands) == 0 {
+			return nil, false
+		}
+		for _, c := range cands {
+			if !strings.HasPrefix(c, "/") && !strings.HasPrefix(c, "*") {
+				return nil, false
+			}
+			set[c] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out, true
 }
 
 // walkerKey runs the JS KeyWalker over a URL argument node, returning literal
