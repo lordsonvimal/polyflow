@@ -8,7 +8,10 @@ import (
 	"sort"
 	"strings"
 
+	sitter "github.com/smacker/go-tree-sitter"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
 
@@ -64,6 +67,7 @@ func LinkRailsViews(nodes []graph.Node, serviceFiles map[string][]string) (newNo
 	// Cross-service: a `react_component("Foo")` mount in the Rails service names
 	// a JSX component that lives in the sibling `js` service. Scan every service.
 	components := newComponentIndex(nodes)
+	components.resolveBarrels(nodes, serviceFiles)
 
 	for _, svc := range svcNames {
 		idx := newViewIndex(serviceFiles[svc])
@@ -266,9 +270,12 @@ func linkTemplates(
 				})
 				continue
 			}
+			implMeta := map[string]string{"mechanism": "data-react-class", "component": rc.Name}
+			if components.viaBarrel[rc.Name] {
+				implMeta["via"] = "barrel"
+			}
 			for _, impl := range impls {
-				addEdge(el.ID, impl, "window."+rc.Name, graph.EdgeTypeComponentImpl,
-					map[string]string{"mechanism": "data-react-class", "component": rc.Name})
+				addEdge(el.ID, impl, "window."+rc.Name, graph.EdgeTypeComponentImpl, implMeta)
 			}
 		}
 	}
@@ -568,7 +575,12 @@ func controllersMarkerIndex(s string) int {
 // only the *dev-mode* script tag. orion mounts LinkIcon and OnboardingTip
 // from app/javascript/components/, which the path rule cannot reach and the
 // registry can.
-type componentIndex struct{ bySymbol map[string][]string }
+type componentIndex struct {
+	bySymbol map[string][]string
+	// viaBarrel[name] is set when resolveBarrels rewrote name's resolution
+	// from a re-export variable to the real component in the imported file.
+	viaBarrel map[string]bool
+}
 
 // newComponentIndex builds the data-react-class → JSX map. Passing one or more
 // service names restricts the scan to those services; passing none scans every
@@ -610,7 +622,7 @@ func newComponentIndex(nodes []graph.Node, svcs ...string) *componentIndex {
 		}
 	}
 
-	idx := &componentIndex{bySymbol: map[string][]string{}}
+	idx := &componentIndex{bySymbol: map[string][]string{}, viaBarrel: map[string]bool{}}
 	for sym, fs := range regFiles {
 		sort.Strings(fs)
 		for _, f := range fs {
@@ -628,3 +640,126 @@ func newComponentIndex(nodes []graph.Node, svcs ...string) *componentIndex {
 }
 
 func (c *componentIndex) lookup(name string) []string { return c.bySymbol[name] }
+
+// resolveBarrels rewrites a data-react-class resolution that lands on a bare
+// re-export in a barrel module (`import X from "./p"; window.X = X`, or an
+// `export default { X }` object) to the real component node in the imported
+// file, one hop away. Post-SPA.1 that target carries Meta["component"]="true"
+// even when it is an app-HOC / connect()-wrapped default export.
+//
+// Without this a trace from a Rails view stops at the terminal barrel variable
+// (cedar: react/react_exports.js re-exports ~60 top-level components this way;
+// orion's app/javascript/exports.js does the same with connect()-wrapped ones).
+func (c *componentIndex) resolveBarrels(nodes []graph.Node, serviceFiles map[string][]string) {
+	if len(c.bySymbol) == 0 {
+		return
+	}
+
+	indexed := map[string]bool{}
+	absByRel := map[string]string{}
+	for _, files := range serviceFiles {
+		for _, abs := range files {
+			rel := patterns.RelativizeToCwd(abs)
+			indexed[rel] = true
+			absByRel[rel] = abs
+		}
+	}
+
+	// (file \x00 label) → best implementation node; component-stamped wins over
+	// a bare class, which wins over a bare function.
+	bestID := map[string]string{}
+	bestRank := map[string]int{}
+	byID := map[string]*graph.Node{}
+	for i := range nodes {
+		n := &nodes[i]
+		byID[n.ID] = n
+		if n.Meta["is_test"] == "true" {
+			continue
+		}
+		rank := 0
+		switch {
+		case n.Meta["component"] == "true":
+			rank = 3
+		case n.Type == graph.NodeTypeClass:
+			rank = 2
+		case n.Type == graph.NodeTypeFunction:
+			rank = 1
+		default:
+			continue
+		}
+		key := n.File + "\x00" + n.Label
+		if rank > bestRank[key] {
+			bestRank[key] = rank
+			bestID[key] = n.ID
+		}
+	}
+
+	// barrel rel file → local default-import name → target rel file.
+	importCache := map[string]map[string]string{}
+	defaultImports := func(rel string) map[string]string {
+		if m, ok := importCache[rel]; ok {
+			return m
+		}
+		m := map[string]string{}
+		importCache[rel] = m
+		abs := absByRel[rel]
+		if abs == "" {
+			return m
+		}
+		src, root, _, ok := jsParse(abs)
+		if !ok {
+			return m
+		}
+		var walk func(n *sitter.Node)
+		walk = func(n *sitter.Node) {
+			if n.Type() == "import_statement" {
+				if s := n.ChildByFieldName("source"); s != nil {
+					spec := strings.Trim(s.Content(src), "\"'`")
+					if tgt := resolveJSImportPath(rel, spec, indexed); tgt != "" {
+						for i := 0; i < int(n.NamedChildCount()); i++ {
+							ic := n.NamedChild(i)
+							if ic.Type() != "import_clause" {
+								continue
+							}
+							for j := 0; j < int(ic.NamedChildCount()); j++ {
+								if cc := ic.NamedChild(j); cc.Type() == "identifier" {
+									m[cc.Content(src)] = tgt
+								}
+							}
+						}
+					}
+				}
+			}
+			for i := 0; i < int(n.NamedChildCount()); i++ {
+				walk(n.NamedChild(i))
+			}
+		}
+		walk(root)
+		return m
+	}
+
+	for sym, ids := range c.bySymbol {
+		out := make([]string, 0, len(ids))
+		seen := map[string]bool{}
+		changed := false
+		for _, id := range ids {
+			pick := id
+			if n := byID[id]; n != nil && n.Type == graph.NodeTypeVariable && n.Meta["scope"] == "global" {
+				if tgt := defaultImports(n.File)[sym]; tgt != "" {
+					if real := bestID[tgt+"\x00"+sym]; real != "" && real != id {
+						pick = real
+						changed = true
+					}
+				}
+			}
+			if !seen[pick] {
+				seen[pick] = true
+				out = append(out, pick)
+			}
+		}
+		if changed {
+			c.bySymbol[sym] = out
+			c.viaBarrel[sym] = true
+		}
+	}
+}

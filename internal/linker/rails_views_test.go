@@ -435,3 +435,68 @@ end`,
 	require.Contains(t, rendersFrom(edges, lid("application")), vid("pages/home.html.erb"))
 	require.Empty(t, unresolved)
 }
+
+// TestComponentImpl_ThroughBarrel: a data-react-class name that a barrel module
+// only re-exports (`import Foo from "./components/Foo"; window.Foo = Foo`) must
+// resolve one hop further, to the real component in Foo.jsx — not stop at the
+// terminal barrel variable. SPA.6.
+func TestComponentImpl_ThroughBarrel(t *testing.T) {
+	t.Parallel()
+	root, files := stylesheetFixture(t, map[string]string{
+		"app/views/dash/index.html.erb": `<%= react_component("Foo") %>`,
+		"react/react_exports.js":         `import Foo from "./components/Foo";` + "\n" + `window.Foo = Foo;` + "\n",
+		"react/components/Foo.jsx":        `export default class Foo extends React.Component { render() { return null; } }` + "\n",
+	})
+	svc := "cedar"
+	barrel := filepath.Join(root, "react/react_exports.js")
+	impl := filepath.Join(root, "react/components/Foo.jsx")
+
+	nodes := append(fileNodesFor(svc, files),
+		graph.Node{ID: "barrel:Foo", Type: graph.NodeTypeVariable, Label: "Foo", Service: svc, File: barrel, Line: 2,
+			Meta: map[string]string{"global_symbol": "Foo", "scope": "global"}},
+		graph.Node{ID: "impl:Foo", Type: graph.NodeTypeVariable, Label: "Foo", Service: svc, File: impl, Line: 1,
+			Meta: map[string]string{"component": "true", "hoc": "app_local"}},
+	)
+
+	_, edges, _ := LinkRailsViews(nodes, map[string][]string{svc: files})
+
+	var got []graph.Edge
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeComponentImpl {
+			got = append(got, e)
+		}
+	}
+	require.Len(t, got, 1)
+	require.Equal(t, "impl:Foo", got[0].To, "component_impl must land on the real component, not the barrel var")
+	require.Equal(t, "barrel", got[0].Meta["via"])
+}
+
+// TestComponentImpl_DirectStillWorks: a component registered in its own file
+// (no barrel indirection) resolves exactly as before, with no via=barrel tag.
+func TestComponentImpl_DirectStillWorks(t *testing.T) {
+	t.Parallel()
+	root, files := stylesheetFixture(t, map[string]string{
+		"app/views/dash/index.html.erb": `<%= react_component("Bar") %>`,
+		"react/components/Bar.jsx":       `function Bar() {} window.Bar = Bar;` + "\n",
+	})
+	svc := "cedar"
+	impl := filepath.Join(root, "react/components/Bar.jsx")
+
+	nodes := append(fileNodesFor(svc, files),
+		graph.Node{ID: "fn:Bar", Type: graph.NodeTypeFunction, Label: "Bar", Service: svc, File: impl, Line: 1},
+		graph.Node{ID: "glob:Bar", Type: graph.NodeTypeVariable, Label: "Bar", Service: svc, File: impl, Line: 1,
+			Meta: map[string]string{"global_symbol": "Bar", "scope": "global"}},
+	)
+
+	_, edges, _ := LinkRailsViews(nodes, map[string][]string{svc: files})
+
+	var got []graph.Edge
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeComponentImpl {
+			got = append(got, e)
+		}
+	}
+	require.Len(t, got, 1)
+	require.Equal(t, "fn:Bar", got[0].To)
+	require.Empty(t, got[0].Meta["via"])
+}
