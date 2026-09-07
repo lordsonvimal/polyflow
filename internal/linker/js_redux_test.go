@@ -344,6 +344,72 @@ function Hooks() {
 	}
 }
 
+// TestLinkJSRedux_ThunkAndConnectShorthand (JCM.11) covers a redux-thunk async
+// creator whose inner dispatches are attributed to the outer creator, and a
+// connect(null, { load }) container whose handler links to that creator.
+func TestLinkJSRedux_ThunkAndConnectShorthand(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"constants/ActionTypes.jsx": `import keyMirror from "keymirror";
+export default keyMirror({ SET_LOADING: null, LOADED: null });
+`,
+		"actions/AC.jsx": `import ActionTypes from "../constants/ActionTypes";
+import actionCreator from "redux-action-utils";
+export const setLoading = actionCreator(ActionTypes.SET_LOADING);
+export const load = () => (dispatch) => {
+  dispatch(setLoading());
+  dispatch({ type: ActionTypes.LOADED });
+};
+`,
+		"components/Panel.jsx": `import { connect } from "react-redux";
+import { load } from "../actions/AC";
+class Panel extends React.Component {
+  onMount = () => {
+    this.props.load();
+  };
+}
+export default connect(null, { load })(Panel);
+`,
+	})
+	setLoading := jsFuncNode("svc", p["actions/AC.jsx"], "setLoading", 3)
+	loadC := jsFuncNode("svc", p["actions/AC.jsx"], "load", 4)
+	onMount := jsFuncNode("svc", p["components/Panel.jsx"], "onMount", 4)
+
+	newNodes, edges := LinkJSRedux([]graph.Node{setLoading, loadC, onMount}, map[string][]string{
+		"svc": {p["constants/ActionTypes.jsx"], p["actions/AC.jsx"], p["components/Panel.jsx"]},
+	})
+
+	loadedID := ""
+	for _, n := range newNodes {
+		if n.Meta["redux_action_type"] == "LOADED" {
+			loadedID = n.ID
+		}
+	}
+	if loadedID == "" {
+		t.Fatalf("no LOADED action-type node; nodes=%+v", newNodes)
+	}
+
+	want := map[string]bool{"load->setLoading": false, "load->LOADED": false, "onMount->load": false}
+	for _, e := range edges {
+		switch {
+		case e.Type == graph.EdgeTypeCalls && e.From == loadC.ID && e.To == setLoading.ID &&
+			e.Meta["redux"] == "thunk_dispatch":
+			want["load->setLoading"] = true
+		case e.Type == graph.EdgeTypeReferences && e.From == loadC.ID && e.To == loadedID &&
+			e.Meta["redux"] == "thunk_dispatch":
+			want["load->LOADED"] = true
+		case e.Type == graph.EdgeTypeCalls && e.From == onMount.ID && e.To == loadC.ID &&
+			e.Meta["redux"] == "props_bound_dispatch":
+			want["onMount->load"] = true
+		}
+	}
+	for k, ok := range want {
+		if !ok {
+			t.Errorf("missing %s; edges=%+v", k, edges)
+		}
+	}
+}
+
 // TestLinkJSRedux_NoReduxNoEdges guards against false positives on a plain
 // component file with a switch statement unrelated to action types.
 func TestLinkJSRedux_NoReduxNoEdges(t *testing.T) {

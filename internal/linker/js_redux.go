@@ -39,7 +39,11 @@ import (
 //     an actions/** module (import or bindActionCreators)
 //
 // Edge roles (Meta["redux"]): creator_type, type_handled_by, reducer_slice,
-// props_actions_dispatch, props_bound_dispatch, dispatch_call, dispatch_type.
+// props_actions_dispatch, props_bound_dispatch, dispatch_call, dispatch_type;
+// JCM.10 selector/read side: slice_reducer, selector_read, reselect_input;
+// JCM.11: thunk_dispatch (thunk inner dispatches), inline-arrow reducer
+// type_handled_by, connect({shorthand}) props_bound_dispatch, effect_gap
+// (redux-saga / redux-observable coverage stub).
 func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, newEdges []graph.Edge) {
 	// --- index existing nodes (File is the cwd-relative form the parser mints) ---
 	declsByFile := make(map[string][]lineNode)      // file → decls sorted by line, for attribution
@@ -172,6 +176,23 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 	// knownSlices / sliceNode back the JCM.10 slice model: each combineReducers
 	// key becomes a stable `redux_slice:<name>` node --contains--> its reducer,
 	// and selector reads (mapStateToProps / useSelector / reselect) target it.
+	// addEdge11 emits the JCM.11 chain edges (thunk dispatches, connect-shorthand
+	// dispatch, inline-arrow reducer type handling) — same shape as addEdge but
+	// tier jcm11 with a distinct id suffix so it never collides with a jcm3 edge.
+	addEdge11 := func(t graph.EdgeType, from, to, role string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		eid := fmt.Sprintf("%s:%s->%s#jcm11", t, from, to)
+		if seenEdge[eid] {
+			return
+		}
+		seenEdge[eid] = true
+		newEdges = append(newEdges, graph.Edge{
+			ID: eid, From: from, To: to, Type: t, Confidence: graph.ConfidenceInferred,
+			Meta: map[string]string{"redux": role, "tier": "jcm11"},
+		})
+	}
 	knownSlices := make(map[string]bool)
 	sliceNode := func(name, svc, rel string, line int) string {
 		id := "redux_slice:" + name
@@ -287,6 +308,86 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				}
 			}
 		})
+
+		// --- JCM.11: thunks. `export const load = () => (dispatch) => { … }` /
+		// `function load() { return function(dispatch) { … } }` — attribute the
+		// inner function's dispatch calls to the outer creator node.
+		reduxWalk(root, func(n *sitter.Node) {
+			var nameNode, fnNode *sitter.Node
+			switch n.Type() {
+			case "function_declaration":
+				nameNode, fnNode = n.ChildByFieldName("name"), n
+			case "variable_declarator":
+				if v := n.ChildByFieldName("value"); v != nil &&
+					(v.Type() == "arrow_function" || v.Type() == "function_expression") {
+					nameNode, fnNode = n.ChildByFieldName("name"), v
+				}
+			}
+			if nameNode == nil || fnNode == nil || nameNode.Type() != "identifier" {
+				return
+			}
+			inner := reduxThunkInner(fnNode, src)
+			if inner == nil {
+				return
+			}
+			cname := nameNode.Content(src)
+			cid := declIndex[rel][cname]
+			if cid == "" {
+				cid = mkFn(svc, rel, cname, int(nameNode.StartPoint().Row)+1, "creator")
+			}
+			recordCreator(rel, cname, cid)
+			ib := inner.ChildByFieldName("body")
+			if ib == nil {
+				return
+			}
+			reduxWalk(ib, func(d *sitter.Node) {
+				if d.Type() != "call_expression" {
+					return
+				}
+				df := d.ChildByFieldName("function")
+				if df == nil || df.Content(src) != "dispatch" {
+					return
+				}
+				da := d.ChildByFieldName("arguments")
+				if da == nil || da.NamedChildCount() == 0 {
+					return
+				}
+				arg0 := da.NamedChild(0)
+				switch arg0.Type() {
+				case "call_expression":
+					acf := arg0.ChildByFieldName("function")
+					if acf == nil {
+						return
+					}
+					var to string
+					switch acf.Type() {
+					case "identifier":
+						nm := acf.Content(src)
+						if id := declIndex[rel][nm]; id != "" {
+							to = id
+						} else if imp, ok := imports[nm]; ok {
+							exp := imp.exported
+							if exp == "" {
+								exp = nm
+							}
+							to = reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn)
+						}
+					case "member_expression":
+						o, p := acf.ChildByFieldName("object"), acf.ChildByFieldName("property")
+						if o != nil && p != nil && o.Type() == "identifier" {
+							if imp, ok := imports[o.Content(src)]; ok {
+								to = reduxCreatorNode(imp.file, p.Content(src), creatorNodeID, svcOfFile, mkFn)
+							}
+						}
+					}
+					addEdge11(graph.EdgeTypeCalls, cid, to, "thunk_dispatch")
+				case "object":
+					if tid := reduxTypeField(arg0, src, resolveTypeRef); tid != "" {
+						addEdge11(graph.EdgeTypeReferences, cid, tid, "thunk_dispatch")
+					}
+				}
+			})
+		})
 	}
 
 	// === Phase 2b: reducers, dispatch sites, combineReducers slice maps ===
@@ -342,6 +443,58 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 					if _, ia, _ := reduxPathRole(imp.file); ia {
 						absorbAC(imp.file)
 					}
+				}
+			}
+		})
+
+		// JCM.11: connect(mapStateToProps?, { load, save }) — object-literal
+		// mapDispatchToProps shorthand. Each value resolving (via imports) to an
+		// action creator becomes a bound prop, so `this.props.<key>(…)` call sites
+		// link like the bindActionCreators path (role props_bound_dispatch).
+		reduxWalk(root, func(n *sitter.Node) {
+			if n.Type() != "call_expression" {
+				return
+			}
+			f := n.ChildByFieldName("function")
+			if f == nil || f.Type() != "identifier" || f.Content(src) != "connect" {
+				return
+			}
+			a := n.ChildByFieldName("arguments")
+			if a == nil || a.NamedChildCount() < 2 {
+				return
+			}
+			obj := a.NamedChild(1)
+			if obj.Type() != "object" {
+				return
+			}
+			for j := 0; j < int(obj.NamedChildCount()); j++ {
+				p := obj.NamedChild(j)
+				var key, valName string
+				switch p.Type() {
+				case "shorthand_property_identifier":
+					key, valName = p.Content(src), p.Content(src)
+				case "pair":
+					k, v := p.ChildByFieldName("key"), p.ChildByFieldName("value")
+					if k == nil || v == nil || v.Type() != "identifier" {
+						continue
+					}
+					key, valName = strings.Trim(k.Content(src), "\"'`"), v.Content(src)
+				default:
+					continue
+				}
+				imp, ok := imports[valName]
+				if !ok {
+					continue
+				}
+				if _, ia, _ := reduxPathRole(imp.file); !ia {
+					continue
+				}
+				exp := imp.exported
+				if exp == "" {
+					exp = valName
+				}
+				if id := reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn); id != "" {
+					fileCreators[key] = id
 				}
 			}
 		})
@@ -443,27 +596,61 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 							continue
 						}
 						v := p.ChildByFieldName("value")
-						if v == nil || v.Type() != "identifier" {
+						if v == nil {
 							continue
 						}
 						sliceName := ""
 						if k := p.ChildByFieldName("key"); k != nil {
 							sliceName = strings.Trim(k.Content(src), "\"'`")
 						}
-						vn := v.Content(src)
-						rid := declIndex[rel][vn]
-						if rid == "" {
-							if imp, ok := imports[vn]; ok {
-								exp := imp.exported
-								if exp == "" {
-									exp = vn
-								}
-								if rid = declIndex[imp.file][exp]; rid == "" {
-									if rid = declIndex[imp.file][vn]; rid == "" {
-										rid = mkFn(svcOfFile[imp.file], imp.file, exp, 1, "reducer")
+						var rid string
+						switch v.Type() {
+						case "identifier":
+							vn := v.Content(src)
+							rid = declIndex[rel][vn]
+							if rid == "" {
+								if imp, ok := imports[vn]; ok {
+									exp := imp.exported
+									if exp == "" {
+										exp = vn
+									}
+									if rid = declIndex[imp.file][exp]; rid == "" {
+										if rid = declIndex[imp.file][vn]; rid == "" {
+											rid = mkFn(svcOfFile[imp.file], imp.file, exp, 1, "reducer")
+										}
 									}
 								}
 							}
+						case "arrow_function", "function_expression":
+							// JCM.11: inline-arrow slice reducer — mint a synthetic
+							// function node and run action-type detection on its body.
+							rname := sliceName
+							if rname == "" {
+								rname = fmt.Sprintf("slice%d", j)
+							}
+							rid = mkFn(svc, rel, rname+"Reducer", int(v.StartPoint().Row)+1, "reducer")
+							if body := v.ChildByFieldName("body"); body != nil {
+								reduxWalk(body, func(m *sitter.Node) {
+									switch m.Type() {
+									case "switch_case":
+										if tid := resolveTypeRef(m.ChildByFieldName("value")); tid != "" {
+											addEdge11(graph.EdgeTypeReferences, tid, rid, "type_handled_by")
+										}
+									case "binary_expression":
+										op := m.ChildByFieldName("operator")
+										if op == nil || (op.Content(src) != "===" && op.Content(src) != "==") {
+											return
+										}
+										for _, side := range []*sitter.Node{m.ChildByFieldName("left"), m.ChildByFieldName("right")} {
+											if tid := resolveTypeRef(side); tid != "" {
+												addEdge11(graph.EdgeTypeReferences, tid, rid, "type_handled_by")
+											}
+										}
+									}
+								})
+							}
+						default:
+							continue
 						}
 						addEdge(graph.EdgeTypeContains, storeID, rid, "reducer_slice")
 						if sliceName != "" && rid != "" {
@@ -740,7 +927,97 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		})
 	}
 
+	// === Phase 4 (JCM.11): effect-library coverage stub ===
+	// redux-saga / redux-observable flow isn't modeled. Leave one visible
+	// unknown-confidence edge per effect file so the gap surfaces in
+	// `polyflow status --unknown-edges` / the unknown_edges MCP tool.
+	for _, fe := range jsFiles {
+		rel := patterns.RelativizeToCwd(fe.abs)
+		src, _, _, ok := jsParse(fe.abs)
+		if !ok {
+			continue
+		}
+		s := string(src)
+		lib := ""
+		switch {
+		case strings.Contains(s, "redux-saga"):
+			lib = "redux-saga"
+		case strings.Contains(s, "redux-observable"):
+			lib = "redux-observable"
+		default:
+			continue
+		}
+		fid := fileNodeID[fe.svc+"\x00"+rel]
+		if fid == "" {
+			continue
+		}
+		gid := "redux_effect_gap:" + rel
+		if !seenNode[gid] {
+			seenNode[gid] = true
+			newNodes = append(newNodes, graph.Node{
+				ID: gid, Type: graph.NodeTypeVariable, Label: lib + " (unmodeled)",
+				Service: fe.svc, File: rel, Line: 1, EndLine: 1, Language: "javascript",
+				Meta: map[string]string{"redux": "effect_gap", "tier": "jcm11", "synthetic": "true"},
+			})
+		}
+		eid := "references:" + fid + "->" + gid + "#jcm11"
+		if !seenEdge[eid] {
+			seenEdge[eid] = true
+			newEdges = append(newEdges, graph.Edge{
+				ID: eid, From: fid, To: gid, Type: graph.EdgeTypeReferences,
+				Confidence: graph.ConfidenceUnknown,
+				Meta:       map[string]string{"redux": "effect_gap", "tier": "jcm11"},
+			})
+		}
+	}
+
 	return newNodes, newEdges
+}
+
+// reduxThunkInner returns the inner `(dispatch, getState?) => …` function of a
+// thunk creator, or nil when fn isn't a thunk. It accepts both the curried-arrow
+// form (`() => (dispatch) => …`) and a `return function(dispatch){…}` body.
+func reduxThunkInner(fn *sitter.Node, src []byte) *sitter.Node {
+	body := fn.ChildByFieldName("body")
+	if body == nil {
+		return nil
+	}
+	if (body.Type() == "arrow_function" || body.Type() == "function_expression") &&
+		reduxFnFirstParam(body, src) == "dispatch" {
+		return body
+	}
+	var found *sitter.Node
+	reduxWalk(body, func(n *sitter.Node) {
+		if found != nil || n.Type() != "return_statement" || n.NamedChildCount() == 0 {
+			return
+		}
+		r := n.NamedChild(0)
+		if (r.Type() == "arrow_function" || r.Type() == "function_expression") &&
+			reduxFnFirstParam(r, src) == "dispatch" {
+			found = r
+		}
+	})
+	return found
+}
+
+// reduxFnFirstParam returns the identifier name of a function's first parameter,
+// unwrapping the single-unparenthesized-arrow-param form.
+func reduxFnFirstParam(fn *sitter.Node, src []byte) string {
+	if p := fn.ChildByFieldName("parameter"); p != nil && p.Type() == "identifier" {
+		return p.Content(src)
+	}
+	ps := fn.ChildByFieldName("parameters")
+	if ps == nil || ps.NamedChildCount() == 0 {
+		return ""
+	}
+	p0 := ps.NamedChild(0)
+	if p0.Type() == "identifier" {
+		return p0.Content(src)
+	}
+	if id := reduxFirstChild(p0, "identifier"); id != nil {
+		return id.Content(src)
+	}
+	return ""
 }
 
 // reduxIsTypeAccess reports whether n is a `<x>.type` member access — the
