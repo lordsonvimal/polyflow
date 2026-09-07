@@ -50,13 +50,14 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte, 
 
 	ex := &jsExtractor{
 		file: file, service: service, langTag: langTag, src: src,
-		moduleVars: map[string]*jsVar{},
-		fnDecls:    map[string]int{},
-		localFns:   map[string]int{},
-		classNodes: map[string]string{},
-		signals:    map[string]string{},
-		nodeSeen:   map[string]bool{},
-		edgeSeen:   map[string]bool{},
+		moduleVars:   map[string]*jsVar{},
+		fnDecls:      map[string]int{},
+		localFns:     map[string]int{},
+		classNodes:   map[string]string{},
+		classMembers: map[string]map[string]int{},
+		signals:      map[string]string{},
+		nodeSeen:     map[string]bool{},
+		edgeSeen:     map[string]bool{},
 	}
 	ex.preCollectClasses(root)
 	ex.collectTopLevel(root)
@@ -99,6 +100,10 @@ type jsExtractor struct {
 	// reduced-confidence, no-type-checker contract.
 	localFns   map[string]int
 	classNodes map[string]string // class/interface name → nodeID (same-file)
+	// classMembers maps a same-file class name → its member function names →
+	// decl line, so intra-class `this.method()` / `this.field` references
+	// (JCM.2) resolve to the member's function node.
+	classMembers map[string]map[string]int
 	// signals maps a Solid reactive accessor name (createSignal/createResource/
 	// createMemo binding) to its variable node ID, so a JSX interpolation reading
 	// that accessor can source a signal→element dom_write (Y.6). Both module- and
@@ -575,24 +580,82 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 		return
 	}
 	name := nameNode.Content(ex.src)
+	classID := fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, tsLine(stmt))
+
+	// JCM.1: every member gets a function node and a class -contains-> member
+	// edge (mirrors linkRubyClassMembers). Two member shapes carry a function:
+	//   - method_definition            `render() {…}` / `get x() {…}`
+	//   - public_field_definition      `handleClick = e => {…}` / `= function(){}`
+	//     (tsx grammar; the plain-JS grammar names this `field_definition`)
+	// The arrow-field form is the dominant React handler idiom and had NO node
+	// before — its body's calls attributed to the file's (module) node and
+	// `this.handleClick` references could not resolve.
 	var methods, fields []string
 	if body := stmt.ChildByFieldName("body"); body != nil {
+		members := ex.classMembers[name]
+		if members == nil {
+			members = map[string]int{}
+			ex.classMembers[name] = members
+		}
 		for j := 0; j < int(body.NamedChildCount()); j++ {
 			m := body.NamedChild(j)
+			var memberName string
+			var isMethod, isFn bool
 			switch m.Type() {
 			case "method_definition":
-				if mn := m.ChildByFieldName("name"); mn != nil {
-					methods = append(methods, mn.Content(ex.src))
-				}
+				memberName, isMethod, isFn = jsMemberName(m, ex.src), true, true
 			case "public_field_definition", "field_definition":
-				if fn := m.ChildByFieldName("property"); fn != nil {
-					fields = append(fields, fn.Content(ex.src))
+				memberName = jsMemberName(m, ex.src)
+				if v := m.ChildByFieldName("value"); v != nil && isFunctionNode(v.Type()) {
+					isFn = true
 				}
+			}
+			if memberName == "" {
+				continue
+			}
+			if isMethod {
+				methods = append(methods, memberName)
+			} else {
+				fields = append(fields, memberName)
+			}
+			if !isFn {
+				continue // pure-data field (`count = 0`) — no function node
+			}
+			memberLine, memberEnd := tsLine(m), tsEndLine(m)
+			if memberEnd < memberLine {
+				memberEnd = memberLine
+			}
+			memberID := ex.fnNodeID(memberName, memberLine)
+			meta := map[string]string{
+				"end_line": fmt.Sprintf("%d", memberEnd),
+				"class":    name,
+			}
+			if isMethod {
+				meta["member_kind"] = "method"
+			} else {
+				meta["member_kind"] = "field_method"
+			}
+			if isAccessorMethod(m) {
+				meta["js_accessor"] = "true"
+			}
+			ex.addNode(graph.Node{
+				ID: memberID, Type: graph.NodeTypeFunction, Label: memberName,
+				Service: ex.service, File: ex.file, Line: memberLine, EndLine: memberEnd,
+				Language: ex.langTag, Meta: meta,
+			})
+			if memberID != classID {
+				ex.addEdge(graph.EdgeTypeContains, classID, memberID, "", nil)
+			}
+			members[memberName] = memberLine
+			// Let JSX `onClick={this.handleClick}` / addEventListener handler
+			// resolution reach class methods, same as component-local consts.
+			if _, taken := ex.localFns[memberName]; !taken {
+				ex.localFns[memberName] = memberLine
 			}
 		}
 	}
 	ex.addNode(graph.Node{
-		ID:   fmt.Sprintf("%s:%s:class:%s:%d", ex.service, ex.file, name, tsLine(stmt)),
+		ID:   classID,
 		Type: graph.NodeTypeClass, Label: name,
 		Service: ex.service, File: ex.file, Line: tsLine(stmt), EndLine: tsEndLine(stmt), Language: ex.langTag,
 		Meta: map[string]string{
@@ -600,6 +663,19 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 			"fields":  strings.Join(fields, ","),
 		},
 	})
+}
+
+// jsMemberName reads a class member's name across grammars: the tsx grammar
+// exposes it as the `name` field on public_field_definition/method_definition,
+// the plain-JS grammar as `property` on field_definition.
+func jsMemberName(m *sitter.Node, src []byte) string {
+	if n := m.ChildByFieldName("name"); n != nil {
+		return n.Content(src)
+	}
+	if n := m.ChildByFieldName("property"); n != nil {
+		return n.Content(src)
+	}
+	return ""
 }
 
 // preCollectClasses records all top-level class and interface names into
