@@ -50,14 +50,15 @@ func extractJSVariables(file, service, langTag, grammarLang string, src []byte, 
 
 	ex := &jsExtractor{
 		file: file, service: service, langTag: langTag, src: src,
-		moduleVars:   map[string]*jsVar{},
-		fnDecls:      map[string]int{},
-		localFns:     map[string]int{},
-		classNodes:   map[string]string{},
-		classMembers: map[string]map[string]int{},
-		signals:      map[string]string{},
-		nodeSeen:     map[string]bool{},
-		edgeSeen:     map[string]bool{},
+		moduleVars:      map[string]*jsVar{},
+		fnDecls:         map[string]int{},
+		localFns:        map[string]int{},
+		classNodes:      map[string]string{},
+		classMembers:    map[string]map[string]int{},
+		classDataFields: map[string]map[string]int{},
+		signals:         map[string]string{},
+		nodeSeen:        map[string]bool{},
+		edgeSeen:        map[string]bool{},
 	}
 	ex.preCollectClasses(root)
 	ex.collectTopLevel(root)
@@ -104,6 +105,10 @@ type jsExtractor struct {
 	// decl line, so intra-class `this.method()` / `this.field` references
 	// (JCM.2) resolve to the member's function node.
 	classMembers map[string]map[string]int
+	// classDataFields maps a same-file class name → its non-function field
+	// names → decl line. `this.count` reads/writes mint a variable node for
+	// the field on demand (JCM.2); function-valued fields live in classMembers.
+	classDataFields map[string]map[string]int
 	// signals maps a Solid reactive accessor name (createSignal/createResource/
 	// createMemo binding) to its variable node ID, so a JSX interpolation reading
 	// that accessor can source a signal→element dom_write (Y.6). Both module- and
@@ -597,6 +602,11 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 			members = map[string]int{}
 			ex.classMembers[name] = members
 		}
+		dataFields := ex.classDataFields[name]
+		if dataFields == nil {
+			dataFields = map[string]int{}
+			ex.classDataFields[name] = dataFields
+		}
 		for j := 0; j < int(body.NamedChildCount()); j++ {
 			m := body.NamedChild(j)
 			var memberName string
@@ -619,7 +629,8 @@ func (ex *jsExtractor) collectClass(stmt *sitter.Node) {
 				fields = append(fields, memberName)
 			}
 			if !isFn {
-				continue // pure-data field (`count = 0`) — no function node
+				dataFields[memberName] = tsLine(m) // `count = 0` — no fn node, but this.count resolves
+				continue
 			}
 			memberLine, memberEnd := tsLine(m), tsEndLine(m)
 			if memberEnd < memberLine {
@@ -960,6 +971,14 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 				frame.fnLine = tsLine(declStatement(decl))
 				selfAttributed = true
 			}
+		} else if fd := node.Parent(); fd != nil && (fd.Type() == "public_field_definition" || fd.Type() == "field_definition") {
+			// Arrow-function class field: `handleClick = (e) => {…}`. JCM.1
+			// minted the member node; attribute its body here so calls inside
+			// it credit the method, not the file's (module) node.
+			if nm := jsMemberName(fd, ex.src); nm != "" {
+				frame.fnName, frame.fnLine = nm, tsLine(fd)
+				selfAttributed = true
+			}
 		} else if h, claimed := ex.jqHandlers[node.StartByte()]; claimed {
 			// An inline jQuery handler: anonymous in the source, but K.4 gave it
 			// a node named after the element and event it serves, so its body
@@ -1094,6 +1113,8 @@ func (ex *jsExtractor) walk(node *sitter.Node, scopes []*jsScope) {
 		ex.handleResponseConsume(node, scopes)
 		ex.handleAddEventListener(node)
 		ex.handleJQueryListener(node)
+	case "member_expression":
+		ex.handleThisMember(node, scopes)
 	case "new_expression":
 		ex.handleNew(node, scopes)
 	case "jsx_expression":
@@ -1729,6 +1750,16 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 
 	// Existing flows_to logic: only fires when the callee is a same-file fn.
 	fnNode := node.ChildByFieldName("function")
+
+	// JCM.2: `this.finish()` inside a class member resolves to the sibling
+	// member's function node.
+	if fnNode != nil && fnNode.Type() == "member_expression" {
+		if obj := fnNode.ChildByFieldName("object"); obj != nil && obj.Type() == "this" {
+			if prop := fnNode.ChildByFieldName("property"); prop != nil && prop.Type() == "property_identifier" {
+				ex.resolveThisCall(node, prop.Content(ex.src), scopes)
+			}
+		}
+	}
 	if fnNode != nil && fnNode.Type() == "identifier" {
 		fnName := fnNode.Content(ex.src)
 		ex.emitNestedLocalCallEdge(node, fnName, scopes)
@@ -1791,6 +1822,107 @@ func (ex *jsExtractor) handleCall(node *sitter.Node, scopes []*jsScope) {
 		}
 		ex.addEdge(graph.EdgeTypeCalls, fromID, toID, graph.ConfidenceStatic,
 			map[string]string{"via": "func_arg"})
+	}
+}
+
+// enclosingClassForThis returns the name of the class whose instance `this`
+// refers to at node, or "" when an intervening ordinary (non-arrow) function
+// rebinds `this` — in which case a member reference cannot be trusted (no type
+// checker). A method_definition body and any chain of arrow functions keep
+// `this` bound to the class instance.
+func (ex *jsExtractor) enclosingClassForThis(node *sitter.Node) string {
+	for p := node.Parent(); p != nil; p = p.Parent() {
+		switch p.Type() {
+		case "function_declaration", "function_expression", "function",
+			"generator_function", "generator_function_declaration":
+			return ""
+		case "class_declaration", "class":
+			if nm := p.ChildByFieldName("name"); nm != nil {
+				return nm.Content(ex.src)
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// resolveThisCall emits a calls edge from the enclosing member to a sibling
+// member invoked as `this.<member>()` (JCM.2). Confidence inferred — lexical
+// resolution, no type checker.
+func (ex *jsExtractor) resolveThisCall(call *sitter.Node, member string, scopes []*jsScope) {
+	cls := ex.enclosingClassForThis(call)
+	if cls == "" {
+		return
+	}
+	line, ok := ex.classMembers[cls][member]
+	if !ok {
+		return
+	}
+	toID := ex.fnNodeID(member, line)
+	fromID := attribution(scopes, ex)
+	if fromID == "" {
+		fromID = ex.moduleAttr(call)
+	}
+	if fromID == "" || fromID == toID {
+		return
+	}
+	ex.addEdge(graph.EdgeTypeCalls, fromID, toID, graph.ConfidenceInferred,
+		map[string]string{"via": "this_member"})
+}
+
+// handleThisMember emits reads/writes edges for `this.<field>` references
+// inside a class member (JCM.2). A function-valued sibling resolves to its
+// member node; a data field mints a class-scoped variable node on demand. The
+// callee position of `this.m()` is skipped — resolveThisCall handles it.
+func (ex *jsExtractor) handleThisMember(node *sitter.Node, scopes []*jsScope) {
+	obj := node.ChildByFieldName("object")
+	if obj == nil || obj.Type() != "this" {
+		return
+	}
+	prop := node.ChildByFieldName("property")
+	if prop == nil || prop.Type() != "property_identifier" {
+		return
+	}
+	if p := node.Parent(); p != nil && p.Type() == "call_expression" && p.ChildByFieldName("function") == node {
+		return
+	}
+	cls := ex.enclosingClassForThis(node)
+	if cls == "" {
+		return
+	}
+	name := prop.Content(ex.src)
+	var toID string
+	if line, ok := ex.classMembers[cls][name]; ok {
+		toID = ex.fnNodeID(name, line)
+	} else if line, ok := ex.classDataFields[cls][name]; ok {
+		toID = ex.varNodeID(name, line)
+		ex.addNode(graph.Node{
+			ID: toID, Type: graph.NodeTypeVariable, Label: name,
+			Service: ex.service, File: ex.file, Line: line, EndLine: line, Language: ex.langTag,
+			Meta: map[string]string{"class": cls, "scope": "class_field", "mutable": "true"},
+		})
+	} else {
+		return
+	}
+	fromID := attribution(scopes, ex)
+	if fromID == "" {
+		fromID = ex.moduleAttr(node)
+	}
+	if fromID == "" || fromID == toID {
+		return
+	}
+	write := false
+	if p := node.Parent(); p != nil &&
+		(p.Type() == "assignment_expression" || p.Type() == "augmented_assignment_expression") &&
+		p.ChildByFieldName("left") == node {
+		write = true
+	}
+	if write {
+		ex.addEdge(graph.EdgeTypeWrites, fromID, toID, graph.ConfidenceInferred,
+			map[string]string{"op": "assign", "via": "this_member"})
+	} else {
+		ex.addEdge(graph.EdgeTypeReads, fromID, toID, graph.ConfidenceInferred,
+			map[string]string{"via": "this_member"})
 	}
 }
 

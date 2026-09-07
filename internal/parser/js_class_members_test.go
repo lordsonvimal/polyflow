@@ -96,6 +96,74 @@ func TestJSClassMembersBothGrammars(t *testing.T) {
 	}
 }
 
+// JCM.2 — class-member body attribution + intra-class this.x resolution.
+
+const jsIntraClassFixture = `import React from "react";
+
+function apiPost(x) { return x; }
+
+class Widget extends React.Component {
+  count = 0;
+  constructor(props) {
+    super(props);
+    this.init();
+  }
+  init() {
+    this.count = 1;
+    apiPost(this.count);
+  }
+  save = () => {
+    apiPost("save");
+    return this.count;
+  };
+  render() { return null; }
+}
+
+export default Widget;
+`
+
+func parseJSIntra(t *testing.T, ext, grammar string) ([]graph.Node, []graph.Edge) {
+	t.Helper()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "Widget"+ext)
+	if err := os.WriteFile(file, []byte(jsIntraClassFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := os.ReadFile(file)
+	nodes, edges, _, _ := extractJSVariables(file, "web", "javascript", grammar, src, nil)
+	return nodes, edges
+}
+
+func TestJSIntraClassThisCall(t *testing.T) {
+	_, edges := parseJSIntra(t, ".jsx", "tsx")
+	if jsEdge(edges, graph.EdgeTypeCalls, "function:constructor", "function:init") == nil {
+		t.Error("expected constructor -calls-> init (via this_member)")
+	}
+}
+
+func TestJSThisFieldReadWrite(t *testing.T) {
+	nodes, edges := parseJSIntra(t, ".jsx", "tsx")
+	if n := jsNode(nodes, graph.NodeTypeVariable, "count"); n == nil {
+		t.Fatal("expected a variable node for data field `count`")
+	} else if n.Meta["class"] != "Widget" {
+		t.Errorf("count field: Meta[class] = %q, want Widget", n.Meta["class"])
+	}
+	// The write/read edges prove the member bodies self-attribute (arrow-field
+	// `save` and plain method `init`), not fall through to the module node.
+	if jsEdge(edges, graph.EdgeTypeWrites, "function:init", "variable:count") == nil {
+		t.Error("expected init -writes-> count")
+	}
+	if jsEdge(edges, graph.EdgeTypeReads, "function:save", "variable:count") == nil {
+		t.Error("expected save -reads-> count")
+	}
+	for _, e := range edges {
+		if (e.Type == graph.EdgeTypeReads || e.Type == graph.EdgeTypeWrites) &&
+			contains(e.To, "variable:count") && contains(e.From, ":(module):") {
+			t.Errorf("this.count access must not attribute to (module): %s", e.From)
+		}
+	}
+}
+
 func TestJSClassMetaFieldsPopulated(t *testing.T) {
 	nodes, _ := parseJSClassMembers(t, ".jsx", "tsx")
 	c := jsNode(nodes, graph.NodeTypeClass, "Grid")
