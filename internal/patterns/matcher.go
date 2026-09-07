@@ -2038,6 +2038,10 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	// the target function (resolved by name in the same file). The callee is
 	// skipped during enclosure lookup: a nested function (e.g. loadSource
 	// defined inside Detail) must not own an event-prop reference to itself.
+	nodeTypeByID := make(map[string]graph.NodeType, len(nodes))
+	for i := range nodes {
+		nodeTypeByID[nodes[i].ID] = nodes[i].Type
+	}
 	for _, r := range callRefs {
 		callee, ok := r.Captures["callee"]
 		if !ok {
@@ -2070,6 +2074,20 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 						break
 					}
 				}
+			}
+		}
+		// JCM.5: `$` / `$$` is the jQuery/Zepto global. `component_fn_call`'s
+		// `^[a-z_$]` query captures every `$(...)` call site, and a same-file
+		// `const $ = require("jquery")` / `cheerio.load(...)` binding gives it a
+		// `variable:$` node to (wrongly) resolve to — flooding e.g.
+		// ActionCreators.jsx with `calls` edges into test-file `$` vars. Only
+		// honour the callee when it resolves to an actual function/method node
+		// (a real `const $ = () => …` helper); otherwise drop it silently — the
+		// jQuery global is not a graph blind spot.
+		if callee == "$" || callee == "$$" {
+			t := nodeTypeByID[calleeID]
+			if !ok || (t != graph.NodeTypeFunction && t != graph.NodeTypeMethod) {
+				continue
 			}
 		}
 		if !ok {

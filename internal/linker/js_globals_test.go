@@ -10,6 +10,35 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
+// TestLinkJSGlobals_JQueryDollarNotResolved (JCM.5): a test file stubbing
+// `window.$ = function(){}` stamps global_symbol="$" on the stub. That must
+// never enter the resolvable symbol table — otherwise every `$(...)` selector
+// call and inline handler across the service fans out an ambiguous calls edge
+// into the stub (~1.2k phantom edges on cedar).
+func TestLinkJSGlobals_JQueryDollarNotResolved(t *testing.T) {
+	t.Parallel()
+	stub := graph.Node{
+		ID: "svc:/svc/__tests__/setup.js:function:$:5", Type: graph.NodeTypeFunction,
+		Label: "$", Service: "svc", File: "/svc/__tests__/setup.js", Line: 5,
+		Meta: map[string]string{"global_symbol": "$", "global_path": "window.$"},
+	}
+	caller := graph.Node{
+		ID: "svc:/svc/main.js:function:setSelection:1", Type: graph.NodeTypeFunction,
+		Label: "setSelection", Service: "svc", File: "/svc/main.js", Line: 1,
+		Meta: map[string]string{"end_line": "3"},
+	}
+	unresolved := []graph.UnresolvedRef{
+		{Service: "svc", File: "/svc/main.js", Line: 2, Name: "$", Kind: "call_ref"},
+	}
+	edges, resolved, collisions := LinkJSGlobals(
+		[]graph.Node{stub, caller}, unresolved, nil,
+		map[string][]string{"svc": {"/svc/__tests__/setup.js", "/svc/main.js"}})
+
+	assert.Empty(t, edges, "no calls edge may target the jQuery `$` global")
+	assert.False(t, resolved["/svc/main.js\x00$"], "`$` call_ref stays unresolved")
+	assert.Empty(t, collisions)
+}
+
 // TestLinkJSGlobals_BasicResolution: call_ref for "save" resolves to window.save
 // defined in another file via global symbol table.
 func TestLinkJSGlobals_BasicResolution(t *testing.T) {
@@ -260,8 +289,8 @@ func TestExtractHandlerCandidates(t *testing.T) {
 		{"save", []string{"save"}},
 		{"   save() ", []string{"save"}},
 		{"", nil},
-		{"123bad()", nil},            // leading digit is not an identifier
-		{"window.maple[name]()", nil},  // computed member → dynamic dispatch
+		{"123bad()", nil},             // leading digit is not an identifier
+		{"window.maple[name]()", nil}, // computed member → dynamic dispatch
 	}
 	for _, tc := range cases {
 		got := extractHandlerCandidates(tc.input)

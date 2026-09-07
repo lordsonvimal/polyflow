@@ -49,6 +49,15 @@ func LinkJSGlobals(
 		if globalName == "" {
 			continue
 		}
+		// JCM.5: `$` / `$$` is the jQuery/Zepto global. Test files routinely
+		// stub it (`window.$ = function () {…}`), which stamps a global_symbol
+		// on the stub — then every `$(...)` selector call and inline handler in
+		// the service fans out an ambiguous `calls` edge into those stubs
+		// (~1.2k phantom edges on cedar). The jQuery global is never a real
+		// call target; keep it out of the resolvable symbol table.
+		if globalName == "$" || globalName == "$$" {
+			continue
+		}
 		if svcGlobals[n.Service] == nil {
 			svcGlobals[n.Service] = make(map[string][]globalEntry)
 		}
@@ -181,8 +190,8 @@ func LinkJSGlobals(
 			if _, exists := a.funcByFileAndLabel[key]; !exists {
 				a.funcByFileAndLabel[key] = n.ID
 			}
-			if n.Label == "(module)" {
-				continue
+			if n.Label == "(module)" || n.Label == "$" || n.Label == "$$" {
+				continue // JCM.5: jQuery/Zepto stub, never a real call target
 			}
 			a.funcByLabel[n.Label] = append(a.funcByLabel[n.Label], globalEntry{nodeID: n.ID, file: n.File})
 			end := 0
@@ -232,7 +241,10 @@ func LinkJSGlobals(
 	// 1. Resolve unresolved call_ref entries against the global table.
 	// Imports-first: skip any name that imports already explain.
 	// Iterate sorted by (service, file, name) for determinism.
-	type uKey struct{ svc, file, name string; line int }
+	type uKey struct {
+		svc, file, name string
+		line            int
+	}
 	var sortedRefs []uKey
 	for _, u := range allUnresolved {
 		if u.Kind != "call_ref" {
@@ -414,9 +426,9 @@ func extractHandlerCandidates(handler string) []string {
 			out = append(out, s)
 		}
 	}
-	add(dotted)              // full dotted path
-	add(segs[len(segs)-1])   // leaf property
-	add(segs[0])             // first identifier (object-resolution fallback)
+	add(dotted)            // full dotted path
+	add(segs[len(segs)-1]) // leaf property
+	add(segs[0])           // first identifier (object-resolution fallback)
 	return out
 }
 
