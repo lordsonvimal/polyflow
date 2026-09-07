@@ -344,6 +344,152 @@ function Hooks() {
 	}
 }
 
+// TestLinkJSRedux_ReduxToolkit covers the path-independent Redux Toolkit
+// shapes: createSlice (slice + reducer + per-key creator/type), configureStore
+// ({reducer:{…}} → store + slices), and createAsyncThunk (creator + type).
+func TestLinkJSRedux_ReduxToolkit(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"features/counter/counterSlice.js": `import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+export const fetchCount = createAsyncThunk("counter/fetchCount", async () => 1);
+const counterSlice = createSlice({
+  name: "counter",
+  initialState: { value: 0 },
+  reducers: {
+    increment(state) { state.value += 1; },
+    setValue: (state, action) => { state.value = action.payload; },
+  },
+});
+export const { increment, setValue } = counterSlice.actions;
+export default counterSlice.reducer;
+`,
+		"app/store.js": `import { configureStore } from "@reduxjs/toolkit";
+import counterReducer from "../features/counter/counterSlice";
+export const store = configureStore({ reducer: { counter: counterReducer } });
+`,
+		"features/counter/Counter.jsx": `import { useDispatch } from "react-redux";
+import { increment } from "./counterSlice";
+function Counter() {
+  const dispatch = useDispatch();
+  return dispatch(increment());
+}
+`,
+	})
+	sliceFile := p["features/counter/counterSlice.js"]
+	counter := jsFuncNode("svc", p["features/counter/Counter.jsx"], "Counter", 3)
+
+	newNodes, edges := LinkJSRedux([]graph.Node{counter}, map[string][]string{
+		"svc": {sliceFile, p["app/store.js"], p["features/counter/Counter.jsx"]},
+	})
+
+	byRole := map[string]int{}
+	for _, e := range edges {
+		if r := e.Meta["redux"]; r != "" {
+			byRole[r]++
+		}
+	}
+	var haveSlice, haveStore bool
+	for _, n := range newNodes {
+		if n.ID == "redux_slice:counter" {
+			haveSlice = true
+		}
+		if n.Meta["redux"] == "store" {
+			haveStore = true
+		}
+	}
+	if !haveSlice {
+		t.Errorf("no redux_slice:counter node; nodes=%+v", newNodes)
+	}
+	if !haveStore {
+		t.Errorf("no redux_store node; nodes=%+v", newNodes)
+	}
+	// increment + setValue → creator_type; fetchCount → creator_type = 3 total.
+	if byRole["creator_type"] < 3 {
+		t.Errorf("want >=3 creator_type edges, got %d (%+v)", byRole["creator_type"], edges)
+	}
+	if byRole["type_handled_by"] < 2 {
+		t.Errorf("want >=2 type_handled_by edges, got %d", byRole["type_handled_by"])
+	}
+	if byRole["reducer_slice"] < 1 {
+		t.Errorf("want configureStore reducer_slice edge, got %d", byRole["reducer_slice"])
+	}
+	// `dispatch(increment())` in the component resolves to the createSlice creator.
+	var dispatchLinked bool
+	for _, e := range edges {
+		if e.From == counter.ID && e.Type == graph.EdgeTypeCalls &&
+			(e.Meta["redux"] == "dispatch_call" || e.Meta["redux"] == "props_bound_dispatch") {
+			dispatchLinked = true
+		}
+	}
+	if !dispatchLinked {
+		t.Errorf("dispatch(increment()) did not link to the slice creator; edges=%+v", edges)
+	}
+}
+
+// TestLinkJSRedux_WholeStateSelector (JCM.10 follow-up): a `state => state` /
+// `{ ...state }` selector depends on the entire store, not one slice — it must
+// link to the combined `redux_store` node so a reverse trace from any slice
+// still reaches it.
+func TestLinkJSRedux_WholeStateSelector(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"reducers/FooReducer.jsx": `export default function FooReducer(state, action) {
+  return state;
+}
+`,
+		"containers/Root.jsx": `import { combineReducers } from "redux";
+import FooReducer from "../reducers/FooReducer";
+export default combineReducers({ fooSlice: FooReducer });
+`,
+		"containers/WholeMSP.jsx": `function mapStateToProps(state) {
+  return { ...state };
+}
+`,
+		"components/WholeHook.jsx": `import { useSelector } from "react-redux";
+function WholeHook() {
+  return useSelector(s => s);
+}
+`,
+	})
+	msp := jsFuncNode("svc", p["containers/WholeMSP.jsx"], "mapStateToProps", 1)
+	hook := jsFuncNode("svc", p["components/WholeHook.jsx"], "WholeHook", 2)
+
+	newNodes, edges := LinkJSRedux([]graph.Node{msp, hook}, map[string][]string{
+		"svc": {
+			p["reducers/FooReducer.jsx"], p["containers/Root.jsx"],
+			p["containers/WholeMSP.jsx"], p["components/WholeHook.jsx"],
+		},
+	})
+
+	storeID := ""
+	for _, n := range newNodes {
+		if n.Meta["redux"] == "store" {
+			storeID = n.ID
+		}
+	}
+	if storeID == "" {
+		t.Fatalf("no redux_store node; nodes=%+v", newNodes)
+	}
+
+	want := map[string]bool{"msp->store": false, "hook->store": false}
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeReads && e.To == storeID &&
+			e.Meta["redux"] == "whole_state_read" && e.Meta["tier"] == "jcm10" {
+			if e.From == msp.ID {
+				want["msp->store"] = true
+			}
+			if e.From == hook.ID {
+				want["hook->store"] = true
+			}
+		}
+	}
+	for k, ok := range want {
+		if !ok {
+			t.Errorf("missing %s; edges=%+v", k, edges)
+		}
+	}
+}
+
 // TestLinkJSRedux_ThunkAndConnectShorthand (JCM.11) covers a redux-thunk async
 // creator whose inner dispatches are attributed to the outer creator, and a
 // connect(null, { load }) container whose handler links to that creator.

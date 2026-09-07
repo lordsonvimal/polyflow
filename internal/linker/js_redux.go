@@ -40,10 +40,14 @@ import (
 //
 // Edge roles (Meta["redux"]): creator_type, type_handled_by, reducer_slice,
 // props_actions_dispatch, props_bound_dispatch, dispatch_call, dispatch_type;
-// JCM.10 selector/read side: slice_reducer, selector_read, reselect_input;
+// JCM.10 selector/read side: slice_reducer, selector_read, reselect_input,
+// whole_state_read (`state => state` / `{...state}` → the combined store node);
 // JCM.11: thunk_dispatch (thunk inner dispatches), inline-arrow reducer
 // type_handled_by, connect({shorthand}) props_bound_dispatch, effect_gap
 // (redux-saga / redux-observable coverage stub).
+// Phase RTK (Redux Toolkit, path-independent): createSlice → slice/reducer +
+// per-key creator_type/type_handled_by; createAsyncThunk → creator + creator_type;
+// configureStore({reducer:{…}}) → redux_store node + reducer_slice.
 func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, newEdges []graph.Edge) {
 	// --- index existing nodes (File is the cwd-relative form the parser mints) ---
 	declsByFile := make(map[string][]lineNode)      // file → decls sorted by line, for attribution
@@ -194,6 +198,16 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		})
 	}
 	knownSlices := make(map[string]bool)
+	// rtkActionFiles: rel → true for any file defining createSlice /
+	// createAsyncThunk creators, so Phase 2b treats a bare imported creator
+	// from it like one from a conventional actions/ module (path-independent).
+	rtkActionFiles := make(map[string]bool)
+	// storeNodesBySvc records every synthetic `redux_store:<file>` node minted in
+	// Phase 2b (combineReducers) so Phase 3's whole-state selectors
+	// (`state => state`, `return state`, `{ ...state }`) have a target: the
+	// combined store itself rather than one slice.
+	storeNodesBySvc := make(map[string][]string)
+	allStoreNodes := []string{}
 	sliceNode := func(name, svc, rel string, line int) string {
 		id := "redux_slice:" + name
 		if !seenNode[id] {
@@ -390,6 +404,171 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		})
 	}
 
+	// === Phase RTK: Redux Toolkit (createSlice / createAsyncThunk / configureStore) ===
+	// Content-gated and path-independent — modern Redux codebases with any
+	// directory layout. Runs after Phase 2a so its creators are registered
+	// before Phase 2b's dispatch-site detection and Phase 3's selector reads.
+	rtkObjProp := func(obj *sitter.Node, key string, src []byte) *sitter.Node {
+		if obj == nil || obj.Type() != "object" {
+			return nil
+		}
+		for i := 0; i < int(obj.NamedChildCount()); i++ {
+			p := obj.NamedChild(i)
+			if p.Type() != "pair" {
+				continue
+			}
+			if k := p.ChildByFieldName("key"); k != nil &&
+				strings.Trim(k.Content(src), "\"'`") == key {
+				return p.ChildByFieldName("value")
+			}
+		}
+		return nil
+	}
+	for _, fe := range jsFiles {
+		rel := patterns.RelativizeToCwd(fe.abs)
+		svc := fe.svc
+		src, root, _, ok := jsParse(fe.abs)
+		if !ok {
+			continue
+		}
+		s := string(src)
+		if !strings.Contains(s, "createSlice") && !strings.Contains(s, "createAsyncThunk") &&
+			!strings.Contains(s, "configureStore") {
+			continue
+		}
+		imports := reduxImports(root, src, fe.abs, indexed)
+		reduxWalk(root, func(n *sitter.Node) {
+			if n.Type() != "call_expression" {
+				return
+			}
+			f := n.ChildByFieldName("function")
+			a := n.ChildByFieldName("arguments")
+			if f == nil || a == nil {
+				return
+			}
+			callee := f.Content(src)
+			line := int(n.StartPoint().Row) + 1
+			bindName := ""
+			if p := n.Parent(); p != nil && p.Type() == "variable_declarator" {
+				if nm := p.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
+					bindName = nm.Content(src)
+				}
+			}
+
+			switch {
+			case callee == "createSlice" || strings.HasSuffix(callee, ".createSlice"):
+				if a.NamedChildCount() == 0 || a.NamedChild(0).Type() != "object" {
+					return
+				}
+				cfg := a.NamedChild(0)
+				name := ""
+				if nv := rtkObjProp(cfg, "name", src); nv != nil {
+					name = strings.Trim(nv.Content(src), "\"'`")
+				}
+				if name == "" {
+					name = strings.TrimSuffix(bindName, "Slice")
+				}
+				if name == "" {
+					return
+				}
+				knownSlices[name] = true
+				rtkActionFiles[rel] = true
+				slID := sliceNode(name, svc, rel, line)
+				redID := mkFn(svc, rel, name+"Reducer", line, "reducer")
+				addEdge10(graph.EdgeTypeContains, slID, redID, "slice_reducer")
+				reducers := rtkObjProp(cfg, "reducers", src)
+				if reducers == nil || reducers.Type() != "object" {
+					return
+				}
+				for i := 0; i < int(reducers.NamedChildCount()); i++ {
+					pr := reducers.NamedChild(i)
+					var key *sitter.Node
+					switch pr.Type() {
+					case "pair":
+						key = pr.ChildByFieldName("key")
+					case "method_definition":
+						key = pr.ChildByFieldName("name")
+					}
+					if key == nil {
+						continue
+					}
+					cname := strings.Trim(key.Content(src), "\"'`")
+					tid := mkVar(svc, rel, name+"/"+cname, line)
+					cid := mkFn(svc, rel, cname, int(key.StartPoint().Row)+1, "creator")
+					addEdge(graph.EdgeTypeReferences, cid, tid, "creator_type")
+					addEdge(graph.EdgeTypeReferences, tid, redID, "type_handled_by")
+					recordCreator(rel, cname, cid)
+				}
+
+			case callee == "createAsyncThunk" || strings.HasSuffix(callee, ".createAsyncThunk"):
+				if bindName == "" {
+					return
+				}
+				cid := declIndex[rel][bindName]
+				if cid == "" {
+					cid = mkFn(svc, rel, bindName, line, "creator")
+				}
+				rtkActionFiles[rel] = true
+				recordCreator(rel, bindName, cid)
+				if a.NamedChildCount() > 0 && a.NamedChild(0).Type() == "string" {
+					if tn := strings.Trim(a.NamedChild(0).Content(src), "\"'`"); tn != "" {
+						addEdge(graph.EdgeTypeReferences, cid, mkVar(svc, rel, tn, line), "creator_type")
+					}
+				}
+
+			case callee == "configureStore" || strings.HasSuffix(callee, ".configureStore"):
+				if a.NamedChildCount() == 0 || a.NamedChild(0).Type() != "object" {
+					return
+				}
+				storeID := "redux_store:" + rel
+				if !seenNode[storeID] {
+					seenNode[storeID] = true
+					newNodes = append(newNodes, graph.Node{
+						ID: storeID, Type: graph.NodeTypeVariable, Label: "redux_store",
+						Service: svc, File: rel, Line: line, EndLine: line, Language: "javascript",
+						Meta: map[string]string{"redux": "store", "tier": "jcm3", "synthetic": "true"},
+					})
+					storeNodesBySvc[svc] = append(storeNodesBySvc[svc], storeID)
+					allStoreNodes = append(allStoreNodes, storeID)
+				}
+				red := rtkObjProp(a.NamedChild(0), "reducer", src)
+				if red == nil || red.Type() != "object" {
+					return
+				}
+				for i := 0; i < int(red.NamedChildCount()); i++ {
+					pr := red.NamedChild(i)
+					if pr.Type() != "pair" {
+						continue
+					}
+					k, v := pr.ChildByFieldName("key"), pr.ChildByFieldName("value")
+					if k == nil || v == nil {
+						continue
+					}
+					sliceName := strings.Trim(k.Content(src), "\"'`")
+					knownSlices[sliceName] = true
+					slID := sliceNode(sliceName, svc, rel, line)
+					addEdge(graph.EdgeTypeContains, storeID, slID, "reducer_slice")
+					if v.Type() == "identifier" {
+						vn := v.Content(src)
+						rid := declIndex[rel][vn]
+						if rid == "" {
+							if imp, ok := imports[vn]; ok {
+								exp := imp.exported
+								if exp == "" {
+									exp = vn
+								}
+								rid = declIndex[imp.file][exp]
+							}
+						}
+						if rid != "" {
+							addEdge10(graph.EdgeTypeContains, slID, rid, "slice_reducer")
+						}
+					}
+				}
+			}
+		})
+	}
+
 	// === Phase 2b: reducers, dispatch sites, combineReducers slice maps ===
 	for _, fe := range jsFiles {
 		rel := patterns.RelativizeToCwd(fe.abs)
@@ -400,6 +579,12 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		}
 		_, _, isReducers := reduxPathRole(rel)
 		imports := reduxImports(root, src, fe.abs, indexed)
+		isActionsFile := func(frel string) bool {
+			if _, ia, _ := reduxPathRole(frel); ia {
+				return true
+			}
+			return rtkActionFiles[frel]
+		}
 		resolveTypeRef := reduxTypeRefResolver(src, rel, imports, actionTypeID)
 		attrFrom := func(line int) string {
 			if id := nearestDecl(declsByFile[rel], line); id != "" {
@@ -421,7 +606,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			}
 		}
 		for _, imp := range imports {
-			if _, ia, _ := reduxPathRole(imp.file); ia {
+			if isActionsFile(imp.file) {
 				absorbAC(imp.file)
 			}
 		}
@@ -440,7 +625,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			}
 			if a0 := a.NamedChild(0); a0.Type() == "identifier" {
 				if imp, ok := imports[a0.Content(src)]; ok {
-					if _, ia, _ := reduxPathRole(imp.file); ia {
+					if isActionsFile(imp.file) {
 						absorbAC(imp.file)
 					}
 				}
@@ -486,7 +671,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				if !ok {
 					continue
 				}
-				if _, ia, _ := reduxPathRole(imp.file); !ia {
+				if !isActionsFile(imp.file) {
 					continue
 				}
 				exp := imp.exported
@@ -514,7 +699,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				o, p := cf.ChildByFieldName("object"), cf.ChildByFieldName("property")
 				if o != nil && p != nil && o.Type() == "identifier" {
 					if imp, ok := imports[o.Content(src)]; ok {
-						if _, ia, _ := reduxPathRole(imp.file); ia {
+						if isActionsFile(imp.file) {
 							return reduxCreatorNode(imp.file, p.Content(src), creatorNodeID, svcOfFile, mkFn)
 						}
 					}
@@ -522,7 +707,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			case "identifier":
 				nm := cf.Content(src)
 				if imp, ok := imports[nm]; ok {
-					if _, ia, _ := reduxPathRole(imp.file); ia {
+					if isActionsFile(imp.file) {
 						exp := imp.exported
 						if exp == "" {
 							exp = nm
@@ -589,6 +774,8 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 							Service: svc, File: rel, Line: line, EndLine: line, Language: "javascript",
 							Meta: map[string]string{"redux": "store", "tier": "jcm3", "synthetic": "true"},
 						})
+						storeNodesBySvc[svc] = append(storeNodesBySvc[svc], storeID)
+						allStoreNodes = append(allStoreNodes, storeID)
 					}
 					for j := 0; j < int(obj.NamedChildCount()); j++ {
 						p := obj.NamedChild(j)
@@ -738,6 +925,17 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			}
 			return fileNodeID[svc+"\x00"+rel]
 		}
+		// emitWholeState wires a whole-store selector to the combined store
+		// node(s) — same-service stores first, else every store in the graph.
+		emitWholeState := func(from string) {
+			stores := storeNodesBySvc[svc]
+			if len(stores) == 0 {
+				stores = allStoreNodes
+			}
+			for _, st := range stores {
+				addEdge10(graph.EdgeTypeReads, from, st, "whole_state_read")
+			}
+		}
 		resolveSelector := func(name string) string {
 			if id := declIndex[rel][name]; id != "" {
 				return id
@@ -862,7 +1060,12 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				if pat := firstParamPattern(n); pat != nil {
 					emitPatternSlices(from, pat)
 				} else {
-					readState(from, firstParam(n), n.ChildByFieldName("body"))
+					p := firstParam(n)
+					body := n.ChildByFieldName("body")
+					if p != "" && reduxReadsWholeState(body, p, src) {
+						emitWholeState(from)
+					}
+					readState(from, p, body)
 				}
 
 			case "call_expression":
@@ -884,7 +1087,12 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 						if pat := firstParamPattern(arg0); pat != nil {
 							emitPatternSlices(from, pat)
 						} else {
-							readState(from, firstParam(arg0), arg0.ChildByFieldName("body"))
+							p := firstParam(arg0)
+							body := arg0.ChildByFieldName("body")
+							if p != "" && reduxReadsWholeState(body, p, src) {
+								emitWholeState(from)
+							}
+							readState(from, p, body)
 						}
 					case "identifier":
 						if to := resolveSelector(arg0.Content(src)); to != "" {
@@ -919,7 +1127,12 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 								addEdge10(graph.EdgeTypeReads, selFrom, to, "reselect_input")
 							}
 						case "arrow_function", "function_expression":
-							readState(selFrom, firstParam(in), in.ChildByFieldName("body"))
+							p := firstParam(in)
+							body := in.ChildByFieldName("body")
+							if p != "" && reduxReadsWholeState(body, p, src) {
+								emitWholeState(selFrom)
+							}
+							readState(selFrom, p, body)
 						}
 					}
 				}
@@ -1309,6 +1522,47 @@ func reduxCollectInlineActionTypes(root *sitter.Node, src []byte) map[string]int
 func reduxIsActionCreatorCall(name string) bool {
 	l := strings.ToLower(name)
 	return strings.Contains(l, "actioncreator") || strings.Contains(l, "createaction")
+}
+
+// reduxReadsWholeState reports whether a selector body depends on the ENTIRE
+// store rather than a named slice — the shapes JCM.10's slice model can't
+// pin: `state => state`, `return state`, `{ ...state }` / `[...state]`,
+// `Object.assign({}, state)`, `f(...state)`, and `{ all: state }`. A
+// `state.slice` / `state.a.b` access never trips this: the bare `state`
+// identifier there sits under a member_expression, not any of these parents.
+func reduxReadsWholeState(body *sitter.Node, param string, src []byte) bool {
+	if body == nil || param == "" {
+		return false
+	}
+	if body.Type() == "identifier" && body.Content(src) == param {
+		return true // arrow expression body: `state => state`
+	}
+	found := false
+	reduxWalk(body, func(n *sitter.Node) {
+		if found || n.Type() != "identifier" || n.Content(src) != param {
+			return
+		}
+		p := n.Parent()
+		if p == nil {
+			return
+		}
+		switch p.Type() {
+		case "return_statement", "spread_element", "parenthesized_expression":
+			found = true
+		case "pair":
+			if p.ChildByFieldName("value") == n { // `{ all: state }`
+				found = true
+			}
+		case "arguments":
+			if call := p.Parent(); call != nil && call.Type() == "call_expression" {
+				if cf := call.ChildByFieldName("function"); cf != nil &&
+					strings.Contains(cf.Content(src), "assign") {
+					found = true // Object.assign(target, state)
+				}
+			}
+		}
+	})
+	return found
 }
 
 // reduxPathRole classifies a file by its conventional Redux directory.
