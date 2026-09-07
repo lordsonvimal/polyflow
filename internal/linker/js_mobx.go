@@ -43,12 +43,22 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 	svcOfFile := make(map[string]string)
 	// membersByFileClass: file → className → memberLabel → node index into `nodes`
 	membersByFileClass := make(map[string]map[string]map[string]int)
+	// JCM.7 cross-file lookups: className → memberLabel → node index, and a
+	// case-insensitive class-name index (a `this.props.grid` prop resolves to a
+	// `Grid` store class by name).
+	membersByClass := make(map[string]map[string]int)
+	classLower := make(map[string]string)
 	for i := range nodes {
 		n := &nodes[i]
 		switch n.Type {
 		case graph.NodeTypeFunction, graph.NodeTypeVariable, graph.NodeTypeClass, graph.NodeTypeMethod:
 			if n.Label == "(module)" {
 				continue
+			}
+			if n.Type == graph.NodeTypeClass {
+				if _, ok := classLower[strings.ToLower(n.Label)]; !ok {
+					classLower[strings.ToLower(n.Label)] = n.Label
+				}
 			}
 			declsByFile[n.File] = append(declsByFile[n.File], lineNode{line: n.Line, id: n.ID})
 			if declIndex[n.File] == nil {
@@ -69,6 +79,12 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				}
 				if _, ok := membersByFileClass[n.File][cls][n.Label]; !ok {
 					membersByFileClass[n.File][cls][n.Label] = i
+				}
+				if membersByClass[cls] == nil {
+					membersByClass[cls] = make(map[string]int)
+				}
+				if _, ok := membersByClass[cls][n.Label]; !ok {
+					membersByClass[cls][n.Label] = i
 				}
 			}
 		case graph.NodeTypeFile:
@@ -340,10 +356,204 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		})
 	}
 
+	// Pass C (JCM.7): an `observer(Component)` re-renders when the observables its
+	// render body reads change. Walk every `observer(...)` wrapper, find the
+	// render scope of its argument, resolve `this.props.<store>.<obs>` /
+	// `this.<store>.<obs>` / `<store>.<obs>` reads to an observable|computed
+	// member of a store class (matched case-insensitively by name), and emit
+	// componentNode --reads--> member with Meta["mobx_via"]="observer_render".
+	for _, fe := range jsFiles {
+		rel := patterns.RelativizeToCwd(fe.abs)
+		src, root, _, ok := jsParse(fe.abs)
+		if !ok || !strings.Contains(string(src), "observer") {
+			continue
+		}
+		perComp := map[string]int{}
+		hocWalk(root, func(call *sitter.Node) {
+			if hocCalleeName(call, src) != "observer" {
+				return
+			}
+			arg0 := hocFirstArg(call)
+			if arg0 == nil {
+				return
+			}
+			wrapperName, _ := hocBinding(call, src)
+			var compID string
+			var bodies []*sitter.Node
+			switch arg0.Type() {
+			case "identifier":
+				compID = declIndex[rel][arg0.Content(src)]
+				if sub := mobxDeclSubtree(root, src, arg0.Content(src)); sub != nil {
+					bodies = mobxRenderBodies(sub, src)
+				}
+			case "class", "class_declaration":
+				if nm := arg0.ChildByFieldName("name"); nm != nil {
+					compID = declIndex[rel][nm.Content(src)]
+				}
+				if compID == "" && wrapperName != "" {
+					compID = declIndex[rel][wrapperName]
+				}
+				bodies = mobxRenderBodies(arg0, src)
+			case "arrow_function", "function", "function_expression":
+				if wrapperName != "" {
+					compID = declIndex[rel][wrapperName]
+				}
+				if compID == "" {
+					if nm := arg0.ChildByFieldName("name"); nm != nil {
+						compID = declIndex[rel][nm.Content(src)]
+					}
+				}
+				if b := arg0.ChildByFieldName("body"); b != nil {
+					bodies = append(bodies, b)
+				}
+			}
+			if compID == "" || len(bodies) == 0 {
+				return
+			}
+			for _, body := range bodies {
+				mobxWalk(body, func(m *sitter.Node) {
+					if m.Type() != "member_expression" || perComp[compID] >= 64 {
+						return
+					}
+					store, obs := mobxObserverReadChain(m, src)
+					if obs == "" {
+						return
+					}
+					cls := classLower[strings.ToLower(store)]
+					if cls == "" {
+						return
+					}
+					idx, ok := membersByClass[cls][obs]
+					if !ok {
+						return
+					}
+					k := nodes[idx].Meta["mobx"]
+					if t, ok2 := tagged[nodes[idx].ID]; ok2 {
+						k = t.Meta["mobx"]
+					}
+					if k != "observable" && k != "computed" {
+						return
+					}
+					eid := fmt.Sprintf("reads:%s->%s#mobx_obs", compID, nodes[idx].ID)
+					if seenEdge[eid] {
+						return
+					}
+					seenEdge[eid] = true
+					perComp[compID]++
+					newEdges = append(newEdges, graph.Edge{
+						ID: eid, From: compID, To: nodes[idx].ID, Type: graph.EdgeTypeReads,
+						Confidence: graph.ConfidenceInferred,
+						Meta:       map[string]string{"mobx": "reactive_read", "mobx_via": "observer_render", "tier": "jcm7"},
+					})
+				})
+			}
+		})
+	}
+
 	for _, n := range tagged {
 		taggedNodes = append(taggedNodes, n)
 	}
 	return outNodes, taggedNodes, newEdges
+}
+
+// mobxRenderBodies returns the reactive render scope(s) of a component: a class's
+// `render` method body, or a function/arrow component's body.
+func mobxRenderBodies(decl *sitter.Node, src []byte) []*sitter.Node {
+	switch decl.Type() {
+	case "class", "class_declaration":
+		var body *sitter.Node
+		for i := 0; i < int(decl.NamedChildCount()); i++ {
+			if c := decl.NamedChild(i); c.Type() == "class_body" {
+				body = c
+				break
+			}
+		}
+		if body == nil {
+			return nil
+		}
+		var out []*sitter.Node
+		for i := 0; i < int(body.NamedChildCount()); i++ {
+			md := body.NamedChild(i)
+			if md.Type() != "method_definition" {
+				continue
+			}
+			if nm := md.ChildByFieldName("name"); nm != nil && nm.Content(src) == "render" {
+				if b := md.ChildByFieldName("body"); b != nil {
+					out = append(out, b)
+				}
+			}
+		}
+		return out
+	case "arrow_function", "function", "function_expression":
+		if b := decl.ChildByFieldName("body"); b != nil {
+			return []*sitter.Node{b}
+		}
+	}
+	return nil
+}
+
+// mobxDeclSubtree finds the class/function/arrow subtree bound to `name` at file
+// scope, so an `observer(Name)` by identifier can be followed to its render body.
+func mobxDeclSubtree(root *sitter.Node, src []byte, name string) *sitter.Node {
+	var found *sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if found != nil {
+			return
+		}
+		switch n.Type() {
+		case "class_declaration", "function_declaration":
+			if nm := n.ChildByFieldName("name"); nm != nil && nm.Content(src) == name {
+				found = n
+				return
+			}
+		case "variable_declarator":
+			if nm := n.ChildByFieldName("name"); nm != nil && nm.Content(src) == name {
+				if v := n.ChildByFieldName("value"); v != nil {
+					switch v.Type() {
+					case "arrow_function", "function", "function_expression", "class":
+						found = v
+						return
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+	return found
+}
+
+// mobxObserverReadChain classifies a member_expression as a store-observable
+// read: `<store>.<obs>`, `this.<store>.<obs>`, or `this.props.<store>.<obs>`.
+func mobxObserverReadChain(m *sitter.Node, src []byte) (store, obs string) {
+	prop := m.ChildByFieldName("property")
+	obj := m.ChildByFieldName("object")
+	if prop == nil || obj == nil || prop.Type() != "property_identifier" {
+		return "", ""
+	}
+	obs = prop.Content(src)
+	switch obj.Type() {
+	case "identifier":
+		return obj.Content(src), obs
+	case "member_expression":
+		p2, o2 := obj.ChildByFieldName("property"), obj.ChildByFieldName("object")
+		if p2 == nil || o2 == nil {
+			return "", ""
+		}
+		if o2.Type() == "this" {
+			return p2.Content(src), obs
+		}
+		if o2.Type() == "member_expression" {
+			pp, oo := o2.ChildByFieldName("property"), o2.ChildByFieldName("object")
+			if pp != nil && oo != nil && oo.Type() == "this" && pp.Content(src) == "props" {
+				return p2.Content(src), obs
+			}
+		}
+	}
+	return "", ""
 }
 
 // mobxBaseAnnotation returns the leftmost identifier of a MobX annotation
