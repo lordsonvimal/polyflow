@@ -42,7 +42,7 @@ export default Row;
 	f := p["components/Row.jsx"]
 	v := hocVarNode("svc", f, "Row", 2)
 
-	out := LinkJSHOC([]graph.Node{v}, map[string][]string{"svc": {f}})
+	out, _, _ := LinkJSHOC([]graph.Node{v}, map[string][]string{"svc": {f}})
 	got := hocUpdatedByID(out)[v.ID]
 	if got.ID == "" {
 		t.Fatalf("Row not updated; out=%+v", out)
@@ -74,7 +74,7 @@ export default observer(Panel);
 	grid := jsClassNode("svc", gf, "Grid", 2, 4)
 	panel := jsFuncNode("svc", pf, "Panel", 2)
 
-	out := LinkJSHOC([]graph.Node{grid, panel}, map[string][]string{"svc": {gf, pf}})
+	out, _, _ := LinkJSHOC([]graph.Node{grid, panel}, map[string][]string{"svc": {gf, pf}})
 	by := hocUpdatedByID(out)
 	if by[grid.ID].Meta["hoc"] != "observer" {
 		t.Errorf("Grid class not stamped: %+v", by[grid.ID].Meta)
@@ -98,7 +98,135 @@ export default Plain;
 	})
 	f := p["components/Plain.jsx"]
 	v := hocVarNode("svc", f, "Plain", 1)
-	if out := LinkJSHOC([]graph.Node{v}, map[string][]string{"svc": {f}}); len(out) != 0 {
-		t.Errorf("plain component produced output: %+v", out)
+	out, newNodes, edges := LinkJSHOC([]graph.Node{v}, map[string][]string{"svc": {f}})
+	if len(out) != 0 || len(newNodes) != 0 || len(edges) != 0 {
+		t.Errorf("plain component produced output: updated=%+v new=%+v edges=%+v", out, newNodes, edges)
+	}
+}
+
+// TestLinkJSHOC_AppLocalWrapperDefaultExport covers SPA.1: an app-local HOC
+// (`ComponentWithAjaxStatus`) wrapping a react-redux `connect(...)` currying of
+// an in-file component. The default export must become a component labelled by
+// the file basename, with a component_impl edge to the inner component.
+func TestLinkJSHOC_AppLocalWrapperDefaultExport(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"components/CDMTopLevel.jsx": `import { connect } from "react-redux";
+import ComponentWithAjaxStatus from "../common/ComponentWithAjaxStatus";
+class CDMTopLevelInner extends React.Component {
+  render() { return <div/>; }
+}
+const mapStateToProps = s => s;
+const mapDispatchToProps = d => ({});
+export default ComponentWithAjaxStatus(
+  connect(mapStateToProps, mapDispatchToProps)(CDMTopLevelInner)
+);
+`,
+	})
+	f := p["components/CDMTopLevel.jsx"]
+	inner := jsClassNode("svc", f, "CDMTopLevelInner", 3, 5)
+
+	updated, newNodes, edges := LinkJSHOC([]graph.Node{inner}, map[string][]string{"svc": {f}})
+	_ = updated
+
+	var synth *graph.Node
+	for i := range newNodes {
+		if newNodes[i].Label == "CDMTopLevel" {
+			synth = &newNodes[i]
+		}
+	}
+	if synth == nil {
+		t.Fatalf("no synthetic CDMTopLevel node; new=%+v", newNodes)
+	}
+	if synth.Meta["component"] != "true" || synth.Meta["hoc"] != "app_local" {
+		t.Errorf("synth meta = %+v", synth.Meta)
+	}
+	if synth.Meta["hoc_inner"] != inner.ID {
+		t.Errorf("hoc_inner = %q, want %q", synth.Meta["hoc_inner"], inner.ID)
+	}
+	found := false
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeComponentImpl && e.From == synth.ID && e.To == inner.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no component_impl %s -> %s; edges=%+v", synth.ID, inner.ID, edges)
+	}
+}
+
+// TestLinkJSHOC_AppLocalInlineClass covers cedar's real shape:
+// `const CDMTopLevel = withAjax(connect(...)(class extends React.Component {…}))`
+// then `export default CDMTopLevel` — the wrapped value is an anonymous class,
+// so the CDMTopLevel variable node itself must be stamped.
+func TestLinkJSHOC_AppLocalInlineClass(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"components/CDMTopLevel.jsx": `import { connect } from "react-redux";
+import ComponentWithAjaxStatus from "../common/ComponentWithAjaxStatus";
+const CDMTopLevel = ComponentWithAjaxStatus(
+  connect(s => s, d => ({}))(
+    class extends React.Component {
+      render() { return <div>{this.props.x}</div>; }
+    }
+  )
+);
+export default CDMTopLevel;
+`,
+	})
+	f := p["components/CDMTopLevel.jsx"]
+	v := hocVarNode("svc", f, "CDMTopLevel", 3)
+
+	updated, newNodes, _ := LinkJSHOC([]graph.Node{v}, map[string][]string{"svc": {f}})
+	if len(newNodes) != 0 {
+		t.Errorf("unexpected synthetic nodes: %+v", newNodes)
+	}
+	got := hocUpdatedByID(updated)[v.ID]
+	if got.Meta["component"] != "true" || got.Meta["hoc"] != "app_local" {
+		t.Errorf("CDMTopLevel meta = %+v", got.Meta)
+	}
+}
+
+// TestLinkJSHOC_AppLocalWrapperConstBinding covers `const Wrapped = mywrap(Inner)`
+// — the existing Wrapped variable node is stamped, no synthetic node.
+func TestLinkJSHOC_AppLocalWrapperConstBinding(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"components/Panel.jsx": `import mywrap from "../common/mywrap";
+class PanelInner extends React.Component { render() { return <div/>; } }
+const Wrapped = mywrap(PanelInner);
+export { Wrapped };
+`,
+	})
+	f := p["components/Panel.jsx"]
+	innerC := jsClassNode("svc", f, "PanelInner", 2, 2)
+	wrapped := hocVarNode("svc", f, "Wrapped", 3)
+
+	updated, newNodes, _ := LinkJSHOC([]graph.Node{innerC, wrapped}, map[string][]string{"svc": {f}})
+	if len(newNodes) != 0 {
+		t.Errorf("unexpected synthetic nodes: %+v", newNodes)
+	}
+	got := hocUpdatedByID(updated)[wrapped.ID]
+	if got.ID == "" || got.Meta["component"] != "true" || got.Meta["hoc"] != "app_local" {
+		t.Errorf("Wrapped meta = %+v", got.Meta)
+	}
+}
+
+// TestLinkJSHOC_NotAComponentArg guards over-stamping: the wrapped identifier
+// is a plain function (lowercase, not a component) → no stamp, no node.
+func TestLinkJSHOC_NotAComponentArg(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"util/Totals.jsx": `import memoize from "lodash/memoize";
+function computeTotals(rows) { return rows.length; }
+export default memoize(computeTotals);
+`,
+	})
+	f := p["util/Totals.jsx"]
+	fn := jsFuncNode("svc", f, "computeTotals", 2)
+
+	updated, newNodes, edges := LinkJSHOC([]graph.Node{fn}, map[string][]string{"svc": {f}})
+	if len(updated) != 0 || len(newNodes) != 0 || len(edges) != 0 {
+		t.Errorf("memoize(computeTotals) produced output: u=%+v n=%+v e=%+v", updated, newNodes, edges)
 	}
 }

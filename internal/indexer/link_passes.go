@@ -250,7 +250,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// target index and JCM.7 can see the real component. Must precede js_link.
 		{"js_hoc", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			hocNodes := linker.LinkJSHOC(st.allNodes, svcFiles)
+			hocNodes, hocNew, hocEdges := linker.LinkJSHOC(st.allNodes, svcFiles)
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
@@ -264,7 +264,23 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 					st.allNodes[idx] = n
 				}
 			}
-			return st.bw.Flush(st.ctx)
+			// SPA.1: synthetic default-export component nodes for app-local
+			// HOC-wrapped exports (`export default withAjax(connect(...)(Inner))`).
+			for i := range hocNew {
+				n := hocNew[i]
+				if _, exists := byID[n.ID]; exists {
+					continue
+				}
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+				byID[n.ID] = len(st.allNodes) - 1
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(hocEdges)
 		}},
 		// JS/TS component + import-aware linking.
 		{"js_link", scopeSameServiceOnly, func() error {
