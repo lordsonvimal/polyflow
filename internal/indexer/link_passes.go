@@ -653,6 +653,30 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(subEdges)
 		}},
+		// SPA.7: the JS half of the Pusher consumer side. Mint one `subscriber`
+		// node per `instance.subscribe(name)` / `channel.bind("evt", …)` site
+		// in JS — the shape `pusher_consumer_erb` (orion's `pusher_config`
+		// ERB helper) never sees. Dynamic channels get a `pusher_channel_dynamic`
+		// ledger entry; a matching `.bind` event literal bridges to a
+		// `pusher_trigger*` publisher. Runs before the contract engine.
+		{"pusher_consumer_js", scopeSameServiceOnly, func() error {
+			subNodes, subEdges, subLedger := linker.EnrichPusherConsumersJS(st.allNodes, st.svcFilesOf())
+			st.allUnresolved = append(st.allUnresolved, subLedger...)
+			if len(subNodes) == 0 {
+				return nil
+			}
+			for i := range subNodes {
+				n := subNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(subEdges)
+		}},
 		// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
 		// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
 		// the downstream config_resolve provider can bind them (or ledger a *named*
