@@ -2,6 +2,7 @@ package linker
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -115,6 +116,69 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 	seenNode := make(map[string]bool)
 	seenEdge := make(map[string]bool)
 
+	// JCM.8: cross-store reactive-read resolution. jsAbsSet bounds import
+	// following to the indexed workspace; bindCache memoises per-file
+	// identifier/`this.<prop>` → store-class-name bindings.
+	jsAbsSet := make(map[string]bool, len(jsFiles))
+	for _, fe := range jsFiles {
+		jsAbsSet[fe.abs] = true
+	}
+	type mobxBinds struct{ ident, thisProp map[string]string }
+	bindCache := make(map[string]mobxBinds)
+	getBinds := func(abs string, root *sitter.Node, src []byte) mobxBinds {
+		if b, ok := bindCache[abs]; ok {
+			return b
+		}
+		i, tp := mobxComputeBindings(abs, root, src, classLower, jsAbsSet)
+		b := mobxBinds{i, tp}
+		bindCache[abs] = b
+		return b
+	}
+	// memberReactiveID resolves <class>.<member> to a node ID iff that member is
+	// tagged observable|computed (consulting the live `tagged` overlay).
+	memberReactiveID := func(canon, member string) string {
+		mm := membersByClass[canon]
+		if mm == nil {
+			return ""
+		}
+		idx, ok := mm[member]
+		if !ok {
+			return ""
+		}
+		k := nodes[idx].Meta["mobx"]
+		if t, ok2 := tagged[nodes[idx].ID]; ok2 {
+			k = t.Meta["mobx"]
+		}
+		if k == "observable" || k == "computed" {
+			return nodes[idx].ID
+		}
+		return ""
+	}
+	// addReactiveEdge emits callSite --reads--> observable. Same-class `this.x`
+	// reads keep tier jcm4 (JCM.4 Pass B); cross-store hops are tier jcm8 and
+	// carry Meta["mobx_resolve"]=<via>.
+	addReactiveEdge := func(from, to, via string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		eid := fmt.Sprintf("reads:%s->%s#mobx", from, to)
+		if seenEdge[eid] {
+			return
+		}
+		seenEdge[eid] = true
+		meta := map[string]string{"mobx": "reactive_read"}
+		if via == "" || via == "this" {
+			meta["tier"] = "jcm4"
+		} else {
+			meta["tier"] = "jcm8"
+			meta["mobx_resolve"] = via
+		}
+		newEdges = append(newEdges, graph.Edge{
+			ID: eid, From: from, To: to, Type: graph.EdgeTypeReads, Confidence: graph.ConfidenceInferred,
+			Meta: meta,
+		})
+	}
+
 	tag := func(idx int, kind string) {
 		n := nodes[idx]
 		if n.Meta != nil && n.Meta["mobx"] == kind {
@@ -130,21 +194,6 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		tagged[n.ID] = n
 	}
 
-	addEdge := func(from, to string) {
-		if from == "" || to == "" || from == to {
-			return
-		}
-		eid := fmt.Sprintf("reads:%s->%s#mobx", from, to)
-		if seenEdge[eid] {
-			return
-		}
-		seenEdge[eid] = true
-		newEdges = append(newEdges, graph.Edge{
-			ID: eid, From: from, To: to, Type: graph.EdgeTypeReads, Confidence: graph.ConfidenceInferred,
-			Meta: map[string]string{"mobx": "reactive_read", "tier": "jcm4"},
-		})
-	}
-
 	for _, fe := range jsFiles {
 		rel := patterns.RelativizeToCwd(fe.abs)
 		svc := fe.svc
@@ -155,18 +204,11 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		if !ok {
 			continue
 		}
-		// cheap reject: no mobx surface at all
+		// cheap reject: no makeObservable surface at all
 		low := string(src)
 		if !strings.Contains(low, "makeObservable") && !strings.Contains(low, "makeAutoObservable") &&
-			!strings.Contains(low, "autorun") && !strings.Contains(low, "reaction(") && !strings.Contains(low, "when(") {
+			!strings.Contains(low, "makeSimpleObservable") {
 			continue
-		}
-
-		attrFrom := func(line int) string {
-			if id := nearestDecl(declsByFile[rel], line); id != "" {
-				return id
-			}
-			return fileNodeID[svc+"\x00"+rel]
 		}
 		classMembers := membersByFileClass[rel]
 
@@ -295,29 +337,32 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			}
 		})
 
-		// Pass B: wire autorun / reaction / when callbacks to the observable
-		// members they read (uses the tags from Pass A regardless of order).
-		reactiveKind := func(cls, label string) string {
-			if cls == "" {
-				return ""
-			}
-			mm := classMembers[cls]
-			if mm == nil {
-				return ""
-			}
-			idx, ok := mm[label]
-			if !ok {
-				return ""
-			}
-			k := nodes[idx].Meta["mobx"]
-			if t, ok2 := tagged[nodes[idx].ID]; ok2 {
-				k = t.Meta["mobx"]
-			}
-			if k == "observable" || k == "computed" {
-				return nodes[idx].ID
-			}
-			return ""
+	}
+
+	// Pass B (JCM.4 + JCM.8): wire autorun / reaction / when callbacks to the
+	// observable members they read. Runs as its own loop after Pass A so every
+	// file's member tags are final before cross-file store resolution.
+	for _, fe := range jsFiles {
+		rel := patterns.RelativizeToCwd(fe.abs)
+		svc := fe.svc
+		if svc == "" {
+			svc = svcOfFile[rel]
 		}
+		src, root, _, ok := jsParse(fe.abs)
+		if !ok {
+			continue
+		}
+		low := string(src)
+		if !strings.Contains(low, "autorun") && !strings.Contains(low, "reaction(") && !strings.Contains(low, "when(") {
+			continue
+		}
+		attrFrom := func(line int) string {
+			if id := nearestDecl(declsByFile[rel], line); id != "" {
+				return id
+			}
+			return fileNodeID[svc+"\x00"+rel]
+		}
+		bnd := getBinds(fe.abs, root, src)
 		mobxWalk(root, func(n *sitter.Node) {
 			if n.Type() != "call_expression" {
 				return
@@ -345,12 +390,12 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				if m.Type() != "member_expression" {
 					return
 				}
-				o, p := m.ChildByFieldName("object"), m.ChildByFieldName("property")
-				if o == nil || p == nil || o.Type() != "this" {
+				canon, obs, via := mobxReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
+				if canon == "" {
 					return
 				}
-				if id := reactiveKind(cls, p.Content(src)); id != "" {
-					addEdge(site, id)
+				if id := memberReactiveID(canon, obs); id != "" {
+					addReactiveEdge(site, id, via)
 				}
 			})
 		})
@@ -369,6 +414,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			continue
 		}
 		perComp := map[string]int{}
+		bnd := getBinds(fe.abs, root, src)
 		hocWalk(root, func(call *sitter.Node) {
 			if hocCalleeName(call, src) != "observer" {
 				return
@@ -378,17 +424,21 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				return
 			}
 			wrapperName, _ := hocBinding(call, src)
-			var compID string
+			var compID, compClass string
 			var bodies []*sitter.Node
 			switch arg0.Type() {
 			case "identifier":
 				compID = declIndex[rel][arg0.Content(src)]
 				if sub := mobxDeclSubtree(root, src, arg0.Content(src)); sub != nil {
 					bodies = mobxRenderBodies(sub, src)
+					if nm := sub.ChildByFieldName("name"); nm != nil {
+						compClass = nm.Content(src)
+					}
 				}
 			case "class", "class_declaration":
 				if nm := arg0.ChildByFieldName("name"); nm != nil {
 					compID = declIndex[rel][nm.Content(src)]
+					compClass = nm.Content(src)
 				}
 				if compID == "" && wrapperName != "" {
 					compID = declIndex[rel][wrapperName]
@@ -415,35 +465,27 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 					if m.Type() != "member_expression" || perComp[compID] >= 64 {
 						return
 					}
-					store, obs := mobxObserverReadChain(m, src)
-					if obs == "" {
+					canon, obs, via := mobxReadResolve(m, src, compClass, classLower, bnd.ident, bnd.thisProp)
+					if canon == "" {
 						return
 					}
-					cls := classLower[strings.ToLower(store)]
-					if cls == "" {
+					id := memberReactiveID(canon, obs)
+					if id == "" {
 						return
 					}
-					idx, ok := membersByClass[cls][obs]
-					if !ok {
-						return
-					}
-					k := nodes[idx].Meta["mobx"]
-					if t, ok2 := tagged[nodes[idx].ID]; ok2 {
-						k = t.Meta["mobx"]
-					}
-					if k != "observable" && k != "computed" {
-						return
-					}
-					eid := fmt.Sprintf("reads:%s->%s#mobx_obs", compID, nodes[idx].ID)
+					eid := fmt.Sprintf("reads:%s->%s#mobx_obs", compID, id)
 					if seenEdge[eid] {
 						return
 					}
 					seenEdge[eid] = true
 					perComp[compID]++
+					meta := map[string]string{"mobx": "reactive_read", "mobx_via": "observer_render", "tier": "jcm7"}
+					if via != "" && via != "this" && via != "props" {
+						meta["mobx_resolve"] = via
+					}
 					newEdges = append(newEdges, graph.Edge{
-						ID: eid, From: compID, To: nodes[idx].ID, Type: graph.EdgeTypeReads,
-						Confidence: graph.ConfidenceInferred,
-						Meta:       map[string]string{"mobx": "reactive_read", "mobx_via": "observer_render", "tier": "jcm7"},
+						ID: eid, From: compID, To: id, Type: graph.EdgeTypeReads,
+						Confidence: graph.ConfidenceInferred, Meta: meta,
 					})
 				})
 			}
@@ -526,34 +568,308 @@ func mobxDeclSubtree(root *sitter.Node, src []byte, name string) *sitter.Node {
 	return found
 }
 
-// mobxObserverReadChain classifies a member_expression as a store-observable
-// read: `<store>.<obs>`, `this.<store>.<obs>`, or `this.props.<store>.<obs>`.
-func mobxObserverReadChain(m *sitter.Node, src []byte) (store, obs string) {
+// mobxReadResolve classifies a `member_expression` read `<recv>.<obs>` as
+// targeting an observable member of a store class, and reports which resolution
+// rule matched (via):
+//
+//   - "this"       — same-class `this.<obs>` (JCM.4 Pass B)
+//   - "import"     — `<ident>.<obs>` where <ident> is an imported/module-local
+//     store instance (`import s from "./s"` / `const s = new S()`)
+//   - "this_field" — `this.<prop>.<obs>` where <prop> = `new StoreClass()`
+//   - "props"      — `this.props.<store>.<obs>` (store class matched by name)
+//   - "root_store" — `<root>.<sub>.<obs>` / `this.<root>.<sub>.<obs>` where
+//     <root> is a store instance and <sub> names a store class (one hop)
+//
+// classLower maps a lowercased class name to its canonical label; identStore /
+// thisPropStore come from mobxComputeBindings.
+func mobxReadResolve(m *sitter.Node, src []byte, sameClass string, classLower, identStore, thisPropStore map[string]string) (canon, obs, via string) {
 	prop := m.ChildByFieldName("property")
 	obj := m.ChildByFieldName("object")
 	if prop == nil || obj == nil || prop.Type() != "property_identifier" {
-		return "", ""
+		return "", "", ""
 	}
 	obs = prop.Content(src)
 	switch obj.Type() {
+	case "this":
+		if sameClass != "" {
+			return sameClass, obs, "this"
+		}
 	case "identifier":
-		return obj.Content(src), obs
+		if c := identStore[obj.Content(src)]; c != "" {
+			return c, obs, "import"
+		}
+		// fallback: a bare `grid.total` where the receiver name *is* a store
+		// class (destructured / same-name singleton the import walk missed).
+		if c := classLower[strings.ToLower(obj.Content(src))]; c != "" {
+			return c, obs, "name"
+		}
 	case "member_expression":
-		p2, o2 := obj.ChildByFieldName("property"), obj.ChildByFieldName("object")
-		if p2 == nil || o2 == nil {
-			return "", ""
+		p2 := obj.ChildByFieldName("property")
+		o2 := obj.ChildByFieldName("object")
+		if p2 == nil || o2 == nil || p2.Type() != "property_identifier" {
+			return "", "", ""
 		}
-		if o2.Type() == "this" {
-			return p2.Content(src), obs
-		}
-		if o2.Type() == "member_expression" {
-			pp, oo := o2.ChildByFieldName("property"), o2.ChildByFieldName("object")
-			if pp != nil && oo != nil && oo.Type() == "this" && pp.Content(src) == "props" {
-				return p2.Content(src), obs
+		switch o2.Type() {
+		case "this":
+			if c := thisPropStore[p2.Content(src)]; c != "" {
+				return c, obs, "this_field"
+			}
+			if c := classLower[strings.ToLower(p2.Content(src))]; c != "" {
+				return c, obs, "name"
+			}
+		case "identifier":
+			if identStore[o2.Content(src)] != "" {
+				if c := classLower[strings.ToLower(p2.Content(src))]; c != "" {
+					return c, obs, "root_store"
+				}
+			}
+		case "member_expression":
+			pp := o2.ChildByFieldName("property")
+			oo := o2.ChildByFieldName("object")
+			if pp == nil || oo == nil || oo.Type() != "this" {
+				return "", "", ""
+			}
+			if pp.Content(src) == "props" {
+				if c := classLower[strings.ToLower(p2.Content(src))]; c != "" {
+					return c, obs, "props"
+				}
+			} else if thisPropStore[pp.Content(src)] != "" {
+				if c := classLower[strings.ToLower(p2.Content(src))]; c != "" {
+					return c, obs, "root_store"
+				}
 			}
 		}
 	}
+	return "", "", ""
+}
+
+// mobxNewExprClass returns the canonical store-class label a `new_expression`
+// constructs, or "" when the constructor isn't a known class.
+func mobxNewExprClass(n *sitter.Node, src []byte, classLower map[string]string) string {
+	if n.Type() != "new_expression" {
+		return ""
+	}
+	c := n.ChildByFieldName("constructor")
+	if c == nil || c.Type() != "identifier" {
+		return ""
+	}
+	return classLower[strings.ToLower(c.Content(src))]
+}
+
+// mobxNewBindingName reports what a `new_expression` is bound to: a plain
+// identifier (`const s = new S()`) or a `this.<prop>` field
+// (`this.s = new S()` / class field `s = new S()`).
+func mobxNewBindingName(n *sitter.Node, src []byte) (ident, thisProp string) {
+	for p, hops := n.Parent(), 0; p != nil && hops < 4; p, hops = p.Parent(), hops+1 {
+		switch p.Type() {
+		case "variable_declarator":
+			if nm := p.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
+				return nm.Content(src), ""
+			}
+			return "", ""
+		case "assignment_expression":
+			l := p.ChildByFieldName("left")
+			if l == nil {
+				return "", ""
+			}
+			if l.Type() == "identifier" {
+				return l.Content(src), ""
+			}
+			if l.Type() == "member_expression" {
+				o, pr := l.ChildByFieldName("object"), l.ChildByFieldName("property")
+				if o != nil && pr != nil && o.Type() == "this" {
+					return "", pr.Content(src)
+				}
+			}
+			return "", ""
+		case "public_field_definition", "field_definition":
+			if nm := p.ChildByFieldName("name"); nm != nil {
+				return "", nm.Content(src)
+			}
+			return "", ""
+		}
+	}
 	return "", ""
+}
+
+// mobxModuleStoreExports reports which store class a module's default export is
+// an instance of, and a name→class map for its named exports of store
+// instances (`export default new S()`, `export const s = new S()`,
+// `const s = new S(); export default s`, `export { s }`).
+func mobxModuleStoreExports(root *sitter.Node, src []byte, classLower map[string]string) (def string, named map[string]string) {
+	named = map[string]string{}
+	local := map[string]string{}
+	var collect func(n *sitter.Node)
+	collect = func(n *sitter.Node) {
+		if n.Type() == "new_expression" {
+			if canon := mobxNewExprClass(n, src, classLower); canon != "" {
+				if id, _ := mobxNewBindingName(n, src); id != "" {
+					local[id] = canon
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			collect(n.NamedChild(i))
+		}
+	}
+	collect(root)
+
+	var visit func(n *sitter.Node)
+	visit = func(n *sitter.Node) {
+		if n.Type() == "export_statement" {
+			if v := n.ChildByFieldName("value"); v != nil {
+				switch v.Type() {
+				case "new_expression":
+					if canon := mobxNewExprClass(v, src, classLower); canon != "" {
+						def = canon
+					}
+				case "identifier":
+					if canon := local[v.Content(src)]; canon != "" {
+						def = canon
+					}
+				}
+			}
+			if d := n.ChildByFieldName("declaration"); d != nil {
+				var dw func(m *sitter.Node)
+				dw = func(m *sitter.Node) {
+					if m.Type() == "variable_declarator" {
+						nm, val := m.ChildByFieldName("name"), m.ChildByFieldName("value")
+						if nm != nil && val != nil && val.Type() == "new_expression" {
+							if canon := mobxNewExprClass(val, src, classLower); canon != "" {
+								named[nm.Content(src)] = canon
+							}
+						}
+					}
+					for i := 0; i < int(m.NamedChildCount()); i++ {
+						dw(m.NamedChild(i))
+					}
+				}
+				dw(d)
+			}
+			for i := 0; i < int(n.NamedChildCount()); i++ {
+				ec := n.NamedChild(i)
+				if ec.Type() != "export_clause" {
+					continue
+				}
+				for j := 0; j < int(ec.NamedChildCount()); j++ {
+					sp := ec.NamedChild(j)
+					if sp.Type() != "export_specifier" {
+						continue
+					}
+					nm := sp.ChildByFieldName("name")
+					if nm == nil {
+						continue
+					}
+					out := nm.Content(src)
+					if al := sp.ChildByFieldName("alias"); al != nil {
+						out = al.Content(src)
+					}
+					if canon := local[nm.Content(src)]; canon != "" {
+						named[out] = canon
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			visit(n.NamedChild(i))
+		}
+	}
+	visit(root)
+	return def, named
+}
+
+// mobxComputeBindings resolves, for one file, which local identifiers and
+// `this.<prop>` fields refer to a store-class instance — via module-local
+// `new S()`, `this.x = new S()`, and imported store singletons (following
+// relative imports one level, bounded by jsAbs).
+func mobxComputeBindings(fileAbs string, root *sitter.Node, src []byte, classLower map[string]string, jsAbs map[string]bool) (identStore, thisPropStore map[string]string) {
+	identStore = map[string]string{}
+	thisPropStore = map[string]string{}
+
+	resolveImport := func(spec string) string {
+		if !strings.HasPrefix(spec, ".") {
+			return ""
+		}
+		base := filepath.Join(filepath.Dir(fileAbs), spec)
+		for _, cand := range []string{
+			base, base + ".js", base + ".jsx", base + ".ts", base + ".tsx", base + ".mjs", base + ".es6",
+			filepath.Join(base, "index.js"), filepath.Join(base, "index.jsx"),
+			filepath.Join(base, "index.ts"), filepath.Join(base, "index.tsx"),
+		} {
+			if jsAbs[cand] {
+				return cand
+			}
+		}
+		return ""
+	}
+
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		switch n.Type() {
+		case "new_expression":
+			if canon := mobxNewExprClass(n, src, classLower); canon != "" {
+				id, tp := mobxNewBindingName(n, src)
+				if id != "" {
+					identStore[id] = canon
+				}
+				if tp != "" {
+					thisPropStore[tp] = canon
+				}
+			}
+		case "import_statement":
+			spec := ""
+			if s := n.ChildByFieldName("source"); s != nil {
+				spec = strings.Trim(s.Content(src), "\"'`")
+			}
+			target := resolveImport(spec)
+			if target == "" {
+				break
+			}
+			tsrc, troot, _, ok := jsParse(target)
+			if !ok {
+				break
+			}
+			def, namedExp := mobxModuleStoreExports(troot, tsrc, classLower)
+			for i := 0; i < int(n.NamedChildCount()); i++ {
+				ic := n.NamedChild(i)
+				if ic.Type() != "import_clause" {
+					continue
+				}
+				for j := 0; j < int(ic.NamedChildCount()); j++ {
+					cc := ic.NamedChild(j)
+					switch cc.Type() {
+					case "identifier":
+						if def != "" {
+							identStore[cc.Content(src)] = def
+						}
+					case "named_imports":
+						for k := 0; k < int(cc.NamedChildCount()); k++ {
+							sp := cc.NamedChild(k)
+							if sp.Type() != "import_specifier" {
+								continue
+							}
+							nm := sp.ChildByFieldName("name")
+							if nm == nil {
+								continue
+							}
+							localName := nm.Content(src)
+							if al := sp.ChildByFieldName("alias"); al != nil {
+								localName = al.Content(src)
+							}
+							if canon := namedExp[nm.Content(src)]; canon != "" {
+								identStore[localName] = canon
+							}
+						}
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+	return identStore, thisPropStore
 }
 
 // mobxBaseAnnotation returns the leftmost identifier of a MobX annotation
