@@ -9,6 +9,27 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
+// featureComponentAccessors are the conventional "resolve a component by string
+// key" lookup functions (SPA.3). A call `getFeatureComponent("PKPDTopLevel")`
+// whose result is rendered maps that string key to a component node. Kept
+// deliberately narrow — `getComponent` alone is far too generic (ECS, DOM, 3D
+// engines all use it) and produced pure noise on real corpora.
+var featureComponentAccessors = map[string]bool{
+	"getFeatureComponent": true,
+}
+
+// crIsTestFile reports whether rel is a JS test/spec/mock file — feature-registry
+// scanning skips these (a `getFeatureComponent("batCar")` in a unit test is not a
+// real render site).
+func crIsTestFile(rel string) bool {
+	for _, s := range []string{"__tests__/", "__mocks__/", "/spec/", ".test.", ".spec.", "-test.", "-spec.", "/test-support/"} {
+		if strings.Contains(rel, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // LinkJSClientRoutes (SPA.2) models a single-page-app's client-side router as
 // graph nodes and edges:
 //
@@ -28,11 +49,23 @@ import (
 // two conventional discriminant identifiers; the table is recognised purely by
 // shape. Runs after js_link so the render-target component nodes it resolves
 // against are already stamped (SPA.1 synthetics included).
-func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge) {
+//
+// SPA.3 rides along: a `getFeatureComponent("K")` / `<registry>["K"]` site whose
+// result is rendered resolves the string key K to a component — a real node when
+// K (or the registry's mapped identifier) matches one, else a synthetic
+// `component` node marked Meta["external"]="true" (the impl lives in a plugin
+// repo outside the corpus). The render edge is `client_route --renders-->` when K
+// feeds a route-switch case, else `enclosingFn --renders-->`. Non-literal keys
+// are ledgered `feature_component_dynamic`. `resolved` reports every (service,
+// key) SPA.3 resolved so the caller can retract the matching
+// `jsx_component_unresolved` ledger rows.
+func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, ledger []graph.UnresolvedRef, resolved map[string]bool) {
+	resolved = make(map[string]bool)
 	// --- index existing nodes ---
 	svcOfFile := make(map[string]string)
 	comp := make(map[string]string) // service\x00label → component node id
 	compRank := make(map[string]int)
+	fnBySvcLabel := make(map[string]string)        // service\x00label → function/method node id
 	handlersByPath := make(map[string][]crHandler) // normalised path → handlers
 	consider := func(svc, label, id string, rank int) {
 		if label == "" || svc == "" {
@@ -64,6 +97,13 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 			if startsUpperASCII(n.Label) {
 				consider(n.Service, n.Label, n.ID, 1)
 			}
+			if k := n.Service + "\x00" + n.Label; fnBySvcLabel[k] == "" {
+				fnBySvcLabel[k] = n.ID
+			}
+		case graph.NodeTypeMethod:
+			if k := n.Service + "\x00" + n.Label; fnBySvcLabel[k] == "" {
+				fnBySvcLabel[k] = n.ID
+			}
 		case graph.NodeTypeHTTPHandler:
 			p := n.Meta["path"]
 			if p == "" {
@@ -87,6 +127,20 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 	routesBySvc := make(map[string][]crEntry)
 	seenRoute := make(map[string]bool)
 	caseBySvc := make(map[string]map[string][]string) // svc → routeName → component tags
+
+	// SPA.3 accumulators.
+	featKeysBySvc := make(map[string]map[string]bool)     // svc → set of literal registry keys
+	featVarKeyBySvc := make(map[string]map[string]string) // svc → local var name → registry key
+	regBySvc := make(map[string]map[string]string)        // svc → registry key → component label
+	rendersBySvc := make(map[string][]fcRender)           // svc → JSX render sites
+	addFeatKey := func(svc, k string) {
+		m := featKeysBySvc[svc]
+		if m == nil {
+			m = make(map[string]bool)
+			featKeysBySvc[svc] = m
+		}
+		m[k] = true
+	}
 
 	seen := make(map[string]bool)
 	for svcKey, files := range serviceFiles {
@@ -127,6 +181,88 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 				}
 				m[name] = append(m[name], tags...)
 			}
+
+			if sc := scanFeatureComponents(root, src, rel); sc != nil && !crIsTestFile(rel) {
+				for k := range sc.keys {
+					addFeatKey(svc, k)
+				}
+				for v, k := range sc.varToKey {
+					m := featVarKeyBySvc[svc]
+					if m == nil {
+						m = make(map[string]string)
+						featVarKeyBySvc[svc] = m
+					}
+					m[v] = k
+				}
+				for k, lbl := range sc.registry {
+					m := regBySvc[svc]
+					if m == nil {
+						m = make(map[string]string)
+						regBySvc[svc] = m
+					}
+					m[k] = lbl
+				}
+				rendersBySvc[svc] = append(rendersBySvc[svc], sc.renders...)
+				for _, ln := range sc.dynamic {
+					ledger = append(ledger, graph.UnresolvedRef{
+						Service: svc, File: rel, Line: ln,
+						Name: "(dynamic)", Kind: "feature_component_dynamic",
+					})
+				}
+			}
+		}
+	}
+
+	// --- SPA.3: resolve string-keyed feature components, minting an external
+	// component node when the key names an impl outside the corpus. Injecting the
+	// resolved id into `comp` lets the SPA.2 render loop below emit the
+	// `client_route --renders-->` edge for a route-switch case unchanged. ---
+	featTarget := make(map[string]map[string]string) // svc → key → node id
+	mintFeat := func(svc, key string) string {
+		if m := featTarget[svc]; m != nil {
+			if id := m[key]; id != "" {
+				return id
+			}
+		}
+		id, label := "", key
+		if lbl := regBySvc[svc][key]; lbl != "" {
+			if rid := comp[svc+"\x00"+lbl]; rid != "" {
+				id = rid
+			} else {
+				label = lbl
+			}
+		}
+		if id == "" {
+			if rid := comp[svc+"\x00"+key]; rid != "" {
+				id = rid
+			}
+		}
+		if id == "" {
+			id = svc + ":(feature_registry):component:" + key
+			newNodes = append(newNodes, graph.Node{
+				ID:       id,
+				Type:     graph.NodeTypeComponent,
+				Label:    label,
+				Service:  svc,
+				File:     "(feature_registry)",
+				Language: "javascript",
+				Meta:     map[string]string{"spa": "feature_component", "external": "true", "key": key},
+			})
+		}
+		if featTarget[svc] == nil {
+			featTarget[svc] = make(map[string]string)
+		}
+		featTarget[svc][key] = id
+		consider(svc, key, id, 2)
+		if label != key {
+			consider(svc, label, id, 2)
+		}
+		resolved[svc+"\x00"+key] = true
+		return id
+	}
+	for svc, keys := range featKeysBySvc {
+		for k := range keys {
+			mintFeat(svc, k)
 		}
 	}
 
@@ -198,10 +334,227 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 			}
 		}
 	}
-	return newNodes, edges
+
+	// --- SPA.3: `enclosingFn --renders--> featureComponent` for render sites that
+	// are *not* inside a route-switch case (those are covered by the SPA.2 loop
+	// above via the injected `comp` entry). ---
+	for svc, rs := range rendersBySvc {
+		for _, r := range rs {
+			if r.inRouteCase {
+				continue
+			}
+			key := r.tag
+			if k := featVarKeyBySvc[svc][r.tag]; k != "" {
+				key = k
+			}
+			if !featKeysBySvc[svc][key] {
+				continue
+			}
+			fnID := fnBySvcLabel[svc+"\x00"+r.fn]
+			if fnID == "" {
+				continue
+			}
+			target := mintFeat(svc, key)
+			if target == "" || target == fnID {
+				continue
+			}
+			addEdge(graph.Edge{
+				ID:         "renders:" + fnID + "->" + target,
+				From:       fnID,
+				To:         target,
+				Type:       graph.EdgeTypeRenders,
+				Confidence: graph.ConfidenceInferred,
+				Meta:       map[string]string{"spa": "feature_component"},
+			})
+		}
+	}
+
+	return newNodes, edges, ledger, resolved
 }
 
 type crHandler struct{ id, method, svc string }
+
+// fcRender is one JSX render site seen while scanning for SPA.3 feature
+// components: the tag name, its enclosing function label ("(module)" at top
+// level), and whether it sits inside a route-switch case.
+type fcRender struct {
+	tag, fn, rel string
+	line         int
+	inRouteCase  bool
+}
+
+// looksLikeRegistryName recognises the conventional identifiers a string-keyed
+// component registry is bound to.
+func looksLikeRegistryName(s string) bool {
+	switch s {
+	case "registry", "REGISTRY", "featureComponents", "componentMap", "components",
+		"componentRegistry", "registeredComponents", "reactExports":
+		return true
+	}
+	return strings.HasSuffix(s, "Registry") || strings.HasSuffix(s, "Components")
+}
+
+type fcScanResult struct {
+	keys     map[string]bool
+	varToKey map[string]string
+	registry map[string]string
+	renders  []fcRender
+	dynamic  []int
+}
+
+// scanFeatureComponents walks a JS file for SPA.3 signals: string-keyed
+// component-registry accessor calls (`getFeatureComponent("K")`), registry
+// object literals (`export default { Foo, Bar }` — every value an uppercase
+// identifier), the local vars those calls bind to, and every JSX render site.
+// Returns nil when the file has nothing of interest.
+func scanFeatureComponents(root *sitter.Node, src []byte, rel string) *fcScanResult {
+	res := &fcScanResult{
+		keys:     make(map[string]bool),
+		varToKey: make(map[string]string),
+		registry: make(map[string]string),
+	}
+	for _, obj := range exportedObjectLiterals(root) {
+		for k, v := range componentRegistryEntries(obj, src) {
+			res.registry[k] = v
+		}
+	}
+
+	var walk func(n *sitter.Node, fn string, inCase bool)
+	walk = func(n *sitter.Node, fn string, inCase bool) {
+		switch n.Type() {
+		case "function_declaration":
+			if nm := n.ChildByFieldName("name"); nm != nil {
+				fn = nm.Content(src)
+			}
+		case "method_definition":
+			if nm := n.ChildByFieldName("name"); nm != nil {
+				fn = nm.Content(src)
+			}
+		case "variable_declarator":
+			if v := n.ChildByFieldName("value"); v != nil {
+				switch v.Type() {
+				case "arrow_function", "function_expression", "function":
+					if nm := n.ChildByFieldName("name"); nm != nil {
+						fn = nm.Content(src)
+					}
+				}
+			}
+		case "switch_statement":
+			if isRouteSwitchDiscriminant(n, src) {
+				inCase = true
+			}
+		case "call_expression":
+			if callee := n.ChildByFieldName("function"); callee != nil &&
+				callee.Type() == "identifier" && featureComponentAccessors[callee.Content(src)] {
+				var first *sitter.Node
+				if args := n.ChildByFieldName("arguments"); args != nil && args.NamedChildCount() > 0 {
+					first = args.NamedChild(0)
+				}
+				if k, ok := crStringLit(first, src); ok && k != "" {
+					res.keys[k] = true
+					for _, vn := range assignedNames(n, src) {
+						res.varToKey[vn] = k
+					}
+				} else {
+					res.dynamic = append(res.dynamic, int(n.StartPoint().Row)+1)
+				}
+			}
+		case "subscript_expression":
+			// `<registry>["K"]` — gated on the object identifier looking like a
+			// registry (bare `obj["K"]` is far too common to treat as a lookup).
+			obj := n.ChildByFieldName("object")
+			if obj != nil && obj.Type() == "identifier" && looksLikeRegistryName(obj.Content(src)) {
+				if k, ok := crStringLit(n.ChildByFieldName("index"), src); ok && startsUpperASCII(k) {
+					res.keys[k] = true
+					for _, vn := range assignedNames(n, src) {
+						res.varToKey[vn] = k
+					}
+				}
+			}
+		case "jsx_self_closing_element", "jsx_opening_element":
+			if nm := n.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
+				if tag := nm.Content(src); startsUpperASCII(tag) {
+					res.renders = append(res.renders, fcRender{
+						tag: tag, fn: fn, rel: rel,
+						line: int(n.StartPoint().Row) + 1, inRouteCase: inCase,
+					})
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i), fn, inCase)
+		}
+	}
+	walk(root, "(module)", false)
+
+	if len(res.keys) == 0 && len(res.registry) == 0 && len(res.dynamic) == 0 {
+		return nil
+	}
+	return res
+}
+
+// componentRegistryEntries reads an object literal that is a component registry —
+// at least two entries, every value a PascalCase identifier (shorthand or
+// explicit), no spreads — returning key → component label. Returns nil for
+// anything else (a route table's string values, a config object, a spread).
+func componentRegistryEntries(obj *sitter.Node, src []byte) map[string]string {
+	if obj == nil || obj.Type() != "object" {
+		return nil
+	}
+	out := make(map[string]string)
+	for i := 0; i < int(obj.NamedChildCount()); i++ {
+		c := obj.NamedChild(i)
+		switch c.Type() {
+		case "shorthand_property_identifier", "shorthand_property_identifier_pattern":
+			nm := c.Content(src)
+			if !startsUpperASCII(nm) {
+				return nil
+			}
+			out[nm] = nm
+		case "pair":
+			k := crKeyName(c.ChildByFieldName("key"), src)
+			v := c.ChildByFieldName("value")
+			if k == "" || v == nil || v.Type() != "identifier" {
+				return nil
+			}
+			vt := v.Content(src)
+			if !startsUpperASCII(vt) {
+				return nil
+			}
+			out[k] = vt
+		default:
+			return nil
+		}
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+// assignedNames returns the identifier names a call/subscript expression is bound
+// to, walking out through parenthesised and nested-assignment wrappers:
+// `var X = (Y = getFeatureComponent("K"))` yields ["Y", "X"].
+func assignedNames(n *sitter.Node, src []byte) []string {
+	var out []string
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		switch p.Type() {
+		case "parenthesized_expression":
+		case "assignment_expression":
+			if l := p.ChildByFieldName("left"); l != nil && l.Type() == "identifier" {
+				out = append(out, l.Content(src))
+			}
+		case "variable_declarator":
+			if nm := p.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
+				out = append(out, nm.Content(src))
+			}
+			return out
+		default:
+			return out
+		}
+	}
+	return out
+}
 
 // exportedObjectLiterals returns object literals that are the value of an
 // `export default …` or an exported `const … = { … }`.

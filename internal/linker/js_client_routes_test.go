@@ -90,7 +90,7 @@ func TestLinkJSClientRoutes_TableAndSwitch(t *testing.T) {
 		jsClassNode("svc", cf, "CDMTopLevel", 1, 3),
 		jsClassNode("svc", cf, "CodeListTopLevelNew", 5, 7),
 	}
-	nodes, edges := LinkJSClientRoutes(in, map[string][]string{"svc": {rf, nf}})
+	nodes, edges, _, _ := LinkJSClientRoutes(in, map[string][]string{"svc": {rf, nf}})
 
 	byLabel := crNodesByLabel(nodes)
 	for _, name := range []string{"cdm", "codelists", "contents"} {
@@ -128,7 +128,7 @@ func TestLinkJSClientRoutes_HashAndPlainPatterns(t *testing.T) {
 `,
 	})
 	rf := p["routes.jsx"]
-	nodes, _ := LinkJSClientRoutes([]graph.Node{anchorNode("svc", rf)}, map[string][]string{"svc": {rf}})
+	nodes, _, _, _ := LinkJSClientRoutes([]graph.Node{anchorNode("svc", rf)}, map[string][]string{"svc": {rf}})
 	byLabel := crNodesByLabel(nodes)
 	if byLabel["hashed"].Meta["path"] != "/x/*" {
 		t.Errorf("hashed path = %q, want /x/*", byLabel["hashed"].Meta["path"])
@@ -154,7 +154,7 @@ func TestLinkJSClientRoutes_NavToHandler(t *testing.T) {
 	h := crHandlerNode("svc", "config/routes.rb", "x#show", "GET", "/x/:id", 4)
 	post := crHandlerNode("svc", "config/routes.rb", "x#update", "POST", "/x/:id", 5)
 
-	nodes, edges := LinkJSClientRoutes(
+	nodes, edges, _, _ := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", rf), h, post},
 		map[string][]string{"svc": {rf}},
 	)
@@ -182,11 +182,150 @@ func TestLinkJSClientRoutes_NoTableNoCrash(t *testing.T) {
 	for _, v := range p {
 		files = append(files, v)
 	}
-	nodes, edges := LinkJSClientRoutes(
+	nodes, edges, _, _ := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", p["config.jsx"]), anchorNode("svc", p["Component.jsx"])},
 		map[string][]string{"svc": files},
 	)
 	if len(nodes) != 0 || len(edges) != 0 {
 		t.Errorf("expected no output, got nodes=%+v edges=%+v", nodes, edges)
+	}
+}
+
+// TestFeatureRegistry_ObjectLiteral (SPA.3): `export default { Foo }` registry +
+// `const C = getFeatureComponent("Foo"); <C/>` → `renders` from the enclosing
+// function to the Foo component node.
+func TestFeatureRegistry_ObjectLiteral(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"registry.jsx": `import Foo from "./components/Foo";
+export default { Foo, Bar };
+`,
+		"page.jsx": `function Page() {
+  const C = getFeatureComponent("Foo");
+  return <C />;
+}
+`,
+	})
+	rf, pf := p["registry.jsx"], p["page.jsx"]
+	foo := jsClassNode("svc", "components/Foo.jsx", "Foo", 1, 3)
+	pageFn := jsFuncNode("svc", pf, "Page", 1)
+
+	nodes, edges, _, resolved := LinkJSClientRoutes(
+		[]graph.Node{anchorNode("svc", rf), anchorNode("svc", pf), foo, pageFn},
+		map[string][]string{"svc": {rf, pf}},
+	)
+	if !hasEdge(edges, graph.EdgeTypeRenders, pageFn.ID, foo.ID) {
+		t.Errorf("no renders Page -> Foo; edges=%+v nodes=%+v", edges, nodes)
+	}
+	if !resolved["svc\x00Foo"] {
+		t.Errorf("Foo not marked resolved: %v", resolved)
+	}
+}
+
+// TestFeatureRegistry_BarrelDefaultExport (SPA.3): a registry in one file mapping
+// a key to a differently-named impl, accessed via `R["key"]` in another file of
+// the same service.
+func TestFeatureRegistry_BarrelDefaultExport(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"barrel.jsx": `export default { Widget: WidgetImpl, Panel: PanelImpl };`,
+		"host.jsx": `import componentRegistry from "./barrel";
+function Host() {
+  const X = componentRegistry["Widget"];
+  return <X />;
+}
+`,
+	})
+	bf, hf := p["barrel.jsx"], p["host.jsx"]
+	impl := jsClassNode("svc", "components/WidgetImpl.jsx", "WidgetImpl", 1, 3)
+	hostFn := jsFuncNode("svc", hf, "Host", 1)
+
+	_, edges, _, _ := LinkJSClientRoutes(
+		[]graph.Node{anchorNode("svc", bf), anchorNode("svc", hf), impl, hostFn},
+		map[string][]string{"svc": {bf, hf}},
+	)
+	if !hasEdge(edges, graph.EdgeTypeRenders, hostFn.ID, impl.ID) {
+		t.Errorf("no renders Host -> WidgetImpl; edges=%+v", edges)
+	}
+}
+
+// TestFeatureRegistry_UnknownKey (SPA.3): a non-literal lookup key is ledgered
+// `feature_component_dynamic` and emits no edge.
+func TestFeatureRegistry_UnknownKey(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"f.jsx": `function F(someVar) {
+  const c = getFeatureComponent(someVar);
+  return <div>{c}</div>;
+}
+`,
+	})
+	ff := p["f.jsx"]
+	nodes, edges, ledger, _ := LinkJSClientRoutes(
+		[]graph.Node{anchorNode("svc", ff), jsFuncNode("svc", ff, "F", 1)},
+		map[string][]string{"svc": {ff}},
+	)
+	if len(nodes) != 0 || len(edges) != 0 {
+		t.Errorf("dynamic key must emit nothing; nodes=%+v edges=%+v", nodes, edges)
+	}
+	found := false
+	for _, u := range ledger {
+		if u.Kind == "feature_component_dynamic" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no feature_component_dynamic ledger entry; got %+v", ledger)
+	}
+}
+
+// TestFeatureRegistry_RouteSwitchCase (SPA.3): a `getFeatureComponent("X")` in a
+// `switch (routeName)` case whose key names no in-corpus component mints an
+// external component node and wires `client_route --renders--> it` (not an
+// enclosing-function edge).
+func TestFeatureRegistry_RouteSwitchCase(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"common/ClientRoutes.jsx": `export default {
+  pkpdProjects: "/pkpd#projects",
+  foo: "/foo/:id",
+  bar: "/bar/:id",
+};
+`,
+		"common/navigation.jsx": `function renderRoute(routeName, params) {
+  var kid;
+  switch (routeName) {
+    case "pkpdProjects":
+      var PKPDTopLevel = getFeatureComponent("PKPDTopLevel");
+      kid = <PKPDTopLevel {...params} />;
+      break;
+  }
+  return kid;
+}
+`,
+	})
+	rf, nf := p["common/ClientRoutes.jsx"], p["common/navigation.jsx"]
+	nodes, edges, _, resolved := LinkJSClientRoutes(
+		[]graph.Node{anchorNode("svc", rf), anchorNode("svc", nf), jsFuncNode("svc", nf, "renderRoute", 1)},
+		map[string][]string{"svc": {rf, nf}},
+	)
+	var synth graph.Node
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeComponent && n.Label == "PKPDTopLevel" {
+			synth = n
+		}
+	}
+	if synth.ID == "" {
+		t.Fatalf("no synthetic PKPDTopLevel component node; nodes=%+v", nodes)
+	}
+	if synth.Meta["external"] != "true" {
+		t.Errorf("synthetic node not marked external: %+v", synth.Meta)
+	}
+	route := crNodesByLabel(nodes)["pkpdProjects"]
+	if !hasEdge(edges, graph.EdgeTypeRenders, route.ID, synth.ID) {
+		t.Errorf("no renders pkpdProjects -> PKPDTopLevel; edges=%+v", edges)
+	}
+	if !resolved["svc\x00PKPDTopLevel"] {
+		t.Errorf("PKPDTopLevel not marked resolved")
 	}
 }

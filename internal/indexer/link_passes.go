@@ -311,7 +311,17 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// render-target component nodes are already resolved/stamped.
 		{"js_client_routes", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			crNodes, crEdges := linker.LinkJSClientRoutes(st.allNodes, svcFiles)
+			crNodes, crEdges, crLedger, crResolved := linker.LinkJSClientRoutes(st.allNodes, svcFiles)
+			// SPA.3: retract jsx_component_unresolved rows for keys the feature
+			// registry resolved; record the non-literal lookups it couldn't.
+			filtered := st.allUnresolved[:0]
+			for _, u := range st.allUnresolved {
+				if u.Kind == "jsx_component_unresolved" && crResolved[u.Service+"\x00"+u.Name] {
+					continue
+				}
+				filtered = append(filtered, u)
+			}
+			st.allUnresolved = append(filtered, crLedger...)
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
