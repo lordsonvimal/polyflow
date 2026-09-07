@@ -2573,6 +2573,24 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		strings.HasPrefix(lower, "dj_handle_async") || strings.HasPrefix(lower, "aj_perform_later") ||
 		strings.HasPrefix(lower, "celery_task_delay") || strings.HasPrefix(lower, "celery_apply_async"):
 		return graph.NodeTypePublisher, graph.EdgeTypeJobEnqueue
+	// CJ: a `class X < <anything>` that defines `perform` is only a *nomination*
+	// — the superclass is unpredicated, so this matches any PORO with a perform
+	// method. It carries no meaning until linker.PromoteInheritedJobPerform
+	// proves the class reaches an ActiveJob root over `inherits` edges, at
+	// which point it is replaced by a real subscriber node (and deleted
+	// otherwise), so it is typed as bookkeeping — the same NodeTypeVariable
+	// marker role as the alias/instance bindings at the top of this switch.
+	//
+	// Specifically NOT a function node: the nomination sits on the class's own
+	// line and carries no end_line, and ruby.go's linkRubyEnclosingCalls treats
+	// an unbounded function span as enclosing every line after it. As a
+	// function it became the innermost scope around the class-line
+	// `aj_perform_method` subscriber of the very same class and stole the
+	// `class --contains--> subscriber` edge off it (measured: 20 job classes).
+	// Must precede the aj_perform_method prefix case below, which would
+	// otherwise claim it.
+	case lower == "aj_perform_method_candidate":
+		return graph.NodeTypeVariable, graph.EdgeTypeCalls
 	case strings.Contains(lower, "sidekiq_worker") || strings.Contains(lower, "sidekiq_job") ||
 		strings.HasPrefix(lower, "aj_perform_method") ||
 		strings.HasPrefix(lower, "celery_task_decorator"):

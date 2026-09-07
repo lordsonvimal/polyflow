@@ -1,1 +1,1 @@
-{"patterns": ["aj_perform_method", "aj_perform_later", "aj_perform_later"], "node_types": ["subscriber", "publisher", "publisher"]}
+{"patterns": ["aj_perform_method", "aj_perform_method_candidate", "aj_perform_method", "aj_perform_method_candidate", "aj_perform_method_candidate", "aj_perform_later", "aj_perform_later"], "node_types": ["subscriber", "variable", "subscriber", "variable", "variable", "publisher", "publisher"]}

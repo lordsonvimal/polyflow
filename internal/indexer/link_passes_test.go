@@ -30,6 +30,7 @@ var wantLinkPasses = []struct {
 	{"js_redux", scopeSameServiceOnly},
 	{"js_mobx", scopeSameServiceOnly},
 	{"ruby_type_relations", scopeSameServiceOnly},
+	{"ruby_job_inherit", scopeSameServiceOnly},
 	{"ruby_class_method_calls", scopeSameServiceOnly},
 	{"ruby_receiver_type_calls", scopeSameServiceOnly},
 	{"ruby_associations", scopeSameServiceOnly},

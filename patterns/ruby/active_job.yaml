@@ -54,3 +54,34 @@ patterns:
         role: job_class
       - name: name
         role: perform_method
+
+  # CJ: the same shape with NO predicate on the superclass name. A project
+  # that introduces its own base class (ReportJob < ProjectBaseJob <
+  # ApplicationJob) fails the predicate above at depth 1, so ~half of a real
+  # monolith's job classes mint no subscriber node at all. A tree-sitter
+  # predicate cannot walk an inheritance chain; the linker can, so this
+  # pattern only *nominates* the class and internal/linker/ruby_job_inherit.go
+  # decides. It is deliberately classified as an inert bookkeeping node
+  # (matcher.go's classifyPattern), never a subscriber: promotion to
+  # subscriber happens only for a class that actually reaches an ActiveJob
+  # root over `inherits` edges. Every candidate the linker does not promote is
+  # deleted, so a PORO with a `perform` method adds nothing to the graph.
+  #
+  # The perform-name capture is deliberately NOT called `name`: matcher.go
+  # labels a node from a `name` capture, which would put `perform` in this
+  # node's label and make it indistinguishable from the Ruby parser's own
+  # `perform` method node.
+  - name: aj_perform_method_candidate
+    query: |
+      (class
+        name: [(constant) (scope_resolution)] @job_class
+        superclass: (superclass)
+        body: (body_statement
+          (method
+            name: (identifier) @perform_name
+            (#eq? @perform_name "perform"))))
+    captures:
+      - name: job_class
+        role: job_class
+      - name: perform_name
+        role: perform_method
