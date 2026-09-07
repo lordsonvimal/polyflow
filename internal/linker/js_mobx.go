@@ -204,10 +204,13 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		if !ok {
 			continue
 		}
-		// cheap reject: no makeObservable surface at all
+		// cheap reject: no makeObservable surface and no legacy decorator surface
 		low := string(src)
-		if !strings.Contains(low, "makeObservable") && !strings.Contains(low, "makeAutoObservable") &&
-			!strings.Contains(low, "makeSimpleObservable") {
+		hasMake := strings.Contains(low, "makeObservable") || strings.Contains(low, "makeAutoObservable") ||
+			strings.Contains(low, "makeSimpleObservable")
+		hasDeco := strings.Contains(low, "@observable") || strings.Contains(low, "@action") ||
+			strings.Contains(low, "@computed") || strings.Contains(low, "@flow")
+		if !hasMake && !hasDeco {
 			continue
 		}
 		classMembers := membersByFileClass[rel]
@@ -249,8 +252,43 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			}
 		}
 
-		// Pass A: annotate members from makeObservable / makeAutoObservable.
+		// Pass A: annotate members from makeObservable / makeAutoObservable, and
+		// from legacy `@observable` / `@action` / `@computed` / `@flow` decorators
+		// (MobX 4/5 and mid-migration codebases).
 		mobxWalk(root, func(n *sitter.Node) {
+			if n.Type() == "decorator" {
+				if !hasDeco || n.NamedChildCount() == 0 {
+					return
+				}
+				kind := mobxNormalizeAnnotation(mobxBaseAnnotation(n.NamedChild(0), src))
+				if kind == "" {
+					return
+				}
+				// A field decorator is a child of the field def; a method
+				// decorator is a preceding sibling of the method_definition.
+				owner := n.Parent()
+				if owner != nil && owner.Type() == "class_body" {
+					owner = n.NextNamedSibling()
+				}
+				if owner == nil {
+					return
+				}
+				switch owner.Type() {
+				case "method_definition", "public_field_definition", "field_definition":
+				default:
+					return
+				}
+				nm := owner.ChildByFieldName("name")
+				if nm == nil {
+					return
+				}
+				cls := mobxEnclosingClass(owner, src)
+				if cls == "" {
+					return
+				}
+				mobxTag(cls, nm.Content(src), kind, int(owner.StartPoint().Row)+1)
+				return
+			}
 			if n.Type() != "call_expression" {
 				return
 			}
@@ -489,6 +527,85 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 					})
 				})
 			}
+		})
+	}
+
+	// Pass D (JCM.9): computed → observable dependency edges. For every member
+	// tagged mobx=computed, walk its getter/method body for `this.<obs>` reads
+	// (and cross-store reads via the JCM.8 resolver) that resolve to an
+	// observable|computed sibling, and emit computedMember --reads--> observable
+	// Meta["mobx"]="computed_dep". Reverse-`reads` on an observable then
+	// transitively reaches `observer` consumers through their computeds.
+	computedFiles := make(map[string]bool)
+	for _, n := range tagged {
+		if n.Meta["mobx"] == "computed" {
+			computedFiles[n.File] = true
+		}
+	}
+	for _, fe := range jsFiles {
+		rel := patterns.RelativizeToCwd(fe.abs)
+		if !computedFiles[rel] {
+			continue
+		}
+		src, root, _, ok := jsParse(fe.abs)
+		if !ok {
+			continue
+		}
+		bnd := getBinds(fe.abs, root, src)
+		mobxWalk(root, func(n *sitter.Node) {
+			if n.Type() != "method_definition" {
+				return
+			}
+			nm := n.ChildByFieldName("name")
+			body := n.ChildByFieldName("body")
+			if nm == nil || body == nil {
+				return
+			}
+			cls := mobxEnclosingClass(n, src)
+			if cls == "" {
+				return
+			}
+			mm := membersByClass[cls]
+			if mm == nil {
+				return
+			}
+			idx, ok := mm[nm.Content(src)]
+			if !ok {
+				return
+			}
+			kind := nodes[idx].Meta["mobx"]
+			if t, ok2 := tagged[nodes[idx].ID]; ok2 {
+				kind = t.Meta["mobx"]
+			}
+			if kind != "computed" {
+				return
+			}
+			from := nodes[idx].ID
+			deps := 0
+			mobxWalk(body, func(m *sitter.Node) {
+				if m.Type() != "member_expression" || deps >= 64 {
+					return
+				}
+				canon, obs, _ := mobxReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
+				if canon == "" {
+					return
+				}
+				to := memberReactiveID(canon, obs)
+				if to == "" || to == from {
+					return
+				}
+				eid := fmt.Sprintf("reads:%s->%s#mobx_cdep", from, to)
+				if seenEdge[eid] {
+					return
+				}
+				seenEdge[eid] = true
+				deps++
+				newEdges = append(newEdges, graph.Edge{
+					ID: eid, From: from, To: to, Type: graph.EdgeTypeReads,
+					Confidence: graph.ConfidenceInferred,
+					Meta:       map[string]string{"mobx": "computed_dep", "tier": "jcm9"},
+				})
+			})
 		})
 	}
 

@@ -261,6 +261,58 @@ class Watcher {
 	}
 }
 
+// TestLinkJSMobx_ComputedDepAndDecorators (JCM.9) covers legacy decorator
+// annotations plus computed → observable dependency edges.
+func TestLinkJSMobx_ComputedDepAndDecorators(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"stores/Grid.js": `import { observable, computed, action } from "mobx";
+class Grid {
+  @observable count = 0;
+  @observable.ref extra = 0;
+  @computed get total() {
+    return this.count + this.extra;
+  }
+  @action.bound inc() {
+    this.count += 1;
+  }
+}
+`,
+	})
+	f := p["stores/Grid.js"]
+	cls := jsClassNode("svc", f, "Grid", 2, 12)
+	count := mobxMemberNode("svc", f, "count", 3, graph.NodeTypeVariable, map[string]string{"class": "Grid", "scope": "class_field"})
+	extra := mobxMemberNode("svc", f, "extra", 4, graph.NodeTypeVariable, map[string]string{"class": "Grid", "scope": "class_field"})
+	total := mobxMemberNode("svc", f, "total", 5, graph.NodeTypeFunction, map[string]string{"class": "Grid", "js_accessor": "true"})
+	inc := mobxMemberNode("svc", f, "inc", 8, graph.NodeTypeFunction, map[string]string{"class": "Grid", "member_kind": "method"})
+
+	_, tagged, edges := LinkJSMobx([]graph.Node{cls, count, extra, total, inc}, map[string][]string{"svc": {f}})
+
+	kinds := map[string]string{}
+	for _, n := range tagged {
+		kinds[n.ID] = n.Meta["mobx"]
+	}
+	for id, want := range map[string]string{count.ID: "observable", extra.ID: "observable", total.ID: "computed", inc.ID: "action"} {
+		if kinds[id] != want {
+			t.Errorf("decorator tag %s: want %s, got %q (all: %+v)", id, want, kinds[id], kinds)
+		}
+	}
+
+	want := map[string]bool{count.ID: false, extra.ID: false}
+	for _, e := range edges {
+		if e.From == total.ID && e.Type == graph.EdgeTypeReads && e.Meta["mobx"] == "computed_dep" && e.Meta["tier"] == "jcm9" {
+			if _, ok := want[e.To]; ok {
+				want[e.To] = true
+			}
+		}
+	}
+	for id, ok := range want {
+		if !ok {
+			t.Errorf("missing computed_dep edge total->%s; edges=%+v", id, edges)
+		}
+	}
+}
+
 // TestLinkJSMobx_NoMobxNoOutput guards against firing on a plain class.
 func TestLinkJSMobx_NoMobxNoOutput(t *testing.T) {
 	t.Parallel()
