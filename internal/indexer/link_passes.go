@@ -321,6 +321,37 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(reduxEdges)
 		}},
+		// JCM.4: MobX reactivity — tags observable/action/computed class members
+		// (makeObservable / makeAutoObservable) and links autorun/reaction/when
+		// callbacks to the observable members they read.
+		{"js_mobx", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			mobxNew, mobxTagged, mobxEdges := linker.LinkJSMobx(st.allNodes, svcFiles)
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for i := range mobxTagged {
+				n := mobxTagged[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				if idx, ok := byID[n.ID]; ok {
+					st.allNodes[idx] = n
+				}
+			}
+			for i := range mobxNew {
+				n := mobxNew[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(mobxEdges)
+		}},
 		// Ruby cross-file inherits/implements/instantiates edges.
 		{"ruby_type_relations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
