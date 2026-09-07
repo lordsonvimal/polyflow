@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
 // UnresolvedRailsRouteAction is the ledger kind for a Rails route whose
@@ -67,6 +68,11 @@ func LinkRailsRouteActions(nodes []graph.Node) ([]graph.Edge, []graph.Unresolved
 
 		calleeID, found := idx.lookup(n.Service, namespace, resource, action)
 		if !found {
+			if alt, ok := railsPluralController(n, resource); ok {
+				calleeID, found = idx.lookup(n.Service, namespace, alt, action)
+			}
+		}
+		if !found {
 			unresolved = append(unresolved, graph.UnresolvedRef{
 				Service: n.Service,
 				File:    n.File,
@@ -93,6 +99,40 @@ func LinkRailsRouteActions(nodes []graph.Node) ([]graph.Edge, []graph.Unresolved
 		})
 	}
 	return edges, unresolved
+}
+
+// railsPluralController is Tier CR: the second and last controller-name
+// candidate a Rails route gets, tried only after the name as written misses.
+//
+// Rails maps the *singular* `resource :session` onto the *plural*
+// SessionsController — a singleton resource is singular in the URL and in the
+// declaration, but its controller is not. Resolving the declaration's name
+// verbatim looks for session_controller.rb, which does not exist, so on cedar
+// every action of all 19 singular resources ledgered while the controller sat
+// on disk one "s" away.
+//
+// Two guards, both narrow on purpose:
+//
+//   - Only `resource_style == "singular"`. A plural `resources` declaration
+//     already spells its controller correctly, and inflecting it again would
+//     start guessing at controllers for the legitimately-dead routes that make
+//     up most of the unresolved ledger (a bare `resources :widgets` mints all
+//     seven REST routes whether or not the controller implements them).
+//   - Never when the route named its controller outright. `controller:` is an
+//     exact basename, already in Meta["resource"]; inflecting it would turn a
+//     stated target into a guessed one.
+//
+// A wrong plural finds nothing and falls through to the ledger, so the cost of
+// an inflection miss is a missing edge, never a wrong one.
+func railsPluralController(n *graph.Node, resource string) (string, bool) {
+	if n.Meta["resource_style"] != "singular" || n.Meta["controller_explicit"] != "" {
+		return "", false
+	}
+	plural := railsinflect.Pluralize(resource)
+	if plural == resource {
+		return "", false
+	}
+	return plural, true
 }
 
 // railsRouteTarget recovers (action, resource, namespace) from a Rails

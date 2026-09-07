@@ -62,6 +62,67 @@ func Singularize(s string) string {
 	return s
 }
 
+// railsIrregularPlurals is railsIrregularSingulars read the other way. It is
+// not a second table to keep in sync — it is derived from the first one, so a
+// word can never pluralize and singularize inconsistently.
+var railsIrregularPlurals = func() map[string]string {
+	out := make(map[string]string, len(railsIrregularSingulars))
+	for plural, singular := range railsIrregularSingulars {
+		out[singular] = plural
+	}
+	return out
+}()
+
+// Pluralize is Singularize's inverse over the same narrow set of rules Rails'
+// own defaults cover. It exists for one job: Rails maps the *singular*
+// `resource :session` declaration onto the *plural* SessionsController, so a
+// route resolver holding the declaration's name has to reach the plural
+// spelling to find the controller on disk.
+//
+// Already-plural input is returned unchanged, because a routes file may
+// legitimately write `resource :settings` for a singleton whose controller is
+// SettingsController. "Already plural" is decided by asking Singularize: a
+// word it changes was plural to begin with.
+//
+// Like Singularize this is deliberately not a full inflector. A word it gets
+// wrong ("analysis" → "analysiss", not "analyses") produces a controller path
+// that matches nothing on disk, so the caller falls through to its unresolved
+// ledger — an inflection miss costs a missing edge, never a wrong one. Resist
+// growing an irregular-noun table here until a real corpus demands one.
+//
+//	Pluralize("home")     == "homes"
+//	Pluralize("category") == "categories"
+//	Pluralize("box")      == "boxes"
+//	Pluralize("sessions") == "sessions"   // already plural, identity
+func Pluralize(s string) string {
+	if s == "" {
+		return s
+	}
+	if p, ok := railsIrregularPlurals[s]; ok {
+		return p
+	}
+	if Singularize(s) != s {
+		return s // already plural
+	}
+	switch {
+	case strings.HasSuffix(s, "y") && len(s) > 1 && !isVowel(s[len(s)-2]):
+		return s[:len(s)-1] + "ies"
+	case strings.HasSuffix(s, "s"), strings.HasSuffix(s, "x"),
+		strings.HasSuffix(s, "z"), strings.HasSuffix(s, "ch"),
+		strings.HasSuffix(s, "sh"):
+		return s + "es"
+	}
+	return s + "s"
+}
+
+func isVowel(b byte) bool {
+	switch b {
+	case 'a', 'e', 'i', 'o', 'u':
+		return true
+	}
+	return false
+}
+
 // DeviseAction is one action `devise_for` implicitly routes for a given scope
 // (sessions, registrations, ...). Unlike a plain REST resource's actions, the
 // path is not derivable from a generic member/collection shape — Devise names

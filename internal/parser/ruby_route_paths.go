@@ -64,7 +64,7 @@ func composeRailsRoutePaths(file, service string, src []byte, nodes []graph.Node
 		byLine:  byLine,
 		seen:    map[string]bool{},
 	}
-	w.walk(tree.RootNode(), nil, nil, nameScope{}, "")
+	w.walk(tree.RootNode(), nil, nil, nameScope{}, "", false)
 	return w.out
 }
 
@@ -174,15 +174,24 @@ func dropNonRoutesFileRouteMatches(file string, results []patterns.MatchResult) 
 // other is not possible, and getting it wrong is expensive in both directions —
 // see composeAndStamp's controller_module note.
 //
+// singular is the fourth piece of threaded state (Tier CR): whether the
+// immediately enclosing resource block was declared with `resource` rather
+// than `resources`. Rails serves a singleton from the *plural* controller, so
+// the route resolver needs to know, and a verb route nested in the block
+// (`resource :home do member { get :users } end`) has no other way to find
+// out — its own path segment is singular too. It is deliberately reset by
+// `namespace` and `scope`, which redefine the controller module and so end the
+// enclosing resource's claim on where the controller lives.
+//
 // names is the third stack, for Rails route *names* (`study_deliverable_path`).
 // It agrees with neither of the other two — see nameScope.
-func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope, nestParam string) {
+func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope, nestParam string, singular bool) {
 	if n == nil {
 		return
 	}
 	if n.Type() != "call" {
 		for i := 0; i < int(n.ChildCount()); i++ {
-			w.walk(n.Child(i), prefix, mod, names, nestParam)
+			w.walk(n.Child(i), prefix, mod, names, nestParam, singular)
 		}
 		return
 	}
@@ -203,7 +212,7 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 	case "namespace":
 		seg, ok := firstPositionalSegment(n, w.src)
 		if ok && blockNode != nil {
-			w.walk(blockBody(blockNode), append(base, seg), appendSeg(mod, seg), names.descend(seg), "")
+			w.walk(blockBody(blockNode), append(base, seg), appendSeg(mod, seg), names.descend(seg), "", false)
 		}
 		return
 	case "scope":
@@ -219,7 +228,7 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		}
 		pathSeg, modSeg := scopeSegments(n, w.src)
 		w.walk(blockBody(blockNode), appendSeg(base, pathSeg), appendSeg(mod, modSeg),
-			names.descend(keywordSegment(n, w.src, "as")), "")
+			names.descend(keywordSegment(n, w.src, "as")), "", false)
 		return
 	case "resources", "resource":
 		seg, ok := firstPositionalSegment(n, w.src)
@@ -235,14 +244,27 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		if as := keywordSegment(n, w.src, "as"); as != "" {
 			nameSeg = as
 		}
-		singular, pluralName := nameSeg, nameSeg
+		singularName, pluralName := nameSeg, nameSeg
 		if plural {
-			singular = railsinflect.Singularize(nameSeg)
+			singularName = railsinflect.Singularize(nameSeg)
 		}
-		w.emitRESTRoutes(n, scope, mod, names, seg, singular, pluralName, plural)
+		// `controller:` names the controller outright, overriding the resource
+		// name entirely: `resources :studies, controller: "containers"`
+		// serves ContainersController. A namespaced value
+		// ("users/sessions") contributes module nesting, the same split
+		// emitDeviseRoutes does for its `controllers:` override hash.
+		ctrlMod, ctrlSeg, ctrlExplicit := mod, seg, false
+		if c := keywordSegment(n, w.src, "controller"); c != "" {
+			ctrlSeg, ctrlExplicit = c, true
+			if slash := strings.LastIndex(c, "/"); slash >= 0 {
+				ctrlMod = appendSeg(mod, c[:slash])
+				ctrlSeg = c[slash+1:]
+			}
+		}
+		w.emitRESTRoutes(n, scope, ctrlMod, names, ctrlSeg, singularName, pluralName, plural, ctrlExplicit)
 		if blockNode != nil {
 			w.walk(blockBody(blockNode), scope, mod,
-				names.enterResource(singular, pluralName), nestingParam(seg, plural))
+				names.enterResource(singularName, pluralName), nestingParam(seg, plural), !plural)
 		}
 		return
 	case "devise_for":
@@ -253,12 +275,12 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 		return
 	case "member":
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), mod, names, "")
+			w.walk(blockBody(blockNode), append(append([]string{}, prefix...), ":id"), mod, names, "", singular)
 		}
 		return
 	case "collection":
 		if blockNode != nil {
-			w.walk(blockBody(blockNode), prefix, mod, names, "")
+			w.walk(blockBody(blockNode), prefix, mod, names, "", singular)
 		}
 		return
 	case "get", "post", "put", "patch", "delete":
@@ -273,11 +295,11 @@ func (w *routeWalker) walk(n *sitter.Node, prefix, mod []string, names nameScope
 				w.emitResourceScopedVerb(n, prefix, mod, names, strings.ToUpper(method), action)
 			}
 		}
-		composeAndStamp(n, w.src, prefix, mod, names, w.byLine)
+		composeAndStamp(n, w.src, prefix, mod, names, w.byLine, singular)
 		return
 	}
 	if blockNode != nil {
-		w.walk(blockBody(blockNode), prefix, mod, names, nestParam)
+		w.walk(blockBody(blockNode), prefix, mod, names, nestParam, singular)
 	}
 }
 
@@ -381,7 +403,7 @@ var pluralRESTActions = []restAction{
 //
 // A singular `resource :profile` has no index and no `:id`: there is only ever one
 // of it, so show/update/destroy address the collection path directly.
-func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, names nameScope, seg, singular, pluralName string, plural bool) {
+func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, names nameScope, seg, singular, pluralName string, plural, ctrlExplicit bool) {
 	only, hasOnly, except := restActionFilters(call, w.src)
 	if hasOnly && len(only) == 0 {
 		// `resources :users, only: []` declares the resource purely as a nesting
@@ -391,6 +413,17 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 		return
 	}
 	line := int(call.StartPoint().Row) + 1
+
+	// How Meta["resource"] was arrived at, for the route→controller resolver
+	// (CR). Rails maps the singular `resource :session` onto the *plural*
+	// SessionsController, so "singular" is the resolver's licence to try the
+	// pluralized spelling when the name as written matches nothing. An
+	// explicit `controller:` is already the exact basename and must never be
+	// inflected, so it suppresses that second candidate outright.
+	style := "plural"
+	if !plural {
+		style = "singular"
+	}
 
 	for _, a := range pluralRESTActions {
 		if !plural && a.name == "index" {
@@ -417,6 +450,25 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 		}
 		w.seen[key] = true
 
+		meta := map[string]string{
+			"pattern":           "rest_resource_route",
+			"path":              path,
+			"method":            a.method,
+			"action":            a.name,
+			"resource":          seg,
+			"resource_style":    style,
+			"controller_module": strings.Join(mod, "/"),
+			// The route's Rails name, recorded at the only place that can
+			// know it. A view's `study_deliverable_path` is resolved by
+			// looking this up (BuildRailsHelperMap), never by rebuilding a
+			// path from the resource name — that reconstruction cannot see
+			// the enclosing `scope "app"` and got every orion route wrong.
+			"route_helper": restHelperName(names, a.name, singular, pluralName),
+		}
+		if ctrlExplicit {
+			meta["controller_explicit"] = "true"
+		}
+
 		w.out = append(w.out, graph.Node{
 			ID:       w.service + ":" + w.file + ":" + string(graph.NodeTypeHTTPHandler) + ":" + key + ":" + strconv.Itoa(line),
 			Type:     graph.NodeTypeHTTPHandler,
@@ -426,20 +478,7 @@ func (w *routeWalker) emitRESTRoutes(call *sitter.Node, scope, mod []string, nam
 			Line:     line,
 			EndLine:  line,
 			Language: "ruby",
-			Meta: map[string]string{
-				"pattern":           "rest_resource_route",
-				"path":              path,
-				"method":            a.method,
-				"action":            a.name,
-				"resource":          seg,
-				"controller_module": strings.Join(mod, "/"),
-				// The route's Rails name, recorded at the only place that can
-				// know it. A view's `study_deliverable_path` is resolved by
-				// looking this up (BuildRailsHelperMap), never by rebuilding a
-				// path from the resource name — that reconstruction cannot see
-				// the enclosing `scope "app"` and got every orion route wrong.
-				"route_helper": restHelperName(names, a.name, singular, pluralName),
-			},
+			Meta:     meta,
 		})
 	}
 }
@@ -758,11 +797,24 @@ func resourceScopedHelperName(as, action, base string) string {
 // own line (matcher.go's r.Line for member_verb_route/collection_verb_route
 // is the innermost named capture's line — the verb call itself — not the
 // enclosing member/collection block's line).
-func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names nameScope, byLine map[int]*graph.Node) {
+func composeAndStamp(call *sitter.Node, src []byte, prefix, mod []string, names nameScope, byLine map[int]*graph.Node, singular bool) {
 	line := int(call.StartPoint().Row) + 1
 	node, ok := byLine[line]
 	if !ok {
 		return
+	}
+
+	// Whether the enclosing `resource`/`resources` block was the singular form
+	// (Tier CR). A verb route inside `resource :home do member { get :users } end`
+	// reads its resource back off the URL as "home" and is served by
+	// HomesController, exactly like the singleton's own show/update routes — but
+	// unlike them it is stamped here rather than by emitRESTRoutes, so without
+	// this it was the one shape CR still could not resolve. Only stamped for the
+	// singular form: "plural" is emitRESTRoutes' statement about a declaration
+	// it minted, and a verb route with no enclosing resource at all (a bare
+	// `get "app_info"`) must stay unmarked rather than claim to be plural.
+	if singular {
+		node.Meta["resource_style"] = "singular"
 	}
 
 	// The controller module the route resolves against, recorded rather than

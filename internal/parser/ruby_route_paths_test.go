@@ -742,3 +742,134 @@ end
 	require.False(t, got["POST /users/sign_in"], "skip: must drop the sessions scope even though it's also overridden")
 	require.True(t, got["GET /users/password/new"], "the non-skipped override must still synthesize")
 }
+
+// TestRESTResourceRoutes_ResourceStyleRecorded is Tier CR's parser half. The
+// route walker is the only place that can know whether a route came from
+// `resource` or `resources` — by the time the linker sees the handler, a
+// singleton's path (/session, no :id) is indistinguishable from a collection
+// route. Recording it is what licenses the linker to try SessionsController
+// for a declaration that says `session`.
+func TestRESTResourceRoutes_ResourceStyleRecorded(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resource :session, only: [:create, :destroy]
+  resources :widgets, only: [:index]
+end
+`)
+	byStyle := map[string]int{}
+	for _, n := range routeNode(nodes, "rest_resource_route") {
+		byStyle[n.Meta["resource_style"]]++
+		require.Empty(t, n.Meta["controller_explicit"],
+			"no controller: option was given for %s", n.Label)
+	}
+	require.Equal(t, map[string]int{"singular": 2, "plural": 1}, byStyle)
+}
+
+// TestRESTResourceRoutes_ExplicitControllerOption: `controller:` names the
+// controller outright and overrides the resource name entirely, so it — not
+// the URL segment — is what Meta["resource"] must carry. The path keeps the
+// declared segment: Rails renames the controller, not the URL.
+func TestRESTResourceRoutes_ExplicitControllerOption(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resources :studies, controller: "containers", only: [:index]
+end
+`)
+	routes := routeNode(nodes, "rest_resource_route")
+	require.Len(t, routes, 1)
+	require.Equal(t, "containers", routes[0].Meta["resource"])
+	require.Equal(t, "true", routes[0].Meta["controller_explicit"])
+	require.Equal(t, "/studies", routes[0].Meta["path"],
+		"controller: renames the controller, never the URL")
+}
+
+// TestRESTResourceRoutes_NamespacedControllerOption: a namespaced value splits
+// into module nesting the same way emitDeviseRoutes' `controllers:` override
+// hash does, so the linker's by-convention lookup finds
+// app/controllers/admin/containers_controller.rb.
+func TestRESTResourceRoutes_NamespacedControllerOption(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resource :dashboard, controller: "admin/dashboards", only: [:show]
+end
+`)
+	routes := routeNode(nodes, "rest_resource_route")
+	require.Len(t, routes, 1)
+	require.Equal(t, "dashboards", routes[0].Meta["resource"])
+	require.Equal(t, "admin", routes[0].Meta["controller_module"])
+	require.Equal(t, "/dashboard", routes[0].Meta["path"])
+}
+
+// TestRESTResourceRoutes_VerbRouteInsideSingularResource: a member/collection
+// verb route declared inside a singular `resource` block is served by the same
+// plural controller as the singleton's own actions, but it is stamped by
+// composeAndStamp rather than emitRESTRoutes — so the style has to be threaded
+// down the walk, not just written where the declaration is read. On the audit
+// corpus this shape (`resource :home do collection { get :pusher_script } end`)
+// was the one singular-resource route CR still could not resolve.
+//
+// The bare top-level verb route must stay *unmarked*: it has no enclosing
+// resource, and claiming either style for it would be a fact the walker does
+// not have.
+func TestRESTResourceRoutes_VerbRouteInsideSingularResource(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resource :home, only: [] do
+    collection do
+      get :pusher_script
+    end
+    member do
+      get :users
+    end
+  end
+  resources :widgets, only: [] do
+    collection do
+      get :bulk_edit
+    end
+  end
+  get "app_info", to: "homes#app_info"
+end
+`)
+	style := map[string]string{}
+	for _, n := range nodes {
+		if n.Type != graph.NodeTypeHTTPHandler {
+			continue
+		}
+		if p := n.Meta["pattern"]; p == "rest_resource_route" {
+			continue
+		}
+		style[n.Meta["path"]] = n.Meta["resource_style"]
+	}
+	require.Equal(t, "singular", style["/home/pusher_script"])
+	// Note the ":id": a Rails singleton has no member id, so the *path* here is
+	// wrong (it should be /home/users). That is a pre-existing path-composition
+	// bug, deliberately left alone by CR — it does not affect controller
+	// resolution, which strips the trailing dynamic segment before reading the
+	// resource back off the path.
+	require.Equal(t, "singular", style["/home/:id/users"])
+	require.Equal(t, "", style["/widgets/bulk_edit"],
+		"a plural resource's verb routes already spell their controller")
+	require.Equal(t, "", style["/app_info"],
+		"a route with no enclosing resource has no style to record")
+}
+
+// TestRESTResourceRoutes_NamespaceResetsResourceStyle: `namespace` inside a
+// singular resource block redefines the controller module, which ends the
+// enclosing singleton's claim on where the controller lives. Carrying the
+// style past it would have the resolver pluralize the namespace segment.
+func TestRESTResourceRoutes_NamespaceResetsResourceStyle(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  resource :home, only: [] do
+    namespace :admin do
+      get :audit
+    end
+  end
+end
+`)
+	for _, n := range nodes {
+		if n.Type == graph.NodeTypeHTTPHandler && n.Meta["pattern"] != "rest_resource_route" {
+			require.Empty(t, n.Meta["resource_style"], "route %s", n.Meta["path"])
+		}
+	}
+}

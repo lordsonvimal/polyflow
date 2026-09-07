@@ -423,3 +423,187 @@ func TestLinkRailsRouteActions_DeviseForControllersOverride(t *testing.T) {
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
 }
+
+// singularResource builds the http_handler a singular `resource :x` mints:
+// no `:id` in the path (there is only ever one of it) and no index action,
+// with Meta["resource_style"] recording the declaration form.
+func singularResource(svc, name, action, method, path string, extra ...string) graph.Node {
+	meta := map[string]string{
+		"action":            action,
+		"resource":          name,
+		"method":            method,
+		"path":              path,
+		"pattern":           "rest_resource_route",
+		"resource_style":    "singular",
+		"controller_module": "",
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		meta[extra[i]] = extra[i+1]
+	}
+	return railsHandler(svc, method+" "+path, 44, meta)
+}
+
+// TestLinkRailsRouteActions_SingularResourcePluralController is Tier CR's
+// worked example. Rails routes the singular `resource :session` to the
+// *plural* SessionsController; resolving the declaration's name verbatim
+// looked for session_controller.rb, found nothing, and ledgered
+// `session#create` while sessions_controller.rb sat on disk.
+func TestLinkRailsRouteActions_SingularResourcePluralController(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/sessions_controller.rb"
+	h := singularResource("orion", "session", "create", "POST", "/session")
+	target := railsAction("orion", ctrl, "create", 9)
+
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, target})
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
+}
+
+// TestLinkRailsRouteActions_SingularResourceInNamespace pins that the plural
+// candidate is tried *within* the route's namespace and not outside it. The
+// namespace guard is the only thing keeping two same-named controllers apart,
+// and a second candidate is a second chance to break it.
+func TestLinkRailsRouteActions_SingularResourceInNamespace(t *testing.T) {
+	t.Parallel()
+	const nsCtrl = "/repo/app/controllers/admin/homes_controller.rb"
+	const rootCtrl = "/repo/app/controllers/homes_controller.rb"
+	h := singularResource("orion", "home", "show", "GET", "/admin/home",
+		"controller_module", "admin")
+	nsTarget := railsAction("orion", nsCtrl, "show", 4)
+
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{
+		h, nsTarget, railsAction("orion", rootCtrl, "show", 4),
+	})
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{nsTarget.ID}, callTargets(edges, h.ID),
+		"the pluralized candidate must stay inside the route's own namespace")
+}
+
+// TestLinkRailsRouteActions_SingularNameAsWrittenWins covers the ordering: the
+// name as declared is candidate one, and a controller that matches it is taken
+// without inflecting. Rails' own `resource :widget` → WidgetsController is the
+// common case, but an app that really did write widget_controller.rb must not
+// be redirected to a differently-named neighbour.
+func TestLinkRailsRouteActions_SingularNameAsWrittenWins(t *testing.T) {
+	t.Parallel()
+	const asWritten = "/repo/app/controllers/widget_controller.rb"
+	const pluralCtrl = "/repo/app/controllers/widgets_controller.rb"
+	h := singularResource("orion", "widget", "show", "GET", "/widget")
+	target := railsAction("orion", asWritten, "show", 6)
+
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{
+		h, target, railsAction("orion", pluralCtrl, "show", 6),
+	})
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
+}
+
+// TestLinkRailsRouteActions_ExplicitControllerBeatsPlural is the guard the
+// lookup doc comment already argued for in the plural case: `resources
+// :studies, controller: "containers"` names its target outright, and a
+// name-similarity guess has nothing to stand on against a stated fact. The
+// route walker puts the option's basename in Meta["resource"] and flags it, so
+// inflection is suppressed entirely — even though studies_controller.rb exists
+// here and the pluralized candidate would have hit it.
+func TestLinkRailsRouteActions_ExplicitControllerBeatsPlural(t *testing.T) {
+	t.Parallel()
+	const named = "/repo/app/controllers/containers_controller.rb"
+	const decoy = "/repo/app/controllers/studies_controller.rb"
+	h := singularResource("orion", "containers", "show", "GET", "/study",
+		"controller_explicit", "true")
+	target := railsAction("orion", named, "show", 11)
+
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{
+		h, target, railsAction("orion", decoy, "show", 11),
+	})
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
+}
+
+// TestLinkRailsRouteActions_PluralResourceNotInflected keeps CR off the
+// unresolved entries that are *correctly* unresolved. Most of a real monolith's
+// route ledger is bare `resources :x` declarations minting all seven REST
+// routes against a controller that implements two — genuinely dead routes. A
+// plural declaration already spells its controller, so it gets no second
+// candidate and `widgetses_controller.rb` is never looked for.
+func TestLinkRailsRouteActions_PluralResourceNotInflected(t *testing.T) {
+	t.Parallel()
+	h := railsHandler("orion", "GET /widgets/new", 30, map[string]string{
+		"action":            "new",
+		"resource":          "widgets",
+		"path":              "/widgets/new",
+		"pattern":           "rest_resource_route",
+		"resource_style":    "plural",
+		"controller_module": "",
+	})
+	nodes := []graph.Node{
+		h,
+		railsAction("orion", "/repo/app/controllers/widgets_controller.rb", "index", 3),
+		railsAction("orion", "/repo/app/controllers/widgetses_controller.rb", "new", 3),
+	}
+
+	edges, unresolved := LinkRailsRouteActions(nodes)
+
+	assert.Empty(t, edges, "a dead REST route stays dead")
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "widgets#new", unresolved[0].Name)
+}
+
+// TestLinkRailsRouteActions_SingularWithoutPluralControllerStillLedgers is the
+// regression the acceptance table's *lower* bound exists for: when the plural
+// controller does not exist, the route must ledger as before and must not fall
+// back onto some other controller that happens to serve the same action name.
+func TestLinkRailsRouteActions_SingularWithoutPluralControllerStillLedgers(t *testing.T) {
+	t.Parallel()
+	h := singularResource("orion", "dashboard", "show", "GET", "/dashboard")
+	nodes := []graph.Node{
+		h,
+		railsAction("orion", "/repo/app/controllers/reports_controller.rb", "show", 7),
+	}
+
+	edges, unresolved := LinkRailsRouteActions(nodes)
+
+	assert.Empty(t, edges)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "dashboard#show", unresolved[0].Name,
+		"the ledger records the name as declared, not the inflected guess")
+	assert.Equal(t, UnresolvedRailsRouteAction, unresolved[0].Kind)
+}
+
+// TestLinkRailsRouteActions_SingularResourceAlreadyPlural: one of cedar's
+// singular `resource` declarations is spelled plural already
+// (`resource :settings`). The inflector's identity case is what stops it
+// becoming `settingses`, and this pins that the route still resolves.
+func TestLinkRailsRouteActions_SingularResourceAlreadyPlural(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/settings_controller.rb"
+	h := singularResource("orion", "settings", "update", "PATCH", "/settings")
+	target := railsAction("orion", ctrl, "update", 15)
+
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, target})
+
+	require.Empty(t, unresolved)
+	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
+}
+
+// TestLinkRailsRouteActions_OneEdgePerSingularRoute is the fan-out gate. CR
+// adds a second lookup for the same handler; if both candidates could ever
+// emit, a route would call two different controllers and the corpus' currently
+// perfect route→action precision would quietly halve.
+func TestLinkRailsRouteActions_OneEdgePerSingularRoute(t *testing.T) {
+	t.Parallel()
+	h := singularResource("orion", "home", "show", "GET", "/home")
+	nodes := []graph.Node{
+		h,
+		railsAction("orion", "/repo/app/controllers/home_controller.rb", "show", 3),
+		railsAction("orion", "/repo/app/controllers/homes_controller.rb", "show", 3),
+	}
+
+	edges, _ := LinkRailsRouteActions(nodes)
+
+	assert.Len(t, edges, 1, "one route, one action: %+v", edges)
+}
