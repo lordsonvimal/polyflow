@@ -274,6 +274,76 @@ export default combineReducers(reducersMap);
 	}
 }
 
+// TestLinkJSRedux_SelectorReadSide (JCM.10) covers the read direction: a
+// combineReducers key becomes a redux_slice node --contains--> its reducer, and
+// mapStateToProps / useSelector consumers get --reads--> that slice.
+func TestLinkJSRedux_SelectorReadSide(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"reducers/FooReducer.jsx": `export default function FooReducer(state, action) {
+  return state;
+}
+`,
+		"containers/Root.jsx": `import { combineReducers } from "redux";
+import FooReducer from "../reducers/FooReducer";
+export default combineReducers({ fooSlice: FooReducer });
+`,
+		"containers/Container.jsx": `function mapStateToProps(state) {
+  return { foo: state.fooSlice.value };
+}
+`,
+		"components/Hooks.jsx": `import { useSelector } from "react-redux";
+function Hooks() {
+  const v = useSelector(s => s.fooSlice.value);
+  return v;
+}
+`,
+	})
+	reducer := jsFuncNode("svc", p["reducers/FooReducer.jsx"], "FooReducer", 1)
+	msp := jsFuncNode("svc", p["containers/Container.jsx"], "mapStateToProps", 1)
+	hooks := jsFuncNode("svc", p["components/Hooks.jsx"], "Hooks", 2)
+
+	newNodes, edges := LinkJSRedux([]graph.Node{reducer, msp, hooks}, map[string][]string{
+		"svc": {
+			p["reducers/FooReducer.jsx"], p["containers/Root.jsx"],
+			p["containers/Container.jsx"], p["components/Hooks.jsx"],
+		},
+	})
+
+	sliceID := ""
+	for _, n := range newNodes {
+		if n.ID == "redux_slice:fooSlice" && n.Meta["redux"] == "slice" {
+			sliceID = n.ID
+		}
+	}
+	if sliceID == "" {
+		t.Fatalf("no redux_slice:fooSlice node; nodes=%+v", newNodes)
+	}
+
+	want := map[string]bool{"slice->reducer": false, "msp->slice": false, "hooks->slice": false}
+	for _, e := range edges {
+		if e.Meta["tier"] != "jcm10" {
+			continue
+		}
+		if e.Type == graph.EdgeTypeContains && e.From == sliceID && e.To == reducer.ID {
+			want["slice->reducer"] = true
+		}
+		if e.Type == graph.EdgeTypeReads && e.To == sliceID && e.Meta["redux"] == "selector_read" {
+			if e.From == msp.ID {
+				want["msp->slice"] = true
+			}
+			if e.From == hooks.ID {
+				want["hooks->slice"] = true
+			}
+		}
+	}
+	for k, ok := range want {
+		if !ok {
+			t.Errorf("missing %s; edges=%+v", k, edges)
+		}
+	}
+}
+
 // TestLinkJSRedux_NoReduxNoEdges guards against false positives on a plain
 // component file with a switch statement unrelated to action types.
 func TestLinkJSRedux_NoReduxNoEdges(t *testing.T) {

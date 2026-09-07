@@ -152,6 +152,39 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			Meta: map[string]string{"redux": role, "tier": "jcm3"},
 		})
 	}
+	// addEdge10 is the JCM.10 (selector / read side) edge emitter — same shape as
+	// addEdge but tier jcm10 and a distinct edge-id suffix so it never collides
+	// with a jcm3 dispatch-chain edge between the same endpoints.
+	addEdge10 := func(t graph.EdgeType, from, to, role string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		eid := fmt.Sprintf("%s:%s->%s#jcm10", t, from, to)
+		if seenEdge[eid] {
+			return
+		}
+		seenEdge[eid] = true
+		newEdges = append(newEdges, graph.Edge{
+			ID: eid, From: from, To: to, Type: t, Confidence: graph.ConfidenceInferred,
+			Meta: map[string]string{"redux": role, "tier": "jcm10"},
+		})
+	}
+	// knownSlices / sliceNode back the JCM.10 slice model: each combineReducers
+	// key becomes a stable `redux_slice:<name>` node --contains--> its reducer,
+	// and selector reads (mapStateToProps / useSelector / reselect) target it.
+	knownSlices := make(map[string]bool)
+	sliceNode := func(name, svc, rel string, line int) string {
+		id := "redux_slice:" + name
+		if !seenNode[id] {
+			seenNode[id] = true
+			newNodes = append(newNodes, graph.Node{
+				ID: id, Type: graph.NodeTypeVariable, Label: name, Service: svc, File: rel,
+				Line: line, EndLine: line, Language: "javascript",
+				Meta: map[string]string{"redux": "slice", "tier": "jcm10", "synthetic": "true"},
+			})
+		}
+		return id
+	}
 
 	// === Phase 1: action-type constants ===
 	// Types-path files: keyMirror keys + SCREAMING string consts. Any other
@@ -413,6 +446,10 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 						if v == nil || v.Type() != "identifier" {
 							continue
 						}
+						sliceName := ""
+						if k := p.ChildByFieldName("key"); k != nil {
+							sliceName = strings.Trim(k.Content(src), "\"'`")
+						}
 						vn := v.Content(src)
 						rid := declIndex[rel][vn]
 						if rid == "" {
@@ -429,6 +466,10 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 							}
 						}
 						addEdge(graph.EdgeTypeContains, storeID, rid, "reducer_slice")
+						if sliceName != "" && rid != "" {
+							knownSlices[sliceName] = true
+							addEdge10(graph.EdgeTypeContains, sliceNode(sliceName, svc, rel, line), rid, "slice_reducer")
+						}
 					}
 					return
 				}
@@ -481,6 +522,218 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				if reduxIsPropsNode(obj, src) {
 					if id := fileCreators[name]; id != "" {
 						addEdge(graph.EdgeTypeCalls, attrFrom(line), id, "props_bound_dispatch")
+					}
+				}
+			}
+		})
+	}
+
+	// === Phase 3 (JCM.10): selector / read side ===
+	// mapStateToProps / useSelector / reselect → `consumer --reads--> redux_slice`.
+	// Slice reads are gated on knownSlices (populated in Phase 2b) to stay precise;
+	// `useSelector(namedSelector)` and `createSelector` inputs resolve by name.
+	for _, fe := range jsFiles {
+		rel := patterns.RelativizeToCwd(fe.abs)
+		svc := fe.svc
+		src, root, _, ok := jsParse(fe.abs)
+		if !ok {
+			continue
+		}
+		s := string(src)
+		if !strings.Contains(s, "mapStateToProps") && !strings.Contains(s, "useSelector") &&
+			!strings.Contains(s, "createSelector") {
+			continue
+		}
+		imports := reduxImports(root, src, fe.abs, indexed)
+		attrFrom := func(line int) string {
+			if id := nearestDecl(declsByFile[rel], line); id != "" {
+				return id
+			}
+			return fileNodeID[svc+"\x00"+rel]
+		}
+		resolveSelector := func(name string) string {
+			if id := declIndex[rel][name]; id != "" {
+				return id
+			}
+			if imp, ok := imports[name]; ok {
+				exp := imp.exported
+				if exp == "" {
+					exp = name
+				}
+				if id := declIndex[imp.file][exp]; id != "" {
+					return id
+				}
+			}
+			return ""
+		}
+		firstParam := func(fn *sitter.Node) string {
+			if p := fn.ChildByFieldName("parameter"); p != nil && p.Type() == "identifier" {
+				return p.Content(src)
+			}
+			ps := fn.ChildByFieldName("parameters")
+			if ps == nil || ps.NamedChildCount() == 0 {
+				return ""
+			}
+			p0 := ps.NamedChild(0)
+			if p0.Type() == "identifier" {
+				return p0.Content(src)
+			}
+			if id := reduxFirstChild(p0, "identifier"); id != nil {
+				return id.Content(src)
+			}
+			return ""
+		}
+		// firstParamPattern returns the object_pattern of a selector's first
+		// parameter (`mapStateToProps({ foo, bar })`), or nil.
+		firstParamPattern := func(fn *sitter.Node) *sitter.Node {
+			ps := fn.ChildByFieldName("parameters")
+			if ps == nil || ps.NamedChildCount() == 0 {
+				return nil
+			}
+			p0 := ps.NamedChild(0)
+			if p0.Type() == "object_pattern" {
+				return p0
+			}
+			return reduxFirstChild(p0, "object_pattern")
+		}
+		emitPatternSlices := func(from string, pat *sitter.Node) {
+			if from == "" || pat == nil {
+				return
+			}
+			for i := 0; i < int(pat.NamedChildCount()); i++ {
+				sp := pat.NamedChild(i)
+				var key *sitter.Node
+				switch sp.Type() {
+				case "shorthand_property_identifier_pattern":
+					key = sp
+				case "pair_pattern":
+					key = sp.ChildByFieldName("key")
+				}
+				if key == nil {
+					continue
+				}
+				if sl := key.Content(src); knownSlices[sl] {
+					addEdge10(graph.EdgeTypeReads, from, sliceNode(sl, svc, rel, 1), "selector_read")
+				}
+			}
+		}
+		// readState walks a selector body for `<param>.<slice>` member access and
+		// `const { slice } = <param>` destructuring, emitting selector_read edges
+		// to every known slice it touches.
+		readState := func(from, param string, body *sitter.Node) {
+			if from == "" || param == "" || body == nil {
+				return
+			}
+			reduxWalk(body, func(m *sitter.Node) {
+				switch m.Type() {
+				case "member_expression":
+					o, pr := m.ChildByFieldName("object"), m.ChildByFieldName("property")
+					if o != nil && pr != nil && o.Type() == "identifier" && o.Content(src) == param {
+						if sl := pr.Content(src); knownSlices[sl] {
+							addEdge10(graph.EdgeTypeReads, from, sliceNode(sl, svc, rel, 1), "selector_read")
+						}
+					}
+				case "variable_declarator":
+					nm, val := m.ChildByFieldName("name"), m.ChildByFieldName("value")
+					if val == nil || val.Type() != "identifier" || val.Content(src) != param ||
+						nm == nil || nm.Type() != "object_pattern" {
+						return
+					}
+					for i := 0; i < int(nm.NamedChildCount()); i++ {
+						sp := nm.NamedChild(i)
+						var key *sitter.Node
+						switch sp.Type() {
+						case "shorthand_property_identifier_pattern":
+							key = sp
+						case "pair_pattern":
+							key = sp.ChildByFieldName("key")
+						}
+						if key == nil {
+							continue
+						}
+						if sl := key.Content(src); knownSlices[sl] {
+							addEdge10(graph.EdgeTypeReads, from, sliceNode(sl, svc, rel, 1), "selector_read")
+						}
+					}
+				}
+			})
+		}
+		reduxWalk(root, func(n *sitter.Node) {
+			switch n.Type() {
+			case "function_declaration", "function_expression", "arrow_function":
+				var nameNode *sitter.Node
+				if n.Type() == "function_declaration" {
+					nameNode = n.ChildByFieldName("name")
+				} else if p := n.Parent(); p != nil && p.Type() == "variable_declarator" {
+					nameNode = p.ChildByFieldName("name")
+				}
+				if nameNode == nil ||
+					!strings.Contains(strings.ToLower(nameNode.Content(src)), "mapstatetoprops") {
+					return
+				}
+				from := attrFrom(int(n.StartPoint().Row) + 1)
+				if pat := firstParamPattern(n); pat != nil {
+					emitPatternSlices(from, pat)
+				} else {
+					readState(from, firstParam(n), n.ChildByFieldName("body"))
+				}
+
+			case "call_expression":
+				f := n.ChildByFieldName("function")
+				a := n.ChildByFieldName("arguments")
+				if f == nil || a == nil {
+					return
+				}
+				callee := f.Content(src)
+				switch {
+				case callee == "useSelector" || strings.HasSuffix(callee, ".useSelector"):
+					if a.NamedChildCount() == 0 {
+						return
+					}
+					arg0 := a.NamedChild(0)
+					from := attrFrom(int(n.StartPoint().Row) + 1)
+					switch arg0.Type() {
+					case "arrow_function", "function_expression":
+						if pat := firstParamPattern(arg0); pat != nil {
+							emitPatternSlices(from, pat)
+						} else {
+							readState(from, firstParam(arg0), arg0.ChildByFieldName("body"))
+						}
+					case "identifier":
+						if to := resolveSelector(arg0.Content(src)); to != "" {
+							addEdge10(graph.EdgeTypeReads, from, to, "selector_read")
+						}
+					}
+				case callee == "createSelector" || strings.HasSuffix(callee, ".createSelector"):
+					selFrom := ""
+					if p := n.Parent(); p != nil && p.Type() == "variable_declarator" {
+						if nm := p.ChildByFieldName("name"); nm != nil {
+							selFrom = declIndex[rel][nm.Content(src)]
+						}
+					}
+					if selFrom == "" {
+						selFrom = attrFrom(int(n.StartPoint().Row) + 1)
+					}
+					var inputs []*sitter.Node
+					if a.NamedChildCount() > 0 && a.NamedChild(0).Type() == "array" {
+						arr := a.NamedChild(0)
+						for i := 0; i < int(arr.NamedChildCount()); i++ {
+							inputs = append(inputs, arr.NamedChild(i))
+						}
+					} else {
+						for i := 0; i+1 < int(a.NamedChildCount()); i++ {
+							inputs = append(inputs, a.NamedChild(i))
+						}
+					}
+					for _, in := range inputs {
+						switch in.Type() {
+						case "identifier":
+							if to := resolveSelector(in.Content(src)); to != "" {
+								addEdge10(graph.EdgeTypeReads, selFrom, to, "reselect_input")
+							}
+						case "arrow_function", "function_expression":
+							readState(selFrom, firstParam(in), in.ChildByFieldName("body"))
+						}
 					}
 				}
 			}
