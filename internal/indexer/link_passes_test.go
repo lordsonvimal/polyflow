@@ -23,6 +23,7 @@ var wantLinkPasses = []struct {
 }{
 	{"js_hoc", scopeSameServiceOnly},
 	{"js_link", scopeSameServiceOnly},
+	{"js_client_routes", scopeSameServiceOnly},
 	{"js_globals", scopeSameServiceOnly},
 	{"js_type_relations", scopeSameServiceOnly},
 	{"js_receiver_type_calls", scopeSameServiceOnly},

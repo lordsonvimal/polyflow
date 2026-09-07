@@ -17,6 +17,12 @@ const (
 	NodeTypeMethod     NodeType = "method"
 	NodeTypeComponent  NodeType = "component"
 	NodeTypeRoute      NodeType = "route"
+	// NodeTypeClientRoute is one entry of a single-page-app's client-side route
+	// table (`{ cdm: "/standards/:id#cdm/:m", … }`). Meta: path (normalised
+	// pre-hash path, :seg→*), hash ("true"|"false"), pattern (raw), hash_fragment.
+	// `client_route --renders--> component` and `http_handler --navigates_to-->
+	// client_route` are emitted by LinkJSClientRoutes (SPA.2).
+	NodeTypeClientRoute NodeType = "client_route"
 	NodeTypeWorker     NodeType = "worker"
 	NodeTypePublisher  NodeType = "publisher"
 	NodeTypeSubscriber NodeType = "subscriber"

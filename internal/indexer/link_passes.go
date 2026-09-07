@@ -304,6 +304,34 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.deleteNodes(removeIDs)
 		}},
+		// SPA.2: model the SPA client-side router — a `client_route` node per
+		// route-table entry, `client_route --renders--> component` from the
+		// `switch (routeName)` block, and `http_handler --navigates_to-->
+		// client_route` where path shapes agree. Runs after js_link so the
+		// render-target component nodes are already resolved/stamped.
+		{"js_client_routes", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			crNodes, crEdges := linker.LinkJSClientRoutes(st.allNodes, svcFiles)
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for i := range crNodes {
+				n := crNodes[i]
+				if _, exists := byID[n.ID]; exists {
+					continue
+				}
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+				byID[n.ID] = len(st.allNodes) - 1
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(crEdges)
+		}},
 		// L.W1: global/window symbol resolution + inline handler linking.
 		// Runs after LinkJS so imports-first ordering is enforced via jsImportedNames.
 		{"js_globals", scopeSameServiceOnly, func() error {
