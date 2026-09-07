@@ -158,8 +158,31 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 		}
 		fileText := string(pf.src)
 		propsNames := collectPropsBindings(pf.root, pf.src)
-		var walk func(n *sitter.Node, fn string)
-		walk = func(n *sitter.Node, fn string) {
+		var walk func(n *sitter.Node, fn string, names map[string]bool)
+		walk = func(n *sitter.Node, fn string, names map[string]bool) {
+			// CW: a module-level helper that receives the transport as an
+			// argument has no `this.props` anywhere in its file, so
+			// collectPropsBindings vouches for nothing and every call in these
+			// 23 files was dropped. Entering a function widens the vouched set
+			// for that subtree only — unioned rather than replaced, since a
+			// method can take a transport parameter *and* read this.props.
+			extra := paramPropClientNames(n, pf.src, specs)
+			for k := range paramDerivedPropClientNames(n, pf.src, specs) {
+				if extra == nil {
+					extra = make(map[string]bool, 1)
+				}
+				extra[k] = true
+			}
+			if len(extra) > 0 {
+				merged := make(map[string]bool, len(names)+len(extra))
+				for k := range names {
+					merged[k] = true
+				}
+				for k := range extra {
+					merged[k] = true
+				}
+				names = merged
+			}
 			switch n.Type() {
 			case "function_declaration", "method_definition":
 				if nm := n.ChildByFieldName("name"); nm != nil {
@@ -175,7 +198,19 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 					}
 				}
 			case "call_expression":
-				if _, method, urlNode, siteVerb, line, ok := propClientCallSite(n, pf.src, specs, fileText, propsNames); ok {
+				if _, method, urlNode, siteVerb, line, ok := propClientCallSite(n, pf.src, specs, fileText, names); !ok {
+					// Recognised receiver + method, unreadable argument list:
+					// the URL argument is absent, or it is an options object
+					// with no `url` key. Ledger it. Closing CW's gap without
+					// this row would only move the silence from "no node" to
+					// "no node and still nothing said".
+					if _, _, line, recognised := propClientRecognisedSite(n, pf.src, specs, fileText, names); recognised {
+						ledger = append(ledger, graph.UnresolvedRef{
+							Service: pf.svc, File: pf.rel, Line: line,
+							Name: "(no url argument)", Kind: "prop_client_dynamic_url",
+						})
+					}
+				} else {
 					verb := method.Verb
 					if siteVerb != "" {
 						verb = siteVerb
@@ -257,10 +292,10 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 				}
 			}
 			for i := 0; i < int(n.NamedChildCount()); i++ {
-				walk(n.NamedChild(i), fn)
+				walk(n.NamedChild(i), fn, names)
 			}
 		}
-		walk(pf.root, "(module)")
+		walk(pf.root, "(module)", propsNames)
 	}
 	return newNodes, edges, ledger
 }
@@ -392,6 +427,214 @@ func walkerKey(w contract.KeyWalker, node *sitter.Node, src []byte) ([]string, b
 	return cands, dyn
 }
 
+// propClientRecognisedSite reports whether call is `<recv>.<method>(...)` where
+// recv names a discovered prop-client and method is one of that spec's
+// URL-carrying methods — independently of whether the URL argument can be read.
+//
+// It exists as its own function because the two questions have different
+// consumers. "Is this a prop-client call" is what decides whether a site owes
+// the graph an entry at all; "can its URL be read" only decides whether that
+// entry is a node or a ledger line. Folding them together is what made Tier CW's
+// gap silent: a recognised call whose URL argument was absent or unreadable
+// returned the same false as an unrelated `foo.get(x)`, so it produced no node,
+// no ledger entry, and nothing anywhere in the graph saying a flow had been
+// dropped. LinkJSPropClients calls this on the miss path for exactly that reason.
+func propClientRecognisedSite(call *sitter.Node, src []byte, specs map[string]propClientSpec, fileText string, propsNames map[string]bool) (propClientSpec, propClientMethod, int, bool) {
+	var zero propClientSpec
+	callee := call.ChildByFieldName("function")
+	if callee == nil || callee.Type() != "member_expression" {
+		return zero, propClientMethod{}, 0, false
+	}
+	propNode := callee.ChildByFieldName("property")
+	obj := callee.ChildByFieldName("object")
+	if propNode == nil || obj == nil {
+		return zero, propClientMethod{}, 0, false
+	}
+	prop, ok := propClientReceiverProp(obj, src)
+	if !ok {
+		return zero, propClientMethod{}, 0, false
+	}
+	spec, ok := specs[prop]
+	if !ok {
+		return zero, propClientMethod{}, 0, false
+	}
+	// bare-identifier receiver must be corroborated: either the file imports
+	// the HOC, or the name is one propsNames vouches for — provably from
+	// `this.props`, or (CW) a formal parameter of an enclosing function whose
+	// name matches a discovered spec. `ajaxStatus` is far too generic to fire on
+	// a bare `x.get(a, b)` with no such evidence.
+	if obj.Type() == "identifier" {
+		if !propsNames[prop] && (spec.HOCExport == "" || !strings.Contains(fileText, spec.HOCExport)) {
+			return zero, propClientMethod{}, 0, false
+		}
+	}
+	method, ok := spec.Methods[propNode.Content(src)]
+	if !ok {
+		return zero, propClientMethod{}, 0, false
+	}
+	return spec, method, int(call.StartPoint().Row) + 1, true
+}
+
+// paramPropClientNames returns the formal parameters of fn whose names match a
+// known service-wide prop-client spec, so a module-level helper receiving the
+// transport as an argument is treated the same as `this.props.<name>`.
+//
+// Deliberately narrow: matching a discovered spec name (not any identifier) is
+// what keeps `get`/`post` from firing on unrelated objects in a type-free pass.
+// The specs map is keyed by injected-prop name and is built from an actual
+// HOC/transport definition found in the service (detectPropClientSpec), so a
+// parameter only qualifies if the service really does inject a transport under
+// that name somewhere.
+func paramPropClientNames(fn *sitter.Node, src []byte, specs map[string]propClientSpec) map[string]bool {
+	if fn == nil || len(specs) == 0 {
+		return nil
+	}
+	var out map[string]bool
+	for nm := range paramBindingNames(fn, src) {
+		if _, ok := specs[nm]; !ok {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool, 1)
+		}
+		out[nm] = true
+	}
+	return out
+}
+
+// paramBindingNames returns every name fn's parameter list binds, including the
+// names a destructured parameter introduces: `({ ajaxStatus, canEdit }) => …`
+// binds both, and a function component spelled that way is the single commonest
+// receiver shape in the audit corpus's remaining misses.
+func paramBindingNames(fn *sitter.Node, src []byte) map[string]bool {
+	out := make(map[string]bool)
+	var bind func(p *sitter.Node)
+	bind = func(p *sitter.Node) {
+		if p == nil {
+			return
+		}
+		switch p.Type() {
+		case "identifier", "shorthand_property_identifier_pattern", "shorthand_property_identifier":
+			out[p.Content(src)] = true
+			return
+		case "object_pattern", "array_pattern":
+			for i := 0; i < int(p.NamedChildCount()); i++ {
+				bind(p.NamedChild(i))
+			}
+			return
+		case "pair_pattern":
+			// `{ ajaxStatus: transport }` binds the *value* side.
+			bind(p.ChildByFieldName("value"))
+			return
+		}
+		// required_parameter / optional_parameter / assignment_pattern /
+		// rest_pattern: the binding hangs off `pattern`, or is the first
+		// non-type child.
+		if pat := p.ChildByFieldName("pattern"); pat != nil {
+			bind(pat)
+			return
+		}
+		if l := p.ChildByFieldName("left"); l != nil {
+			bind(l)
+			return
+		}
+		for i := 0; i < int(p.NamedChildCount()); i++ {
+			switch c := p.NamedChild(i); c.Type() {
+			case "identifier", "object_pattern", "array_pattern":
+				bind(c)
+				return
+			}
+		}
+	}
+	if params := fn.ChildByFieldName("parameters"); params != nil {
+		for i := 0; i < int(params.NamedChildCount()); i++ {
+			bind(params.NamedChild(i))
+		}
+		return out
+	}
+	// `ajaxStatus => ...`: an arrow with a single unparenthesised parameter has
+	// no `parameters` node at all, only `parameter`.
+	bind(fn.ChildByFieldName("parameter"))
+	return out
+}
+
+// paramDerivedPropClientNames returns spec-matching names that fn's body unpacks
+// out of one of fn's own parameters: `const { ajaxStatus } = props` in a function
+// component, and `const { ajaxStatus } = component.props` where the component is
+// handed in. Both are the same fact as `this.props.<name>` — the transport came
+// from the caller — written without a `this`, which is exactly why
+// collectPropsBindings, keyed on the literal text "this.props", saw nothing.
+//
+// Anchored on fn's parameter list rather than on the conventional name `props`:
+// the guarantee that makes this safe is that the object being unpacked provably
+// came from outside the function, and only the parameter list can say so. A
+// `const { ajaxStatus } = getProps()` is deliberately not covered — its origin is
+// a call return, and nothing here can see through it.
+func paramDerivedPropClientNames(fn *sitter.Node, src []byte, specs map[string]propClientSpec) map[string]bool {
+	if fn == nil || len(specs) == 0 {
+		return nil
+	}
+	params := paramBindingNames(fn, src)
+	if len(params) == 0 {
+		return nil
+	}
+	body := fn.ChildByFieldName("body")
+	if body == nil {
+		return nil
+	}
+	var out map[string]bool
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "variable_declarator" {
+			name := n.ChildByFieldName("name")
+			val := n.ChildByFieldName("value")
+			if name != nil && name.Type() == "object_pattern" && val != nil && fromParam(val, src, params) {
+				for i := 0; i < int(name.NamedChildCount()); i++ {
+					c := name.NamedChild(i)
+					var nm string
+					switch c.Type() {
+					case "shorthand_property_identifier_pattern", "shorthand_property_identifier":
+						nm = c.Content(src)
+					case "pair_pattern":
+						if k := c.ChildByFieldName("key"); k != nil {
+							nm = k.Content(src)
+						}
+					}
+					if nm == "" {
+						continue
+					}
+					if _, ok := specs[nm]; !ok {
+						continue
+					}
+					if out == nil {
+						out = make(map[string]bool, 1)
+					}
+					out[nm] = true
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(body)
+	return out
+}
+
+// fromParam reports whether val is one of params, or `<param>.props`.
+func fromParam(val *sitter.Node, src []byte, params map[string]bool) bool {
+	switch val.Type() {
+	case "identifier":
+		return params[val.Content(src)]
+	case "member_expression":
+		obj := val.ChildByFieldName("object")
+		prop := val.ChildByFieldName("property")
+		return obj != nil && prop != nil && obj.Type() == "identifier" &&
+			prop.Content(src) == "props" && params[obj.Content(src)]
+	}
+	return false
+}
+
 // propClientCallSite reports whether call is `<recv>.<method>(...)` where recv
 // is a prop-client receiver (`this.props.<prop>` or a bare `<prop>` in a file
 // that imports the HOC) and method is one of the spec's URL methods. Returns
@@ -402,34 +645,7 @@ func propClientCallSite(call *sitter.Node, src []byte, specs map[string]propClie
 	miss := func() (propClientSpec, propClientMethod, *sitter.Node, string, int, bool) {
 		return zero, propClientMethod{}, nil, "", 0, false
 	}
-	callee := call.ChildByFieldName("function")
-	if callee == nil || callee.Type() != "member_expression" {
-		return miss()
-	}
-	propNode := callee.ChildByFieldName("property")
-	obj := callee.ChildByFieldName("object")
-	if propNode == nil || obj == nil {
-		return miss()
-	}
-	methodName := propNode.Content(src)
-	prop, ok := propClientReceiverProp(obj, src)
-	if !ok {
-		return miss()
-	}
-	spec, ok := specs[prop]
-	if !ok {
-		return miss()
-	}
-	// bare-identifier receiver must be corroborated: either the file imports
-	// the HOC, or the name provably originates from `this.props` (a destructure
-	// or a `this.props.<prop>` access somewhere in the file). `ajaxStatus` is
-	// far too generic to fire on a bare `x.get(a, b)` with no such evidence.
-	if obj.Type() == "identifier" {
-		if !propsNames[prop] && (spec.HOCExport == "" || !strings.Contains(fileText, spec.HOCExport)) {
-			return miss()
-		}
-	}
-	method, ok := spec.Methods[methodName]
+	spec, method, _, ok := propClientRecognisedSite(call, src, specs, fileText, propsNames)
 	if !ok {
 		return miss()
 	}
