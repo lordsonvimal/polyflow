@@ -25,6 +25,7 @@ var wantLinkPasses = []struct {
 	{"js_globals", scopeSameServiceOnly},
 	{"js_type_relations", scopeSameServiceOnly},
 	{"js_receiver_type_calls", scopeSameServiceOnly},
+	{"js_redux", scopeSameServiceOnly},
 	{"ruby_type_relations", scopeSameServiceOnly},
 	{"ruby_class_method_calls", scopeSameServiceOnly},
 	{"ruby_receiver_type_calls", scopeSameServiceOnly},

@@ -303,6 +303,24 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, receiverTypeUnresolved...)
 			return nil
 		}},
+		// JCM.3: Redux dispatch chain — component handler → action creator →
+		// action-type constant → reducer. Mints synthetic nodes for action-type
+		// constants no parser captured (keyMirror keys, string consts).
+		{"js_redux", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			reduxNodes, reduxEdges := linker.LinkJSRedux(st.allNodes, svcFiles)
+			for i := range reduxNodes {
+				n := reduxNodes[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+			}
+			if err := st.bw.Flush(st.ctx); err != nil {
+				return err
+			}
+			return st.writeEdges(reduxEdges)
+		}},
 		// Ruby cross-file inherits/implements/instantiates edges.
 		{"ruby_type_relations", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
