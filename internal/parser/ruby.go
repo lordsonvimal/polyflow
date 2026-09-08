@@ -38,6 +38,12 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	// patterns' `_` wildcard lets @helper bind to a non-route call as well.
 	results = dropNonRouteHelperNavMatches(results)
 
+	// Tier AT.1: `create_table "x" do |t|` declares a table only in a Rails
+	// schema dump. The same call in db/migrate/*.rb is one entry in a
+	// historical log — the same table is created and dropped across dozens of
+	// migrations — so admitting it there mints duplicate and stale tables.
+	results = dropNonSchemaFileTableMatches(file, results)
+
 	if err != nil {
 		nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 		setLanguage(nodes, "ruby")
@@ -45,6 +51,10 @@ func (p *RubyParser) Parse(file, service string, matcher *patterns.TreeSitterMat
 	}
 	nodes, edges, unresolved := patterns.MatchToGraph(service, results)
 	setLanguage(nodes, "ruby")
+
+	// Tier AT.1: turn each schema table node's raw block source into a column
+	// list. Runs first so nothing downstream sees the placeholder text.
+	stampRailsSchemaTables(src, nodes, results)
 
 	// Tier-2 AMQP queue-key resolution: rewrite channel/subscriber nodes whose
 	// queue name is a same-file method reference (from_queue resolved_queue_name)

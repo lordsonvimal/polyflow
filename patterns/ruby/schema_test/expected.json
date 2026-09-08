@@ -1,0 +1,4 @@
+{
+  "patterns": ["rails_create_table", "rails_create_table", "rails_create_table"],
+  "node_types": ["table", "table", "table"]
+}

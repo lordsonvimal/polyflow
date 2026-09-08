@@ -2567,6 +2567,15 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	case lower == "sql_create_table" || lower == "sql_create_view":
 		return graph.NodeTypeTable, graph.EdgeTypeCalls
 
+	// ── Rails schema.rb table declarations (AT.1) ───────────────────────────
+	// The same entity as a CREATE TABLE, declared in Ruby instead of SQL, so
+	// it gets the same node type — a Rails table and a .sql table are not two
+	// kinds of thing, and Tier AT's linker, LinkTables' SQ2 name lookup and
+	// the UI all address them identically. internal/parser/ruby.go gates this
+	// pattern to db/schema.rb before MatchToGraph ever sees it.
+	case lower == "rails_create_table":
+		return graph.NodeTypeTable, graph.EdgeTypeCalls
+
 	// ── Python imports (no graph node; captured for future cross-file linker) ──
 	case lower == "python_import" || lower == "python_from_import":
 		return graph.NodeTypeTypeAlias, graph.EdgeTypeCalls

@@ -302,6 +302,13 @@ const (
 	// relationship to another table. meta: column=<fk column>,
 	// ref_column=<referenced column>.
 	EdgeTypeReferences EdgeType = "references"
+	// backed_by: ORM model class → the table node its rows live in (Tier AT).
+	// Ownership, not access: a model *is* backed by exactly one table whether
+	// or not any code reads or writes it, which is why this is neither
+	// `queries` nor `persists` (those run from a call site and say a
+	// statement was executed). meta: via=table_name|convention,
+	// inherit_hops=<n> for the convention case.
+	EdgeTypeBackedBy EdgeType = "backed_by"
 	// Response-type edges (Tier Y.4 — the return half of a request flow).
 	//
 	// returns: handler-function → struct it writes as its JSON response body

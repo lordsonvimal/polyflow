@@ -34,6 +34,7 @@ var wantLinkPasses = []struct {
 	{"ruby_class_method_calls", scopeSameServiceOnly},
 	{"ruby_receiver_type_calls", scopeSameServiceOnly},
 	{"ruby_associations", scopeSameServiceOnly},
+	{"rails_model_tables", scopeSameServiceOnly},
 	{"rails_filters", scopeSameServiceOnly},
 	{"ruby_mixin_methods", scopeSameServiceOnly},
 	{"ruby_mixin_constants", scopeSameServiceOnly},

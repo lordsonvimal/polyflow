@@ -550,6 +550,21 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, assocUnresolved...)
 			return nil
 		}},
+		// Tier AT.2: ActiveRecord model class → the db/schema.rb table it is
+		// backed by. Runs after ruby_type_relations, whose `inherits` edges are
+		// the chain this walks to prove a class is a model at all — without
+		// them every model would look like a PORO and the pass would emit
+		// nothing. Purely additive: one new edge type between two node types
+		// that already exist, touching no node.
+		{"rails_model_tables", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			tableEdges, tableUnresolved := linker.LinkRailsModelTables(st.allNodes, st.allEdges, svcFiles)
+			if err := st.writeEdges(tableEdges); err != nil {
+				return err
+			}
+			st.allUnresolved = append(st.allUnresolved, tableUnresolved...)
+			return nil
+		}},
 		// Rails filter chain: before_action/around_action/after_action → the method
 		// the callback names, from the declaring class and from each action it
 		// guards. Needs the Ruby method nodes' qualified_name, so it runs after the

@@ -1,0 +1,40 @@
+# Rails `db/schema.rb` table declarations (Tier AT.1,
+# docs/cedar-end-to-end-flow-holes-plan.md). A Rails app declares its tables
+# in Ruby, not SQL, so patterns/sql/schema.yaml's sql_create_table never fires
+# on one and the whole persistence leg of the graph is missing: 173 declared
+# tables, zero `table` nodes.
+#
+# This file deliberately carries NO file scoping of its own — a pattern query
+# cannot see the path it is running against. The db/schema.rb allow-list lives
+# in internal/parser/ruby.go (dropNonSchemaFileTableMatches), the same split
+# rails_routes.yaml uses for its receiverless `get "…"` verbs. That gate is
+# load-bearing, not tidiness: `create_table` appears 537+ times across cedar's
+# db/migrate/*.rb, where the same table is created and dropped across dozens
+# of files, and matching those would mint duplicate and stale table nodes.
+language: ruby
+version: "1"
+patterns:
+  # create_table "widgets", force: :cascade do |t| … end
+  #
+  # `block:` is required rather than optional: it is what distinguishes a
+  # schema declaration from any other call to a method spelled create_table,
+  # and it is also the @columns node the parser walks to build meta["columns"]
+  # (the same KeyNodes retention patterns/sql/schema.yaml uses for its
+  # column_definitions capture — "columns" is already on the matcher's
+  # keyWalkerKeyCaptureNames allow-list for exactly that reason).
+  #
+  # The `.` anchor pins @name to the FIRST argument. Without it, `create_table
+  # "x", id: false` would also let @name bind further down the argument list.
+  - name: rails_create_table
+    query: |
+      (call
+        !receiver
+        method: (identifier) @_kw
+        (#eq? @_kw "create_table")
+        arguments: (argument_list . (string) @name)
+        block: (do_block) @columns) @_def
+    captures:
+      - name: name
+        role: table_name
+      - name: columns
+        role: table_columns
