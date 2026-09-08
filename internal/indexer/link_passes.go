@@ -311,7 +311,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// render-target component nodes are already resolved/stamped.
 		{"js_client_routes", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			crNodes, crEdges, crLedger, crResolved := linker.LinkJSClientRoutes(st.allNodes, svcFiles)
+			crNodes, crTagged, crEdges, crLedger, crResolved := linker.LinkJSClientRoutes(st.allNodes, svcFiles)
 			// SPA.3: retract jsx_component_unresolved rows for keys the feature
 			// registry resolved; record the non-literal lookups it couldn't.
 			filtered := st.allUnresolved[:0]
@@ -325,6 +325,18 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
+			}
+			// RT.1: re-typed render targets replace their existing entry rather
+			// than appending. A second node with the same label would be a
+			// second render target and would mint fan-out.
+			for i := range crTagged {
+				n := crTagged[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				if idx, ok := byID[n.ID]; ok {
+					st.allNodes[idx] = n
+				}
 			}
 			for i := range crNodes {
 				n := crNodes[i]

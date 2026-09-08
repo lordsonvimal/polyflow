@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -59,7 +60,27 @@ func crIsTestFile(rel string) bool {
 // are ledgered `feature_component_dynamic`. `resolved` reports every (service,
 // key) SPA.3 resolved so the caller can retract the matching
 // `jsx_component_unresolved` ledger rows.
-func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, ledger []graph.UnresolvedRef, resolved map[string]bool) {
+//
+// RT.1 rides along: a route's render target that resolved to a `variable` node
+// declaring a component — `const Foo = () => …`, `const Foo = connect(…)(Bar)`
+// — is re-typed to `component` and returned in `tagged`. The edge already
+// pointed at the right file and line; only the type was wrong, and it is
+// load-bearing, because "which component does route `cdm` render" is asked as a
+// type filter and returned nothing. Targets whose initialiser is not a
+// component (an object, a string) keep their type and ledger as
+// `client_route_target_not_component`.
+//
+// `tagged` holds re-typed *existing* nodes and `newNodes` genuinely new ones;
+// the caller must replace the former in place by ID rather than appending. A
+// second node with the same label is a second render target, and the render
+// matcher mints fan-out from it.
+//
+// Deliberately narrow: only nodes already reached by a `client_route
+// --renders-->` edge. React components typed `function` rather than `component`
+// across the wider JSX graph are a labelling inconsistency with no query riding
+// on it (see docs/cedar-monolith-gap-audit-plan.md), and re-typing those is a
+// different and much larger decision.
+func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (newNodes, tagged []graph.Node, edges []graph.Edge, ledger []graph.UnresolvedRef, resolved map[string]bool) {
 	resolved = make(map[string]bool)
 	// --- index existing nodes ---
 	svcOfFile := make(map[string]string)
@@ -77,8 +98,10 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 			compRank[key] = rank
 		}
 	}
+	nodeByID := make(map[string]*graph.Node, len(nodes))
 	for i := range nodes {
 		n := &nodes[i]
+		nodeByID[n.ID] = n
 		if n.Service != "" && n.File != "" {
 			svcOfFile[n.File] = n.Service
 		}
@@ -142,6 +165,9 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 		m[k] = true
 	}
 
+	// RT.1: file → variable name → whether its initialiser declares a component.
+	varIsComponent := make(map[string]map[string]bool)
+
 	seen := make(map[string]bool)
 	for svcKey, files := range serviceFiles {
 		for _, abs := range files {
@@ -171,6 +197,10 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 					seenRoute[key] = true
 					routesBySvc[svc] = append(routesBySvc[svc], crEntry{e.name, e.pattern, rel})
 				}
+			}
+
+			if decls := componentVarDecls(root, src); len(decls) > 0 {
+				varIsComponent[rel] = decls
 			}
 
 			for name, tags := range routeCaseComponents(root, src) {
@@ -275,6 +305,38 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 		edges = append(edges, e)
 	}
 
+	// RT.1: re-type a route's render target, once per node however many routes
+	// reach it. Ledger rows are keyed the same way — a target that is not a
+	// component is one fact about one node, not one per route.
+	retyped := make(map[string]bool)
+	var rtLedger []graph.UnresolvedRef
+	retypeTarget := func(id string) {
+		if retyped[id] {
+			return
+		}
+		retyped[id] = true
+		n := nodeByID[id]
+		if n == nil || n.Type != graph.NodeTypeVariable {
+			return
+		}
+		if !varIsComponent[n.File][n.Label] {
+			rtLedger = append(rtLedger, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line,
+				Name: n.Label, Kind: "client_route_target_not_component",
+			})
+			return
+		}
+		out := *n
+		out.Type = graph.NodeTypeComponent
+		out.Meta = make(map[string]string, len(n.Meta)+2)
+		for k, v := range n.Meta {
+			out.Meta[k] = v
+		}
+		out.Meta["component"] = "true"
+		out.Meta["retyped_from"] = string(graph.NodeTypeVariable)
+		tagged = append(tagged, out)
+	}
+
 	for svc, entries := range routesBySvc {
 		for _, e := range entries {
 			path, hash, frag := normClientRoute(e.pattern)
@@ -302,6 +364,7 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 				if cid == "" || cid == routeID {
 					continue
 				}
+				retypeTarget(cid)
 				addEdge(graph.Edge{
 					ID:         "renders:" + routeID + "->" + cid,
 					From:       routeID,
@@ -369,7 +432,79 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 		}
 	}
 
-	return newNodes, edges, ledger, resolved
+	// Route order comes from a map walk, so RT.1's outputs are sorted before
+	// they leave: a re-typed node upserts idempotently either way, but a ledger
+	// whose row order moves between two cold indexes is a determinism failure
+	// the snapshot tests would report as a real diff.
+	sort.Slice(tagged, func(i, j int) bool { return tagged[i].ID < tagged[j].ID })
+	sort.Slice(rtLedger, func(i, j int) bool {
+		if rtLedger[i].File != rtLedger[j].File {
+			return rtLedger[i].File < rtLedger[j].File
+		}
+		return rtLedger[i].Name < rtLedger[j].Name
+	})
+	ledger = append(ledger, rtLedger...)
+
+	return newNodes, tagged, edges, ledger, resolved
+}
+
+// isComponentHOC reports whether a call wrapper returns a React component. The
+// list is JCM.6's `hocNames` (js_hoc.go) plus `connect`, which that tier handles
+// through its curry-unwrapping path rather than by name. Recognising the wrapper
+// is what separates `const Foo = connect(mapState)(Bar)` — a component
+// declaration in every sense except the node type the parser gave it — from
+// `const config = loadConfig()`. Treating any call as a component would re-type
+// whatever a route happens to name, which is the failure the gate exists for.
+func isComponentHOC(name string) bool {
+	return name == "connect" || hocNames[name]
+}
+
+// componentVarDecls maps each variable name declared in the file to whether its
+// initialiser declares a component: a function, an arrow, a class, or an HOC
+// call. First declaration wins, so a later shadow in an inner scope cannot
+// change the verdict for the exported binding.
+func componentVarDecls(root *sitter.Node, src []byte) map[string]bool {
+	out := make(map[string]bool)
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "variable_declarator" {
+			nm := n.ChildByFieldName("name")
+			if nm != nil && nm.Type() == "identifier" {
+				if label := nm.Content(src); label != "" {
+					if _, seen := out[label]; !seen {
+						out[label] = declaresComponent(n.ChildByFieldName("value"), src)
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+	return out
+}
+
+// declaresComponent reports whether an initialiser expression produces a React
+// component.
+func declaresComponent(v *sitter.Node, src []byte) bool {
+	for i := 0; v != nil && i < 8; i++ {
+		switch v.Type() {
+		case "arrow_function", "function_expression", "function",
+			"class", "class_expression", "generator_function":
+			return true
+		case "parenthesized_expression":
+			v = v.NamedChild(0)
+		case "call_expression":
+			// `connect(mapState)(Bar)` and `React.memo(X)` both resolve through
+			// JCM.6's callee walk, which peels the curry and reads the member
+			// property.
+			return isComponentHOC(hocOutermostCallee(v, src))
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 type crHandler struct{ id, method, svc string }

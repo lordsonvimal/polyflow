@@ -17,3 +17,9 @@ belongs_to :user
 redirect_to request.referer
 redirect_to @folder.uri
 redirect_to :back
+
+# RT.2: a single-argument `#` names no route and no request. The two-argument
+# form (`link_to text, "#"`) still matches — see the pattern comment.
+link_to("#", class: "btn")
+link_to "#" do
+end

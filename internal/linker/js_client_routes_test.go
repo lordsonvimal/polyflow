@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -90,7 +91,7 @@ func TestLinkJSClientRoutes_TableAndSwitch(t *testing.T) {
 		jsClassNode("svc", cf, "CDMTopLevel", 1, 3),
 		jsClassNode("svc", cf, "CodeListTopLevelNew", 5, 7),
 	}
-	nodes, edges, _, _ := LinkJSClientRoutes(in, map[string][]string{"svc": {rf, nf}})
+	nodes, _, edges, _, _ := LinkJSClientRoutes(in, map[string][]string{"svc": {rf, nf}})
 
 	byLabel := crNodesByLabel(nodes)
 	for _, name := range []string{"cdm", "codelists", "contents"} {
@@ -128,7 +129,7 @@ func TestLinkJSClientRoutes_HashAndPlainPatterns(t *testing.T) {
 `,
 	})
 	rf := p["routes.jsx"]
-	nodes, _, _, _ := LinkJSClientRoutes([]graph.Node{anchorNode("svc", rf)}, map[string][]string{"svc": {rf}})
+	nodes, _, _, _, _ := LinkJSClientRoutes([]graph.Node{anchorNode("svc", rf)}, map[string][]string{"svc": {rf}})
 	byLabel := crNodesByLabel(nodes)
 	if byLabel["hashed"].Meta["path"] != "/x/*" {
 		t.Errorf("hashed path = %q, want /x/*", byLabel["hashed"].Meta["path"])
@@ -154,7 +155,7 @@ func TestLinkJSClientRoutes_NavToHandler(t *testing.T) {
 	h := crHandlerNode("svc", "config/routes.rb", "x#show", "GET", "/x/:id", 4)
 	post := crHandlerNode("svc", "config/routes.rb", "x#update", "POST", "/x/:id", 5)
 
-	nodes, edges, _, _ := LinkJSClientRoutes(
+	nodes, _, edges, _, _ := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", rf), h, post},
 		map[string][]string{"svc": {rf}},
 	)
@@ -182,7 +183,7 @@ func TestLinkJSClientRoutes_NoTableNoCrash(t *testing.T) {
 	for _, v := range p {
 		files = append(files, v)
 	}
-	nodes, edges, _, _ := LinkJSClientRoutes(
+	nodes, _, edges, _, _ := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", p["config.jsx"]), anchorNode("svc", p["Component.jsx"])},
 		map[string][]string{"svc": files},
 	)
@@ -210,7 +211,7 @@ export default { Foo, Bar };
 	foo := jsClassNode("svc", "components/Foo.jsx", "Foo", 1, 3)
 	pageFn := jsFuncNode("svc", pf, "Page", 1)
 
-	nodes, edges, _, resolved := LinkJSClientRoutes(
+	nodes, _, edges, _, resolved := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", rf), anchorNode("svc", pf), foo, pageFn},
 		map[string][]string{"svc": {rf, pf}},
 	)
@@ -240,7 +241,7 @@ function Host() {
 	impl := jsClassNode("svc", "components/WidgetImpl.jsx", "WidgetImpl", 1, 3)
 	hostFn := jsFuncNode("svc", hf, "Host", 1)
 
-	_, edges, _, _ := LinkJSClientRoutes(
+	_, _, edges, _, _ := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", bf), anchorNode("svc", hf), impl, hostFn},
 		map[string][]string{"svc": {bf, hf}},
 	)
@@ -261,7 +262,7 @@ func TestFeatureRegistry_UnknownKey(t *testing.T) {
 `,
 	})
 	ff := p["f.jsx"]
-	nodes, edges, ledger, _ := LinkJSClientRoutes(
+	nodes, _, edges, ledger, _ := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", ff), jsFuncNode("svc", ff, "F", 1)},
 		map[string][]string{"svc": {ff}},
 	)
@@ -305,7 +306,7 @@ func TestFeatureRegistry_RouteSwitchCase(t *testing.T) {
 `,
 	})
 	rf, nf := p["common/ClientRoutes.jsx"], p["common/navigation.jsx"]
-	nodes, edges, _, resolved := LinkJSClientRoutes(
+	nodes, _, edges, _, resolved := LinkJSClientRoutes(
 		[]graph.Node{anchorNode("svc", rf), anchorNode("svc", nf), jsFuncNode("svc", nf, "renderRoute", 1)},
 		map[string][]string{"svc": {rf, nf}},
 	)
@@ -328,4 +329,215 @@ func TestFeatureRegistry_RouteSwitchCase(t *testing.T) {
 	if !resolved["svc\x00PKPDTopLevel"] {
 		t.Errorf("PKPDTopLevel not marked resolved")
 	}
+}
+
+// ── Tier RT.1: SPA route render targets ──────────────────────────────────────
+//
+// A route's render target resolved to the right file and the right line and the
+// wrong node type: `const Foo = connect(…)(Bar)` is a component declaration, but
+// the JS parser types it `variable`, and 12 of cedar's 18 routes rendered one.
+// The flow was present and unqueryable — "which component does route `cdm`
+// render" is asked as a type filter, and a type filter returned 5 of 18.
+//
+// The tests below fix the two halves of that: the shapes that must re-type, and
+// the shape that must not. The second matters more. Re-typing is a mutation of
+// an existing node, and the way a mutating pass fails here is by appending a
+// second node instead of replacing the first — which reads as a win in the
+// component count while giving the render matcher two targets for one route.
+
+// jsVarComponentNode builds a `variable` node as the JS parser emits one for a
+// `const Foo = …` that its own heuristics thought was a component. Only nodes
+// carrying that stamp are eligible render targets in the first place, so RT.1's
+// initialiser check is a second opinion on the parser's, not a replacement.
+func jsVarComponentNode(svc, file, label string, line int) graph.Node {
+	return graph.Node{
+		ID:       fmt.Sprintf("%s:%s:variable:%s:%d", svc, file, label, line),
+		Type:     graph.NodeTypeVariable,
+		Label:    label,
+		Service:  svc,
+		File:     file,
+		Line:     line,
+		Language: "javascript",
+		Meta:     map[string]string{"component": "true"},
+	}
+}
+
+// rtFixture wires four routes against the four declaration shapes that reach a
+// route: a plain function, an arrow const, an HOC-wrapped const, and a const
+// holding an object. Returns the pass's outputs plus the route-table path.
+func rtFixture(t *testing.T) (nodes, tagged []graph.Node, edges []graph.Edge, ledger []graph.UnresolvedRef, comps string) {
+	t.Helper()
+	_, p := writeReduxFixture(t, map[string]string{
+		"common/ClientRoutes.jsx": `export default {
+  plain: "/orion/:id#plain",
+  arrow: "/orion/:id#arrow",
+  wrapped: "/orion/:id#wrapped",
+  settings: "/orion/:id#settings",
+};
+`,
+		"common/navigation.jsx": `function renderRoute(routeName, params) {
+  var kid;
+  switch (routeName) {
+    case "plain":
+      kid = <PlainTopLevel {...params} />;
+      break;
+    case "arrow":
+      kid = <ArrowTopLevel {...params} />;
+      break;
+    case "wrapped":
+      kid = <WrappedTopLevel {...params} />;
+      break;
+    case "settings":
+      kid = <SettingsConfig {...params} />;
+      break;
+  }
+  return kid;
+}
+`,
+		"components/TopLevels.jsx": `export function PlainTopLevel(props) {
+  return <div>{props.id}</div>;
+}
+
+export const ArrowTopLevel = (props) => <div>{props.id}</div>;
+
+const Inner = (props) => <div>{props.id}</div>;
+export const WrappedTopLevel = connect(mapStateToProps)(Inner);
+
+export const SettingsConfig = { tabs: ["a", "b"] };
+`,
+	})
+	rf, nf, cf := p["common/ClientRoutes.jsx"], p["common/navigation.jsx"], p["components/TopLevels.jsx"]
+
+	in := []graph.Node{
+		anchorNode("svc", rf),
+		anchorNode("svc", nf),
+		jsFuncNode("svc", nf, "renderRoute", 1),
+		jsFuncNode("svc", cf, "PlainTopLevel", 1),
+		jsVarComponentNode("svc", cf, "ArrowTopLevel", 5),
+		jsVarComponentNode("svc", cf, "WrappedTopLevel", 8),
+		jsVarComponentNode("svc", cf, "SettingsConfig", 10),
+	}
+	nodes, tagged, edges, ledger, _ = LinkJSClientRoutes(in, map[string][]string{"svc": {rf, nf, cf}})
+	return nodes, tagged, edges, ledger, cf
+}
+
+// TestClientRouteTargets_RetypedToComponent (RT.1): every declaration shape a
+// route actually renders ends up typed `component`, reached by exactly one
+// `renders` edge.
+func TestClientRouteTargets_RetypedToComponent(t *testing.T) {
+	t.Parallel()
+	nodes, tagged, edges, _, cf := rtFixture(t)
+
+	byLabel := map[string]graph.Node{}
+	for _, n := range tagged {
+		byLabel[n.Label] = n
+	}
+	for _, label := range []string{"ArrowTopLevel", "WrappedTopLevel"} {
+		n, ok := byLabel[label]
+		if !ok {
+			t.Fatalf("%s not re-typed; tagged=%+v", label, tagged)
+		}
+		if n.Type != graph.NodeTypeComponent {
+			t.Errorf("%s type = %q, want component", label, n.Type)
+		}
+		if n.File != cf || n.Label != label {
+			t.Errorf("%s re-typed node moved: %+v", label, n)
+		}
+		if n.Meta["retyped_from"] != string(graph.NodeTypeVariable) {
+			t.Errorf("%s missing retyped_from provenance: %+v", label, n.Meta)
+		}
+	}
+	// A function declaration was already the right shape for the query and is
+	// not a variable — RT.1 has nothing to do to it and must leave it alone.
+	if _, ok := byLabel["PlainTopLevel"]; ok {
+		t.Errorf("PlainTopLevel re-typed; RT.1 only touches variable targets")
+	}
+
+	routes := crNodesByLabel(nodes)
+	for _, r := range []struct{ route, target string }{
+		{"plain", "svc:" + cf + ":function:PlainTopLevel:1"},
+		{"arrow", "svc:" + cf + ":variable:ArrowTopLevel:5"},
+		{"wrapped", "svc:" + cf + ":variable:WrappedTopLevel:8"},
+	} {
+		if !hasEdge(edges, graph.EdgeTypeRenders, routes[r.route].ID, r.target) {
+			t.Errorf("no renders %s -> %s; edges=%+v", r.route, r.target, edges)
+		}
+	}
+	// The node ID does not change when the type does. An edge minted against
+	// the pre-RT id must still land on the re-typed node.
+	for _, n := range tagged {
+		if got := nodesRenderedBy(edges, n.ID); got != 1 {
+			t.Errorf("%s is the target of %d renders edges, want 1", n.Label, got)
+		}
+	}
+}
+
+// TestClientRouteTargets_NonComponentStaysVariable (RT.1): the gate. A route
+// naming a const that holds an object resolves to the right node and that node
+// is not a component, so it keeps its type and says so in the ledger. Without
+// this, "re-type whatever a route points at" would launder every such const
+// into the component count.
+func TestClientRouteTargets_NonComponentStaysVariable(t *testing.T) {
+	t.Parallel()
+	nodes, tagged, edges, ledger, cf := rtFixture(t)
+
+	for _, n := range tagged {
+		if n.Label == "SettingsConfig" {
+			t.Fatalf("an object literal was re-typed as a component: %+v", n)
+		}
+	}
+	var row *graph.UnresolvedRef
+	for i := range ledger {
+		if ledger[i].Kind == "client_route_target_not_component" {
+			row = &ledger[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("no client_route_target_not_component row; ledger=%+v", ledger)
+	}
+	if row.Name != "SettingsConfig" || row.File != cf {
+		t.Errorf("ledger row names the wrong node: %+v", *row)
+	}
+
+	// The edge is still correct — the target is where the route points, and
+	// only its type was ever in question.
+	routes := crNodesByLabel(nodes)
+	if !hasEdge(edges, graph.EdgeTypeRenders, routes["settings"].ID, "svc:"+cf+":variable:SettingsConfig:10") {
+		t.Errorf("the renders edge to a non-component target was dropped")
+	}
+}
+
+// TestClientRouteTargets_MintsNoSecondNode is the in-place-mutation gate, and
+// the reason `tagged` is a separate return value from `newNodes`. Appending a
+// re-typed copy leaves two nodes with one label, the render matcher sees two
+// targets for one route, and the corpus grows a component count that looks like
+// the tier working.
+func TestClientRouteTargets_MintsNoSecondNode(t *testing.T) {
+	t.Parallel()
+	nodes, tagged, _, _, _ := rtFixture(t)
+
+	for _, n := range nodes {
+		if n.Type != graph.NodeTypeClientRoute {
+			t.Errorf("js_client_routes minted a non-route node %s (%s); "+
+				"re-typed targets belong in tagged, not newNodes", n.ID, n.Type)
+		}
+	}
+	seen := map[string]bool{}
+	for _, n := range tagged {
+		if seen[n.ID] {
+			t.Errorf("node %s tagged twice; a node re-typed once per route "+
+				"would upsert repeatedly and read as two targets", n.ID)
+		}
+		seen[n.ID] = true
+	}
+}
+
+func nodesRenderedBy(edges []graph.Edge, to string) int {
+	n := 0
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeRenders && e.To == to {
+			n++
+		}
+	}
+	return n
 }

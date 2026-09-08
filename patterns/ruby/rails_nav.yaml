@@ -1,6 +1,17 @@
 language: ruby
 version: "1"
 patterns:
+  # ── link_to / button_to ───────────────────────────────────────────────────
+  # The destination is the second positional argument when there is link text
+  # and the first when there is not. Both forms are written with and without
+  # parentheses, and the two-argument queries below use `(_)` rather than a bare
+  # `_` for that reason: an unnamed wildcard also matches the `(` token, so
+  # `link_to("Create Org Admin", widget_path(id: 1))` matched with @path bound
+  # to the link *text* — a node claiming a request to "Org Admin". The named
+  # wildcard cannot bind a token, which leaves the parenthesised call to the
+  # one-argument queries below, where the anchor pins the destination to the
+  # first named argument.
+
   # link_to "Text", "/literal-path" or button_to "Text", "/literal-path"
   - name: nav_link_rails_literal
     query: |
@@ -8,8 +19,32 @@ patterns:
         method: (identifier) @_fn
         (#match? @_fn "^(link_to|button_to)$")
         arguments: (argument_list
-          _
+          (_)
           (string) @path))
+    captures:
+      - name: path
+        role: http_path
+
+  # link_to "/literal-path" — one positional argument, which Rails uses as both
+  # the destination and the link text. Anchored to the first named argument so
+  # the two-argument form above cannot also match here.
+  #
+  # The leading `/` is doing two jobs. It keeps a bare `link_to "Home"` — link
+  # text with no destination at all — unmatched, and it declines the very common
+  # `link_to "#", data: { role: … } do`, whose `#` names no route and no
+  # request: a nav producer for it is an orphan http_client describing a
+  # navigation that never happens, the artifact the C.2 helper gate removed 28
+  # of. The two-argument form still admits `link_to text, "#"`; that predates
+  # this tier and moving it is a separate decision with its own counts.
+  - name: nav_link_rails_literal
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^(link_to|button_to)$")
+        arguments: (argument_list
+          .
+          (string) @path
+          (#match? @path "^[\"']/")))
     captures:
       - name: path
         role: http_path
@@ -21,7 +56,7 @@ patterns:
         method: (identifier) @_fn
         (#match? @_fn "^(link_to|button_to)$")
         arguments: (argument_list
-          _
+          (_)
           (identifier) @helper))
     captures:
       - name: helper
@@ -34,7 +69,38 @@ patterns:
         method: (identifier) @_fn
         (#match? @_fn "^(link_to|button_to)$")
         arguments: (argument_list
-          _
+          (_)
+          (call
+            !receiver
+            method: (identifier) @helper)))
+    captures:
+      - name: helper
+        role: rails_nav_helper
+
+  # link_to helper_name / link_to(helper_name(args), method: :delete) — the
+  # destination is the only positional argument. The `_path`/`_url` suffix gate
+  # (internal/parser/ruby_nav_helper_gate.go) drops the first-argument bindings
+  # that are link text rather than a route helper, which is what makes an
+  # anchored first-argument capture safe here.
+  - name: nav_link_rails_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^(link_to|button_to)$")
+        arguments: (argument_list
+          .
+          (identifier) @helper))
+    captures:
+      - name: helper
+        role: rails_nav_helper
+
+  - name: nav_link_rails_helper
+    query: |
+      (call
+        method: (identifier) @_fn
+        (#match? @_fn "^(link_to|button_to)$")
+        arguments: (argument_list
+          .
           (call
             !receiver
             method: (identifier) @helper)))
