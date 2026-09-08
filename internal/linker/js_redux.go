@@ -595,18 +595,35 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 
 		// action-creator modules this file pulls in, plus the union of their
 		// creator names → node IDs (for `props.<creator>()` / `dispatch(x())`).
-		acFile := ""
+		// acFiles is a list, in absorption order, rather than "the first one
+		// seen": a component routinely imports several modules that all satisfy
+		// isActionsFile, and `props.actions.X(…)` names one creator without
+		// saying which module defines it. Resolving that against an arbitrary
+		// single module sent the edge to a module that does not define X, where
+		// reduxCreatorNode then minted a synthetic stub for it.
+		var acFiles []string
+		acSeen := make(map[string]bool)
 		fileCreators := make(map[string]string)
 		absorbAC := func(acRel string) {
-			if acFile == "" {
-				acFile = acRel
+			if !acSeen[acRel] {
+				acSeen[acRel] = true
+				acFiles = append(acFiles, acRel)
 			}
 			for nm, id := range creatorNodeID[acRel] {
 				fileCreators[nm] = id
 			}
 		}
-		for _, imp := range imports {
-			if isActionsFile(imp.file) {
+		// `imports` is a map, so absorbing straight out of a range over it made
+		// both acFiles' order and fileCreators' collision winner depend on Go's
+		// randomised map iteration — two cold indexes of the same tree disagreed
+		// on where these edges pointed. Absorb by sorted local binding name.
+		impNames := make([]string, 0, len(imports))
+		for local := range imports {
+			impNames = append(impNames, local)
+		}
+		sort.Strings(impNames)
+		for _, local := range impNames {
+			if imp := imports[local]; isActionsFile(imp.file) {
 				absorbAC(imp.file)
 			}
 		}
@@ -886,8 +903,8 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				if obj.Type() == "member_expression" {
 					op := obj.ChildByFieldName("property")
 					if op != nil && op.Content(src) == "actions" && reduxIsPropsNode(obj.ChildByFieldName("object"), src) {
-						if acFile != "" {
-							toID := reduxCreatorNode(acFile, name, creatorNodeID, svcOfFile, mkFn)
+						if acRel := reduxCreatorHome(acFiles, name, creatorNodeID); acRel != "" {
+							toID := reduxCreatorNode(acRel, name, creatorNodeID, svcOfFile, mkFn)
 							addEdge(graph.EdgeTypeCalls, attrFrom(line), toID, "props_actions_dispatch")
 						}
 						return
@@ -1342,6 +1359,28 @@ func reduxCreatorNode(acRel, name string, creatorNodeID map[string]map[string]st
 		}
 	}
 	return mkFn(svcOfFile[acRel], acRel, name, 1, "creator")
+}
+
+// reduxCreatorHome picks which of a component's imported action-creator modules
+// owns `name`: the first one that actually declares a creator by that name,
+// falling back to acFiles[0] so an undeclared creator still resolves (to a
+// synthetic stub, as before) rather than dropping the edge. Returns "" when the
+// file imports no action-creator module at all.
+//
+// The fallback is deliberately last, not first: `props.actions.X(…)` carries no
+// module name, so preferring the module that declares X is the only evidence
+// available about where the call really goes — and taking any other module
+// means minting a stub for a creator that already has a real node elsewhere.
+func reduxCreatorHome(acFiles []string, name string, creatorNodeID map[string]map[string]string) string {
+	if len(acFiles) == 0 {
+		return ""
+	}
+	for _, acRel := range acFiles {
+		if m := creatorNodeID[acRel]; m != nil && m[name] != "" {
+			return acRel
+		}
+	}
+	return acFiles[0]
 }
 
 // reduxIsPropsNode reports whether n is `props` or `<x>.props` (e.g. `this.props`).

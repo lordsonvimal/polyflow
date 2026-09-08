@@ -3,6 +3,7 @@ package linker
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -574,5 +575,74 @@ func TestLinkJSRedux_NoReduxNoEdges(t *testing.T) {
 	newNodes, edges := LinkJSRedux(nil, map[string][]string{"svc": {p["components/Plain.jsx"]}})
 	if len(newNodes) != 0 || len(edges) != 0 {
 		t.Errorf("plain file must not produce redux nodes/edges; nodes=%+v edges=%+v", newNodes, edges)
+	}
+}
+
+// TestLinkJSRedux_PropsActionsPrefersDeclaringModule pins the fix for the
+// duplicate-label defect: a container that imports two action-creator modules
+// writes `this.props.actions.setFoo(1)` without naming either of them, so the
+// linker used to absorb whichever module a Go map handed it first and mint a
+// synthetic setFoo stub inside a module that never declared one. Two cold
+// indexes of the same tree then disagreed on where the edge pointed.
+//
+// ActionHandlers is the decoy and sorts before Creators by local binding name,
+// so a fix that only made the absorption order deterministic — without also
+// preferring the module that declares the creator — would still pick it.
+func TestLinkJSRedux_PropsActionsPrefersDeclaringModule(t *testing.T) {
+	t.Parallel()
+	_, p := writeReduxFixture(t, map[string]string{
+		"constants/ActionTypes.jsx": `import keyMirror from "keymirror";
+export default keyMirror({ SET_FOO: null, RESET_FOO: null });
+`,
+		"actions/ActionHandlers.jsx": `import ActionTypes from "../constants/ActionTypes";
+import actionCreator from "redux-action-utils";
+export default {
+  resetFoo: actionCreator(ActionTypes.RESET_FOO, "payload"),
+};
+`,
+		"actions/Creators.jsx": `import ActionTypes from "../constants/ActionTypes";
+import actionCreator from "redux-action-utils";
+export default {
+  setFoo: actionCreator(ActionTypes.SET_FOO, "payload"),
+};
+`,
+		"components/Container.jsx": `import ActionHandlers from "../actions/ActionHandlers";
+import Creators from "../actions/Creators";
+class Container extends React.Component {
+  onClick = () => {
+    this.props.actions.setFoo(1);
+  };
+}
+`,
+	})
+
+	onClick := jsFuncNode("svc", p["components/Container.jsx"], "onClick", 4)
+	files := map[string][]string{"svc": {
+		p["constants/ActionTypes.jsx"], p["actions/ActionHandlers.jsx"],
+		p["actions/Creators.jsx"], p["components/Container.jsx"],
+	}}
+
+	// Repeat: Go randomises map iteration per range, so a single pass can pass
+	// by luck. Every run must agree, and agree on the declaring module.
+	for i := 0; i < 8; i++ {
+		newNodes, edges := LinkJSRedux([]graph.Node{onClick}, files)
+
+		var target string
+		for _, e := range edges {
+			if e.From == onClick.ID && e.Meta["redux"] == "props_actions_dispatch" {
+				target = e.To
+			}
+		}
+		if target == "" {
+			t.Fatalf("run %d: no props_actions_dispatch edge from onClick; edges=%+v", i, edges)
+		}
+		if !strings.Contains(target, "Creators.jsx") {
+			t.Fatalf("run %d: setFoo resolved to %q, want the module that declares it (Creators.jsx)", i, target)
+		}
+		for _, n := range newNodes {
+			if n.Label == "setFoo" && strings.Contains(n.File, "ActionHandlers.jsx") {
+				t.Fatalf("run %d: minted a synthetic setFoo stub in the decoy module: %+v", i, n)
+			}
+		}
 	}
 }
