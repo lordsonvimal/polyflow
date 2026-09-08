@@ -845,6 +845,42 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(pcEdges)
 		}},
+		// Tier UL: read the URL of every JS/TS http_client the matcher left
+		// dynamic, by backtracking its URL expression to the assignments in the
+		// enclosing function. Runs after js_prop_clients (so a prop-client node
+		// minted there is a candidate too) and before js_http_hosts and Tier CB,
+		// so a path recovered here still gets its host and base-URL treatment.
+		{"js_local_urls", scopeSameServiceOnly, func() error {
+			changed, added, ulLedger := linker.ResolveJSLocalURLs(st.allNodes)
+			st.allUnresolved = append(st.allUnresolved, ulLedger...)
+			if len(changed) == 0 && len(added) == 0 {
+				return nil
+			}
+			// changed nodes are rewritten in place — re-persisting upserts them
+			// rather than adding a second node at the same site.
+			for i := range changed {
+				n := changed[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for i := range added {
+				n := added[i]
+				if _, exists := byID[n.ID]; exists {
+					continue
+				}
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+				st.allNodes = append(st.allNodes, n)
+				byID[n.ID] = len(st.allNodes) - 1
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
 		// JS/TS client at all, so this is the only source of Meta["env_var"] /
 		// Meta["host_default_literal"] for JS/TS nodes — must also run before

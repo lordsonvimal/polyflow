@@ -3,6 +3,7 @@ package linker
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -223,8 +224,9 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 
 					// each mint request is one distinct path shape to emit.
 					type mintReq struct {
-						path  string
-						cands []string
+						path         string
+						cands        []string
+						localBinding bool
 					}
 					var reqs []mintReq
 
@@ -235,6 +237,16 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 						for _, sh := range shapes {
 							reqs = append(reqs, mintReq{path: sh, cands: []string{sh}})
 						}
+					} else if paths, reason, ok := resolveLocalURLBinding(urlNode, enclosingJSFunction(n), pf.src); ok {
+						// Tier UL: the argument is a bare local (often the
+						// `{ url }` shorthand of an options object) bound to one
+						// or more literal paths in this function. One node per
+						// distinct path — a switch selecting between four
+						// endpoints is four flows, not one client with four
+						// edges.
+						for _, p := range paths {
+							reqs = append(reqs, mintReq{path: p, cands: []string{p}, localBinding: true})
+						}
 					} else {
 						name := "(dynamic)"
 						k := "prop_client_dynamic_url"
@@ -243,6 +255,11 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 							name, k = fname, kind
 						case len(cands) > 0:
 							name = cands[0]
+						case reason == ledgerLocalURLHighFanout:
+							// A local carrying more than maxLocalURLBranches
+							// URLs is a table or a loop, and saying so is more
+							// useful than the generic dynamic row.
+							k = reason
 						}
 						ledger = append(ledger, graph.UnresolvedRef{
 							Service: pf.svc, File: pf.rel, Line: line,
@@ -267,6 +284,10 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 						}
 						if len(req.cands) > 1 {
 							meta["key_candidates"] = contract.MarshalKeyCandidates(req.cands)
+						}
+						if req.localBinding {
+							meta["url_origin"] = localURLOriginLocalBinding
+							meta["branch_index"] = strconv.Itoa(ri)
 						}
 						newNodes = append(newNodes, graph.Node{
 							ID:       id,
