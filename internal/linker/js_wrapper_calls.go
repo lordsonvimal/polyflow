@@ -2,6 +2,7 @@ package linker
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -50,7 +51,7 @@ import (
 // template-truncation walk) and once as a bare producer_alias_url_call. When both
 // land on the same call site the wrapper node is strictly better, so the
 // producer_alias_url_call duplicate is returned for removal.
-func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Node, []graph.Edge, map[string]bool) {
+func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Node, []graph.Edge, []graph.UnresolvedRef, map[string]bool) {
 	// service -> wrapperName -> URL param index
 	wrapperParamIndex := map[string]map[string]int{}
 	// service -> wrapperName -> HTTP verb the wrapper's own body pins on its
@@ -100,7 +101,7 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 		}
 	}
 	if len(wrapperParamIndex) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	// Discovered wrapperParamIndex above is single-hop: it only knows a
@@ -165,7 +166,9 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 
 	var newNodes []graph.Node
 	var newEdges []graph.Edge
+	var ledger []graph.UnresolvedRef
 	seenID := map[string]bool{}
+	seenLedger := map[string]bool{}
 
 	for svc, files := range serviceFiles {
 		wrappers := wrapperParamIndex[svc]
@@ -176,7 +179,16 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 			if !isJSFile(file) {
 				continue
 			}
-			for _, n := range scanJSWrapperCallSites(svc, file, wrappers, wrapperMethod[svc]) {
+			siteNodes, siteLedger := scanJSWrapperCallSites(svc, file, wrappers, wrapperMethod[svc])
+			for _, r := range siteLedger {
+				key := fmt.Sprintf("%s\x00%s\x00%d\x00%s", r.Service, r.File, r.Line, r.Name)
+				if seenLedger[key] {
+					continue
+				}
+				seenLedger[key] = true
+				ledger = append(ledger, r)
+			}
+			for _, n := range siteNodes {
 				if seenID[n.ID] {
 					continue
 				}
@@ -213,7 +225,22 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 		}
 	}
 
-	return newNodes, newEdges, removeIDs
+	// serviceFiles iterates in map order, so the ledger has to be sorted before
+	// it leaves this pass or two cold indexes disagree on row order.
+	sort.Slice(ledger, func(i, j int) bool {
+		a, b := ledger[i], ledger[j]
+		if a.Service != b.Service {
+			return a.Service < b.Service
+		}
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		return a.Name < b.Name
+	})
+	return newNodes, newEdges, ledger, removeIDs
 }
 
 // scanJSWrapperCallSites re-parses file and returns one http_client node per
@@ -221,24 +248,30 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 // documented reason for re-parsing instead of reading a pattern-emitted node:
 // the wrapper table is only known after all files are collected, so the call
 // sites can't have been captured with this knowledge at parse time.
-func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyMethods map[string]string) []graph.Node {
+func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyMethods map[string]string) ([]graph.Node, []graph.UnresolvedRef) {
 	src, root, lang, ok := jsParse(file)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
+	// UB.1: a member-expression callee is accepted alongside a bare identifier
+	// so an object-literal transport (`NetUtils.postForm("/api/x", body)`) can
+	// be resolved. It is looked up under the qualified name the wrapper fact
+	// carries ("NetUtils.postForm"), never under the bare property, so an
+	// unrelated `Chart.update(...)` or `this.get(...)` finds nothing.
 	q, err := compiledQuery(`
 		(call_expression
-			function: (identifier) @callee
+			function: [(identifier) (member_expression)] @callee
 			arguments: (arguments) @args) @call`, lang)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	cur := sitter.NewQueryCursor()
 	cur.Exec(q, root)
 
 	relFile := patterns.RelativizeToCwd(file)
 	var out []graph.Node
+	var ledger []graph.UnresolvedRef
 	for {
 		m, ok := cur.NextMatch()
 		if !ok {
@@ -258,7 +291,10 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyM
 		if calleeNode == nil || argsNode == nil || callNode == nil {
 			continue
 		}
-		callee := calleeNode.Content(src)
+		callee, ok := jsWrapperCalleeName(calleeNode, src)
+		if !ok {
+			continue
+		}
 		paramIdx, ok := wrappers[callee]
 		if !ok {
 			continue
@@ -326,7 +362,10 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyM
 		if meta["method"] == "" {
 			mth, via := bodyMethods[callee], "js_wrapper_body"
 			if mth == "" {
-				mth, via = jsWrapperMethod(callee), "js_wrapper_name"
+				// UB.1: for `NetUtils.apiPost` the verb lives in the property,
+				// not the object — deriving it from the whole qualified name
+				// would read `DeleteHelper.load` as a DELETE.
+				mth, via = jsWrapperMethod(jsWrapperCalleeProperty(callee)), "js_wrapper_name"
 			}
 			if mth != "" {
 				meta["method"] = mth
@@ -335,6 +374,21 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyM
 					label = mth + " " + meta["url"]
 				}
 			}
+		}
+		// UB.1c: the call is recognised as a wrapper call but its URL argument
+		// could not be read — a second forwarding hop, a member access on
+		// runtime data, a concatenation the KeyWalker refuses. The node is
+		// still worth minting (a request does happen here) but it reaches no
+		// handler, so the site is ledgered under its own kind rather than
+		// being silently counted as covered.
+		if meta["key_dynamic"] == "true" {
+			ledger = append(ledger, graph.UnresolvedRef{
+				Service: service,
+				File:    relFile,
+				Line:    line,
+				Name:    callee,
+				Kind:    "wrapper_url_dynamic",
+			})
 		}
 		out = append(out, graph.Node{
 			ID:       id,
@@ -347,7 +401,35 @@ func scanJSWrapperCallSites(service, file string, wrappers map[string]int, bodyM
 			Meta:     meta,
 		})
 	}
-	return out
+	return out, ledger
+}
+
+// jsWrapperCalleeName renders a call's callee as a wrapper-table key: a bare
+// identifier as itself, and (UB.1) a member expression as "object.property"
+// when the object is a plain identifier. Anything deeper (`a.b.c()`,
+// `this.x()`, `arr[i]()`) abstains — those are not module-object transports,
+// and a key built from them could only miss or, worse, collide.
+func jsWrapperCalleeName(callee *sitter.Node, src []byte) (string, bool) {
+	switch callee.Type() {
+	case "identifier":
+		return callee.Content(src), true
+	case "member_expression":
+		obj, prop := callee.ChildByFieldName("object"), callee.ChildByFieldName("property")
+		if obj == nil || prop == nil || obj.Type() != "identifier" || prop.Type() != "property_identifier" {
+			return "", false
+		}
+		return obj.Content(src) + "." + prop.Content(src), true
+	}
+	return "", false
+}
+
+// jsWrapperCalleeProperty is the property half of a qualified wrapper name
+// ("NetUtils.apiPost" -> "apiPost"); an unqualified name is returned as is.
+func jsWrapperCalleeProperty(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // jsResolveForwardedParamURL (JP.2) handles `function load(url) { apiGet(url) }`:

@@ -76,7 +76,7 @@ export function fetchGraph(params: string) {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	var sawOuterCallSite bool
 	for _, n := range newNodes {
@@ -119,7 +119,7 @@ export function load() {
 	}
 	require.NotEmpty(t, aliasDupID, "fixture should produce a producer_alias_url_call node for apiGet(\"/app/things\")")
 
-	newNodes, _, removeIDs := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _, removeIDs := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	var wrapperAtSameSite bool
 	for _, n := range newNodes {
@@ -156,7 +156,7 @@ export function loadFolders() {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	var sawListSite bool
 	for _, n := range newNodes {
@@ -191,7 +191,7 @@ function outer(unrelated: string) {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	for _, n := range newNodes {
 		assert.NotEqual(t, "outer", n.Meta["wrapper"],
@@ -227,7 +227,7 @@ function load(baseUrl) {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	var sawPut, sawGet bool
 	for _, n := range newNodes {
@@ -274,7 +274,7 @@ function restore(id) {
 	nodes := parseJSWrapperFixture(t, "svc", paths)
 	serviceFiles := map[string][]string{"svc": paths}
 
-	newNodes, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
 
 	var sawDirect, sawTransitive bool
 	for _, n := range newNodes {
@@ -290,4 +290,132 @@ function restore(id) {
 	}
 	assert.True(t, sawDirect, "postSSEAndReload call site not minted")
 	assert.True(t, sawTransitive, "runAction call site not minted")
+}
+
+// ── Tier UB.1 — object-literal transports, member-expression call sites ──────
+
+// TestLinkJSAPIWrapperCalls_ObjectLiteralWrapper is UB.1's worked example. The
+// transport is a property of a module-scope object literal and is called
+// through a member expression, which is the shape Tier WB missed for two
+// independent reasons: its wrapper facts only named functions bound to a
+// declarator, and its call-site scan only accepted an identifier callee.
+func TestLinkJSAPIWrapperCalls_ObjectLiteralWrapper(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"netUtils.js": `const NetUtils = {
+  getJson: async url => (await fetch(url, { credentials: "include" })).json(),
+  postForm: async (url, body) => (await fetch(url, { method: "POST", body })).json(),
+};
+
+export async function closeIssue(formData) {
+  return await NetUtils.postForm("/api/widgets/close", formData);
+}
+
+export async function loadWidget(url) {
+  return await NetUtils.getJson(url);
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "orion", paths)
+	serviceFiles := map[string][]string{"orion": paths}
+
+	newNodes, _, ledger, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	var closeSite *graph.Node
+	for i := range newNodes {
+		if newNodes[i].Meta["wrapper"] == "NetUtils.postForm" {
+			closeSite = &newNodes[i]
+		}
+	}
+	require.NotNil(t, closeSite, "NetUtils.postForm call site should mint an http_client node")
+	assert.Equal(t, "/api/widgets/close", closeSite.Meta["url"])
+	// The verb comes from the wrapper's own body (`method: "POST"`), not from
+	// its name: "postForm" is not one of the name-derived verbs.
+	assert.Equal(t, "POST", closeSite.Meta["method"])
+	assert.Equal(t, "js_wrapper_body", closeSite.Meta["method_resolved_via"])
+
+	// loadWidget forwards its own parameter — a second hop UB.1 does not take.
+	// It is ledgered rather than silently counted as covered.
+	var dynamicRow bool
+	for _, r := range ledger {
+		if r.Kind == "wrapper_url_dynamic" && r.Name == "NetUtils.getJson" {
+			dynamicRow = true
+		}
+	}
+	assert.True(t, dynamicRow, "unreadable wrapper URL should be ledgered as wrapper_url_dynamic")
+}
+
+// TestLinkJSAPIWrapperCalls_ObjectMethodDoesNotCollideWithFreeFunction is why
+// the wrapper fact is keyed "Object.property" and not by the bare property
+// name. Both wrappers here are called `postForm` and forward their URL at
+// different positions; a bare-name key would give one of the two call sites the
+// other's parameter index and mint a node claiming a request to a request body.
+func TestLinkJSAPIWrapperCalls_ObjectMethodDoesNotCollideWithFreeFunction(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"mixed.js": `function postForm(opts, url) {
+  return fetch(url, { method: "POST" });
+}
+
+const NetUtils = {
+  postForm: (url, body) => fetch(url, { method: "POST", body }),
+};
+
+export function a() {
+  return postForm({}, "/api/free/fn");
+}
+
+export function b() {
+  return NetUtils.postForm("/api/object/method", {});
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "orion", paths)
+	serviceFiles := map[string][]string{"orion": paths}
+
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	urls := map[string]string{}
+	for _, n := range newNodes {
+		urls[n.Meta["wrapper"]] = n.Meta["url"]
+	}
+	assert.Equal(t, "/api/free/fn", urls["postForm"], "free function forwards at index 1")
+	assert.Equal(t, "/api/object/method", urls["NetUtils.postForm"], "object method forwards at index 0")
+}
+
+// TestLinkJSAPIWrapperCalls_UnknownObjectMintsNothing is the guard that keeps
+// UB.1 from becoming a phantom-client factory. `.update(...)` on an imported
+// third-party object looks exactly like a transport call at the syntax level;
+// only the absence of a wrapper fact for that qualified name distinguishes it.
+func TestLinkJSAPIWrapperCalls_UnknownObjectMintsNothing(t *testing.T) {
+	t.Parallel()
+	_, paths := writeJSWrapperFixture(t, map[string]string{
+		"chart.js": `import Chart from "chart.js";
+
+const NetUtils = {
+  getJson: url => fetch(url),
+};
+
+export function render() {
+  Chart.update("/not/a/request");
+  return NetUtils.getJson("/api/real");
+}
+`,
+	})
+	nodes := parseJSWrapperFixture(t, "orion", paths)
+	serviceFiles := map[string][]string{"orion": paths}
+
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, serviceFiles)
+
+	for _, n := range newNodes {
+		assert.NotEqual(t, "Chart.update", n.Meta["wrapper"],
+			"a member call on an object with no wrapper fact must mint nothing")
+	}
+	var sawReal bool
+	for _, n := range newNodes {
+		if n.Meta["wrapper"] == "NetUtils.getJson" && n.Meta["url"] == "/api/real" {
+			sawReal = true
+		}
+	}
+	assert.True(t, sawReal, "the known wrapper in the same file should still resolve")
 }

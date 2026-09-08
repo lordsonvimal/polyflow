@@ -1152,7 +1152,8 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// require a literal at the call site and never fire otherwise.
 		{"js_api_wrapper_calls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			wrapperNodes, wrapperEdges, dupIDs := linker.LinkJSAPIWrapperCalls(st.allNodes, svcFiles)
+			wrapperNodes, wrapperEdges, wrapperUnresolved, dupIDs := linker.LinkJSAPIWrapperCalls(st.allNodes, svcFiles)
+			st.allUnresolved = append(st.allUnresolved, wrapperUnresolved...)
 			for i := range wrapperNodes {
 				n := wrapperNodes[i]
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {

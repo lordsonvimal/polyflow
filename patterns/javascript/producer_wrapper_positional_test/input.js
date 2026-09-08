@@ -15,3 +15,14 @@ function apiPutPairDecl(configId, uri) {
 
 // ── axios(config-object) forward, shorthand form ──
 const apiGetShorthandArrow = (url) => axios({ method: "GET", url });
+
+// ── UB.1: object-literal transport, positional forward ──
+const NetUtils = {
+  getJson: (uri) => fetch(uri),
+  postForm(uri, body) {
+    return fetch(uri, { method: "POST", body });
+  },
+};
+
+// ── UB.1: single unparenthesised arrow parameter ──
+const apiGetBareArrow = uri => fetch(uri);

@@ -21,6 +21,15 @@ patterns:
   # parameter of that function). Not anchored inside return_statement — see
   # producer_wrapper_body.yaml's header comment for why (real
   # fetch(...).then() chains are bare statements).
+  #
+  # UB.1 needed no new query here: a transport declared as a property of an
+  # object literal (`const Net = { postForm: (url, body) => fetch(url, ...) }`)
+  # already matches this pattern, because the query only describes the
+  # fetch call, not what encloses it. What was missing was entirely on the Go
+  # side — jsWrapperParamIndex could only name a function bound to a
+  # variable_declarator, so an object-literal member produced no wrapper fact.
+  # It now names such a member "Object.property", which is also the key
+  # scanJSWrapperCallSites looks up for a member-expression call site.
   - name: wrapper_url_positional_fetch_call
     query: |
       (call_expression

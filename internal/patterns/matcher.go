@@ -1044,31 +1044,114 @@ func jsWrapperParamIndex(argNode *sitter.Node, src []byte) (wrapperName string, 
 	argText := argNode.Content(src)
 	cur := argNode.Parent()
 	for depth := 0; cur != nil && depth < testDSLWalkDepth; depth, cur = depth+1, cur.Parent() {
-		var params, name *sitter.Node
+		var params, single *sitter.Node
+		var name string
 		switch cur.Type() {
 		case "function_declaration":
 			params = cur.ChildByFieldName("parameters")
-			name = cur.ChildByFieldName("name")
+			if nm := cur.ChildByFieldName("name"); nm != nil {
+				name = nm.Content(src)
+			}
 		case "arrow_function", "function_expression":
 			params = cur.ChildByFieldName("parameters")
-			if decl := cur.Parent(); decl != nil && decl.Type() == "variable_declarator" {
-				name = decl.ChildByFieldName("name")
+			if params == nil {
+				// An arrow with a single unparenthesised parameter
+				// (`url => fetch(url)`) has no formal_parameters node at all;
+				// the grammar puts the bare identifier under a `parameter`
+				// field instead. Missing this made every one-argument arrow
+				// wrapper — the most compact way to write one — invisible.
+				single = cur.ChildByFieldName("parameter")
+			}
+			name = jsFunctionExprWrapperName(cur, src)
+		case "method_definition":
+			// UB.1: a shorthand method of an object literal,
+			// `const Net = { postForm(url, body) { fetch(url, ...) } }`. A
+			// method_definition inside a class_body is deliberately NOT
+			// accepted: a class method is reached as `this.foo(...)` or
+			// through an instance, which is a different call-site shape than
+			// the module-object one scanJSWrapperCallSites resolves.
+			if p := cur.Parent(); p != nil && p.Type() == "object" {
+				params = cur.ChildByFieldName("parameters")
+				name = jsObjectMemberWrapperName(cur, src)
 			}
 		default:
 			continue
 		}
-		if params == nil || name == nil {
+		if name == "" || (params == nil && single == nil) {
+			return "", -1, false
+		}
+		if params == nil {
+			if single.Type() == "identifier" && single.Content(src) == argText {
+				return name, 0, true
+			}
 			return "", -1, false
 		}
 		for i := 0; i < int(params.NamedChildCount()); i++ {
 			p := jsParamIdentifier(params.NamedChild(i))
 			if p != nil && p.Content(src) == argText {
-				return name.Content(src), i, true
+				return name, i, true
 			}
 		}
 		return "", -1, false
 	}
 	return "", -1, false
+}
+
+// jsFunctionExprWrapperName names an arrow/function expression by what it is
+// bound to: a `const apiGet = url => ...` declarator, or (UB.1) a property of
+// an object literal, in which case the name is qualified `Object.property`.
+// Empty when the expression is anonymous (an inline callback, an argument),
+// which is jsWrapperParamIndex's signal to emit no wrapper fact at all.
+func jsFunctionExprWrapperName(fn *sitter.Node, src []byte) string {
+	parent := fn.Parent()
+	if parent == nil {
+		return ""
+	}
+	switch parent.Type() {
+	case "variable_declarator":
+		if nm := parent.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
+			return nm.Content(src)
+		}
+	case "pair":
+		return jsObjectMemberWrapperName(parent, src)
+	}
+	return ""
+}
+
+// jsObjectMemberWrapperName qualifies an object-literal member (a `pair` or a
+// shorthand `method_definition`) with the name of the const the object is
+// assigned to: `NetUtils._postForm`. Qualifying rather than using the bare
+// property name is what keeps the service-wide wrapper table safe to consult
+// from a member-expression call site — `.get(...)` and `.post(...)` are far
+// too common for a bare property name to be a usable key, and an unguarded
+// member match is how a phantom-client family gets minted (see the C.1c/C.2
+// removals). Empty unless the object is directly bound to a plain identifier,
+// so an object literal passed inline as an argument names nothing.
+func jsObjectMemberWrapperName(member *sitter.Node, src []byte) string {
+	key := member.ChildByFieldName("key")
+	if key == nil {
+		key = member.ChildByFieldName("name")
+	}
+	if key == nil {
+		return ""
+	}
+	prop := strings.Trim(key.Content(src), "\"'`")
+	if prop == "" {
+		return ""
+	}
+	obj := member.Parent()
+	if obj == nil || obj.Type() != "object" {
+		return ""
+	}
+	decl := obj.Parent()
+	if decl == nil || decl.Type() != "variable_declarator" {
+		return ""
+	}
+	nm := decl.ChildByFieldName("name")
+	if nm == nil || nm.Type() != "identifier" {
+		return ""
+	}
+	return nm.Content(src) + "." + prop
 }
 
 // jsWrapperCallMethod extracts the HTTP verb a wrapper body's fetch/axios call
