@@ -993,7 +993,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// Rails routes name their action by convention, not by the Meta["handler"]
 		// receiver string LinkRouteHandlers keys on, so they need their own pass.
 		{"rails_route_actions", scopeSameServiceOnly, func() error {
-			railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(st.allNodes)
+			railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(st.allNodes, st.allEdges)
 			if err := st.writeEdges(railsActionEdges); err != nil {
 				return err
 			}

@@ -44,8 +44,8 @@ const UnresolvedRailsRouteAction = "rails_route_action_unresolved"
 // Must run after the parser has produced http_handler nodes and controller
 // function nodes; ordering against the other link passes does not matter, as
 // this reads nodes only.
-func LinkRailsRouteActions(nodes []graph.Node) ([]graph.Edge, []graph.UnresolvedRef) {
-	idx := newControllerActionIndex(nodes)
+func LinkRailsRouteActions(nodes []graph.Node, allEdges []graph.Edge) ([]graph.Edge, []graph.UnresolvedRef) {
+	idx := newControllerActionIndex(nodes, allEdges)
 
 	var (
 		edges      []graph.Edge
@@ -66,10 +66,34 @@ func LinkRailsRouteActions(nodes []graph.Node) ([]graph.Edge, []graph.Unresolved
 			continue
 		}
 
-		calleeID, found := idx.lookup(n.Service, namespace, resource, action)
+		names := []string{resource}
+		if alt, ok := railsPluralController(n, resource); ok {
+			names = append(names, alt)
+		}
+
+		var (
+			calleeID  string
+			found     bool
+			ambiguous []string
+		)
+		for _, name := range names {
+			if calleeID, found = idx.lookup(n.Service, namespace, name, action); found {
+				break
+			}
+		}
+		// Tier RA: only once the action is absent from the controller's own file
+		// do we ask what it inherits. Local first is not an optimisation — a
+		// controller that overrides an inherited action must reach its override.
 		if !found {
-			if alt, ok := railsPluralController(n, resource); ok {
-				calleeID, found = idx.lookup(n.Service, namespace, alt, action)
+			for _, name := range names {
+				var amb []string
+				if calleeID, found, amb = idx.lookupInherited(n.Service, namespace, name, action); found {
+					break
+				}
+				if len(amb) > 0 {
+					ambiguous = amb
+					break
+				}
 			}
 		}
 		if !found {
@@ -79,6 +103,7 @@ func LinkRailsRouteActions(nodes []graph.Node) ([]graph.Edge, []graph.Unresolved
 				Line:    n.Line,
 				Name:    resource + "#" + action,
 				Kind:    UnresolvedRailsRouteAction,
+				Targets: strings.Join(ambiguous, "\n"),
 			})
 			continue
 		}
@@ -254,10 +279,30 @@ func pathSegments(p string) []string {
 type controllerActionIndex struct {
 	// byPath: service \x00 controllerPath \x00 action → node ID
 	byPath map[string]string
+
+	// Tier RA. classAt: service \x00 controllerPath → the class nodes declared
+	// in that controller file, sorted by ID. ancestors: class node ID → the
+	// classes and modules it inherits or includes, sorted. methodsOf: class node
+	// ID → declared method label → node ID.
+	classAt   map[string][]string
+	ancestors map[string][]string
+	methodsOf map[string]map[string]string
 }
 
-func newControllerActionIndex(nodes []graph.Node) *controllerActionIndex {
-	idx := &controllerActionIndex{byPath: map[string]string{}}
+// maxControllerAncestorHops bounds the ancestor walk. Every one of the 24
+// inherited actions cedar resolves sits at hop 1 — a controller and its base
+// class, or a controller and the concern it includes — so 4 is slack, not a
+// working depth. The bound exists because `inherits` is a graph, not a tree:
+// a diamond of concerns would otherwise be walked repeatedly.
+const maxControllerAncestorHops = 4
+
+func newControllerActionIndex(nodes []graph.Node, allEdges []graph.Edge) *controllerActionIndex {
+	idx := &controllerActionIndex{
+		byPath:    map[string]string{},
+		classAt:   map[string][]string{},
+		ancestors: map[string][]string{},
+		methodsOf: map[string]map[string]string{},
+	}
 	// Node order is not stable across runs, so collect and sort before taking
 	// "the first" of anything — an index built in map-iteration order produced a
 	// run-to-run edge flip once already (key_dynamic_raw, acbb20e).
@@ -296,7 +341,83 @@ func newControllerActionIndex(nodes []graph.Node) *controllerActionIndex {
 			idx.byPath[e.pathKey] = e.id
 		}
 	}
+
+	idx.buildAncestry(nodes, allEdges)
 	return idx
+}
+
+// buildAncestry collects the three tables the Tier RA fallback walks: which
+// class a controller file declares, what that class inherits or includes, and
+// which methods each class in the repo declares.
+//
+// `contains` and `inherits` are both already in the graph by the time this pass
+// runs (the parser emits the first, LinkRubyTypeRelations the second, and it is
+// ordered earlier in the pipeline), so none of this re-reads a file.
+//
+// Unlike Tier AT this deliberately does *not* filter Meta["via"] == "mixin".
+// AT asked "is this class an ActiveRecord model", where a mixin answers nothing;
+// RA asks "can this controller respond to `show`", and `include
+// HomeCommonActions` is precisely how six of cedar's route actions arrive. Both
+// relations put a method on the instance, which is the only property RA needs.
+func (idx *controllerActionIndex) buildAncestry(nodes []graph.Node, allEdges []graph.Edge) {
+	byID := make(map[string]*graph.Node, len(nodes))
+	for i := range nodes {
+		byID[nodes[i].ID] = &nodes[i]
+	}
+
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeClass || n.Language != "ruby" {
+			continue
+		}
+		ctrlPath, ok := controllerPath(n.File)
+		if !ok || !isControllerFile(n.File) {
+			continue
+		}
+		key := n.Service + "\x00" + ctrlPath
+		idx.classAt[key] = append(idx.classAt[key], n.ID)
+	}
+
+	for i := range allEdges {
+		e := &allEdges[i]
+		switch e.Type {
+		case graph.EdgeTypeInherits:
+			if byID[e.From] == nil || byID[e.To] == nil {
+				continue
+			}
+			idx.ancestors[e.From] = append(idx.ancestors[e.From], e.To)
+		case graph.EdgeTypeContains:
+			parent, child := byID[e.From], byID[e.To]
+			if parent == nil || child == nil || parent.Type != graph.NodeTypeClass {
+				continue
+			}
+			if child.Type != graph.NodeTypeFunction && child.Type != graph.NodeTypeMethod {
+				continue
+			}
+			// The same call-site-versus-declaration discriminator the direct
+			// index uses: an inherited `before_action :audit` is not an action.
+			if child.Meta["pattern"] != "" && child.Meta["end_line"] == "" {
+				continue
+			}
+			m := idx.methodsOf[parent.ID]
+			if m == nil {
+				m = map[string]string{}
+				idx.methodsOf[parent.ID] = m
+			}
+			// Node order is not stable across runs; keep the lowest ID so a class
+			// that declares one label twice resolves the same way every index.
+			if prev, exists := m[child.Label]; !exists || child.ID < prev {
+				m[child.Label] = child.ID
+			}
+		}
+	}
+
+	for k := range idx.classAt {
+		sort.Strings(idx.classAt[k])
+	}
+	for k := range idx.ancestors {
+		sort.Strings(idx.ancestors[k])
+	}
 }
 
 // lookup resolves a route against exactly one controller: the one its own
@@ -330,4 +451,83 @@ func (idx *controllerActionIndex) lookup(service, namespace, resource, action st
 	}
 	id, ok := idx.byPath[service+"\x00"+ctrlPath+"\x00"+action]
 	return id, ok
+}
+
+// lookupInherited is Tier RA: the same controller, asked what it inherits.
+//
+// It changes nothing about *which* controller serves a route — the namespace
+// derivation and the singular-resource plural are still the only two candidate
+// names, and there is still no name-similarity fallback. All it adds is that a
+// controller whose action arrives from a base class or an included concern is
+// no longer indistinguishable from one that has no such action at all. On cedar
+// those were 24 of 99 ledger rows: `IntegrationApiBaseController` defines a
+// generic `show`/`index` that thirteen API routes reach, `HomeCommonActions`
+// supplies `show` and `get_tab_data` to the per-tenant home controllers, and
+// two controllers subclass a sibling controller outright.
+//
+// The remaining 75 rows are the graph telling the truth and must stay: a bare
+// `resources :async_operations` declares seven REST routes against a controller
+// that implements `poll` and `delete_async_op`, and those five unimplemented
+// actions are dead however far up the chain you look.
+//
+// Breadth-first, nearest ancestor wins, because that is Ruby's own rule. Within
+// one hop it refuses instead: two ancestors at the same distance both defining
+// the action is a question about Ruby's method resolution order — include order
+// against superclass, `prepend` against `include` — that the graph does not
+// record, and picking one would be a guess wearing an edge's confidence. The
+// caller ledgers those with the candidates listed in Targets.
+func (idx *controllerActionIndex) lookupInherited(service, namespace, resource, action string) (id string, found bool, ambiguous []string) {
+	ctrlPath := resource
+	if namespace != "" {
+		ctrlPath = namespace + "/" + resource
+	}
+	frontier := idx.classAt[service+"\x00"+ctrlPath]
+	if len(frontier) == 0 {
+		return "", false, nil
+	}
+
+	seen := map[string]bool{}
+	for _, c := range frontier {
+		seen[c] = true
+	}
+
+	for hop := 0; hop < maxControllerAncestorHops && len(frontier) > 0; hop++ {
+		var next []string
+		for _, c := range frontier {
+			for _, a := range idx.ancestors[c] {
+				if seen[a] {
+					continue
+				}
+				seen[a] = true
+				next = append(next, a)
+			}
+		}
+
+		var hits []string
+		for _, a := range next {
+			if mid, ok := idx.methodsOf[a][action]; ok {
+				hits = append(hits, mid)
+			}
+		}
+		sort.Strings(hits)
+		hits = dedupeSortedIDs(hits)
+		switch {
+		case len(hits) == 1:
+			return hits[0], true, nil
+		case len(hits) > 1:
+			return "", false, hits
+		}
+		frontier = next
+	}
+	return "", false, nil
+}
+
+func dedupeSortedIDs(in []string) []string {
+	out := in[:0]
+	for i, s := range in {
+		if i == 0 || s != in[i-1] {
+			out = append(out, s)
+		}
+	}
+	return out
 }

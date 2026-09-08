@@ -82,7 +82,7 @@ func TestLinkRailsRouteActions_WorkedExample(t *testing.T) {
 		railsAction("orion", ctrl, "create", 14),
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	require.Len(t, edges, 1)
 	assert.Equal(t, nodes[1].ID, edges[0].To, "route must reach #update, not another action")
@@ -117,7 +117,7 @@ func TestLinkRailsRouteActions_NamespaceDisambiguates(t *testing.T) {
 		railsAction("orion", rootCtrl, "update", 12),
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	require.Len(t, edges, 1)
 	assert.Equal(t, nodes[1].ID, edges[0].To,
@@ -143,7 +143,7 @@ func TestLinkRailsRouteActions_AmbiguousRefuses(t *testing.T) {
 		railsAction("orion", "/repo/app/controllers/client_api/v1/reports_controller.rb", "index", 9),
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	assert.Empty(t, edges, "two plausible controllers must not be guessed between")
 	require.Len(t, unresolved, 1)
@@ -181,7 +181,7 @@ func TestLinkRailsRouteActions_APIControllerWithoutNewStaysUnresolved(t *testing
 		railsAction("orion", rootCtrl, "new", 33),  // the HTML controller does
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	assert.Empty(t, edges, "a route with no implementation must not borrow another namespace's")
 	require.Len(t, unresolved, 1)
@@ -208,7 +208,7 @@ func TestLinkRailsRouteActions_NoNameSimilarityFallback(t *testing.T) {
 	})
 	nodes := []graph.Node{h, railsAction("orion", elsewhere, "index", 12)}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	assert.Empty(t, edges, "a same-named controller in another namespace is not evidence")
 	require.Len(t, unresolved, 1)
@@ -242,7 +242,7 @@ func TestLinkRailsRouteActions_VerbRoutes(t *testing.T) {
 		railsAction("orion", files, "copy", 120),
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{nodes[2].ID}, callTargets(edges, member.ID),
@@ -275,7 +275,7 @@ func TestLinkRailsRouteActions_BeforeActionIsNotAnAction(t *testing.T) {
 		"pattern":  "rest_resource_route",
 	})
 
-	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, callSite})
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, callSite}, nil)
 
 	assert.Empty(t, edges, "a call site is not a declaration")
 	require.Len(t, unresolved, 1)
@@ -297,7 +297,7 @@ func TestLinkRailsRouteActions_GoRoutesUntouched(t *testing.T) {
 		Language: "go",
 		Meta:     map[string]string{"handler": "appConfigHandler.SaveConfig", "action": "SaveConfig"},
 	}
-	edges, unresolved := LinkRailsRouteActions([]graph.Node{goRoute})
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{goRoute}, nil)
 	assert.Empty(t, edges)
 	assert.Empty(t, unresolved)
 }
@@ -318,7 +318,7 @@ func TestLinkRailsRouteActions_HTTPVerbRouteIsSilent(t *testing.T) {
 		"path":      "/async_operations/poll",
 		"pattern":   "http_verb_route",
 	})
-	edges, unresolved := LinkRailsRouteActions([]graph.Node{h})
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{h}, nil)
 	assert.Empty(t, edges)
 	assert.Empty(t, unresolved)
 }
@@ -342,7 +342,7 @@ func TestLinkRailsRouteActions_HTTPVerbRouteWithExplicitTarget(t *testing.T) {
 	target := railsAction("orion", ctrl, "queue_compute_dependencies", 63)
 	nodes := []graph.Node{h, target}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -369,7 +369,7 @@ func TestLinkRailsRouteActions_ExplicitTargetResourceNotInURL(t *testing.T) {
 	target := railsAction("orion", ctrl, "index", 5)
 	nodes := []graph.Node{h, target}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -393,7 +393,7 @@ func TestLinkRailsRouteActions_OneEdgePerRoute(t *testing.T) {
 	dup.Type = graph.NodeTypeMethod
 	dup.ID += ":m"
 
-	edges, _ := LinkRailsRouteActions([]graph.Node{h, railsAction("orion", ctrl, "index", 10), dup})
+	edges, _ := LinkRailsRouteActions([]graph.Node{h, railsAction("orion", ctrl, "index", 10), dup}, nil)
 	assert.Len(t, edges, 1)
 }
 
@@ -418,7 +418,7 @@ func TestLinkRailsRouteActions_DeviseForControllersOverride(t *testing.T) {
 	target := railsAction("orion", ctrl, "create", 20)
 	nodes := []graph.Node{h, target}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -454,7 +454,7 @@ func TestLinkRailsRouteActions_SingularResourcePluralController(t *testing.T) {
 	h := singularResource("orion", "session", "create", "POST", "/session")
 	target := railsAction("orion", ctrl, "create", 9)
 
-	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, target})
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, target}, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -474,7 +474,7 @@ func TestLinkRailsRouteActions_SingularResourceInNamespace(t *testing.T) {
 
 	edges, unresolved := LinkRailsRouteActions([]graph.Node{
 		h, nsTarget, railsAction("orion", rootCtrl, "show", 4),
-	})
+	}, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{nsTarget.ID}, callTargets(edges, h.ID),
@@ -495,7 +495,7 @@ func TestLinkRailsRouteActions_SingularNameAsWrittenWins(t *testing.T) {
 
 	edges, unresolved := LinkRailsRouteActions([]graph.Node{
 		h, target, railsAction("orion", pluralCtrl, "show", 6),
-	})
+	}, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -518,7 +518,7 @@ func TestLinkRailsRouteActions_ExplicitControllerBeatsPlural(t *testing.T) {
 
 	edges, unresolved := LinkRailsRouteActions([]graph.Node{
 		h, target, railsAction("orion", decoy, "show", 11),
-	})
+	}, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -546,7 +546,7 @@ func TestLinkRailsRouteActions_PluralResourceNotInflected(t *testing.T) {
 		railsAction("orion", "/repo/app/controllers/widgetses_controller.rb", "new", 3),
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	assert.Empty(t, edges, "a dead REST route stays dead")
 	require.Len(t, unresolved, 1)
@@ -565,7 +565,7 @@ func TestLinkRailsRouteActions_SingularWithoutPluralControllerStillLedgers(t *te
 		railsAction("orion", "/repo/app/controllers/reports_controller.rb", "show", 7),
 	}
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 
 	assert.Empty(t, edges)
 	require.Len(t, unresolved, 1)
@@ -584,7 +584,7 @@ func TestLinkRailsRouteActions_SingularResourceAlreadyPlural(t *testing.T) {
 	h := singularResource("orion", "settings", "update", "PATCH", "/settings")
 	target := railsAction("orion", ctrl, "update", 15)
 
-	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, target})
+	edges, unresolved := LinkRailsRouteActions([]graph.Node{h, target}, nil)
 
 	require.Empty(t, unresolved)
 	assert.Equal(t, []string{target.ID}, callTargets(edges, h.ID))
@@ -603,7 +603,312 @@ func TestLinkRailsRouteActions_OneEdgePerSingularRoute(t *testing.T) {
 		railsAction("orion", "/repo/app/controllers/homes_controller.rb", "show", 3),
 	}
 
-	edges, _ := LinkRailsRouteActions(nodes)
+	edges, _ := LinkRailsRouteActions(nodes, nil)
 
 	assert.Len(t, edges, 1, "one route, one action: %+v", edges)
+}
+
+// ── Tier RA: actions supplied by a base class or an included concern ────────
+//
+// Cedar's ledger held 99 unresolved route actions. Opening the controller named
+// by 20 randomly-sampled rows found 6 whose action exists but is inherited, and
+// 14 with no such action anywhere — the honest majority a bare `resources`
+// declaration mints against a controller that implements two of seven verbs.
+// These tests pin both halves: the 6 must resolve, the 14 must not.
+
+// railsClass builds the class node the Ruby parser stamps for a controller or
+// concern, and the `contains` edges from it to the methods it declares.
+func railsClass(svc, file, name string, methods ...graph.Node) (graph.Node, []graph.Edge) {
+	cls := graph.Node{
+		ID:       svc + ":" + file + ":class:" + name + ":1",
+		Type:     graph.NodeTypeClass,
+		Label:    name,
+		Service:  svc,
+		File:     file,
+		Line:     1,
+		Language: "ruby",
+	}
+	var edges []graph.Edge
+	for _, m := range methods {
+		edges = append(edges, graph.Edge{
+			ID:   "contains:" + cls.ID + "->" + m.ID,
+			From: cls.ID,
+			To:   m.ID,
+			Type: graph.EdgeTypeContains,
+		})
+	}
+	return cls, edges
+}
+
+func railsInherits(from, to graph.Node, via string) graph.Edge {
+	return graph.Edge{
+		ID:   "inherits:" + from.ID + "->" + to.ID,
+		From: from.ID,
+		To:   to.ID,
+		Type: graph.EdgeTypeInherits,
+		Meta: map[string]string{"via": via},
+	}
+}
+
+// TestLinkRailsRouteActions_ActionFromIncludedConcern is cedar's
+// HomeCommonActions case, six ledger rows on its own: three tenant namespaces
+// each declare `resource :home`, and each of their controllers gets `show` and
+// `get_tab_data` from one included module. The concern lives in
+// app/controllers/concerns/, which is not a `_controller.rb` file, so the
+// direct path index cannot see it at all.
+func TestLinkRailsRouteActions_ActionFromIncludedConcern(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/pcda/homes_controller.rb"
+	const concernFile = "/repo/app/controllers/concerns/home_common_actions.rb"
+
+	show := railsAction("orion", concernFile, "show", 11)
+	local := railsAction("orion", ctrl, "pusher_script", 7)
+	ctrlCls, ctrlEdges := railsClass("orion", ctrl, "Pcda::HomesController", local)
+	concernCls, concernEdges := railsClass("orion", concernFile, "HomeCommonActions", show)
+
+	h := railsHandler("orion", "GET /pcda/home", 78, map[string]string{
+		"action":         "show",
+		"resource":       "home",
+		"resource_style": "singular",
+		"path":           "/pcda/home",
+		"pattern":        "rest_resource_route",
+	})
+	nodes := []graph.Node{h, show, local, ctrlCls, concernCls}
+	edges := append(append(ctrlEdges, concernEdges...),
+		railsInherits(ctrlCls, concernCls, "mixin"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, show.ID, out[0].To, "the route must reach the concern's #show")
+	assert.Empty(t, unresolved)
+}
+
+// TestLinkRailsRouteActions_ActionFromBaseClass is the single largest cedar
+// group — 13 rows — where IntegrationApiBaseController implements a generic
+// `index`/`show` and the per-resource controllers add only private helpers.
+func TestLinkRailsRouteActions_ActionFromBaseClass(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/integration_api/v1/mappings_controller.rb"
+	const base = "/repo/app/controllers/integration_api/v1/integration_api_base_controller.rb"
+
+	index := railsAction("orion", base, "index", 45)
+	findAll := railsAction("orion", ctrl, "find_all", 6)
+	ctrlCls, ctrlEdges := railsClass("orion", ctrl, "MappingsController", findAll)
+	baseCls, baseEdges := railsClass("orion", base, "IntegrationApiBaseController", index)
+
+	h := railsHandler("orion", "GET /integration_api/v1/standards/:standard_id/mappings", 815, map[string]string{
+		"action":   "index",
+		"resource": "mappings",
+		"path":     "/integration_api/v1/standards/:standard_id/mappings",
+		"pattern":  "rest_resource_route",
+	})
+	nodes := []graph.Node{h, index, findAll, ctrlCls, baseCls}
+	edges := append(append(ctrlEdges, baseEdges...),
+		railsInherits(ctrlCls, baseCls, "superclass"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, index.ID, out[0].To)
+	assert.Empty(t, unresolved)
+}
+
+// TestLinkRailsRouteActions_DeadRestActionsStayUnresolved is the test that
+// stops RA over-matching, and it is the most important one in this file. Tier
+// CR's post-mortem established that most of the ledger is correct: `resources
+// :widgets` declares seven routes whether or not the controller implements
+// them. Having a base class in the chain must not change that — nothing up
+// there defines the missing six either.
+//
+// A tier that closes this ledger has started matching things that do not exist.
+func TestLinkRailsRouteActions_DeadRestActionsStayUnresolved(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/api/v1/async_operations_controller.rb"
+	const base = "/repo/app/controllers/api/v1/api_controller.rb"
+
+	index := railsAction("orion", ctrl, "index", 4)
+	authenticate := railsAction("orion", base, "authenticate", 3)
+	ctrlCls, ctrlEdges := railsClass("orion", ctrl, "AsyncOperationsController", index)
+	baseCls, baseEdges := railsClass("orion", base, "ApiController", authenticate)
+
+	nodes := []graph.Node{index, authenticate, ctrlCls, baseCls}
+	var handlers []graph.Node
+	for _, action := range []string{"index", "show", "new", "edit", "create", "update", "destroy"} {
+		h := railsHandler("orion", "ANY /api/v1/async_operations "+action, 324, map[string]string{
+			"action":   action,
+			"resource": "async_operations",
+			"path":     "/api/v1/async_operations",
+			"pattern":  "rest_resource_route",
+		})
+		handlers = append(handlers, h)
+		nodes = append(nodes, h)
+	}
+	edges := append(append(ctrlEdges, baseEdges...),
+		railsInherits(ctrlCls, baseCls, "superclass"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	require.Len(t, out, 1, "only the implemented action links")
+	assert.Equal(t, index.ID, out[0].To)
+	assert.Equal(t, handlers[0].ID, out[0].From)
+	assert.Len(t, unresolved, 6, "the six unimplemented REST actions must still ledger")
+	for _, u := range unresolved {
+		assert.Equal(t, UnresolvedRailsRouteAction, u.Kind)
+		assert.Empty(t, u.Targets, "a plain miss had no candidates to list")
+	}
+}
+
+// TestLinkRailsRouteActions_LocalOverrideBeatsInherited — the ancestor walk is
+// a fallback, not a preference. A controller that overrides an inherited action
+// must reach its own definition, or every API controller in cedar would trace
+// into IntegrationApiBaseController's generic #show instead of its own.
+func TestLinkRailsRouteActions_LocalOverrideBeatsInherited(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/integration_api/v1/standards_controller.rb"
+	const base = "/repo/app/controllers/integration_api/v1/integration_api_base_controller.rb"
+
+	own := railsAction("orion", ctrl, "show", 12)
+	inherited := railsAction("orion", base, "show", 39)
+	ctrlCls, ctrlEdges := railsClass("orion", ctrl, "StandardsController", own)
+	baseCls, baseEdges := railsClass("orion", base, "IntegrationApiBaseController", inherited)
+
+	h := railsHandler("orion", "GET /integration_api/v1/standards/:id", 771, map[string]string{
+		"action":   "show",
+		"resource": "standards",
+		"path":     "/integration_api/v1/standards/:id",
+		"pattern":  "rest_resource_route",
+	})
+	nodes := []graph.Node{h, own, inherited, ctrlCls, baseCls}
+	edges := append(append(ctrlEdges, baseEdges...),
+		railsInherits(ctrlCls, baseCls, "superclass"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, own.ID, out[0].To)
+	assert.Empty(t, unresolved)
+}
+
+// TestLinkRailsRouteActions_AmbiguousAncestorsRefuse — a superclass and an
+// included concern at the same distance both defining `show` is a question
+// about Ruby's method resolution order, which the graph does not record.
+// Refuse and list both, the same way two same-named controllers already do.
+func TestLinkRailsRouteActions_AmbiguousAncestorsRefuse(t *testing.T) {
+	t.Parallel()
+	const ctrl = "/repo/app/controllers/widgets_controller.rb"
+
+	fromBase := railsAction("orion", "/repo/app/controllers/base_controller.rb", "show", 4)
+	fromConcern := railsAction("orion", "/repo/app/controllers/concerns/showable.rb", "show", 4)
+	ctrlCls, _ := railsClass("orion", ctrl, "WidgetsController")
+	baseCls, baseEdges := railsClass("orion", "/repo/app/controllers/base_controller.rb", "BaseController", fromBase)
+	concernCls, concernEdges := railsClass("orion", "/repo/app/controllers/concerns/showable.rb", "Showable", fromConcern)
+
+	h := railsHandler("orion", "GET /widgets/:id", 3, map[string]string{
+		"action":   "show",
+		"resource": "widgets",
+		"path":     "/widgets/:id",
+		"pattern":  "rest_resource_route",
+	})
+	nodes := []graph.Node{h, fromBase, fromConcern, ctrlCls, baseCls, concernCls}
+	edges := append(append(baseEdges, concernEdges...),
+		railsInherits(ctrlCls, baseCls, "superclass"),
+		railsInherits(ctrlCls, concernCls, "mixin"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	assert.Empty(t, out, "two candidates at one hop is not an answer")
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "widgets#show", unresolved[0].Name)
+	assert.Contains(t, unresolved[0].Targets, fromBase.ID)
+	assert.Contains(t, unresolved[0].Targets, fromConcern.ID)
+}
+
+// TestLinkRailsRouteActions_NearestAncestorWins — the same collision one hop
+// apart is not a collision. Ruby resolves to the nearer definition, so a
+// grandparent's #show must lose to a parent's.
+func TestLinkRailsRouteActions_NearestAncestorWins(t *testing.T) {
+	t.Parallel()
+	near := railsAction("orion", "/repo/app/controllers/mid_controller.rb", "show", 4)
+	far := railsAction("orion", "/repo/app/controllers/root_controller.rb", "show", 4)
+	ctrlCls, _ := railsClass("orion", "/repo/app/controllers/widgets_controller.rb", "WidgetsController")
+	midCls, midEdges := railsClass("orion", "/repo/app/controllers/mid_controller.rb", "MidController", near)
+	rootCls, rootEdges := railsClass("orion", "/repo/app/controllers/root_controller.rb", "RootController", far)
+
+	h := railsHandler("orion", "GET /widgets/:id", 3, map[string]string{
+		"action":   "show",
+		"resource": "widgets",
+		"path":     "/widgets/:id",
+		"pattern":  "rest_resource_route",
+	})
+	nodes := []graph.Node{h, near, far, ctrlCls, midCls, rootCls}
+	edges := append(append(midEdges, rootEdges...),
+		railsInherits(ctrlCls, midCls, "superclass"),
+		railsInherits(midCls, rootCls, "superclass"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, near.ID, out[0].To)
+	assert.Empty(t, unresolved)
+}
+
+// TestLinkRailsRouteActions_AncestorWalkStaysInNamespace — RA must not become
+// the name-similarity fallback Tier CR removed. An ancestor is reached from the
+// controller the namespace names; a same-named controller elsewhere in the tree
+// is still not a candidate, even if its base class defines the action.
+func TestLinkRailsRouteActions_AncestorWalkStaysInNamespace(t *testing.T) {
+	t.Parallel()
+	rootCtrlCls, _ := railsClass("orion", "/repo/app/controllers/users_controller.rb", "UsersController")
+	base := railsAction("orion", "/repo/app/controllers/base_controller.rb", "new", 4)
+	baseCls, baseEdges := railsClass("orion", "/repo/app/controllers/base_controller.rb", "BaseController", base)
+
+	h := railsHandler("orion", "GET /api/v1/users/new", 46, map[string]string{
+		"action":   "new",
+		"resource": "users",
+		"path":     "/api/v1/users/new",
+		"pattern":  "rest_resource_route",
+	})
+	nodes := []graph.Node{h, base, rootCtrlCls, baseCls}
+	edges := append(baseEdges, railsInherits(rootCtrlCls, baseCls, "superclass"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	assert.Empty(t, out, "api/v1/users has no controller; the root one is not a substitute")
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "users#new", unresolved[0].Name)
+}
+
+// TestLinkRailsRouteActions_BeforeActionIsNotAnInheritedAction carries the
+// direct index's call-site discriminator into the ancestor walk. A base class
+// listing `before_action :audit` mints a pattern-derived function node with no
+// end_line; inheriting it must not make `audit` a routable action.
+func TestLinkRailsRouteActions_BeforeActionIsNotAnInheritedAction(t *testing.T) {
+	t.Parallel()
+	const base = "/repo/app/controllers/base_controller.rb"
+	callSite := graph.Node{
+		ID:       "orion:" + base + ":function:audit:2",
+		Type:     graph.NodeTypeFunction,
+		Label:    "audit",
+		Service:  "orion",
+		File:     base,
+		Line:     2,
+		Language: "ruby",
+		Meta:     map[string]string{"pattern": "ruby_method_call"},
+	}
+	ctrlCls, _ := railsClass("orion", "/repo/app/controllers/widgets_controller.rb", "WidgetsController")
+	baseCls, baseEdges := railsClass("orion", base, "BaseController", callSite)
+
+	h := railsHandler("orion", "GET /widgets/audit", 3, map[string]string{
+		"action":    "audit",
+		"full_path": "/widgets/audit",
+		"pattern":   "collection_verb_route",
+	})
+	nodes := []graph.Node{h, callSite, ctrlCls, baseCls}
+	edges := append(baseEdges, railsInherits(ctrlCls, baseCls, "superclass"))
+
+	out, unresolved := LinkRailsRouteActions(nodes, edges)
+
+	assert.Empty(t, out, "a before_action invocation is not a def")
+	assert.Len(t, unresolved, 1)
 }

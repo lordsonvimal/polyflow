@@ -172,7 +172,7 @@ end
 	})
 	require.NotEmpty(t, nodes)
 
-	edges, unresolved := LinkRailsRouteActions(nodes)
+	edges, unresolved := LinkRailsRouteActions(nodes, nil)
 	assert.Empty(t, edges, "no controller exists for any default-scope node; must never fabricate a calls edge")
 	assert.Len(t, unresolved, len(nodes), "every synthesized node must be ledgered")
 	for _, u := range unresolved {
