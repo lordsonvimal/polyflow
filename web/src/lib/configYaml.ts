@@ -58,6 +58,13 @@ function nodeComment(node: unknown): string | null {
 
 export function setField(doc: Document, path: (string | number)[], value: unknown): FieldEditResult {
   const oldComment = nodeComment(doc.getIn(path, true));
+  // An empty form field clears to `undefined` — that must round-trip to an
+  // absent key, never a literal `null`/`0` (Tier MS.0i: writing
+  // `min_corroborated_paths: 0` would read as "no corroboration required").
+  if (value === undefined) {
+    doc.deleteIn(path);
+    return { lostComment: oldComment };
+  }
   doc.setIn(path, value);
   const newComment = nodeComment(doc.getIn(path, true));
   return { lostComment: oldComment && !newComment ? oldComment : null };

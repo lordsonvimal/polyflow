@@ -129,6 +129,75 @@ type SearchConfig struct {
 	Synonyms map[string][]string `yaml:"synonyms,omitempty" json:"synonyms,omitempty"`
 }
 
+// SchemaConfig holds settings for endpoint-declaring data assets (Tier MS).
+//
+// The thresholds are configurable because they are calibrated against a single
+// corpus: a fleet sweep found exactly one qualifying asset in twenty repos, so
+// the defaults are an informed guess rather than a measured optimum. A workspace
+// that has to change them is as likely to be revealing a bad default as a bad
+// asset — but a loosened threshold is recorded (schema_asset_loaded_tuned) so
+// that a discovery it produced is never mistaken for one the gate produced.
+type SchemaConfig struct {
+	// Assets are doublestar globs (relative to each service path) naming data
+	// assets explicitly. An escape hatch for assets that cannot self-discover
+	// (routes in another service, an unparsed route table) — not the intended
+	// path. A declared asset skips the corroboration gate only; it is parsed and
+	// ledgered like any other.
+	Assets []string `yaml:"assets,omitempty" json:"assets,omitempty"`
+
+	// MinCorroboratedPaths is how many distinct normalised string leaves must
+	// match a declared handler path before a file is treated as an asset.
+	// 0 means DefaultMinCorroboratedPaths.
+	MinCorroboratedPaths int `yaml:"min_corroborated_paths,omitempty" json:"min_corroborated_paths,omitempty"`
+
+	// MinCorroboratedRatio is the minimum share of a file's candidate paths that
+	// must corroborate. Stops a large file with a few incidental path-like
+	// strings from qualifying on volume. 0 means DefaultMinCorroboratedRatio.
+	MinCorroboratedRatio float64 `yaml:"min_corroborated_ratio,omitempty" json:"min_corroborated_ratio,omitempty"`
+
+	// MinEntityDiscrimination is the minimum share of containers at the chosen
+	// depth that must own a corroborated leaf, when picking the entity level.
+	// 0 means DefaultMinEntityDiscrimination.
+	MinEntityDiscrimination float64 `yaml:"min_entity_discrimination,omitempty" json:"min_entity_discrimination,omitempty"`
+
+	// Disable turns the tier off entirely for workspaces that do not want it.
+	Disable bool `yaml:"disable,omitempty" json:"disable,omitempty"`
+}
+
+// Schema tier threshold defaults — the tested values, applied at read time by
+// SchemaConfig.Effective and never written back into the parsed config.
+const (
+	DefaultMinCorroboratedPaths    = 5
+	DefaultMinCorroboratedRatio    = 0.25
+	DefaultMinEntityDiscrimination = 0.5
+)
+
+// Effective returns the config with every zero-valued threshold replaced by its
+// default, and reports whether any threshold is LOOSER than its default. Follows
+// the StaleAfterDuration precedent: defaults are applied at read time, never
+// written back into the parsed config, so `polyflow config` still shows the user
+// what they wrote.
+func (s SchemaConfig) Effective() (SchemaConfig, bool) {
+	out := s
+	loosened := false
+	if out.MinCorroboratedPaths == 0 {
+		out.MinCorroboratedPaths = DefaultMinCorroboratedPaths
+	} else if out.MinCorroboratedPaths < DefaultMinCorroboratedPaths {
+		loosened = true
+	}
+	if out.MinCorroboratedRatio == 0 {
+		out.MinCorroboratedRatio = DefaultMinCorroboratedRatio
+	} else if out.MinCorroboratedRatio < DefaultMinCorroboratedRatio {
+		loosened = true
+	}
+	if out.MinEntityDiscrimination == 0 {
+		out.MinEntityDiscrimination = DefaultMinEntityDiscrimination
+	} else if out.MinEntityDiscrimination < DefaultMinEntityDiscrimination {
+		loosened = true
+	}
+	return out, loosened
+}
+
 // WorkspaceConfig is the parsed representation of polyflow.yml.
 type WorkspaceConfig struct {
 	Name     string    `yaml:"name" json:"name"`
@@ -146,6 +215,7 @@ type WorkspaceConfig struct {
 	Settings      Settings       `yaml:"settings" json:"settings"`
 	Evidence      EvidenceConfig `yaml:"evidence,omitempty" json:"evidence,omitempty"`
 	Search        SearchConfig   `yaml:"search,omitempty" json:"search,omitempty"`
+	Schema        SchemaConfig   `yaml:"schema,omitempty" json:"schema,omitempty"`
 }
 
 // DefaultExcludes returns the exclude globs written by `polyflow init`.

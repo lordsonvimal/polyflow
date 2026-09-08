@@ -17,13 +17,15 @@ var assetExts = map[string]bool{
 	".pdf": true, ".zip": true, ".gz": true, ".tar": true, ".map": true,
 	".lock": true, ".sum": true, ".mod": true, ".toml": true, ".ini": true,
 	".env": true, ".example": true, ".md": true, ".txt": true,
-	".json": true, ".yaml": true, ".yml": true,
 }
 
-// NOTE: .json/.yaml/.yml move OUT of this list the moment a plan gives them a
-// reader (plan 4 K.1/K.2 for yaml, plan 5 Q.2 for json IaC). Each removal is
-// part of that plan's phase, with this comment updated. .css/.scss left in
-// Tier K.5, which gave them internal/parser/scss.go.
+// NOTE: .json/.yaml/.yml left this list in Tier MS.0, which gave route-corroborated
+// data assets a reader (internal/linker/schema_url_table.go). Only *discovered*
+// assets are subtracted back out of the unparsed count — the schema_url_tables
+// link pass decrements allUnparsedFiles for each table it builds; every other
+// JSON/YAML file stays a reportable blind spot, per the standing rule that
+// anything not in assetExts and not parsed is one. .css/.scss left in Tier K.5,
+// which gave them internal/parser/scss.go.
 
 // unparsedKey returns the extension or basename for extensionless files.
 func unparsedKey(path string) string {

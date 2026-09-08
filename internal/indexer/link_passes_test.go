@@ -83,6 +83,7 @@ var wantLinkPasses = []struct {
 	{"broker_hints", scopeCrossService},
 	{"rails_nav_helpers", scopeSameServiceOnly},
 	{"file_route_synthesis", scopeSameServiceOnly},
+	{"schema_url_tables", scopeSameServiceOnly},
 	{"load_contract_rules", scopeCrossService},
 	{"apply_hints_and_enrich", scopeCrossService},
 	{"gin_middleware", scopeSameServiceOnly},

@@ -299,6 +299,106 @@ function EvidenceSection(props: { evidence: Record<string, any> }) {
   );
 }
 
+// SCHEMA_DEFAULTS mirrors internal/workspace SchemaConfig's Default* constants
+// (Tier MS.0). Kept in sync by the ConfigPanel test that asserts the
+// placeholders.
+const SCHEMA_DEFAULTS = {
+  min_corroborated_paths: 5,
+  min_corroborated_ratio: 0.25,
+  min_entity_discrimination: 0.5,
+} as const;
+
+function SchemaThresholdField(props: {
+  label: string;
+  field: keyof typeof SCHEMA_DEFAULTS;
+  value: number | undefined;
+}) {
+  const dflt = SCHEMA_DEFAULTS[props.field];
+  // Looser = a smaller number: it can only admit more assets. Tightening can
+  // only reject, so it needs no warning (MS.0h / MS.0i).
+  const looser = () => props.value !== undefined && props.value < dflt;
+  return (
+    <label class="flex flex-col gap-0.5 text-[11px] text-neutral-400">
+      {props.label}
+      <input
+        data-testid={`config-schema-${props.field.replace(/_/g, "-")}`}
+        class="bg-neutral-900 border border-neutral-800 rounded px-1.5 py-1 text-neutral-200 text-xs"
+        value={props.value !== undefined ? String(props.value) : ""}
+        placeholder={String(dflt)}
+        onInput={(e) =>
+          configStore.setField(
+            ["schema", props.field],
+            e.currentTarget.value === "" ? undefined : Number(e.currentTarget.value),
+            "schema",
+          )
+        }
+      />
+      {looser() && (
+        <p
+          data-testid={`config-schema-${props.field.replace(/_/g, "-")}-warning`}
+          class="text-[10px] text-amber-400"
+        >
+          Looser than the default ({String(dflt)}). Assets discovered only because of this
+          will be recorded as tuned, and any coverage number measured here is a tuned number.
+        </p>
+      )}
+    </label>
+  );
+}
+
+function SchemaSection(props: { schema: Record<string, any> }) {
+  const assets = () => (props.schema.assets ?? []) as string[];
+  return (
+    <Section title="Schema">
+      <div class="space-y-1">
+        <div class="text-[11px] text-neutral-400">Asset globs (escape hatch — discovery is by route corroboration)</div>
+        <For each={assets()}>
+          {(glob, i) => (
+            <div data-testid="config-schema-asset-row" class="flex items-center gap-2 mb-1">
+              <input
+                data-testid={`config-schema-asset-${i()}`}
+                class="flex-1 bg-neutral-900 border border-neutral-800 rounded px-1.5 py-1 text-neutral-200 text-xs"
+                value={glob}
+                onInput={(e) => configStore.setField(["schema", "assets", i()], e.currentTarget.value, "schema")}
+              />
+              <button
+                data-testid={`config-remove-schema-asset-${i()}`}
+                class="text-red-400 hover:text-red-300 text-[11px]"
+                onClick={() => configStore.removeRow(["schema", "assets"], i(), "schema")}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </For>
+        <button
+          data-testid="config-add-schema-asset"
+          class="text-indigo-300 hover:text-indigo-200 text-xs"
+          onClick={() => configStore.addRow(["schema", "assets"], "", "schema")}
+        >
+          + Add asset glob
+        </button>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <SchemaThresholdField label="Min corroborated paths" field="min_corroborated_paths" value={props.schema.min_corroborated_paths} />
+        <SchemaThresholdField label="Min corroborated ratio" field="min_corroborated_ratio" value={props.schema.min_corroborated_ratio} />
+        <SchemaThresholdField label="Min entity discrimination" field="min_entity_discrimination" value={props.schema.min_entity_discrimination} />
+      </div>
+
+      <label class="flex items-center gap-2 text-[11px] text-neutral-400">
+        <input
+          type="checkbox"
+          data-testid="config-schema-disable"
+          checked={props.schema.disable === true}
+          onInput={(e) => configStore.setField(["schema", "disable"], e.currentTarget.checked ? true : undefined, "schema")}
+        />
+        Disable schema-driven URL resolution
+      </label>
+    </Section>
+  );
+}
+
 export default function FormMode() {
   const model = createMemo(() => configStore.model());
 
@@ -309,6 +409,7 @@ export default function FormMode() {
       <ExcludesSection excludes={model().index?.exclude ?? []} />
       <SettingsSection settings={model().settings ?? {}} />
       <EvidenceSection evidence={model().evidence ?? {}} />
+      <SchemaSection schema={model().schema ?? {}} />
     </div>
   );
 }

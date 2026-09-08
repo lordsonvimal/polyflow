@@ -92,6 +92,10 @@ type linkPipelineState struct {
 
 	// jsImportedNames: set by the js_link pass, read by js_globals.
 	jsImportedNames map[string]bool
+	// schemaURLTables: set by the schema_url_tables pass (Tier MS.0), one
+	// per service that has a route-corroborated endpoint-declaring data
+	// asset. A lookup table, never a producer — consumed by MS.1+.
+	schemaURLTables map[string]*linker.SchemaURLTable
 	// contractRules: set by load_contract_rules, read by contract_engine and
 	// contract_coverage.
 	contractRules []contract.Rule
@@ -1442,6 +1446,43 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				}
 				st.allUnresolved = append(st.allUnresolved, fr.Unresolved...)
 			}
+			return nil
+		}},
+		// Tier MS.0: discover endpoint-declaring data assets (checked-in JSON/
+		// YAML that names this service's real routes) by route corroboration,
+		// build the per-service URL table, and ledger dead entries. Mints
+		// NOTHING — the table is a resolver consumed by MS.1+, never a producer
+		// of nodes (see docs/schema-driven-url-resolution-plan.md Core model).
+		// Runs after file_route_synthesis so every synthesized handler path is
+		// available to corroborate against.
+		{"schema_url_tables", scopeSameServiceOnly, func() error {
+			handlerPaths := make(map[string]map[string]bool)
+			for i := range st.allNodes {
+				n := &st.allNodes[i]
+				if n.Type != graph.NodeTypeHTTPHandler {
+					continue
+				}
+				raw := n.Meta["path"]
+				if raw == "" {
+					continue
+				}
+				norm, ok := linker.NormalizeSchemaPath(raw)
+				if !ok {
+					continue
+				}
+				if handlerPaths[n.Service] == nil {
+					handlerPaths[n.Service] = make(map[string]bool)
+				}
+				handlerPaths[n.Service][norm] = true
+			}
+			svcFiles := make(map[string][]string, len(st.allSvcFiles))
+			for _, sf := range st.allSvcFiles {
+				abs, _ := filepath.Abs(sf.svc.Path)
+				svcFiles[sf.svc.Name] = walkAllFiles(abs)
+			}
+			tables, ledger := linker.LoadSchemaURLTables(svcFiles, handlerPaths, st.cfg.Schema)
+			st.schemaURLTables = tables
+			st.allUnresolved = append(st.allUnresolved, ledger...)
 			return nil
 		}},
 		// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).

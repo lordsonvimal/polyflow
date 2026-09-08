@@ -120,6 +120,53 @@ describe("ConfigPanel", () => {
     expect(container.querySelector('[data-testid="config-save-error"]')!.textContent).toContain("does not exist");
   });
 
+  it("Schema section renders; empty threshold writes no key; looser value warns, tighter does not", async () => {
+    const fetchMock = fakeFetch({
+      "GET /api/config": { path: "/ws/polyflow.yml", raw: RAW, parsed: null, etag: "e1" },
+      "PUT /api/config": { etag: "e2", ok: true },
+    });
+    (globalThis as any).fetch = fetchMock;
+    dispose = render(() => <ConfigPanel />, container);
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="config-service-row"]')).toHaveLength(1));
+    expect(container.querySelector('[data-testid="config-schema-disable"]')).toBeTruthy();
+
+    // placeholder shows the default, value empty
+    const paths = container.querySelector('[data-testid="config-schema-min-corroborated-paths"]') as HTMLInputElement;
+    expect(paths.placeholder).toBe("5");
+    expect(paths.value).toBe("");
+
+    // tighter than default → no warning
+    paths.value = "8";
+    paths.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(container.querySelector('[data-testid="config-schema-min-corroborated-paths-warning"]')).toBeFalsy();
+
+    // looser than default → warning
+    paths.value = "2";
+    paths.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="config-schema-min-corroborated-paths-warning"]')).toBeTruthy(),
+    );
+
+    // clear → key absent from saved YAML
+    paths.value = "";
+    paths.dispatchEvent(new Event("input", { bubbles: true }));
+
+    (container.querySelector('[data-testid="config-add-schema-asset"]') as HTMLElement).click();
+    const assetInput = container.querySelector('[data-testid="config-schema-asset-0"]') as HTMLInputElement;
+    assetInput.value = "config/*.json";
+    assetInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+    (container.querySelector('[data-testid="config-save"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]: [string, RequestInit]) => init?.method === "PUT");
+      expect(putCall).toBeTruthy();
+    });
+    const putCall = fetchMock.mock.calls.find(([, init]: [string, RequestInit]) => init?.method === "PUT")!;
+    const body = JSON.parse((putCall[1] as RequestInit).body as string);
+    expect(body.raw).toContain("config/*.json");
+    expect(body.raw).not.toContain("min_corroborated_paths");
+  });
+
   it("409 conflict renders keep-mine/take-disk/cancel choices", async () => {
     const fetchMock = fakeFetch({
       "GET /api/config": { path: "/ws/polyflow.yml", raw: RAW, parsed: null, etag: "e1" },

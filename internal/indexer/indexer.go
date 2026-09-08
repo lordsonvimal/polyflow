@@ -767,6 +767,22 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	allUnresolved = linkState.allUnresolved
 	handshakeResolved := linkState.handshakeResolved
 	pluginCoverageNotes := linkState.pluginCoverageNotes
+	// Tier MS.0: a discovered endpoint-declaring data asset is no longer a
+	// blind spot — subtract it back out of the per-(service,ext) unparsed
+	// ledger. Only discovered assets leave the count; every other JSON/YAML
+	// file stays reported.
+	for svc, tbl := range linkState.schemaURLTables {
+		if tbl == nil {
+			continue
+		}
+		ext := filepath.Ext(tbl.File)
+		if m := allUnparsedFiles[svc]; m != nil && m[ext] > 0 {
+			m[ext]--
+			if m[ext] == 0 {
+				delete(m, ext)
+			}
+		}
+	}
 	clk.mark("link passes")
 
 	// ── Root classification ──────────────────────────────────────────────────
