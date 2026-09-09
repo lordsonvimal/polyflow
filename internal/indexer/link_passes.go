@@ -1485,6 +1485,25 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, ledger...)
 			return nil
 		}},
+		// Tier MS.1: pin an entity from a discovered asset's vocabulary and
+		// resolve a direct `<pinned>.<key>` read on a JS/TS http_client the
+		// matcher left dynamic. Rewrites the existing node in place with the
+		// resolved path + provenance Meta; mints nothing new. Runs right after
+		// schema_url_tables (its input) and before the contract engine.
+		{"schema_url_links", scopeSameServiceOnly, func() error {
+			changed, ledger := linker.ResolveSchemaURLs(st.allNodes, st.schemaURLTables)
+			st.allUnresolved = append(st.allUnresolved, ledger...)
+			for i := range changed {
+				n := changed[i]
+				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+					return err
+				}
+			}
+			if len(changed) == 0 {
+				return nil
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		// Cross-service contract linking (HTTP, AMQP, Hub, Jobs, Pusher, WebSocket via contracts/*.yaml).
 		// opts.ContractsDir may add workspace-custom rules on top of the embedded defaults (G.5).
 		{"load_contract_rules", scopeCrossService, func() error {
