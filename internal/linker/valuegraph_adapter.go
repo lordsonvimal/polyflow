@@ -33,6 +33,7 @@ import (
 const (
 	vgLayer            = "L2"
 	vgLocalBindingRule = "valuegraph/javascript#local_binding"
+	vgCallSiteRule     = "valuegraph/javascript#call_sites"
 
 	// The two crossing kinds declared in valuegraph/javascript.yaml, and the
 	// rule names they are stamped with. The rule names the *crossing*, not the
@@ -501,6 +502,47 @@ func resolveOneLocalURLExprVG(eng *valuegraph.Engine, n *sitter.Node, fn *sitter
 		return nil, ledgerLocalURLHighFanout, false
 	}
 	return out, "", true
+}
+
+// resolveWrapperArgURL reads the URL argument of a call to a detected API
+// wrapper (JP.2, js_wrapper_calls.go) when the KeyWalker could not.
+//
+// The relation this needs is the one `jsResolveForwardedParamURL` hand-wrote:
+// `function load(url) { apiGet(url) }` is answered by `load("/api/x")` further
+// down the file. It is the reverse crossing minus the crossing, and VG.6
+// expresses it as the spec's `call_sites` rule — so what is left here is only
+// the pass's policy, unchanged from the walker it replaces: one value or none.
+//
+// Root is the whole file, not the enclosing function: the call that fills the
+// parameter is by definition outside the function that declares it.
+func resolveWrapperArgURL(file string, src []byte, root, arg *sitter.Node) (string, bool) {
+	if arg == nil || root == nil {
+		return "", false
+	}
+	eng := valuegraph.New(jsValuegraphSpec(), jsEngineFileSource{}, valuegraph.Options{})
+	v := eng.Resolve(valuegraph.Query{File: file, Src: src, Root: root, Expr: arg})
+	if v.IsDynamic() {
+		// A hole anywhere poisons the site. The walker abstained on any
+		// non-literal argument at any caller; a wildcard segment minted from a
+		// wrapper call would be a path this pass has never claimed to produce.
+		return "", false
+	}
+	got, ok := v.Strings(2)
+	if !ok || len(got) != 1 || !isWrapperURLPath(got[0]) {
+		// Two callers with two URLs is a real fan-out, but this pass mints one
+		// node per call site with one `url`. Widening that is a mint decision
+		// nobody has taken; until then the site stays dynamic, exactly as it did.
+		return "", false
+	}
+	return got[0], true
+}
+
+// isWrapperURLPath is the shape test the walker applied to a forwarded literal:
+// a request path or an absolute URL, and nothing else. A bare word passed to a
+// wrapper is a key, an id or a flag — not an endpoint.
+func isWrapperURLPath(s string) bool {
+	return strings.HasPrefix(s, "/") ||
+		strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
 // localURLExprAlternatives flattens a ternary (through parenthesised and

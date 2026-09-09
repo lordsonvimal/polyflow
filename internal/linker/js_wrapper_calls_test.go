@@ -419,3 +419,147 @@ export function render() {
 	}
 	assert.True(t, sawReal, "the known wrapper in the same file should still resolve")
 }
+
+// ── VG.6: the forwarded argument on the value engine ────────────────────────
+//
+// JP.2's `jsResolveForwardedParamURL` walker was retired for the spec's
+// `call_sites` rule (internal/valuegraph/javascript.yaml). These fix what the
+// pass mints at the *forwarded* site — the one the walker existed for, and the
+// one TestLinkJSAPIWrapperCalls_ForwardedParamResolvesToSoleLiteral does not
+// look at: it asserts on the literal call site, which the KeyWalker had already
+// read before either implementation was consulted.
+
+// wrapperSiteURL is the url minted at the call site whose callee is wrapper.
+func wrapperSiteURL(t *testing.T, nodes []graph.Node, wrapper string) (url string, dynamic bool, found bool) {
+	t.Helper()
+	for _, n := range nodes {
+		if n.Meta["wrapper"] == wrapper {
+			return n.Meta["url"], n.Meta["key_dynamic"] == "true", true
+		}
+	}
+	return "", false, false
+}
+
+func linkWrapperFixture(t *testing.T, files map[string]string) []graph.Node {
+	t.Helper()
+	_, paths := writeJSWrapperFixture(t, files)
+	nodes := parseJSWrapperFixture(t, "svc", paths)
+	newNodes, _, _, _ := linker.LinkJSAPIWrapperCalls(nodes, map[string][]string{"svc": paths})
+	return newNodes
+}
+
+// The relation the walker implemented, asserted where it applies: `apiGet(url)`
+// forwards `list`'s parameter, and `list` is called once with one literal.
+func TestLinkJSAPIWrapperCalls_VGForwardedParamSite(t *testing.T) {
+	t.Parallel()
+	got := linkWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+function list(url: string) {
+  return apiGet(url);
+}
+
+export function loadFolders() {
+  return list("/app/folders");
+}
+`,
+	})
+	url, dynamic, found := wrapperSiteURL(t, got, "apiGet")
+	require.True(t, found, "the forwarded apiGet(url) site should mint a node")
+	assert.False(t, dynamic)
+	assert.Equal(t, "/app/folders", url)
+}
+
+// Two callers with two URLs is a real fan-out. This pass mints one node per
+// call site carrying one url, so it abstains — the policy the walker had, kept
+// at the mint site now that the engine reports both.
+func TestLinkJSAPIWrapperCalls_VGTwoCallersStayDynamic(t *testing.T) {
+	t.Parallel()
+	got := linkWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+function list(url: string) {
+  return apiGet(url);
+}
+
+export function a() { return list("/app/a"); }
+export function b() { return list("/app/b"); }
+`,
+	})
+	_, dynamic, found := wrapperSiteURL(t, got, "apiGet")
+	require.True(t, found)
+	assert.True(t, dynamic, "two callers with two literals must not collapse to one url")
+}
+
+// One unreadable caller poisons the site, even when its siblings resolved.
+func TestLinkJSAPIWrapperCalls_VGUnreadableCallerPoisons(t *testing.T) {
+	t.Parallel()
+	got := linkWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+function list(url: string) {
+  return apiGet(url);
+}
+
+export function a() { return list("/app/a"); }
+export function b(runtime: string) { return list(runtime); }
+`,
+	})
+	_, dynamic, found := wrapperSiteURL(t, got, "apiGet")
+	require.True(t, found)
+	assert.True(t, dynamic, "a caller whose argument cannot be read poisons the site")
+}
+
+// The engine's reach here is exactly the parameter, and this test is what says
+// so. An argument that is an ordinary local binding never reaches the engine at
+// all: the KeyWalker above already reads `const url = "/app/things"` and the
+// site is not dynamic by the time the JP.2 branch is consulted. The relation
+// this tier moved is the one the KeyWalker cannot see — a value that arrives
+// from outside the function.
+func TestLinkJSAPIWrapperCalls_VGLocalBindingNeedsNoEngine(t *testing.T) {
+	t.Parallel()
+	got := linkWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+export function loadThings() {
+  const url = "/app/things";
+  return apiGet(url);
+}
+`,
+	})
+	require.Len(t, got, 1)
+	assert.Equal(t, "/app/things", got[0].Meta["url"])
+	assert.Empty(t, got[0].Meta["url_via"], "a local binding is the KeyWalker's, not the engine's")
+}
+
+// A bare word is a key or a flag, not an endpoint. Resolving it is not the same
+// as accepting it: the engine reads "things" perfectly well and the mint site
+// still refuses it.
+func TestLinkJSAPIWrapperCalls_VGNonPathValueStaysDynamic(t *testing.T) {
+	t.Parallel()
+	got := linkWrapperFixture(t, map[string]string{
+		"api.ts": `export function apiGet(path: string) {
+  return fetch(path);
+}
+
+function list(url: string) {
+  return apiGet(url);
+}
+
+export function loadThings() {
+  return list("things");
+}
+`,
+	})
+	_, dynamic, found := wrapperSiteURL(t, got, "apiGet")
+	require.True(t, found)
+	assert.True(t, dynamic, "a resolved value that is not a request path is not a url")
+}

@@ -373,6 +373,11 @@ func (c *ctx) lookup(name string, at *sitter.Node, scope *sitter.Node, use uint3
 
 // crossOrStop is the fallback every unbound name takes: try the crossings in both
 // directions, and report the local reason when neither applies.
+//
+// An unbound *parameter* has a third source no crossing covers — the call sites
+// of its own function, in this same file. It is tried only for a parameter:
+// ReasonNoBinding means the name belongs to no scope here, and filling it from a
+// call would be inventing a binding rather than reading one.
 func (c *ctx) crossOrStop(name string, at, scope *sitter.Node, depth int, reason string) Value {
 	var vals []Value
 	if v, ok := c.crossForward(name, at, depth); ok {
@@ -380,6 +385,11 @@ func (c *ctx) crossOrStop(name string, at, scope *sitter.Node, depth int, reason
 	}
 	if v, ok := c.crossReverse(name, scope, depth); ok {
 		vals = append(vals, v)
+	}
+	if reason == ReasonParam {
+		if v, ok := c.callSiteArgs(name, scope, depth); ok {
+			vals = append(vals, v)
+		}
 	}
 	if len(vals) == 0 {
 		return Opaque(c.originOf(at, reason))

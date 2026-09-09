@@ -74,6 +74,12 @@ opaque:
   - node: member_expression
   - node: subscript_expression
 
+# What fills a parameter nothing in scope binds? Its own call sites, same file.
+call_sites:
+  node: call_expression
+  function: function
+  arguments: arguments
+
 # Carries no value; skipped when counting a position.
 ignore: [comment]
 # Destroys positional numbering wherever it appears in a list.

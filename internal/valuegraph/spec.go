@@ -36,6 +36,11 @@ type Spec struct {
 	PositionalStop []string `yaml:"positional_stop"`
 
 	Crossings []CrossRule `yaml:"crossings"`
+
+	// CallSites says how to read a call, which is what lets an unbound
+	// parameter be filled from the call sites of the function that declares
+	// it. Absent means the language declines that relation entirely.
+	CallSites *CallSiteRule `yaml:"call_sites"`
 }
 
 // Text modes for LiteralRule.
@@ -160,6 +165,24 @@ const ValueIsSymbolReference = "symbol_reference"
 // the tag of the element the attribute belongs to. Written `parent_field:name`.
 const OwnerParentField = "parent_field:"
 
+// CallSiteRule says how a call names the function it calls and where its
+// arguments are.
+//
+// It is the reverse crossing minus the crossing: the same "the Nth argument
+// fills the Nth parameter" relation, joined by a name the file already
+// contains, so no index and no CrossSource are needed. A parameter with no
+// local binding is filled from the calls to its own function in the same file
+// — `function load(url) { get(url) }` is answered by `load("/api/x")`.
+//
+// Same file only. A call from another file is a crossing: it needs the caller
+// to say which files to search, which is precisely what CrossSource is for and
+// what this rule deliberately does not assume.
+type CallSiteRule struct {
+	Node string `yaml:"node"`
+	Fn   string `yaml:"function"`  // field naming the callee
+	Args string `yaml:"arguments"` // field holding the argument list
+}
+
 // CrossEndpoint is one side of a CrossRule.
 //
 // Producer side: Node is the node type that writes the binding, NameChild and
@@ -251,6 +274,14 @@ func (s *Spec) Validate() error {
 			return fmt.Errorf("valuegraph: crossings[%d] (%s) is reverse but names no call node", i, r.Kind)
 		}
 	}
+	if r := s.CallSites; r != nil {
+		if r.Node == "" {
+			return fmt.Errorf("valuegraph: call_sites has no node")
+		}
+		if r.Fn == "" || r.Args == "" {
+			return fmt.Errorf("valuegraph: call_sites (%s) needs both function and arguments", r.Node)
+		}
+	}
 	return nil
 }
 
@@ -271,6 +302,9 @@ type index struct {
 	crossByKind   map[string]CrossRule
 	ignore        map[string]bool
 	stop          map[string]bool
+
+	// callSite is nil when the language declines the relation.
+	callSite *CallSiteRule
 }
 
 func newIndex(s *Spec) *index {
@@ -289,6 +323,7 @@ func newIndex(s *Spec) *index {
 	if s == nil {
 		return ix
 	}
+	ix.callSite = s.CallSites
 	for _, r := range s.Crossings {
 		ix.crossProducer[r.Producer.Node] = append(ix.crossProducer[r.Producer.Node], r)
 		ix.crossByKind[r.Kind] = r

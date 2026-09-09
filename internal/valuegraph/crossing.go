@@ -339,6 +339,80 @@ func (c *ctx) crossReverse(name string, scope *sitter.Node, depth int) (Value, b
 	return c.capUnion(scope, Union(vals...)), true
 }
 
+// callSiteArgs answers "who calls the function this parameter belongs to",
+// within the query's own root. It is crossReverse with the crossing removed:
+// the same argument→parameter relation, but the callee is named by the call
+// itself, so there is no owner to join on, no index to build and no CrossSource
+// to require.
+//
+// The whole root is searched, not just the sibling statements: a wrapper is
+// commonly declared at module scope and called from inside three different
+// components in the same file, and refusing to look would leave a parameter
+// unresolved next to the literal that fills it.
+//
+// A call that supplies no argument at the position is Opaque(ReasonArity)
+// rather than a skipped alternative: `load()` alongside `load("/api/x")` means
+// the parameter really can be undefined, and a caller that mints on the strength
+// of the second call without seeing the first is asserting more than the code
+// says.
+func (c *ctx) callSiteArgs(name string, scope *sitter.Node, depth int) (Value, bool) {
+	r := c.e.ix.callSite
+	if r == nil || scope == nil || c.root == nil {
+		return Value{}, false
+	}
+	sym := c.scopeName(scope)
+	if sym == "" {
+		return Value{}, false
+	}
+	pos, ok := c.paramIndexOf(scope, name)
+	if !ok {
+		return Value{}, false
+	}
+
+	var vals []Value
+	for _, call := range c.callsTo(sym, *r) {
+		args := call.ChildByFieldName(r.Args)
+		var arg *sitter.Node
+		if args != nil {
+			arg = c.nthValue(args, pos)
+		}
+		if arg == nil {
+			vals = append(vals, Opaque(c.originOf(call, ReasonArity)))
+			continue
+		}
+		argScope := c.enclosingScope(arg)
+		if argScope == nil {
+			argScope = c.root
+		}
+		vals = append(vals, c.resolveNode(arg, argScope, depth+1))
+	}
+	if len(vals) == 0 {
+		return Value{}, false
+	}
+	return c.capUnion(scope, Union(vals...)), true
+}
+
+// callsTo finds every call in this file whose callee is written exactly sym.
+// Only a bare callee matches: `obj.load(…)` is a different function that
+// happens to share a last segment, and reading it as this one is the kind of
+// name collision the crossing index already refuses.
+func (c *ctx) callsTo(sym string, r CallSiteRule) []*sitter.Node {
+	var out []*sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == r.Node {
+			if fn := n.ChildByFieldName(r.Fn); fn != nil && strings.TrimSpace(fn.Content(c.src)) == sym {
+				out = append(out, n)
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(c.root)
+	return out
+}
+
 // reverseCallArgs reads the pos'th argument of every call, in every file
 // defining the owner, that reaches the handed-over symbol through the prop it
 // was handed as.

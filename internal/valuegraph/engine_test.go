@@ -382,3 +382,99 @@ func TestNoLanguageKnowledgeInTheEngine(t *testing.T) {
 		}
 	}
 }
+
+// ── call sites: the argument→parameter relation without a crossing ──────────
+//
+// The same relation the reverse crossing implements, joined by a name the file
+// already contains. Four hand-written implementations of it exist in the linker
+// (report §5); this is the one that needs no index.
+
+// callSiteSpec is testSpec plus the two facts the relation needs: the field a
+// scope's own name lives in, and how a call is written.
+func callSiteSpec() *Spec {
+	s := testSpec()
+	for i := range s.Scopes {
+		s.Scopes[i].Name = "name"
+	}
+	s.CallSites = &CallSiteRule{Node: "call", Fn: "function", Args: "arguments"}
+	return s
+}
+
+func TestCallSiteFillsAParameter(t *testing.T) {
+	v := resolveProbe(t, callSiteSpec(), Options{}, `
+def load(url):
+    go(url)
+
+load("/api/x")
+`)
+	wantStrings(t, v, true, "/api/x")
+}
+
+// Two callers are two real requests, exactly as two branch arms are. Collapsing
+// them — or abstaining because there is more than one — is a mint-site policy,
+// and the engine is not where it lives.
+func TestCallSitesUnionTheirArguments(t *testing.T) {
+	v := resolveProbe(t, callSiteSpec(), Options{}, `
+def load(url):
+    go(url)
+
+load("/api/a")
+load("/api/b")
+`)
+	wantStrings(t, v, true, "/api/a", "/api/b")
+}
+
+// A caller that supplies nothing at the position says the parameter can be
+// undefined. It is an alternative, not a site to skip.
+func TestCallSiteWithNoArgumentIsArity(t *testing.T) {
+	v := resolveProbe(t, callSiteSpec(), Options{}, `
+def load(url):
+    go(url)
+
+load()
+load("/api/a")
+`)
+	if !v.IsDynamic() {
+		t.Fatalf("a call supplying no argument must leave the value dynamic: %s", v.String())
+	}
+	var arity bool
+	for _, o := range v.Origins() {
+		if o.Reason == ReasonArity {
+			arity = true
+		}
+	}
+	if !arity {
+		t.Fatalf("want a ReasonArity origin, got %+v", v.Origins())
+	}
+}
+
+// A last segment that happens to match is a different function. Reading it as
+// this one is the name collision the crossing index already refuses.
+func TestCallSiteIgnoresAQualifiedCallee(t *testing.T) {
+	wantOpaque(t, resolveProbe(t, callSiteSpec(), Options{}, `
+def load(url):
+    go(url)
+
+obj.load("/api/x")
+`), ReasonParam)
+}
+
+// The relation is the spec's to grant. A language that declines it leaves the
+// parameter exactly as opaque as it was before the rule existed.
+func TestCallSitesInertWithoutTheRule(t *testing.T) {
+	wantOpaque(t, resolveProbe(t, testSpec(), Options{}, `
+def load(url):
+    go(url)
+
+load("/api/x")
+`), ReasonParam)
+}
+
+func TestCallSiteRecursionTerminates(t *testing.T) {
+	v := resolveProbe(t, callSiteSpec(), Options{}, `
+def load(url):
+    load(url)
+    go(url)
+`)
+	wantOpaque(t, v, ReasonCycle)
+}
