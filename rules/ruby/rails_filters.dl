@@ -1,0 +1,101 @@
+% Rails filter chain — Tier DL.1.
+%
+% The relations below are the whole of what `internal/linker/rails_filters.go`
+% computes in seven mutually-recursive functions (resolveSuper, eachSuperclass,
+% eachIncludedModule, effectiveFilters, chainSkips, retracted, skippedFor),
+% recomputing the ancestor chain once per class. Parsing stays in Go — a rule
+% cannot read a tree-sitter node — and so does callback resolution, which is an
+% *ordered* search with a depth that grades the edge's confidence, not a set.
+%
+% Every key is pre-normalized by the emitter. No rule calls a normalizer:
+% `filterFamily("skip_before_action") = "before_action"` is applied at
+% assertion time, so `reg_family` joins on an already-canonical string.
+%
+% Base relations, all asserted by internal/linker/rails_filters_dl.go:
+%
+%   class_decl(C)            one per parsed class or module body
+%   subclass_of(C, S)        C's `< S`, after lexical constant resolution
+%   includes_module(C, M)    C's include/extend/prepend, one row per declaration
+%   action(C, A)             a public instance method of a controller class
+%   filter_reg(C, R)         C's body registers filter R
+%   skip_reg(C, R)           C's body retracts with skip registration R
+%   reg_family(R, F)         the chain R acts on, e.g. "before_action"
+%   reg_callback(R, CB)      one row per callback symbol R names
+%   skip_total(R)            R is a skip carrying neither only: nor except:
+%   reg_has_only(R)          R carries only:
+%   reg_only(R, A)           R's only: names action A
+%   reg_except(R, A)         R's except: names action A
+
+% --- ancestry -------------------------------------------------------------
+% Only the superclass chain propagates registrations by inheritance. A module
+% cannot legally declare a filter in its body — the spelling is `included do`,
+% which the emitter attributes to the module and which reaches a class through
+% filter_owner below, not through ancestor.
+%
+% Stating this as two relations is the defect fix the tier gets for free: the
+% `inherits` edge conflates superclasses with mixins (1595 vs 670), forcing
+% every caller to filter meta.via != "mixin" first. No rule can conflate them.
+ancestor(C, S) :- subclass_of(C, S).
+ancestor(C, A) :- subclass_of(C, S), ancestor(S, A).
+
+% --- who owns a registration that binds to C ------------------------------
+% C itself, every superclass, and every module any of those include —
+% transitively, because a concern routinely includes another concern.
+filter_owner(C, C) :- class_decl(C).
+filter_owner(C, A) :- ancestor(C, A).
+filter_owner(C, M) :- filter_owner(C, X), includes_module(X, M).
+
+registered(C, R) :- filter_owner(C, O), filter_reg(O, R).
+
+own_filter(C, R) :- filter_reg(C, R).
+
+% An inherited edge is never better than `inferred`, and only an inherited
+% filter is subject to a partial (only:/except:) skip — the class that writes
+% the registration is not retracting its own line.
+inherited_filter(C, R) :- registered(C, R), not own_filter(C, R).
+
+% --- retraction -----------------------------------------------------------
+% A skip applies to the class that writes it and to everything below it.
+skip_in_force(C, S) :- skip_reg(C, S).
+skip_in_force(C, S) :- ancestor(C, A), skip_reg(A, S).
+
+% A skip carrying neither only: nor except: cancels the registration outright.
+% One carrying either survives here and is decided per action, below.
+retracts(S, R) :- skip_total(S), reg_family(S, F), reg_family(R, F),
+                  reg_callback(S, CB), reg_callback(R, CB).
+retracted(C, R) :- skip_in_force(C, S), retracts(S, R).
+
+effective_filter(C, R) :- registered(C, R), not retracted(C, R).
+
+% --- the two edges --------------------------------------------------------
+% class scope: what the source literally says, and the only edge a base
+% controller can produce, since it declares filters and defines no actions.
+class_filter(C, R, CB) :- effective_filter(C, R), reg_callback(R, CB).
+
+% only:/except:. A registration with neither runs for every action, so
+% "blocked" is the relation with a finite extent — "applies" is not.
+action_name(A) :- action(_, A).
+reg_blocked(R, A) :- reg_has_only(R), action_name(A), not reg_only(R, A).
+reg_blocked(R, A) :- reg_except(R, A).
+
+skip_reg_any(S) :- skip_reg(_, S).
+skip_applies(S, A) :- skip_reg_any(S), action_name(A), not reg_blocked(S, A).
+
+% A partial skip retracts one callback for one action, and only where the
+% filter was inherited — which is the whole reason skip_before_action means
+% something: it is what stands between `before_action :authenticate_user!` in
+% ApplicationController and an edge onto the login form.
+action_skipped(C, R, CB, A) :-
+    inherited_filter(C, R),
+    skip_in_force(C, S),
+    reg_family(S, F), reg_family(R, F),
+    reg_callback(S, CB), reg_callback(R, CB),
+    skip_applies(S, A).
+
+% action scope: what a request actually does.
+action_filter(C, R, CB, A) :-
+    effective_filter(C, R),
+    reg_callback(R, CB),
+    action(C, A),
+    not reg_blocked(R, A),
+    not action_skipped(C, R, CB, A).

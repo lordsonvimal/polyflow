@@ -2,6 +2,7 @@ package linker
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -75,6 +76,13 @@ import (
 // can ever emit. There is no per-action edge to spray, because a model has no
 // actions.
 func LinkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string) ([]graph.Edge, []graph.UnresolvedRef) {
+	return linkRailsFilters(nodes, serviceFiles, os.Getenv("PF_DATALOG") == "1")
+}
+
+// linkRailsFilters is LinkRailsFilters with the decision procedure chosen
+// explicitly rather than from the environment, so the test matrix can run every
+// case under both without an env var and therefore without giving up t.Parallel.
+func linkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string, useDatalog bool) ([]graph.Edge, []graph.UnresolvedRef) {
 	svcNames := make([]string, 0, len(serviceFiles))
 	for svc := range serviceFiles {
 		svcNames = append(svcNames, svc)
@@ -90,7 +98,7 @@ func LinkRailsFilters(nodes []graph.Node, serviceFiles map[string][]string) ([]g
 			continue // not a Rails app
 		}
 		ix := newFilterIndex(nodes, svc, files)
-		e, u := ix.link()
+		e, u := ix.link(ix.rowSource(useDatalog))
 		edges = append(edges, e...)
 		unresolved = append(unresolved, u...)
 	}
@@ -958,13 +966,79 @@ func skippedFor(skips []filterReg, reg filterReg, cb, action string) bool {
 // resolve + emit
 // ---------------------------------------------------------------------------
 
-func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
+// filterRow is one (registration, callback) pair as it applies to one class:
+// which declaration owns it, and which of the class's own actions it reaches
+// after only:/except: and any partial skip have been applied.
+//
+// It is the seam between deciding *what* the filter chain is and emitting it.
+// walkRows decides it with the hand-written ancestor walk; datalogRows decides
+// it with rules/ruby/rails_filters.dl (Tier DL.1). Everything downstream —
+// callback resolution, confidence grading, the ledger — is shared, so the two
+// paths can only differ in the one thing the tier is testing.
+type filterRow struct {
+	reg     filterReg
+	owner   *ctrlClass
+	cb      string
+	actions []string // action names, in the class's source order
+
+	// classRule/actionRule are the SA.1 provenance strings for the two edges
+	// this row emits, empty on the hand-written path (writeEdges falls back to
+	// the pass name there, exactly as before).
+	classRule  string
+	actionRule string
+}
+
+// rowSource picks the decision procedure. PF_DATALOG=1 selects Tier DL's rule
+// engine; anything else keeps the hand-written walk. The flag is temporary by
+// construction — DL.2 deletes it and the losing branch in the same commit,
+// because a permanently flagged fork is worse than either branch alone.
+func (ix *filterIndex) rowSource(useDatalog bool) func(*ctrlClass) []filterRow {
+	if !useDatalog {
+		return ix.walkRows
+	}
+	rows, err := ix.datalogRows()
+	if err != nil {
+		// Never degrade to an empty answer: "this codebase has no filters" and
+		// "the rule file failed to load" look identical in the graph, and only
+		// one of them is a reason to stop trusting it.
+		fmt.Fprintf(os.Stderr, "polyflow: rails_filters: PF_DATALOG=1 but the rule engine failed (%v); falling back to the walk\n", err)
+		return ix.walkRows
+	}
+	return rows
+}
+
+// walkRows is the hand-written decision procedure: the class's own filters,
+// its included concerns', and each superclass's, minus what a skip retracts.
+func (ix *filterIndex) walkRows(c *ctrlClass) []filterRow {
+	skips := ix.chainSkips(c)
+	var out []filterRow
+	for _, ef := range ix.effectiveFilters(c) {
+		reg, owner := ef.reg, ef.owner
+		inherited := owner != c
+		for _, cb := range reg.callbacks {
+			row := filterRow{reg: reg, owner: owner, cb: cb}
+			for _, a := range c.actions {
+				if !reg.appliesTo(a.name) {
+					continue
+				}
+				if inherited && skippedFor(skips, reg, cb, a.name) {
+					continue
+				}
+				row.actions = append(row.actions, a.name)
+			}
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func (ix *filterIndex) link(rowsFor func(*ctrlClass) []filterRow) ([]graph.Edge, []graph.UnresolvedRef) {
 	var edges []graph.Edge
 	var unresolved []graph.UnresolvedRef
 	seenEdge := map[string]bool{}
 	seenMiss := map[string]bool{}
 
-	add := func(from, to, label, conf string, meta map[string]string) {
+	add := func(from, to, label, conf, rule string, meta map[string]string) {
 		if from == "" || to == "" || from == to {
 			return
 		}
@@ -973,11 +1047,17 @@ func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
 			return
 		}
 		seenEdge[id] = true
-		edges = append(edges, graph.Edge{
+		e := graph.Edge{
 			ID: id, From: from, To: to,
 			Type: graph.EdgeTypeCalls, Label: label,
 			Meta: meta, Confidence: conf,
-		})
+		}
+		if rule != "" {
+			// SA.1: the rule that derived the edge, not the coarse pass name.
+			// writeEdges keeps a layer/rule a producer already stamped.
+			e.Sources = []graph.SourceRef{{Provider: "static", Layer: "L3", Rule: rule}}
+		}
+		edges = append(edges, e)
 	}
 
 	for _, c := range ix.classes {
@@ -996,99 +1076,90 @@ func (ix *filterIndex) link() ([]graph.Edge, []graph.UnresolvedRef) {
 			continue
 		}
 		classNodeID := ix.classID[fmt.Sprintf("%s\x00%s\x00%d", c.file, c.name, c.line)]
-		skips := ix.chainSkips(c)
 
-		for _, ef := range ix.effectiveFilters(c) {
-			reg, owner := ef.reg, ef.owner
+		for _, row := range rowsFor(c) {
+			reg, owner, cb := row.reg, row.owner, row.cb
 			inherited := owner != c
-			for _, cb := range reg.callbacks {
-				// Resolution runs from the declaring class: `before_action :x` in
-				// ApplicationController names ApplicationController's `x`, even
-				// when the subclass this edge hangs off defines an `x` of its own.
-				targets, depth := ix.resolveCallback(owner, cb)
-				if len(targets) == 0 {
-					if inherited {
-						continue // the owner already ledgered this miss
-					}
-					key := fmt.Sprintf("%s\x00%s\x00%s", c.file, c.name, cb)
+			// Resolution runs from the declaring class: `before_action :x` in
+			// ApplicationController names ApplicationController's `x`, even
+			// when the subclass this edge hangs off defines an `x` of its own.
+			targets, depth := ix.resolveCallback(owner, cb)
+			if len(targets) == 0 {
+				if inherited {
+					continue // the owner already ledgered this miss
+				}
+				key := fmt.Sprintf("%s\x00%s\x00%s", c.file, c.name, cb)
+				if !seenMiss[key] {
+					seenMiss[key] = true
+					unresolved = append(unresolved, graph.UnresolvedRef{
+						Service: ix.svc, File: c.file, Line: reg.line,
+						Name: cb, Kind: "rails_filter_unresolved",
+					})
+				}
+				continue
+			}
+			// More than one class in the service defines the callback at the
+			// same point in the ancestor chain: every one is a candidate,
+			// naming one would be the fan-out bug (phases.md #1).
+			conf := graph.ConfidenceStatic
+			if depth > 0 {
+				conf = graph.ConfidenceInferred
+			}
+			if len(targets) > 1 {
+				conf = graph.ConfidencePartial
+				if !inherited {
+					key := fmt.Sprintf("ambiguous\x00%s\x00%s\x00%s", c.file, c.name, cb)
 					if !seenMiss[key] {
 						seenMiss[key] = true
 						unresolved = append(unresolved, graph.UnresolvedRef{
 							Service: ix.svc, File: c.file, Line: reg.line,
-							Name: cb, Kind: "rails_filter_unresolved",
+							Name: cb, Kind: "rails_filter_ambiguous",
 						})
 					}
-					continue
 				}
-				// More than one class in the service defines the callback at the
-				// same point in the ancestor chain: every one is a candidate,
-				// naming one would be the fan-out bug (phases.md #1).
-				conf := graph.ConfidenceStatic
-				if depth > 0 {
+			}
+
+			base := map[string]string{
+				"via":    "rails_filter",
+				"filter": reg.kind,
+			}
+			if inherited {
+				// The subclass's file contains no trace of this filter, so the
+				// edge has to say where to go read it. The superclass chain is
+				// reconstructed from constant names, so an inherited edge is
+				// never better than inferred.
+				base["inherited_from"] = owner.name
+				if conf == graph.ConfidenceStatic {
 					conf = graph.ConfidenceInferred
 				}
-				if len(targets) > 1 {
-					conf = graph.ConfidencePartial
-					if !inherited {
-						key := fmt.Sprintf("ambiguous\x00%s\x00%s\x00%s", c.file, c.name, cb)
-						if !seenMiss[key] {
-							seenMiss[key] = true
-							unresolved = append(unresolved, graph.UnresolvedRef{
-								Service: ix.svc, File: c.file, Line: reg.line,
-								Name: cb, Kind: "rails_filter_ambiguous",
-							})
-						}
-					}
-				}
+			}
+			if reg.conditional {
+				base["conditional"] = "true"
+			}
+			if reg.inline {
+				// The registration named a block, not this method — the call
+				// is one level of indirection away from the line.
+				base["form"] = "block"
+			}
+			if len(reg.only) > 0 {
+				base["only"] = strings.Join(reg.only, ",")
+			}
+			if len(reg.except) > 0 {
+				base["except"] = strings.Join(reg.except, ",")
+			}
 
-				base := map[string]string{
-					"via":    "rails_filter",
-					"filter": reg.kind,
-				}
-				if inherited {
-					// The subclass's file contains no trace of this filter, so the
-					// edge has to say where to go read it. The superclass chain is
-					// reconstructed from constant names, so an inherited edge is
-					// never better than inferred.
-					base["inherited_from"] = owner.name
-					if conf == graph.ConfidenceStatic {
-						conf = graph.ConfidenceInferred
-					}
-				}
-				if reg.conditional {
-					base["conditional"] = "true"
-				}
-				if reg.inline {
-					// The registration named a block, not this method — the call
-					// is one level of indirection away from the line.
-					base["form"] = "block"
-				}
-				if len(reg.only) > 0 {
-					base["only"] = strings.Join(reg.only, ",")
-				}
-				if len(reg.except) > 0 {
-					base["except"] = strings.Join(reg.except, ",")
-				}
-
-				for _, t := range targets {
-					m := copyMeta(base)
-					m["scope"] = "class"
-					add(classNodeID, t, reg.kind+" :"+cb, conf, m)
-				}
-				for _, a := range c.actions {
-					if !reg.appliesTo(a.name) {
-						continue
-					}
-					if inherited && skippedFor(skips, reg, cb, a.name) {
-						continue
-					}
-					for _, aid := range ix.methodQN[c.name+"#"+a.name] {
-						for _, t := range targets {
-							m := copyMeta(base)
-							m["scope"] = "action"
-							m["action"] = a.name
-							add(aid, t, reg.kind+" :"+cb, conf, m)
-						}
+			for _, t := range targets {
+				m := copyMeta(base)
+				m["scope"] = "class"
+				add(classNodeID, t, reg.kind+" :"+cb, conf, row.classRule, m)
+			}
+			for _, action := range row.actions {
+				for _, aid := range ix.methodQN[c.name+"#"+action] {
+					for _, t := range targets {
+						m := copyMeta(base)
+						m["scope"] = "action"
+						m["action"] = action
+						add(aid, t, reg.kind+" :"+cb, conf, row.actionRule, m)
 					}
 				}
 			}

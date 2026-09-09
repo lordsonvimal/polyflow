@@ -58,8 +58,33 @@ func filterFixture(t *testing.T) ([]graph.Node, []graph.Edge, []graph.Unresolved
 		require.NoError(t, err)
 		nodes = append(nodes, ns...)
 	}
-	edges, unresolved := linker.LinkRailsFilters(nodes, map[string][]string{filterSvc: filterFixtureFiles})
+	files := map[string][]string{filterSvc: filterFixtureFiles}
+	edges, unresolved := linker.LinkRailsFilters(nodes, files)
+
+	// Tier DL.1's matrix. Every case below asserts against the value this
+	// helper returns, so proving here that the rule engine produces the same
+	// edges and the same ledger runs every case under both paths — rather than
+	// forking the file, or setting PF_DATALOG and losing t.Parallel.
+	//
+	// Sources[] is the one field allowed to differ: the rule path stamps the
+	// rule that derived each edge (SA.1), which is the improvement, not a
+	// regression. TestLinkRailsFilters_DatalogStampsTheRule checks it directly.
+	dlEdges, dlUnresolved := linker.LinkRailsFiltersVia(nodes, files, true)
+	require.Equal(t, unresolved, dlUnresolved, "PF_DATALOG=1 ledger differs from the walk")
+	require.Equal(t, stripSources(edges), stripSources(dlEdges), "PF_DATALOG=1 edges differ from the walk")
+
 	return nodes, edges, unresolved
+}
+
+// stripSources drops SA.1 provenance so the two decision procedures can be
+// compared on what they decide, not on how they label it.
+func stripSources(edges []graph.Edge) []graph.Edge {
+	out := make([]graph.Edge, len(edges))
+	copy(out, edges)
+	for i := range out {
+		out[i].Sources = nil
+	}
+	return out
 }
 
 // nodeIDFor returns the single node of a type with a label, failing otherwise.
@@ -510,6 +535,33 @@ func TestLinkRailsFilters_ConcernIncludedDoAttributesToTheIncludingModel(t *test
 		assert.NotContains(t, u.File, "batch_change_notifier.rb",
 			"included do inside BatchChangeNotifier should attribute to Batch, not go unclaimed")
 	}
+}
+
+// TestLinkRailsFilters_DatalogStampsTheRule is the one field the two paths are
+// allowed to differ on, and the reason DL.1 waited on SA.1: an edge derived by
+// a rule says which rule, so "why is this edge here" is answerable without
+// bisecting the pass. The walk can only offer the pass name.
+func TestLinkRailsFilters_DatalogStampsTheRule(t *testing.T) {
+	t.Parallel()
+	nodes, walkEdges, _ := filterFixture(t)
+	dlEdges, _ := linker.LinkRailsFiltersVia(nodes, map[string][]string{filterSvc: filterFixtureFiles}, true)
+	require.NotEmpty(t, dlEdges)
+
+	for _, e := range walkEdges {
+		assert.Empty(t, e.Sources, "the walk has no rule to name; writeEdges stamps the pass name")
+	}
+
+	kinds := map[string]int{}
+	for _, e := range dlEdges {
+		require.Len(t, e.Sources, 1, "edge %s carries no provenance", e.ID)
+		s := e.Sources[0]
+		assert.Equal(t, "static", s.Provider)
+		assert.Equal(t, "L3", s.Layer, "derivation is L3 in the layer contract")
+		kinds[s.Rule]++
+	}
+	assert.Positive(t, kinds["rails_filters/class_filter"])
+	assert.Positive(t, kinds["rails_filters/action_filter"])
+	assert.Len(t, kinds, 2, "only the two goals the emitter queries may appear: %v", kinds)
 }
 
 // TestLinkRailsFilters_Deterministic (bug-class #2): the pass is built on maps
