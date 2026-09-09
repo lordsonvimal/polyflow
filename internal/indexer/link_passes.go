@@ -992,6 +992,50 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(puEdges)
 		}},
+		// Tier UB.3: the transport function crosses a JSX prop — parent owns the
+		// wrapper, child supplies the URL argument. Consumes the same
+		// prop_client_dynamic_url ledger (already thinned by js_prop_urls),
+		// restricted to rows whose URL argument is a parameter of the wrapper.
+		// Indexes every JSX attribute whose value hands over a local function,
+		// joins on the referenced symbol, reads the argument at the child's
+		// props.<prop>(…) call sites, and mints one http_client per distinct URL
+		// at the parent's transport call. Retracts the rows it resolved.
+		{"js_prop_transport", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			ptNodes, ptEdges, ptLedger, retract := linker.LinkJSPropTransport(st.allNodes, st.allUnresolved, svcFiles)
+			if len(retract) > 0 {
+				filtered := st.allUnresolved[:0]
+				for _, u := range st.allUnresolved {
+					if u.Kind == "prop_client_dynamic_url" && retract[linker.PropURLRetractKey(u.File, u.Line)] {
+						continue
+					}
+					filtered = append(filtered, u)
+				}
+				st.allUnresolved = filtered
+			}
+			st.allUnresolved = append(st.allUnresolved, ptLedger...)
+			if len(ptNodes) > 0 {
+				byID := make(map[string]int, len(st.allNodes))
+				for i := range st.allNodes {
+					byID[st.allNodes[i].ID] = i
+				}
+				for i := range ptNodes {
+					n := ptNodes[i]
+					if _, exists := byID[n.ID]; exists {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = len(st.allNodes) - 1
+				}
+				if err := st.bw.Flush(st.ctx); err != nil {
+					return err
+				}
+			}
+			return st.writeEdges(ptEdges)
+		}},
 		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
 		// JS/TS client at all, so this is the only source of Meta["env_var"] /
 		// Meta["host_default_literal"] for JS/TS nodes — must also run before
