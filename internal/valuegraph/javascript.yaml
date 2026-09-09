@@ -1,0 +1,64 @@
+# The JavaScript / TypeScript binding spec — the grammar facts the linker's four
+# JS URL passes (js_local_url, js_prop_urls, js_prop_transport, js_prop_client)
+# hard-code, expressed as data. No policy lives here: the engine says what a
+# value is, the caller decides what to do about it.
+#
+# The spec addresses node types and field names directly; it never compiles a
+# tree-sitter query. Keep this file under 120 lines — growth past that means a
+# mint-site idiom has leaked into the vocabulary.
+
+language: javascript
+grammars: [javascript, typescript, tsx]
+
+# What is a concrete string?
+literals:
+  - node: string
+    text: inner            # strip the delimiters
+  - node: template_string
+    text: template         # string_fragment children are literal parts;
+                           # template_substitution children resolve recursively
+
+# What joins values in order?
+concat:
+  - node: binary_expression
+    operator: "+"
+    parts: [left, right]
+
+# What offers alternatives?
+union:
+  - node: ternary_expression
+    parts: [consequence, alternative]
+
+# What binds a name to a value?
+bindings:
+  - node: variable_declarator
+    name: name
+    value: value
+  - node: assignment_expression
+    name: left
+    value: right
+  - node: pair                # object-literal member: { url: "/api/x" }
+    name: key
+    value: value
+
+# What introduces a scope, and where are its parameters?
+scopes:
+  - node: function_declaration
+    params: parameters
+  - node: function_expression
+    params: parameters
+  - node: method_definition
+    params: parameters
+  - node: arrow_function
+    params: parameters
+    # An arrow with ONE unparenthesised param has NO formal_parameters node —
+    # the identifier hangs off the `parameter` field instead. Declaring both
+    # lets the loader fall through rather than resolve the param to an outer
+    # binding of the same name.
+    params_alt: parameter
+
+# Where does resolution deliberately stop? (VG.3 scope; crossings override in VG.4)
+opaque:
+  - node: call_expression
+  - node: member_expression
+  - node: subscript_expression
