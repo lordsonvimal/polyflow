@@ -2,7 +2,6 @@ package linker
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -14,17 +13,18 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/valuegraph"
 )
 
-// Tier VG.3 — the JS URL resolvers on the symbolic value engine.
+// Tier VG — the JS URL resolvers on the symbolic value engine.
 //
-// docs/js-value-graph-pilot-plan.md. `resolveLocalURLBinding` (and through it
-// `js_prop_urls.go`, `js_prop_transport.go`, `js_prop_client.go`) keeps its
-// exact signature and, when PF_VALUEGRAPH=1 is set, answers the same question
-// through `internal/valuegraph` instead of the hand-written backtracker. The
-// signatures are unchanged on purpose: that is what makes VG.3 a differential
-// change the vgdiff tool can verify.
+// docs/js-value-graph-pilot-plan.md and docs/js-value-graph-pilot-report.md.
+// `resolveLocalURLBinding` (and through it `js_prop_urls.go`,
+// `js_prop_transport.go`, `js_prop_client.go`) keeps its exact signature and
+// answers through `internal/valuegraph` rather than a hand-written backtracker.
+// The signatures were unchanged on purpose: that is what made VG.3/VG.4
+// differential changes the vgdiff tool could verify against the walkers, which
+// VG.5 then retired.
 //
 // This file is the linker-side adapter: the FileSource over the phase parse
-// cache, the embedded spec, and the flag.
+// cache and the embedded spec.
 
 // vgLayer / vgLocalBindingRule are the SA.1 provenance stamped onto every
 // http_client node the engine path mints or mutates
@@ -50,14 +50,6 @@ const (
 	// would make a 25-site component indistinguishable from an unreadable one.
 	vgPropMaxStrings = 2 * maxPropURLFanout
 )
-
-// ValuegraphEnabled reports whether the engine path is selected. Read from the
-// environment on every call rather than cached: it is consulted once per
-// candidate site, never in a hot loop, and a cached value would make the
-// differential tests (which flip the flag) unable to see both paths in one
-// process. Exported so the indexer can gate the edge-provenance rebuild in
-// writeEdges on the same flag.
-func ValuegraphEnabled() bool { return os.Getenv("PF_VALUEGRAPH") == "1" }
 
 var (
 	jsVGSpecOnce sync.Once
@@ -384,7 +376,6 @@ func vgPropFailKind(v valuegraph.Value) string {
 		return r
 	}
 }
-
 
 // resolveLocalURLBindingVG is the engine-backed implementation of
 // resolveLocalURLBinding. It keeps the legacy control flow exactly — unwrap the

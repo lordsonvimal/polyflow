@@ -14,12 +14,10 @@ import (
 )
 
 // Tier VG.3 deliverable 4 (docs/js-value-graph-pilot-plan.md): every http_client
-// node the engine path resolves, and every http_call edge out of it, carries
+// node the value engine resolves, and every http_call edge out of it, carries
 // SA.1 provenance with Layer "L2" and a non-empty Rule naming the valuegraph
 // spec — not the coarse L5/<pass> fallback writeEdges stamps otherwise.
 func TestRun_ValuegraphLocalURLProvenance(t *testing.T) {
-	t.Setenv("PF_VALUEGRAPH", "1")
-
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "orion")
 	require.NoError(t, os.MkdirAll(svc, 0o755))

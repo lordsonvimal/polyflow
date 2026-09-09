@@ -1,7 +1,7 @@
 package linker
 
 import (
-	"os"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -9,14 +9,16 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/vgbaseline"
 )
 
-// Tier VG.3 acceptance (docs/js-value-graph-pilot-plan.md): the engine path
-// must reproduce the legacy walker byte-for-byte on the URL-resolution passes —
-// zero LOST and zero CHANGED rows. GAINED rows are permitted (the engine's
-// lexical scope walk can resolve a module const the intraprocedural walker
-// abstains on) but are surfaced here so a real run can enumerate them.
+// Tier VG.3 acceptance (docs/js-value-graph-pilot-plan.md) was a differential:
+// the engine had to reproduce the legacy walker byte-for-byte — zero LOST, zero
+// CHANGED. VG.5 retired the walker, so there is no second arm left to compare
+// against and these fixtures became goldens: the shapes and the exact paths the
+// engine reads out of them, frozen. A diff here is a behaviour change, and
+// changing the table is how you declare one.
 //
 // This runs in-process against fixtures rather than a corpus; the cold-cedar
-// vgdiff run is the plan owner's, exactly as VG.0's baseline capture is.
+// vgdiff run against a captured baseline is the plan owner's, exactly as VG.0's
+// baseline capture is.
 
 // vgFixtures are the shapes js_local_url_test.go exercises plus a couple that
 // stress the engine's literal / concat / template handling directly.
@@ -126,17 +128,23 @@ func vgCaptureClients(t *testing.T, abs []string) *vgbaseline.Baseline {
 	return b
 }
 
-func TestVGLocalURLDifferential(t *testing.T) {
-	// Not parallel: toggles the process-wide PF_VALUEGRAPH flag.
-	prev, had := os.LookupEnv("PF_VALUEGRAPH")
-	t.Cleanup(func() {
-		if had {
-			os.Setenv("PF_VALUEGRAPH", prev)
-		} else {
-			os.Unsetenv("PF_VALUEGRAPH")
-		}
-	})
+// vgWant is what each fixture resolves to: the URLs minted, in the sorted order
+// vgbaseline.Sort puts them in, and the number of blind-spot rows left behind.
+// An empty urls list with one ledger row is the deliberate abstention case.
+var vgWant = map[string]struct {
+	urls   []string
+	ledger int
+}{
+	"switch-two-arms":        {urls: []string{"/api/forms/list?name=*", "/api/items/list?name=*"}},
+	"if-else-shorthand":      {urls: []string{"/api/clients/*", "/api/clients"}},
+	"path-hole-wildcard":     {urls: []string{"/api/data_model_types/*"}},
+	"concat-of-local-const":  {urls: []string{"/api/v1/games/*"}},
+	"unreadable-arm-poisons": {ledger: 1},
+	"module-scope-reassign":  {ledger: 1},
+	"sibling-fn-not-read":    {ledger: 1},
+}
 
+func TestVGLocalURLFixtures(t *testing.T) {
 	names := make([]string, 0, len(vgFixtures))
 	for name := range vgFixtures {
 		names = append(names, name)
@@ -146,37 +154,30 @@ func TestVGLocalURLDifferential(t *testing.T) {
 	for _, name := range names {
 		files := vgFixtures[name]
 		t.Run(name, func(t *testing.T) {
-			abs := vgWriteFixture(t, files)
-
-			os.Unsetenv("PF_VALUEGRAPH")
-			base := vgCaptureClients(t, abs)
-
-			os.Setenv("PF_VALUEGRAPH", "1")
-			cand := vgCaptureClients(t, abs)
-
-			d := vgbaseline.Compare(base, cand)
-			if d.Regressions() != 0 {
-				t.Fatalf("engine path regressed against the legacy walker:\n%s", d.String())
+			want, ok := vgWant[name]
+			if !ok {
+				t.Fatalf("fixture %q has no expectation — add one rather than deleting the fixture", name)
 			}
-			for _, row := range d.Rows {
-				t.Logf("GAINED (permitted, enumerate in VG.5): %s", row.Detail)
+			got := vgCaptureClients(t, vgWriteFixture(t, files))
+
+			var urls []string
+			for _, c := range got.Clients {
+				urls = append(urls, c.URL)
+			}
+			if !reflect.DeepEqual(urls, want.urls) && !(len(urls) == 0 && len(want.urls) == 0) {
+				t.Errorf("urls = %v, want %v", urls, want.urls)
+			}
+			if len(got.Ledger) != want.ledger {
+				t.Errorf("ledger rows = %d, want %d: %+v", len(got.Ledger), want.ledger, got.Ledger)
 			}
 		})
 	}
 }
 
-// TestVGLocalURLProvenanceStamp asserts the engine path stamps SA.1 layer/rule
-// onto the node it mutates (deliverable 4). The legacy path leaves them unset.
+// TestVGLocalURLProvenanceStamp asserts the resolver stamps SA.1 layer/rule
+// onto every node it mints or mutates — writeEdges propagates it from there
+// onto the http_call edge.
 func TestVGLocalURLProvenanceStamp(t *testing.T) {
-	prev, had := os.LookupEnv("PF_VALUEGRAPH")
-	t.Cleanup(func() {
-		if had {
-			os.Setenv("PF_VALUEGRAPH", prev)
-		} else {
-			os.Unsetenv("PF_VALUEGRAPH")
-		}
-	})
-
 	_, p := writeReduxFixture(t, map[string]string{"modules/arms.es6": `function reload(id, isNew) {
   let url;
   if (isNew) {
@@ -187,19 +188,15 @@ func TestVGLocalURLProvenanceStamp(t *testing.T) {
   $.ajax({ url, type: "GET" });
 }
 `})
-	mk := func() []graph.Node {
-		return []graph.Node{{
-			ID: "svc:modules/arms.es6:http_client:8", Type: graph.NodeTypeHTTPClient,
-			Label: "dynamic", Service: "svc", File: p["modules/arms.es6"], Line: 8,
-			Language: "javascript",
-			Meta: map[string]string{
-				"method": "GET", "key_dynamic": "true", "key_dynamic_raw": `{ url, type: "GET" }`,
-			},
-		}}
-	}
+	in := []graph.Node{{
+		ID: "svc:modules/arms.es6:http_client:8", Type: graph.NodeTypeHTTPClient,
+		Label: "dynamic", Service: "svc", File: p["modules/arms.es6"], Line: 8,
+		Language: "javascript",
+		Meta: map[string]string{
+			"method": "GET", "key_dynamic": "true", "key_dynamic_raw": `{ url, type: "GET" }`,
+		},
+	}}
 
-	os.Setenv("PF_VALUEGRAPH", "1")
-	in := mk()
 	changed, added, _ := ResolveJSLocalURLs(in, nil)
 	if len(changed) != 1 || len(added) != 1 {
 		t.Fatalf("changed=%d added=%d, want 1 and 1", len(changed), len(added))
@@ -209,12 +206,5 @@ func TestVGLocalURLProvenanceStamp(t *testing.T) {
 			t.Errorf("node %s missing VG provenance: layer=%q rule=%q",
 				n.ID, n.Meta["vg_layer"], n.Meta["vg_rule"])
 		}
-	}
-
-	os.Unsetenv("PF_VALUEGRAPH")
-	legacy := mk()
-	lc, _, _ := ResolveJSLocalURLs(legacy, nil)
-	if len(lc) != 1 || lc[0].Meta["vg_layer"] != "" {
-		t.Errorf("legacy path stamped VG provenance: %+v", lc[0].Meta)
 	}
 }

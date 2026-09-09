@@ -1,7 +1,7 @@
 package linker
 
 import (
-	"os"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -9,10 +9,10 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/vgbaseline"
 )
 
-// Tier VG.4 acceptance (docs/js-value-graph-pilot-plan.md): the crossing rules
-// must reproduce UB.2 and UB.3 — zero LOST and zero CHANGED. GAINED rows are
-// permitted and are surfaced, because a gain that nobody enumerated is an
-// unproven behaviour change wearing a favourable label.
+// Tier VG.4 acceptance (docs/js-value-graph-pilot-plan.md) was a differential
+// against the UB.2/UB.3 walkers — zero LOST, zero CHANGED. VG.5 retired those
+// walkers, so as in vg_differential_test.go the fixtures are now goldens: the
+// crossing shapes, and the exact URLs each one resolves to.
 //
 // The corpus run is the plan owner's; this pins the shapes in process.
 
@@ -257,22 +257,21 @@ func vgCaptureProps(nodes []graph.Node, ledger []graph.UnresolvedRef, files map[
 	return b
 }
 
-func vgWithFlag(t *testing.T) {
-	t.Helper()
-	prev, had := os.LookupEnv("PF_VALUEGRAPH")
-	t.Cleanup(func() {
-		if had {
-			os.Setenv("PF_VALUEGRAPH", prev)
-		} else {
-			os.Unsetenv("PF_VALUEGRAPH")
-		}
-	})
+// vgPropWant is what each crossing fixture resolves to, in vgbaseline.Sort
+// order, plus the blind-spot rows that survive both passes.
+var vgPropWant = map[string]struct {
+	urls   []string
+	ledger int
+}{
+	"prop-url-worked-example":         {urls: []string{"/api/gadgets/*/usage", "/api/widget_groups/*/usage", "/api/widgets/*/usage"}},
+	"prop-url-destructured":           {urls: []string{"/api/widgets"}},
+	"prop-url-three-sites":            {urls: []string{"/api/forms", "/api/sites", "/api/studies"}},
+	"prop-url-unresolvable-sibling":   {urls: []string{"/api/widgets/*/usage"}},
+	"prop-transport-worked-example":   {urls: []string{"/api/schedules/*", "/api/schedules/reset"}},
+	"prop-transport-unresolvable-arg": {urls: []string{"/api/schedules/reset"}},
 }
 
-func TestVGPropCrossingDifferential(t *testing.T) {
-	// Not parallel: toggles the process-wide PF_VALUEGRAPH flag.
-	vgWithFlag(t)
-
+func TestVGPropCrossingFixtures(t *testing.T) {
 	names := make([]string, 0, len(vgPropFixtures))
 	for name := range vgPropFixtures {
 		names = append(names, name)
@@ -282,20 +281,21 @@ func TestVGPropCrossingDifferential(t *testing.T) {
 	for _, name := range names {
 		c := vgPropFixtures[name]
 		t.Run(name, func(t *testing.T) {
-			nodes, ledger, files := vgPropSetup(t, c)
-
-			os.Unsetenv("PF_VALUEGRAPH")
-			base := vgCaptureProps(nodes, ledger, files)
-
-			os.Setenv("PF_VALUEGRAPH", "1")
-			cand := vgCaptureProps(nodes, ledger, files)
-
-			d := vgbaseline.Compare(base, cand)
-			if d.Regressions() != 0 {
-				t.Fatalf("crossings regressed against the legacy passes:\n%s", d.String())
+			want, ok := vgPropWant[name]
+			if !ok {
+				t.Fatalf("fixture %q has no expectation — add one rather than deleting the fixture", name)
 			}
-			for _, row := range d.Rows {
-				t.Logf("GAINED (permitted, enumerate in VG.5): %s", row.Detail)
+			got := vgCaptureProps(vgPropSetup(t, c))
+
+			var urls []string
+			for _, cl := range got.Clients {
+				urls = append(urls, cl.URL)
+			}
+			if !reflect.DeepEqual(urls, want.urls) && !(len(urls) == 0 && len(want.urls) == 0) {
+				t.Errorf("urls = %v, want %v", urls, want.urls)
+			}
+			if len(got.Ledger) != want.ledger {
+				t.Errorf("ledger rows = %d, want %d: %+v", len(got.Ledger), want.ledger, got.Ledger)
 			}
 		})
 	}
@@ -306,9 +306,6 @@ func TestVGPropCrossingDifferential(t *testing.T) {
 // differential cannot see this on its own: it compares two runs that could both
 // be wrong in the same way.
 func TestVGPropCrossingMintsOneNodePerURL(t *testing.T) {
-	vgWithFlag(t)
-	os.Setenv("PF_VALUEGRAPH", "1")
-
 	nodes, ledger, files := vgPropSetup(t, vgPropFixtures["prop-url-three-sites"])
 	got, _, out, retract := LinkJSPropURLs(nodes, ledger, files)
 
@@ -341,9 +338,6 @@ func TestVGPropCrossingMintsOneNodePerURL(t *testing.T) {
 // node, not just the language. Which of the two mirror rules produced a suspect
 // edge is the whole reason they were worth distinguishing.
 func TestVGPropCrossingProvenanceNamesTheCrossing(t *testing.T) {
-	vgWithFlag(t)
-	os.Setenv("PF_VALUEGRAPH", "1")
-
 	for name, want := range map[string]string{
 		"prop-url-worked-example":       vgPropURLRule,
 		"prop-transport-worked-example": vgPropTransportRule,
@@ -374,8 +368,6 @@ func TestVGPropCrossingProvenanceNamesTheCrossing(t *testing.T) {
 // Asserted deliberately, per the plan: the answer is "resolved", and it is a
 // GAINED row on any corpus that contains the shape.
 func TestVGPropCrossingTwoHops(t *testing.T) {
-	vgWithFlag(t)
-
 	c := vgPropCase{
 		files: map[string]string{
 			"Inner.jsx": `export default class Inner extends React.Component {
@@ -402,13 +394,6 @@ func TestVGPropCrossingTwoHops(t *testing.T) {
 	}
 	nodes, ledger, files := vgPropSetup(t, c)
 
-	os.Unsetenv("PF_VALUEGRAPH")
-	legacy, _, _, _ := LinkJSPropURLs(nodes, ledger, files)
-	if len(legacy) != 0 {
-		t.Fatalf("the legacy producer index resolves one hop only; got %v", urlSet(legacy))
-	}
-
-	os.Setenv("PF_VALUEGRAPH", "1")
 	got, _, _, retract := LinkJSPropURLs(nodes, ledger, files)
 	if len(got) != 1 || got[0].Meta["url"] != "/api/deep" {
 		t.Fatalf("two-hop crossing = %v, want [/api/deep]", urlSet(got))

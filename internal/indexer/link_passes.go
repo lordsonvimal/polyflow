@@ -83,13 +83,12 @@ type linkPipelineState struct {
 	nodeRef    map[string]string
 	nodeRefLen int
 
-	// nodeVGRule caches node ID → valuegraph spec rule for nodes the valuegraph
-	// engine path resolved (Meta["vg_rule"], set by ResolveJSLocalURLs in VG.3
-	// and by the crossing passes in VG.4). Rebuilt every writeEdges call — only
-	// when PF_VALUEGRAPH is set — because an in-place Meta mutation does not
-	// change allNodes' length and so would slip past the nodeRef staleness guard
-	// above. writeEdges stamps L2/<rule> rather than the uniform L5/<pass> on
-	// every edge touching such a node.
+	// nodeVGRule caches node ID → valuegraph spec rule for nodes the value
+	// engine resolved (Meta["vg_rule"], set by ResolveJSLocalURLs and by the
+	// crossing passes). Rebuilt every writeEdges call, because an in-place Meta
+	// mutation does not change allNodes' length and so would slip past the
+	// nodeRef staleness guard above. writeEdges stamps L2/<rule> rather than the
+	// uniform L5/<pass> on every edge touching such a node.
 	nodeVGRule map[string]string
 
 	// targetServices restricts what a scopeCrossService pass's edge-emitting
@@ -170,12 +169,10 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 		}
 		st.nodeRefLen = len(st.allNodes)
 	}
-	if linker.ValuegraphEnabled() {
-		st.nodeVGRule = make(map[string]string)
-		for i := range st.allNodes {
-			if r := st.allNodes[i].Meta["vg_rule"]; r != "" {
-				st.nodeVGRule[st.allNodes[i].ID] = r
-			}
+	st.nodeVGRule = make(map[string]string)
+	for i := range st.allNodes {
+		if r := st.allNodes[i].Meta["vg_rule"]; r != "" {
+			st.nodeVGRule[st.allNodes[i].ID] = r
 		}
 	}
 	bwE := graph.NewBatchWriter(st.store)

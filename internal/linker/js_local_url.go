@@ -6,7 +6,6 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -86,110 +85,12 @@ func ResolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (
 // declined, so the caller can pick the right ledger kind. A cap breach and an
 // unreadable right-hand side are different facts about the code and collapsing
 // them would make the ledger unable to say which.
-func resolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (paths []string, reason string, ok bool) {
-	if ValuegraphEnabled() {
-		// Tier VG.3: same question, same signature, answered by the symbolic
-		// value engine (internal/valuegraph) instead of the walkers below.
-		return resolveLocalURLBindingVG(urlExpr, fn, src)
-	}
-	if urlExpr == nil || fn == nil {
-		return nil, ledgerLocalURLUnresolved, false
-	}
-	expr := localURLUnwrapObject(urlExpr, src)
-	if expr == nil {
-		return nil, ledgerLocalURLUnresolved, false
-	}
-
-	name := localURLIdentName(expr, src)
-	if name == "" {
-		// Not a binding to backtrack. The expression may still be readable once
-		// the options object is unwrapped — `$.ajax({url: "/api/x", …})`
-		// reaching here at all only means the *outer* object was what the
-		// pattern captured.
-		if got := localURLStaticPaths(expr, src); len(got) > 0 {
-			if len(got) > maxLocalURLBranches {
-				return nil, ledgerLocalURLHighFanout, false
-			}
-			return got, "", true
-		}
-		return nil, ledgerLocalURLUnresolved, false
-	}
-
-	// The module-scope guard has to be applied before any attempt to read the
-	// name, including the KeyWalker's own single-binding resolution: that path
-	// answers "what value does this scope hold" and is content to ignore a
-	// module-level write, which is exactly the case this tier must abstain on.
-	if localURLModuleReassign(fn, src, name) {
-		return nil, ledgerLocalURLUnresolved, false
-	}
-
-	rhs := localURLAssignments(fn, expr.StartByte(), src, name)
-	if len(rhs) == 0 {
-		return nil, ledgerLocalURLUnresolved, false
-	}
-
-	var (
-		out  []string
-		seen = make(map[string]bool, len(rhs))
-	)
-	for _, r := range rhs {
-		got := localURLStaticPaths(r, src)
-		if len(got) == 0 {
-			// One unreadable branch poisons the whole site. Minting the other
-			// three would present a partial answer as a complete one.
-			return nil, ledgerLocalURLUnresolved, false
-		}
-		for _, p := range got {
-			if !seen[p] {
-				seen[p] = true
-				out = append(out, p)
-			}
-		}
-	}
-	if len(out) > maxLocalURLBranches {
-		return nil, ledgerLocalURLHighFanout, false
-	}
-	return out, "", true
-}
-
-// localURLStaticPaths reads one expression as request paths, via the same JS
-// KeyWalker the matcher uses. Reusing it is not merely convenient — it is what
-// keeps a resolved local identical to a resolved literal at the same site: a
-// template hole in the path becomes the "*" the param_wildcard normalizer
-// matches against `:id`, and a hole that can only ever contribute a query
-// string truncates. Truncating at the first substitution unconditionally, as an
-// earlier sketch of this tier proposed, would reduce `/api/clients/${id}` to
-// `/api/clients/` and match the collection route instead of the member one — a
-// wrong edge in place of a missing one.
 //
-// A ternary right-hand side legitimately yields more than one path; those are
-// branches too, and the caller's cap covers them.
-func localURLStaticPaths(n *sitter.Node, src []byte) []string {
-	if n == nil {
-		return nil
-	}
-	w := contract.KeyWalkerFor("javascript")
-	if w == nil {
-		return nil
-	}
-	cands, dynamic := w.WalkKey(n, src, func(string) (string, bool) { return "", false })
-	if dynamic || len(cands) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(cands))
-	for _, c := range cands {
-		// A leading "*" is a wildcarded host or base segment, which the
-		// dynamic_host_strip normalizer removes before matching — the same
-		// shape LinkJSPropClients already accepts at its own mint site.
-		if !strings.HasPrefix(c, "/") && !strings.HasPrefix(c, "*") {
-			// Not a request path. A bare word ("done", "html") is a value this
-			// local also carries on some branch, and a site whose local is not
-			// exclusively a URL is not a site this tier can read.
-			return nil
-		}
-		out = append(out, c)
-	}
-	return out
+// The walkers that used to answer this were retired in VG.5; the symbolic value
+// engine (internal/valuegraph, via valuegraph_adapter.go) is now the only
+// implementation. The signature is kept because five passes call it.
+func resolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (paths []string, reason string, ok bool) {
+	return resolveLocalURLBindingVG(urlExpr, fn, src)
 }
 
 // localURLUnwrapObject returns the expression that actually holds the URL: the
@@ -437,14 +338,11 @@ func applyLocalURL(n *graph.Node, path string, branch int) {
 	n.Meta["url"] = path
 	n.Meta["url_origin"] = localURLOriginLocalBinding
 	n.Meta["branch_index"] = strconv.Itoa(branch)
-	if ValuegraphEnabled() {
-		// SA.1 provenance: this URL was resolved by the value engine, not the
-		// legacy backtracker. Carried on the node so a reviewer (and, once the
-		// contract engine propagates it, the http_call edge) can see which
-		// layer and rule minted the flow.
-		n.Meta["vg_layer"] = vgLayer
-		n.Meta["vg_rule"] = vgLocalBindingRule
-	}
+	// SA.1 provenance: which layer and rule read this URL. Carried on the node
+	// so a reviewer — and writeEdges, which propagates it onto the http_call
+	// edge — can see what minted the flow.
+	n.Meta["vg_layer"] = vgLayer
+	n.Meta["vg_rule"] = vgLocalBindingRule
 	delete(n.Meta, "key_dynamic")
 	delete(n.Meta, "key_dynamic_raw")
 	delete(n.Meta, "key_candidates")

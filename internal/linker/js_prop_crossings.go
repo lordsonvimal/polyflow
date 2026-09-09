@@ -26,13 +26,20 @@ import (
 // The two passes still hold different policies over the same lattice shape and
 // they still each own theirs.
 //
-// Both are reached only under PF_VALUEGRAPH=1; the legacy walkers are deleted in
-// VG.5, not here.
+// VG.5 retired the legacy walkers and the PF_VALUEGRAPH flag: these are the
+// passes. The tier prose for each — what UB.2 and UB.3 are for, and why one
+// node per URL rather than one node with many edges — stays in js_prop_urls.go
+// and js_prop_transport.go alongside the recognition helpers they still own.
 
-// linkJSPropURLsVG is LinkJSPropURLs on the engine: for each blind-spot ledger
-// row, resolve the prop the transport reads its URL from, and mint one client
-// per distinct path the crossing produced.
-func linkJSPropURLsVG(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
+// LinkJSPropURLs is the Tier UB.2 pass: for each blind-spot ledger row, resolve
+// the prop the transport reads its URL from through the forward crossing, and
+// mint one client per distinct path the crossing produced.
+//
+// It returns the synthetic http_client nodes, the `calls` edges wiring them to
+// their enclosing functions, the prop_url_* ledger, and the set of
+// prop_client_dynamic_url sites that resolved (keyed by PropURLRetractKey) so
+// the caller can retract them.
+func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
 	retract = map[string]bool{}
 	rows := propClientDynamicRows(ledger)
 	if len(rows) == 0 {
@@ -150,12 +157,15 @@ func linkJSPropURLsVG(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceF
 	return newNodes, edges, out, retract
 }
 
-// linkJSPropTransportVG is LinkJSPropTransport on the engine. The site is the
-// same ledger row; the difference is entirely in the direction the value comes
-// from, and the engine is asked for that by the same call — the reverse
-// crossing fires because the URL argument is a parameter of the wrapper the
-// child was handed.
-func linkJSPropTransportVG(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
+// LinkJSPropTransport is the Tier UB.3 pass. The site is the same ledger row as
+// UB.2's; the difference is entirely in the direction the value comes from, and
+// the engine is asked for that by the same call — the reverse crossing fires
+// because the URL argument is a parameter of the wrapper the child was handed.
+//
+// It returns the synthetic http_client nodes, the `calls` edges wiring them to
+// the wrapper function, the prop_transport_* ledger, and the resolved
+// prop_client_dynamic_url sites for the caller to retract.
+func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
 	retract = map[string]bool{}
 	rows := propClientDynamicRows(ledger)
 	if len(rows) == 0 {
