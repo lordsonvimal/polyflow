@@ -2,30 +2,37 @@ package linker
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
-// Tier MS.1 — pin an entity from a discovered data asset's own vocabulary and
-// resolve a direct `<pinned>.<key>` read at a JS/TS transport call site.
+// Tier MS.1 + MS.2 — pin an entity from a discovered data asset's own
+// vocabulary and resolve a URL that a JS/TS transport call site reads out of it,
+// either directly (`<pinned>.<key>`) or through a learnt accessor function
+// (`getCreateURL(schema, props)`).
 //
 // MS.0 built the per-service SchemaURLTable: entity -> key -> path, learnt from a
-// checked-in data file that names this service's real routes. This pass consumes
+// checked-in data file that names this service's real routes. This code consumes
 // that table. It does NOT mint from the asset — the code call site stays the
 // producer; the asset only answers "given this entity and this key, what path?".
 // The receiver is pinned to an entity by the asset's vocabulary (no identifier,
 // container path, or framework is hardcoded here — see the Genericity section of
 // docs/schema-driven-url-resolution-plan.md), the key is read verbatim off the
-// member expression, and the verb comes from the call site, never the key name.
+// member expression or learnt from the accessor's body, and the verb comes from
+// the call site, never the key name.
 
 const (
 	ledgerSchemaEntityUnresolved = "schema_entity_unresolved"
 	ledgerSchemaEntityAmbiguous  = "schema_entity_ambiguous"
+	ledgerSchemaKeyAmbiguous     = "schema_key_ambiguous"
 	schemaURLOrigin              = "schema_asset"
 	maxSchemaCopyUnwrap          = 1
+	maxAccessorDepth             = 3
 )
 
 var (
@@ -44,15 +51,514 @@ func isPlaceholderLiteral(s string) bool {
 		phBrace.MatchString(s) || phAngle.MatchString(s)
 }
 
-// ResolveSchemaURLs reads the URL of every JS/TS http_client the matcher left
-// dynamic whose URL expression is a direct read of a discovered asset
-// (`schema.<entity>.<key>`, `r.<key>` with `r` pinned in the enclosing
-// function). A resolved site has its existing node rewritten in place, carrying
-// the provenance Meta keys a reviewer needs to check the edge without
-// re-deriving the pin. Must run after the schema_url_tables pass and before the
-// contract engine.
-func ResolveSchemaURLs(nodes []graph.Node, tables map[string]*SchemaURLTable) (changed []graph.Node, ledger []graph.UnresolvedRef) {
+// ── the resolver ─────────────────────────────────────────────────────────────
+
+// schemaAccessor is a function whose body proves it returns one or more keys off
+// a schema parameter. keys has more than one element for a conditional accessor
+// (a fallback chain); it resolves at a call site only when every key yields the
+// same path for the pinned entity.
+type schemaAccessor struct {
+	param int
+	keys  []string
+}
+
+// SchemaHit is a resolved schema URL read, with the provenance a reviewer needs
+// to check the minted edge without re-deriving the pin.
+type SchemaHit struct {
+	Path   string
+	Entity string
+	Key    string
+	RawURL string
+	File   string
+}
+
+// SchemaURLResolver answers "does this URL expression read a discovered data
+// asset, and if so what path?" for the two JS mint sites (LinkJSPropClients and
+// ResolveJSLocalURLs). It carries the per-service tables and the accessor
+// functions it learnt from their bodies.
+type SchemaURLResolver struct {
+	tables    map[string]*SchemaURLTable
+	accessors map[string]map[string]schemaAccessor
+}
+
+// BuildSchemaURLResolver discovers accessor functions in each service's JS/TS
+// files by reading their bodies (MS.2a) and pairs them with the MS.0 tables.
+// Returns nil when there are no tables.
+func BuildSchemaURLResolver(tables map[string]*SchemaURLTable, serviceFiles map[string][]string) *SchemaURLResolver {
 	if len(tables) == 0 {
+		return nil
+	}
+	r := &SchemaURLResolver{tables: tables, accessors: map[string]map[string]schemaAccessor{}}
+	for svc := range tables {
+		defs := map[string]fnDef{}
+		for _, abs := range serviceFiles[svc] {
+			if !isJSFile(abs) {
+				continue
+			}
+			rel := patterns.RelativizeToCwd(abs)
+			if crIsTestFile(rel) {
+				continue
+			}
+			src, root, _, ok := jsParse(abs)
+			if !ok {
+				continue
+			}
+			indexFnDefs(root, src, func(name string, fn *sitter.Node) {
+				if _, exists := defs[name]; !exists {
+					defs[name] = fnDef{node: fn, src: src}
+				}
+			})
+		}
+		learnt := map[string]schemaAccessor{}
+		names := make([]string, 0, len(defs))
+		for n := range defs {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			if acc, ok := classifyAccessor(n, defs, learnt, map[string]bool{}, 0); ok {
+				learnt[n] = acc
+			}
+		}
+		if len(learnt) > 0 {
+			r.accessors[svc] = learnt
+		}
+	}
+	return r
+}
+
+// LearntAccessorCount reports how many accessor functions were learnt, summed
+// across services — for the acceptance table.
+func (r *SchemaURLResolver) LearntAccessorCount() int {
+	if r == nil {
+		return 0
+	}
+	n := 0
+	for _, m := range r.accessors {
+		n += len(m)
+	}
+	return n
+}
+
+// ResolveURLExpr tries to resolve expr — a URL argument, or the value of an
+// options object's url key — at a call site in service svc, with fn the
+// enclosing function. ok is true with a hit when it resolved; ledgerKind is
+// non-empty when the site should be ledgered; both empty means "not a schema
+// expression, carry on".
+func (r *SchemaURLResolver) ResolveURLExpr(expr, fn *sitter.Node, src []byte, svc string) (hit SchemaHit, ok bool, ledgerKind string) {
+	if r == nil || expr == nil {
+		return SchemaHit{}, false, ""
+	}
+	tbl := r.tables[svc]
+	if tbl == nil {
+		return SchemaHit{}, false, ""
+	}
+	expr = schemaUnwrapValue(expr, fn, src, 0)
+	if expr == nil {
+		return SchemaHit{}, false, ""
+	}
+
+	base, poisoned := schemaStripReplace(expr, src)
+	if poisoned {
+		return SchemaHit{}, false, ledgerSchemaEntityUnresolved
+	}
+
+	pins, ambiguous := schemaFunctionPins(fn, src, tbl)
+
+	// Direct key read: <recv>.<key> / <recv>["<key>"].
+	if recv, key := schemaSplitKeyRead(base, src); recv != nil && key != "" {
+		entity := schemaPinExprEntity(recv, src, tbl, pins, 0)
+		if entity == "" {
+			if nm := schemaIdentName(recv, src); nm != "" && ambiguous[nm] {
+				return SchemaHit{}, false, ledgerSchemaEntityAmbiguous
+			}
+			if schemaKeyInTable(tbl, key) {
+				return SchemaHit{}, false, ledgerSchemaEntityUnresolved
+			}
+			return SchemaHit{}, false, ""
+		}
+		e, found := tbl.Lookup(entity, key)
+		if !found {
+			return SchemaHit{}, false, ""
+		}
+		return SchemaHit{Path: e.Path, Entity: entity, Key: key, RawURL: e.Raw, File: tbl.File}, true, ""
+	}
+
+	// Accessor call: getCreateURL(schema, props).
+	if base != nil && base.Type() == "call_expression" {
+		return r.resolveAccessorCall(base, fn, src, svc, tbl, pins, ambiguous)
+	}
+	return SchemaHit{}, false, ""
+}
+
+func (r *SchemaURLResolver) resolveAccessorCall(call, fn *sitter.Node, src []byte, svc string, tbl *SchemaURLTable, pins map[string]string, ambiguous map[string]bool) (SchemaHit, bool, string) {
+	name := calleeName(call, src)
+	acc, isAcc := r.accessors[svc][name]
+	if !isAcc {
+		return SchemaHit{}, false, ""
+	}
+	args := call.ChildByFieldName("arguments")
+	if args == nil || acc.param >= int(args.NamedChildCount()) {
+		return SchemaHit{}, false, ledgerSchemaEntityUnresolved
+	}
+	schemaArg := args.NamedChild(acc.param)
+	entity := schemaPinExprEntity(schemaArg, src, tbl, pins, 0)
+	if entity == "" {
+		if nm := schemaIdentName(schemaArg, src); nm != "" && ambiguous[nm] {
+			return SchemaHit{}, false, ledgerSchemaEntityAmbiguous
+		}
+		return SchemaHit{}, false, ledgerSchemaEntityUnresolved
+	}
+	var chosen schemaURLEntry
+	paths := map[string]bool{}
+	for _, k := range acc.keys {
+		if e, found := tbl.Lookup(entity, k); found {
+			paths[e.Path] = true
+			chosen = e
+		}
+	}
+	switch len(paths) {
+	case 0:
+		return SchemaHit{}, false, ""
+	case 1:
+		return SchemaHit{Path: chosen.Path, Entity: entity, Key: chosen.Key, RawURL: chosen.Raw, File: tbl.File}, true, ""
+	default:
+		return SchemaHit{}, false, ledgerSchemaKeyAmbiguous
+	}
+}
+
+// schemaUnwrapValue peels an options-object wrapper and one level of local
+// binding so `{ url: <expr> }` and `const u = <expr>` both reach <expr>.
+func schemaUnwrapValue(n, fn *sitter.Node, src []byte, depth int) *sitter.Node {
+	if n == nil || depth > 3 {
+		return n
+	}
+	switch n.Type() {
+	case "parenthesized_expression":
+		if c := n.NamedChild(0); c != nil {
+			return schemaUnwrapValue(c, fn, src, depth+1)
+		}
+	case "object":
+		for _, k := range []string{"url", "path", "href"} {
+			if v := jsObjectKeyValue(n, src, k); v != nil {
+				return schemaUnwrapValue(v, fn, src, depth+1)
+			}
+		}
+		return nil
+	case "identifier", "shorthand_property_identifier", "property_identifier":
+		if fn == nil {
+			return n
+		}
+		nm := n.Content(src)
+		rhs := localURLAssignments(fn, n.StartByte(), src, nm)
+		if len(rhs) == 1 {
+			return schemaUnwrapValue(rhs[0], fn, src, depth+1)
+		}
+	}
+	return n
+}
+
+// ── accessor learning (MS.2a) ────────────────────────────────────────────────
+
+// classifyAccessor reads name's body and reports whether it is a schema
+// accessor: every return expression reduces to a read of one parameter's key(s),
+// directly / through a path-neutral wrapper call / through another accessor.
+func classifyAccessor(name string, defs map[string]fnDef, learnt map[string]schemaAccessor, visiting map[string]bool, depth int) (schemaAccessor, bool) {
+	if acc, ok := learnt[name]; ok {
+		return acc, true
+	}
+	if depth >= maxAccessorDepth || visiting[name] {
+		return schemaAccessor{}, false
+	}
+	def, ok := defs[name]
+	if !ok {
+		return schemaAccessor{}, false
+	}
+	visiting[name] = true
+	defer delete(visiting, name)
+
+	params := fnParamNames(def.node, def.src)
+	if len(params) == 0 {
+		return schemaAccessor{}, false
+	}
+	rets := fnReturnExprs(def.node)
+	if len(rets) == 0 {
+		return schemaAccessor{}, false
+	}
+	param := -1
+	keyset := map[string]bool{}
+	for _, ret := range rets {
+		p, keys, ok := reduceAccessorExpr(ret, params, def.src, defs, learnt, visiting, depth)
+		if !ok {
+			return schemaAccessor{}, false
+		}
+		if p >= 0 {
+			if param == -1 {
+				param = p
+			} else if p != param {
+				return schemaAccessor{}, false
+			}
+		}
+		for _, k := range keys {
+			keyset[k] = true
+		}
+	}
+	if param == -1 || len(keyset) == 0 {
+		return schemaAccessor{}, false
+	}
+	keys := make([]string, 0, len(keyset))
+	for k := range keyset {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return schemaAccessor{param: param, keys: keys}, true
+}
+
+// reduceAccessorExpr reduces one return expression. p is the parameter index the
+// keys are read off (-1 = this branch contributes no path, e.g. `|| ""`).
+func reduceAccessorExpr(expr *sitter.Node, params []string, src []byte, defs map[string]fnDef, learnt map[string]schemaAccessor, visiting map[string]bool, depth int) (p int, keys []string, ok bool) {
+	expr = unwrapParens(expr)
+	if expr == nil {
+		return -1, nil, false
+	}
+	switch expr.Type() {
+	case "string", "template_string", "number", "null", "undefined":
+		return -1, nil, true // contributes no path (fallback default)
+	case "member_expression", "subscript_expression":
+		recv, key := schemaSplitKeyRead(expr, src)
+		if recv == nil || recv.Type() != "identifier" || key == "" {
+			return -1, nil, false
+		}
+		if idx := indexOf(params, recv.Content(src)); idx >= 0 {
+			return idx, []string{key}, true
+		}
+		return -1, nil, false
+	case "binary_expression":
+		op := ""
+		if o := expr.ChildByFieldName("operator"); o != nil {
+			op = o.Content(src)
+		}
+		left := expr.ChildByFieldName("left")
+		right := expr.ChildByFieldName("right")
+		if op == "||" {
+			return mergeAccessorBranches(
+				[]*sitter.Node{left, right}, params, src, defs, learnt, visiting, depth)
+		}
+		if op == "&&" {
+			return reduceAccessorExpr(right, params, src, defs, learnt, visiting, depth)
+		}
+		return -1, nil, false
+	case "ternary_expression", "conditional_expression":
+		return mergeAccessorBranches(
+			[]*sitter.Node{expr.ChildByFieldName("consequence"), expr.ChildByFieldName("alternative")},
+			params, src, defs, learnt, visiting, depth)
+	case "call_expression":
+		return reduceAccessorCall(expr, params, src, defs, learnt, visiting, depth)
+	}
+	return -1, nil, false
+}
+
+// mergeAccessorBranches reduces the arms of a `||` / ternary fallback chain. An
+// arm it cannot read (an array-valued key selected by a runtime discriminator, a
+// call it does not recognise) is *tolerated* — the chain is a fallback and a
+// real accessor legitimately falls back to a shape this analysis will not
+// resolve. The classification still fails if two arms read different parameters,
+// or if no arm reduces at all.
+func mergeAccessorBranches(branches []*sitter.Node, params []string, src []byte, defs map[string]fnDef, learnt map[string]schemaAccessor, visiting map[string]bool, depth int) (int, []string, bool) {
+	param := -1
+	var keys []string
+	okAny := false
+	for _, b := range branches {
+		if b == nil {
+			continue
+		}
+		p, ks, ok := reduceAccessorExpr(b, params, src, defs, learnt, visiting, depth)
+		if !ok {
+			continue
+		}
+		okAny = true
+		if p >= 0 {
+			if param == -1 {
+				param = p
+			} else if p != param {
+				return -1, nil, false
+			}
+			keys = append(keys, ks...)
+		}
+	}
+	if !okAny {
+		return -1, nil, false
+	}
+	return param, keys, true
+}
+
+// reduceAccessorCall covers a call that returns a key: another accessor on the
+// same param, or a path-neutral wrapper with exactly one key-read argument.
+func reduceAccessorCall(call *sitter.Node, params []string, src []byte, defs map[string]fnDef, learnt map[string]schemaAccessor, visiting map[string]bool, depth int) (int, []string, bool) {
+	name := calleeName(call, src)
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return -1, nil, false
+	}
+	var argNodes []*sitter.Node
+	for i := 0; i < int(args.NamedChildCount()); i++ {
+		argNodes = append(argNodes, args.NamedChild(i))
+	}
+
+	// A call of another accessor on one of our params.
+	if acc, ok := classifyAccessor(name, defs, learnt, visiting, depth+1); ok {
+		if acc.param < len(argNodes) {
+			a := argNodes[acc.param]
+			if a.Type() == "identifier" {
+				if idx := indexOf(params, a.Content(src)); idx >= 0 {
+					return idx, acc.keys, true
+				}
+			}
+		}
+		return -1, nil, false
+	}
+
+	// A path-neutral wrapper: exactly one argument is a key read on a param, and
+	// every other argument is a param identifier, an object, or a literal — so
+	// it cannot change which path is returned.
+	keyArgParam, keyArgKeys := -1, []string(nil)
+	for _, a := range argNodes {
+		p, ks, ok := reduceAccessorExpr(a, params, src, defs, learnt, visiting, depth)
+		if ok && p >= 0 {
+			if keyArgParam != -1 {
+				return -1, nil, false // two key-read arguments: ambiguous
+			}
+			keyArgParam, keyArgKeys = p, ks
+			continue
+		}
+		switch a.Type() {
+		case "identifier":
+			if indexOf(params, a.Content(src)) < 0 {
+				return -1, nil, false
+			}
+		case "object", "string", "number", "null", "undefined", "member_expression":
+			// inert
+		default:
+			return -1, nil, false
+		}
+	}
+	if keyArgParam < 0 {
+		return -1, nil, false
+	}
+	return keyArgParam, keyArgKeys, true
+}
+
+// ── shared helpers ───────────────────────────────────────────────────────────
+
+func unwrapParens(n *sitter.Node) *sitter.Node {
+	for n != nil && n.Type() == "parenthesized_expression" {
+		n = n.NamedChild(0)
+	}
+	return n
+}
+
+func indexOf(ss []string, s string) int {
+	for i, v := range ss {
+		if v == s {
+			return i
+		}
+	}
+	return -1
+}
+
+// calleeName returns the name a call is made through: a bare identifier, or the
+// trailing property of a member expression (`Validation.getCreateURL` -> "getCreateURL").
+func calleeName(call *sitter.Node, src []byte) string {
+	fn := call.ChildByFieldName("function")
+	if fn == nil {
+		return ""
+	}
+	switch fn.Type() {
+	case "identifier":
+		return fn.Content(src)
+	case "member_expression":
+		if p := fn.ChildByFieldName("property"); p != nil {
+			return p.Content(src)
+		}
+	}
+	return ""
+}
+
+// fnParamNames returns the parameter identifiers of a function/arrow node, in
+// order. A destructured or rest parameter contributes an empty string so index
+// positions stay aligned.
+func fnParamNames(fn *sitter.Node, src []byte) []string {
+	var out []string
+	ps := fn.ChildByFieldName("parameters")
+	if ps == nil {
+		// arrow with a single unparenthesised param
+		if p := fn.ChildByFieldName("parameter"); p != nil && p.Type() == "identifier" {
+			return []string{p.Content(src)}
+		}
+		return nil
+	}
+	for i := 0; i < int(ps.NamedChildCount()); i++ {
+		c := ps.NamedChild(i)
+		switch c.Type() {
+		case "identifier":
+			out = append(out, c.Content(src))
+		case "required_parameter", "optional_parameter":
+			if pat := c.ChildByFieldName("pattern"); pat != nil && pat.Type() == "identifier" {
+				out = append(out, pat.Content(src))
+			} else {
+				out = append(out, "")
+			}
+		case "assignment_pattern":
+			if l := c.ChildByFieldName("left"); l != nil && l.Type() == "identifier" {
+				out = append(out, l.Content(src))
+			} else {
+				out = append(out, "")
+			}
+		default:
+			out = append(out, "")
+		}
+	}
+	return out
+}
+
+// fnReturnExprs collects every returned expression in a function body (and the
+// expression body of an arrow), not descending into nested functions.
+func fnReturnExprs(fn *sitter.Node) []*sitter.Node {
+	body := fn.ChildByFieldName("body")
+	if body == nil {
+		return nil
+	}
+	if body.Type() != "statement_block" {
+		return []*sitter.Node{body}
+	}
+	var out []*sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		switch n.Type() {
+		case "function_declaration", "function_expression", "arrow_function", "function", "generator_function", "generator_function_declaration":
+			return
+		case "return_statement":
+			if n.NamedChildCount() > 0 {
+				out = append(out, n.NamedChild(0))
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(body)
+	return out
+}
+
+// ── existing-node post-pass (still catches http_client nodes the matcher
+//    minted dynamic, e.g. an already-read `url` local) ─────────────────────────
+
+// ResolveSchemaURLs rewrites, in place, every JS/TS http_client the matcher left
+// dynamic whose URL expression resolves through the resolver. Sites with no node
+// are handled at the two mint sites (LinkJSPropClients, ResolveJSLocalURLs); this
+// pass is the belt-and-braces sweep for nodes that survived them still dynamic.
+func ResolveSchemaURLs(nodes []graph.Node, r *SchemaURLResolver) (changed []graph.Node, ledger []graph.UnresolvedRef) {
+	if r == nil {
 		return nil, nil
 	}
 	fileCache := make(map[string]*jsHostFile)
@@ -62,8 +568,7 @@ func ResolveSchemaURLs(nodes []graph.Node, tables map[string]*SchemaURLTable) (c
 		if !ok {
 			continue
 		}
-		tbl := tables[n.Service]
-		if tbl == nil {
+		if r.tables[n.Service] == nil {
 			continue
 		}
 		jf, cached := fileCache[n.File]
@@ -79,28 +584,24 @@ func ResolveSchemaURLs(nodes []graph.Node, tables map[string]*SchemaURLTable) (c
 			continue
 		}
 		fn := enclosingJSFunction(expr)
-		entry, entity, key, kind := schemaResolveExpr(expr, fn, jf.src, tbl)
+		hit, ok, kind := r.ResolveURLExpr(expr, fn, jf.src, n.Service)
 		if kind != "" {
 			ledger = append(ledger, graph.UnresolvedRef{
-				Service: n.Service, File: n.File, Line: n.Line,
-				Name: key, Kind: kind,
+				Service: n.Service, File: n.File, Line: n.Line, Name: raw, Kind: kind,
 			})
 			continue
 		}
-		if entity == "" {
-			continue // not a schema read, or a key this asset does not declare
+		if !ok {
+			continue
 		}
 		verb := strings.ToUpper(n.Meta["method"])
 		if verb == "" {
-			// The verb comes from the call site, never the key name. Naming is
-			// not semantics (see the Core model). No readable verb -> ledger.
 			ledger = append(ledger, graph.UnresolvedRef{
-				Service: n.Service, File: n.File, Line: n.Line,
-				Name: key, Kind: ledgerSchemaEntityUnresolved,
+				Service: n.Service, File: n.File, Line: n.Line, Name: raw, Kind: ledgerSchemaEntityUnresolved,
 			})
 			continue
 		}
-		applySchemaURL(n, entry, tbl.File, entity, key, verb)
+		applySchemaURL(n, hit, verb)
 		changed = append(changed, *n)
 	}
 	return changed, ledger
@@ -119,7 +620,7 @@ func schemaURLCandidate(n *graph.Node) (raw string, ok bool) {
 		return "", false
 	}
 	if n.Meta["url_origin"] == schemaURLOrigin {
-		return "", false // idempotent re-run
+		return "", false
 	}
 	if n.Meta["key_dynamic"] != "true" {
 		return "", false
@@ -131,46 +632,10 @@ func schemaURLCandidate(n *graph.Node) (raw string, ok bool) {
 	return raw, true
 }
 
-// schemaResolveExpr resolves a URL expression to a table entry. It returns a
-// non-empty kind when the site must be ledgered, an empty entity when the
-// expression is not a schema read at all (discard silently), or the entry with
-// its entity and key when it resolves.
-func schemaResolveExpr(expr, fn *sitter.Node, src []byte, tbl *SchemaURLTable) (entry schemaURLEntry, entity, key, kind string) {
-	base, poisoned := schemaStripReplace(expr, src)
-	if poisoned {
-		return schemaURLEntry{}, "", "", ledgerSchemaEntityUnresolved
-	}
-	recv, key := schemaSplitKeyRead(base, src)
-	if recv == nil || key == "" {
-		return schemaURLEntry{}, "", "", ""
-	}
-
-	pins, ambiguous := schemaFunctionPins(fn, src, tbl)
-	entity = schemaPinExprEntity(recv, src, tbl, pins, 0)
-	if entity == "" {
-		if name := schemaIdentName(recv, src); name != "" && ambiguous[name] {
-			return schemaURLEntry{}, "", key, ledgerSchemaEntityAmbiguous
-		}
-		if schemaKeyInTable(tbl, key) {
-			// An unpinned receiver read with a key this asset declares: the
-			// tier's own blind-spot report, and how rung 4 stays visible.
-			return schemaURLEntry{}, "", key, ledgerSchemaEntityUnresolved
-		}
-		return schemaURLEntry{}, "", "", ""
-	}
-
-	e, ok := tbl.Lookup(entity, key)
-	if !ok {
-		return schemaURLEntry{}, "", "", ""
-	}
-	return e, entity, key, ""
-}
-
 // schemaStripReplace peels trailing `.replace(<placeholder>, x)` calls off an
 // expression (MS.1c: parameter substitution on an already-wildcarded path).
-// poisoned is true when a `.replace` has a first argument that is not a
-// recognised placeholder literal — a regex or an arbitrary string that could
-// change the path.
+// poisoned is true when a `.replace` first argument is not a recognised
+// placeholder literal.
 func schemaStripReplace(expr *sitter.Node, src []byte) (base *sitter.Node, poisoned bool) {
 	cur := expr
 	for cur != nil && cur.Type() == "call_expression" {
@@ -219,10 +684,9 @@ func schemaSplitKeyRead(n *sitter.Node, src []byte) (recv *sitter.Node, key stri
 }
 
 // schemaPinExprEntity pins an expression to an entity name using the asset's
-// vocabulary (table.Entities()). The three literal shapes — member chain ending
-// in an entity literal, string subscript, single-string-literal call — plus a
-// bare identifier resolved through the function's pins, plus one level of
-// copy-wrapper unwrap.
+// vocabulary (table.Entities()): a member chain / string subscript /
+// single-string-literal call ending in an entity literal, a bare identifier
+// resolved through the function's pins, or one level of copy-wrapper unwrap.
 func schemaPinExprEntity(n *sitter.Node, src []byte, tbl *SchemaURLTable, pins map[string]string, depth int) string {
 	if n == nil {
 		return ""
@@ -238,8 +702,7 @@ func schemaPinExprEntity(n *sitter.Node, src []byte, tbl *SchemaURLTable, pins m
 	case "subscript_expression":
 		idx := n.ChildByFieldName("index")
 		if idx != nil && idx.Type() == "string" {
-			s := schemaStringContent(idx, src)
-			if tbl.hasEntity(s) {
+			if s := schemaStringContent(idx, src); tbl.hasEntity(s) {
 				return s
 			}
 		}
@@ -248,16 +711,11 @@ func schemaPinExprEntity(n *sitter.Node, src []byte, tbl *SchemaURLTable, pins m
 		if args == nil {
 			return ""
 		}
-		// getSchema("widget") — a call with a single string-literal argument.
 		if args.NamedChildCount() == 1 && args.NamedChild(0).Type() == "string" {
-			s := schemaStringContent(args.NamedChild(0), src)
-			if tbl.hasEntity(s) {
+			if s := schemaStringContent(args.NamedChild(0), src); tbl.hasEntity(s) {
 				return s
 			}
 		}
-		// clone(x.widget) — one level of copy-wrapper unwrap: exactly one argument,
-		// itself a pin expression, and nothing else that could change which
-		// entity is returned.
 		if depth < maxSchemaCopyUnwrap && args.NamedChildCount() == 1 {
 			return schemaPinExprEntity(args.NamedChild(0), src, tbl, pins, depth+1)
 		}
@@ -267,8 +725,8 @@ func schemaPinExprEntity(n *sitter.Node, src []byte, tbl *SchemaURLTable, pins m
 
 // schemaFunctionPins records, per binding name in fn, the entity it was pinned
 // to (MS.1a). A name pinned to two different entities in one function is not a
-// branch — it means the analysis lost track; it is returned in ambiguous and
-// resolves to nothing.
+// branch — the analysis lost track; it is returned in ambiguous and resolves to
+// nothing.
 func schemaFunctionPins(fn *sitter.Node, src []byte, tbl *SchemaURLTable) (pins map[string]string, ambiguous map[string]bool) {
 	pins = map[string]string{}
 	ambiguous = map[string]bool{}
@@ -281,7 +739,7 @@ func schemaFunctionPins(fn *sitter.Node, src []byte, tbl *SchemaURLTable) (pins 
 			return
 		}
 		if n != fn && localURLFnTypes[n.Type()] {
-			return // a sibling/nested function's binding is not this one's
+			return
 		}
 		var name, val *sitter.Node
 		switch n.Type() {
@@ -295,8 +753,6 @@ func schemaFunctionPins(fn *sitter.Node, src []byte, tbl *SchemaURLTable) (pins 
 			e := schemaPinExprEntity(val, src, tbl, nil, 0)
 			switch {
 			case e == "":
-				// A write that is not a pin. If the name was ever a pin, the
-				// binding no longer reliably names one entity.
 				if _, isPin := pins[nm]; isPin {
 					ambiguous[nm] = true
 				}
@@ -342,8 +798,6 @@ func schemaIdentName(n *sitter.Node, src []byte) string {
 	return ""
 }
 
-// schemaStringContent returns a string literal's content with surrounding
-// quotes removed.
 func schemaStringContent(n *sitter.Node, src []byte) string {
 	s := n.Content(src)
 	if len(s) >= 2 {
@@ -355,19 +809,30 @@ func schemaStringContent(n *sitter.Node, src []byte) string {
 	return s
 }
 
-// applySchemaURL writes the resolved path and its provenance onto a node and
-// retires the dynamic markers, so the contract engine sees an ordinary readable
-// client and the ledger check does not double-count a site since resolved.
-func applySchemaURL(n *graph.Node, entry schemaURLEntry, file, entity, key, verb string) {
+// applySchemaURL writes a resolved hit onto an existing node and retires the
+// dynamic markers.
+func applySchemaURL(n *graph.Node, hit SchemaHit, verb string) {
 	n.Meta = ensureMeta(n.Meta)
-	n.Meta["url"] = entry.Path
+	n.Meta["url"] = hit.Path
 	n.Meta["url_origin"] = schemaURLOrigin
-	n.Meta["schema_file"] = file
-	n.Meta["schema_entity"] = entity
-	n.Meta["schema_key"] = key
-	n.Meta["schema_url_raw"] = entry.Raw
+	n.Meta["schema_file"] = hit.File
+	n.Meta["schema_entity"] = hit.Entity
+	n.Meta["schema_key"] = hit.Key
+	n.Meta["schema_url_raw"] = hit.RawURL
 	delete(n.Meta, "key_dynamic")
 	delete(n.Meta, "key_dynamic_raw")
 	delete(n.Meta, "key_candidates")
-	n.Label = verb + " " + entry.Path
+	n.Label = verb + " " + hit.Path
+}
+
+// SchemaMintMeta returns the provenance Meta a fresh mint site should carry for
+// a schema hit (LinkJSPropClients).
+func SchemaMintMeta(hit SchemaHit) map[string]string {
+	return map[string]string{
+		"url_origin":     schemaURLOrigin,
+		"schema_file":    hit.File,
+		"schema_entity":  hit.Entity,
+		"schema_key":     hit.Key,
+		"schema_url_raw": hit.RawURL,
+	}
 }

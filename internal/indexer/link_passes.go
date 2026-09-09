@@ -96,6 +96,9 @@ type linkPipelineState struct {
 	// per service that has a route-corroborated endpoint-declaring data
 	// asset. A lookup table, never a producer — consumed by MS.1+.
 	schemaURLTables map[string]*linker.SchemaURLTable
+	// schemaURLResolver: set by schema_url_tables, consumed by js_prop_clients,
+	// js_local_urls, and schema_url_links (Tier MS.1/MS.2).
+	schemaURLResolver *linker.SchemaURLResolver
 	// contractRules: set by load_contract_rules, read by contract_engine and
 	// contract_coverage.
 	contractRules []contract.Rule
@@ -844,6 +847,41 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
+		// Tier MS.0: discover endpoint-declaring data assets (checked-in JSON/
+		// YAML that names this service's real routes) by route corroboration,
+		// build the per-service URL table, ledger dead entries, and learn the
+		// accessor functions that read the asset (MS.2a). Mints NOTHING — the
+		// table is a resolver consumed by the two JS mint sites below, never a
+		// producer of nodes. Runs before js_prop_clients so its resolver is
+		// available there; it corroborates against handler nodes from the parse
+		// phase (SPA-synthesized routes come later and do not name asset URLs).
+		{"schema_url_tables", scopeSameServiceOnly, func() error {
+			handlerPaths := make(map[string]map[string]bool)
+			for i := range st.allNodes {
+				n := &st.allNodes[i]
+				if n.Type != graph.NodeTypeHTTPHandler {
+					continue
+				}
+				norm, ok := linker.NormalizeSchemaPath(n.Meta["path"])
+				if !ok {
+					continue
+				}
+				if handlerPaths[n.Service] == nil {
+					handlerPaths[n.Service] = make(map[string]bool)
+				}
+				handlerPaths[n.Service][norm] = true
+			}
+			svcFiles := make(map[string][]string, len(st.allSvcFiles))
+			for _, sf := range st.allSvcFiles {
+				abs, _ := filepath.Abs(sf.svc.Path)
+				svcFiles[sf.svc.Name] = walkAllFiles(abs)
+			}
+			tables, ledger := linker.LoadSchemaURLTables(svcFiles, handlerPaths, st.cfg.Schema)
+			st.schemaURLTables = tables
+			st.schemaURLResolver = linker.BuildSchemaURLResolver(tables, svcFiles)
+			st.allUnresolved = append(st.allUnresolved, ledger...)
+			return nil
+		}},
 		// SPA.4: prop-injected HTTP-client wrapper. Mints http_client nodes for
 		// `this.props.ajaxStatus.get(msg, url)` call sites (URL KeyWalked) so the
 		// contract engine joins them to Rails routes. Runs before js_http_hosts
@@ -851,7 +889,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// before the contract engine.
 		{"js_prop_clients", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			pcNodes, pcEdges, pcLedger := linker.LinkJSPropClients(st.allNodes, svcFiles)
+			pcNodes, pcEdges, pcLedger := linker.LinkJSPropClients(st.allNodes, svcFiles, st.schemaURLResolver)
 			st.allUnresolved = append(st.allUnresolved, pcLedger...)
 			if len(pcNodes) == 0 {
 				return st.writeEdges(pcEdges)
@@ -882,7 +920,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// minted there is a candidate too) and before js_http_hosts and Tier CB,
 		// so a path recovered here still gets its host and base-URL treatment.
 		{"js_local_urls", scopeSameServiceOnly, func() error {
-			changed, added, ulLedger := linker.ResolveJSLocalURLs(st.allNodes)
+			changed, added, ulLedger := linker.ResolveJSLocalURLs(st.allNodes, st.schemaURLResolver)
 			st.allUnresolved = append(st.allUnresolved, ulLedger...)
 			if len(changed) == 0 && len(added) == 0 {
 				return nil
@@ -1448,50 +1486,14 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return nil
 		}},
-		// Tier MS.0: discover endpoint-declaring data assets (checked-in JSON/
-		// YAML that names this service's real routes) by route corroboration,
-		// build the per-service URL table, and ledger dead entries. Mints
-		// NOTHING — the table is a resolver consumed by MS.1+, never a producer
-		// of nodes (see docs/schema-driven-url-resolution-plan.md Core model).
-		// Runs after file_route_synthesis so every synthesized handler path is
-		// available to corroborate against.
-		{"schema_url_tables", scopeSameServiceOnly, func() error {
-			handlerPaths := make(map[string]map[string]bool)
-			for i := range st.allNodes {
-				n := &st.allNodes[i]
-				if n.Type != graph.NodeTypeHTTPHandler {
-					continue
-				}
-				raw := n.Meta["path"]
-				if raw == "" {
-					continue
-				}
-				norm, ok := linker.NormalizeSchemaPath(raw)
-				if !ok {
-					continue
-				}
-				if handlerPaths[n.Service] == nil {
-					handlerPaths[n.Service] = make(map[string]bool)
-				}
-				handlerPaths[n.Service][norm] = true
-			}
-			svcFiles := make(map[string][]string, len(st.allSvcFiles))
-			for _, sf := range st.allSvcFiles {
-				abs, _ := filepath.Abs(sf.svc.Path)
-				svcFiles[sf.svc.Name] = walkAllFiles(abs)
-			}
-			tables, ledger := linker.LoadSchemaURLTables(svcFiles, handlerPaths, st.cfg.Schema)
-			st.schemaURLTables = tables
-			st.allUnresolved = append(st.allUnresolved, ledger...)
-			return nil
-		}},
-		// Tier MS.1: pin an entity from a discovered asset's vocabulary and
-		// resolve a direct `<pinned>.<key>` read on a JS/TS http_client the
-		// matcher left dynamic. Rewrites the existing node in place with the
-		// resolved path + provenance Meta; mints nothing new. Runs right after
-		// schema_url_tables (its input) and before the contract engine.
+		// Tier MS.1/MS.2: pin an entity from a discovered asset's vocabulary and
+		// resolve a direct `<pinned>.<key>` read or a learnt-accessor call on a
+		// JS/TS http_client the matcher left dynamic. Rewrites the existing node
+		// in place with the resolved path + provenance Meta; mints nothing here
+		// (the no-node prop-client sites are handled inside js_prop_clients).
+		// Runs after js_local_urls so a node it could already read is left alone.
 		{"schema_url_links", scopeSameServiceOnly, func() error {
-			changed, ledger := linker.ResolveSchemaURLs(st.allNodes, st.schemaURLTables)
+			changed, ledger := linker.ResolveSchemaURLs(st.allNodes, st.schemaURLResolver)
 			st.allUnresolved = append(st.allUnresolved, ledger...)
 			for i := range changed {
 				n := changed[i]

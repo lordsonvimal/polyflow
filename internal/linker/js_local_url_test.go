@@ -33,7 +33,7 @@ func propClientURLs(t *testing.T, files map[string]string) ([]graph.Node, []grap
 		abs = append(abs, p[name])
 	}
 	sort.Strings(abs)
-	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": abs})
+	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": abs}, nil)
 	var clients []graph.Node
 	for _, n := range nodes {
 		if n.Type == graph.NodeTypeHTTPClient {
@@ -285,7 +285,7 @@ func TestResolveJSLocalURLs_RewritesInPlaceAndAddsBranches(t *testing.T) {
 			"method": "GET", "key_dynamic": "true", "key_dynamic_raw": `{ url, type: "GET" }`,
 		},
 	}}
-	changed, added, ledger := ResolveJSLocalURLs(in)
+	changed, added, ledger := ResolveJSLocalURLs(in, nil)
 	if len(ledger) != 0 {
 		t.Errorf("unexpected ledger: %+v", ledger)
 	}
@@ -333,7 +333,7 @@ func TestResolveJSLocalURLs_UnreadableSiteLedgers(t *testing.T) {
 			"key_dynamic_raw": `{ url: this.comparisonQueryUrl, type: "GET" }`,
 		},
 	}}
-	changed, added, ledger := ResolveJSLocalURLs(in)
+	changed, added, ledger := ResolveJSLocalURLs(in, nil)
 	if len(changed) != 0 || len(added) != 0 {
 		t.Fatalf("a member expression resolved: changed=%+v added=%+v", changed, added)
 	}
@@ -356,10 +356,10 @@ func TestResolveJSLocalURLs_Idempotent(t *testing.T) {
 		Service: "svc", File: p["modules/one.es6"], Line: 3, Language: "javascript",
 		Meta: map[string]string{"method": "GET", "key_dynamic": "true", "key_dynamic_raw": "url"},
 	}}
-	if changed, added, _ := ResolveJSLocalURLs(in); len(changed) != 1 || len(added) != 0 {
+	if changed, added, _ := ResolveJSLocalURLs(in, nil); len(changed) != 1 || len(added) != 0 {
 		t.Fatalf("first run: changed=%d added=%d", len(changed), len(added))
 	}
-	changed, added, ledger := ResolveJSLocalURLs(in)
+	changed, added, ledger := ResolveJSLocalURLs(in, nil)
 	if len(changed) != 0 || len(added) != 0 || len(ledger) != 0 {
 		t.Fatalf("second run was not a no-op: changed=%+v added=%+v ledger=%+v", changed, added, ledger)
 	}
@@ -379,7 +379,7 @@ func TestResolveJSLocalURLs_SkipsNavLinks(t *testing.T) {
 		Service: "svc", File: p["modules/nav.es6"], Line: 3, Language: "javascript",
 		Meta: map[string]string{"nav_link": "true", "key_dynamic": "true", "key_dynamic_raw": "url"},
 	}}
-	changed, added, ledger := ResolveJSLocalURLs(in)
+	changed, added, ledger := ResolveJSLocalURLs(in, nil)
 	if len(changed) != 0 || len(added) != 0 || len(ledger) != 0 {
 		t.Fatalf("nav link touched: changed=%+v added=%+v ledger=%+v", changed, added, ledger)
 	}

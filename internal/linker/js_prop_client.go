@@ -77,7 +77,7 @@ func propClientVerb(name string) string {
 // LinkJSPropClients is the SPA.4 pass. Returns synthetic http_client nodes, the
 // `calls` edges wiring them to their enclosing functions, and the
 // prop_client_dynamic_url ledger.
-func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, ledger []graph.UnresolvedRef) {
+func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string, sr *SchemaURLResolver) (newNodes []graph.Node, edges []graph.Edge, ledger []graph.UnresolvedRef) {
 	// index function/method nodes for the enclosing-fn `calls` edge.
 	fnBySvcLabel := make(map[string]string)
 	svcOfFile := make(map[string]string)
@@ -216,6 +216,7 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 					if siteVerb != "" {
 						verb = siteVerb
 					}
+					verbKnown := verb != ""
 					if verb == "" {
 						verb = "GET"
 					}
@@ -227,6 +228,7 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 						path         string
 						cands        []string
 						localBinding bool
+						schemaMeta   map[string]string
 					}
 					var reqs []mintReq
 
@@ -246,6 +248,22 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 						// edges.
 						for _, p := range paths {
 							reqs = append(reqs, mintReq{path: p, cands: []string{p}, localBinding: true})
+						}
+					} else if hit, hok, hkind := sr.ResolveURLExpr(urlNode, enclosingJSFunction(n), pf.src, pf.svc); hok || hkind != "" {
+						// Tier MS.1/MS.2: the URL argument reads a discovered data
+						// asset. The asset supplies the path; the call site
+						// supplies the verb — never guess one from the key name.
+						if hok && verbKnown {
+							reqs = append(reqs, mintReq{path: hit.Path, cands: []string{hit.Path}, schemaMeta: SchemaMintMeta(hit)})
+						} else {
+							kk := hkind
+							if kk == "" {
+								kk = "schema_entity_unresolved"
+							}
+							ledger = append(ledger, graph.UnresolvedRef{
+								Service: pf.svc, File: pf.rel, Line: line,
+								Name: "(schema)", Kind: kk,
+							})
 						}
 					} else {
 						name := "(dynamic)"
@@ -288,6 +306,9 @@ func LinkJSPropClients(nodes []graph.Node, serviceFiles map[string][]string) (ne
 						if req.localBinding {
 							meta["url_origin"] = localURLOriginLocalBinding
 							meta["branch_index"] = strconv.Itoa(ri)
+						}
+						for k, v := range req.schemaMeta {
+							meta[k] = v
 						}
 						newNodes = append(newNodes, graph.Node{
 							ID:       id,
@@ -685,6 +706,20 @@ func propClientCallSite(call *sitter.Node, src []byte, specs map[string]propClie
 	var siteVerb string
 	if method.URLOptKey != "" {
 		optsObj := urlNode
+		// The options object is often built into a local — `const opts = { url:
+		// …, method: "PUT" }; transport.ajax(msg, opts)`. Backtrack a bare
+		// identifier to its object literal so the url/method keys are readable.
+		if optsObj.Type() != "object" {
+			if nm := localURLIdentName(optsObj, src); nm != "" {
+				if efn := enclosingJSFunction(call); efn != nil {
+					for _, rhs := range localURLAssignments(efn, optsObj.StartByte(), src, nm) {
+						if rhs.Type() == "object" {
+							optsObj = rhs
+						}
+					}
+				}
+			}
+		}
 		urlNode = jsObjectKeyValue(optsObj, src, method.URLOptKey)
 		if urlNode == nil {
 			return miss()

@@ -13,11 +13,12 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
-// Tier MS.1 end to end. The asset lives in a different file from every call
+// Tier MS.1/MS.2 end to end. The asset lives in a different file from every call
 // site, so a linker unit test with hand-built nodes cannot check the join: the
-// schema_url_tables pass has to discover the YAML by route corroboration, and
-// the schema_url_links pass has to pin the entity and resolve the key so the
-// contract engine reaches the express route.
+// schema_url_tables pass has to discover the YAML by route corroboration and
+// learn the accessor family from urls.js, and the JS mint sites have to pin the
+// entity and resolve the key (direct read and accessor call) so the contract
+// engine reaches the express route.
 func TestRun_SchemaDrivenURLResolution(t *testing.T) {
 	dir := t.TempDir()
 	svc := filepath.Join(dir, "orion")
@@ -31,7 +32,7 @@ func TestRun_SchemaDrivenURLResolution(t *testing.T) {
     get: /api/widgets/<id>
     update: /api/widgets/<id>
   gadget:
-    get: /api/gadgets/:id
+    endpoint: /api/gadgets
     reorder: /api/gadgets/:id/reorder
   sprocket:
     list: /api/sprockets
@@ -48,10 +49,17 @@ router.get("/api/gadgets/:id", (req, res) => res.end());
 router.get("/api/sprockets", (req, res) => res.end());
 router.get("/api/cogs", (req, res) => res.end());
 router.get("/api/bolts", (req, res) => res.end());
+router.get("/api/gadgets", (req, res) => res.end());
 module.exports = router;
 `)
 
+	// A non-cedar accessor family, learnt from these bodies alone (MS.2a).
+	writeFile(t, filepath.Join(svc, "components"), "urls.js", `export function listURL(res) { return res.list; }
+export function createURL(res) { return res.endpoint || listURL(res); }
+`)
+
 	writeFile(t, filepath.Join(svc, "components"), "WidgetPane.js", `import resources from "../config/orion-resources.yml";
+import { createURL } from "./urls";
 
 export function save(values) {
   const r = resources.widget;
@@ -60,6 +68,11 @@ export function save(values) {
 
 export function reorder(id) {
   fetch(resources["gadget"].reorder.replace(":id", id), { method: "POST" });
+}
+
+export function add() {
+  const g = resources.gadget;
+  fetch(createURL(g), { method: "GET" });
 }
 `)
 
@@ -98,7 +111,8 @@ export function reorder(id) {
 		got[n.Meta["schema_entity"]+"."+n.Meta["schema_key"]] = handlers[0]
 	}
 
-	require.Equal(t, 2, minted, "expected two schema_asset clients")
+	require.Equal(t, 3, minted, "two direct key reads + one through a learnt accessor")
 	require.Contains(t, got["widget.update"], "/api/widgets/:id")
 	require.Contains(t, got["gadget.reorder"], "/api/gadgets/:id/reorder")
+	require.Contains(t, got["gadget.endpoint"], "/api/gadgets", "resolved through the learnt createURL accessor")
 }

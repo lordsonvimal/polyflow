@@ -324,7 +324,7 @@ func enclosingJSFunction(n *sitter.Node) *sitter.Node {
 // additional branch nodes, and one ledger row per site that could not be read.
 // Must run before the contract engine, and before Tier CB, so a recovered path
 // still gets its host and base-URL treatment.
-func ResolveJSLocalURLs(nodes []graph.Node) (changed, added []graph.Node, ledger []graph.UnresolvedRef) {
+func ResolveJSLocalURLs(nodes []graph.Node, sr *SchemaURLResolver) (changed, added []graph.Node, ledger []graph.UnresolvedRef) {
 	fileCache := make(map[string]*jsHostFile)
 	for i := range nodes {
 		n := &nodes[i]
@@ -351,6 +351,26 @@ func ResolveJSLocalURLs(nodes []graph.Node) (changed, added []graph.Node, ledger
 		fn := enclosingJSFunction(expr)
 		paths, reason, ok := resolveLocalURLBinding(expr, fn, jf.src)
 		if !ok || len(paths) == 0 {
+			// Tier MS.1/MS.2: the binding is not a literal path but a read of a
+			// discovered data asset (`schema.create_url`, `getCreateURL(schema)`).
+			hit, hok, hkind := sr.ResolveURLExpr(expr, fn, jf.src, n.Service)
+			verb := strings.ToUpper(n.Meta["method"])
+			if hok && verb != "" {
+				applySchemaURL(n, hit, verb)
+				changed = append(changed, *n)
+				continue
+			}
+			if hok || hkind != "" {
+				k := hkind
+				if k == "" {
+					k = ledgerSchemaEntityUnresolved // resolved but no verb
+				}
+				ledger = append(ledger, graph.UnresolvedRef{
+					Service: n.Service, File: n.File, Line: n.Line,
+					Name: localURLLedgerName(raw), Kind: k,
+				})
+				continue
+			}
 			if reason == "" {
 				reason = ledgerLocalURLUnresolved
 			}

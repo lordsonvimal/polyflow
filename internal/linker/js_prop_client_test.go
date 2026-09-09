@@ -81,7 +81,7 @@ export default ComponentWithAjaxStatus(VariablesGridView);
 		{ID: "svc:grids/VariablesGridView.jsx:method:loadVariables:3", Type: graph.NodeTypeMethod,
 			Label: "loadVariables", Service: "svc", File: "grids/VariablesGridView.jsx", Line: 3, Language: "javascript"},
 	}
-	nodes, edges, ledger := LinkJSPropClients(in, map[string][]string{"svc": {hoc, grid}})
+	nodes, edges, ledger := LinkJSPropClients(in, map[string][]string{"svc": {hoc, grid}}, nil)
 
 	if len(ledger) != 0 {
 		t.Errorf("unexpected ledger: %+v", ledger)
@@ -117,7 +117,7 @@ func TestLinkJSPropClients_BareUnrelatedGetNoNode(t *testing.T) {
 	})
 	hoc := p["common/ComponentWithAjaxStatus.jsx"]
 	thing := p["util/thing.jsx"]
-	nodes, edges, _ := LinkJSPropClients(nil, map[string][]string{"svc": {hoc, thing}})
+	nodes, edges, _ := LinkJSPropClients(nil, map[string][]string{"svc": {hoc, thing}}, nil)
 	for _, n := range nodes {
 		if n.Type == graph.NodeTypeHTTPClient {
 			t.Errorf("unrelated .get() minted a node: %+v", n)
@@ -153,7 +153,7 @@ class T extends React.Component {
 export default ComponentWithAjaxStatus(T);
 `,
 	})
-	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/T.jsx"]}})
+	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/T.jsx"]}}, nil)
 	if got := urlsOf(nodes); len(got) != 1 || got[0] != "/api/*s" {
 		t.Errorf("urls = %v, want [/api/*s]; ledger=%+v", got, ledger)
 	}
@@ -178,7 +178,7 @@ class S extends React.Component {
 export default ComponentWithAjaxStatus(S);
 `,
 	})
-	nodes, _, _ := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/S.jsx"]}})
+	nodes, _, _ := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/S.jsx"]}}, nil)
 	got := urlsOf(nodes)
 	want := map[string]bool{"/api/a": true, "/api/b": true}
 	if len(got) != 2 || !want[got[0]] || !want[got[1]] {
@@ -200,7 +200,7 @@ class O extends React.Component {
 export default ComponentWithAjaxStatus(O);
 `,
 	})
-	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/O.jsx"]}})
+	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["grids/O.jsx"]}}, nil)
 	if got := urlsOf(nodes); len(got) != 0 {
 		t.Errorf("opaque builder minted nodes: %v", got)
 	}
@@ -230,7 +230,7 @@ export default ComponentWithAjaxStatus(G);
 	})
 	hoc := p["common/ComponentWithAjaxStatus.jsx"]
 	g := p["grids/G.jsx"]
-	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {hoc, g}})
+	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{"svc": {hoc, g}}, nil)
 	for _, n := range nodes {
 		if n.Type == graph.NodeTypeHTTPClient {
 			t.Errorf("dynamic URL minted a node: %+v", n)
@@ -271,7 +271,7 @@ export default fetchConfig;
 	}
 	nodes, edges, ledger := LinkJSPropClients(in, map[string][]string{
 		"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["utils/config.jsx"]},
-	})
+	}, nil)
 	if len(ledger) != 0 {
 		t.Errorf("unexpected ledger: %+v", ledger)
 	}
@@ -306,7 +306,7 @@ func TestLinkJSPropClients_ParamNameMustMatchASpec(t *testing.T) {
 	})
 	nodes, edges, ledger := LinkJSPropClients(nil, map[string][]string{
 		"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["utils/cache.jsx"]},
-	})
+	}, nil)
 	if got := urlsOf(nodes); len(got) != 0 {
 		t.Errorf("a parameter matching no spec minted %v", got)
 	}
@@ -328,7 +328,7 @@ func TestLinkJSPropClients_ParamReceiverDynamicURLLedgers(t *testing.T) {
 	})
 	nodes, edges, ledger := LinkJSPropClients(nil, map[string][]string{
 		"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["utils/load.jsx"]},
-	})
+	}, nil)
 	if got := urlsOf(nodes); len(got) != 0 {
 		t.Errorf("dynamic URL minted %v", got)
 	}
@@ -360,7 +360,7 @@ func TestLinkJSPropClients_MissingURLArgLedgers(t *testing.T) {
 	})
 	nodes, _, ledger := LinkJSPropClients(nil, map[string][]string{
 		"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["utils/ping.jsx"]},
-	})
+	}, nil)
 	if got := urlsOf(nodes); len(got) != 0 {
 		t.Errorf("a call with no URL argument minted %v", got)
 	}
@@ -388,7 +388,7 @@ function withoutTransport(ajaxStatus2) {
 	})
 	nodes, _, _ := LinkJSPropClients(nil, map[string][]string{
 		"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["utils/two.jsx"]},
-	})
+	}, nil)
 	got := urlsOf(nodes)
 	if len(got) != 1 || got[0] != "/api/one" {
 		t.Errorf("urls = %v, want only [/api/one]", got)
@@ -431,7 +431,7 @@ func TestLinkJSPropClients_DestructuredParamReceiver(t *testing.T) {
 			})
 			nodes, _, _ := LinkJSPropClients(nil, map[string][]string{
 				"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["components/T.jsx"]},
-			})
+			}, nil)
 			if got := urlsOf(nodes); len(got) != 1 || got[0] != "/api/vlms" {
 				t.Errorf("urls = %v, want [/api/vlms]", got)
 			}
@@ -456,7 +456,7 @@ func TestLinkJSPropClients_DestructureFromACallIsNotVouched(t *testing.T) {
 	})
 	nodes, _, _ := LinkJSPropClients(nil, map[string][]string{
 		"svc": {p["common/ComponentWithAjaxStatus.jsx"], p["utils/listener.jsx"]},
-	})
+	}, nil)
 	if got := urlsOf(nodes); len(got) != 0 {
 		t.Errorf("a call-return destructure minted %v", got)
 	}
