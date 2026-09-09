@@ -62,6 +62,11 @@ type propFnPass struct {
 // prop_transport_* ledger, and the set of prop_client_dynamic_url sites that
 // resolved (keyed by PropURLRetractKey) so the caller can retract them.
 func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
+	if ValuegraphEnabled() {
+		// Tier VG.4: the mirror image of the same crossing rule, read in the
+		// other direction (js_prop_crossings.go).
+		return linkJSPropTransportVG(nodes, ledger, serviceFiles)
+	}
 	retract = map[string]bool{}
 
 	var rows []graph.UnresolvedRef

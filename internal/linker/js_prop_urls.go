@@ -72,6 +72,11 @@ func PropURLRetractKey(file string, line int) string {
 // prop_url_* ledger, and the set of prop_client_dynamic_url sites that resolved
 // (keyed by PropURLRetractKey) so the caller can retract them.
 func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
+	if ValuegraphEnabled() {
+		// Tier VG.4: the producer index and the value walk below become one
+		// crossing rule in the binding spec (js_prop_crossings.go).
+		return linkJSPropURLsVG(nodes, ledger, serviceFiles)
+	}
 	retract = map[string]bool{}
 
 	var rows []graph.UnresolvedRef
@@ -418,25 +423,37 @@ func findPropClientCallAtLine(root *sitter.Node, src []byte, line int) *sitter.N
 // from: a positional identifier argument, or the `url` key / shorthand of an
 // options object argument.
 func propURLConsumerProp(call *sitter.Node, src []byte) string {
+	n := propURLConsumerPropNode(call, src)
+	if n == nil {
+		return ""
+	}
+	return n.Content(src)
+}
+
+// propURLConsumerPropNode is propURLConsumerProp's answer as the node itself,
+// which is what the value engine resolves (VG.4). Which argument is the URL is
+// recognition and stays here; what that argument can be is the engine's
+// question.
+func propURLConsumerPropNode(call *sitter.Node, src []byte) *sitter.Node {
 	args := call.ChildByFieldName("arguments")
 	if args == nil {
-		return ""
+		return nil
 	}
 	for i := 0; i < int(args.NamedChildCount()); i++ {
 		a := args.NamedChild(i)
 		switch a.Type() {
 		case "identifier":
-			return a.Content(src)
+			return a
 		case "object":
 			if v := jsObjectKeyValue(a, src, "url"); v != nil {
 				switch v.Type() {
 				case "identifier", "shorthand_property_identifier", "property_identifier":
-					return v.Content(src)
+					return v
 				}
 			}
 		}
 	}
-	return ""
+	return nil
 }
 
 // fileHasProp reports whether name is read as a prop somewhere in the file:

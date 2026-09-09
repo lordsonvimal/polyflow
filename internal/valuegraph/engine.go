@@ -67,7 +67,10 @@ type Engine struct {
 	ix   *index
 	spec *Spec
 	fs   FileSource
+	xs   CrossSource // nil unless fs also knows which files define which owner
 	opts Options
+
+	xi crossIndex
 
 	mu   sync.Mutex
 	memo map[memoKey]Value
@@ -99,14 +102,21 @@ type cycleKey struct {
 // an engine that resolves everything to Opaque, which is the correct behaviour
 // for a caller that has no spec for the language in front of it. Call
 // Spec.Validate if you want to know.
+// A FileSource that also implements CrossSource enables the spec's crossing
+// rules; one that does not leaves them inert, so an intraprocedural caller
+// cannot reach a crossing by accident.
 func New(spec *Spec, fs FileSource, opts Options) *Engine {
-	return &Engine{
+	e := &Engine{
 		ix:   newIndex(spec),
 		spec: spec,
 		fs:   fs,
 		opts: opts.withDefaults(),
 		memo: make(map[memoKey]Value),
 	}
+	if xs, ok := fs.(CrossSource); ok {
+		e.xs = xs
+	}
+	return e
 }
 
 // Resolve never returns a zero Value and never panics on a malformed tree.
@@ -114,7 +124,12 @@ func (e *Engine) Resolve(q Query) Value {
 	if q.Expr == nil {
 		return Opaque(Origin{Reason: ReasonUnsupported, File: q.File, Text: "no expression"})
 	}
-	c := &ctx{e: e, file: q.File, src: q.Src, root: q.Root, opened: map[string]parsedFile{}}
+	c := &ctx{
+		e: e, file: q.File, src: q.Src, root: q.Root,
+		opened:   map[string]parsedFile{},
+		visiting: map[cycleKey]bool{},
+		crossed:  map[string]bool{},
+	}
 
 	if c.src == nil {
 		pf, ok, capped := c.open(q.File)
@@ -157,6 +172,17 @@ type ctx struct {
 
 	opened   map[string]parsedFile
 	visiting map[cycleKey]bool
+	crossed  map[string]bool
+}
+
+// inFile returns the same call, reading a different file. The budgets, the
+// cycle set and the crossing set are shared: they bound one Resolve, and a
+// resolution that has left its own file is still that one Resolve.
+func (c *ctx) inFile(file string, src []byte, root *sitter.Node) *ctx {
+	return &ctx{
+		e: c.e, file: file, src: src, root: root,
+		opened: c.opened, visiting: c.visiting, crossed: c.crossed,
+	}
 }
 
 // open parses file through the FileSource, charging the call's file budget.
@@ -203,6 +229,12 @@ func (c *ctx) resolveNode(n *sitter.Node, scope *sitter.Node, depth int) Value {
 		return c.capUnion(n, Union(c.resolveParts(n, r.Parts, scope, depth)...))
 	}
 	if r, ok := ix.opaque[typ]; ok {
+		// A read the spec stops at may still be a crossed binding written as a
+		// qualified name: `this.props.createUrl` is bound by whoever renders
+		// this component, and only a crossing can see that.
+		if v, crossed := c.crossMember(n, depth); crossed {
+			return v
+		}
 		return Opaque(c.originOf(n, r.Reason))
 	}
 	if n.NamedChildCount() == 0 {
@@ -328,12 +360,31 @@ func (c *ctx) lookup(name string, at *sitter.Node, scope *sitter.Node, use uint3
 			return c.capUnion(at, Union(vals...))
 		}
 		if r, ok := c.e.ix.scope[cur.Type()]; ok && c.isParam(cur, r, name) {
-			// The parameter shadows anything outside, and inside this tier
-			// nothing binds it: crossing a call or a prop is VG.4's job.
-			return Opaque(c.originOf(at, ReasonParam))
+			// The parameter shadows anything outside. Nothing in this file
+			// binds it — but a crossing may: the name may be a prop the caller
+			// destructured, or a parameter the other side of a prop fills in at
+			// its own call site. Both are tried, and a name that is genuinely
+			// both is genuinely both.
+			return c.crossOrStop(name, at, cur, depth, ReasonParam)
 		}
 	}
-	return Opaque(c.originOf(at, ReasonNoBinding))
+	return c.crossOrStop(name, at, scope, depth, ReasonNoBinding)
+}
+
+// crossOrStop is the fallback every unbound name takes: try the crossings in both
+// directions, and report the local reason when neither applies.
+func (c *ctx) crossOrStop(name string, at, scope *sitter.Node, depth int, reason string) Value {
+	var vals []Value
+	if v, ok := c.crossForward(name, at, depth); ok {
+		vals = append(vals, v)
+	}
+	if v, ok := c.crossReverse(name, scope, depth); ok {
+		vals = append(vals, v)
+	}
+	if len(vals) == 0 {
+		return Opaque(c.originOf(at, reason))
+	}
+	return c.capUnion(at, Union(vals...))
 }
 
 // outward returns the next scope out from cur: the nearest enclosing scope

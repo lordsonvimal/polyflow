@@ -83,12 +83,13 @@ type linkPipelineState struct {
 	nodeRef    map[string]string
 	nodeRefLen int
 
-	// nodeVGRule caches node ID → valuegraph spec rule for nodes the Tier VG.3
-	// engine path resolved (Meta["vg_rule"], set by ResolveJSLocalURLs). Rebuilt
-	// every writeEdges call — only when PF_VALUEGRAPH is set — because an
-	// in-place Meta mutation does not change allNodes' length and so would slip
-	// past the nodeRef staleness guard above. writeEdges stamps L2/<rule> rather
-	// than the uniform L5/<pass> on every edge out of such a node.
+	// nodeVGRule caches node ID → valuegraph spec rule for nodes the valuegraph
+	// engine path resolved (Meta["vg_rule"], set by ResolveJSLocalURLs in VG.3
+	// and by the crossing passes in VG.4). Rebuilt every writeEdges call — only
+	// when PF_VALUEGRAPH is set — because an in-place Meta mutation does not
+	// change allNodes' length and so would slip past the nodeRef staleness guard
+	// above. writeEdges stamps L2/<rule> rather than the uniform L5/<pass> on
+	// every edge touching such a node.
 	nodeVGRule map[string]string
 
 	// targetServices restricts what a scopeCrossService pass's edge-emitting
@@ -185,6 +186,12 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 			// Tier VG.3: this edge's producer had its URL resolved by the
 			// valuegraph engine — carry that layer/rule onto the edge instead
 			// of the coarse per-pass fallback.
+			layer, rule = "L2", r
+		} else if r := st.nodeVGRule[e.To]; r != "" {
+			// Tier VG.4: a crossing pass wires its minted client to the
+			// enclosing function with a `calls` edge pointing *at* the resolved
+			// node. That edge exists only because the crossing resolved, so it
+			// carries the crossing's provenance rather than the pass's.
 			layer, rule = "L2", r
 		}
 		evidence.StampStatic(&e, st.nodeRef[e.From], layer, rule)

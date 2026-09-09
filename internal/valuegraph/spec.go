@@ -17,15 +17,25 @@ import "fmt"
 
 // Spec is one language's binding rules.
 type Spec struct {
-	Language  string        `yaml:"language"`
-	Grammars  []string      `yaml:"grammars"`
-	Literals  []LiteralRule `yaml:"literals"`
-	Concat    []ConcatRule  `yaml:"concat"`
-	Union     []UnionRule   `yaml:"union"`
-	Bindings  []BindingRule `yaml:"bindings"`
-	Scopes    []ScopeRule   `yaml:"scopes"`
-	Opaque    []OpaqueRule  `yaml:"opaque"`
-	Crossings []CrossRule   `yaml:"crossings"` // empty until VG.4
+	Language string        `yaml:"language"`
+	Grammars []string      `yaml:"grammars"`
+	Literals []LiteralRule `yaml:"literals"`
+	Concat   []ConcatRule  `yaml:"concat"`
+	Union    []UnionRule   `yaml:"union"`
+	Bindings []BindingRule `yaml:"bindings"`
+	Scopes   []ScopeRule   `yaml:"scopes"`
+	Opaque   []OpaqueRule  `yaml:"opaque"`
+
+	// Ignore lists node types that never carry a value and are skipped when
+	// counting positions — a comment between two arguments must not shift the
+	// third one's index.
+	Ignore []string `yaml:"ignore"`
+	// PositionalStop lists node types that destroy positional indexing wherever
+	// they appear in a list: past a spread there is no such thing as "the third
+	// argument". A list containing one yields no positional value at all.
+	PositionalStop []string `yaml:"positional_stop"`
+
+	Crossings []CrossRule `yaml:"crossings"`
 }
 
 // Text modes for LiteralRule.
@@ -95,10 +105,15 @@ type BindingRule struct {
 // different field than the parameter list does. The loader treats a missing
 // field as "try the next one", never as an error: this class of quirk is why
 // the spec has declared alternatives at all.
+// Name is the field holding the scope's own name, where the grammar gives it
+// one. A scope that has no name field can still be named — by the binding that
+// holds it (`const load = () => …`) — which is why this is optional and why the
+// lookup falls back to the binding rules.
 type ScopeRule struct {
 	Node      string `yaml:"node"`
 	Params    string `yaml:"params"`
 	ParamsAlt string `yaml:"params_alt"`
+	Name      string `yaml:"name"`
 }
 
 // OpaqueRule says where resolution deliberately stops.
@@ -116,8 +131,16 @@ type OpaqueRule struct {
 
 // CrossRule is a binding that crosses a file boundary and therefore needs an
 // index rather than a local walk. VG.1 parses and validates nothing here; the
-// field exists so the spec schema is stable across the tier. VG.4 gives it
-// meaning.
+// field exists so the spec schema is stable across the tier.
+//
+// A crossing is a binding whose two halves are written in different files and
+// joined by a name no parse can see — a component tag, an exported symbol. The
+// engine cannot discover that join itself, so a crossing is inert unless the
+// caller's FileSource also implements CrossSource.
+//
+// Direction is "" (forward: the producer's value binds the consumer's name) or
+// DirectionReverse (the producer hands the consumer a symbol, and the value
+// comes back from the consumer's call site into that symbol's parameter).
 type CrossRule struct {
 	Kind      string        `yaml:"kind"`
 	Direction string        `yaml:"direction"`
@@ -125,7 +148,30 @@ type CrossRule struct {
 	Consumer  CrossEndpoint `yaml:"consumer"`
 }
 
+// DirectionReverse marks a crossing whose value flows consumer → producer.
+const DirectionReverse = "reverse"
+
+// ValueIsSymbolReference restricts a reverse crossing's producer to attributes
+// whose value *references* a definition — an identifier or a dotted path — as
+// opposed to one written inline, which has no separate definition to join to.
+const ValueIsSymbolReference = "symbol_reference"
+
+// OwnerParentField is the owner mode "read this field of the node's parent":
+// the tag of the element the attribute belongs to. Written `parent_field:name`.
+const OwnerParentField = "parent_field:"
+
 // CrossEndpoint is one side of a CrossRule.
+//
+// Producer side: Node is the node type that writes the binding, NameChild and
+// ValueChild are named-child indices (the grammars this addresses expose no
+// fields on it — and Child would return the `=` token), Owner says how to find
+// the name that identifies the other side, and ValueIs restricts which values
+// the rule accepts.
+//
+// Consumer side: Roots are the receiver texts a crossed name may be read
+// through (`this.props.x`, `props.x`), Destructure allows the same name to
+// arrive unqualified through a destructuring pattern, and the Call* fields
+// describe the call whose positional argument feeds a reverse crossing.
 type CrossEndpoint struct {
 	Node        string   `yaml:"node"`
 	NameChild   int      `yaml:"name_child"`
@@ -134,6 +180,9 @@ type CrossEndpoint struct {
 	ValueIs     string   `yaml:"value_is"`
 	Roots       []string `yaml:"roots"`
 	Destructure bool     `yaml:"destructure"`
+	Call        string   `yaml:"call"`
+	CallFn      string   `yaml:"call_function"`
+	CallArgs    string   `yaml:"call_arguments"`
 	CallArg     string   `yaml:"call_argument"`
 }
 
@@ -188,6 +237,20 @@ func (s *Spec) Validate() error {
 			return fmt.Errorf("valuegraph: opaque[%d] has no node", i)
 		}
 	}
+	for i, r := range s.Crossings {
+		if r.Kind == "" {
+			return fmt.Errorf("valuegraph: crossings[%d] has no kind", i)
+		}
+		if r.Producer.Node == "" {
+			return fmt.Errorf("valuegraph: crossings[%d] (%s) has no producer node", i, r.Kind)
+		}
+		if r.Producer.Owner == "" {
+			return fmt.Errorf("valuegraph: crossings[%d] (%s) has no producer owner", i, r.Kind)
+		}
+		if r.Direction == DirectionReverse && r.Consumer.Call == "" {
+			return fmt.Errorf("valuegraph: crossings[%d] (%s) is reverse but names no call node", i, r.Kind)
+		}
+	}
 	return nil
 }
 
@@ -201,19 +264,40 @@ type index struct {
 	opaque  map[string]OpaqueRule
 	scope   map[string]ScopeRule
 	binding map[string][]BindingRule
+
+	// crossProducer is keyed by the producer node type: one walk of a file
+	// collects the sites of every crossing rule at once.
+	crossProducer map[string][]CrossRule
+	crossByKind   map[string]CrossRule
+	ignore        map[string]bool
+	stop          map[string]bool
 }
 
 func newIndex(s *Spec) *index {
 	ix := &index{
-		literal: map[string]LiteralRule{},
-		concat:  map[string]ConcatRule{},
-		union:   map[string]UnionRule{},
-		opaque:  map[string]OpaqueRule{},
-		scope:   map[string]ScopeRule{},
-		binding: map[string][]BindingRule{},
+		literal:       map[string]LiteralRule{},
+		concat:        map[string]ConcatRule{},
+		union:         map[string]UnionRule{},
+		opaque:        map[string]OpaqueRule{},
+		scope:         map[string]ScopeRule{},
+		binding:       map[string][]BindingRule{},
+		crossProducer: map[string][]CrossRule{},
+		crossByKind:   map[string]CrossRule{},
+		ignore:        map[string]bool{},
+		stop:          map[string]bool{},
 	}
 	if s == nil {
 		return ix
+	}
+	for _, r := range s.Crossings {
+		ix.crossProducer[r.Producer.Node] = append(ix.crossProducer[r.Producer.Node], r)
+		ix.crossByKind[r.Kind] = r
+	}
+	for _, t := range s.Ignore {
+		ix.ignore[t] = true
+	}
+	for _, t := range s.PositionalStop {
+		ix.stop[t] = true
 	}
 	for _, r := range s.Literals {
 		ix.literal[r.Node] = r

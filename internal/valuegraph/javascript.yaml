@@ -40,15 +40,26 @@ bindings:
   - node: pair                # object-literal member: { url: "/api/x" }
     name: key
     value: value
+  - node: public_field_definition   # class field: post = (a, url) => …
+    name: name
+    value: value
+  - node: field_definition
+    name: name
+    value: value
 
-# What introduces a scope, and where are its parameters?
+# What introduces a scope, where are its parameters, and what is it called?
+# The name matters to a reverse crossing, which joins on the name of the
+# function that was handed over.
 scopes:
   - node: function_declaration
     params: parameters
+    name: name
   - node: function_expression
     params: parameters
+    name: name
   - node: method_definition
     params: parameters
+    name: name
   - node: arrow_function
     params: parameters
     # An arrow with ONE unparenthesised param has NO formal_parameters node —
@@ -57,8 +68,47 @@ scopes:
     # binding of the same name.
     params_alt: parameter
 
-# Where does resolution deliberately stop? (VG.3 scope; crossings override in VG.4)
+# Where does resolution deliberately stop, unless a crossing applies?
 opaque:
   - node: call_expression
   - node: member_expression
   - node: subscript_expression
+
+# Carries no value; skipped when counting a position.
+ignore: [comment]
+# Destroys positional numbering wherever it appears in a list.
+positional_stop: [spread_element]
+
+# Bindings whose two halves live in different files, joined by a name no parse
+# contains — the component tag. Inert unless the caller supplies a CrossSource.
+crossings:
+  # <Child createUrl={expr} />  binds  createUrl  inside Child.
+  - kind: jsx_attribute
+    producer:
+      node: jsx_attribute
+      # NAMED CHILD INDICES, not fields: jsx_attribute exposes no name/value
+      # field. Child(1) would be the `=` token.
+      name_child: 0
+      value_child: 1
+      owner: parent_field:name   # the enclosing element's tag
+    consumer:
+      roots: [this.props, props]
+      destructure: true          # `const { createUrl } = this.props`
+
+  # <Grid onSave={this.postJSON} />  then  props.onSave(data, "/api/x"):
+  # the transport crosses down, so the URL comes back up into its parameter.
+  - kind: jsx_attribute_callback
+    direction: reverse
+    producer:
+      node: jsx_attribute
+      name_child: 0
+      value_child: 1
+      owner: parent_field:name
+      value_is: symbol_reference # an inline arrow has no definition to join to
+    consumer:
+      roots: [this.props, props]
+      destructure: true
+      call: call_expression
+      call_function: function
+      call_arguments: arguments
+      call_argument: positional

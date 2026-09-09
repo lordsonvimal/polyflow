@@ -1,12 +1,16 @@
 package linker
 
 import (
+	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
+	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/valuegraph"
 )
 
@@ -29,6 +33,22 @@ import (
 const (
 	vgLayer            = "L2"
 	vgLocalBindingRule = "valuegraph/javascript#local_binding"
+
+	// The two crossing kinds declared in valuegraph/javascript.yaml, and the
+	// rule names they are stamped with. The rule names the *crossing*, not the
+	// language: which of the two mirror-image rules produced an edge is what
+	// tells a reviewer where to look when one is suspect, and it is the reason
+	// UB.2 and UB.3 were separate passes worth distinguishing.
+	vgCrossPropURL       = "jsx_attribute"
+	vgCrossPropTransport = "jsx_attribute_callback"
+	vgPropURLRule        = "valuegraph/javascript#" + vgCrossPropURL
+	vgPropTransportRule  = "valuegraph/javascript#" + vgCrossPropTransport
+
+	// vgPropMaxStrings bounds the alternatives a crossed prop may enumerate
+	// before the engine stops. It is deliberately wider than maxPropURLFanout:
+	// the *cap* is the mint site's decision, and an engine that collapsed at 24
+	// would make a 25-site component indistinguishable from an unreadable one.
+	vgPropMaxStrings = 2 * maxPropURLFanout
 )
 
 // ValuegraphEnabled reports whether the engine path is selected. Read from the
@@ -76,6 +96,295 @@ func (s jsEngineFileSource) Parse(file string) ([]byte, *sitter.Node, bool) {
 	}
 	return src, root, true
 }
+
+// ── VG.4: the crossing-capable engine ───────────────────────────────────────
+
+// jsPropFileSource is jsEngineFileSource plus the two facts a crossing needs
+// and no parse contains: which component a file defines, and which files define
+// a component. Both come from the graph's own component index, which is where
+// "which symbol is a component" is already decided — the engine never learns
+// what a component is.
+//
+// Implementing valuegraph.CrossSource is what switches the spec's crossing
+// rules on. The intraprocedural caller (VG.3) uses jsEngineFileSource, which
+// does not implement it, so Tier UL cannot reach a crossing by accident.
+type jsPropFileSource struct {
+	files        []string
+	ownersByFile map[string][]string
+	filesByOwner map[string][]string
+}
+
+func (s *jsPropFileSource) Files() []string { return s.files }
+
+func (s *jsPropFileSource) Parse(file string) ([]byte, *sitter.Node, bool) {
+	src, root, _, ok := jsParse(file)
+	if !ok || root == nil {
+		return nil, nil, false
+	}
+	return src, root, true
+}
+
+func (s *jsPropFileSource) OwnersIn(file string) []string { return s.ownersByFile[file] }
+
+func (s *jsPropFileSource) FilesForOwner(owner string) []string { return s.filesByOwner[owner] }
+
+// jsPropScope is what both crossing passes need before they can ask anything:
+// one engine per service, and the function-label index the `calls` edge is
+// wired through.
+type jsPropScope struct {
+	fnBySvcLabel map[string]string
+	engines      map[string]*valuegraph.Engine
+}
+
+// newJSPropScope builds the per-service engines. The file list, the test-file
+// exclusion and the component index are exactly the ones the legacy producer
+// scans used — recognition, which stays at the mint site; what moves is the
+// resolution the scans existed to feed.
+func newJSPropScope(nodes []graph.Node, serviceFiles map[string][]string) *jsPropScope {
+	sc := &jsPropScope{
+		fnBySvcLabel: map[string]string{},
+		engines:      map[string]*valuegraph.Engine{},
+	}
+
+	nodeFile := map[string]string{}
+	svcSet := map[string]bool{}
+	svcOfFile := map[string]string{}
+	for i := range nodes {
+		n := &nodes[i]
+		nodeFile[n.ID] = n.File
+		svcSet[n.Service] = true
+		if n.Service != "" && n.File != "" {
+			svcOfFile[n.File] = n.Service
+		}
+		switch n.Type {
+		case graph.NodeTypeFunction, graph.NodeTypeMethod:
+			if k := n.Service + "\x00" + n.Label; sc.fnBySvcLabel[k] == "" {
+				sc.fnBySvcLabel[k] = n.ID
+			}
+		}
+	}
+
+	sources := map[string]*jsPropFileSource{}
+	sourceFor := func(svc string) *jsPropFileSource {
+		if s := sources[svc]; s != nil {
+			return s
+		}
+		s := &jsPropFileSource{
+			ownersByFile: map[string][]string{},
+			filesByOwner: map[string][]string{},
+		}
+		sources[svc] = s
+		return s
+	}
+	addOwner := func(svc, owner, file string) {
+		if svc == "" || owner == "" || file == "" {
+			return
+		}
+		s := sourceFor(svc)
+		for _, have := range s.ownersByFile[file] {
+			if have == owner {
+				return
+			}
+		}
+		s.ownersByFile[file] = append(s.ownersByFile[file], owner)
+		s.filesByOwner[owner] = append(s.filesByOwner[owner], file)
+	}
+	for _, svc := range sortedBoolKeys(svcSet) {
+		ci := newComponentIndex(nodes, svc)
+		for sym, ids := range ci.bySymbol {
+			for _, id := range ids {
+				addOwner(svc, sym, nodeFile[id])
+			}
+		}
+	}
+	// A component that only forwards a prop is often never registered on
+	// `window`; fall back to a Capitalized top-level declaration in its file.
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Type != graph.NodeTypeFunction && n.Type != graph.NodeTypeClass {
+			continue
+		}
+		if l := n.Label; l != "" && l[0] >= 'A' && l[0] <= 'Z' {
+			addOwner(n.Service, l, n.File)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, svcKey := range sortedMapKeys(serviceFiles) {
+		for _, abs := range serviceFiles[svcKey] {
+			if !isJSFile(abs) {
+				continue
+			}
+			rel := patterns.RelativizeToCwd(abs)
+			if seen[rel] || crIsTestFile(rel) {
+				continue
+			}
+			seen[rel] = true
+			svc := svcKey
+			if svc == "" {
+				svc = svcOfFile[rel]
+			}
+			s := sourceFor(svc)
+			s.files = append(s.files, rel)
+		}
+	}
+
+	spec := jsValuegraphSpec()
+	for svc, s := range sources {
+		sort.Strings(s.files)
+		for _, files := range s.filesByOwner {
+			sort.Strings(files)
+		}
+		sc.engines[svc] = valuegraph.New(spec, s, valuegraph.Options{
+			// The union width is the engine's ceiling, not the pass's: the
+			// fan-out cap is a mint decision and stays at the mint site.
+			MaxUnionWidth: vgPropMaxStrings,
+			// The crossing index is service-wide by construction, so the file
+			// budget has to admit the whole service — a truncated index is a
+			// silently missing producer, which is the one failure this tier
+			// cannot afford.
+			MaxFiles: len(s.files) + 8,
+		})
+	}
+	return sc
+}
+
+// vgPropProducer is one producer site's contribution: the paths it resolved to,
+// or the reason it could not be read. One site fails on its own — suppressing
+// its siblings would hide a real render site behind the ones that resolved.
+type vgPropProducer struct {
+	file  string
+	line  int
+	paths []string
+	fail  string // "" when paths resolved; otherwise the ledger's kind
+}
+
+// vgPropProducers splits a resolved value into what each producer site
+// contributed, keeping only the sites the named crossing produced.
+//
+// Filtering by crossing kind is what keeps the two mirror passes from stealing
+// each other's rows: a name that is both a prop and a callback parameter
+// resolves through both rules, and each pass mints only what its own rule found.
+//
+// The alternatives are regrouped by site first. A producer whose value is a
+// branch — a switch over four endpoints, a ternary — arrives as several
+// alternatives that all came from one render site, and the shipped passes read
+// such a site all-or-nothing: one unreadable arm poisons it, because three of
+// four flows presented as complete is worse than a ledger row. That policy is
+// the caller's and it is applied here, not in the engine.
+func vgPropProducers(v valuegraph.Value, kind string) []vgPropProducer {
+	type site struct {
+		file string
+		line int
+		text string
+		alts []valuegraph.Value
+	}
+	var order []*site
+	byKey := map[string]*site{}
+	for _, alt := range v.Alternatives() {
+		if alt.Src.Reason != kind {
+			continue
+		}
+		key := fmt.Sprintf("%s\x00%d", alt.Src.File, alt.Src.Line)
+		s := byKey[key]
+		if s == nil {
+			s = &site{file: alt.Src.File, line: alt.Src.Line, text: alt.Src.Text}
+			byKey[key] = s
+			order = append(order, s)
+		}
+		s.alts = append(s.alts, alt)
+	}
+
+	out := make([]vgPropProducer, 0, len(order))
+	for _, s := range order {
+		out = append(out, vgPropReadSite(s.file, s.line, s.text, s.alts))
+	}
+	return out
+}
+
+// vgPropReadSite reads one producer site's alternatives as request paths.
+//
+// A producer *written* as a literal is read as a literal, by the same function
+// that has always read one (resolveJSPropURL): it strips the query string a
+// route never matches on, and it declines an interpolation-led template. A
+// producer reached through a binding keeps the shape Tier UL gives it. The two
+// have disagreed about query strings since UB.2 shipped; reproducing that
+// disagreement is what makes this a differential change rather than a
+// recall change wearing one's clothes. VG.5 reports it.
+func vgPropReadSite(file string, line int, text string, alts []valuegraph.Value) vgPropProducer {
+	p := vgPropProducer{file: file, line: line}
+	if vgIsQuotedLiteral(text) {
+		if u, ok := resolveJSPropURL(text); ok {
+			p.paths = []string{u}
+		} else {
+			p.fail = "literal"
+		}
+		return p
+	}
+	seen := map[string]bool{}
+	for _, alt := range alts {
+		strs, ok := alt.Strings(vgPropMaxStrings)
+		if !ok {
+			return vgPropProducer{file: file, line: line, fail: vgPropFailKind(alt)}
+		}
+		for _, s := range strs {
+			if !isLocalURLPath(s) {
+				// A site whose value is not exclusively a request path — a
+				// branch carrying null, a bare word — is not one this tier can
+				// read, on any of its arms.
+				return vgPropProducer{file: file, line: line, fail: "identifier"}
+			}
+			if !seen[s] {
+				seen[s] = true
+				p.paths = append(p.paths, s)
+			}
+		}
+	}
+	if len(p.paths) == 0 {
+		p.fail = "identifier"
+	}
+	return p
+}
+
+// vgIsQuotedLiteral reports whether a producer was written as a string or
+// template literal, which is the one distinction resolveJSPropURL needs and the
+// lattice deliberately does not carry.
+func vgIsQuotedLiteral(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	switch t[0] {
+	case '"', '\'', '`':
+		return true
+	}
+	return false
+}
+
+// vgPropFailKind names an unreadable producer in the ledger's existing
+// vocabulary, so a reader of `prop_url_unresolved` still sees builder_call /
+// member_expression / identifier. A reason with no legacy name is passed
+// through verbatim: "depth" or "cycle" in the ledger is more useful than
+// flattening it into "expression".
+func vgPropFailKind(v valuegraph.Value) string {
+	origins := v.Origins()
+	if len(origins) == 0 {
+		// Nothing opaque in it: the value resolved, to something that is not a
+		// request path. That is the identifier case in the ledger's vocabulary.
+		return "identifier"
+	}
+	switch r := origins[0].Reason; r {
+	case valuegraph.ReasonCall:
+		return "builder_call"
+	case valuegraph.ReasonMember, valuegraph.ReasonUnsupported:
+		return "member_expression"
+	case valuegraph.ReasonNoBinding, valuegraph.ReasonParam:
+		return "identifier"
+	default:
+		return r
+	}
+}
+
 
 // resolveLocalURLBindingVG is the engine-backed implementation of
 // resolveLocalURLBinding. It keeps the legacy control flow exactly — unwrap the

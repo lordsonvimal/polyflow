@@ -46,6 +46,7 @@ const (
 	ReasonCycle       = "cycle"       // the binding refers to itself
 	ReasonWidth       = "width"       // Options.MaxUnionWidth alternatives exceeded
 	ReasonFiles       = "files"       // Options.MaxFiles files opened in one Resolve
+	ReasonArity       = "arity"       // a call site supplies no value at that position
 	ReasonUnsupported = "unsupported" // no rule in the spec addresses this node
 )
 
@@ -64,6 +65,13 @@ type Value struct {
 	Text   string  // KindLiteral only
 	Parts  []Value // KindConcat (ordered) / KindUnion (deduped, sorted by String())
 	Origin Origin  // KindOpaque only
+
+	// Src records the site the value was fetched from when the engine crossed
+	// a file boundary to find it (VG.4): the crossing's kind, and the producer's
+	// file and line. It is metadata — String, dedup and enumeration all ignore
+	// it — and it exists because a caller that mints one node per resolved
+	// alternative has to be able to say which site each one came from.
+	Src Origin
 }
 
 // DefaultMaxStrings caps Strings when its max argument is 0.
@@ -285,6 +293,57 @@ func (v Value) hasLiteral() bool {
 		}
 	}
 	return false
+}
+
+// withSrc stamps a crossing site onto a value, without disturbing what the
+// value is.
+//
+// A union is stamped part by part rather than at the root: Union flattens a
+// nested union into its parent, so a site recorded on the nested root would be
+// dropped exactly when the producer is multi-valued. Stamping the parts means
+// each alternative still knows which site produced it after any amount of
+// flattening — which is what lets a caller mint one node per alternative and
+// name the producer of each.
+func withSrc(v Value, o Origin) Value {
+	if v.Kind == KindUnion {
+		parts := make([]Value, len(v.Parts))
+		for i, p := range v.Parts {
+			parts[i] = withSrc(p, o)
+		}
+		v.Parts = parts
+		return v
+	}
+	if v.Src == (Origin{}) {
+		v.Src = o
+	}
+	return v
+}
+
+// Alternatives returns the top-level alternatives of a Value: the parts of a
+// union, or the value itself. A caller that mints one node per alternative
+// walks this rather than Strings, because only the parts carry Src.
+func (v Value) Alternatives() []Value {
+	if v.Kind == KindUnion {
+		return v.Parts
+	}
+	return []Value{v}
+}
+
+// Sources returns every crossing site recorded in the tree, in traversal order.
+// Empty when resolution never left the query's own file.
+func (v Value) Sources() []Origin {
+	var out []Origin
+	var walk func(Value)
+	walk = func(n Value) {
+		if n.Src != (Origin{}) {
+			out = append(out, n.Src)
+		}
+		for _, p := range n.Parts {
+			walk(p)
+		}
+	}
+	walk(v)
+	return out
 }
 
 // IsDynamic reports whether any part is Opaque.
