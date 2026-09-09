@@ -1,0 +1,9 @@
+# Tier VG differential baselines (docs/js-value-graph-pilot-plan.md, VG.0).
+#
+# Public-corpus baselines are committed as regression tripwires. Private-corpus
+# captures (cedar / the real monolith) embed the real repository name and file
+# tree, so they are generated locally and MUST NOT be committed — see README.md
+# and the memory note polyflow-no-thirdparty-repo-refs.
+*.json
+!gotify.json
+!lobsters.json
