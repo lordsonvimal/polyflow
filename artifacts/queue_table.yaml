@@ -1,0 +1,20 @@
+# artifacts/queue_table.yaml — a second fact kind, to prove the SA.3
+# generalization is not URL-specific.
+#
+# A broker config / settings file qualifies when enough of its distinct string
+# leaves match a queue name the AMQP tiers already declared for the same
+# service. toml is listed for completeness but has no reader yet (no TOML
+# dependency in go.mod); yaml and env are supported today.
+kind: queue_table
+formats: [yaml, env]
+gate:
+  against: amqp_queue_name
+  normalizers: [case_fold, trim_slash]
+  min_matches: 3
+  min_ratio: 0.25
+  min_entity_discrimination: 0.5
+emit:
+  fact: queue_name
+  entity: container
+  key: leaf_path
+  value: leaf_value

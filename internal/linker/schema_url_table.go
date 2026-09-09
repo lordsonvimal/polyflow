@@ -1,18 +1,16 @@
 package linker
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"gopkg.in/yaml.v3"
 
+	"github.com/lordsonvimal/polyflow/internal/artifact"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -74,7 +72,7 @@ func (t *SchemaURLTable) Lookup(entity, key string) (schemaURLEntry, bool) {
 	return schemaURLEntry{}, false
 }
 
-// ── discovery ────────────────────────────────────────────────────────────────
+// ── path normalisation ───────────────────────────────────────────────────────
 
 var (
 	schemaPlaceholderDollar = regexp.MustCompile(`\$\{[^}]*\}`)
@@ -88,6 +86,12 @@ var (
 // NormalizeSchemaPath applies MS.0b: drop query/fragment, wildcard every
 // placeholder spelling, collapse repeated slashes, strip a trailing slash. It
 // returns ok=false for a leaf that does not begin with "/" after normalisation.
+//
+// This is exactly the `endpoint_table` mapping's normalizer chain
+// (query_strip → param_wildcard → trim_slash → require_abs_path); it stays here
+// as a named helper because callers outside the artifact gate use it directly
+// (link_passes builds handlerPaths with it, schema_url_link resolves with it).
+// The differential test asserts the two stay byte-identical on cedar.
 func NormalizeSchemaPath(raw string) (string, bool) {
 	s := raw
 	if i := strings.IndexAny(s, "?#"); i >= 0 {
@@ -109,8 +113,7 @@ func NormalizeSchemaPath(raw string) (string, bool) {
 
 // schemaSkipDir reports whether a slash-path lives under a test or fixture
 // directory (MS.0c rule 1) — cedar carries a fixture copy of its own asset that
-// must never be indexed as the real thing. Reuses crIsTestFile and adds the
-// data-fixture dir conventions walkAllFiles does not filter.
+// must never be indexed as the real thing.
 func schemaSkipDir(slash string) bool {
 	if crIsTestFile(slash) {
 		return true
@@ -123,148 +126,17 @@ func schemaSkipDir(slash string) bool {
 	return false
 }
 
-// schemaLeaf is one string leaf of a data file with its container chain (the
-// chain's last element is the leaf's own key).
-type schemaLeaf struct {
-	chain []string
-	raw   string
-	norm  string // "" when the raw string is not a candidate path
-}
-
-// flattenSchema walks an arbitrary JSON/YAML tree recording every string leaf
-// with its container chain. Objects, arrays and nested combinations flatten the
-// same way; an array index contributes its number as a chain element.
-func flattenSchema(node interface{}, chain []string, out *[]schemaLeaf) {
-	switch v := node.(type) {
-	case map[string]interface{}:
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			flattenSchema(v[k], append(chain, k), out)
-		}
-	case map[interface{}]interface{}: // yaml.v3 non-string keys
-		keys := make([]string, 0, len(v))
-		m := make(map[string]interface{}, len(v))
-		for k, val := range v {
-			ks := fmt.Sprint(k)
-			keys = append(keys, ks)
-			m[ks] = val
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			flattenSchema(m[k], append(chain, k), out)
-		}
-	case []interface{}:
-		for i, item := range v {
-			flattenSchema(item, append(chain, strconv.Itoa(i)), out)
-		}
-	case string:
-		norm, _ := NormalizeSchemaPath(v)
-		cp := make([]string, len(chain))
-		copy(cp, chain)
-		*out = append(*out, schemaLeaf{chain: cp, raw: v, norm: norm})
-	}
-}
-
-// parseSchemaFile decodes a .json/.yaml/.yml file into a generic tree.
-func parseSchemaFile(path string, data []byte) (interface{}, bool) {
-	ext := strings.ToLower(filepath.Ext(path))
-	var root interface{}
-	if ext == ".json" {
-		if err := json.Unmarshal(data, &root); err != nil {
-			return nil, false
-		}
-		return root, true
-	}
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, false
-	}
-	return root, true
-}
-
-// isOpenAPIShape reports whether the top level names an OpenAPI/Swagger document
-// (MS.0e) — a server contract, already the contract engine's job.
-func isOpenAPIShape(root interface{}) bool {
-	m, ok := root.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	_, a := m["openapi"]
-	_, b := m["swagger"]
-	return a || b
-}
-
-// schemaGateResult is the outcome of evaluating the MS.0c corroboration gate.
-type schemaGateResult struct {
-	distinct int
-	matched  int
-	ratio    float64
-	pass     bool
-}
-
-func evalSchemaGate(distinctPaths map[string]bool, handlers map[string]bool, cfg workspace.SchemaConfig) schemaGateResult {
-	matched := 0
-	for p := range distinctPaths {
-		if handlers[p] {
-			matched++
+// isOpenAPIArtifact reports whether the artifact's top level names an OpenAPI or
+// Swagger document (MS.0e) — a server contract, already the contract engine's
+// job. A top-level scalar `openapi:` / `swagger:` is the version field every
+// such document carries.
+func isOpenAPIArtifact(a *artifact.Artifact) bool {
+	for _, l := range a.Leaves {
+		if len(l.Path) == 1 && (l.Path[0] == "openapi" || l.Path[0] == "swagger") {
+			return true
 		}
 	}
-	r := schemaGateResult{distinct: len(distinctPaths), matched: matched}
-	if r.distinct > 0 {
-		r.ratio = float64(matched) / float64(r.distinct)
-	}
-	r.pass = matched >= cfg.MinCorroboratedPaths && r.ratio >= cfg.MinCorroboratedRatio
-	return r
-}
-
-// chooseEntityDepth applies MS.0d: pick the shallowest depth whose corroborated
-// leaves are all nested below it (coverage 1.0), that has at least two distinct
-// containers (entities are plural), and whose discrimination exceeds the
-// configured minimum. Returns 0 when no depth qualifies.
-func chooseEntityDepth(leaves []schemaLeaf, corroborated map[int]bool, minDisc float64) (depth int, coverage, disc float64) {
-	maxLen := 0
-	for _, l := range leaves {
-		if len(l.chain) > maxLen {
-			maxLen = len(l.chain)
-		}
-	}
-	var corrIdx []int
-	for i := range leaves {
-		if corroborated[i] {
-			corrIdx = append(corrIdx, i)
-		}
-	}
-	if len(corrIdx) == 0 {
-		return 0, 0, 0
-	}
-	for d := 1; d < maxLen; d++ {
-		containers := map[string]bool{}
-		for _, l := range leaves {
-			if len(l.chain) > d {
-				containers[strings.Join(l.chain[:d], "\x00")] = true
-			}
-		}
-		if len(containers) < 2 {
-			continue
-		}
-		covered := 0
-		owners := map[string]bool{}
-		for _, i := range corrIdx {
-			if len(leaves[i].chain) > d {
-				covered++
-				owners[strings.Join(leaves[i].chain[:d], "\x00")] = true
-			}
-		}
-		cov := float64(covered) / float64(len(corrIdx))
-		dsc := float64(len(owners)) / float64(len(containers))
-		if cov == 1.0 && dsc > minDisc {
-			return d, cov, dsc
-		}
-	}
-	return 0, 0, 0
+	return false
 }
 
 // LoadSchemaURLTables discovers endpoint-declaring data assets in each service's
@@ -272,7 +144,8 @@ func chooseEntityDepth(leaves []schemaLeaf, corroborated map[int]bool, minDisc f
 // skipped shapes, and one schema_asset_loaded row per discovered asset recording
 // the thresholds that admitted it.
 //
-// Discovery is by ROUTE CORROBORATION: a .json/.yaml/.yml file qualifies when
+// Discovery is by ROUTE CORROBORATION, delegated to the generic
+// internal/artifact gate + the `endpoint_table` mapping: a file qualifies when
 // enough of its distinct normalised string leaves match a declared handler path
 // in the same service. Deliberately no filename rule and no key-name rule.
 //
@@ -289,8 +162,21 @@ func LoadSchemaURLTables(
 	if cfg.Disable {
 		return tables, ledger
 	}
+
+	mapping, ok := artifact.MappingFor("endpoint_table")
+	if !ok {
+		return tables, ledger
+	}
 	eff, _ := cfg.Effective()
-	def, _ := workspace.SchemaConfig{}.Effective()
+
+	// The mapping carries the tested defaults; a workspace threshold overrides
+	// them. `gate` admits under the effective thresholds; the default-threshold
+	// comparison (for the _tuned ledger kind) reuses the same match counts.
+	gate := mapping.GateSpec()
+	gate.MinMatches = eff.MinCorroboratedPaths
+	gate.MinRatio = eff.MinCorroboratedRatio
+	gate.MinDiscrimination = eff.MinEntityDiscrimination
+
 	cwd, _ := os.Getwd()
 
 	svcNames := make([]string, 0, len(serviceFiles))
@@ -298,6 +184,11 @@ func LoadSchemaURLTables(
 		svcNames = append(svcNames, s)
 	}
 	sort.Strings(svcNames)
+
+	// known: service → normalised handler path. handlerPaths already arrives
+	// normalised by NormalizeSchemaPath (link_passes.go), which is the same
+	// chain the gate applies, so it is a valid `known` map as-is.
+	known := handlerPaths
 
 	for _, svc := range svcNames {
 		files := append([]string(nil), serviceFiles[svc]...)
@@ -320,14 +211,15 @@ func LoadSchemaURLTables(
 			if err != nil {
 				continue
 			}
-			root, ok := parseSchemaFile(abs, data)
+			art, ok := artifact.ReadFile(abs, data)
 			if !ok {
 				continue
 			}
+			art.Service = svc
 
 			declared := schemaFileDeclared(abs, cfg.Assets)
 
-			if isOpenAPIShape(root) {
+			if isOpenAPIArtifact(art) {
 				if declared {
 					ledger = append(ledger, graph.UnresolvedRef{
 						Service: svc, File: rel, Kind: "schema_asset_skipped",
@@ -337,39 +229,28 @@ func LoadSchemaURLTables(
 				continue
 			}
 
-			var leaves []schemaLeaf
-			flattenSchema(root, nil, &leaves)
-
-			distinct := map[string]bool{}
-			for _, l := range leaves {
-				if l.norm != "" {
-					distinct[l.norm] = true
-				}
-			}
-			if len(distinct) == 0 {
+			v := gate.Evaluate(art, known, declared)
+			if v.Distinct == 0 {
 				continue
 			}
-
-			gate := evalSchemaGate(distinct, handlers, eff)
-			gateDef := evalSchemaGate(distinct, handlers, def)
-			if !gate.pass && !declared {
+			if !v.GatePassed && !declared {
 				continue
 			}
-
-			corroborated := map[int]bool{}
-			for i, l := range leaves {
-				if l.norm != "" && handlers[l.norm] {
-					corroborated[i] = true
-				}
-			}
-
-			depth, cov, disc := chooseEntityDepth(leaves, corroborated, eff.MinEntityDiscrimination)
-			if depth == 0 {
+			if v.EntityDepth == 0 {
 				ledger = append(ledger, graph.UnresolvedRef{
 					Service: svc, File: rel, Kind: "schema_asset_skipped",
 					Name: rel, Targets: "reason=no_entity_level",
 				})
 				continue
+			}
+			depth := v.EntityDepth
+
+			// Parallel normalised value per leaf, for entity/key extraction.
+			norm := make([]string, len(art.Leaves))
+			for i, l := range art.Leaves {
+				if n, ok := gate.Norm(l.Value); ok {
+					norm[i] = n
+				}
 			}
 
 			tbl := &SchemaURLTable{
@@ -378,45 +259,45 @@ func LoadSchemaURLTables(
 				Aliases:  map[string]string{},
 			}
 			deadSeen := map[string]bool{}
-			for i, l := range leaves {
-				if l.norm == "" {
+			for i, l := range art.Leaves {
+				if norm[i] == "" || len(l.Path) <= depth {
 					continue
 				}
-				if len(l.chain) <= depth {
-					continue
-				}
-				entity := l.chain[depth-1]
-				key := strings.Join(l.chain[depth:], ".")
-				if handlers[l.norm] {
+				entity := l.Path[depth-1]
+				key := strings.Join(l.Path[depth:], ".")
+				if handlers[norm[i]] {
 					if tbl.ByEntity[entity] == nil {
 						tbl.ByEntity[entity] = map[string]schemaURLEntry{}
 					}
 					if _, exists := tbl.ByEntity[entity][key]; !exists {
-						tbl.ByEntity[entity][key] = schemaURLEntry{Raw: l.raw, Path: l.norm, Key: key}
+						tbl.ByEntity[entity][key] = schemaURLEntry{Raw: l.Value, Path: norm[i], Key: key}
 					}
 					continue
 				}
 				// MS.0g: a candidate path in a qualifying asset that matches no
 				// handler — a finding (stale config), not a missing route parser.
-				if !deadSeen[l.norm] {
-					deadSeen[l.norm] = true
+				if !deadSeen[norm[i]] {
+					deadSeen[norm[i]] = true
 					ledger = append(ledger, graph.UnresolvedRef{
 						Service: svc, File: rel, Kind: "schema_route_dead",
-						Name: l.raw, Targets: fmt.Sprintf("entity=%s key=%s", entity, key),
+						Name: l.Value, Targets: fmt.Sprintf("entity=%s key=%s", entity, key),
 					})
 				}
-				_ = i
 			}
 
-			schemaCollectAliases(leaves, depth, tbl)
+			schemaCollectAliases(art.Leaves, norm, depth, tbl)
 
 			if len(tbl.ByEntity) == 0 {
 				continue
 			}
 			tables[svc] = tbl
 
+			// _tuned: admitted under the effective thresholds but not under the
+			// tested defaults.
+			gatePassDef := v.MatchCount >= artifact.DefaultMinMatches &&
+				v.Ratio >= artifact.DefaultMinRatio
 			kind := "schema_asset_loaded"
-			if gate.pass && !gateDef.pass {
+			if v.GatePassed && !gatePassDef {
 				kind = "schema_asset_loaded_tuned"
 			}
 			ledger = append(ledger, graph.UnresolvedRef{
@@ -425,7 +306,7 @@ func LoadSchemaURLTables(
 					"min_corroborated_paths=%d min_corroborated_ratio=%.3g min_entity_discrimination=%.3g "+
 						"matched=%d distinct=%d ratio=%.3g entity_depth=%d coverage=%.3g discrimination=%.3g declared=%t",
 					eff.MinCorroboratedPaths, eff.MinCorroboratedRatio, eff.MinEntityDiscrimination,
-					gate.matched, gate.distinct, gate.ratio, depth, cov, disc, declared,
+					v.MatchCount, v.Distinct, v.Ratio, depth, v.Coverage, v.Disc, declared,
 				),
 			})
 		}
@@ -448,14 +329,11 @@ func LoadSchemaURLTables(
 	return tables, ledger
 }
 
-// schemaFileDeclared reports whether abs matches one of the cfg Assets globs,
-// evaluated relative to the owning service's root.
+// schemaFileDeclared reports whether abs matches one of the cfg Assets globs.
 func schemaFileDeclared(abs string, globs []string) bool {
 	if len(globs) == 0 {
 		return false
 	}
-	// Match the glob against the absolute path; a bare glob is also matched
-	// against the path tail via a "**/" prefix, so "config/x.json" works.
 	slashAbs := filepath.ToSlash(abs)
 	for _, g := range globs {
 		g = filepath.ToSlash(g)
@@ -472,24 +350,25 @@ func schemaFileDeclared(abs string, globs []string) bool {
 // schemaCollectAliases records a self-identifying token per entity (MS.0d):
 // a direct-child string leaf that is not a path and is a bare identifier. The
 // container key is preferred on disagreement, so an alias never overwrites an
-// entity and never shadows one.
-func schemaCollectAliases(leaves []schemaLeaf, depth int, tbl *SchemaURLTable) {
+// entity and never shadows one. norm[i] is the normalised form of leaf i, ""
+// when the leaf is not a path.
+func schemaCollectAliases(leaves []artifact.Leaf, norm []string, depth int, tbl *SchemaURLTable) {
 	perEntity := map[string]map[string]bool{}
-	for _, l := range leaves {
-		if l.norm != "" || len(l.chain) != depth+1 {
+	for i, l := range leaves {
+		if norm[i] != "" || len(l.Path) != depth+1 {
 			continue
 		}
-		if !schemaBareToken.MatchString(l.raw) {
+		if !schemaBareToken.MatchString(l.Value) {
 			continue
 		}
-		entity := l.chain[depth-1]
+		entity := l.Path[depth-1]
 		if _, isEntity := tbl.ByEntity[entity]; !isEntity {
 			continue
 		}
 		if perEntity[entity] == nil {
 			perEntity[entity] = map[string]bool{}
 		}
-		perEntity[entity][l.raw] = true
+		perEntity[entity][l.Value] = true
 	}
 	for entity, vals := range perEntity {
 		if len(vals) != 1 {

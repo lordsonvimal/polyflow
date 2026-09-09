@@ -1,0 +1,24 @@
+# artifacts/endpoint_table.yaml — reproduces Tier MS (schema-driven URL tables).
+#
+# A .json/.yaml/.yml file in a service qualifies as an endpoint table when
+# enough of its distinct normalised string leaves match a declared handler path
+# in the same service. No filename rule, no key-name rule — the asset is the
+# configuration.
+#
+# The normalizer chain below is exactly linker.NormalizeSchemaPath decomposed
+# into steps; the differential test in internal/linker asserts byte parity of
+# cedar's endpoint table across the SA.3 refactor, so this list must not gain or
+# lose a step without that test being updated deliberately.
+kind: endpoint_table
+formats: [json, yaml]
+gate:
+  against: handler_path
+  normalizers: [query_strip, param_wildcard, trim_slash, require_abs_path]
+  min_matches: 5
+  min_ratio: 0.25
+  min_entity_discrimination: 0.5
+emit:
+  fact: endpoint_url
+  entity: container      # the discriminating container names the entity
+  key: leaf_path         # the remaining key chain names the accessor
+  value: leaf_value
