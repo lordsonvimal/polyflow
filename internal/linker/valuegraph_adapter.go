@@ -2,6 +2,7 @@ package linker
 
 import (
 	"os"
+	"strings"
 	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -30,12 +31,13 @@ const (
 	vgLocalBindingRule = "valuegraph/javascript#local_binding"
 )
 
-// valuegraphEnabled reports whether the engine path is selected. Read from the
+// ValuegraphEnabled reports whether the engine path is selected. Read from the
 // environment on every call rather than cached: it is consulted once per
 // candidate site, never in a hot loop, and a cached value would make the
-// differential tests (which flip the flag with t.Setenv) unable to see both
-// paths in one process.
-func valuegraphEnabled() bool { return os.Getenv("PF_VALUEGRAPH") == "1" }
+// differential tests (which flip the flag) unable to see both paths in one
+// process. Exported so the indexer can gate the edge-provenance rebuild in
+// writeEdges on the same flag.
+func ValuegraphEnabled() bool { return os.Getenv("PF_VALUEGRAPH") == "1" }
 
 var (
 	jsVGSpecOnce sync.Once
@@ -151,36 +153,93 @@ func resolveLocalURLBindingVG(urlExpr *sitter.Node, fn *sitter.Node, src []byte)
 }
 
 // resolveOneLocalURLExprVG resolves a single expression to request paths via
-// the engine, applying the same path-shape gate localURLStaticPaths applies: a
-// value that is not a "/"- or "*"-rooted path (a bare word like "done" or
-// "html" carried on some branch) makes the site unreadable rather than
-// contributing a non-URL string.
+// the engine.
+//
+// A ternary right-hand side is several real request paths in a definite source
+// order (`cond ? "/a" : "/b"` is /a then /b). valuegraph's Union canonicalises
+// order, and the mint site indexes branches positionally, so the ternary is
+// split here and each arm resolved on its own — consequence before alternative
+// — rather than handed to the engine whole.
+//
+// Two gates match the legacy JS KeyWalker's behaviour: a value that is not a
+// "/"- or "*"-rooted path (a bare word like "done" carried on some branch), and
+// a value with no literal segment at all ("*", "*/*"), both make the whole site
+// unreadable. The KeyWalker abstains wholesale on a dynamic segment it cannot
+// read; the engine resolves arm by arm and would otherwise leak a bare-wildcard
+// "path" the route matcher treats as matching everything.
 func resolveOneLocalURLExprVG(eng *valuegraph.Engine, n *sitter.Node, fn *sitter.Node, src []byte) (paths []string, reason string, ok bool) {
 	if n == nil {
 		return nil, ledgerLocalURLUnresolved, false
 	}
-	// Root == fn caps valuegraph's outward scope walk at the enclosing
-	// function: outward() stops as soon as it reaches c.root, so a sibling or
-	// module-scope binding of the same name is never read.
-	v := eng.Resolve(valuegraph.Query{Src: src, Root: fn, Expr: n, Scope: fn})
-
-	got, vok := v.Strings(0)
-	if !vok {
-		return nil, vgLedgerReason(v), false
-	}
-	for _, p := range got {
-		if !isLocalURLPath(p) {
-			return nil, ledgerLocalURLUnresolved, false
+	var (
+		out  []string
+		seen = make(map[string]bool)
+	)
+	for _, alt := range localURLExprAlternatives(n) {
+		// Root == fn caps valuegraph's outward scope walk at the enclosing
+		// function: outward() stops as soon as it reaches c.root, so a sibling
+		// or module-scope binding of the same name is never read.
+		v := eng.Resolve(valuegraph.Query{Src: src, Root: fn, Expr: alt, Scope: fn})
+		got, vok := v.Strings(0)
+		if !vok {
+			return nil, vgLedgerReason(v), false
+		}
+		for _, p := range got {
+			if !isLocalURLPath(p) {
+				return nil, ledgerLocalURLUnresolved, false
+			}
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
 		}
 	}
-	if len(got) > maxLocalURLBranches {
+	if len(out) == 0 {
+		return nil, ledgerLocalURLUnresolved, false
+	}
+	if len(out) > maxLocalURLBranches {
 		return nil, ledgerLocalURLHighFanout, false
 	}
-	return got, "", true
+	return out, "", true
 }
 
+// localURLExprAlternatives flattens a ternary (through parenthesised and
+// TypeScript cast wrappers) into its alternative sub-expressions in source
+// order. Anything that is not a ternary is returned unchanged as a
+// single-element slice.
+func localURLExprAlternatives(n *sitter.Node) []*sitter.Node {
+	switch n.Type() {
+	case "ternary_expression", "conditional_expression":
+		var out []*sitter.Node
+		for _, f := range []string{"consequence", "alternative"} {
+			if c := n.ChildByFieldName(f); c != nil {
+				out = append(out, localURLExprAlternatives(c)...)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	case "parenthesized_expression":
+		if n.NamedChildCount() == 1 {
+			return localURLExprAlternatives(n.NamedChild(0))
+		}
+	case "as_expression", "satisfies_expression", "non_null_expression":
+		if n.NamedChildCount() >= 1 {
+			return localURLExprAlternatives(n.NamedChild(0))
+		}
+	}
+	return []*sitter.Node{n}
+}
+
+// isLocalURLPath reports whether p is a request path the legacy KeyWalker would
+// also have produced: "/"- or "*"-rooted, and carrying at least one literal
+// (non-"*", non-"/") character. "*" and "*/*" fail the second test — the
+// KeyWalker never emits them, it abstains on the whole expression instead.
 func isLocalURLPath(p string) bool {
-	return len(p) > 0 && (p[0] == '/' || p[0] == '*')
+	if len(p) == 0 || (p[0] != '/' && p[0] != '*') {
+		return false
+	}
+	return strings.ContainsFunc(p, func(r rune) bool { return r != '*' && r != '/' })
 }
 
 // vgLedgerReason maps an opaque resolution onto the ledger kind the caller

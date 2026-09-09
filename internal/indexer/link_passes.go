@@ -83,6 +83,14 @@ type linkPipelineState struct {
 	nodeRef    map[string]string
 	nodeRefLen int
 
+	// nodeVGRule caches node ID → valuegraph spec rule for nodes the Tier VG.3
+	// engine path resolved (Meta["vg_rule"], set by ResolveJSLocalURLs). Rebuilt
+	// every writeEdges call — only when PF_VALUEGRAPH is set — because an
+	// in-place Meta mutation does not change allNodes' length and so would slip
+	// past the nodeRef staleness guard above. writeEdges stamps L2/<rule> rather
+	// than the uniform L5/<pass> on every edge out of such a node.
+	nodeVGRule map[string]string
+
 	// targetServices restricts what a scopeCrossService pass's edge-emitting
 	// call persists to edges touching one of these services (see
 	// filterByTargetServices). nil/empty — Run()'s only setting today — is a
@@ -161,10 +169,25 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 		}
 		st.nodeRefLen = len(st.allNodes)
 	}
+	if linker.ValuegraphEnabled() {
+		st.nodeVGRule = make(map[string]string)
+		for i := range st.allNodes {
+			if r := st.allNodes[i].Meta["vg_rule"]; r != "" {
+				st.nodeVGRule[st.allNodes[i].ID] = r
+			}
+		}
+	}
 	bwE := graph.NewBatchWriter(st.store)
 	for i := range edges {
 		e := edges[i]
-		evidence.StampStatic(&e, st.nodeRef[e.From], "L5", st.currentPass)
+		layer, rule := "L5", st.currentPass
+		if r := st.nodeVGRule[e.From]; r != "" {
+			// Tier VG.3: this edge's producer had its URL resolved by the
+			// valuegraph engine — carry that layer/rule onto the edge instead
+			// of the coarse per-pass fallback.
+			layer, rule = "L2", r
+		}
+		evidence.StampStatic(&e, st.nodeRef[e.From], layer, rule)
 		if err := bwE.AddEdge(st.ctx, &e); err != nil {
 			return err
 		}

@@ -87,7 +87,7 @@ func ResolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (
 // unreadable right-hand side are different facts about the code and collapsing
 // them would make the ledger unable to say which.
 func resolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (paths []string, reason string, ok bool) {
-	if valuegraphEnabled() {
+	if ValuegraphEnabled() {
 		// Tier VG.3: same question, same signature, answered by the symbolic
 		// value engine (internal/valuegraph) instead of the walkers below.
 		return resolveLocalURLBindingVG(urlExpr, fn, src)
@@ -437,7 +437,7 @@ func applyLocalURL(n *graph.Node, path string, branch int) {
 	n.Meta["url"] = path
 	n.Meta["url_origin"] = localURLOriginLocalBinding
 	n.Meta["branch_index"] = strconv.Itoa(branch)
-	if valuegraphEnabled() {
+	if ValuegraphEnabled() {
 		// SA.1 provenance: this URL was resolved by the value engine, not the
 		// legacy backtracker. Carried on the node so a reviewer (and, once the
 		// contract engine propagates it, the http_call edge) can see which
