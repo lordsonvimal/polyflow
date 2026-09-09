@@ -419,6 +419,16 @@ type SourceRef struct {
 	ObservedAt int64  `json:"observed_at,omitempty"` // runtime only, unix seconds
 	CodeFile   string `json:"code_file,omitempty"`   // runtime only, from code.filepath
 	CodeFunc   string `json:"code_func,omitempty"`   // runtime only, from code.function
+
+	// SA.1 static provenance. Required on every edge whose Provider is
+	// "static": an edge with Provider "static" and an empty Rule is a schema
+	// error, checked in reconcile (see evidence.ValidateStaticProvenance).
+	// Layer is the layer-contract tier that produced the edge ("L1".."L5",
+	// docs/architecture.md); Rule identifies the concrete producer — a
+	// pattern id, a valuegraph spec rule, a datalog rule, a contract variant,
+	// or a Go link-pass name from buildLinkPasses.
+	Layer string `json:"layer,omitempty"`
+	Rule  string `json:"rule,omitempty"`
 }
 
 // Edge represents a directed relationship between two nodes.

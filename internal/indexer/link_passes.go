@@ -90,6 +90,13 @@ type linkPipelineState struct {
 	// non-empty slice only by a future scoped relink (FR.5c).
 	targetServices []string
 
+	// currentPass is the name of the namedPass currently executing, set by the
+	// pipeline driver loop before each pass.exec() call. writeEdges reads it to
+	// stamp SA.1 static provenance (Layer "L5", Rule = pass name) on every edge
+	// the pass persists. Empty only if a pass body calls writeEdges outside the
+	// driver loop — ValidateStaticProvenance flags the resulting rows.
+	currentPass string
+
 	// jsImportedNames: set by the js_link pass, read by js_globals.
 	jsImportedNames map[string]bool
 	// schemaURLTables: set by the schema_url_tables pass (Tier MS.0), one
@@ -157,7 +164,7 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 	bwE := graph.NewBatchWriter(st.store)
 	for i := range edges {
 		e := edges[i]
-		evidence.StampStatic(&e, st.nodeRef[e.From])
+		evidence.StampStatic(&e, st.nodeRef[e.From], "L5", st.currentPass)
 		if err := bwE.AddEdge(st.ctx, &e); err != nil {
 			return err
 		}

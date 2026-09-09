@@ -354,6 +354,15 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 			"from_id feeds directly into read/context/trace for the producer call site.",
 	}, auditTool(s, "unknown_edges", s.unknownEdges))
 
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "explain",
+		Description: "Show why one edge exists: its evidence sources, the static layer + rule that " +
+			"minted it (SA.1 provenance), and any unresolved-ref (\"ledger\") rows recorded at the same " +
+			"source site. Pass an edge id from unknown_edges (from_id is the producer node, not the edge — " +
+			"use the edge id shown by trace or a graph dump). Use this when an edge looks wrong and you " +
+			"need to know which pattern, pass or rule to blame.",
+	}, auditTool(s, "explain", s.explain))
+
 	return srv, s
 }
 

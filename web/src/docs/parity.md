@@ -53,6 +53,7 @@ invisible to the other.
 | `polyflow eval agent` | **exception** — same as `eval stamp` |
 | `polyflow doctor` | Health & trust dashboard |
 | `polyflow reconcile` | Health activity → Reconcile section — `GET /api/reconcile/propose` |
+| `polyflow explain <edge-id>` | Explore activity → edge detail panel (`DetailHost` / `SeamSummary`) — the same edge provenance (evidence sources, layer/rule chain, ledger rows) the `explain` MCP tool returns |
 | `polyflow rules` | **exception** — evidence-rule authoring for the reconcile harness, not a workspace operation |
 | `polyflow rules promote <proposal.yaml>` | **exception** — same as `rules` |
 | `polyflow models` | **exception** — local embedder model management (`--format`-shaped shell output; a one-time machine setup step, not workspace state) |

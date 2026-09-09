@@ -98,6 +98,7 @@ func init() {
 		evalCmd,
 		doctorCmd,
 		reconcileCmd,
+		explainCmd,
 		rulesCmd,
 		modelsCmd,
 		benchCmd,

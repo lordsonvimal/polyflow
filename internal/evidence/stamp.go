@@ -14,15 +14,33 @@ import "github.com/lordsonvimal/polyflow/internal/graph"
 // re-writing the entire edge table. Keep in lockstep with
 // StaticProvider.Collect + computeState — a divergence shows up directly as a
 // sources_json / verification_state diff.
-func StampStatic(e *graph.Edge, fromRef string) {
+//
+// SA.1: layer and rule record which layer-contract tier and concrete producer
+// minted the edge. Callers stamp a coarse uniform value (Layer "L5", Rule =
+// link-pass name) today; per-layer refinement lands with SA.2/SA.3/SA.5. An
+// empty rule on a static source is a schema error caught by
+// ValidateStaticProvenance.
+func StampStatic(e *graph.Edge, fromRef, layer, rule string) {
 	conf := e.Confidence
 	if conf == "" {
 		conf = graph.ConfidenceCandidate
+	}
+	// A producer that already stamped a precise layer/rule (SA.2+) on the
+	// edge's first source keeps it — the uniform value is only a fallback.
+	if len(e.Sources) == 1 && e.Sources[0].Provider == "static" {
+		if e.Sources[0].Layer != "" {
+			layer = e.Sources[0].Layer
+		}
+		if e.Sources[0].Rule != "" {
+			rule = e.Sources[0].Rule
+		}
 	}
 	e.Sources = []graph.SourceRef{{
 		Provider:   "static",
 		Confidence: conf,
 		Ref:        fromRef,
+		Layer:      layer,
+		Rule:       rule,
 	}}
 	e.VerificationState = graph.StateCandidate
 	e.VerifiedGranularity = ""

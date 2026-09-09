@@ -313,6 +313,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, ws *workspace.WorkspaceConfi
 		return workingEdges[i].ID < workingEdges[j].ID
 	})
 
+	// SA.1: every static edge must carry a layer-contract rule. A partial
+	// rollout of per-layer refinement is fine (coarse "L5"/pass-name values);
+	// a silently unstamped static source is not.
+	if bad := ValidateStaticProvenance(workingEdges); len(bad) > 0 {
+		n := len(bad)
+		sample := bad
+		if n > 10 {
+			sample = bad[:10]
+		}
+		return ReconcileResult{}, fmt.Errorf("reconcile: %d static edge(s) have an empty Sources[].Rule (SA.1 schema error); e.g. %v", n, sample)
+	}
+
 	return ReconcileResult{
 		Nodes:      allNodes,
 		Edges:      workingEdges,

@@ -82,6 +82,7 @@ func BuildBridge(ctx context.Context, links []workspace.Link, contractsDir strin
 		if pass.scope != scopeCrossService {
 			continue
 		}
+		st.currentPass = pass.name
 		if err := pass.exec(); err != nil {
 			return nil, fmt.Errorf("bridge build pass %s: %w", pass.name, err)
 		}

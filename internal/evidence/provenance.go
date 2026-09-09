@@ -45,11 +45,31 @@ func (s *StaticProvider) Collect(_ context.Context, _ *workspace.WorkspaceConfig
 			conf = graph.ConfidenceCandidate
 		}
 		stamped[i] = e
+		// SA.1: the static provenance (layer/rule) is stamped by the link
+		// passes as edges are minted (see StampStatic) and is the one part of
+		// the static source the reconciler cannot recompute from node geometry
+		// alone — carry it forward from the incoming edge.
+		var layer, rule string
+		for _, src := range e.Sources {
+			if src.Provider == "static" {
+				layer, rule = src.Layer, src.Rule
+				break
+			}
+		}
+		if rule == "" {
+			// Parse-phase (L1) edges are minted by the tree-sitter pattern
+			// engine and never pass through a link pass's StampStatic. Stamp a
+			// coarse but correct rule here so no static edge reaches
+			// persistence without one (ValidateStaticProvenance).
+			layer, rule = "L1", "parser/"+string(e.Type)
+		}
 		// Total recomputation: replace Sources, never append to a stale list.
 		stamped[i].Sources = []graph.SourceRef{{
 			Provider:   "static",
 			Confidence: conf,
 			Ref:        ref,
+			Layer:      layer,
+			Rule:       rule,
 		}}
 		stamped[i].VerificationState = ""   // set by Reconciler
 		stamped[i].VerifiedGranularity = "" // set by Reconciler when confirmed
@@ -60,6 +80,24 @@ func (s *StaticProvider) Collect(_ context.Context, _ *workspace.WorkspaceConfig
 		Edges:      stamped,
 		Unresolved: s.unres,
 	}, nil
+}
+
+// ValidateStaticProvenance returns the IDs of edges that carry a "static"
+// SourceRef with an empty Rule (SA.1). Every static edge must record which
+// layer-contract producer minted it; a static source with no rule is a schema
+// error. The Reconciler calls this after it has recomputed every edge's
+// Sources[] and fails the run if the result is non-empty.
+func ValidateStaticProvenance(edges []graph.Edge) []string {
+	var bad []string
+	for i := range edges {
+		for _, src := range edges[i].Sources {
+			if src.Provider == "static" && src.Rule == "" {
+				bad = append(bad, edges[i].ID)
+				break
+			}
+		}
+	}
+	return bad
 }
 
 // staticRef returns the provenance ref for a static edge's From node.

@@ -147,6 +147,39 @@ func TestStaticProvider_ReplacesSourcesOnRestamp(t *testing.T) {
 	assert.Equal(t, "static", ev.Edges[0].Sources[0].Provider)
 }
 
+func TestValidateStaticProvenance_RejectsEmptyRule(t *testing.T) {
+	edges := []graph.Edge{
+		{ID: "ok", Sources: []graph.SourceRef{{Provider: "static", Layer: "L5", Rule: "js_link"}}},
+		{ID: "bad", Sources: []graph.SourceRef{{Provider: "static", Layer: "L5", Rule: ""}}},
+		{ID: "runtime-empty-ok", Sources: []graph.SourceRef{{Provider: "runtime", Rule: ""}}},
+	}
+	bad := evidence.ValidateStaticProvenance(edges)
+	require.Equal(t, []string{"bad"}, bad)
+}
+
+// TestReconcile_RejectsUnstampedStaticSource asserts a static SourceRef that
+// reaches reconciliation with no Rule fails the run (SA.1 schema error), rather
+// than being persisted silently.
+func TestReconcile_RejectsUnstampedStaticSource(t *testing.T) {
+	nodes := []graph.Node{{ID: "a", File: "a.go", Line: 1}, {ID: "b", File: "b.go", Line: 2}}
+	staticEdge := graph.Edge{ID: "s1", From: "a", To: "b", Type: graph.EdgeTypeHTTPCall, Label: "GET /x"}
+	sp := evidence.NewStaticProvider(nodes, []graph.Edge{staticEdge}, nil)
+
+	// A second provider that (wrongly) contributes a static source with no Rule
+	// onto the same channel.
+	rogue := &fakeProvider{name: "runtime", ev: evidence.Evidence{
+		Edges: []graph.Edge{{
+			ID: "r1", From: "a", To: "b", Type: graph.EdgeTypeHTTPCall, Label: "GET /x",
+			Sources: []graph.SourceRef{{Provider: "static", Confidence: "candidate", Ref: "x.go:9"}},
+		}},
+	}}
+	rec, err := evidence.NewReconciler(sp, rogue)
+	require.NoError(t, err)
+	_, err = rec.Reconcile(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SA.1")
+}
+
 // --- Multi-valued channel join (bug-class rule 1) ---
 
 // TestReconcilerMultiChannelFanout asserts that N static edges sharing one

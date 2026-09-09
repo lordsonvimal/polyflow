@@ -706,7 +706,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 			}
 			// Stamp static provenance up front (like link_passes.writeEdges) so
 			// the F.0 reconciler doesn't re-upsert every semantic edge.
-			evidence.StampStatic(&e, semNodeRef[e.From])
+			evidence.StampStatic(&e, semNodeRef[e.From], "L1", "semantic/go_packages")
 			if err := bwSem.AddEdge(ctx, &e); err != nil {
 				return nil, err
 			}
@@ -757,6 +757,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	linker.EnableJSTreeCache()
 	defer linker.DisableJSTreeCache()
 	for _, pass := range buildLinkPasses(linkState) {
+		linkState.currentPass = pass.name
 		if err := pass.exec(); err != nil {
 			return nil, fmt.Errorf("link pass %s: %w", pass.name, err)
 		}
