@@ -49,6 +49,7 @@ var wantLinkPasses = []struct {
 	{"schema_url_tables", scopeSameServiceOnly},
 	{"js_prop_clients", scopeSameServiceOnly},
 	{"js_local_urls", scopeSameServiceOnly},
+	{"js_prop_urls", scopeSameServiceOnly},
 	{"js_http_hosts", scopeSameServiceOnly},
 	{"config_baseurl", scopeSameServiceOnly},
 	{"route_handlers", scopeSameServiceOnly},

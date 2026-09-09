@@ -950,6 +950,48 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
+		// Tier UB.2: the URL crosses a JSX prop — parent computes the endpoint,
+		// child requests it. Consumes js_prop_clients' prop_client_dynamic_url
+		// ledger, indexes every JSX attribute value in the service, and joins on
+		// (component, prop name), minting one http_client per distinct resolved
+		// URL. Runs after js_local_urls so its local-binding walk is available
+		// for producer values, and retracts the ledger rows it resolved.
+		{"js_prop_urls", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			puNodes, puEdges, puLedger, retract := linker.LinkJSPropURLs(st.allNodes, st.allUnresolved, svcFiles)
+			if len(retract) > 0 {
+				filtered := st.allUnresolved[:0]
+				for _, u := range st.allUnresolved {
+					if u.Kind == "prop_client_dynamic_url" && retract[linker.PropURLRetractKey(u.File, u.Line)] {
+						continue
+					}
+					filtered = append(filtered, u)
+				}
+				st.allUnresolved = filtered
+			}
+			st.allUnresolved = append(st.allUnresolved, puLedger...)
+			if len(puNodes) > 0 {
+				byID := make(map[string]int, len(st.allNodes))
+				for i := range st.allNodes {
+					byID[st.allNodes[i].ID] = i
+				}
+				for i := range puNodes {
+					n := puNodes[i]
+					if _, exists := byID[n.ID]; exists {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = len(st.allNodes) - 1
+				}
+				if err := st.bw.Flush(st.ctx); err != nil {
+					return err
+				}
+			}
+			return st.writeEdges(puEdges)
+		}},
 		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
 		// JS/TS client at all, so this is the only source of Meta["env_var"] /
 		// Meta["host_default_literal"] for JS/TS nodes — must also run before
