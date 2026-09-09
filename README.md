@@ -58,6 +58,12 @@ it is roughly break-even.
 4. **Serve** — the graph is exposed to agents via an MCP stdio server and to
    humans via a web UI / CLI.
 
+Internally these stages are split into seven layers, each with exactly one
+extension mechanism. If you are adding framework coverage, read
+[Architecture — the layer contract](docs/architecture.md) first: it says which
+layer your change belongs in, and the decision procedure usually lands on YAML
+rather than Go.
+
 ## Installation
 
 There are two ways to get `polyflow` on your machine: build it from source,
