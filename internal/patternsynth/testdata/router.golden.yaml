@@ -3,7 +3,7 @@
 #   polyflow pattern synth --package github.com/example/orion/router --corpus testdata/corpus
 # package: github.com/example/orion/router
 # corpus:  testdata/corpus
-# corpus-sha: sha256:c8f8b62e5bb579eb
+# corpus-sha: sha256:dc0bfdad77ffa29e
 # proposer: template
 #
 # Every capture role below is inferred, not reviewed. Check the roles
@@ -13,6 +13,18 @@ language: go
 version: "1"
 package: github.com/example/orion/router
 patterns:
+  - name: router_binding_arg_call
+    query: |
+      (call_expression
+        function: (identifier) @callee
+        (#eq? @callee "mountWillow")
+        arguments: (argument_list
+          (identifier) @arg))
+    captures:
+      - name: callee
+        role: TODO
+      - name: arg
+        role: TODO
   - name: router_get_route
     query: |
       (call_expression
@@ -32,6 +44,23 @@ patterns:
         role: http_path
       - name: handler
         role: handler_ref
+  - name: router_handler_param_decl
+    query: |
+      (function_declaration
+        name: (identifier) @name
+        parameters: (parameter_list
+          (parameter_declaration
+            name: (identifier) @param
+            type: (qualified_type
+              package: (package_identifier) @_pkg
+              name: (type_identifier) @_type)))
+        (#eq? @_pkg "router")
+        (#eq? @_type "Handler")) @_decl
+    captures:
+      - name: name
+        role: TODO
+      - name: param
+        role: TODO
   - name: router_route_group
     query: |
       (call_expression
@@ -49,3 +78,36 @@ patterns:
         role: method
       - name: prefix
         role: route_prefix
+  - name: router_router_param_decl
+    query: |
+      (function_declaration
+        name: (identifier) @name
+        parameters: (parameter_list
+          (parameter_declaration
+            name: (identifier) @param
+            type: (qualified_type
+              package: (package_identifier) @_pkg
+              name: (type_identifier) @_type)))
+        (#eq? @_pkg "router")
+        (#eq? @_type "Router")) @_decl
+    captures:
+      - name: name
+        role: TODO
+      - name: param
+        role: TODO
+  - name: router_use
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @receiver
+          field: (field_identifier) @method
+          (#eq? @method "Use"))
+        arguments: (argument_list
+          (identifier) @arg0))
+    captures:
+      - name: receiver
+        role: receiver
+      - name: method
+        role: method
+      - name: arg0
+        role: TODO

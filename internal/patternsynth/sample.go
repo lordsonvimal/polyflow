@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -27,18 +28,45 @@ type CorpusFile struct {
 	Src  []byte
 }
 
-// Site is one call site attributed to the target package.
+// Site is one source site attributed to the target package.
+//
+// Not every site is a method call. A package's surface also shows up as a bare
+// call that *passes* a package value across a function boundary
+// (`registerUserRoutes(group, h)`) and as a declaration that *receives* one
+// (`func registerUserRoutes(rg *gin.RouterGroup)`). Sampling only
+// `receiver.Method(...)` is why those two shapes never reached the proposer at
+// all — no cluster, so no candidate, so nothing for the gate to judge.
 type Site struct {
 	File     string
 	Line     int
-	Method   string   // selector field, e.g. "Get"
+	Kind     string   // SiteCall | SiteBareCall | SiteDecl
+	Method   string   // SiteCall: selector field ("Get"); SiteBareCall: callee ("registerUserRoutes")
 	Recv     string   // operand identifier, e.g. "r" (receiver) or "chi" (package)
-	RecvKind string   // RecvBinding | RecvPackage
+	RecvKind string   // RecvBinding | RecvPackage; empty for SiteDecl
 	ArgShape []string // per-argument tree-sitter node type, in order
 	// Args holds each argument's source text, used only for role inference
 	// (a string literal that looks like a URL path becomes @path).
 	Args []string
+
+	// BindingArgs (SiteBareCall) are the argument positions holding a package
+	// value. They are the site's whole claim to attribution: a bare call names
+	// no package identifier, so the only evidence it belongs to the package is
+	// that a package-typed value flows into it.
+	BindingArgs []int
+
+	// SiteDecl only.
+	Name     string // declared function/method name
+	DeclKind string // "function_declaration" | "method_declaration"
+	TypeName string // the package type's own name, e.g. "RouterGroup"
+	TypePtr  bool   // the parameter is a pointer to it
 }
+
+// Site kinds.
+const (
+	SiteCall     = "call"      // pkg.M(...) or binding.M(...)
+	SiteBareCall = "bare_call" // f(..., binding, ...) — a package value crossing a call boundary
+	SiteDecl     = "decl"      // func f(x pkg.T) — a declaration receiving one
+)
 
 // Receiver kinds. A binding is a value obtained from the package
 // (`r := chi.NewRouter()`, or a parameter typed `chi.Router`); a package call
@@ -55,15 +83,63 @@ const (
 // over the verbs it actually observed, instead of one near-duplicate pattern
 // per verb.
 type Cluster struct {
+	Kind     string // SiteCall | SiteBareCall | SiteDecl
 	RecvKind string
 	ArgShape []string
-	Methods  []string // sorted, distinct
+	Methods  []string // sorted, distinct; callee names for SiteBareCall, empty for SiteDecl
 	Sites    []Site
+
+	// SiteBareCall: the argument positions holding a package value.
+	BindingArgs []int
+
+	// SiteDecl: the declaration shape the cluster is about. Parameter *index*
+	// is deliberately not part of the identity — the proposed query matches any
+	// parameter of the type, so keying on position would emit two identical
+	// patterns for `f(rg *gin.RouterGroup)` and `g(h H, rg *gin.RouterGroup)`.
+	DeclKind string
+	TypeName string
+	TypePtr  bool
+	PkgAlias string // the local identifier the corpus binds the package to
 }
 
 // Key is the cluster's identity, and its sort key.
 func (c Cluster) Key() string {
-	return c.RecvKind + "(" + strings.Join(c.ArgShape, ",") + ")"
+	switch c.Kind {
+	case SiteDecl:
+		return "decl(" + c.DeclKind + "," + c.typeExpr() + ")"
+	case SiteBareCall:
+		// One cluster for every bare call, whatever its signature. Keying on the
+		// argument shape looks consistent with the call case and is not: a
+		// receiver call's shape *is* its meaning, while a registrar's extra
+		// parameters are incidental. Measured on gotify, keying on shape split
+		// one concept across 13 near-identical patterns.
+		return "bare()"
+	default:
+		// Unchanged for call sites: the key appears in reports and in the
+		// disambiguation order, and moving it would move every existing name.
+		return c.RecvKind + "(" + strings.Join(c.ArgShape, ",") + ")"
+	}
+}
+
+// typeExpr renders the package type as it appears in source, which is also how
+// the proposed query has to spell it.
+func (c Cluster) typeExpr() string {
+	alias := c.PkgAlias
+	if alias == "" {
+		alias = "pkg"
+	}
+	if c.TypePtr {
+		return "*" + alias + "." + c.TypeName
+	}
+	return alias + "." + c.TypeName
+}
+
+func joinInts(xs []int) string {
+	parts := make([]string, len(xs))
+	for i, x := range xs {
+		parts[i] = strconv.Itoa(x)
+	}
+	return strings.Join(parts, "+")
 }
 
 // Sample walks the corpus, keeps the files attributable to pkg, and clusters
@@ -94,10 +170,16 @@ func Sample(opts Options) ([]Cluster, []CorpusFile, error) {
 			continue
 		}
 		bindings := goBindings(root, f.Src, aliases)
-		for _, s := range goCallSites(root, f.Src, f.Path, aliases, bindings) {
+		sites := goCallSites(root, f.Src, f.Path, aliases, bindings)
+		sites = append(sites, goDeclSites(root, f.Src, f.Path, aliases)...)
+		for _, s := range sites {
 			c := byKey[clusterKey(s)]
 			if c == nil {
-				c = &Cluster{RecvKind: s.RecvKind, ArgShape: s.ArgShape}
+				c = &Cluster{
+					Kind: s.Kind, RecvKind: s.RecvKind, ArgShape: s.ArgShape,
+					BindingArgs: s.BindingArgs, DeclKind: s.DeclKind,
+					TypeName: s.TypeName, TypePtr: s.TypePtr, PkgAlias: s.Recv,
+				}
 				byKey[clusterKey(s)] = c
 			}
 			c.Sites = append(c.Sites, s)
@@ -108,7 +190,7 @@ func Sample(opts Options) ([]Cluster, []CorpusFile, error) {
 	for _, c := range byKey {
 		seen := map[string]bool{}
 		for _, s := range c.Sites {
-			if !seen[s.Method] {
+			if s.Method != "" && !seen[s.Method] {
 				seen[s.Method] = true
 				c.Methods = append(c.Methods, s.Method)
 			}
@@ -127,7 +209,11 @@ func Sample(opts Options) ([]Cluster, []CorpusFile, error) {
 }
 
 func clusterKey(s Site) string {
-	return s.RecvKind + "(" + strings.Join(s.ArgShape, ",") + ")"
+	return Cluster{
+		Kind: s.Kind, RecvKind: s.RecvKind, ArgShape: s.ArgShape,
+		BindingArgs: s.BindingArgs, DeclKind: s.DeclKind,
+		TypeName: s.TypeName, TypePtr: s.TypePtr, PkgAlias: s.Recv,
+	}.Key()
 }
 
 // skipDirs are never walked: they hold code the corpus does not own, and a
@@ -286,17 +372,145 @@ func collectGoBindings(root *sitter.Node, src []byte, aliases, out map[string]bo
 // qualifiedByPackage reports whether a type expression names a type from one of
 // the package aliases, through any number of pointer/slice wrappers.
 func qualifiedByPackage(typ *sitter.Node, src []byte, aliases map[string]bool) bool {
+	_, _, _, ok := packageType(typ, src, aliases)
+	return ok
+}
+
+// packageType resolves a type expression to the package type it names: the
+// local alias the file bound the package to, the type's own name, and whether
+// it sits behind a pointer. The alias travels with it because the proposed
+// query has to spell the identifier the corpus uses — an aliased import would
+// otherwise never match.
+func packageType(typ *sitter.Node, src []byte, aliases map[string]bool) (alias, name string, ptr, ok bool) {
 	switch typ.Type() {
 	case "qualified_type":
-		if p := typ.ChildByFieldName("package"); p != nil {
-			return aliases[p.Content(src)]
+		p, n := typ.ChildByFieldName("package"), typ.ChildByFieldName("name")
+		if p == nil || n == nil || !aliases[p.Content(src)] {
+			return "", "", false, false
 		}
-	case "pointer_type", "slice_type", "array_type":
+		return p.Content(src), n.Content(src), false, true
+	case "pointer_type":
 		if inner := typ.NamedChild(0); inner != nil {
-			return qualifiedByPackage(inner, src, aliases)
+			if a, n, _, ok := packageType(inner, src, aliases); ok {
+				return a, n, true, true
+			}
+		}
+	case "slice_type", "array_type":
+		// Recognized for binding purposes (a `[]pkg.T` still holds package
+		// values) but never proposed as a declaration shape.
+		if inner := typ.NamedChild(0); inner != nil {
+			if a, n, p, ok := packageType(inner, src, aliases); ok {
+				return a, n, p, ok
+			}
 		}
 	}
-	return false
+	return "", "", false, false
+}
+
+// goDeclSites collects declarations that receive a package-typed parameter.
+//
+// This is a declaration, not a call, and the distinction is the point: the
+// binding between a function and the package value it is handed lives in its
+// *signature*, and a sampler that only looks at call expressions cannot see it.
+// The package-qualified type is what makes the site attributable — an
+// unqualified parameter would match any helper in the corpus.
+func goDeclSites(root *sitter.Node, src []byte, file string, aliases map[string]bool) []Site {
+	var out []Site
+	walk(root, func(n *sitter.Node) bool {
+		kind := n.Type()
+		if kind != "function_declaration" && kind != "method_declaration" {
+			return true
+		}
+		nameNode := n.ChildByFieldName("name")
+		params := n.ChildByFieldName("parameters")
+		if nameNode == nil || params == nil {
+			return true
+		}
+		// One site per distinct package type in the signature: two parameters
+		// of the same type are one shape, and the proposed query matches any
+		// parameter position, so emitting both would double-count the site.
+		seen := map[string]bool{}
+		for i := 0; i < int(params.NamedChildCount()); i++ {
+			p := params.NamedChild(i)
+			if p.Type() != "parameter_declaration" {
+				continue
+			}
+			typ := p.ChildByFieldName("type")
+			pname := p.ChildByFieldName("name")
+			if typ == nil || pname == nil || typ.Type() == "slice_type" || typ.Type() == "array_type" {
+				continue
+			}
+			alias, tname, ptr, ok := packageType(typ, src, aliases)
+			if !ok || seen[tname] {
+				continue
+			}
+			seen[tname] = true
+			out = append(out, Site{
+				File: file, Line: int(n.StartPoint().Row) + 1, Kind: SiteDecl,
+				Name: nameNode.Content(src), DeclKind: kind, Recv: alias,
+				TypeName: tname, TypePtr: ptr,
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// IndexCallables returns the names of callables declared anywhere in the
+// corpus: the resolution table behind the gate's callable key. A capture whose
+// text names one of these is a reference to something that can be called, which
+// is a key a linker can join on — unlike a capture that names a value.
+func IndexCallables(files []CorpusFile, opts Options) map[string]bool {
+	out := map[string]bool{}
+	if opts.Language != "go" {
+		return out
+	}
+	for _, f := range files {
+		root, err := patterns.ParseTree("go", f.Src)
+		if err != nil || root == nil {
+			continue
+		}
+		walk(root, func(n *sitter.Node) bool {
+			switch n.Type() {
+			case "function_declaration", "method_declaration":
+				if name := n.ChildByFieldName("name"); name != nil {
+					out[name.Content(f.Src)] = true
+				}
+			case "short_var_declaration", "var_spec", "const_spec":
+				// `handler := func(...) {...}` declares a callable too, and a
+				// pattern capturing `handler` joins on it just as well.
+				right := n.ChildByFieldName("right")
+				if right == nil {
+					if right = n.ChildByFieldName("value"); right == nil {
+						return true
+					}
+				}
+				if !hasFuncLiteral(right) {
+					return true
+				}
+				left := n.ChildByFieldName("left")
+				if left == nil {
+					left = n
+				}
+				for i := 0; i < int(left.NamedChildCount()); i++ {
+					if c := left.NamedChild(i); c.Type() == "identifier" {
+						out[c.Content(f.Src)] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+func hasFuncLiteral(exprs *sitter.Node) bool {
+	for i := 0; i < int(exprs.NamedChildCount()); i++ {
+		if exprs.NamedChild(i).Type() == "func_literal" {
+			return true
+		}
+	}
+	return exprs.Type() == "func_literal"
 }
 
 // exprListCallsPackage reports whether any expression in the list is a call on
@@ -344,27 +558,38 @@ func goCallSites(root *sitter.Node, src []byte, file string, aliases, bindings m
 			return true
 		}
 		fn := n.ChildByFieldName("function")
-		if fn == nil || fn.Type() != "selector_expression" {
+		if fn == nil {
 			return true
 		}
-		op, field := fn.ChildByFieldName("operand"), fn.ChildByFieldName("field")
-		if op == nil || field == nil || op.Type() != "identifier" {
-			return true
-		}
-		recv := op.Content(src)
-		kind := ""
-		switch {
-		case aliases[recv]:
-			kind = RecvPackage
-		case bindings[recv]:
-			kind = RecvBinding
+		var s Site
+		switch fn.Type() {
+		case "selector_expression":
+			op, field := fn.ChildByFieldName("operand"), fn.ChildByFieldName("field")
+			if op == nil || field == nil || op.Type() != "identifier" {
+				return true
+			}
+			recv := op.Content(src)
+			kind := ""
+			switch {
+			case aliases[recv]:
+				kind = RecvPackage
+			case bindings[recv]:
+				kind = RecvBinding
+			default:
+				return true
+			}
+			s = Site{Kind: SiteCall, Method: field.Content(src), Recv: recv, RecvKind: kind}
+		case "identifier":
+			// A bare call names no package identifier, so it is attributable
+			// only through its arguments: `registerUserRoutes(group, h)` is a
+			// package site because a package value flows into it. Without an
+			// argument that carries one, this is just a local call.
+			s = Site{Kind: SiteBareCall, Method: fn.Content(src)}
 		default:
 			return true
 		}
-		s := Site{
-			File: file, Line: int(n.StartPoint().Row) + 1,
-			Method: field.Content(src), Recv: recv, RecvKind: kind,
-		}
+		s.File, s.Line = file, int(n.StartPoint().Row)+1
+
 		if args := n.ChildByFieldName("arguments"); args != nil {
 			for i := 0; i < int(args.NamedChildCount()); i++ {
 				a := args.NamedChild(i)
@@ -374,7 +599,13 @@ func goCallSites(root *sitter.Node, src []byte, file string, aliases, bindings m
 				}
 				s.ArgShape = append(s.ArgShape, t)
 				s.Args = append(s.Args, a.Content(src))
+				if a.Type() == "identifier" && bindings[a.Content(src)] {
+					s.BindingArgs = append(s.BindingArgs, i)
+				}
 			}
+		}
+		if s.Kind == SiteBareCall && len(s.BindingArgs) == 0 {
+			return true
 		}
 		out = append(out, s)
 		return true

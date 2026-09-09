@@ -43,6 +43,11 @@ type Options struct {
 	MinPrecision float64
 	Labels       map[string]bool
 
+	// Callables is the corpus's declared-callable table, consulted by the key
+	// gate. Run builds it once per corpus; Validate builds one on demand when a
+	// caller invokes it directly, so this is never something a caller must set.
+	Callables map[string]bool
+
 	Proposer Proposer
 }
 
@@ -107,6 +112,9 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// Once per corpus, not once per candidate: on a 134-file corpus with 36
+	// candidates the difference is a full re-parse of the corpus 35 times over.
+	opts.Callables = IndexCallables(files, opts)
 	res := Result{Options: opts, Files: files, Clusters: clusters, CorpusSHA: CorpusSHA(files)}
 
 	// Two clusters routinely reduce to the same name — the same dominant

@@ -19,6 +19,10 @@ type Hit struct {
 	File    string
 	Line    int
 	Text    string // the source line, for the manual-label sample
+	// Captures is what the pattern actually bound at this site. The gate reads
+	// it to decide whether a capture is a key: whether `@middleware` is a
+	// callable is not answerable from the query alone, only from what it caught.
+	Captures map[string]string
 }
 
 // Site is the hit's identity in a comparison.
@@ -47,7 +51,20 @@ type Verdict struct {
 	Sample    []Hit   // up to sampleSize hits, for manual labelling
 	Precision float64 // -1 when no labels covered the sample
 	Labeled   int
+
+	// KeyKind is why the candidate has (or has not) a joinable key:
+	// KeyLiteral, KeyCallable or KeyNone. CallableFrac is the best capture's
+	// resolution rate, reported even on rejection so a near miss is visible.
+	KeyKind      string
+	CallableFrac float64
 }
+
+// Key kinds.
+const (
+	KeyNone     = "none"
+	KeyLiteral  = "literal"  // a string literal or a function literal, visible in the query
+	KeyCallable = "callable" // a capture that resolves to something callable at its sites
+)
 
 // sampleSize is the plan's "manual-label precision on a sampled 20".
 const sampleSize = 20
@@ -79,13 +96,6 @@ func Validate(p Proposal, files []CorpusFile, opts Options) (Verdict, error) {
 		// still compile and still match — wrongly.
 		v.Rejects = append(v.Rejects, fmt.Sprintf("%s: %s", RejectWildcard, where))
 	}
-	if !hasKeyCapture(p.Pattern) {
-		// A pattern with no literal or callable capture records that a call
-		// happened and nothing about it; it costs review budget and inflates
-		// the pattern count for no graph.
-		v.Rejects = append(v.Rejects, RejectNoKey)
-	}
-
 	hits, err := RunPattern(p.Pattern, files, opts)
 	if err != nil {
 		return v, err
@@ -93,6 +103,20 @@ func Validate(p Proposal, files []CorpusFile, opts Options) (Verdict, error) {
 	v.Hits = hits
 	v.Files = distinctFiles(hits)
 	v.Sample = sampleHits(hits, files)
+
+	// The key check runs after the hits, not before: whether a capture is a
+	// callable is a fact about what it caught, not about how it was written.
+	if opts.Callables == nil {
+		opts.Callables = IndexCallables(files, opts)
+	}
+	v.KeyKind, v.CallableFrac = keyKind(p.Pattern, hits, opts.Callables)
+	if v.KeyKind == KeyNone {
+		// A pattern with no literal and no callable capture records that a call
+		// happened and nothing about it; it costs review budget and inflates
+		// the pattern count for no graph.
+		v.Rejects = append(v.Rejects, fmt.Sprintf("%s: best callable capture resolved %.0f%% of hits, floor %.0f%%",
+			RejectNoKey, v.CallableFrac*100, callableKeyFloor*100))
+	}
 
 	switch {
 	case len(hits) == 0:
@@ -151,7 +175,10 @@ func runRegistry(reg *patterns.Registry, files []CorpusFile, opts Options) ([]Hi
 			return nil, fmt.Errorf("match %s: %w", f.Path, err)
 		}
 		for _, r := range results {
-			hits = append(hits, Hit{Pattern: r.PatternName, File: f.Path, Line: r.Line, Text: sourceLine(f.Src, r.Line)})
+			hits = append(hits, Hit{
+				Pattern: r.PatternName, File: f.Path, Line: r.Line,
+				Text: sourceLine(f.Src, r.Line), Captures: r.Captures,
+			})
 		}
 	}
 	sort.Slice(hits, func(i, j int) bool {
@@ -180,16 +207,120 @@ func keyBearingNode(nodeType string) bool {
 	return false
 }
 
-// hasKeyCapture reports whether the candidate captures at least one string
-// literal or callable.
+// callableKeyFloor is the share of a candidate's hits whose capture must
+// resolve to a callable before that capture counts as the pattern's key.
 //
-// It reads the query rather than the inferred capture roles on purpose: roles
-// are a guess the proposer made, and a gate that trusts the proposer's own
-// labelling is not a gate. A call whose captured arguments are neither a
-// literal nor a callable records that the call happened and nothing about it —
-// it yields no joinable key, so it costs review budget and inflates the
-// pattern count for no graph.
-func hasKeyCapture(p patterns.Pattern) bool {
+// Not 1.0: one `r.Use(cfg.Middleware)` among fifty `r.Use(authRequired)` should
+// not disqualify the pattern. Not low either — the floor is what stops
+// `c.JSON(200, buildResponse())` from passing on the one hit in twenty whose
+// argument happens to be a call.
+const callableKeyFloor = 0.8
+
+// keyKind reports whether the candidate has a key a linker could join on, and
+// why.
+//
+// Two kinds qualify. A **literal** key is visible in the query itself: a string
+// (a path, a topic, a table name) or a function literal. A **callable** key is
+// only visible in what the query caught — `r.Use(authMiddleware())` and
+// `r.Use(logger)` capture an identifier or a call expression, node types that
+// say nothing on their own, but the *values* name something callable, and a
+// reference to a callable is exactly as joinable as an inline one.
+//
+// A call whose captures are neither records that the call happened and nothing
+// about it. That is still the line; the earlier version of this gate just drew
+// it syntactically, which put every middleware registration on the wrong side.
+//
+// Neither kind reads the proposer's inferred roles. Roles are a guess, and a
+// gate that trusts the proposer's own labelling is not a gate.
+func keyKind(p patterns.Pattern, hits []Hit, callables map[string]bool) (string, float64) {
+	if hasLiteralKeyCapture(p) {
+		return KeyLiteral, 1
+	}
+	if len(hits) == 0 {
+		return KeyNone, 0
+	}
+
+	// Score every capture independently and keep the best: a pattern needs one
+	// joinable key, not all of them.
+	skip := calleeNameCaptures(p.Query)
+	counts := map[string]int{}
+	for _, h := range hits {
+		for name, text := range h.Captures {
+			if strings.HasPrefix(name, "_") || skip[name] {
+				continue
+			}
+			if isCallableRef(text, callables) {
+				counts[name]++
+			}
+		}
+	}
+	best := 0.0
+	for _, n := range counts {
+		if f := float64(n) / float64(len(hits)); f > best {
+			best = f
+		}
+	}
+	if best >= callableKeyFloor {
+		return KeyCallable, best
+	}
+	return KeyNone, best
+}
+
+// calleeNameCaptures returns the captures bound at a `field:` position — the
+// method name of a call on a receiver whose type the query does not know.
+//
+// This one exclusion is load-bearing. Such a name resolves to no declaration,
+// so counting it as a callable key makes the gate vacuous: measured on gotify,
+// `c.Next()` passed on 66 sites because some unrelated type in the corpus
+// declares a `Next` method. A key has to be something the call is *about*, not
+// the call's own name.
+//
+// Scoped to `field:` and not to the `field_identifier` node type, because a
+// method *declaration* binds its own name to the same node type — and that name
+// is a declaration, which is exactly the key the gate should accept.
+func calleeNameCaptures(query string) map[string]bool {
+	out := map[string]bool{}
+	toks := tokenizeQuery(query)
+	for i, t := range toks {
+		if t != "@" || i < 3 || i+1 >= len(toks) || toks[i-1] != ")" {
+			continue
+		}
+		// `field: (field_identifier) @method` — walk back past `(type)` to the
+		// field label that introduced it.
+		if i >= 5 && toks[i-3] == "(" && toks[i-4] == ":" && toks[i-5] == "field" {
+			out[toks[i+1]] = true
+		}
+	}
+	return out
+}
+
+// isCallableRef reports whether a captured expression *references* something
+// the corpus declares as callable: `logging`, `authentication.RequireClient`,
+// `&handler.Mount`.
+//
+// A call expression is deliberately not one. Two earlier attempts show why the
+// line has to sit here. Letting any call qualify "by construction" admitted
+// `c.AbortWithError(404, fmt.Errorf(...))` — 48 false sites on gotify alone.
+// Resolving the *callee* instead admitted `ctx.JSON(200, withResolvedImage(&app))`,
+// which passes a value that a callable produced, not a callable. Whether a call
+// returns something callable is a question about types, which is Tier VG's job.
+// The gate asks what it can answer and abstains otherwise: a reference to a
+// declared callable is a joinable key, a call's result is not knowable here.
+func isCallableRef(text string, callables map[string]bool) bool {
+	t := strings.TrimSpace(text)
+	if t == "" || strings.ContainsAny(t, "(){}[]\"`") {
+		return false
+	}
+	t = strings.TrimLeft(t, "&*")
+	if i := strings.LastIndexByte(t, '.'); i >= 0 {
+		t = t[i+1:]
+	}
+	return callables[t]
+}
+
+// hasLiteralKeyCapture reports whether the query captures a string literal or a
+// function literal, read off the query text rather than the roles.
+func hasLiteralKeyCapture(p patterns.Pattern) bool {
 	toks := tokenizeQuery(p.Query)
 	for i, t := range toks {
 		if t != "@" || i == 0 {

@@ -2085,8 +2085,12 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 		// X.9: gin route-group registrar bookkeeping nodes are the same shape —
 		// they feed EnrichRouteGroups and would otherwise emit a self-edge from
 		// their enclosing function (the func node sits on the same line).
+		// Tier PS: `*_param_decl` / `*_binding_arg_call` are synthesized
+		// bookkeeping with the same property — a declaration is not a call.
 		if n.Type == graph.NodeTypeVariable && (n.Meta["alias_name"] != "" || n.Meta["instance_name"] != "" ||
 			strings.HasPrefix(n.Meta["pattern"], "gin_group_registrar") ||
+			strings.HasSuffix(n.Meta["pattern"], "_param_decl") ||
+			strings.HasSuffix(n.Meta["pattern"], "_binding_arg_call") ||
 			strings.HasPrefix(n.Meta["pattern"], "wrapper_url_")) {
 			continue
 		}
@@ -2611,6 +2615,17 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	// call sites and MUST NOT emit edges (guarded in Pass 2 by the
 	// gin_group_registrar prefix), same discipline as alias binding markers.
 	case lower == "gin_group_registrar_func" || lower == "gin_group_registrar_call":
+		return graph.NodeTypeVariable, graph.EdgeTypeCalls
+
+	// Tier PS: the two non-call shapes synthesis samples — a declaration that
+	// receives a package-typed parameter (`<pkg>_<type>_param_decl`) and a call
+	// that passes a package value across a function boundary
+	// (`<pkg>_binding_arg_call`). Same bookkeeping discipline as X.9 above, and
+	// for the same reason: a synthesized pattern's roles are inferred and
+	// unreviewed, so it records a fact and must not mint an endpoint or emit an
+	// edge off it. This case must precede the generic `contains "route"`
+	// heuristic below, which `gin_routergroup_param_decl` would otherwise hit.
+	case strings.HasSuffix(lower, "_param_decl") || strings.HasSuffix(lower, "_binding_arg_call"):
 		return graph.NodeTypeVariable, graph.EdgeTypeCalls
 
 	// ── WB.1: wrapper-body param→URL bookkeeping ──────────────────────────────

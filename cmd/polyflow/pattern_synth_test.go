@@ -25,7 +25,7 @@ func TestPatternSynth_DryRunReportsAndWritesNothing(t *testing.T) {
 	for _, want := range []string{
 		"accept  router_get_route",
 		"accept  router_route_group",
-		"REJECT  router_use",
+		"REJECT  router_setlimit",
 		"reason: no_extractable_capture",
 		"(dry run, not written)",
 	} {

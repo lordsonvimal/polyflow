@@ -33,10 +33,16 @@ func TestSample_ClustersByCalleeShape(t *testing.T) {
 		methods[c.Key()] = c.Methods
 	}
 	want := map[string]int{
-		"binding(interpreted_string_literal,identifier)":   6,
+		"binding(interpreted_string_literal,identifier)":   7,
 		"binding(interpreted_string_literal,func_literal)": 1,
-		"binding(identifier)":                              1,
+		"binding(identifier)":                              2, // r.Use(logging) and r.SetLimit(maxInFlight)
 		"package()":                                        1,
+		// Not call sites: a declaration receiving a package value, and the call
+		// that hands one over. Sampling only `receiver.Method(...)` left both
+		// invisible to the proposer.
+		"decl(function_declaration,router.Router)":  2,
+		"decl(function_declaration,router.Handler)": 1,
+		"bare()": 1,
 	}
 	for k, n := range want {
 		if got[k] != n {
@@ -64,6 +70,60 @@ func TestSample_UnimportedFileIsNotAttributed(t *testing.T) {
 		for _, s := range c.Sites {
 			if s.File == "unrelated.go" {
 				t.Errorf("sampled %s:%d from a file that does not import the package", s.File, s.Line)
+			}
+		}
+	}
+}
+
+// The two shapes the sampler could not see. A declaration is where a function's
+// binding to a package value is written down, and a bare call is where that
+// value crosses a function boundary; neither is `receiver.Method(...)`, so
+// neither produced a cluster, so no proposer could have reached them.
+func TestSample_SamplesDeclarationsAndBareCalls(t *testing.T) {
+	clusters, _, err := Sample(fixtureOpts())
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	byKind := map[string][]Site{}
+	for _, c := range clusters {
+		byKind[c.Kind] = append(byKind[c.Kind], c.Sites...)
+	}
+
+	decls := map[string]bool{}
+	for _, s := range byKind[SiteDecl] {
+		decls[s.Name] = true
+		if s.TypeName == "" || s.DeclKind != "function_declaration" {
+			t.Errorf("decl site %s has type %q kind %q, want a package type on a function declaration",
+				s.Name, s.TypeName, s.DeclKind)
+		}
+	}
+	for _, want := range []string{"Mount", "mountWillow", "logging"} {
+		if !decls[want] {
+			t.Errorf("no declaration site for %s: %v", want, decls)
+		}
+	}
+
+	if len(byKind[SiteBareCall]) != 1 {
+		t.Fatalf("bare-call sites = %d, want 1 (mountWillow(r))", len(byKind[SiteBareCall]))
+	}
+	bare := byKind[SiteBareCall][0]
+	if bare.Method != "mountWillow" || len(bare.BindingArgs) != 1 || bare.BindingArgs[0] != 0 {
+		t.Errorf("bare call = %+v, want mountWillow with the package value at argument 0", bare)
+	}
+}
+
+// Attribution for a bare call is its arguments and nothing else: it names no
+// package identifier, so a call that carries no package value is a local call
+// the sampler must not claim.
+func TestSample_BareCallWithoutAPackageValueIsNotAttributed(t *testing.T) {
+	clusters, _, err := Sample(fixtureOpts())
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	for _, c := range clusters {
+		for _, s := range c.Sites {
+			if s.Kind == SiteBareCall && len(s.BindingArgs) == 0 {
+				t.Errorf("attributed bare call %s at %s:%d with no package argument", s.Method, s.File, s.Line)
 			}
 		}
 	}
@@ -160,12 +220,77 @@ func TestGate_RejectsFanoutAboveCap(t *testing.T) {
 	}
 }
 
+// `r.SetLimit(maxInFlight)` captures a value: not a literal, and not a
+// reference to anything the corpus declares as callable. It records that a call
+// happened and nothing about it.
 func TestGate_RejectsPatternWithNoKeyCapture(t *testing.T) {
 	res := mustRun(t, fixtureOpts())
-	v := findVerdict(t, res, "router_use")
+	v := findVerdict(t, res, "router_setlimit")
 	assertRejected(t, v, RejectNoKey)
+	if v.KeyKind != KeyNone {
+		t.Errorf("key kind = %q, want %q", v.KeyKind, KeyNone)
+	}
 	if len(v.Hits) == 0 {
-		t.Error("router_use should still be reported with its hits — a rejection nobody can see is not reviewable")
+		t.Error("router_setlimit should still be reported with its hits — a rejection nobody can see is not reviewable")
+	}
+}
+
+// The other side of the same line: `r.Use(logging)` captures an identifier —
+// a node type that says nothing on its own — but the value names a callable the
+// corpus declares, which is as joinable as an inline handler. Rejecting it was
+// the gate reading the query instead of what the query caught, and it cost
+// every middleware registration in the corpus.
+func TestGate_CallableReferenceIsAKey(t *testing.T) {
+	res := mustRun(t, fixtureOpts())
+	v := findVerdict(t, res, "router_use")
+	if !v.Accepted {
+		t.Fatalf("router_use rejected for %v, want accepted on its callable key", v.Rejects)
+	}
+	if v.KeyKind != KeyCallable {
+		t.Errorf("key kind = %q, want %q", v.KeyKind, KeyCallable)
+	}
+	if v.CallableFrac < callableKeyFloor {
+		t.Errorf("callable fraction = %.2f, want >= %.2f", v.CallableFrac, callableKeyFloor)
+	}
+}
+
+// A cluster drops the method name so verbs merge. `Use` and `SetLimit` share a
+// shape and disagree on the key, so the alternation has to split — otherwise
+// the one real key is diluted by the value beside it and both are lost.
+func TestPropose_SplitsClusterWhenMethodsDisagreeOnKey(t *testing.T) {
+	res := mustRun(t, fixtureOpts())
+	use := findVerdict(t, res, "router_use")
+	limit := findVerdict(t, res, "router_setlimit")
+
+	if len(use.Hits) != 1 || use.Hits[0].Line != 13 {
+		t.Errorf("router_use hits = %v, want only the r.Use(logging) site", use.Hits)
+	}
+	for _, h := range limit.Hits {
+		for _, u := range use.Hits {
+			if h.Site() == u.Site() {
+				t.Errorf("the two split patterns both match %s — the split must partition the sites", h.Site())
+			}
+		}
+	}
+}
+
+func TestIsCallableRef(t *testing.T) {
+	declared := map[string]bool{"logging": true, "Mount": true}
+	cases := map[string]bool{
+		"logging":           true,  // declared in the corpus
+		"handlers.Mount":    true,  // qualified reference to a declared callable
+		"&Mount":            true,  // address-of a declared callable
+		"maxInFlight":       false, // a value the corpus does not declare as callable
+		"authMiddleware()":  false, // a call passes a *result*; whether it is callable needs types
+		"errors.New(\"x\")": false, // ... and this is why: `New` is declared all over a real corpus
+		"gin.H{\"e\": 1}":   false, // a composite literal is not a reference
+		"200":               false,
+		"":                  false,
+	}
+	for text, want := range cases {
+		if got := isCallableRef(text, declared); got != want {
+			t.Errorf("isCallableRef(%q) = %v, want %v", text, got, want)
+		}
 	}
 }
 
@@ -207,7 +332,10 @@ func TestRun_AcceptsRouteAndGroup(t *testing.T) {
 	for _, v := range res.Accepted() {
 		accepted = append(accepted, v.Proposal.Pattern.Name)
 	}
-	want := []string{"router_get_route", "router_route_group"}
+	want := []string{
+		"router_binding_arg_call", "router_get_route", "router_handler_param_decl",
+		"router_route_group", "router_router_param_decl", "router_use",
+	}
 	if strings.Join(accepted, ",") != strings.Join(want, ",") {
 		t.Fatalf("accepted = %v, want %v", accepted, want)
 	}
