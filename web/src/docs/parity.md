@@ -20,6 +20,7 @@ invisible to the other.
 | `polyflow patterns` | Settings → Patterns |
 | `polyflow patterns list` | Settings → Patterns list/search/language-filter |
 | `polyflow patterns add <file>` | Settings → Patterns → "Add pattern…" — `POST /api/patterns` |
+| `polyflow patterns synth` | **exception** — Tier PS authoring surface; it samples a corpus outside the workspace, writes a `patterns/<lang>/*.yaml` source file and expects the reviewer to add a fixture directory next to it, none of which the UI's pattern views model |
 | `polyflow context` | Context copy (right-click node → "Copy context") / `POST /api/context/bundle` |
 | `polyflow trace` | Flows activity — waypoint/path tracing between two nodes |
 | `polyflow impact` | Impact activity — blast-radius view for a node or file |

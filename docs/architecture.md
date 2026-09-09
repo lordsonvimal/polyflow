@@ -65,7 +65,11 @@ twice.
 
 Ask in order; the first yes wins.
 
-1. New **syntactic shape**? → L1 code YAML (`patterns/<lang>/*.yaml`).
+1. New **syntactic shape**? → L1 code YAML (`patterns/<lang>/*.yaml`). For a
+   whole package's surface, `polyflow pattern synth --package <pkg> --corpus
+   <dir>` (Tier PS, `internal/patternsynth`) proposes candidates from a corpus
+   and writes only the ones its gate accepts; the roles it infers still need a
+   reviewer, and every pattern file still needs its `<name>_test/` fixtures.
 2. New **in-tree artifact** holding graph facts? → L1 artifact reader + mapping YAML.
 3. New way a **value hides**? → L2 spec rule.
 4. New **relationship derived from existing facts**? → L3 rules.

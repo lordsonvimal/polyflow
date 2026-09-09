@@ -198,6 +198,13 @@ func NewTreeSitterMatcherForService(reg *Registry, svcDeps []deps.Dependency) *T
 	return m
 }
 
+// GrammarFor exposes languageFor to callers outside this package. Tier PS's
+// synthesizer needs it because getQuerySet only *logs* a candidate query's
+// compile error and skips the pattern — a gate that must reject on that error
+// has to compile the candidate itself, against exactly the grammar the matcher
+// would have used. Returns nil for a grammar this build has no binding for.
+func GrammarFor(lang string) *sitter.Language { return languageFor(lang) }
+
 // languageFor returns the tree-sitter Language for the given language string.
 func languageFor(lang string) *sitter.Language {
 	switch lang {
@@ -2844,8 +2851,12 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 	// Explicit case, and it must precede both the chi_* case below (which
 	// `chi_route_group` matches on the "chi_route" prefix) and the generic
 	// `contains "route"` heuristic (which every name here matches).
+	// The `_route_group` suffix is matched generically, not just for the two
+	// hand-written prefixes: Tier PS synthesizes group patterns named
+	// `<pkg>_route_group`, and a generated pattern that classified as an
+	// http_handler would mint an endpoint for every `r.Route("/admin", ...)`.
 	case lower == "resources_route" || lower == "resource_route" ||
-		lower == "namespace_route" ||
+		lower == "namespace_route" || strings.HasSuffix(lower, "_route_group") ||
 		strings.HasPrefix(lower, "gin_route_group") || strings.HasPrefix(lower, "chi_route_group"):
 		return graph.NodeTypeRouteGroup, graph.EdgeTypeHTTPCall
 

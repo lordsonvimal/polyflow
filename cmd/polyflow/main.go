@@ -1475,8 +1475,12 @@ func indexFreshness(cfg *workspace.WorkspaceConfig, lastIndexedAt time.Time) str
 // ─── patterns ────────────────────────────────────────────────────────────────
 
 var patternsCmd = &cobra.Command{
-	Use:   "patterns",
-	Short: "List or manage loaded patterns",
+	Use: "patterns",
+	// "pattern" is an alias, not a second command: SA.4 specifies
+	// `polyflow pattern synth`, and a near-duplicate top-level verb would be
+	// worse than accepting both spellings of the one that exists.
+	Aliases: []string{"pattern"},
+	Short:   "List, manage or synthesize patterns",
 }
 
 var patternsListLanguage string
@@ -1496,7 +1500,7 @@ func initPatternsSubcmds() {
 		RunE:  runPatternsAdd,
 	}
 
-	patternsCmd.AddCommand(listCmd, addCmd)
+	patternsCmd.AddCommand(listCmd, addCmd, initPatternSynthCmd())
 }
 
 func runPatternsList(cmd *cobra.Command, args []string) error {
