@@ -319,6 +319,20 @@ func newRulePatterns(r *Rule) *rulePatterns {
 	return rp
 }
 
+// frame is a rule's binding environment: a variable's value is frame.val[Var]
+// and set records which slots are bound (Var < 64, checked at load). It
+// replaces the `env map[string]string` that evalRule allocated per call and the
+// `map...faststr` hashing on every body-literal binding
+// (docs/datalog-engine-performance-plan.md D.2). One []string alloc per
+// evalRule, and the set/unwind is bit ops.
+type frame struct {
+	val []string
+	set uint64
+}
+
+func (f *frame) get(id int) (string, bool) { return f.val[id], f.set&(1<<uint(id)) != 0 }
+func (f *frame) put(id int, v string)      { f.val[id] = v; f.set |= 1 << uint(id) }
+
 // eachSolved iterates the tuples satisfying a positive body literal, without
 // materializing them when the literal is a pure base relation — the common case
 // and most of match's former allocation (P.2).
@@ -348,7 +362,7 @@ func (e *Engine) eachSolved(rs *roundState, rel string, binds []*string, fn func
 // materialized stratum — and is the only thing the two evaluation modes differ
 // in (see bottomup.go).
 func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) error {
-	env := map[string]string{}
+	fr := frame{val: make([]string, r.NVars)}
 	for i, term := range r.Head.Args {
 		b := binds[i]
 		if b == nil {
@@ -360,27 +374,27 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) er
 			}
 			continue
 		}
-		if v, seen := env[term.Name]; seen {
+		if v, seen := fr.get(term.Var); seen {
 			if v != *b {
 				return nil
 			}
 			continue
 		}
-		env[term.Name] = *b
+		fr.put(term.Var, *b)
 	}
 	var steps []DerivationStep
 	if e.recordProv {
 		steps = make([]DerivationStep, 0, len(r.Body))
 	}
-	return e.join(src, r, newRulePatterns(r), 0, env, binds, t, steps)
+	return e.join(src, r, newRulePatterns(r), 0, &fr, binds, t, steps)
 }
 
-func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
+func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *frame, binds []*string, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
 		head := make(Tuple, len(r.Head.Args))
 		for k, term := range r.Head.Args {
 			if term.IsVar {
-				v, ok := env[term.Name]
+				v, ok := fr.get(term.Var)
 				if !ok {
 					// checkSafe rules this out at load; a hit here is an engine bug.
 					return fmt.Errorf("datalog: rule %s (%s:%d) left head variable %s unbound",
@@ -407,7 +421,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[
 		if !term.IsVar {
 			continue
 		}
-		if v, ok := env[term.Name]; ok {
+		if v, ok := fr.get(term.Var); ok {
 			rp.vals[i][k] = v
 			sub[k] = &rp.vals[i][k]
 		} else {
@@ -423,7 +437,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[
 		if found {
 			return nil
 		}
-		return e.join(src, r, rp, i+1, env, binds, t, steps)
+		return e.join(src, r, rp, i+1, fr, binds, t, steps)
 	}
 
 	_, isBase := e.base[lit.Rel]
@@ -431,34 +445,32 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[
 	rec := e.recordProv
 	var joinErr error
 	err := src.eachLit(i, lit.Rel, sub, func(tup Tuple) bool {
-		var added []string
+		var added uint64
 		ok := true
 		for k, term := range lit.Args {
 			if !term.IsVar {
 				continue
 			}
-			if v, seen := env[term.Name]; seen {
+			if v, seen := fr.get(term.Var); seen {
 				if v != tup[k] {
 					ok = false
 					break
 				}
 				continue
 			}
-			env[term.Name] = tup[k]
-			added = append(added, term.Name)
+			fr.put(term.Var, tup[k])
+			added |= 1 << uint(term.Var)
 		}
 		if ok {
 			next := steps
 			if rec {
 				next = append(steps, DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase})
 			}
-			if e2 := e.join(src, r, rp, i+1, env, binds, t, next); e2 != nil {
+			if e2 := e.join(src, r, rp, i+1, fr, binds, t, next); e2 != nil {
 				joinErr = e2
 			}
 		}
-		for _, name := range added {
-			delete(env, name)
-		}
+		fr.set &^= added
 		return joinErr == nil
 	})
 	if err != nil {

@@ -15,6 +15,12 @@ import (
 type Term struct {
 	IsVar bool
 	Name  string // variable name when IsVar, literal value otherwise
+	// Var is a dense per-rule slot index for this variable, assigned at load by
+	// assignVars. It replaces the variable name as the binding-frame key on the
+	// hot path: join indexes a []string frame by Var instead of hashing Name
+	// into an env map (docs/datalog-engine-performance-plan.md D.2). Only
+	// meaningful when IsVar.
+	Var int
 }
 
 // Literal is one goal: `reg_callback(R, CB)` or `not own_filter(C, R)`.
@@ -38,9 +44,39 @@ type Rule struct {
 	Name string
 	File string
 	Line int
+
+	// NVars is the number of distinct variables in the rule — the size of the
+	// binding frame join allocates. assignVars sets it.
+	NVars int
 }
 
 func (l Literal) arity() int { return len(l.Args) }
+
+// assignVars gives every distinct variable in a rule a dense slot index, shared
+// between the head and the body, and records the count on the rule. The join
+// frame is a []string of NVars entries indexed by Term.Var, which is what lets
+// D.2 drop the per-evalRule env map.
+func assignVars(r *Rule) {
+	ids := map[string]int{}
+	number := func(args []Term) {
+		for i := range args {
+			if !args[i].IsVar {
+				continue
+			}
+			id, ok := ids[args[i].Name]
+			if !ok {
+				id = len(ids)
+				ids[args[i].Name] = id
+			}
+			args[i].Var = id
+		}
+	}
+	number(r.Head.Args)
+	for bi := range r.Body {
+		number(r.Body[bi].Args)
+	}
+	r.NVars = len(ids)
+}
 
 // ---------------------------------------------------------------------------
 // tokenizer
@@ -148,6 +184,7 @@ func parseRules(src []byte, file string) ([]*Rule, error) {
 		if err != nil {
 			return nil, err
 		}
+		assignVars(r)
 		rules = append(rules, r)
 	}
 	return rules, nil

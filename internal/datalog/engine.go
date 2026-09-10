@@ -463,6 +463,12 @@ func (e *Engine) LoadRules(src []byte, name string) error {
 		if err := checkSafe(r); err != nil {
 			return err
 		}
+		// The join binding frame tracks which slots are set with a uint64 mask
+		// (D.2). No rule this engine sees comes close, but a bad one must fail at
+		// load rather than corrupt a binding.
+		if r.NVars > 64 {
+			return fmt.Errorf("%s:%d: rule %s has %d distinct variables; the engine supports at most 64", r.File, r.Line, r.Name, r.NVars)
+		}
 	}
 	all := append(append([]*Rule{}, e.ruleOrder...), rules...)
 
