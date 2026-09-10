@@ -133,6 +133,14 @@ type Options struct {
 	MaxTuples int
 	// MaxRounds caps fixpoint iteration.
 	MaxRounds int
+
+	// Provenance records a Derivation for every derived tuple during bulk
+	// (whole-relation) evaluation. It defaults off (Tier DL.3 / P.6): derivation
+	// recording is ~40% of a bulk pass, it is criterion 4 rather than something
+	// any caller reads inline, and Provenance(goal, t) recomputes it on demand
+	// for one ground tuple in microseconds. Turn it on only to inspect the
+	// derivations of a whole relation at once.
+	Provenance bool
 }
 
 func (o Options) withDefaults() Options {
@@ -378,6 +386,10 @@ type Engine struct {
 	// Deduped, because a rule re-fires on every fixpoint round.
 	derivs   map[dgKey][]Derivation
 	derivSet map[string]bool
+	// recordProv gates derivation recording on the hot path. It tracks
+	// opts.Provenance, except Provenance() flips it on for the duration of one
+	// bound recompute (P.6).
+	recordProv bool
 
 	loaded bool // rules stratified; set on first Query
 	err    error
@@ -392,13 +404,14 @@ func New(opts Options) *Engine {
 		opts.DemandDriven = true
 	}
 	return &Engine{
-		opts:     opts.withDefaults(),
-		syms:     newInterner(),
-		base:     map[string]*relation{},
-		rules:    map[string][]*Rule{},
-		tables:   map[sgKey]*table{},
-		derivs:   map[dgKey][]Derivation{},
-		derivSet: map[string]bool{},
+		opts:       opts.withDefaults(),
+		recordProv: opts.Provenance,
+		syms:       newInterner(),
+		base:       map[string]*relation{},
+		rules:      map[string][]*Rule{},
+		tables:     map[sgKey]*table{},
+		derivs:     map[dgKey][]Derivation{},
+		derivSet:   map[string]bool{},
 	}
 }
 

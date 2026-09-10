@@ -22,7 +22,10 @@ func stratify(rules []*Rule) (map[string]int, error) {
 	}
 
 	// deps[to] = relations `to` reads; neg records whether the read is negated.
-	type dep struct{ rel string; neg bool }
+	type dep struct {
+		rel string
+		neg bool
+	}
 	deps := map[string][]dep{}
 	for _, r := range rules {
 		for _, l := range r.Body {
@@ -74,7 +77,10 @@ func stratify(rules []*Rule) (map[string]int, error) {
 // findNegativeCycle returns a relation cycle containing at least one negated
 // edge, for the error message. Best-effort: any such cycle is a valid answer.
 func findNegativeCycle(rules []*Rule, heads map[string]bool) []string {
-	type edge struct{ to string; neg bool }
+	type edge struct {
+		to  string
+		neg bool
+	}
 	adj := map[string][]edge{}
 	var froms []string
 	for _, r := range rules {

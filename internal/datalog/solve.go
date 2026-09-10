@@ -59,7 +59,21 @@ func (e *Engine) Provenance(goal string, t Tuple) ([]Derivation, error) {
 	}
 	pattern := make([]string, len(t))
 	copy(pattern, t)
-	if _, err := e.solveComplete(goal, bindsOf(pattern)); err != nil {
+	binds := bindsOf(pattern)
+
+	// Bulk evaluation runs with recording off (P.6). Recompute this one ground
+	// goal with recording on: it is a fully bound query, so it touches only the
+	// derivations of the tuple asked about and costs microseconds. Re-derive
+	// even if a previous bound query already completed this subgoal — that run
+	// may have had recording off too.
+	prev := e.recordProv
+	e.recordProv = true
+	defer func() { e.recordProv = prev }()
+	if tb := e.tables[e.subgoalKey(goal, binds)]; tb != nil && tb.state == tableComplete && len(e.derivs[e.groupKey(goal, t)]) == 0 {
+		tb.state = tableDirty
+	}
+
+	if _, err := e.solveComplete(goal, binds); err != nil {
 		return nil, err
 	}
 	ds := e.derivs[e.groupKey(goal, t)]
@@ -354,7 +368,10 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) er
 		}
 		env[term.Name] = *b
 	}
-	steps := make([]DerivationStep, 0, len(r.Body))
+	var steps []DerivationStep
+	if e.recordProv {
+		steps = make([]DerivationStep, 0, len(r.Body))
+	}
 	return e.join(src, r, newRulePatterns(r), 0, env, binds, t, steps)
 }
 
@@ -377,7 +394,11 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[
 		if !matches(head, binds) {
 			return nil
 		}
-		return e.record(t, head, &Derivation{Rule: r.Name, Head: head, Body: append([]DerivationStep(nil), steps...)})
+		var d *Derivation
+		if e.recordProv {
+			d = &Derivation{Rule: r.Name, Head: head, Body: append([]DerivationStep(nil), steps...)}
+		}
+		return e.record(t, head, d)
 	}
 
 	lit := r.Body[i]
@@ -407,6 +428,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[
 
 	_, isBase := e.base[lit.Rel]
 	isBase = isBase && len(e.rules[lit.Rel]) == 0
+	rec := e.recordProv
 	var joinErr error
 	err := src.eachLit(i, lit.Rel, sub, func(tup Tuple) bool {
 		var added []string
@@ -426,8 +448,11 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[
 			added = append(added, term.Name)
 		}
 		if ok {
-			step := DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase}
-			if e2 := e.join(src, r, rp, i+1, env, binds, t, append(steps, step)); e2 != nil {
+			next := steps
+			if rec {
+				next = append(steps, DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase})
+			}
+			if e2 := e.join(src, r, rp, i+1, env, binds, t, next); e2 != nil {
 				joinErr = e2
 			}
 		}
@@ -449,7 +474,7 @@ func (e *Engine) record(t *table, tup Tuple, d *Derivation) error {
 			return fmt.Errorf("datalog: relation %s exceeded MaxTuples (%d)", t.rel.name, e.opts.MaxTuples)
 		}
 	}
-	if d != nil {
+	if d != nil && e.recordProv {
 		k := e.derivKeyFast(*d)
 		if !e.derivSet[k] {
 			e.derivSet[k] = true
