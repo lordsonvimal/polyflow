@@ -68,6 +68,17 @@ type MatchResult struct {
 	// grammar (e.g. "javascript" for js/ts/tsx/jsx), or "" when the grammar
 	// has no walker family.
 	Lang string
+
+	// Grammar is the raw tree-sitter grammar language (e.g. "typescript").
+	// Set only for matches of patterns carrying a `facts:` block — MatchToFacts
+	// (FX.2) needs it to pick grammar-specific node types for the scope verbs.
+	Grammar string
+
+	// CaptureNodes / AnchorNode retain the live tree-sitter nodes for FX.2
+	// fact extraction. Populated only when the pattern has a `facts:` block;
+	// nil otherwise (the flat Captures map stays the path for legacy patterns).
+	CaptureNodes map[string]*sitter.Node
+	AnchorNode   *sitter.Node
 }
 
 // keyWalkerKeyCaptureNames is the bounded allow-list of capture names whose
@@ -856,6 +867,21 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 		KeyNodes:    keyNodes,
 		Src:         src,
 		Lang:        keyWalkerLangFor(pc.grammarLang),
+	}
+	if len(pat.Facts) > 0 {
+		mr.Grammar = pc.grammarLang
+		mr.AnchorNode = anchor
+		cn := make(map[string]*sitter.Node, len(matchCaps))
+		for _, cap := range matchCaps {
+			name := q.CaptureNameForId(cap.Index)
+			if strings.HasPrefix(name, "_") {
+				continue
+			}
+			if _, dup := cn[name]; !dup {
+				cn[name] = cap.Node
+			}
+		}
+		mr.CaptureNodes = cn
 	}
 	if pat.Package != "" {
 		mr.Package = pat.Package

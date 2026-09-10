@@ -1,0 +1,514 @@
+package patterns
+
+import (
+	"strconv"
+	"strings"
+
+	sitter "github.com/smacker/go-tree-sitter"
+
+	"github.com/lordsonvimal/polyflow/internal/contract"
+	"github.com/lordsonvimal/polyflow/internal/factpipe"
+)
+
+// ExtractContext carries what the `extract:` verbs need beyond the tree-sitter
+// node a capture bound. Src / Grammar / File are always set by the matcher; the
+// resolution hooks are the seam to the language-semantic layer (Tier VG) and
+// are nil until FX.6 wires them — a verb that needs a nil hook returns its
+// documented non-match value ("" / empty node).
+type ExtractContext struct {
+	Src     []byte
+	Grammar string
+	File    string
+
+	ResolveType   func(n *sitter.Node, src []byte) string
+	ResolveValue  func(n *sitter.Node, src []byte) string
+	ResolveTarget func(n *sitter.Node, src []byte) (target string, depth int64)
+}
+
+// verbVal is an intermediate extraction result. A verb yields zero or more of
+// these; chaining (`then:`) feeds Node forward to the next verb. Kind selects
+// which of Str / Node / Int is meaningful when the value is finally lowered to
+// a factpipe.Atom.
+type verbVal struct {
+	Node *sitter.Node
+	Str  string
+	Int  int64
+	Kind factpipe.AtomKind
+}
+
+func (v verbVal) atom() factpipe.Atom {
+	switch v.Kind {
+	case factpipe.AtomNode:
+		return factpipe.Node(v.Str)
+	case factpipe.AtomInt:
+		return factpipe.Int(v.Int)
+	default:
+		return factpipe.Str(v.Str)
+	}
+}
+
+// parseVerb splits "name(arg)" into ("name", "arg"). A verb with no parens
+// returns ("name", ""). The arg may itself contain parentheses (preceded_by
+// takes a whole tree-sitter query), so the split is on the first "(" and the
+// matching final ")".
+func parseVerb(spec string) (name, arg string) {
+	spec = strings.TrimSpace(spec)
+	i := strings.IndexByte(spec, '(')
+	if i < 0 || !strings.HasSuffix(spec, ")") {
+		return spec, ""
+	}
+	return strings.TrimSpace(spec[:i]), spec[i+1 : len(spec)-1]
+}
+
+// runVerb executes one verb against node and returns its value(s).
+func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
+	if node == nil {
+		return nil
+	}
+	name, arg := parseVerb(spec)
+	switch name {
+	case "", "text":
+		return []verbVal{{Str: node.Content(ec.Src), Kind: factpipe.AtomStr}}
+	case "string_value":
+		return []verbVal{{Str: stringValue(node, ec.Src), Kind: factpipe.AtomStr}}
+	case "trailing_identifier":
+		return []verbVal{{Str: trailingIdentifier(node, ec.Src), Kind: factpipe.AtomStr}}
+	case "receiver":
+		return []verbVal{{Str: receiverText(node, ec.Src), Kind: factpipe.AtomStr}}
+	case "keyword_arg":
+		if v := keywordArg(node, arg, ec.Src); v != nil {
+			return []verbVal{{Node: v, Str: v.Content(ec.Src), Kind: factpipe.AtomStr}}
+		}
+		return []verbVal{{Str: "", Kind: factpipe.AtomStr}}
+
+	case "list_elements":
+		return fanoutElements(node, ec.Src)
+	case "hash_pairs":
+		return hashPairs(node, arg, ec.Src)
+
+	case "position_in_parent":
+		return []verbVal{{Int: int64(positionInParent(node)), Kind: factpipe.AtomInt}}
+	case "preceded_by":
+		return []verbVal{{Int: precededBy(node, arg, ec), Kind: factpipe.AtomInt}}
+	case "nth_of_kind":
+		return []verbVal{{Int: nthOfKind(node, arg), Kind: factpipe.AtomInt}}
+	case "line":
+		return []verbVal{{Int: int64(node.StartPoint().Row) + 1, Kind: factpipe.AtomInt}}
+	case "end_line":
+		return []verbVal{{Int: int64(node.EndPoint().Row) + 1, Kind: factpipe.AtomInt}}
+
+	case "enclosing":
+		if a := enclosing(node, arg, ec.Grammar); a != nil {
+			return []verbVal{{Node: a, Str: nodeID(a, ec), Kind: factpipe.AtomNode}}
+		}
+		return []verbVal{{Str: "", Kind: factpipe.AtomNode}}
+	case "enclosing_name":
+		return []verbVal{{Str: enclosingName(node, arg, ec), Kind: factpipe.AtomStr}}
+	case "synthesize_node":
+		return []verbVal{{Str: synthesizeNodeID(node, arg, ec), Kind: factpipe.AtomNode}}
+
+	case "resolved_type":
+		s := ""
+		if ec.ResolveType != nil {
+			s = ec.ResolveType(node, ec.Src)
+		}
+		return []verbVal{{Str: s, Kind: factpipe.AtomStr}}
+	case "resolved_value":
+		s := ""
+		if ec.ResolveValue != nil {
+			s = ec.ResolveValue(node, ec.Src)
+		}
+		return []verbVal{{Str: s, Kind: factpipe.AtomStr}}
+	case "resolved_target":
+		var target string
+		var depth int64
+		if ec.ResolveTarget != nil {
+			target, depth = ec.ResolveTarget(node, ec.Src)
+		}
+		if arg == "depth" {
+			return []verbVal{{Int: depth, Kind: factpipe.AtomInt}}
+		}
+		return []verbVal{{Str: target, Kind: factpipe.AtomNode}}
+	case "key_expr":
+		return []verbVal{{Str: keyExpr(node, ec), Kind: factpipe.AtomStr}}
+
+	default:
+		// Unknown verb: fail soft to the source text so a typo in a YAML is a
+		// wrong-value bug caught by the .dl diff test, not a panic mid-index.
+		return []verbVal{{Str: node.Content(ec.Src), Kind: factpipe.AtomStr}}
+	}
+}
+
+// evalArg produces the value(s) for one tuple position.
+func evalArg(a ArgSpec, capNodes map[string]*sitter.Node, anchor *sitter.Node, ec *ExtractContext) []verbVal {
+	if a.Literal != nil {
+		return []verbVal{{Str: *a.Literal, Kind: factpipe.AtomStr}}
+	}
+	node := anchor
+	if a.Capture != "" {
+		node = capNodes[a.Capture]
+	}
+	if node == nil {
+		return []verbVal{{Str: "", Kind: factpipe.AtomStr}}
+	}
+	if a.Field != "" {
+		if f := node.ChildByFieldName(a.Field); f != nil {
+			node = f
+		} else {
+			return []verbVal{{Str: "", Kind: factpipe.AtomStr}}
+		}
+	}
+	vals := runVerb(a.Extract, node, ec)
+	if a.Then == "" {
+		return vals
+	}
+	var out []verbVal
+	for _, v := range vals {
+		n := v.Node
+		if n == nil {
+			continue
+		}
+		out = append(out, runVerb(a.Then, n, ec)...)
+	}
+	return out
+}
+
+// --- individual verb implementations -------------------------------------
+
+func stringValue(n *sitter.Node, src []byte) string {
+	// Prefer a content child so escapes/quotes are excluded by the grammar.
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		c := n.NamedChild(i)
+		switch c.Type() {
+		case "string_content", "string_fragment":
+			return c.Content(src)
+		}
+	}
+	s := n.Content(src)
+	s = strings.TrimPrefix(s, ":") // ruby symbol
+	if len(s) >= 2 {
+		if q := s[0]; (q == '"' || q == '\'' || q == '`') && s[len(s)-1] == q {
+			s = s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+func trailingIdentifier(n *sitter.Node, src []byte) string {
+	switch n.Type() {
+	case "identifier", "constant", "property_identifier", "field_identifier",
+		"simple_symbol", "shorthand_property_identifier":
+		return strings.TrimPrefix(n.Content(src), ":")
+	case "call", "method_call", "function_call", "command", "call_expression":
+		for _, f := range []string{"method", "function", "name"} {
+			if c := n.ChildByFieldName(f); c != nil {
+				return trailingIdentifier(c, src)
+			}
+		}
+	case "selector_expression":
+		if c := n.ChildByFieldName("field"); c != nil {
+			return c.Content(src)
+		}
+	case "member_expression":
+		if c := n.ChildByFieldName("property"); c != nil {
+			return c.Content(src)
+		}
+	case "scope_resolution":
+		if c := n.ChildByFieldName("name"); c != nil {
+			return c.Content(src)
+		}
+	}
+	return ""
+}
+
+func receiverText(n *sitter.Node, src []byte) string {
+	for _, f := range []string{"receiver", "object", "operand"} {
+		if c := n.ChildByFieldName(f); c != nil {
+			return c.Content(src)
+		}
+	}
+	switch n.Type() {
+	case "call", "method_call", "call_expression":
+		for _, f := range []string{"function", "method"} {
+			if c := n.ChildByFieldName(f); c != nil {
+				switch c.Type() {
+				case "selector_expression":
+					if o := c.ChildByFieldName("operand"); o != nil {
+						return o.Content(src)
+					}
+				case "member_expression":
+					if o := c.ChildByFieldName("object"); o != nil {
+						return o.Content(src)
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// keywordArg finds a `name:` / `name =` keyword/hash argument anywhere inside
+// call and returns its value node.
+func keywordArg(call *sitter.Node, name string, src []byte) *sitter.Node {
+	var found *sitter.Node
+	var walk func(*sitter.Node, int)
+	walk = func(n *sitter.Node, depth int) {
+		if n == nil || found != nil || depth > 6 {
+			return
+		}
+		switch n.Type() {
+		case "pair", "keyword_argument":
+			k := n.ChildByFieldName("key")
+			v := n.ChildByFieldName("value")
+			if k != nil && v != nil {
+				key := strings.TrimSuffix(strings.TrimPrefix(k.Content(src), ":"), ":")
+				if key == name {
+					found = v
+					return
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i), depth+1)
+		}
+	}
+	walk(call, 0)
+	return found
+}
+
+// fanoutElements yields one value per element of an array/slice/list literal.
+func fanoutElements(n *sitter.Node, src []byte) []verbVal {
+	var out []verbVal
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		c := n.NamedChild(i)
+		if c.Type() == "comment" {
+			continue
+		}
+		out = append(out, verbVal{Node: c, Str: stringValue(c, src), Kind: factpipe.AtomStr})
+	}
+	return out
+}
+
+// hashPairs yields one value per map entry — hash_pairs(key) the keys,
+// hash_pairs(value) the values.
+func hashPairs(n *sitter.Node, which string, src []byte) []verbVal {
+	field := "value"
+	if which == "key" {
+		field = "key"
+	}
+	var out []verbVal
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		c := n.NamedChild(i)
+		if c.Type() != "pair" && c.Type() != "keyword_argument" {
+			continue
+		}
+		if v := c.ChildByFieldName(field); v != nil {
+			out = append(out, verbVal{Node: v, Str: stringValue(v, src), Kind: factpipe.AtomStr})
+		}
+	}
+	return out
+}
+
+func positionInParent(n *sitter.Node) int {
+	p := n.Parent()
+	if p == nil {
+		return 0
+	}
+	if i := namedChildIndex(p, n); i >= 0 {
+		return i
+	}
+	return 0
+}
+
+// precededBy counts prior named siblings whose subtree matches query.
+func precededBy(n *sitter.Node, query string, ec *ExtractContext) int64 {
+	p := n.Parent()
+	if p == nil || query == "" {
+		return 0
+	}
+	lang := languageFor(ec.Grammar)
+	if lang == nil {
+		return 0
+	}
+	// Wrap in an explicit pattern group so a trailing `(#eq? ...)` predicate
+	// binds to the pattern rather than parsing as a second top-level pattern.
+	q, err := sitter.NewQuery([]byte("("+query+")"), lang)
+	if err != nil {
+		if q, err = sitter.NewQuery([]byte(query), lang); err != nil {
+			return 0
+		}
+	}
+	defer q.Close()
+	var count int64
+	for i := 0; i < int(p.NamedChildCount()); i++ {
+		sib := p.NamedChild(i)
+		if sib.StartByte() >= n.StartByte() {
+			break
+		}
+		qc := sitter.NewQueryCursor()
+		qc.Exec(q, sib)
+		for {
+			m, ok := qc.NextMatch()
+			if !ok {
+				break
+			}
+			m = filterPredicatesCached(q, m, ec.Src)
+			if m != nil && len(m.Captures) > 0 {
+				count++
+				break
+			}
+		}
+		qc.Close()
+	}
+	return count
+}
+
+// nthOfKind is the 0-based ordinal of n among its same-type siblings.
+func nthOfKind(n *sitter.Node, kind string) int64 {
+	p := n.Parent()
+	if p == nil {
+		return 0
+	}
+	want := kind
+	if want == "" {
+		want = n.Type()
+	}
+	var ord int64
+	for i := 0; i < int(p.NamedChildCount()); i++ {
+		sib := p.NamedChild(i)
+		if sib.StartByte() >= n.StartByte() {
+			break
+		}
+		if sib.Type() == want {
+			ord++
+		}
+	}
+	return ord
+}
+
+// enclosingKindTypes maps a generic scope kind to the grammar's node types.
+func enclosingKindTypes(grammar, kind string) []string {
+	js := grammar == "javascript" || grammar == "typescript" || grammar == "tsx" || grammar == "jsx"
+	switch kind {
+	case "function":
+		switch {
+		case grammar == "ruby":
+			return []string{"method", "singleton_method"}
+		case grammar == "go":
+			return []string{"function_declaration", "method_declaration", "func_literal"}
+		case js:
+			return []string{"function_declaration", "function_expression", "arrow_function", "method_definition", "generator_function_declaration"}
+		case grammar == "python":
+			return []string{"function_definition"}
+		}
+	case "method":
+		switch {
+		case grammar == "ruby":
+			return []string{"method", "singleton_method"}
+		case grammar == "go":
+			return []string{"method_declaration"}
+		case js:
+			return []string{"method_definition"}
+		case grammar == "python":
+			return []string{"function_definition"}
+		}
+	case "class":
+		switch {
+		case grammar == "ruby":
+			return []string{"class"}
+		case grammar == "go":
+			return []string{"type_declaration"}
+		case js:
+			return []string{"class_declaration", "class"}
+		case grammar == "python":
+			return []string{"class_definition"}
+		}
+	case "module":
+		if grammar == "ruby" {
+			return []string{"module"}
+		}
+	case "block":
+		switch {
+		case grammar == "ruby":
+			return []string{"block", "do_block"}
+		case grammar == "go":
+			return []string{"block", "func_literal"}
+		case js:
+			return []string{"statement_block", "arrow_function"}
+		}
+	}
+	return nil
+}
+
+func enclosing(n *sitter.Node, kind, grammar string) *sitter.Node {
+	types := enclosingKindTypes(grammar, kind)
+	if len(types) == 0 {
+		return nil
+	}
+	for cur := n.Parent(); cur != nil; cur = cur.Parent() {
+		for _, t := range types {
+			if cur.Type() == t {
+				return cur
+			}
+		}
+	}
+	return nil
+}
+
+func enclosingName(n *sitter.Node, kind string, ec *ExtractContext) string {
+	if ec.Grammar == "ruby" && (kind == "class" || kind == "module") {
+		if s := rubyEnclosingClassName(n, ec.Src); s != "" {
+			return s
+		}
+	}
+	e := enclosing(n, kind, ec.Grammar)
+	if e == nil {
+		return ""
+	}
+	if nm := e.ChildByFieldName("name"); nm != nil {
+		if nm.Type() == "scope_resolution" {
+			if last := nm.ChildByFieldName("name"); last != nil {
+				return last.Content(ec.Src)
+			}
+		}
+		return nm.Content(ec.Src)
+	}
+	return ""
+}
+
+// nodeID builds a stable id for an existing enclosing node: file + start line,
+// matching internal/graph's "<file>:<line>" convention (service prefix is added
+// downstream by the FX.1 bridge / emit stage).
+func nodeID(n *sitter.Node, ec *ExtractContext) string {
+	return ec.File + ":" + strconv.Itoa(int(n.StartPoint().Row)+1)
+}
+
+// synthesizeNodeID mints a stable id for an anonymous construct (block /
+// lambda / arrow). Stable across runs for the same source span.
+func synthesizeNodeID(n *sitter.Node, kind string, ec *ExtractContext) string {
+	if kind == "" {
+		kind = n.Type()
+	}
+	return ec.File + "\x00synth:" + kind + ":" +
+		strconv.Itoa(int(n.StartByte())) + "-" + strconv.Itoa(int(n.EndByte()))
+}
+
+func keyExpr(n *sitter.Node, ec *ExtractContext) (out string) {
+	w := contract.KeyWalkerFor(keyWalkerLangFor(ec.Grammar))
+	if w == nil {
+		return ""
+	}
+	defer func() {
+		if recover() != nil {
+			out = ""
+		}
+	}()
+	alts, ok := w.WalkKey(n, ec.Src, nil)
+	if !ok || len(alts) == 0 {
+		return ""
+	}
+	if len(alts) == 1 {
+		return alts[0]
+	}
+	return strings.Join(alts, "|")
+}

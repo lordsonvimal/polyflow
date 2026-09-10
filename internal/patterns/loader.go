@@ -31,6 +31,11 @@ type Pattern struct {
 	Extract  ExtractConfig       `yaml:"extract"`
 	Captures []Capture           `yaml:"captures"` // kept for backward compat
 
+	// Facts is the FX.2 structured-fact block: instead of building a graph
+	// node/edge directly (Extract), the pattern asserts one or more predicate
+	// tuples a <framework>.dl rule derives over. Empty for legacy patterns.
+	Facts []FactSpec `yaml:"facts"`
+
 	// Version gate, copied down from the PatternFile at registration time so
 	// per-service filtering and match metadata don't need the file context.
 	Package      string `yaml:"-"`
