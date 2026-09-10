@@ -21,6 +21,11 @@ type Term struct {
 	// into an env map (docs/datalog-engine-performance-plan.md D.2). Only
 	// meaningful when IsVar.
 	Var int
+	// Sym is the interned id of Name for a constant term, resolved by LoadRules
+	// against the engine's symbol table (docs/datalog-engine-performance-plan.md
+	// D.12). Only meaningful when !IsVar; it lets join compare a rule constant to
+	// an interned tuple element without hashing the string.
+	Sym uint32
 }
 
 // Literal is one goal: `reg_callback(R, CB)` or `not own_filter(C, R)`.

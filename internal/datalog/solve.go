@@ -30,20 +30,35 @@ func (e *Engine) QueryPattern(goal string, pattern []string) ([]Tuple, error) {
 	if err := e.ready(goal, len(pattern)); err != nil {
 		return nil, err
 	}
-	binds := bindsOf(pattern)
+	binds := bindsOf(pattern, e.syms)
 	// An unbound whole-relation goal has no demand to exploit, so it takes the
 	// stratified bottom-up path (P.5); a bound one keeps the tabled evaluator,
 	// which is where demand-driven evaluation genuinely pays.
 	solve := e.solveComplete
 	if e.useBottomUp(goal, binds) {
-		solve = func(goal string, _ []*string) ([]Tuple, error) { return e.solveBottomUp(goal) }
+		solve = func(goal string, _ []*uint32) ([]itup, error) { return e.solveBottomUp(goal) }
 	}
 	out, err := solve(goal, binds)
 	if err != nil {
 		return nil, err
 	}
+	// De-intern on the way out, then sort the strings — interning order is
+	// assignment order, not lexical, so the determinism guarantee (§4) lives on
+	// the revealed tuples, never on the ids. Every result tuple has the same
+	// arity (one relation, deduped), so the strings go into one flat backing
+	// slice sub-sliced per row rather than a []string alloc per tuple.
 	res := make([]Tuple, len(out))
-	copy(res, out)
+	if len(out) > 0 {
+		w := len(out[0])
+		flat := make([]string, len(out)*w)
+		for i, t := range out {
+			row := flat[i*w : i*w+w : i*w+w]
+			for j, id := range t {
+				row[j] = e.syms.strs[id]
+			}
+			res[i] = row
+		}
+	}
 	sortTuples(res)
 	return res, nil
 }
@@ -60,7 +75,8 @@ func (e *Engine) Provenance(goal string, t Tuple) ([]Derivation, error) {
 	}
 	pattern := make([]string, len(t))
 	copy(pattern, t)
-	binds := bindsOf(pattern)
+	binds := bindsOf(pattern, e.syms)
+	ti := e.syms.intern(t)
 
 	// Bulk evaluation runs with recording off (P.6). Recompute this one ground
 	// goal with recording on: it is a fully bound query, so it touches only the
@@ -70,16 +86,16 @@ func (e *Engine) Provenance(goal string, t Tuple) ([]Derivation, error) {
 	prev := e.recordProv
 	e.recordProv = true
 	defer func() { e.recordProv = prev }()
-	if tb := e.tables[e.subgoalKey(goal, binds)]; tb != nil && tb.state == tableComplete && len(e.derivs[e.groupKey(goal, t)]) == 0 {
+	if tb := e.tables[e.subgoalKey(goal, binds)]; tb != nil && tb.state == tableComplete && len(e.derivs[e.groupKey(goal, ti)]) == 0 {
 		tb.state = tableDirty
 	}
 
 	if _, err := e.solveComplete(goal, binds); err != nil {
 		return nil, err
 	}
-	ds := e.derivs[e.groupKey(goal, t)]
+	ds := e.derivs[e.groupKey(goal, ti)]
 	if len(ds) == 0 {
-		if r, ok := e.base[goal]; ok && r.has(t) {
+		if r, ok := e.base[goal]; ok && r.has(ti) {
 			// A base fact has no derivation and that is the answer, not a
 			// failure: the walk back stops here.
 			return nil, nil
@@ -117,11 +133,11 @@ func (e *Engine) arityOf(goal string) (int, error) {
 	return 0, fmt.Errorf("datalog: unknown relation %q — it is neither asserted nor the head of a rule", goal)
 }
 
-func bindsOf(pattern []string) []*string {
-	binds := make([]*string, len(pattern))
+func bindsOf(pattern []string, in *interner) []*uint32 {
+	binds := make([]*uint32, len(pattern))
 	for i := range pattern {
 		if pattern[i] != "" {
-			v := pattern[i]
+			v := in.id(pattern[i])
 			binds[i] = &v
 		}
 	}
@@ -142,12 +158,12 @@ type roundState struct {
 // solveComplete drives the fixpoint for one subgoal: re-evaluate until a whole
 // round adds no tuple anywhere. Datalog is monotone and the domain is finite,
 // so this terminates; MaxRounds only catches a bug in the engine itself.
-func (e *Engine) solveComplete(rel string, binds []*string) ([]Tuple, error) {
+func (e *Engine) solveComplete(rel string, binds []*uint32) ([]itup, error) {
 	topLevel := e.evalDepth == 0
 	e.evalDepth++
 	defer func() { e.evalDepth-- }()
 
-	var out []Tuple
+	var out []itup
 	for i := 0; i < e.opts.MaxRounds; i++ {
 		before := e.grown
 		rs := &roundState{seen: map[sgKey]bool{}}
@@ -175,7 +191,7 @@ func (e *Engine) solveComplete(rel string, binds []*string) ([]Tuple, error) {
 // in progress returns its partial answers rather than recursing — the caller's
 // fixpoint loop is what turns that into the complete set. This is the tabling
 // half of "top-down with tabling"; the call-pattern key is the demand half.
-func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, error) {
+func (e *Engine) solve(rs *roundState, rel string, binds []*uint32) ([]itup, error) {
 	rules := e.rules[rel]
 	baseRel, hasBase := e.base[rel]
 	if len(rules) == 0 {
@@ -205,7 +221,7 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 	// A relation can be both asserted and derived; the answer is the union.
 	if hasBase {
 		var rerr error
-		baseRel.each(binds, func(tup Tuple) bool {
+		baseRel.each(binds, func(tup itup) bool {
 			if err := e.record(t, tup, nil); err != nil {
 				rerr = err
 				return false
@@ -220,7 +236,7 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 		// Debugging mode: ignore the call pattern and materialize the whole
 		// relation, then filter. Never the default — this is what makes a
 		// closure over a large ancestor set explode.
-		free := make([]*string, len(binds))
+		free := make([]*uint32, len(binds))
 		if e.subgoalKey(rel, free) != key {
 			all, err := e.solve(rs, rel, free)
 			if err != nil {
@@ -260,7 +276,7 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 // goal sits strictly below it, so the negated goal's dependency cone cannot
 // contain anything currently in flight — nothing partial can leak in, and the
 // table is genuinely final once its own fixpoint settles.
-func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
+func (e *Engine) solveNegated(rel string, binds []*uint32) (bool, error) {
 	// A relation with no rules is complete the moment it was asserted — there is
 	// no fixpoint that could add to it. reg_only, reg_except, action and skip_total
 	// are all base relations negated in hot rules, and running solveComplete for
@@ -275,7 +291,7 @@ func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
 		}
 		return br.exists(binds), nil
 	}
-	free := make([]*string, len(binds))
+	free := make([]*uint32, len(binds))
 	key := e.subgoalKey(rel, free)
 	if t := e.tables[key]; t != nil && t.state == tableComplete {
 		return t.rel.exists(binds), nil
@@ -298,23 +314,23 @@ func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
 // its own entry, and a deeper literal is fully evaluated before the loop at a
 // shallower depth rewrites its pattern, so in-place mutation is safe.
 type rulePatterns struct {
-	ptr  [][]*string // ptr[i][k] is nil (free) or points into vals[i]
-	vals [][]string  // stable backing storage the pointers alias
-	head []string    // scratch head tuple, rebuilt per firing, cloned only on insert (D.3)
+	ptr  [][]*uint32 // ptr[i][k] is nil (free) or points into vals[i]
+	vals [][]uint32  // stable backing storage the pointers alias
+	head itup        // scratch head tuple, rebuilt per firing, cloned only on insert (D.3)
 }
 
 func newRulePatterns(r *Rule) *rulePatterns {
 	rp := &rulePatterns{
-		ptr:  make([][]*string, len(r.Body)),
-		vals: make([][]string, len(r.Body)),
-		head: make([]string, len(r.Head.Args)),
+		ptr:  make([][]*uint32, len(r.Body)),
+		vals: make([][]uint32, len(r.Body)),
+		head: make(itup, len(r.Head.Args)),
 	}
 	for bi, lit := range r.Body {
-		rp.vals[bi] = make([]string, len(lit.Args))
-		rp.ptr[bi] = make([]*string, len(lit.Args))
+		rp.vals[bi] = make([]uint32, len(lit.Args))
+		rp.ptr[bi] = make([]*uint32, len(lit.Args))
 		for k, term := range lit.Args {
 			if !term.IsVar {
-				rp.vals[bi][k] = term.Name
+				rp.vals[bi][k] = term.Sym
 				rp.ptr[bi][k] = &rp.vals[bi][k]
 			}
 		}
@@ -367,26 +383,26 @@ func (e *Engine) planBody(r *Rule) []litPlan {
 // (docs/datalog-engine-performance-plan.md D.2). One []string alloc per
 // evalRule, and the set/unwind is bit ops.
 type frame struct {
-	val []string
+	val []uint32
 	set uint64
 }
 
-func (f *frame) get(id int) (string, bool) { return f.val[id], f.set&(1<<uint(id)) != 0 }
-func (f *frame) put(id int, v string)      { f.val[id] = v; f.set |= 1 << uint(id) }
+func (f *frame) get(id int) (uint32, bool) { return f.val[id], f.set&(1<<uint(id)) != 0 }
+func (f *frame) put(id int, v uint32)      { f.val[id] = v; f.set |= 1 << uint(id) }
 
 // evalRule proves one rule against a call pattern, left to right. src decides
 // where a body literal's tuples come from — the tabled evaluator or a
 // materialized stratum — and is the only thing the two evaluation modes differ
 // in (see bottomup.go).
-func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) error {
-	fr := frame{val: make([]string, r.NVars)}
+func (e *Engine) evalRule(src bodySource, r *Rule, binds []*uint32, t *table) error {
+	fr := frame{val: make([]uint32, r.NVars)}
 	for i, term := range r.Head.Args {
 		b := binds[i]
 		if b == nil {
 			continue
 		}
 		if !term.IsVar {
-			if term.Name != *b {
+			if term.Sym != *b {
 				return nil
 			}
 			continue
@@ -420,13 +436,13 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) er
 	return e.join(src, r, rp, e.planBody(r), 0, &fr, binds, t, steps)
 }
 
-func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan, i int, fr *frame, binds []*string, t *table, steps []DerivationStep) error {
+func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan, i int, fr *frame, binds []*uint32, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
 		// Reuse the per-rule scratch head instead of make(Tuple, …) per firing;
 		// record clones it only when the tuple is genuinely new (D.3). The
 		// terminal case does not recurse, so nothing overwrites rp.head between
 		// here and record.
-		head := Tuple(rp.head)
+		head := rp.head
 		for k, term := range r.Head.Args {
 			if term.IsVar {
 				v, ok := fr.get(term.Var)
@@ -437,7 +453,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 				}
 				head[k] = v
 			} else {
-				head[k] = term.Name
+				head[k] = term.Sym
 			}
 		}
 		if !matches(head, binds) {
@@ -447,8 +463,8 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 		if e.recordProv {
 			// The Derivation retains its Head, so it gets a stable copy — the
 			// scratch buffer is about to be reused. Off the hot path by default.
-			hc := append(Tuple(nil), head...)
-			d = &Derivation{Rule: r.Name, Head: hc, Body: append([]DerivationStep(nil), steps...)}
+			hc := append(itup(nil), head...)
+			d = &Derivation{Rule: r.Name, Head: e.syms.reveal(hc), Body: append([]DerivationStep(nil), steps...)}
 			return e.record(t, hc, d)
 		}
 		return e.record(t, head, d)
@@ -501,7 +517,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 				// litTuples pre-filters at most one bound position; a constant
 				// here is checked as the binding happens, exactly as matches did
 				// inside the old each.
-				if term.Name != tup[k] {
+				if term.Sym != tup[k] {
 					ok = false
 					break
 				}
@@ -520,7 +536,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 		if ok {
 			next := steps
 			if rec {
-				next = append(steps, DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase})
+				next = append(steps, DerivationStep{Relation: lit.Rel, Tuple: e.syms.reveal(tup), Base: isBase})
 			}
 			if e2 := e.join(src, r, rp, plan, i+1, fr, binds, t, next); e2 != nil {
 				fr.set &^= added
@@ -532,7 +548,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 	return nil
 }
 
-func (e *Engine) record(t *table, tup Tuple, d *Derivation) error {
+func (e *Engine) record(t *table, tup itup, d *Derivation) error {
 	if t.rel.add(tup) {
 		e.grown++
 		if len(t.rel.tuples) > e.opts.MaxTuples {
@@ -557,7 +573,7 @@ type dgKey struct {
 	k   tkey
 }
 
-func (e *Engine) groupKey(rel string, t Tuple) dgKey { return dgKey{rel: rel, k: e.syms.key(t)} }
+func (e *Engine) groupKey(rel string, t itup) dgKey { return dgKey{rel: rel, k: e.syms.key(t)} }
 
 // derivKeyFast is the dedup key for a derivation on the hot path: interned
 // symbols packed four bytes each, one allocation for the final string instead
@@ -602,7 +618,7 @@ func derivKey(d Derivation) string {
 	return sb.String()
 }
 
-func matches(t Tuple, binds []*string) bool {
+func matches(t itup, binds []*uint32) bool {
 	for i, b := range binds {
 		if b != nil && t[i] != *b {
 			return false

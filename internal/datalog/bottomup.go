@@ -40,9 +40,9 @@ type bodySource interface {
 	// Candidates are pre-filtered on at most one bound position (the index bucket
 	// join probed); join re-checks every bound position as it binds, so a
 	// candidate that does not match is simply skipped there.
-	litTuples(pos int, lp *litPlan, binds []*string) ([]Tuple, error)
+	litTuples(pos int, lp *litPlan, binds []*uint32) ([]itup, error)
 	// negated decides `not lp.rel(binds)`.
-	negated(lp *litPlan, binds []*string) (bool, error)
+	negated(lp *litPlan, binds []*uint32) (bool, error)
 }
 
 // topDown is the tabled evaluator: a body literal is another subgoal, and a
@@ -52,7 +52,7 @@ type topDown struct {
 	rs *roundState
 }
 
-func (s topDown) litTuples(_ int, lp *litPlan, binds []*string) ([]Tuple, error) {
+func (s topDown) litTuples(_ int, lp *litPlan, binds []*uint32) ([]itup, error) {
 	if !lp.derived {
 		if lp.base == nil {
 			return nil, fmt.Errorf("datalog: unknown relation %q", lp.rel)
@@ -62,7 +62,7 @@ func (s topDown) litTuples(_ int, lp *litPlan, binds []*string) ([]Tuple, error)
 	return s.e.solve(s.rs, lp.rel, binds)
 }
 
-func (s topDown) negated(lp *litPlan, binds []*string) (bool, error) {
+func (s topDown) negated(lp *litPlan, binds []*uint32) (bool, error) {
 	return s.e.solveNegated(lp.rel, binds)
 }
 
@@ -96,7 +96,7 @@ func (s *bottomUp) source(rel string) *relation {
 	return s.e.base[rel]
 }
 
-func (s *bottomUp) litTuples(pos int, lp *litPlan, binds []*string) ([]Tuple, error) {
+func (s *bottomUp) litTuples(pos int, lp *litPlan, binds []*uint32) ([]itup, error) {
 	// buSrc is primed by evalComponent for every literal of every rule it runs;
 	// fall back to the string-keyed lookup only if it was not (a base-only
 	// literal that evalComponent still resolves, or a defensive path).
@@ -117,7 +117,7 @@ func (s *bottomUp) litTuples(pos int, lp *litPlan, binds []*string) ([]Tuple, er
 	return src.selectCands(binds), nil
 }
 
-func (s *bottomUp) negated(lp *litPlan, binds []*string) (bool, error) {
+func (s *bottomUp) negated(lp *litPlan, binds []*uint32) (bool, error) {
 	rel := lp.rel
 	if !lp.derived {
 		// Base relation: complete from the moment it was asserted.
@@ -141,7 +141,7 @@ func (s *bottomUp) negated(lp *litPlan, binds []*string) (bool, error) {
 // useBottomUp: an unbound whole-relation goal over a loaded rule set. A bound
 // pattern, or a goal that is nothing but asserted facts, does not take this
 // path.
-func (e *Engine) useBottomUp(goal string, binds []*string) bool {
+func (e *Engine) useBottomUp(goal string, binds []*uint32) bool {
 	if !e.loaded || e.strata == nil || len(e.rules[goal]) == 0 {
 		return false
 	}
@@ -158,7 +158,7 @@ func (e *Engine) useBottomUp(goal string, binds []*string) bool {
 // that subgoal, and marking it complete is what lets a later bound query — or
 // solveNegated — reuse this work instead of re-deriving it.
 func (e *Engine) freeTable(rel string, arity int) *table {
-	key := e.subgoalKey(rel, make([]*string, arity))
+	key := e.subgoalKey(rel, make([]*uint32, arity))
 	t := e.tables[key]
 	if t == nil {
 		t = &table{rel: newRelation(rel, arity, e.syms)}
@@ -170,7 +170,7 @@ func (e *Engine) freeTable(rel string, arity int) *table {
 // solveBottomUp materializes goal by evaluating its dependency cone one
 // strongly connected component at a time, dependencies first. It returns the
 // goal's tuples in derivation order; the caller sorts.
-func (e *Engine) solveBottomUp(goal string) ([]Tuple, error) {
+func (e *Engine) solveBottomUp(goal string) ([]itup, error) {
 	bu := &bottomUp{
 		e:        e,
 		full:     map[string]*relation{},
@@ -411,7 +411,7 @@ func (e *Engine) evalComponent(bu *bottomUp, rels []string) error {
 	mark := make(map[string]int, len(pending))
 	bu.pos = -1
 	for _, w := range work {
-		if err := e.evalRule(bu, w.rule, make([]*string, w.rule.Head.arity()), tables[w.rule.Head.Rel]); err != nil {
+		if err := e.evalRule(bu, w.rule, make([]*uint32, w.rule.Head.arity()), tables[w.rule.Head.Rel]); err != nil {
 			return err
 		}
 	}
@@ -450,7 +450,7 @@ func (e *Engine) evalComponent(bu *bottomUp, rels []string) error {
 		for _, w := range work {
 			for _, pos := range w.rec {
 				bu.pos = pos
-				if err := e.evalRule(bu, w.rule, make([]*string, w.rule.Head.arity()), tables[w.rule.Head.Rel]); err != nil {
+				if err := e.evalRule(bu, w.rule, make([]*uint32, w.rule.Head.arity()), tables[w.rule.Head.Rel]); err != nil {
 					return err
 				}
 			}

@@ -58,6 +58,32 @@ func (in *interner) id(s string) uint32 {
 	return v
 }
 
+// sym is the reverse of id: the string an interned id stands for.
+func (in *interner) sym(id uint32) string { return in.strs[id] }
+
+// intern converts a public string tuple to the internal []uint32 representation
+// (docs/datalog-engine-performance-plan.md D.12). Done once, at the Assert and
+// Query-input boundaries — a dozen relations and one call pattern, never the
+// join, where every element comparison is a uint32 == instead of a string
+// compare and a map probe.
+func (in *interner) intern(t Tuple) itup {
+	it := make(itup, len(t))
+	for i, s := range t {
+		it[i] = in.id(s)
+	}
+	return it
+}
+
+// reveal is intern's inverse: it turns an internal tuple back into strings for
+// the public API — Query results, Provenance, error messages.
+func (in *interner) reveal(t itup) Tuple {
+	out := make(Tuple, len(t))
+	for i, id := range t {
+		out[i] = in.strs[id]
+	}
+	return out
+}
+
 // tkey is a comparable, allocation-free key for a tuple: the interned symbols
 // packed two-per-uint64. Arity <=4 (every relation this engine sees) packs
 // exactly and cannot collide; a wider tuple spills its tail into ext.
@@ -66,10 +92,10 @@ type tkey struct {
 	ext    string
 }
 
-func (in *interner) key(t Tuple) tkey {
+func (in *interner) key(t itup) tkey {
 	var k tkey
 	for i, s := range t {
-		id := uint64(in.id(s))
+		id := uint64(s)
 		switch i {
 		case 0:
 			k.lo |= id << 32
@@ -88,8 +114,16 @@ func (in *interner) key(t Tuple) tkey {
 	return k
 }
 
-// Tuple is one fact. All terms are strings; the emitter types them.
+// Tuple is one fact at the public boundary. All terms are strings; the emitter
+// types them.
 type Tuple []string
+
+// itup is a tuple as the engine stores and joins it: interned symbol ids
+// (docs/datalog-engine-performance-plan.md D.12). Interning happens once at the
+// Assert / Query-input boundary; from there every unification and `matches`
+// comparison is a uint32 ==, `add`'s clone copies 4 B/elem instead of a 16 B
+// string header, and the per-argument index keys on uint32.
+type itup []uint32
 
 // Relation names a relation and its arity.
 type Relation struct {
@@ -159,10 +193,10 @@ func (o Options) withDefaults() Options {
 type relation struct {
 	name   string
 	arity  int
-	tuples []Tuple
+	tuples []itup
 	in     *interner
 	seen   map[tkey]bool
-	idx    []map[string][]Tuple // by argument position, nil until first use
+	idx    []map[uint32][]itup // by argument position, nil until first use
 }
 
 func newRelation(name string, arity int, in *interner) *relation {
@@ -172,7 +206,7 @@ func newRelation(name string, arity int, in *interner) *relation {
 func tupleKey(t Tuple) string { return strings.Join(t, "\x00") }
 
 // add returns true when the tuple was new.
-func (r *relation) add(t Tuple) bool {
+func (r *relation) add(t itup) bool {
 	k := r.in.key(t)
 	if r.seen[k] {
 		return false
@@ -183,7 +217,7 @@ func (r *relation) add(t Tuple) bool {
 	// the head tuple into rulePatterns.head — so a tuple that is genuinely new is
 	// cloned here, at the one point it starts being retained, and a re-derived
 	// one costs nothing.
-	stored := append(Tuple(nil), t...)
+	stored := append(itup(nil), t...)
 	r.tuples = append(r.tuples, stored)
 	if r.idx != nil {
 		// The index is only ever added to — relations are monotone within a run —
@@ -206,7 +240,7 @@ func (r *relation) reserve(n int) {
 		return
 	}
 	if n > cap(r.tuples) {
-		grown := make([]Tuple, len(r.tuples), n)
+		grown := make([]itup, len(r.tuples), n)
 		copy(grown, r.tuples)
 		r.tuples = grown
 	}
@@ -217,20 +251,20 @@ func (r *relation) reserve(n int) {
 
 // indexTuple files one tuple into each per-argument bucket. buildIndex does the
 // same over the whole relation; add does it incrementally.
-func (r *relation) indexTuple(t Tuple) {
+func (r *relation) indexTuple(t itup) {
 	for i := 0; i < r.arity && i < len(t); i++ {
 		r.idx[i][t[i]] = append(r.idx[i][t[i]], t)
 	}
 }
 
 // has reports whether an exact tuple is present.
-func (r *relation) has(t Tuple) bool { return r.seen[r.in.key(t)] }
+func (r *relation) has(t itup) bool { return r.seen[r.in.key(t)] }
 
 // selectCands returns the candidate bucket to scan for a call pattern: the
 // smallest per-argument index bucket among the bound positions, or every tuple
 // when the pattern is fully free. binds[i] == nil means argument i is free.
-func (r *relation) selectCands(binds []*string) []Tuple {
-	var best []Tuple
+func (r *relation) selectCands(binds []*uint32) []itup {
+	var best []itup
 	bestN := -1
 	for i, b := range binds {
 		if b == nil {
@@ -257,7 +291,7 @@ func (r *relation) selectCands(binds []*string) []Tuple {
 // allocating nothing. Every negated literal and every base-union probe wants
 // this and not a slice — it was 61% of allocation before the split
 // (docs/datalog-engine-performance-plan.md §1.2, P.2).
-func (r *relation) exists(binds []*string) bool {
+func (r *relation) exists(binds []*uint32) bool {
 	if r == nil {
 		return false
 	}
@@ -272,7 +306,7 @@ func (r *relation) exists(binds []*string) bool {
 // each calls fn for every tuple consistent with the call pattern, stopping
 // early when fn returns false. No result slice is built; the join consumes
 // tuples one at a time.
-func (r *relation) each(binds []*string, fn func(Tuple) bool) {
+func (r *relation) each(binds []*uint32, fn func(itup) bool) {
 	if r == nil {
 		return
 	}
@@ -287,11 +321,11 @@ func (r *relation) each(binds []*string, fn func(Tuple) bool) {
 
 // match returns the tuples consistent with a call pattern. Kept for Query's
 // final answer, where the slice is the product rather than an intermediate.
-func (r *relation) match(binds []*string) []Tuple {
+func (r *relation) match(binds []*uint32) []itup {
 	if r == nil {
 		return nil
 	}
-	var out []Tuple
+	var out []itup
 	for _, t := range r.selectCands(binds) {
 		if matches(t, binds) {
 			out = append(out, t)
@@ -304,9 +338,9 @@ func (r *relation) buildIndex() {
 	if r.idx != nil {
 		return
 	}
-	r.idx = make([]map[string][]Tuple, r.arity)
+	r.idx = make([]map[uint32][]itup, r.arity)
 	for i := range r.idx {
-		r.idx[i] = map[string][]Tuple{}
+		r.idx[i] = map[uint32][]itup{}
 	}
 	for _, t := range r.tuples {
 		r.indexTuple(t)
@@ -345,13 +379,13 @@ type sgKey struct {
 	ext    string
 }
 
-func (e *Engine) subgoalKey(rel string, binds []*string) sgKey {
+func (e *Engine) subgoalKey(rel string, binds []*uint32) sgKey {
 	k := sgKey{rel: rel}
 	for i, b := range binds {
 		var id uint64
 		bound := b != nil
 		if bound {
-			id = uint64(e.syms.id(*b))
+			id = uint64(*b)
 		}
 		switch i {
 		case 0:
@@ -474,7 +508,7 @@ func (e *Engine) Assert(rel string, tuples []Tuple) error {
 		if len(t) != r.arity {
 			return fmt.Errorf("datalog: relation %s has arity %d, got a tuple of %d terms %v", rel, r.arity, len(t), t)
 		}
-		if r.add(t) && len(r.tuples) > e.opts.MaxTuples {
+		if r.add(e.syms.intern(t)) && len(r.tuples) > e.opts.MaxTuples {
 			return fmt.Errorf("datalog: relation %s exceeded MaxTuples (%d)", rel, e.opts.MaxTuples)
 		}
 	}
@@ -556,6 +590,23 @@ func (e *Engine) LoadRules(src []byte, name string) error {
 			if a, ok := arity[rel]; ok {
 				r.arity = a
 			}
+		}
+	}
+
+	// Intern every rule constant now (D.12): join compares a body/head constant
+	// to an interned tuple element, so it needs the id, not the string. Idempotent
+	// — a re-loaded rule gets the same id.
+	internLit := func(l *Literal) {
+		for k := range l.Args {
+			if !l.Args[k].IsVar {
+				l.Args[k].Sym = e.syms.id(l.Args[k].Name)
+			}
+		}
+	}
+	for _, r := range all {
+		internLit(&r.Head)
+		for i := range r.Body {
+			internLit(&r.Body[i])
 		}
 	}
 
