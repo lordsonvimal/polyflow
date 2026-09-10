@@ -8,6 +8,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/factpipe"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
 // ExtractContext carries what the `extract:` verbs need beyond the tree-sitter
@@ -149,6 +150,8 @@ func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
 		return []verbVal{{Str: target, Kind: factpipe.AtomNode}}
 	case "key_expr":
 		return []verbVal{{Str: keyExpr(node, ec), Kind: factpipe.AtomStr}}
+	case "inflect":
+		return inflectVerb(node.Content(ec.Src), arg)
 
 	default:
 		// Unknown verb: fail soft to the source text so a typo in a YAML is a
@@ -222,6 +225,33 @@ func callName(expr string) string {
 		}
 	}
 	return s
+}
+
+// inflectVerb applies one Rails naming convention to a captured name node's
+// text. It is a generic string transform — the same `underscore` / `pluralize`
+// / `singularize` / `tableize` rules ActiveSupport ships, no framework logic
+// beyond the convention name. `tableize` fans out: it yields every regular
+// plural form (Knife → knives, knifes) so a `.dl` rule can validate each
+// against the declared table set and pick the one the schema confirms.
+func inflectVerb(text, rule string) []verbVal {
+	text = strings.TrimSpace(strings.TrimPrefix(text, ":"))
+	switch rule {
+	case "underscore":
+		return []verbVal{{Str: railsinflect.Underscore(text), Kind: factpipe.AtomStr}}
+	case "pluralize":
+		return []verbVal{{Str: railsinflect.Pluralize(text), Kind: factpipe.AtomStr}}
+	case "singularize":
+		return []verbVal{{Str: railsinflect.Singularize(text), Kind: factpipe.AtomStr}}
+	case "tableize":
+		cands := railsinflect.TableNameCandidates(text)
+		out := make([]verbVal, 0, len(cands))
+		for _, c := range cands {
+			out = append(out, verbVal{Str: c, Kind: factpipe.AtomStr})
+		}
+		return out
+	default:
+		return []verbVal{{Str: text, Kind: factpipe.AtomStr}}
+	}
 }
 
 func stringValue(n *sitter.Node, src []byte) string {

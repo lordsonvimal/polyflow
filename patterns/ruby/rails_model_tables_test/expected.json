@@ -1,0 +1,8 @@
+{
+  "patterns": [
+    "model_class", "model_class", "model_class",
+    "model_table_name",
+    "model_abstract"
+  ],
+  "node_types": []
+}

@@ -14,7 +14,10 @@
 // dependencies on parser or linker so it can sit below both.
 package railsinflect
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // railsIrregularSingulars are the plurals no suffix rule reaches. They matter
 // more than a purely cosmetic wart would suggest: a route *name* or an
@@ -113,6 +116,59 @@ func Pluralize(s string) string {
 		return s + "es"
 	}
 	return s + "s"
+}
+
+// Underscore is ActiveSupport's underscore() for the shapes a class name can
+// actually take: it demodulizes (Admin::Report → Report — Rails serves it from
+// `reports` unless the module declares a table_name_prefix, an explicit
+// declaration read separately), then converts CamelCase to snake_case with the
+// usual acronym handling (APIKey → api_key).
+func Underscore(className string) string {
+	if i := strings.LastIndex(className, "::"); i >= 0 {
+		className = className[i+2:]
+	}
+	rs := []rune(className)
+	var b strings.Builder
+	for i, r := range rs {
+		if !unicode.IsUpper(r) {
+			b.WriteRune(r)
+			continue
+		}
+		prevLowerOrDigit := i > 0 && (unicode.IsLower(rs[i-1]) || unicode.IsDigit(rs[i-1]))
+		endsAcronym := i > 0 && unicode.IsUpper(rs[i-1]) && i+1 < len(rs) && unicode.IsLower(rs[i+1])
+		if prevLowerOrDigit || endsAcronym {
+			b.WriteByte('_')
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
+}
+
+// TableNameCandidates returns the conventional table names for a class name,
+// most specific first — the regular pluralization forms only, for a caller
+// that validates each against the declared table set (an irregular plural like
+// Person → people produces no hit and the caller ledgers, which is the correct
+// outcome: an inflection miss costs a missing edge, never a wrong one). This is
+// ActiveRecord's `tableize` restricted to the forms Rails' default pluralizer
+// reaches without an irregular-noun table.
+func TableNameCandidates(className string) []string {
+	base := Underscore(className)
+	if base == "" {
+		return nil
+	}
+	switch {
+	case strings.HasSuffix(base, "y") && len(base) > 1 && !isVowel(base[len(base)-2]):
+		return []string{base[:len(base)-1] + "ies"}
+	case strings.HasSuffix(base, "s"), strings.HasSuffix(base, "x"),
+		strings.HasSuffix(base, "z"), strings.HasSuffix(base, "ch"),
+		strings.HasSuffix(base, "sh"):
+		return []string{base + "es"}
+	case strings.HasSuffix(base, "fe"):
+		return []string{base[:len(base)-2] + "ves", base + "s"}
+	case strings.HasSuffix(base, "f"):
+		return []string{base[:len(base)-1] + "ves", base + "s"}
+	}
+	return []string{base + "s"}
 }
 
 func isVowel(b byte) bool {

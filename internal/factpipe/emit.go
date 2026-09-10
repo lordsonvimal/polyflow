@@ -47,7 +47,7 @@ var frozenEdgeTypes = map[string]bool{
 	"renders": true, "defined_in": true, "component_impl": true, "http_call": true,
 	"publishes": true, "subscribes": true, "job_enqueue": true, "job_perform": true,
 	"navigates_to": true, "spawns": true, "dom_read": true, "dom_write": true,
-	"dom_listen": true, "dom_contract": true,
+	"dom_listen": true, "dom_contract": true, "backed_by": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or

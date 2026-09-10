@@ -1,0 +1,128 @@
+% ActiveRecord model class -> the db/schema.rb table it is backed by.
+% Tier FX FX.8. Replaces internal/linker/rails_model_tables.go (551 lines):
+% the two-round STI resolution, the hop-bounded inherits walk to an
+% ActiveRecord root, the conventional-name-validated-against-the-schema
+% candidate check, and the two blind-spot ledgers.
+%
+% Stage-1 facts (patterns/ruby/rails_model_tables.yaml):
+%   model_class(File, Line, ConvTable)   one per candidate table name of a
+%       `class Foo` under app/models (Line is the class decl line; the
+%       `inflect(tableize)` verb fans a -f/-fe class name to both regular forms)
+%   model_table_name(File, Line, Name)   `self.table_name = "x"` (Line inside class)
+%   model_abstract(File, Line)           `self.abstract_class = true`
+%
+% Bridge (FX.1): node, node_label, node_start, node_line, node_meta,
+%   class_super, ancestor_dist. Builtins: contains, le, min, count.
+
+% ---------------------------------------------------------------------------
+% ActiveRecord roots and the superclass-only ancestor closure
+% ---------------------------------------------------------------------------
+ar_root(R) :- node(R, "class", _, _), node_label(R, "ApplicationRecord").
+ar_root(R) :- node(R, "class", _, _), node_label(R, "ActiveRecord::Base").
+
+super_anc(C, S) :- class_super(C, S).
+super_anc(C, A) :- class_super(C, S), super_anc(S, A).
+
+% ---------------------------------------------------------------------------
+% class identity for a stage-1 (File, Line) fact
+% ---------------------------------------------------------------------------
+% model_class carries the class decl line -> the class node starts there.
+class_at(File, Line, C) :- node(C, "class", File, _), node_start(C, Line).
+
+% a self.table_name / self.abstract_class assignment sits inside a class body;
+% recover the innermost enclosing class by span containment (gin idiom).
+decl_site(File, Line) :- model_table_name(File, Line, _).
+decl_site(File, Line) :- model_abstract(File, Line).
+decl_cover(File, Line, C, KL) :-
+    decl_site(File, Line),
+    node(C, "class", File, _), node_line(C, KL, KE), le(KL, Line), le(Line, KE).
+decl_owner_l(File, Line, MaxL) :- decl_cover(File, Line, _, L), max(MaxL, L).
+decl_owner(File, Line, C) :- decl_owner_l(File, Line, L), decl_cover(File, Line, C, L).
+
+tn_class(C, Name)  :- model_table_name(File, Line, Name), decl_owner(File, Line, C).
+has_tn(C)          :- tn_class(C, _).
+abstract_class(C)  :- model_abstract(File, Line), decl_owner(File, Line, C).
+is_abstract(C)     :- abstract_class(C).
+
+% concerns are modules, never models — the parser types `module X` as a class
+% node, so exclude the conventional concerns dir the same way the Go pass's
+% isModule guard did.
+concern(C) :- node(C, "class", File, _), contains(File, "/concerns/").
+
+% ---------------------------------------------------------------------------
+% which classes are models
+% ---------------------------------------------------------------------------
+% under app/models, reaches an ActiveRecord root over superclasses, and not
+% marked abstract. An explicit self.table_name is itself the declaration of
+% modelhood and needs no inheritance proof.
+model_file(C) :- node(C, "class", File, _), contains(File, "app/models/").
+
+is_model(C) :-
+    model_file(C), not is_abstract(C), not concern(C),
+    super_anc(C, R), ar_root(R).
+is_model(C) :-
+    has_tn(C), not is_abstract(C), not concern(C).
+
+% hop distance to the nearest ActiveRecord root (for the convention edge's
+% inherit_hops meta) — ancestor_dist is the min hop over inherits.
+root_hop(C, H) :- ancestor_dist(C, R, D), ar_root(R), min(H, D).
+
+% ---------------------------------------------------------------------------
+% own table — explicit self.table_name, or a conventional name the schema has
+% ---------------------------------------------------------------------------
+rails_table(T, Name) :-
+    node(T, "table", _, _), node_meta(T, "source", "rails_schema"), node_label(T, Name).
+table_exists(Name) :- rails_table(_, Name).
+
+own_table(C, Name, "table_name") :- tn_class(C, Name).
+
+% a candidate table name confirmed by the schema. Exactly one hit -> convention;
+% zero (irregular plural) or several (ambiguity) fall through to the ledger.
+conv_hit(C, Name) :-
+    is_model(C), not has_tn(C),
+    class_at(File, Line, C), model_class(File, Line, Name),
+    table_exists(Name).
+conv_n(C, N) :- conv_hit(C, Name), count(N, Name).
+own_table(C, Name, "convention") :- conv_hit(C, Name), conv_n(C, 1).
+
+own_any(C) :- own_table(C, _, _).
+
+% ---------------------------------------------------------------------------
+% STI — a model with no table of its own inherits its nearest resolved
+% superclass's table (class Issue < Comment -> `comments`).
+% ---------------------------------------------------------------------------
+sti_cand(C, Name, D) :-
+    is_model(C), not own_any(C),
+    ancestor_dist(C, A, D), own_table(A, Name, _).
+sti_min(C, MinD) :- sti_cand(C, _, D), min(MinD, D).
+sti_table(C, Name) :- sti_min(C, D), sti_cand(C, Name, D).
+
+% ---------------------------------------------------------------------------
+% the backed_by edge
+% ---------------------------------------------------------------------------
+model_table(C, T, Name, "table_name", "") :-
+    own_table(C, Name, "table_name"), rails_table(T, Name).
+model_table(C, T, Name, "convention", H) :-
+    own_table(C, Name, "convention"), rails_table(T, Name), root_hop(C, H).
+model_table(C, T, Name, "sti", "") :-
+    sti_table(C, Name), rails_table(T, Name).
+
+model_backed(C) :- model_table(C, _, _, _, _).
+
+% ---------------------------------------------------------------------------
+% ledger 1 — a model that resolves to no table (irregular plural, ambiguous
+% candidates, an explicit table_name naming an undeclared table, or an STI
+% leaf whose chain never resolves).
+% ---------------------------------------------------------------------------
+model_unresolved(Nm, File, Line) :-
+    is_model(C), not model_backed(C),
+    node_label(C, Nm), node(C, "class", File, _), node_start(C, Line).
+
+% ---------------------------------------------------------------------------
+% ledger 2 — a schema table no model in this service claims (join tables,
+% views, schema_migrations). Information, not a defect.
+% ---------------------------------------------------------------------------
+owned_table(T) :- model_table(_, T, _, _, _).
+table_unowned(Nm, File, Line) :-
+    rails_table(T, Nm), node(T, "table", File, _), node_start(T, Line),
+    not owned_table(T).

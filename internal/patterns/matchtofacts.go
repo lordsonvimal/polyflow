@@ -14,6 +14,11 @@ var fanoutVerbs = map[string]bool{
 	"list_elements": true,
 	"hash_pairs":    true,
 	"each_arg":      true,
+	// inflect(tableize) yields every regular plural form of a class name
+	// (Knife → knives, knifes) so a `.dl` rule can validate each against the
+	// declared table set; the other inflect rules yield exactly one value, a
+	// one-element fan-out dimension.
+	"inflect": true,
 }
 
 // MatchToFacts lowers one pattern match to the facts its `facts:` block

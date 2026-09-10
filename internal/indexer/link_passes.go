@@ -603,21 +603,10 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, assocUnresolved...)
 			return nil
 		}},
-		// Tier AT.2: ActiveRecord model class → the db/schema.rb table it is
-		// backed by. Runs after ruby_type_relations, whose `inherits` edges are
-		// the chain this walks to prove a class is a model at all — without
-		// them every model would look like a PORO and the pass would emit
-		// nothing. Purely additive: one new edge type between two node types
-		// that already exist, touching no node.
-		{"rails_model_tables", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			tableEdges, tableUnresolved := linker.LinkRailsModelTables(st.allNodes, st.allEdges, svcFiles)
-			if err := st.writeEdges(tableEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, tableUnresolved...)
-			return nil
-		}},
+		// Tier AT.2 (ActiveRecord model class → db/schema.rb table) is Tier FX
+		// FX.8: patterns/ruby/rails_model_tables.yaml + rules/ruby/
+		// rails_model_tables.dl, run by the factpipe_frameworks pass below.
+		//
 		// Rails filter chain (before_action/skip_before_action/rescue_from/AR
 		// lifecycle → the callback method, per action, minus retractions) is
 		// Tier FX FX.8: patterns/ruby/rails_filters.yaml + rules/ruby/

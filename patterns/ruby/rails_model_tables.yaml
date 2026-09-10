@@ -1,0 +1,89 @@
+# ActiveRecord model class -> db/schema.rb table (Tier FX FX.8). Replaces
+# internal/linker/rails_model_tables.go: a `class Foo < ApplicationRecord`
+# under app/models becomes one `backed_by` edge to the table node minted from
+# db/schema.rb (AT.1), resolved by explicit `self.table_name` first, then the
+# regular pluralization convention *validated against the declared table set*,
+# then single-table inheritance (nearest resolved superclass's table).
+#
+# Stage 1 (this file) lowers each class + storage declaration to flat facts.
+# Stage 3 (rules/ruby/rails_model_tables.dl) does the ancestor closure, the
+# schema validation, and STI. Stage 4 (this file's `emit:` block) turns the
+# derived model_table relation into edges + the two blind-spot ledgers.
+#
+# Gate: Rails. ActiveRecord ships in `railties`; a `class Foo < Bar` outside
+# app/models is overwhelmingly not a model, which the .dl's path gate enforces.
+#
+# Plan note: `inflect(tableize)` is the FX.8 `inflect` primitive — a generic
+# ActiveSupport naming transform (underscore/pluralize/singularize/tableize),
+# no framework logic beyond the convention name. `tableize` fans a -f/-fe class
+# name to both regular plural forms so the .dl can let the schema pick.
+language: ruby
+version: "1"
+package: railties
+
+patterns:
+  - name: model_class
+    query: |
+      (class name: [(constant) (scope_resolution)] @n) @c
+    facts:
+      - pred: model_class
+        args:
+          file: { extract: file }
+          line: { capture: c, extract: line }
+          conv: { capture: n, extract: "inflect(tableize)" }
+
+  - name: model_table_name
+    query: |
+      (assignment
+        left: (call
+          receiver: (self)
+          method: (identifier) @m (#eq? @m "table_name"))
+        right: [(string) (simple_symbol)] @v) @a
+    facts:
+      - pred: model_table_name
+        args:
+          file: { extract: file }
+          line: { capture: a, extract: line }
+          name: { capture: v, extract: string_value }
+
+  - name: model_abstract
+    query: |
+      (assignment
+        left: (call
+          receiver: (self)
+          method: (identifier) @m (#eq? @m "abstract_class"))
+        right: (true)) @a
+    facts:
+      - pred: model_abstract
+        args:
+          file: { extract: file }
+          line: { capture: a, extract: line }
+
+emit:
+  # model class --backed_by--> table node.
+  - relation: model_table
+    columns: [Model, Table, TableName, Via, Hops]
+    edge: { from: {arg: Model}, to: {arg: Table}, type: backed_by }
+    meta:
+      via: { arg: Via }
+      table: { arg: TableName }
+      inherit_hops: { arg: Hops }   # "" for table_name / sti -> key omitted
+    confidence:
+      - { else: inferred }
+    dedup: [from, to]
+
+  # a model whose table does not resolve — the SA "never empty" ledger.
+  - relation: model_unresolved
+    columns: [Name, File, Line]
+    edge: { from: {arg: Name}, to: {arg: Name}, type: backed_by }
+    unresolved:
+      when: "1 == 1"
+      ref: { name: {arg: Name}, file: {arg: File}, line: {arg: Line}, kind: rails_model_table_unresolved }
+
+  # a schema table no model in this service claims (join tables, views).
+  - relation: table_unowned
+    columns: [Name, File, Line]
+    edge: { from: {arg: Name}, to: {arg: Name}, type: backed_by }
+    unresolved:
+      when: "1 == 1"
+      ref: { name: {arg: Name}, file: {arg: File}, line: {arg: Line}, kind: rails_table_unowned }

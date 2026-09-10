@@ -19,9 +19,9 @@ import (
 const railsSchemaTablePattern = "rails_create_table"
 
 // railsSchemaColumnSourceMeta marks a table node as declared by a Rails
-// schema dump rather than by a .sql CREATE TABLE. Consumed by
-// linker.LinkRailsModelTables, which resolves models only against tables it
-// can attribute to a real schema declaration.
+// schema dump rather than by a .sql CREATE TABLE. Consumed by the
+// rails_model_tables framework pass (Tier FX FX.8), which resolves models
+// only against tables it can attribute to a real schema declaration.
 const railsSchemaColumnSourceMeta = "rails_schema"
 
 // railsSchemaBlockNonColumnMethods are the `create_table` block macros that

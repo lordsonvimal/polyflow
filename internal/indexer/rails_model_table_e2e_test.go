@@ -29,6 +29,23 @@ func TestRun_RailsModelTables(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(svc, "app", "models"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(svc, "db", "migrate"), 0o755))
 
+	// rails_model_tables is Tier FX FX.8 — a package-gated framework pass, so
+	// the fixture has to resolve railties the way a real Rails app does.
+	writeFile(t, svc, "Gemfile", "source 'https://rubygems.org'\ngem 'rails'\n")
+	writeFile(t, svc, "Gemfile.lock", `GEM
+  remote: https://rubygems.org/
+  specs:
+    activerecord (7.1.3)
+    railties (7.1.3)
+    rails (7.1.3)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rails
+`)
+
 	writeFile(t, filepath.Join(svc, "db"), "schema.rb", `ActiveRecord::Schema[7.1].define(version: 2026_01_01_000000) do
   create_table "widgets", force: :cascade do |t|
     t.string "name"
