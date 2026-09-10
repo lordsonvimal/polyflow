@@ -3,6 +3,7 @@ package datalog
 import (
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -572,6 +573,27 @@ func matches(t Tuple, binds []*string) bool {
 	return true
 }
 
+// sortTuples orders a Query result. It compares tuples element by element
+// instead of joining each into a "\x00"-separated key: the old
+// sort.SliceStable(tupleKey(i) < tupleKey(j)) allocated two []byte per
+// comparison — 42% of BenchmarkRailsFilters' allocation objects for a step
+// nobody profiles as hot (docs/datalog-engine-performance-plan.md §6 Phase A).
+// Every tuple in one relation's result has the same arity and they are distinct
+// (deduped by relation.seen), so an unstable element-wise sort is both
+// allocation-free and deterministic.
 func sortTuples(ts []Tuple) {
-	sort.SliceStable(ts, func(i, j int) bool { return tupleKey(ts[i]) < tupleKey(ts[j]) })
+	slices.SortFunc(ts, compareTuples)
+}
+
+func compareTuples(a, b Tuple) int {
+	n := min(len(a), len(b))
+	for k := 0; k < n; k++ {
+		if a[k] != b[k] {
+			if a[k] < b[k] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return len(a) - len(b)
 }

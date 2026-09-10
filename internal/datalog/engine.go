@@ -211,21 +211,27 @@ func (r *relation) has(t Tuple) bool { return r.seen[r.in.key(t)] }
 // smallest per-argument index bucket among the bound positions, or every tuple
 // when the pattern is fully free. binds[i] == nil means argument i is free.
 func (r *relation) selectCands(binds []*string) []Tuple {
-	best, bestN := -1, -1
+	var best []Tuple
+	bestN := -1
 	for i, b := range binds {
 		if b == nil {
 			continue
 		}
-		r.buildIndex()
-		n := len(r.idx[i][*b])
-		if best < 0 || n < bestN {
-			best, bestN = i, n
+		if r.idx == nil {
+			r.buildIndex()
+		}
+		// Hold the bucket, not its position: the old code fetched r.idx[i][*b]
+		// once for len() and then r.idx[best][*binds[best]] again to return it —
+		// two string-keyed map probes where one does (§6 Phase A).
+		bucket := r.idx[i][*b]
+		if bestN < 0 || len(bucket) < bestN {
+			best, bestN = bucket, len(bucket)
 		}
 	}
-	if best >= 0 {
-		return r.idx[best][*binds[best]]
+	if bestN < 0 {
+		return r.tuples
 	}
-	return r.tuples
+	return best
 }
 
 // exists reports whether any tuple is consistent with the call pattern,
