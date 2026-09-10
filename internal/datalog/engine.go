@@ -114,14 +114,10 @@ func (r *relation) add(t Tuple) bool {
 	return true
 }
 
-// match returns the tuples consistent with a call pattern. binds[i] == nil
-// means argument i is free.
-func (r *relation) match(binds []*string) []Tuple {
-	if r == nil {
-		return nil
-	}
-	// Pick the most selective bound position and probe its index; the rest is
-	// a filter over that bucket.
+// selectCands returns the candidate bucket to scan for a call pattern: the
+// smallest per-argument index bucket among the bound positions, or every tuple
+// when the pattern is fully free. binds[i] == nil means argument i is free.
+func (r *relation) selectCands(binds []*string) []Tuple {
 	best, bestN := -1, -1
 	for i, b := range binds {
 		if b == nil {
@@ -133,20 +129,53 @@ func (r *relation) match(binds []*string) []Tuple {
 			best, bestN = i, n
 		}
 	}
-	cands := r.tuples
 	if best >= 0 {
-		cands = r.idx[best][*binds[best]]
+		return r.idx[best][*binds[best]]
 	}
-	var out []Tuple
-	for _, t := range cands {
-		ok := true
-		for i, b := range binds {
-			if b != nil && t[i] != *b {
-				ok = false
-				break
+	return r.tuples
+}
+
+// exists reports whether any tuple is consistent with the call pattern,
+// allocating nothing. Every negated literal and every base-union probe wants
+// this and not a slice — it was 61% of allocation before the split
+// (docs/datalog-engine-performance-plan.md §1.2, P.2).
+func (r *relation) exists(binds []*string) bool {
+	if r == nil {
+		return false
+	}
+	for _, t := range r.selectCands(binds) {
+		if matches(t, binds) {
+			return true
+		}
+	}
+	return false
+}
+
+// each calls fn for every tuple consistent with the call pattern, stopping
+// early when fn returns false. No result slice is built; the join consumes
+// tuples one at a time.
+func (r *relation) each(binds []*string, fn func(Tuple) bool) {
+	if r == nil {
+		return
+	}
+	for _, t := range r.selectCands(binds) {
+		if matches(t, binds) {
+			if !fn(t) {
+				return
 			}
 		}
-		if ok {
+	}
+}
+
+// match returns the tuples consistent with a call pattern. Kept for Query's
+// final answer, where the slice is the product rather than an intermediate.
+func (r *relation) match(binds []*string) []Tuple {
+	if r == nil {
+		return nil
+	}
+	var out []Tuple
+	for _, t := range r.selectCands(binds) {
+		if matches(t, binds) {
 			out = append(out, t)
 		}
 	}

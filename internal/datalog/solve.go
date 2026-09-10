@@ -195,10 +195,16 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 
 	// A relation can be both asserted and derived; the answer is the union.
 	if hasBase {
-		for _, tup := range baseRel.match(binds) {
+		var rerr error
+		baseRel.each(binds, func(tup Tuple) bool {
 			if err := e.record(t, tup, nil); err != nil {
-				return nil, err
+				rerr = err
+				return false
 			}
+			return true
+		})
+		if rerr != nil {
+			return nil, rerr
 		}
 	}
 	if !e.opts.DemandDriven {
@@ -257,22 +263,75 @@ func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
 		if br == nil {
 			return false, fmt.Errorf("datalog: unknown relation %q", rel)
 		}
-		return len(br.match(binds)) > 0, nil
+		return br.exists(binds), nil
 	}
 	free := make([]*string, len(binds))
 	key := subgoalKey(rel, free)
 	if t := e.tables[key]; t != nil && t.state == tableComplete {
-		return len(t.rel.match(binds)) > 0, nil
+		return t.rel.exists(binds), nil
 	}
 	if _, err := e.solveComplete(rel, free); err != nil {
 		return false, err
 	}
 	if t := e.tables[key]; t != nil {
 		t.state = tableComplete
-		return len(t.rel.match(binds)) > 0, nil
+		return t.rel.exists(binds), nil
 	}
 	// A purely base relation has no table; probe the facts directly.
-	return len(e.base[rel].match(binds)) > 0, nil
+	return e.base[rel].exists(binds), nil
+}
+
+// rulePatterns is the reusable set of sub-call patterns for one rule body, one
+// per body literal. join mutates the variable positions in place as bindings
+// change instead of allocating a fresh []*string per literal per candidate row
+// (docs/datalog-engine-performance-plan.md §1.2, P.2). Each recursion depth owns
+// its own entry, and a deeper literal is fully evaluated before the loop at a
+// shallower depth rewrites its pattern, so in-place mutation is safe.
+type rulePatterns struct {
+	ptr  [][]*string // ptr[i][k] is nil (free) or points into vals[i]
+	vals [][]string  // stable backing storage the pointers alias
+}
+
+func newRulePatterns(r *Rule) *rulePatterns {
+	rp := &rulePatterns{
+		ptr:  make([][]*string, len(r.Body)),
+		vals: make([][]string, len(r.Body)),
+	}
+	for bi, lit := range r.Body {
+		rp.vals[bi] = make([]string, len(lit.Args))
+		rp.ptr[bi] = make([]*string, len(lit.Args))
+		for k, term := range lit.Args {
+			if !term.IsVar {
+				rp.vals[bi][k] = term.Name
+				rp.ptr[bi][k] = &rp.vals[bi][k]
+			}
+		}
+	}
+	return rp
+}
+
+// eachSolved iterates the tuples satisfying a positive body literal, without
+// materializing them when the literal is a pure base relation — the common case
+// and most of match's former allocation (P.2).
+func (e *Engine) eachSolved(rs *roundState, rel string, binds []*string, fn func(Tuple) bool) error {
+	if len(e.rules[rel]) == 0 {
+		br := e.base[rel]
+		if br == nil {
+			return fmt.Errorf("datalog: unknown relation %q", rel)
+		}
+		br.each(binds, fn)
+		return nil
+	}
+	tuples, err := e.solve(rs, rel, binds)
+	if err != nil {
+		return err
+	}
+	for _, tup := range tuples {
+		if !fn(tup) {
+			break
+		}
+	}
+	return nil
 }
 
 // evalRule proves one rule against a call pattern, left to right.
@@ -298,10 +357,10 @@ func (e *Engine) evalRule(rs *roundState, r *Rule, binds []*string, t *table) er
 		env[term.Name] = *b
 	}
 	steps := make([]DerivationStep, 0, len(r.Body))
-	return e.join(rs, r, 0, env, binds, t, steps)
+	return e.join(rs, r, newRulePatterns(r), 0, env, binds, t, steps)
 }
 
-func (e *Engine) join(rs *roundState, r *Rule, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
+func (e *Engine) join(rs *roundState, r *Rule, rp *rulePatterns, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
 		head := make(Tuple, len(r.Head.Args))
 		for k, term := range r.Head.Args {
@@ -324,16 +383,16 @@ func (e *Engine) join(rs *roundState, r *Rule, i int, env map[string]string, bin
 	}
 
 	lit := r.Body[i]
-	sub := make([]*string, len(lit.Args))
+	sub := rp.ptr[i]
 	for k, term := range lit.Args {
 		if !term.IsVar {
-			v := term.Name
-			sub[k] = &v
 			continue
 		}
 		if v, ok := env[term.Name]; ok {
-			vv := v
-			sub[k] = &vv
+			rp.vals[i][k] = v
+			sub[k] = &rp.vals[i][k]
+		} else {
+			sub[k] = nil
 		}
 	}
 
@@ -345,16 +404,13 @@ func (e *Engine) join(rs *roundState, r *Rule, i int, env map[string]string, bin
 		if found {
 			return nil
 		}
-		return e.join(rs, r, i+1, env, binds, t, steps)
+		return e.join(rs, r, rp, i+1, env, binds, t, steps)
 	}
 
-	tuples, err := e.solve(rs, lit.Rel, sub)
-	if err != nil {
-		return err
-	}
 	_, isBase := e.base[lit.Rel]
 	isBase = isBase && len(e.rules[lit.Rel]) == 0
-	for _, tup := range tuples {
+	var joinErr error
+	err := e.eachSolved(rs, lit.Rel, sub, func(tup Tuple) bool {
 		var added []string
 		ok := true
 		for k, term := range lit.Args {
@@ -373,15 +429,19 @@ func (e *Engine) join(rs *roundState, r *Rule, i int, env map[string]string, bin
 		}
 		if ok {
 			step := DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase}
-			if err := e.join(rs, r, i+1, env, binds, t, append(steps, step)); err != nil {
-				return err
+			if e2 := e.join(rs, r, rp, i+1, env, binds, t, append(steps, step)); e2 != nil {
+				joinErr = e2
 			}
 		}
 		for _, name := range added {
 			delete(env, name)
 		}
+		return joinErr == nil
+	})
+	if err != nil {
+		return err
 	}
-	return nil
+	return joinErr
 }
 
 func (e *Engine) record(t *table, tup Tuple, d *Derivation) error {
