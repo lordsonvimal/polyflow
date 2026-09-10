@@ -28,11 +28,17 @@ func stratify(rules []*Rule) (map[string]int, error) {
 	}
 	deps := map[string][]dep{}
 	for _, r := range rules {
+		// An aggregate rule reads its inputs the way a negated literal does: the
+		// aggregated relation must be fully derived first, so every positive read
+		// forces a strictly higher stratum. That also rejects an aggregate over
+		// its own or a higher component — the same non-convergence a negated cycle
+		// triggers.
+		strict := r.Agg != nil
 		for _, l := range r.Body {
 			if !heads[l.Rel] {
 				continue // base relations are stratum 0 by construction
 			}
-			deps[r.Head.Rel] = append(deps[r.Head.Rel], dep{l.Rel, l.Neg})
+			deps[r.Head.Rel] = append(deps[r.Head.Rel], dep{l.Rel, l.Neg || strict})
 		}
 	}
 
@@ -89,7 +95,7 @@ func findNegativeCycle(rules []*Rule, heads map[string]bool) []string {
 		}
 		for _, l := range r.Body {
 			if heads[l.Rel] {
-				adj[r.Head.Rel] = append(adj[r.Head.Rel], edge{l.Rel, l.Neg})
+				adj[r.Head.Rel] = append(adj[r.Head.Rel], edge{l.Rel, l.Neg || r.Agg != nil})
 			}
 		}
 		if adj[r.Head.Rel] == nil {

@@ -54,7 +54,7 @@ func (e *Engine) QueryPattern(goal string, pattern []string) ([]Tuple, error) {
 		for i, t := range out {
 			row := flat[i*w : i*w+w : i*w+w]
 			for j, id := range t {
-				row[j] = e.syms.strs[id]
+				row[j] = e.syms.sym(id)
 			}
 			res[i] = row
 		}
@@ -73,6 +73,27 @@ func (e *Engine) Provenance(goal string, t Tuple) ([]Derivation, error) {
 	if err := e.ready(goal, len(t)); err != nil {
 		return nil, err
 	}
+
+	if e.aggRel[goal] {
+		// Aggregate relations are only derived bottom-up (see solve); recompute
+		// that cone with recording on and read the one group's derivation.
+		prev := e.recordProv
+		e.recordProv = true
+		e.reset()
+		_, err := e.solveBottomUp(goal)
+		e.recordProv = prev
+		if err != nil {
+			return nil, err
+		}
+		ds := e.derivs[e.groupKey(goal, e.syms.intern(t))]
+		if len(ds) == 0 {
+			return nil, fmt.Errorf("datalog: %s%v is not derivable", goal, []string(t))
+		}
+		out := append([]Derivation(nil), ds...)
+		sort.SliceStable(out, func(i, j int) bool { return derivKey(out[i]) < derivKey(out[j]) })
+		return out, nil
+	}
+
 	pattern := make([]string, len(t))
 	copy(pattern, t)
 	binds := bindsOf(pattern, e.syms)
@@ -194,6 +215,29 @@ func (e *Engine) solveComplete(rel string, binds []*uint32) ([]itup, error) {
 func (e *Engine) solve(rs *roundState, rel string, binds []*uint32) ([]itup, error) {
 	rules := e.rules[rel]
 	baseRel, hasBase := e.base[rel]
+
+	// An aggregate relation cannot be built from partial subgoal answers — the
+	// group would be reduced before it is complete, and relations are monotone so
+	// the premature tuple could never be retracted. Redirect any top-down reach
+	// to the stratified bottom-up path, which derives the aggregated inputs first,
+	// then filter to the call pattern.
+	if e.aggRel[rel] {
+		its, err := e.solveBottomUp(rel)
+		if err != nil {
+			return nil, err
+		}
+		if !anyBound(binds) {
+			return its, nil
+		}
+		out := make([]itup, 0, len(its))
+		for _, tp := range its {
+			if matches(tp, binds) {
+				out = append(out, tp)
+			}
+		}
+		return out, nil
+	}
+
 	if len(rules) == 0 {
 		if !hasBase {
 			return nil, fmt.Errorf("datalog: unknown relation %q", rel)
@@ -433,11 +477,41 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*uint32, t *table) er
 		r.patBusy = true
 		defer func() { r.patBusy = false }()
 	}
+	if r.Agg != nil {
+		saved := e.agg
+		e.agg = &aggRun{accs: map[tkey]*aggAcc{}}
+		defer func() { e.agg = saved }()
+		if err := e.join(src, r, rp, e.planBody(r), 0, &fr, binds, t, steps); err != nil {
+			return err
+		}
+		return e.flushAgg(r, t)
+	}
 	return e.join(src, r, rp, e.planBody(r), 0, &fr, binds, t, steps)
+}
+
+func (e *Engine) termSym(term Term, fr *frame) (uint32, bool) {
+	if term.IsVar {
+		return fr.get(term.Var)
+	}
+	return term.Sym, true
+}
+
+func anyBound(binds []*uint32) bool {
+	for _, b := range binds {
+		if b != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan, i int, fr *frame, binds []*uint32, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
+		if r.Agg != nil {
+			// Aggregate rule: don't emit a head per substitution — fold this one
+			// into its group; flushAgg emits one head per group after the join.
+			return e.aggCollect(r, fr, steps)
+		}
 		// Reuse the per-rule scratch head instead of make(Tuple, …) per firing;
 		// record clones it only when the tuple is genuinely new (D.3). The
 		// terminal case does not recurse, so nothing overwrites rp.head between
@@ -471,6 +545,27 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 	}
 
 	lit := r.Body[i]
+
+	if isBuiltin(lit.Rel) {
+		// A comparison test, not a generator: checkSafe guarantees both operands
+		// are already bound, so evaluate and either prune this branch or move on.
+		// Like a negated literal, a builtin contributes no derivation step.
+		a, aok := e.termSym(lit.Args[0], fr)
+		b, bok := e.termSym(lit.Args[1], fr)
+		if !aok || !bok {
+			return fmt.Errorf("datalog: rule %s (%s:%d): %s operand unbound at evaluation (checkSafe should have caught this)",
+				r.Name, r.File, r.Line, lit.Rel)
+		}
+		pass, err := evalBuiltin(lit.Rel, a, b, e.syms)
+		if err != nil {
+			return err
+		}
+		if !pass {
+			return nil
+		}
+		return e.join(src, r, rp, plan, i+1, fr, binds, t, steps)
+	}
+
 	lp := &plan[i]
 	sub := rp.ptr[i]
 	for k, term := range lit.Args {

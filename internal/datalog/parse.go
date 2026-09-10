@@ -54,6 +54,13 @@ type Rule struct {
 	// binding frame join allocates. assignVars sets it.
 	NVars int
 
+	// Agg, when non-nil, makes this an aggregate rule (FX.3): the body is
+	// evaluated to all satisfying substitutions, grouped by the head variables
+	// other than Agg.OutVar, and Agg.OutVar is bound to min / max / count of
+	// Agg.InVar per group. The aggregated input relations sit in a strictly lower
+	// stratum (stratify enforces it), so the group is complete when the rule runs.
+	Agg *AggSpec
+
 	// pat is the rule's sub-call patterns, cached across evalRule calls (D.4).
 	// The structure is immutable; only vals/head are written during a join and
 	// both are fully overwritten before each read, and evaluation is
@@ -72,6 +79,96 @@ type Rule struct {
 }
 
 func (l Literal) arity() int { return len(l.Args) }
+
+// AggSpec is the aggregation on an aggregate rule: `head(G, Out) :- body, <fn>(Out, In)`.
+type AggSpec struct {
+	Fn     string // "min" | "max" | "count"
+	OutVar string // head variable bound to the aggregate result
+	InVar  string // body variable aggregated over
+
+	outSlot int // dense var slot for OutVar, set by resolveAggSlots
+	inSlot  int // dense var slot for InVar
+}
+
+var aggFns = map[string]bool{"min": true, "max": true, "count": true}
+
+func isAggName(s string) bool { return aggFns[s] }
+
+// extractAgg pulls an aggregate literal (`min(Out, In)` etc.) out of a rule
+// body, validates it and records it on r.Agg. Called before assignVars so the
+// remaining body is what gets numbered.
+func extractAgg(r *Rule) error {
+	kept := r.Body[:0]
+	for _, l := range r.Body {
+		if !isAggName(l.Rel) {
+			kept = append(kept, l)
+			continue
+		}
+		if l.Neg {
+			return fmt.Errorf("%s:%d: rule %s: aggregate %s cannot be negated", r.File, r.Line, r.Name, l.Rel)
+		}
+		if len(l.Args) != 2 || !l.Args[0].IsVar || !l.Args[1].IsVar {
+			return fmt.Errorf("%s:%d: rule %s: %s takes (OutVar, InVar), both variables", r.File, r.Line, r.Name, l.Rel)
+		}
+		if r.Agg != nil {
+			return fmt.Errorf("%s:%d: rule %s: at most one aggregate per rule", r.File, r.Line, r.Name)
+		}
+		r.Agg = &AggSpec{Fn: l.Rel, OutVar: l.Args[0].Name, InVar: l.Args[1].Name}
+	}
+	r.Body = kept
+	if r.Agg == nil {
+		return nil
+	}
+	headHas := false
+	for _, a := range r.Head.Args {
+		if a.IsVar && a.Name == r.Agg.OutVar {
+			headHas = true
+		}
+	}
+	if !headHas {
+		return fmt.Errorf("%s:%d: rule %s: aggregate output %s must appear in the head", r.File, r.Line, r.Name, r.Agg.OutVar)
+	}
+	for _, a := range r.Head.Args {
+		if a.IsVar && a.Name == r.Agg.InVar {
+			return fmt.Errorf("%s:%d: rule %s: aggregate input %s cannot also be a head variable", r.File, r.Line, r.Name, r.Agg.InVar)
+		}
+	}
+	bound := false
+	for _, l := range r.Body {
+		if l.Neg {
+			continue
+		}
+		for _, a := range l.Args {
+			if a.IsVar && a.Name == r.Agg.InVar {
+				bound = true
+			}
+		}
+	}
+	if !bound {
+		return fmt.Errorf("%s:%d: rule %s: aggregate input %s is not bound by a positive body literal", r.File, r.Line, r.Name, r.Agg.InVar)
+	}
+	return nil
+}
+
+// resolveAggSlots fills the dense var slots on an aggregate spec, after
+// assignVars has numbered the rule's variables.
+func resolveAggSlots(r *Rule) {
+	if r.Agg == nil {
+		return
+	}
+	for _, a := range r.Head.Args {
+		if a.IsVar && a.Name == r.Agg.OutVar {
+			r.Agg.outSlot = a.Var
+		}
+	}
+	for _, l := range r.Body {
+		for _, a := range l.Args {
+			if a.IsVar && a.Name == r.Agg.InVar {
+				r.Agg.inSlot = a.Var
+			}
+		}
+	}
+}
 
 // assignVars gives every distinct variable in a rule a dense slot index, shared
 // between the head and the body, and records the count on the rule. The join
@@ -151,6 +248,16 @@ func lex(src []byte, file string) ([]token, error) {
 				continue
 			}
 			return nil, fmt.Errorf("%s:%d: stray ':'", file, line)
+		case c >= '0' && c <= '9':
+			// A bare integer literal — an ordering index, a depth, a line. It
+			// interns to the reserved integer symbol range (FX.3), which is what
+			// makes `le(D, 2)` a numeric comparison rather than a string one.
+			j := i
+			for j < len(src) && src[j] >= '0' && src[j] <= '9' {
+				j++
+			}
+			out = append(out, token{"int", string(src[i:j]), line})
+			i = j
 		case isIdentStart(rune(c)):
 			j := i
 			for j < len(src) && isIdentRune(rune(src[j])) {
@@ -205,7 +312,11 @@ func parseRules(src []byte, file string) ([]*Rule, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := extractAgg(r); err != nil {
+			return nil, err
+		}
 		assignVars(r)
+		resolveAggSlots(r)
 		rules = append(rules, r)
 	}
 	return rules, nil
@@ -283,7 +394,7 @@ func (p *parser) literal(allowNeg bool) (Literal, error) {
 	for {
 		a := p.peek()
 		switch {
-		case a.kind == "string":
+		case a.kind == "string" || a.kind == "int":
 			lit.Args = append(lit.Args, Term{Name: a.text})
 			p.pos++
 		case a.kind == "ident":
@@ -324,6 +435,41 @@ func (p *parser) literal(allowNeg bool) (Literal, error) {
 // rows a filter-chain rule exists to distinguish. An unbound head variable is
 // an infinite relation. Both are rejected at load, with the rule named.
 func checkSafe(r *Rule) error {
+	if isBuiltin(r.Head.Rel) || isAggName(r.Head.Rel) {
+		return fmt.Errorf("%s:%d: rule %s: %s is a builtin, not a relation that can be a rule head",
+			r.File, r.Line, r.Name, r.Head.Rel)
+	}
+	// Comparison builtins are always-complete tests, not generators: every
+	// argument must be bound by a positive literal *earlier* in the body, the
+	// same discipline as negation but order-sensitive.
+	bound := map[string]bool{}
+	for _, l := range r.Body {
+		if isBuiltin(l.Rel) {
+			if l.Neg {
+				return fmt.Errorf("%s:%d: rule %s: %s cannot be negated", r.File, r.Line, r.Name, l.Rel)
+			}
+			if len(l.Args) != builtinArity[l.Rel] {
+				return fmt.Errorf("%s:%d: rule %s: %s takes %d arguments, got %d",
+					r.File, r.Line, r.Name, l.Rel, builtinArity[l.Rel], len(l.Args))
+			}
+			for _, a := range l.Args {
+				if a.IsVar && !bound[a.Name] {
+					return fmt.Errorf("%s:%d: rule %s: %s argument %s is not bound by an earlier positive literal",
+						r.File, r.Line, r.Name, l.Rel, a.Name)
+				}
+			}
+			continue
+		}
+		if l.Neg {
+			continue
+		}
+		for _, a := range l.Args {
+			if a.IsVar {
+				bound[a.Name] = true
+			}
+		}
+	}
+
 	if len(r.Body) == 0 {
 		for _, a := range r.Head.Args {
 			if a.IsVar {
@@ -346,6 +492,10 @@ func checkSafe(r *Rule) error {
 	}
 	for _, a := range r.Head.Args {
 		if !a.IsVar {
+			continue
+		}
+		if r.Agg != nil && a.Name == r.Agg.OutVar {
+			// Bound at aggregation time, not by a body literal.
 			continue
 		}
 		if strings.HasPrefix(a.Name, "_") && len(r.Body) > 0 {

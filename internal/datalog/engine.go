@@ -32,6 +32,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -49,6 +50,15 @@ type interner struct {
 func newInterner() *interner { return &interner{ids: make(map[string]uint32)} }
 
 func (in *interner) id(s string) uint32 {
+	// A non-negative decimal in the reserved range maps straight to an integer
+	// symbol (FX.3) — the fact IR carries ordering indices, resolution depths,
+	// source lines and ports as factpipe.AtomInt, and the comparison builtins and
+	// bounded aggregation need them comparable as numbers, not strings. This
+	// check runs at the Assert / Query-input boundary (a dozen relations), never
+	// in the join.
+	if n, ok := parseIntSym(s); ok {
+		return intSymFlag | n
+	}
 	if v, ok := in.ids[s]; ok {
 		return v
 	}
@@ -58,8 +68,14 @@ func (in *interner) id(s string) uint32 {
 	return v
 }
 
-// sym is the reverse of id: the string an interned id stands for.
-func (in *interner) sym(id uint32) string { return in.strs[id] }
+// sym is the reverse of id: the string an interned id stands for. A symbol with
+// intSymFlag set carries an integer directly and has no strs entry (FX.3).
+func (in *interner) sym(id uint32) string {
+	if id&intSymFlag != 0 {
+		return strconv.FormatUint(uint64(id&^intSymFlag), 10)
+	}
+	return in.strs[id]
+}
 
 // intern converts a public string tuple to the internal []uint32 representation
 // (docs/datalog-engine-performance-plan.md D.12). Done once, at the Assert and
@@ -79,7 +95,7 @@ func (in *interner) intern(t Tuple) itup {
 func (in *interner) reveal(t itup) Tuple {
 	out := make(Tuple, len(t))
 	for i, id := range t {
-		out[i] = in.strs[id]
+		out[i] = in.sym(id)
 	}
 	return out
 }
@@ -447,6 +463,15 @@ type Engine struct {
 	evalDepth int   // nested solveComplete calls in flight; 0 => a top-level fixpoint
 	grown     int64 // incremented on every new tuple; the fixpoint signal
 
+	// aggRel is the set of relations headed by at least one aggregate rule (FX.3).
+	// Aggregation needs its input relation fully derived before it runs, which the
+	// bottom-up stratum order guarantees but a partial top-down subgoal does not,
+	// so a top-down reach for an aggregate relation is redirected to bottom-up.
+	aggRel map[string]bool
+	// agg is the accumulator for the aggregate rule currently being evaluated,
+	// saved and restored around nested evaluation (composed aggregates).
+	agg *aggRun
+
 	// derivs records every way a tuple was derived, keyed relation+tuple.
 	// Deduped, because a rule re-fires on every fixpoint round.
 	derivs   map[dgKey][]Derivation
@@ -474,6 +499,7 @@ func New(opts Options) *Engine {
 		syms:       newInterner(),
 		base:       map[string]*relation{},
 		rules:      map[string][]*Rule{},
+		aggRel:     map[string]bool{},
 		tables:     map[sgKey]*table{},
 		derivs:     map[dgKey][]Derivation{},
 		derivSet:   map[string]bool{},
@@ -548,6 +574,9 @@ func (e *Engine) LoadRules(src []byte, name string) error {
 	}
 	for _, r := range all {
 		for _, l := range append([]Literal{r.Head}, r.Body...) {
+			if isBuiltin(l.Rel) {
+				continue
+			}
 			if a, seen := arity[l.Rel]; seen && a != l.arity() {
 				return fmt.Errorf("%s:%d: %s is used with arity %d here and %d elsewhere", r.File, r.Line, l.Rel, l.arity(), a)
 			}
@@ -568,7 +597,7 @@ func (e *Engine) LoadRules(src []byte, name string) error {
 	var missing []string
 	for _, r := range all {
 		for _, l := range r.Body {
-			if heads[l.Rel] {
+			if heads[l.Rel] || isBuiltin(l.Rel) {
 				continue
 			}
 			if _, ok := e.base[l.Rel]; !ok {
@@ -612,8 +641,13 @@ func (e *Engine) LoadRules(src []byte, name string) error {
 
 	e.ruleOrder = all
 	e.rules = map[string][]*Rule{}
+	e.aggRel = map[string]bool{}
 	for _, r := range all {
 		e.rules[r.Head.Rel] = append(e.rules[r.Head.Rel], r)
+		if r.Agg != nil {
+			e.aggRel[r.Head.Rel] = true
+			resolveAggSlots(r)
+		}
 	}
 	e.strata = strata
 	e.loaded = true
@@ -644,6 +678,7 @@ func (e *Engine) reset() {
 	e.tables = map[sgKey]*table{}
 	e.evalDepth = 0
 	e.grown = 0
+	e.agg = nil
 	// New facts or rules can change a literal's base/derived classification, so
 	// the cached body plans (D.9) are no longer trustworthy.
 	for _, r := range e.ruleOrder {
