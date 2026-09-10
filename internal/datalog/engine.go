@@ -178,14 +178,20 @@ func (r *relation) add(t Tuple) bool {
 		return false
 	}
 	r.seen[k] = true
-	r.tuples = append(r.tuples, t)
+	// Copy only on insert (docs/datalog-engine-performance-plan.md D.3). The
+	// caller may hand us a scratch buffer it reuses per rule firing — join builds
+	// the head tuple into rulePatterns.head — so a tuple that is genuinely new is
+	// cloned here, at the one point it starts being retained, and a re-derived
+	// one costs nothing.
+	stored := append(Tuple(nil), t...)
+	r.tuples = append(r.tuples, stored)
 	if r.idx != nil {
 		// The index is only ever added to — relations are monotone within a run —
 		// so maintain it in place instead of dropping it and rebuilding every
 		// per-argument bucket over every tuple on the next lookup. During a
 		// fixpoint that rebuild was per round per relation
 		// (docs/datalog-engine-performance-plan.md P.4).
-		r.indexTuple(t)
+		r.indexTuple(stored)
 	}
 	return true
 }
@@ -443,7 +449,7 @@ func (e *Engine) Assert(rel string, tuples []Tuple) error {
 		if len(t) != r.arity {
 			return fmt.Errorf("datalog: relation %s has arity %d, got a tuple of %d terms %v", rel, r.arity, len(t), t)
 		}
-		if r.add(append(Tuple(nil), t...)) && len(r.tuples) > e.opts.MaxTuples {
+		if r.add(t) && len(r.tuples) > e.opts.MaxTuples {
 			return fmt.Errorf("datalog: relation %s exceeded MaxTuples (%d)", rel, e.opts.MaxTuples)
 		}
 	}

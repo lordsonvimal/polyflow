@@ -299,12 +299,14 @@ func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
 type rulePatterns struct {
 	ptr  [][]*string // ptr[i][k] is nil (free) or points into vals[i]
 	vals [][]string  // stable backing storage the pointers alias
+	head []string    // scratch head tuple, rebuilt per firing, cloned only on insert (D.3)
 }
 
 func newRulePatterns(r *Rule) *rulePatterns {
 	rp := &rulePatterns{
 		ptr:  make([][]*string, len(r.Body)),
 		vals: make([][]string, len(r.Body)),
+		head: make([]string, len(r.Head.Args)),
 	}
 	for bi, lit := range r.Body {
 		rp.vals[bi] = make([]string, len(lit.Args))
@@ -391,7 +393,11 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) er
 
 func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *frame, binds []*string, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
-		head := make(Tuple, len(r.Head.Args))
+		// Reuse the per-rule scratch head instead of make(Tuple, …) per firing;
+		// record clones it only when the tuple is genuinely new (D.3). The
+		// terminal case does not recurse, so nothing overwrites rp.head between
+		// here and record.
+		head := Tuple(rp.head)
 		for k, term := range r.Head.Args {
 			if term.IsVar {
 				v, ok := fr.get(term.Var)
@@ -410,7 +416,11 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 		}
 		var d *Derivation
 		if e.recordProv {
-			d = &Derivation{Rule: r.Name, Head: head, Body: append([]DerivationStep(nil), steps...)}
+			// The Derivation retains its Head, so it gets a stable copy — the
+			// scratch buffer is about to be reused. Off the hot path by default.
+			hc := append(Tuple(nil), head...)
+			d = &Derivation{Rule: r.Name, Head: hc, Body: append([]DerivationStep(nil), steps...)}
+			return e.record(t, hc, d)
 		}
 		return e.record(t, head, d)
 	}
