@@ -16,6 +16,11 @@ import (
 //go:embed ruby/*.dl
 var files embed.FS
 
+// FS is the embedded rule tree, one subdirectory per language. The FX.6
+// pipeline (internal/factpipe) walks it to pair each `rules/<lang>/<name>.dl`
+// with `patterns/<lang>/<name>.yaml`.
+var FS = files
+
 // Load returns one rule file by its path under rules/, e.g. "ruby/rails_filters.dl".
 func Load(name string) ([]byte, error) {
 	b, err := files.ReadFile(name)

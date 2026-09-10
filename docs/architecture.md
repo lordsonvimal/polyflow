@@ -96,6 +96,30 @@ The guard checks direction, not intent. The first request to put a `where:` or
 policy leaking below L5, and no import-graph test can catch it. Reviewers should
 treat "it's only one condition" as the signal it is.
 
+## Framework pipeline slot (Tier FX)
+
+The declarative framework pipeline (`internal/factpipe` + its `pipeline`
+subpackage, `docs/declarative-framework-pipeline-plan.md`) runs the four L1–L5
+stages for one framework — extract (`patterns/<lang>/<name>.yaml` `facts:`),
+bridge the graph-so-far to base relations (FX.1 `GraphFacts`), derive
+(`rules/<lang>/<name>.dl`), emit (`emit:` block) — as data, no per-framework Go.
+
+`pipeline.Run` executes **after language-semantic analysis and before
+cross-service contract matching**:
+
+- *after* semantic analysis, because FX.1's bridge needs `calls_edge`,
+  `resolved`, `inherits` and the containment/class backbone already populated —
+  a framework `.dl` joins its extracted facts against real name resolution.
+- *before* L4 contract matching, because the framework edges it emits (Gin/Rails
+  middleware `calls`, Pusher `publishes`, …) are inputs a later contract match or
+  reachability walk reads.
+
+Wrong slot = stale resolution in, or missing edges out; treat a change to it
+with the same care as any `internal/linker` pass-ordering change. Gating is via
+`internal/deps`: a framework whose `package:`/`version_range:` gate the service
+does not satisfy is never compiled or run (`Registry.Active`), so cost is
+O(active frameworks), not O(all).
+
 ## Status
 
 The layers marked as future extension points above are landing incrementally:

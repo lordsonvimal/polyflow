@@ -20,6 +20,16 @@ import "sort"
 type Program struct {
 	src  []byte
 	name string
+	base []string // body relations that are neither a rule head nor a builtin
+}
+
+// BaseRelations returns the sorted names of every relation a rule body reads
+// that no rule derives — i.e. the relations the caller must supply (Add or
+// Declare) on the FactRelations before Eval. LoadRules rejects the program if
+// one of these is absent, so the pipeline uses this list to Declare the ones a
+// given service produced no facts for ("this service really has no X").
+func (p *Program) BaseRelations() []string {
+	return append([]string(nil), p.base...)
 }
 
 // Compile validates src. It fails here — not at Eval — on a syntax error, an
@@ -38,7 +48,27 @@ func Compile(src []byte, name string) (*Program, error) {
 	if _, err := stratify(rules); err != nil {
 		return nil, err
 	}
-	return &Program{src: append([]byte(nil), src...), name: name}, nil
+
+	heads := map[string]bool{}
+	for _, r := range rules {
+		heads[r.Head.Rel] = true
+	}
+	baseSet := map[string]bool{}
+	for _, r := range rules {
+		for _, l := range r.Body {
+			if l.Rel == "" || heads[l.Rel] || isBuiltin(l.Rel) {
+				continue
+			}
+			baseSet[l.Rel] = true
+		}
+	}
+	base := make([]string, 0, len(baseSet))
+	for rel := range baseSet {
+		base = append(base, rel)
+	}
+	sort.Strings(base)
+
+	return &Program{src: append([]byte(nil), src...), name: name, base: base}, nil
 }
 
 // FactRelations is the base-fact input to Eval: relation name to tuples, plus
