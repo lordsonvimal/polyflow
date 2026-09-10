@@ -119,17 +119,31 @@ func subgoalKey(rel string, binds []*string) string {
 	return sb.String()
 }
 
+// roundState is the per-round memo of one fixpoint: the set of subgoals already
+// evaluated this round, so a subgoal reached twice in one round is not
+// recomputed. It is owned by the solveComplete invocation that created it — a
+// nested fixpoint (from solveNegated) gets its own, so nothing a negated
+// relation's evaluation does can invalidate the outer fixpoint's memo. That
+// cross-fixpoint interference, via a shared global counter, was the defect in
+// docs/datalog-engine-performance-plan.md §1.1.
+type roundState struct {
+	seen map[string]bool
+}
+
 // solveComplete drives the fixpoint for one subgoal: re-evaluate until a whole
 // round adds no tuple anywhere. Datalog is monotone and the domain is finite,
 // so this terminates; MaxRounds only catches a bug in the engine itself.
 func (e *Engine) solveComplete(rel string, binds []*string) ([]Tuple, error) {
-	topLevel := len(e.active) == 0
+	topLevel := e.evalDepth == 0
+	e.evalDepth++
+	defer func() { e.evalDepth-- }()
+
 	var out []Tuple
 	for i := 0; i < e.opts.MaxRounds; i++ {
 		before := e.grown
-		e.round++
+		rs := &roundState{seen: map[string]bool{}}
 		var err error
-		out, err = e.solve(rel, binds)
+		out, err = e.solve(rs, rel, binds)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +153,7 @@ func (e *Engine) solveComplete(rel string, binds []*string) ([]Tuple, error) {
 				// every table populated along the way is final. Marking them
 				// lets a second Query reuse the work instead of re-deriving it.
 				for _, t := range e.tables {
-					t.complete = true
+					t.state = tableComplete
 				}
 			}
 			return out, nil
@@ -152,7 +166,7 @@ func (e *Engine) solveComplete(rel string, binds []*string) ([]Tuple, error) {
 // in progress returns its partial answers rather than recursing — the caller's
 // fixpoint loop is what turns that into the complete set. This is the tabling
 // half of "top-down with tabling"; the call-pattern key is the demand half.
-func (e *Engine) solve(rel string, binds []*string) ([]Tuple, error) {
+func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, error) {
 	rules := e.rules[rel]
 	baseRel, hasBase := e.base[rel]
 	if len(rules) == 0 {
@@ -165,15 +179,19 @@ func (e *Engine) solve(rel string, binds []*string) ([]Tuple, error) {
 	key := subgoalKey(rel, binds)
 	t := e.tables[key]
 	if t == nil {
-		t = &table{rel: newRelation(rel, len(binds)), round: -1}
+		t = &table{rel: newRelation(rel, len(binds))}
 		e.tables[key] = t
 	}
-	if t.complete || e.active[key] || t.round == e.round {
+	if t.state == tableComplete || t.state == tableProducing || rs.seen[key] {
 		return t.rel.tuples, nil
 	}
-	t.round = e.round
-	e.active[key] = true
-	defer delete(e.active, key)
+	rs.seen[key] = true
+	t.state = tableProducing
+	defer func() {
+		if t.state == tableProducing {
+			t.state = tableDirty
+		}
+	}()
 
 	// A relation can be both asserted and derived; the answer is the union.
 	if hasBase {
@@ -189,7 +207,7 @@ func (e *Engine) solve(rel string, binds []*string) ([]Tuple, error) {
 		// closure over a large ancestor set explode.
 		free := make([]*string, len(binds))
 		if subgoalKey(rel, free) != key {
-			all, err := e.solve(rel, free)
+			all, err := e.solve(rs, rel, free)
 			if err != nil {
 				return nil, err
 			}
@@ -204,7 +222,7 @@ func (e *Engine) solve(rel string, binds []*string) ([]Tuple, error) {
 		}
 	}
 	for _, r := range rules {
-		if err := e.evalRule(r, binds, t); err != nil {
+		if err := e.evalRule(rs, r, binds, t); err != nil {
 			return nil, err
 		}
 	}
@@ -227,16 +245,30 @@ func (e *Engine) solve(rel string, binds []*string) ([]Tuple, error) {
 // contain anything currently in flight — nothing partial can leak in, and the
 // table is genuinely final once its own fixpoint settles.
 func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
+	// A relation with no rules is complete the moment it was asserted — there is
+	// no fixpoint that could add to it. reg_only, reg_except, action and skip_total
+	// are all base relations negated in hot rules, and running solveComplete for
+	// each check does two expensive things for nothing: it walks a full (empty)
+	// fixpoint loop, and it bumps the global round counter, invalidating the
+	// per-round memo for every table in the engine (docs/datalog-engine-performance-plan.md
+	// §1.1). Probe the facts directly instead.
+	if len(e.rules[rel]) == 0 {
+		br := e.base[rel]
+		if br == nil {
+			return false, fmt.Errorf("datalog: unknown relation %q", rel)
+		}
+		return len(br.match(binds)) > 0, nil
+	}
 	free := make([]*string, len(binds))
 	key := subgoalKey(rel, free)
-	if t := e.tables[key]; t != nil && t.complete {
+	if t := e.tables[key]; t != nil && t.state == tableComplete {
 		return len(t.rel.match(binds)) > 0, nil
 	}
 	if _, err := e.solveComplete(rel, free); err != nil {
 		return false, err
 	}
 	if t := e.tables[key]; t != nil {
-		t.complete = true
+		t.state = tableComplete
 		return len(t.rel.match(binds)) > 0, nil
 	}
 	// A purely base relation has no table; probe the facts directly.
@@ -244,7 +276,7 @@ func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
 }
 
 // evalRule proves one rule against a call pattern, left to right.
-func (e *Engine) evalRule(r *Rule, binds []*string, t *table) error {
+func (e *Engine) evalRule(rs *roundState, r *Rule, binds []*string, t *table) error {
 	env := map[string]string{}
 	for i, term := range r.Head.Args {
 		b := binds[i]
@@ -266,10 +298,10 @@ func (e *Engine) evalRule(r *Rule, binds []*string, t *table) error {
 		env[term.Name] = *b
 	}
 	steps := make([]DerivationStep, 0, len(r.Body))
-	return e.join(r, 0, env, binds, t, steps)
+	return e.join(rs, r, 0, env, binds, t, steps)
 }
 
-func (e *Engine) join(r *Rule, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
+func (e *Engine) join(rs *roundState, r *Rule, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
 		head := make(Tuple, len(r.Head.Args))
 		for k, term := range r.Head.Args {
@@ -313,10 +345,10 @@ func (e *Engine) join(r *Rule, i int, env map[string]string, binds []*string, t 
 		if found {
 			return nil
 		}
-		return e.join(r, i+1, env, binds, t, steps)
+		return e.join(rs, r, i+1, env, binds, t, steps)
 	}
 
-	tuples, err := e.solve(lit.Rel, sub)
+	tuples, err := e.solve(rs, lit.Rel, sub)
 	if err != nil {
 		return err
 	}
@@ -341,7 +373,7 @@ func (e *Engine) join(r *Rule, i int, env map[string]string, binds []*string, t 
 		}
 		if ok {
 			step := DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase}
-			if err := e.join(r, i+1, env, binds, t, append(steps, step)); err != nil {
+			if err := e.join(rs, r, i+1, env, binds, t, append(steps, step)); err != nil {
 				return err
 			}
 		}

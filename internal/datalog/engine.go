@@ -168,17 +168,30 @@ func (r *relation) buildIndex() {
 	}
 }
 
-// table is the memo for one subgoal: a relation plus the bookkeeping the
-// fixpoint driver needs.
+// tableState is where a memo table sits in its lifecycle. It replaces the old
+// global round counter: a subgoal reached twice is recognised by its own
+// state, not by comparing a mutable integer that any nested fixpoint could bump
+// (docs/datalog-engine-performance-plan.md §1.1).
+type tableState int
+
+const (
+	// tableDirty: never produced, or produced in an earlier fixpoint round and
+	// due to be re-derived this round.
+	tableDirty tableState = iota
+	// tableProducing: on the current production stack. A recursive reach
+	// returns the partial tuples rather than recursing — this is the tabling
+	// half of top-down-with-tabling, and the recursion guard.
+	tableProducing
+	// tableComplete: a full fixpoint produced nothing new, so the tuple set is
+	// final. Returned as-is, which is what makes a negated subgoal — always in
+	// a strictly lower stratum — safe to read.
+	tableComplete
+)
+
+// table is the memo for one subgoal: a relation plus its lifecycle state.
 type table struct {
-	rel *relation
-	// round is the evaluation round this table was last produced in, so a
-	// subgoal reached twice in one round is not recomputed.
-	round int
-	// complete is set once a full fixpoint produced nothing new. A complete
-	// table is returned as-is, which is what makes a negated subgoal — always
-	// in a strictly lower stratum — safe to read.
-	complete bool
+	rel   *relation
+	state tableState
 }
 
 // Engine holds base facts, rules and the memo tables from evaluation.
@@ -192,10 +205,9 @@ type Engine struct {
 	ruleOrder []*Rule
 	strata    map[string]int
 
-	tables map[string]*table
-	active map[string]bool
-	round  int
-	grown  int64 // incremented on every new tuple; the fixpoint signal
+	tables    map[string]*table
+	evalDepth int   // nested solveComplete calls in flight; 0 => a top-level fixpoint
+	grown     int64 // incremented on every new tuple; the fixpoint signal
 
 	// derivs records every way a tuple was derived, keyed relation+tuple.
 	// Deduped, because a rule re-fires on every fixpoint round.
@@ -219,7 +231,6 @@ func New(opts Options) *Engine {
 		base:     map[string]*relation{},
 		rules:    map[string][]*Rule{},
 		tables:   map[string]*table{},
-		active:   map[string]bool{},
 		derivs:   map[string][]Derivation{},
 		derivSet: map[string]bool{},
 	}
@@ -364,8 +375,7 @@ func (e *Engine) Relations() []Relation {
 
 func (e *Engine) reset() {
 	e.tables = map[string]*table{}
-	e.active = map[string]bool{}
-	e.round = 0
+	e.evalDepth = 0
 	e.grown = 0
 }
 
