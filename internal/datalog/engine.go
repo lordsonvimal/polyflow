@@ -165,8 +165,23 @@ func (r *relation) add(t Tuple) bool {
 	}
 	r.seen[k] = true
 	r.tuples = append(r.tuples, t)
-	r.idx = nil // invalidated; rebuilt on next indexed lookup
+	if r.idx != nil {
+		// The index is only ever added to — relations are monotone within a run —
+		// so maintain it in place instead of dropping it and rebuilding every
+		// per-argument bucket over every tuple on the next lookup. During a
+		// fixpoint that rebuild was per round per relation
+		// (docs/datalog-engine-performance-plan.md P.4).
+		r.indexTuple(t)
+	}
 	return true
+}
+
+// indexTuple files one tuple into each per-argument bucket. buildIndex does the
+// same over the whole relation; add does it incrementally.
+func (r *relation) indexTuple(t Tuple) {
+	for i := 0; i < r.arity && i < len(t); i++ {
+		r.idx[i][t[i]] = append(r.idx[i][t[i]], t)
+	}
 }
 
 // has reports whether an exact tuple is present.
@@ -249,9 +264,7 @@ func (r *relation) buildIndex() {
 		r.idx[i] = map[string][]Tuple{}
 	}
 	for _, t := range r.tuples {
-		for i := 0; i < r.arity && i < len(t); i++ {
-			r.idx[i][t[i]] = append(r.idx[i][t[i]], t)
-		}
+		r.indexTuple(t)
 	}
 }
 
