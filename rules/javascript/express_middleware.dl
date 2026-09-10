@@ -1,0 +1,53 @@
+% Express middleware chain — Tier FX FX.7.
+%
+% The whole of internal/linker/express_middleware.go: `app.use(mw)` stands for
+% handler --calls--> middleware edges, for every http_handler on the same
+% receiver variable in the same file. Narrower than Gin's — Express has no
+% route-group receiver chain in this model (v1 same-file/same-receiver only).
+%
+% Base relations:
+%   mw_use(Recv, Name, Expr, File, Line)   one per registration
+%   node / node_meta / node_line / node_label / calls_edge_seq   the FX.1 bridge
+
+guarded(File, Recv, H) :-
+    mw_use(Recv, _, _, File, _),
+    node(H, "http_handler", File, _),
+    node_meta(H, "recv", Recv).
+
+% the function lexically wrapping the .use(...) call (fnRangesByFile: function
+% and method nodes only; innermost = latest-starting containing function).
+mw_fn_cand(File, Line, Fn, L) :-
+    mw_use(_, _, _, File, Line),
+    node(Fn, "function", File, _),
+    node_line(Fn, L, E), le(L, Line), le(Line, E).
+mw_fn_cand(File, Line, Fn, L) :-
+    mw_use(_, _, _, File, Line),
+    node(Fn, "method", File, _),
+    node_line(Fn, L, E), le(L, Line), le(Line, E).
+
+mw_fn_start(File, Line, MaxL) :- mw_fn_cand(File, Line, _, L), max(MaxL, L).
+mw_fn(File, Line, Fn)         :- mw_fn_start(File, Line, L), mw_fn_cand(File, Line, Fn, L).
+
+% middleware target: the already-resolved calls edge from that function whose
+% target node's label matches the registration identifier; last write wins.
+mw_seq(File, Line, To, Seq) :-
+    mw_use(_, Name, _, File, Line),
+    mw_fn(File, Line, Fn),
+    calls_edge_seq(Fn, _, To, Seq),
+    node_label(To, Name).
+mw_best(File, Line, MaxS) :- mw_seq(File, Line, _, S), max(MaxS, S).
+mw_target(File, Line, To) :- mw_best(File, Line, S), mw_seq(File, Line, To, S).
+
+express_guard(H, To, Expr) :-
+    mw_use(Recv, _, Expr, File, Line),
+    guarded(File, Recv, H),
+    mw_target(File, Line, To).
+
+has_target(File, Line) :- mw_target(File, Line, _).
+has_scope(File, Line)  :- mw_use(Recv, _, _, File, Line), guarded(File, Recv, _).
+
+express_blind(Name, File, Line) :-
+    mw_use(_, Name, _, File, Line),
+    ne(Name, ""),
+    has_scope(File, Line),
+    not has_target(File, Line).

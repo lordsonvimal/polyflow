@@ -70,9 +70,9 @@ func ClassifyEdgeNoise(e *Edge, src, dst *Node) NoiseClass {
 		case "rails_filter":
 			return NoiseFilterChain // internal/linker/rails_filters.go:818, reused verbatim from Tier IR
 		case "gin_middleware_use":
-			return NoiseFilterChain // internal/linker/gin_middleware.go:210 — Gin's own before_action equivalent
+			return NoiseFilterChain // rules/go/gin_middleware.dl (Tier FX) — Gin's own before_action equivalent
 		case "express_middleware_use":
-			return NoiseFilterChain // internal/linker/express_middleware.go — Express's own before_action equivalent
+			return NoiseFilterChain // rules/javascript/express_middleware.dl (Tier FX) — Express's own before_action equivalent
 		case "closure_param":
 			// internal/parser/go_semantic.go: a generic wrapper (e.g.
 			// withID(ctx, name, func(id uint){...})) invoking a func-typed

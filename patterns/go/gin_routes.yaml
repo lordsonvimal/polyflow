@@ -148,19 +148,10 @@ patterns:
       - name: arg
         role: group_registrar_arg
 
-  # r.Use(authMiddleware()) — middleware registration.
-  - name: gin_middleware_use
-    query: |
-      (call_expression
-        function: (selector_expression
-          operand: (identifier) @router
-          field: (field_identifier) @fn
-          (#eq? @fn "Use"))
-        arguments: (argument_list
-          (_) @middleware))
-    captures:
-      - name: middleware
-        role: middleware_ref
+  # r.Use(mw) — the middleware registration pattern moved to
+  # patterns/go/gin_middleware.yaml (Tier FX FX.7), which pairs it with a
+  # facts: block + rules/go/gin_middleware.dl. Exactly one pattern must mint
+  # the middleware_use node.
 
   # c.ShouldBindJSON(&req) — request shape extraction: which struct the
   # handler expects.

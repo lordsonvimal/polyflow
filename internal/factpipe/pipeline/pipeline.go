@@ -29,6 +29,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -117,6 +118,15 @@ func Load(ruleFS, patternFS fs.FS) (*Registry, error) {
 
 	reg := &Registry{}
 	for _, dlPath := range dlPaths {
+		name := strings.TrimSuffix(path.Base(dlPath), ".dl")
+		yamlPath := path.Join(path.Dir(dlPath), name+".yaml")
+		if _, err := fs.Stat(patternFS, yamlPath); errors.Is(err, fs.ErrNotExist) {
+			// A `.dl` with no paired pattern YAML is not a pipeline framework
+			// (e.g. rules/ruby/rails_filters.dl, consumed directly by
+			// internal/linker until FX.8 gives it a YAML). Skip it — only a
+			// YAML that declares a framework but cannot be assembled is fatal.
+			continue
+		}
 		fw, err := loadFramework(ruleFS, patternFS, dlPath)
 		if err != nil {
 			return nil, err

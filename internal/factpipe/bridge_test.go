@@ -52,11 +52,13 @@ func TestGraphFactsCounts(t *testing.T) {
 
 	want := map[string]int{
 		"node":           4,
+		"node_label":     4, // every node has a Label
 		"node_line":      3, // only nodes with EndLine > 0
 		"node_meta":      2, // both keys of the one node with Meta
 		"edge":           6,
 		"calls_edge":     2,
 		"calls_edge_any": 1, // (from,label) deduped
+		"calls_edge_seq": 2, // one per calls edge, with its ordinal
 		"inherits":       1,
 		"defines":        2, // e1, e2 — NOT e6 (method parent)
 		"import":         1,

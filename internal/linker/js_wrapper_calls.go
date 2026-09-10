@@ -61,8 +61,8 @@ func LinkJSAPIWrapperCalls(nodes []graph.Node, serviceFiles map[string][]string)
 	wrapperMethod := map[string]map[string]string{}
 	// file -> enclosing function/method ranges, for attributing each new
 	// http_client node to its containing function with a calls edge — the
-	// same line-range containment technique LinkGinMiddleware uses to find
-	// the function lexically wrapping a call site.
+	// same line-range containment technique rules/go/gin_middleware.dl uses to
+	// find the function lexically wrapping a call site.
 	type fnRange struct {
 		id            string
 		line, endLine int

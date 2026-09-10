@@ -1,0 +1,63 @@
+# Gin middleware chain (Tier FX reference migration, FX.7). Replaces
+# internal/linker/gin_middleware.go: a `r.Use(mw)` / `group.Use(mw)`
+# registration becomes the calls edges it stands for — every http_handler in
+# scope of the registration --calls--> the middleware's real definition, the
+# same handler-calls-guard modeling rails_filters uses.
+#
+# Stage 1 (this file's `facts:` block) lowers each registration to an mw_use
+# fact. Stage 3 (rules/go/gin_middleware.dl) resolves scope via the route-group
+# receiver chain and the middleware target via the already-resolved calls
+# edges. Stage 4 (this file's `emit:` block) turns the derived relations into
+# edges + the blind-spot ledger.
+#
+# Gate: gin only. `r.Use(mw)` exists in other routers; the dependency gate is
+# the disambiguator (same convention as gin_routes.yaml).
+language: go
+version: "1"
+package: github.com/gin-gonic/gin
+
+patterns:
+  # r.Use(authMiddleware.Authenticate()) — middleware registration. Moved here
+  # verbatim from gin_routes.yaml so exactly one pattern mints the
+  # middleware_use node (classifyPattern still routes it to NodeTypeMiddlewareUse).
+  - name: gin_middleware_use
+    query: |
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @router
+          field: (field_identifier) @fn
+          (#eq? @fn "Use"))
+        arguments: (argument_list
+          (_) @middleware))
+    captures:
+      - name: middleware
+        role: middleware_ref
+    facts:
+      - pred: mw_use
+        args:
+          router: { capture: router }
+          name:   { capture: middleware, extract: call_name }
+          expr:   { capture: middleware }
+          file:   { extract: file }
+          line:   { extract: line }
+
+emit:
+  # handler --calls--> middleware definition, for every handler the
+  # registration guards and a resolvable target.
+  - relation: gin_guard
+    columns: [Handler, Target, Expr]
+    edge: { from: {arg: Handler}, to: {arg: Target}, type: calls, label: middleware }
+    meta: { via: gin_middleware_use, middleware_expr: {arg: Expr} }
+    confidence:
+      - { else: inferred }
+    dedup: [from, to, label]
+
+  # a registration that guards handlers but whose target does not resolve to an
+  # indexed node (external / vendored middleware) — the SA "never empty" ledger,
+  # one row per registration site (not per guarded handler).
+  - relation: gin_blind
+    columns: [Name, File, Line]
+    edge: { from: {arg: Name}, to: {arg: Name}, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref: { name: {arg: Name}, file: {arg: File}, line: {arg: Line}, kind: middleware }

@@ -155,6 +155,32 @@ func TestRunIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestLoadEmbeddedFrameworks pins the frameworks migrated to the declarative
+// pipeline (FX.7): gin_middleware + express_middleware, each compiling and
+// carrying an emit spec. rules/ruby/rails_filters.dl has no paired YAML yet
+// (FX.8) and must be skipped, not error.
+func TestLoadEmbeddedFrameworks(t *testing.T) {
+	reg, err := pipeline.LoadEmbedded()
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	got := map[string]string{}
+	for _, fw := range reg.All() {
+		if fw.Rules == nil || len(fw.Emits) == 0 {
+			t.Errorf("framework %s: rules=%v emits=%d", fw.Name, fw.Rules != nil, len(fw.Emits))
+		}
+		got[fw.Name] = fw.Language
+	}
+	for name, lang := range map[string]string{"gin_middleware": "go", "express_middleware": "javascript"} {
+		if got[name] != lang {
+			t.Errorf("framework %q: language %q, want %q (registry: %v)", name, got[name], lang, got)
+		}
+	}
+	if _, ok := got["rails_filters"]; ok {
+		t.Errorf("rails_filters has no paired YAML yet — must be skipped, not registered")
+	}
+}
+
 func names(fws []*pipeline.Framework) []string {
 	var out []string
 	for _, f := range fws {

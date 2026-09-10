@@ -1,0 +1,4 @@
+{
+  "patterns": ["express_middleware_use", "express_middleware_use"],
+  "node_types": ["middleware_use", "middleware_use"]
+}

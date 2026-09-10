@@ -1651,28 +1651,13 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			// contract.setPath for why meta["path"] must stay raw.
 			return persistComposedRoutes(st.ctx, st.bw, st.enrichedNodes, st.allNodes)
 		}},
-		// Gin middleware chain: handler --calls--> the middleware guarding it
-		// (r.Use/group.Use), so `impact`/`context` on a route or a middleware
-		// function surfaces the other side without a separate tool.
-		{"gin_middleware", scopeSameServiceOnly, func() error {
-			mwEdges, mwUnresolved := linker.LinkGinMiddleware(st.enrichedNodes, st.allEdges)
-			if err := st.writeEdges(mwEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, mwUnresolved...)
-			return nil
-		}},
-		// Express middleware chain: same handler-calls-guard modeling as Gin's,
-		// for `app.use(mw)`/`router.use(mw)` registrations (see
-		// internal/linker/express_middleware.go for the v1 same-file/
-		// same-receiver scope this covers).
-		{"express_middleware", scopeSameServiceOnly, func() error {
-			mwEdges, mwUnresolved := linker.LinkExpressMiddleware(st.enrichedNodes, st.allEdges)
-			if err := st.writeEdges(mwEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, mwUnresolved...)
-			return nil
+		// Tier FX declarative framework pipeline: per-service, gate the embedded
+		// framework registry to the service's dependencies, re-parse its
+		// source, and run extract → bridge → derive → emit. FX.7 migrated the
+		// gin_middleware and express_middleware chains here (handler --calls-->
+		// the middleware guarding it), replacing the hand-written link passes.
+		{"factpipe_frameworks", scopeSameServiceOnly, func() error {
+			return runFactpipeFrameworks(st)
 		}},
 		// G.7 pre-engine enrichment: resolve alias/instance bindings and one-hop
 		// wrapper functions. Alias binding nodes (NodeTypeVariable with alias_name

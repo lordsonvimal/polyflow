@@ -69,6 +69,10 @@ func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
 	switch name {
 	case "", "text":
 		return []verbVal{{Str: node.Content(ec.Src), Kind: factpipe.AtomStr}}
+	case "file":
+		return []verbVal{{Str: ec.File, Kind: factpipe.AtomStr}}
+	case "call_name":
+		return []verbVal{{Str: callName(node.Content(ec.Src)), Kind: factpipe.AtomStr}}
 	case "string_value":
 		return []verbVal{{Str: stringValue(node, ec.Src), Kind: factpipe.AtomStr}}
 	case "trailing_identifier":
@@ -174,6 +178,37 @@ func evalArg(a ArgSpec, capNodes map[string]*sitter.Node, anchor *sitter.Node, e
 }
 
 // --- individual verb implementations -------------------------------------
+
+// callName extracts the resolvable identifier a call/reference expression
+// names: everything from the first "(" is dropped, then the segment after the
+// last "." is taken, and the result is returned only if it is a bare
+// identifier. `authMiddleware.Authenticate()` → "Authenticate",
+// `gin.Recovery()` → "Recovery", `LoggingMiddleware(log)` → "LoggingMiddleware",
+// `cors.New(cors.Config{})` → "New". A non-identifier (e.g. an index
+// expression) yields "". This is a generic AST-text operation — no framework
+// knowledge — and is the verb form of what a hand-written "trailing call
+// identifier" string helper does.
+func callName(expr string) string {
+	s := strings.TrimSpace(expr)
+	if i := strings.IndexByte(s, '('); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndexByte(s, '.'); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	for i, r := range s {
+		ok := r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
+			(i > 0 && r >= '0' && r <= '9')
+		if !ok {
+			return ""
+		}
+	}
+	return s
+}
 
 func stringValue(n *sitter.Node, src []byte) string {
 	// Prefer a content child so escapes/quotes are excluded by the grammar.

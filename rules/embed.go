@@ -13,7 +13,7 @@ import (
 	"fmt"
 )
 
-//go:embed ruby/*.dl
+//go:embed */*.dl
 var files embed.FS
 
 // FS is the embedded rule tree, one subdirectory per language. The FX.6

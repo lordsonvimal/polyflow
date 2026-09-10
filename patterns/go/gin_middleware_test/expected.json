@@ -1,0 +1,4 @@
+{
+  "patterns": ["gin_middleware_use", "gin_middleware_use"],
+  "node_types": ["middleware_use", "middleware_use"]
+}

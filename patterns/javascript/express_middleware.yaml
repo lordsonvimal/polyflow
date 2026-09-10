@@ -1,0 +1,55 @@
+# Express middleware chain (Tier FX reference migration, FX.7). Replaces
+# internal/linker/express_middleware.go: `app.use(mw)` / `router.use(mw)`
+# becomes handler --calls--> middleware edges for every http_handler on the
+# same receiver variable in the same file (v1 scope — no cross-file mount
+# composition, the same descope express_mount records).
+#
+# Gate: express only (the `.use(mw)` shape is generic; the dependency gate is
+# the disambiguator, per express_routes.yaml).
+language: javascript
+version: "1"
+package: express
+
+patterns:
+  # app.use(authMiddleware) / router.use(cors()) — a BARE middleware
+  # registration. Moved here verbatim from express_routes.yaml so exactly one
+  # pattern mints the middleware_use node. Anchored on both sides of the single
+  # argument so a two-arg `.use("/prefix", router)` mount never matches.
+  - name: express_middleware_use
+    query: |
+      (call_expression
+        function: (member_expression
+          object: (identifier) @recv
+          property: (property_identifier) @method
+          (#eq? @method "use"))
+        arguments: (arguments
+          .
+          (_) @middleware
+          .))
+    captures:
+      - name: middleware
+        role: middleware_ref
+    facts:
+      - pred: mw_use
+        args:
+          recv: { capture: recv }
+          name: { capture: middleware, extract: call_name }
+          expr: { capture: middleware }
+          file: { extract: file }
+          line: { extract: line }
+
+emit:
+  - relation: express_guard
+    columns: [Handler, Target, Expr]
+    edge: { from: {arg: Handler}, to: {arg: Target}, type: calls, label: middleware }
+    meta: { via: express_middleware_use, middleware_expr: {arg: Expr} }
+    confidence:
+      - { else: inferred }
+    dedup: [from, to, label]
+
+  - relation: express_blind
+    columns: [Name, File, Line]
+    edge: { from: {arg: Name}, to: {arg: Name}, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref: { name: {arg: Name}, file: {arg: File}, line: {arg: Line}, kind: middleware }

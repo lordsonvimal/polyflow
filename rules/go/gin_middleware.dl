@@ -1,0 +1,82 @@
+% Gin middleware chain — Tier FX FX.7.
+%
+% This rule set is the whole of what internal/linker/gin_middleware.go computed:
+% a `r.Use(mw)` / `group.Use(mw)` registration stands for handler --calls-->
+% middleware edges (handler-calls-guard, like rails_filters' before_action),
+% for every http_handler in the registration's scope.
+%
+% Base relations:
+%   mw_use(Router, Name, Expr, File, Line)   one per registration
+%       Router  the receiver variable (router or route-group var)
+%       Name    the middleware's resolvable identifier (call_name verb), "" when none
+%       Expr    the registration expression verbatim (meta)
+%   node / node_meta / node_line / node_label / calls_edge_seq   the FX.1 bridge
+
+% --- registration scope: the route-group receiver chain ------------------
+% `api := r.Group("/x")` records receiver "r"; a middleware on `api` guards
+% every handler on `api` and on any group nested (transitively) under it — the
+% same fixpoint EnrichRouteGroups walks for prefixes. Scope is file-local
+% (handlersByFileVar[u.file]).
+grp_child(File, R, V) :-
+    node(G, "route_group", File, _),
+    node_meta(G, "pattern", "gin_route_group"),
+    node_meta(G, "var_name", V),
+    node_meta(G, "receiver", R).
+
+scope(File, Root, Root) :- mw_use(Root, _, _, File, _).
+scope(File, Root, V)    :- scope(File, Root, X), grp_child(File, X, V).
+
+guarded(File, Root, H) :-
+    scope(File, Root, V),
+    node(H, "http_handler", File, _),
+    node_meta(H, "router", V).
+
+% --- the function lexically wrapping the .Use(...) call ------------------
+% Restricted to function/method nodes (a func literal is a middleware argument,
+% never a wrapper) — mirrors fnRangesByFile. "Innermost" = the latest-starting
+% among the functions whose span covers the call line; nested functions nest
+% their start lines, so max(StartLine) is the innermost.
+mw_fn_cand(File, Line, Fn, L) :-
+    mw_use(_, _, _, File, Line),
+    node(Fn, "function", File, _),
+    node_line(Fn, L, E), le(L, Line), le(Line, E).
+mw_fn_cand(File, Line, Fn, L) :-
+    mw_use(_, _, _, File, Line),
+    node(Fn, "method", File, _),
+    node_line(Fn, L, E), le(L, Line), le(Line, E).
+
+mw_fn_start(File, Line, MaxL) :- mw_fn_cand(File, Line, _, L), max(MaxL, L).
+mw_fn(File, Line, Fn)         :- mw_fn_start(File, Line, L), mw_fn_cand(File, Line, Fn, L).
+
+% --- middleware target -------------------------------------------------
+% An already-resolved calls edge from that function whose target node's label
+% matches the registration's identifier. When several such edges resolved to
+% different same-labelled nodes, gin_middleware.go's callsFrom map kept the one
+% latest in the edge slice (last write wins); max(Seq) over calls_edge_seq
+% reproduces that exact pick — a set-semantics rule cannot otherwise.
+mw_seq(File, Line, To, Seq) :-
+    mw_use(_, Name, _, File, Line),
+    mw_fn(File, Line, Fn),
+    calls_edge_seq(Fn, _, To, Seq),
+    node_label(To, Name).
+mw_best(File, Line, MaxS) :- mw_seq(File, Line, _, S), max(MaxS, S).
+mw_target(File, Line, To) :- mw_best(File, Line, S), mw_seq(File, Line, To, S).
+
+% --- the edge --------------------------------------------------------
+gin_guard(H, To, Expr) :-
+    mw_use(Root, _, Expr, File, Line),
+    guarded(File, Root, H),
+    mw_target(File, Line, To).
+
+% --- the blind-spot ledger ------------------------------------------
+% A registration that names a resolvable identifier and guards at least one
+% handler, but whose target resolved to no indexed node (external / vendored
+% middleware). One row per site, not per guarded handler.
+has_target(File, Line) :- mw_target(File, Line, _).
+has_scope(File, Line)  :- mw_use(Root, _, _, File, Line), guarded(File, Root, _).
+
+gin_blind(Name, File, Line) :-
+    mw_use(_, Name, _, File, Line),
+    ne(Name, ""),
+    has_scope(File, Line),
+    not has_target(File, Line).
