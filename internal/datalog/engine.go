@@ -13,10 +13,12 @@
 // Two properties are non-negotiable and are why this is not a thirty-line
 // bottom-up loop:
 //
-//   - **Demand-driven by default.** Evaluation is top-down with tabling, so a
-//     query for one class's filters does not materialize the closure for every
-//     class. Full bottom-up materialization is available under
-//     Options.DemandDriven=false, for debugging only.
+//   - **Demand-driven where there is demand.** A *bound* query is evaluated
+//     top-down with tabling, so asking for one class's filters does not
+//     materialize the closure for every class. An unbound whole-relation goal
+//     has no demand to prune with, and takes stratified bottom-up evaluation
+//     with semi-naive deltas instead (bottomup.go, Tier DL.3 / P.5). Both modes
+//     share one rule set and one join.
 //   - **Derivation tracking from the start.** Provenance answers "which rule
 //     produced this tuple, from which base facts" (SA.1). Retrofitting it means
 //     re-running evaluation, so it is recorded during evaluation, not after.
@@ -116,11 +118,15 @@ type DerivationStep struct {
 
 // Options configures evaluation.
 type Options struct {
-	// DemandDriven selects top-down evaluation with tabling, so a bound query
-	// computes only the subgoals it needs. Default true (the zero value is
-	// promoted by New). Full bottom-up materialization is what makes
-	// `registered(C, CB, Kind)` explode across a large ancestor closure, and is
-	// available only for debugging.
+	// DemandDriven selects top-down evaluation with tabling for a *bound* query,
+	// so it computes only the subgoals that pattern needs. Default true (the zero
+	// value is promoted by New). With it off, a bound query ignores its call
+	// pattern and materializes the whole relation before filtering — which is
+	// what makes `registered(C, CB, Kind)` explode across a large ancestor
+	// closure, and is available only for debugging.
+	//
+	// It does not affect an unbound whole-relation goal: there is no demand to
+	// exploit there, so that goal always takes the stratified bottom-up path.
 	DemandDriven bool
 
 	// MaxTuples caps answers per relation; exceeded => error naming it.
@@ -356,7 +362,12 @@ type Engine struct {
 	// ruleOrder keeps rules in file order so evaluation, and therefore
 	// derivation output, is deterministic.
 	ruleOrder []*Rule
-	strata    map[string]int
+	// strata is the load-time proof that the program is stratified. Bottom-up
+	// evaluation orders by strongly connected component, which refines stratum
+	// order (see Engine.cone), so this is not consulted per query — but a nil
+	// value means no stratification has been established and no bottom-up
+	// evaluation may run.
+	strata map[string]int
 
 	syms      *interner
 	tables    map[sgKey]*table

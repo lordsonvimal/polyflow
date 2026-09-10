@@ -244,6 +244,42 @@ func TestBoundQueryAgreesWithUnbound(t *testing.T) {
 	}
 }
 
+// TestBottomUpAgreesWithTopDown is the negation-soundness guard for P.5. An
+// unbound goal now takes the stratified bottom-up path and a bound one keeps
+// the tabled evaluator, so the two are separate programs unless something pins
+// them together — and the failure mode when they drift is `not p(x)` reading an
+// unfinished relation, which shows up as *missing* tuples, not as an error.
+//
+// It runs on the real rules/ruby/rails_filters.dl over the cedar-shaped
+// fixture, because the toy programs elsewhere in this file have neither the
+// stratum depth nor the negated derived relations (reg_blocked, action_skipped)
+// that make the ordering non-trivial.
+func TestBottomUpAgreesWithTopDown(t *testing.T) {
+	t.Parallel()
+	bottomUp := buildRailsFixture(t)
+	topDown := buildRailsFixture(t)
+
+	for _, rel := range []string{"class_filter", "action_filter"} {
+		all, err := bottomUp.Query(rel)
+		require.NoError(t, err, rel)
+		arity := len(all[0])
+
+		for _, class := range []string{classKey(0), classKey(1), classKey(7), classKey(501)} {
+			want := []string{}
+			for _, tup := range all {
+				if tup[0] == class {
+					want = append(want, strings.Join(tup, "/"))
+				}
+			}
+			pattern := make([]string, arity)
+			pattern[0] = class
+			got, err := topDown.QueryPattern(rel, pattern)
+			require.NoError(t, err, "%s(%s, ...)", rel, class)
+			assert.Equal(t, want, flat(got), "%s(%s, ...)", rel, class)
+		}
+	}
+}
+
 // TestMaxTuplesNamesTheRelation: a cap that fails without saying what blew up
 // is a cap nobody can act on.
 func TestMaxTuplesNamesTheRelation(t *testing.T) {

@@ -30,7 +30,14 @@ func (e *Engine) QueryPattern(goal string, pattern []string) ([]Tuple, error) {
 		return nil, err
 	}
 	binds := bindsOf(pattern)
-	out, err := e.solveComplete(goal, binds)
+	// An unbound whole-relation goal has no demand to exploit, so it takes the
+	// stratified bottom-up path (P.5); a bound one keeps the tabled evaluator,
+	// which is where demand-driven evaluation genuinely pays.
+	solve := e.solveComplete
+	if e.useBottomUp(goal, binds) {
+		solve = func(goal string, _ []*string) ([]Tuple, error) { return e.solveBottomUp(goal) }
+	}
+	out, err := solve(goal, binds)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +221,9 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 			return t.rel.tuples, nil
 		}
 	}
+	src := topDown{e: e, rs: rs}
 	for _, r := range rules {
-		if err := e.evalRule(rs, r, binds, t); err != nil {
+		if err := e.evalRule(src, r, binds, t); err != nil {
 			return nil, err
 		}
 	}
@@ -321,8 +329,11 @@ func (e *Engine) eachSolved(rs *roundState, rel string, binds []*string, fn func
 	return nil
 }
 
-// evalRule proves one rule against a call pattern, left to right.
-func (e *Engine) evalRule(rs *roundState, r *Rule, binds []*string, t *table) error {
+// evalRule proves one rule against a call pattern, left to right. src decides
+// where a body literal's tuples come from — the tabled evaluator or a
+// materialized stratum — and is the only thing the two evaluation modes differ
+// in (see bottomup.go).
+func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) error {
 	env := map[string]string{}
 	for i, term := range r.Head.Args {
 		b := binds[i]
@@ -344,10 +355,10 @@ func (e *Engine) evalRule(rs *roundState, r *Rule, binds []*string, t *table) er
 		env[term.Name] = *b
 	}
 	steps := make([]DerivationStep, 0, len(r.Body))
-	return e.join(rs, r, newRulePatterns(r), 0, env, binds, t, steps)
+	return e.join(src, r, newRulePatterns(r), 0, env, binds, t, steps)
 }
 
-func (e *Engine) join(rs *roundState, r *Rule, rp *rulePatterns, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
+func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, env map[string]string, binds []*string, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
 		head := make(Tuple, len(r.Head.Args))
 		for k, term := range r.Head.Args {
@@ -384,20 +395,20 @@ func (e *Engine) join(rs *roundState, r *Rule, rp *rulePatterns, i int, env map[
 	}
 
 	if lit.Neg {
-		found, err := e.solveNegated(lit.Rel, sub)
+		found, err := src.negated(lit.Rel, sub)
 		if err != nil {
 			return err
 		}
 		if found {
 			return nil
 		}
-		return e.join(rs, r, rp, i+1, env, binds, t, steps)
+		return e.join(src, r, rp, i+1, env, binds, t, steps)
 	}
 
 	_, isBase := e.base[lit.Rel]
 	isBase = isBase && len(e.rules[lit.Rel]) == 0
 	var joinErr error
-	err := e.eachSolved(rs, lit.Rel, sub, func(tup Tuple) bool {
+	err := src.eachLit(i, lit.Rel, sub, func(tup Tuple) bool {
 		var added []string
 		ok := true
 		for k, term := range lit.Args {
@@ -416,7 +427,7 @@ func (e *Engine) join(rs *roundState, r *Rule, rp *rulePatterns, i int, env map[
 		}
 		if ok {
 			step := DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase}
-			if e2 := e.join(rs, r, rp, i+1, env, binds, t, append(steps, step)); e2 != nil {
+			if e2 := e.join(src, r, rp, i+1, env, binds, t, append(steps, step)); e2 != nil {
 				joinErr = e2
 			}
 		}

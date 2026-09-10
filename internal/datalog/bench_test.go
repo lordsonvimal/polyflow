@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/lordsonvimal/polyflow/internal/datalog"
@@ -256,4 +257,63 @@ func BenchmarkRailsFilters(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// chainEngine loads the two-rule transitive closure over a parent chain
+// a0 <- a1 <- ... <- a(depth). The closure has depth*(depth+1)/2 tuples, so
+// doubling the depth quadruples the *answer*: the thing P.5 is measured on is
+// cost per derived tuple, which naive evaluation cannot hold flat because it
+// re-derives the whole relation once per round, and there are depth rounds.
+func chainEngine(tb testing.TB, depth int) *datalog.Engine {
+	tb.Helper()
+	e := datalog.New(datalog.Options{MaxTuples: 10_000_000, MaxRounds: depth + 10})
+	parent := make([]datalog.Tuple, 0, depth)
+	for i := 1; i <= depth; i++ {
+		parent = append(parent, datalog.Tuple{fmt.Sprintf("a%05d", i), fmt.Sprintf("a%05d", i-1)})
+	}
+	require.NoError(tb, e.Assert("parent", parent))
+	require.NoError(tb, e.LoadRules([]byte(`
+		ancestor(C, P) :- parent(C, P).
+		ancestor(C, A) :- parent(C, P), ancestor(P, A).
+	`), "chain.dl"))
+	return e
+}
+
+// BenchmarkAncestorChain is P.5's acceptance measurement: an ancestor-style
+// closure must scale linearly when chain depth is doubled. "Linearly" is per
+// derived tuple — the closure itself is quadratic in depth — so the number to
+// read is ns/tuple, which must stay flat as depth doubles rather than doubling
+// with it.
+func BenchmarkAncestorChain(b *testing.B) {
+	for _, depth := range []int{125, 250, 500, 1000} {
+		b.Run(fmt.Sprintf("depth=%d", depth), func(b *testing.B) {
+			b.ReportAllocs()
+			tuples := 0
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				e := chainEngine(b, depth)
+				b.StartTimer()
+
+				got, err := e.Query("ancestor")
+				if err != nil {
+					b.Fatal(err)
+				}
+				tuples = len(got)
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*tuples), "ns/tuple")
+		})
+	}
+}
+
+// TestDeepChainClosureIsComplete pins semi-naive evaluation against the one
+// failure it can have that a small fixture would not show: a delta round that
+// stops early derives a closure that is merely incomplete, not wrong-looking.
+func TestDeepChainClosureIsComplete(t *testing.T) {
+	t.Parallel()
+	const depth = 200
+	got, err := chainEngine(t, depth).Query("ancestor")
+	require.NoError(t, err)
+	require.Len(t, got, depth*(depth+1)/2, "every (descendant, ancestor) pair in the chain")
+	assert.Equal(t, datalog.Tuple{"a00001", "a00000"}, got[0])
+	assert.Equal(t, datalog.Tuple{fmt.Sprintf("a%05d", depth), fmt.Sprintf("a%05d", depth-1)}, got[len(got)-1])
 }
