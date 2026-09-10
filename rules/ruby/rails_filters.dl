@@ -72,30 +72,51 @@ effective_filter(C, R) :- registered(C, R), not retracted(C, R).
 % controller can produce, since it declares filters and defines no actions.
 class_filter(C, R, CB) :- effective_filter(C, R), reg_callback(R, CB).
 
-% only:/except:. A registration with neither runs for every action, so
-% "blocked" is the relation with a finite extent — "applies" is not.
-action_name(A) :- action(_, A).
-reg_blocked(R, A) :- reg_has_only(R), action_name(A), not reg_only(R, A).
-reg_blocked(R, A) :- reg_except(R, A).
-
-skip_reg_any(S) :- skip_reg(_, S).
-skip_applies(S, A) :- skip_reg_any(S), action_name(A), not reg_blocked(S, A).
+% only:/except:. `reg_blocked` used to manufacture a service-wide action domain
+% (`action_name` × every registration carrying only:, minus the listed ones)
+% purely to be read back as `not reg_blocked(R, A)` with *both* arguments already
+% bound. DL.1 §5.2 / DL.3 D.1: case-split on which list the registration carries
+% and place `action(C, A)` first, so the negation is a bounded index probe over
+% the class's own handful of actions instead of a global cross-product.
+reg_has_except(R) :- reg_except(R, _).
 
 % A partial skip retracts one callback for one action, and only where the
 % filter was inherited — which is the whole reason skip_before_action means
 % something: it is what stands between `before_action :authenticate_user!` in
-% ApplicationController and an edge onto the login form.
+% ApplicationController and an edge onto the login form. Three branches, by
+% whether the skip carries only:, except:, or neither (skip_total).
 action_skipped(C, R, CB, A) :-
-    inherited_filter(C, R),
+    inherited_filter(C, R), action(C, A),
     skip_in_force(C, S),
     reg_family(S, F), reg_family(R, F),
     reg_callback(S, CB), reg_callback(R, CB),
-    skip_applies(S, A).
+    skip_total(S).
+action_skipped(C, R, CB, A) :-
+    inherited_filter(C, R), action(C, A),
+    skip_in_force(C, S),
+    reg_family(S, F), reg_family(R, F),
+    reg_callback(S, CB), reg_callback(R, CB),
+    reg_has_only(S), reg_only(S, A).
+action_skipped(C, R, CB, A) :-
+    inherited_filter(C, R), action(C, A),
+    skip_in_force(C, S),
+    reg_family(S, F), reg_family(R, F),
+    reg_callback(S, CB), reg_callback(R, CB),
+    reg_has_except(S), not reg_except(S, A).
 
-% action scope: what a request actually does.
+% action scope: what a request actually does. Three disjoint, total branches —
+% a registration carries only:, or except:, or neither (the emitter normalizes
+% so it is never both). `action(C, A)` is first so `A` is bound to this class's
+% own actions before any negation.
 action_filter(C, R, CB, A) :-
-    effective_filter(C, R),
-    reg_callback(R, CB),
-    action(C, A),
-    not reg_blocked(R, A),
+    effective_filter(C, R), reg_callback(R, CB), action(C, A),
+    reg_has_only(R), reg_only(R, A),
+    not action_skipped(C, R, CB, A).
+action_filter(C, R, CB, A) :-
+    effective_filter(C, R), reg_callback(R, CB), action(C, A),
+    reg_has_except(R), not reg_except(R, A),
+    not action_skipped(C, R, CB, A).
+action_filter(C, R, CB, A) :-
+    effective_filter(C, R), reg_callback(R, CB), action(C, A),
+    not reg_has_only(R), not reg_has_except(R),
     not action_skipped(C, R, CB, A).

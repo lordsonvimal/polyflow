@@ -2,6 +2,7 @@ package datalog_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,7 +129,9 @@ func buildRailsFixture(tb testing.TB) *datalog.Engine {
 	}
 
 	// action(C, A): 827 pairs across the controller classes, drawn from a pool
-	// of ~120 distinct names so action_name(A) is a real cross-product factor.
+	// of ~380 distinct names (benchActionNames). Pre-D.1 this sized the
+	// reg_blocked / skip_applies cross-product; post-D.1 it sizes the per-class
+	// bounded only:/except: probes instead.
 	{
 		emitted := 0
 		cls := 1
@@ -237,6 +240,37 @@ func TestRailsFixtureShape(t *testing.T) {
 		} else {
 			t.Logf("%s: %d tuples", tc.rel, n)
 		}
+	}
+}
+
+// TestRailsFiltersD1DroppedTheCrossProduct pins DL.3 D.1: the only:/except:
+// restriction is case-split into bounded index probes, so the manufactured
+// service-wide relations reg_blocked / skip_applies / action_name (and their
+// helpers) must have left the rule set entirely — a query for one is now an
+// unknown-relation error, not a large cross-product.
+func TestRailsFiltersD1DroppedTheCrossProduct(t *testing.T) {
+	t.Parallel()
+	e := buildRailsFixture(t)
+	for _, rel := range []string{"reg_blocked", "skip_applies", "action_name", "skip_reg_any"} {
+		_, err := e.Query(rel)
+		require.Error(t, err, rel)
+		assert.Contains(t, err.Error(), "unknown relation", rel)
+	}
+	// The two edge relations still derive, and action_filter still refines
+	// class_filter per action rather than dropping or inflating rows.
+	cf, err := e.Query("class_filter")
+	require.NoError(t, err)
+	af, err := e.Query("action_filter")
+	require.NoError(t, err)
+	assert.NotEmpty(t, cf)
+	assert.NotEmpty(t, af)
+	cfKeys := map[string]bool{}
+	for _, tup := range cf {
+		cfKeys[strings.Join(tup[:3], "/")] = true
+	}
+	for _, tup := range af {
+		require.True(t, cfKeys[strings.Join(tup[:3], "/")],
+			"action_filter row %v has no class_filter (class, reg, cb)", tup)
 	}
 }
 
