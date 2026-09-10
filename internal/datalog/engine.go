@@ -196,6 +196,25 @@ func (r *relation) add(t Tuple) bool {
 	return true
 }
 
+// reserve grows the tuple slice's capacity and, while it is still empty,
+// re-sizes the seen set so a rule that fills this relation from zero does not
+// pay ~log2(n) slice regrowths and map rehashes on the way up
+// (docs/datalog-engine-performance-plan.md D.10). Idempotent and never shrinks:
+// a bad n costs only transient memory, never a tuple.
+func (r *relation) reserve(n int) {
+	if n <= 0 {
+		return
+	}
+	if n > cap(r.tuples) {
+		grown := make([]Tuple, len(r.tuples), n)
+		copy(grown, r.tuples)
+		r.tuples = grown
+	}
+	if len(r.seen) == 0 {
+		r.seen = make(map[tkey]bool, n)
+	}
+}
+
 // indexTuple files one tuple into each per-argument bucket. buildIndex does the
 // same over the whole relation; add does it incrementally.
 func (r *relation) indexTuple(t Tuple) {

@@ -378,6 +378,35 @@ func (e *Engine) evalComponent(bu *bottomUp, rels []string) error {
 		}
 	}
 
+	// D.10 — capacity hints. A non-recursive rule fills its output relation once,
+	// from empty, so reserve `tuples`/`seen` at the driving relation's size — the
+	// first positive body literal's materialized count, a lower bound on the
+	// output usually within 2× of it — and skip the ~log₂(N) doublings the fill
+	// would otherwise pay. A recursive component grows over many rounds instead;
+	// seeding it here at anything more than its current size just over-reserves
+	// (D.5's regression), so leave it to the rounds.
+	for _, w := range work {
+		if len(w.rec) > 0 {
+			continue
+		}
+		out := tables[w.rule.Head.Rel].rel
+		plan := e.planBody(w.rule)
+		for i := range w.rule.Body {
+			if w.rule.Body[i].Neg {
+				continue
+			}
+			n := 0
+			if src := plan[i].buSrc; src != nil {
+				n = len(src.tuples)
+			}
+			if n > e.opts.MaxTuples {
+				n = e.opts.MaxTuples
+			}
+			out.reserve(n)
+			break
+		}
+	}
+
 	// Round 0: every literal reads the full relation.
 	mark := make(map[string]int, len(pending))
 	bu.pos = -1
