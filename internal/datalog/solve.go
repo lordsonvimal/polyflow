@@ -335,30 +335,6 @@ type frame struct {
 func (f *frame) get(id int) (string, bool) { return f.val[id], f.set&(1<<uint(id)) != 0 }
 func (f *frame) put(id int, v string)      { f.val[id] = v; f.set |= 1 << uint(id) }
 
-// eachSolved iterates the tuples satisfying a positive body literal, without
-// materializing them when the literal is a pure base relation — the common case
-// and most of match's former allocation (P.2).
-func (e *Engine) eachSolved(rs *roundState, rel string, binds []*string, fn func(Tuple) bool) error {
-	if len(e.rules[rel]) == 0 {
-		br := e.base[rel]
-		if br == nil {
-			return fmt.Errorf("datalog: unknown relation %q", rel)
-		}
-		br.each(binds, fn)
-		return nil
-	}
-	tuples, err := e.solve(rs, rel, binds)
-	if err != nil {
-		return err
-	}
-	for _, tup := range tuples {
-		if !fn(tup) {
-			break
-		}
-	}
-	return nil
-}
-
 // evalRule proves one rule against a call pattern, left to right. src decides
 // where a body literal's tuples come from — the tabled evaluator or a
 // materialized stratum — and is the only thing the two evaluation modes differ
@@ -467,12 +443,29 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 	_, isBase := e.base[lit.Rel]
 	isBase = isBase && len(e.rules[lit.Rel]) == 0
 	rec := e.recordProv
-	var joinErr error
-	err := src.eachLit(i, lit.Rel, sub, func(tup Tuple) bool {
+
+	// Iterate the candidate slice directly instead of handing eachLit a callback.
+	// The callback was a fresh func literal per body literal per candidate scan,
+	// and because it crossed the bodySource interface it escaped to the heap
+	// along with the `joinErr` it closed over — together 58% of this benchmark's
+	// allocation (docs/datalog-engine-performance-plan.md §6.5/§6.6). Pulling the
+	// tuples lets the recursion return its error straight up the stack.
+	tuples, err := src.litTuples(i, lit.Rel, sub)
+	if err != nil {
+		return err
+	}
+	for _, tup := range tuples {
 		var added uint64
 		ok := true
 		for k, term := range lit.Args {
 			if !term.IsVar {
+				// litTuples pre-filters at most one bound position; a constant
+				// here is checked as the binding happens, exactly as matches did
+				// inside the old each.
+				if term.Name != tup[k] {
+					ok = false
+					break
+				}
 				continue
 			}
 			if v, seen := fr.get(term.Var); seen {
@@ -491,16 +484,13 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 				next = append(steps, DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase})
 			}
 			if e2 := e.join(src, r, rp, i+1, fr, binds, t, next); e2 != nil {
-				joinErr = e2
+				fr.set &^= added
+				return e2
 			}
 		}
 		fr.set &^= added
-		return joinErr == nil
-	})
-	if err != nil {
-		return err
 	}
-	return joinErr
+	return nil
 }
 
 func (e *Engine) record(t *table, tup Tuple, d *Derivation) error {

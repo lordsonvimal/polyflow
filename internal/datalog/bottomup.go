@@ -34,9 +34,13 @@ import (
 // and records its derivation is shared, because a second copy of that logic is
 // exactly where the two modes would silently drift apart.
 type bodySource interface {
-	// eachLit iterates the tuples satisfying body literal at position pos of the
-	// rule being evaluated, stopping early when fn returns false.
-	eachLit(pos int, rel string, binds []*string, fn func(Tuple) bool) error
+	// litTuples returns the candidate tuples for body literal at position pos of
+	// the rule being evaluated. The slice is borrowed, never copied — an index
+	// bucket or a subgoal's tuple slice — so join must not retain or mutate it.
+	// Candidates are pre-filtered on at most one bound position (the index bucket
+	// join probed); join re-checks every bound position as it binds, so a
+	// candidate that does not match is simply skipped there.
+	litTuples(pos int, rel string, binds []*string) ([]Tuple, error)
 	// negated decides `not rel(binds)`.
 	negated(rel string, binds []*string) (bool, error)
 }
@@ -48,8 +52,15 @@ type topDown struct {
 	rs *roundState
 }
 
-func (s topDown) eachLit(_ int, rel string, binds []*string, fn func(Tuple) bool) error {
-	return s.e.eachSolved(s.rs, rel, binds, fn)
+func (s topDown) litTuples(_ int, rel string, binds []*string) ([]Tuple, error) {
+	if len(s.e.rules[rel]) == 0 {
+		br := s.e.base[rel]
+		if br == nil {
+			return nil, fmt.Errorf("datalog: unknown relation %q", rel)
+		}
+		return br.selectCands(binds), nil
+	}
+	return s.e.solve(s.rs, rel, binds)
 }
 
 func (s topDown) negated(rel string, binds []*string) (bool, error) {
@@ -86,20 +97,19 @@ func (s *bottomUp) source(rel string) *relation {
 	return s.e.base[rel]
 }
 
-func (s *bottomUp) eachLit(pos int, rel string, binds []*string, fn func(Tuple) bool) error {
+func (s *bottomUp) litTuples(pos int, rel string, binds []*string) ([]Tuple, error) {
 	src := s.source(rel)
 	if src == nil {
-		return fmt.Errorf("datalog: unknown relation %q", rel)
+		return nil, fmt.Errorf("datalog: unknown relation %q", rel)
 	}
 	if pos == s.pos {
 		// Semi-naive: this occurrence reads only what the previous round added.
 		src = s.delta[rel]
 		if src == nil {
-			return nil
+			return nil, nil
 		}
 	}
-	src.each(binds, fn)
-	return nil
+	return src.selectCands(binds), nil
 }
 
 func (s *bottomUp) negated(rel string, binds []*string) (bool, error) {
