@@ -1,0 +1,463 @@
+package factpipe
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/lordsonvimal/polyflow/internal/datalog"
+	"github.com/lordsonvimal/polyflow/internal/graph"
+)
+
+// emit.go is FX.5 — emit + policy-as-data. Everything the Go link passes did
+// after the derivation (edge construction, confidence, abstention, fan-out
+// caps, the blind-spot ledger, dedup) is expressed as an `emit:` block in the
+// framework YAML, so a framework needs no policy Go (the SA contract's L5
+// "policy lives in Go" is replaced by "policy is data in the emit spec").
+//
+// One `emit:` entry binds one derived datalog relation to one graph edge
+// family:
+//
+//	emit:
+//	  - relation: gin_guard
+//	    columns:  [Handler, Target, Expr, Depth]
+//	    edge:  { from: {arg: Handler}, to: {arg: Target}, type: calls, label: middleware }
+//	    meta:  { via: gin_middleware_use, middleware_expr: {arg: Expr} }
+//	    confidence:
+//	      - { when: "Depth == 0", value: certain }
+//	      - { when: "Depth <= 2", value: inferred }
+//	      - { else: heuristic }
+//	    abstain:
+//	      when: "count_distinct(Target by Handler, Expr) > 1"
+//	    fan_out: { key: [Handler], max: 50, on_exceed: ledger_only }
+//	    dedup:  [from, to, label]
+//	    unresolved:
+//	      when: "Target == null"
+//	      ref:  { service: {arg: Service}, name: {arg: Name}, kind: middleware }
+
+// frozenEdgeTypes is the closed, framework-agnostic edge vocabulary an emit
+// spec may write (plan § FX.0). A spec naming anything else fails at compile,
+// not at emit.
+var frozenEdgeTypes = map[string]bool{
+	"contains": true, "calls": true, "imports": true, "references": true,
+	"renders": true, "defined_in": true, "component_impl": true, "http_call": true,
+	"publishes": true, "subscribes": true, "job_enqueue": true, "job_perform": true,
+	"navigates_to": true, "spawns": true, "dom_read": true, "dom_write": true,
+	"dom_listen": true, "dom_contract": true,
+}
+
+// valueRef is an edge/meta/ref field source: either a literal (a bare scalar or
+// `{literal: X}`) or `{arg: Column}` naming a column of the derived relation.
+type valueRef struct {
+	Arg     string
+	Literal string
+	isLit   bool
+}
+
+// UnmarshalYAML accepts a bare scalar (⇒ literal) or a mapping with `arg` /
+// `literal`.
+func (v *valueRef) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		v.Literal, v.isLit = n.Value, true
+		return nil
+	}
+	var m struct {
+		Arg     string  `yaml:"arg"`
+		Literal *string `yaml:"literal"`
+	}
+	if err := n.Decode(&m); err != nil {
+		return err
+	}
+	v.Arg = m.Arg
+	if m.Literal != nil {
+		v.Literal, v.isLit = *m.Literal, true
+	}
+	return nil
+}
+
+func (v valueRef) set() bool { return v.Arg != "" || v.isLit }
+
+func (v valueRef) resolve(row map[string]string) string {
+	if v.Arg != "" {
+		return row[v.Arg]
+	}
+	return v.Literal
+}
+
+type edgeSpec struct {
+	From   valueRef `yaml:"from"`
+	To     valueRef `yaml:"to"`
+	Type   string   `yaml:"type"`
+	Label  string   `yaml:"label"`
+	Method valueRef `yaml:"method"`
+	Path   valueRef `yaml:"path"`
+}
+
+type confRule struct {
+	When  string `yaml:"when"`
+	Value string `yaml:"value"`
+	Else  string `yaml:"else"`
+}
+
+type fanOutSpec struct {
+	Key      []string `yaml:"key"`
+	Max      int      `yaml:"max"`
+	OnExceed string   `yaml:"on_exceed"` // ledger_only (default) | drop | unresolved
+}
+
+type unresolvedRefSpec struct {
+	Service valueRef `yaml:"service"`
+	Name    valueRef `yaml:"name"`
+	File    valueRef `yaml:"file"`
+	Line    valueRef `yaml:"line"`
+	Kind    string   `yaml:"kind"`
+}
+
+type unresolvedSpec struct {
+	When string            `yaml:"when"`
+	Ref  unresolvedRefSpec `yaml:"ref"`
+}
+
+// EmitSpec is one entry of a framework YAML's `emit:` list, as written.
+type EmitSpec struct {
+	Relation   string              `yaml:"relation"`
+	Columns    []string            `yaml:"columns"`
+	Rule       string              `yaml:"rule"` // SA.1 provenance Rule; defaults to Relation
+	Edge       edgeSpec            `yaml:"edge"`
+	Meta       map[string]valueRef `yaml:"meta"`
+	Confidence []confRule          `yaml:"confidence"`
+	Abstain    struct {
+		When string `yaml:"when"`
+	} `yaml:"abstain"`
+	FanOut     *fanOutSpec     `yaml:"fan_out"`
+	Dedup      []string        `yaml:"dedup"`
+	Unresolved *unresolvedSpec `yaml:"unresolved"`
+}
+
+// CompiledEmit is an EmitSpec with its `when:` predicates parsed and validated.
+type CompiledEmit struct {
+	spec       EmitSpec
+	abstain    boolFn
+	unresolved boolFn
+	confidence []compiledConf
+}
+
+type compiledConf struct {
+	pred  boolFn // nil ⇒ the `else` arm
+	value string
+}
+
+// Relation returns the derived relation this spec consumes.
+func (e *CompiledEmit) Relation() string { return e.spec.Relation }
+
+// EmitResult is what Apply produces for one relation: graph edges, "never
+// empty" unresolved refs (SA invariant), and ledger rows (fan-out drops). All
+// three are sorted and deterministic.
+type EmitResult struct {
+	Edges      []graph.Edge
+	Unresolved []graph.UnresolvedRef
+	Ledger     []graph.UnresolvedRef
+}
+
+// CompileEmits parses a YAML document with a top-level `emit:` list.
+func CompileEmits(src []byte) ([]CompiledEmit, error) {
+	var doc struct {
+		Emit []EmitSpec `yaml:"emit"`
+	}
+	if err := yaml.Unmarshal(src, &doc); err != nil {
+		return nil, err
+	}
+	return CompileEmitSpecs(doc.Emit)
+}
+
+// CompileEmitSpecs compiles already-decoded specs (the pipeline path, where the
+// YAML is unmarshalled once alongside the patterns).
+func CompileEmitSpecs(specs []EmitSpec) ([]CompiledEmit, error) {
+	out := make([]CompiledEmit, 0, len(specs))
+	for _, s := range specs {
+		ce, err := compileEmit(s)
+		if err != nil {
+			return nil, fmt.Errorf("emit %q: %w", s.Relation, err)
+		}
+		out = append(out, ce)
+	}
+	return out, nil
+}
+
+func compileEmit(s EmitSpec) (CompiledEmit, error) {
+	var ce CompiledEmit
+	if s.Relation == "" {
+		return ce, fmt.Errorf("missing relation")
+	}
+	if !s.Edge.From.set() || !s.Edge.To.set() {
+		return ce, fmt.Errorf("edge needs both from and to")
+	}
+	if !frozenEdgeTypes[s.Edge.Type] {
+		return ce, fmt.Errorf("edge type %q is not in the frozen vocabulary", s.Edge.Type)
+	}
+	if s.Unresolved != nil && s.Unresolved.Ref.Kind == "" {
+		return ce, fmt.Errorf("unresolved.ref needs a kind")
+	}
+
+	var err error
+	if ce.abstain, err = compilePredicate(s.Abstain.When); err != nil {
+		return ce, fmt.Errorf("abstain: %w", err)
+	}
+	if s.Unresolved != nil {
+		if ce.unresolved, err = compilePredicate(s.Unresolved.When); err != nil {
+			return ce, fmt.Errorf("unresolved.when: %w", err)
+		}
+	}
+	for i, c := range s.Confidence {
+		if c.Else != "" {
+			ce.confidence = append(ce.confidence, compiledConf{value: c.Else})
+			continue
+		}
+		pred, err := compilePredicate(c.When)
+		if err != nil {
+			return ce, fmt.Errorf("confidence[%d]: %w", i, err)
+		}
+		ce.confidence = append(ce.confidence, compiledConf{pred: pred, value: c.Value})
+	}
+	ce.spec = s
+	return ce, nil
+}
+
+// Apply turns one derived relation's tuples into edges / unresolved / ledger
+// rows per the spec. prov (may be nil) supplies the SA.1 derivation rule per
+// edge; the engine already tracked it, so this lookup is free.
+func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) EmitResult {
+	cols := e.spec.Columns
+	rmaps := make([]map[string]string, len(rows))
+	for i, t := range rows {
+		m := make(map[string]string, len(t)*2)
+		for j, v := range t {
+			if j < len(cols) {
+				m[cols[j]] = v
+			}
+			m[strconv.Itoa(j)] = v
+		}
+		rmaps[i] = m
+	}
+
+	var res EmitResult
+	seen := map[string]bool{}
+
+	type pending struct {
+		edge   graph.Edge
+		fanKey string
+	}
+	var pend []pending
+
+	for i, row := range rmaps {
+		if e.abstain != nil && e.abstain(row, rmaps) {
+			continue
+		}
+		if e.unresolved != nil && e.unresolved(row, rmaps) {
+			res.Unresolved = append(res.Unresolved, e.buildUnresolved(row))
+			continue
+		}
+		edge := e.buildEdge(row, rmaps, rows[i], prov)
+		key := e.dedupKey(edge)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		fk := ""
+		if e.spec.FanOut != nil {
+			parts := make([]string, len(e.spec.FanOut.Key))
+			for k, c := range e.spec.FanOut.Key {
+				parts[k] = row[c]
+			}
+			fk = strings.Join(parts, "\x00")
+		}
+		pend = append(pend, pending{edge, fk})
+	}
+
+	drop := map[int]bool{}
+	if fo := e.spec.FanOut; fo != nil && fo.Max > 0 {
+		groups := map[string][]int{}
+		for idx, p := range pend {
+			groups[p.fanKey] = append(groups[p.fanKey], idx)
+		}
+		for _, gk := range sortedKeys(groups) {
+			members := groups[gk]
+			if len(members) <= fo.Max {
+				continue
+			}
+			var targets []string
+			for _, mi := range members {
+				drop[mi] = true
+				targets = append(targets, pend[mi].edge.To)
+			}
+			sort.Strings(targets)
+			targets = dedupStrings(targets)
+			name := strings.ReplaceAll(gk, "\x00", "|")
+			ledgerRow := graph.UnresolvedRef{
+				Kind:    e.spec.Relation + "_fanout",
+				Name:    name,
+				Targets: strings.Join(targets, "\n"),
+			}
+			switch fo.OnExceed {
+			case "drop":
+				// nothing recorded
+			case "unresolved":
+				res.Unresolved = append(res.Unresolved, ledgerRow)
+			default: // ledger_only
+				res.Ledger = append(res.Ledger, ledgerRow)
+			}
+		}
+	}
+
+	for idx, p := range pend {
+		if !drop[idx] {
+			res.Edges = append(res.Edges, p.edge)
+		}
+	}
+
+	sort.Slice(res.Edges, func(i, j int) bool { return res.Edges[i].ID < res.Edges[j].ID })
+	sortUnresolved(res.Unresolved)
+	sortUnresolved(res.Ledger)
+	return res
+}
+
+func (e *CompiledEmit) buildEdge(row map[string]string, all []map[string]string, tup datalog.Tuple, prov *datalog.Provenance) graph.Edge {
+	s := e.spec
+	from := s.Edge.From.resolve(row)
+	to := s.Edge.To.resolve(row)
+	id := from + "->" + to + ":"
+	if s.Edge.Label != "" {
+		id += s.Edge.Label
+	} else {
+		id += s.Edge.Type
+	}
+
+	conf := e.confidenceFor(row, all)
+
+	var meta map[string]string
+	if len(s.Meta) > 0 {
+		meta = make(map[string]string, len(s.Meta))
+		for _, k := range sortedKeys(s.Meta) {
+			meta[k] = s.Meta[k].resolve(row)
+		}
+	}
+
+	edge := graph.Edge{
+		ID:         id,
+		From:       from,
+		To:         to,
+		Type:       graph.EdgeType(s.Edge.Type),
+		Label:      s.Edge.Label,
+		Confidence: conf,
+		Meta:       meta,
+	}
+	if s.Edge.Method.set() {
+		edge.Method = s.Edge.Method.resolve(row)
+	}
+	if s.Edge.Path.set() {
+		edge.Path = s.Edge.Path.resolve(row)
+	}
+
+	rule := s.Rule
+	if rule == "" {
+		rule = s.Relation
+	}
+	if prov != nil {
+		if ds, err := prov.Of(s.Relation, tup); err == nil && len(ds) > 0 && ds[0].Rule != "" {
+			rule = ds[0].Rule
+		}
+	}
+	edge.Sources = []graph.SourceRef{{
+		Provider:   "static",
+		Confidence: conf,
+		Layer:      "L3",
+		Rule:       rule,
+	}}
+	return edge
+}
+
+func (e *CompiledEmit) confidenceFor(row map[string]string, all []map[string]string) string {
+	for _, c := range e.confidence {
+		if c.pred == nil || c.pred(row, all) {
+			return c.value
+		}
+	}
+	return ""
+}
+
+func (e *CompiledEmit) buildUnresolved(row map[string]string) graph.UnresolvedRef {
+	r := e.spec.Unresolved.Ref
+	out := graph.UnresolvedRef{Kind: r.Kind}
+	if r.Service.set() {
+		out.Service = r.Service.resolve(row)
+	}
+	if r.Name.set() {
+		out.Name = r.Name.resolve(row)
+	}
+	if r.File.set() {
+		out.File = r.File.resolve(row)
+	}
+	if r.Line.set() {
+		if n, err := strconv.Atoi(r.Line.resolve(row)); err == nil {
+			out.Line = n
+		}
+	}
+	return out
+}
+
+func (e *CompiledEmit) dedupKey(edge graph.Edge) string {
+	fields := e.spec.Dedup
+	if len(fields) == 0 {
+		fields = []string{"from", "to", "type", "label"}
+	}
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		switch f {
+		case "from":
+			parts[i] = edge.From
+		case "to":
+			parts[i] = edge.To
+		case "type":
+			parts[i] = string(edge.Type)
+		case "label":
+			parts[i] = edge.Label
+		case "method":
+			parts[i] = edge.Method
+		case "path":
+			parts[i] = edge.Path
+		}
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func dedupStrings(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	out := in[:1]
+	for _, s := range in[1:] {
+		if s != out[len(out)-1] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func sortUnresolved(u []graph.UnresolvedRef) {
+	sort.Slice(u, func(i, j int) bool {
+		if u[i].Kind != u[j].Kind {
+			return u[i].Kind < u[j].Kind
+		}
+		if u[i].Name != u[j].Name {
+			return u[i].Name < u[j].Name
+		}
+		if u[i].File != u[j].File {
+			return u[i].File < u[j].File
+		}
+		return u[i].Line < u[j].Line
+	})
+}
