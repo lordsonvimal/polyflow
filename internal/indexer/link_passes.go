@@ -618,19 +618,11 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, tableUnresolved...)
 			return nil
 		}},
-		// Rails filter chain: before_action/around_action/after_action → the method
-		// the callback names, from the declaring class and from each action it
-		// guards. Needs the Ruby method nodes' qualified_name, so it runs after the
-		// parse phase; independent of the type-relation edges above.
-		{"rails_filters", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			filterEdges, filterUnresolved := linker.LinkRailsFilters(st.allNodes, svcFiles)
-			if err := st.writeEdges(filterEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, filterUnresolved...)
-			return nil
-		}},
+		// Rails filter chain (before_action/skip_before_action/rescue_from/AR
+		// lifecycle → the callback method, per action, minus retractions) is
+		// Tier FX FX.8: patterns/ruby/rails_filters.yaml + rules/ruby/
+		// rails_filters.dl, run by the factpipe_frameworks pass below.
+		//
 		// C.4: a bare Ruby call the parser could not bind in its own file, resolved
 		// against the methods the calling class inherits or mixes in. Must run after
 		// LinkRubyTypeRelations, whose `inherits` edges are the ancestor chain this

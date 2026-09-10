@@ -98,3 +98,27 @@ func TestIntegerAtomsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a/7", "c/7"}, flat(bound))
 }
+
+// TestContainsAndPrefixBuiltins — a rule needs "this file is under
+// app/controllers/" and the fact IR carries no path structure (FX.8).
+func TestContainsAndPrefixBuiltins(t *testing.T) {
+	t.Parallel()
+	e := datalog.New(datalog.Options{})
+	require.NoError(t, e.Assert("node", []datalog.Tuple{
+		{"c1", "class", "app/controllers/users_controller.rb", "web"},
+		{"c2", "class", "app/models/user.rb", "web"},
+		{"c3", "class", "engine/app/controllers/admin_controller.rb", "web"},
+	}))
+	require.NoError(t, e.LoadRules([]byte(`
+		controller(C) :- node(C, "class", File, _), contains(File, "app/controllers/").
+		toplevel(C)   :- node(C, "class", File, _), prefix(File, "app/").
+	`), "t.dl"))
+
+	ctrl, err := e.Query("controller")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c1", "c3"}, flat(ctrl))
+
+	top, err := e.Query("toplevel")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c1", "c2"}, flat(top))
+}

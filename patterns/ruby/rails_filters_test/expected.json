@@ -1,0 +1,13 @@
+{
+  "patterns": [
+    "before_action_symbol", "before_action_symbol",
+    "around_action_symbol",
+    "after_action_symbol",
+    "before_action_block",
+    "skip_before_action", "skip_around_action", "skip_after_action",
+    "rescue_from_with",
+    "ar_lifecycle_symbol", "ar_lifecycle_symbol",
+    "public_method", "public_method", "public_method", "public_method", "public_method"
+  ],
+  "node_types": []
+}

@@ -257,3 +257,40 @@ end
 }
 
 func strptr(s string) *string { return &s }
+
+func TestHasKeywordAndListCSV(t *testing.T) {
+	rb := `class C
+  before_action :auth, only: %i[show edit], if: :logged_in?
+  before_action :plain
+end
+`
+	root := parseTS(t, "ruby", rb)
+	ec := &ExtractContext{Src: []byte(rb), Grammar: "ruby", File: "c.rb"}
+
+	var withOpts, plain *sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "call" {
+			if firstOfType(n, "hash") != nil || firstOfType(n, "pair") != nil {
+				withOpts = n
+			} else if plain == nil {
+				plain = n
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+
+	if got := runVerb("has_keyword(if,unless)", withOpts, ec)[0].atom().Value(); got != "true" {
+		t.Errorf("has_keyword on if: filter = %q, want true", got)
+	}
+	if got := runVerb("has_keyword(if,unless)", plain, ec)[0].atom().Value(); got != "" {
+		t.Errorf("has_keyword on plain filter = %q, want empty", got)
+	}
+	only := keywordArg(withOpts, "only", ec.Src)
+	if got := listCSV(only, ec.Src); got != "show,edit" {
+		t.Errorf("list_csv(only) = %q, want show,edit", got)
+	}
+}

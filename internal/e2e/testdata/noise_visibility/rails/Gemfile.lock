@@ -1,0 +1,17 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    actionpack (8.1.0)
+    railties (8.1.0)
+      actionpack (= 8.1.0)
+    rails (8.1.0)
+      railties (= 8.1.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rails
+
+BUNDLED WITH
+   2.5.9

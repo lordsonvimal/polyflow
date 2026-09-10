@@ -3,6 +3,7 @@ package datalog
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // FX.3 — comparison builtins and the integer atom domain.
@@ -56,17 +57,25 @@ func decodeIntSym(id uint32) (int64, bool) {
 	return 0, false
 }
 
-var builtinArity = map[string]int{"lt": 2, "le": 2, "ne": 2}
+var builtinArity = map[string]int{"lt": 2, "le": 2, "ne": 2, "contains": 2, "prefix": 2}
 
 func isBuiltin(rel string) bool { _, ok := builtinArity[rel]; return ok }
 
 // evalBuiltin decides one comparison literal against already-bound operands.
 // lt and le require both operands in the integer domain; ne is defined on any
 // two atoms as raw symbol identity, because "these two node ids differ" is a
-// sound, useful guard that cannot be gotten wrong.
+// sound, useful guard that cannot be gotten wrong. contains / prefix are
+// substring / prefix tests on the revealed strings — a rule needs "this file
+// is under app/controllers/" and the fact IR carries no path structure.
 func evalBuiltin(rel string, a, b uint32, in *interner) (bool, error) {
 	if rel == "ne" {
 		return a != b, nil
+	}
+	if rel == "contains" {
+		return strings.Contains(in.sym(a), in.sym(b)), nil
+	}
+	if rel == "prefix" {
+		return strings.HasPrefix(in.sym(a), in.sym(b)), nil
 	}
 	x, xok := decodeIntSym(a)
 	y, yok := decodeIntSym(b)

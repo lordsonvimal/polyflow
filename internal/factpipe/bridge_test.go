@@ -142,6 +142,72 @@ func TestGraphFactsDeterministic(t *testing.T) {
 	}
 }
 
+func TestGraphFactsFileRank(t *testing.T) {
+	fs := NewFactSet()
+	GraphFacts(fixtureSnapshot(), fs)
+	fr := byPred(fs, "file_rank")
+	// two distinct files: base.rb, ctrl.rb — lexical order.
+	if len(fr) != 2 {
+		t.Fatalf("file_rank: %d facts, want 2", len(fr))
+	}
+	if fr[0].Args[0].Str != "base.rb" || fr[0].Args[1].Kind != AtomInt || fr[0].Args[1].Int != 0 {
+		t.Errorf("file_rank[0] = %+v, want (base.rb, 0)", fr[0].Args)
+	}
+	if fr[1].Args[0].Str != "ctrl.rb" || fr[1].Args[1].Int != 1 {
+		t.Errorf("file_rank[1] = %+v, want (ctrl.rb, 1)", fr[1].Args)
+	}
+}
+
+// ancestrySnapshot: Grandchild -> Child -> Parent superclass chain plus a mixin
+// Mixed included straight into Grandchild, to exercise depth and level ties.
+func ancestrySnapshot() graph.Snapshot {
+	cls := func(id, label, file string) graph.Node {
+		return graph.Node{ID: id, Type: graph.NodeTypeClass, Label: label, Service: "web", File: file, Line: 1}
+	}
+	return graph.Snapshot{
+		Nodes: []graph.Node{
+			cls("g", "Grandchild", "g.rb"),
+			cls("c", "Child", "c.rb"),
+			cls("p", "Parent", "p.rb"),
+			cls("m", "Mixed", "m.rb"),
+		},
+		Edges: []graph.Edge{
+			{ID: "e1", From: "g", To: "c", Type: graph.EdgeTypeInherits},
+			{ID: "e2", From: "g", To: "m", Type: graph.EdgeTypeInherits}, // mixin, same level as c
+			{ID: "e3", From: "c", To: "p", Type: graph.EdgeTypeInherits},
+		},
+	}
+}
+
+func TestGraphFactsAncestorDist(t *testing.T) {
+	fs := NewFactSet()
+	GraphFacts(ancestrySnapshot(), fs)
+
+	type ad struct {
+		sub, anc string
+		depth    int64
+	}
+	var got []ad
+	for _, f := range byPred(fs, "ancestor_dist") {
+		if f.Args[2].Kind != AtomInt {
+			t.Fatalf("ancestor_dist depth not int: %+v", f.Args)
+		}
+		got = append(got, ad{f.Args[0].Node, f.Args[1].Node, f.Args[2].Int})
+	}
+	want := []ad{
+		{"g", "c", 1}, {"g", "m", 1}, {"g", "p", 2}, // g's frontier order: c then m, then p
+		{"c", "p", 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ancestor_dist = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ancestor_dist[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestGraphFactsOriginPattern(t *testing.T) {
 	fs := NewFactSet()
 	GraphFacts(fixtureSnapshot(), fs)

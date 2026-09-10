@@ -48,14 +48,20 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 			continue
 		}
 
+		// Test-harness nodes (a spec's DummyController) are excluded, matching
+		// the hand-written link passes' n.Meta[graph.MetaIsTest] skip.
 		snap := graph.Snapshot{}
+		realNode := make(map[string]bool)
 		for i := range st.enrichedNodes {
-			if st.enrichedNodes[i].Service == sf.svc.Name {
-				snap.Nodes = append(snap.Nodes, st.enrichedNodes[i])
+			n := &st.enrichedNodes[i]
+			if n.Service != sf.svc.Name || n.Meta[graph.MetaIsTest] == "true" || graph.IsTestFilePath(n.File) {
+				continue
 			}
+			snap.Nodes = append(snap.Nodes, *n)
+			realNode[n.ID] = true
 		}
 		for i := range st.allEdges {
-			if svcOf[st.allEdges[i].From] == sf.svc.Name {
+			if realNode[st.allEdges[i].From] {
 				snap.Edges = append(snap.Edges, st.allEdges[i])
 			}
 		}
@@ -87,6 +93,11 @@ func parsedFilesForLanguages(paths []string, langs map[string]bool) []pipeline.P
 		if lang == "" || !langs[lang] {
 			continue
 		}
+		// Match the hand-written link passes, which skip nodes with
+		// graph.MetaIsTest: a spec's DummyController is not a real registration.
+		if graph.IsTestFilePath(p) {
+			continue
+		}
 		src, err := os.ReadFile(p)
 		if err != nil {
 			continue
@@ -111,6 +122,8 @@ func patternLangForFile(path string) (lang, grammar string) {
 		return "javascript", "typescript"
 	case ".tsx":
 		return "javascript", "tsx"
+	case ".rb", ".rake":
+		return "ruby", "ruby"
 	}
 	return "", ""
 }

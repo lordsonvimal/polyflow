@@ -84,9 +84,23 @@ func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
 			return []verbVal{{Node: v, Str: v.Content(ec.Src), Kind: factpipe.AtomStr}}
 		}
 		return []verbVal{{Str: "", Kind: factpipe.AtomStr}}
+	case "has_keyword":
+		// "true" if the call carries any of the comma-listed keyword args, else
+		// "". rails_filters' `conditional` meta is "did this filter pass if:/
+		// unless:" — a two-key presence test one keyword_arg cannot answer.
+		present := ""
+		for _, name := range strings.Split(arg, ",") {
+			if keywordArg(node, strings.TrimSpace(name), ec.Src) != nil {
+				present = "true"
+				break
+			}
+		}
+		return []verbVal{{Str: present, Kind: factpipe.AtomStr}}
 
 	case "list_elements":
 		return fanoutElements(node, ec.Src)
+	case "list_csv":
+		return []verbVal{{Str: listCSV(node, ec.Src), Kind: factpipe.AtomStr}}
 	case "hash_pairs":
 		return hashPairs(node, arg, ec.Src)
 
@@ -311,8 +325,29 @@ func keywordArg(call *sitter.Node, name string, src []byte) *sitter.Node {
 	return found
 }
 
+// listCSV is list_elements joined with "," in source order — the flat-text
+// sibling of list_elements, for a meta field that records a captured list
+// verbatim (rails_filters' `only:` / `except:` meta is "a,b,c").
+func listCSV(n *sitter.Node, src []byte) string {
+	var parts []string
+	for _, v := range fanoutElements(n, src) {
+		if v.Str != "" {
+			parts = append(parts, v.Str)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 // fanoutElements yields one value per element of an array/slice/list literal.
+// A scalar node (a lone `only: :index` rather than `only: %i[...]`) is a
+// one-element list and yields itself.
 func fanoutElements(n *sitter.Node, src []byte) []verbVal {
+	switch n.Type() {
+	case "array", "list", "symbol_array", "string_array", "argument_list",
+		"composite_literal", "expression_list":
+	default:
+		return []verbVal{{Node: n, Str: stringValue(n, src), Kind: factpipe.AtomStr}}
+	}
 	var out []verbVal
 	for i := 0; i < int(n.NamedChildCount()); i++ {
 		c := n.NamedChild(i)

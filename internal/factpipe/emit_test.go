@@ -170,3 +170,52 @@ emit:
 		t.Fatal("expected a predicate parse error")
 	}
 }
+
+func TestEmitLabelTemplateAndKind(t *testing.T) {
+	ce := mustCompile(t, `
+emit:
+  - relation: class_filter
+    columns: [Handler, Target, Kind, Cb]
+    edge:
+      from: { arg: Handler }
+      to:   { arg: Target }
+      type: calls
+      label: { template: "{Kind} :{Cb}" }
+    meta:
+      filter: { arg: Kind }
+`)
+	res := ce.Apply([]datalog.Tuple{
+		{"app.rb:9", "base.rb:3", "before_action", "authenticate_user!"},
+	}, nil)
+	if len(res.Edges) != 1 {
+		t.Fatalf("got %d edges, want 1", len(res.Edges))
+	}
+	e := res.Edges[0]
+	if e.Label != "before_action :authenticate_user!" {
+		t.Errorf("label = %q", e.Label)
+	}
+	if e.ID != "app.rb:9->base.rb:3:before_action :authenticate_user!" {
+		t.Errorf("id = %q", e.ID)
+	}
+	if e.Meta["filter"] != "before_action" {
+		t.Errorf("meta.filter = %q", e.Meta["filter"])
+	}
+}
+
+func TestEmitUnresolvedKindFromColumn(t *testing.T) {
+	ce := mustCompile(t, `
+emit:
+  - relation: filter_miss
+    columns: [Cb, File, Line, MissKind]
+    edge: { from: {arg: Cb}, to: {arg: Cb}, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref: { name: {arg: Cb}, file: {arg: File}, line: {arg: Line}, kind: {arg: MissKind} }
+`)
+	res := ce.Apply([]datalog.Tuple{
+		{"do_stuff", "x_controller.rb", "12", "rails_filter_ambiguous"},
+	}, nil)
+	if len(res.Unresolved) != 1 || res.Unresolved[0].Kind != "rails_filter_ambiguous" {
+		t.Fatalf("unresolved = %+v", res.Unresolved)
+	}
+}

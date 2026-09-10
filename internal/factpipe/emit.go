@@ -2,6 +2,7 @@ package factpipe
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,40 +50,53 @@ var frozenEdgeTypes = map[string]bool{
 	"dom_listen": true, "dom_contract": true,
 }
 
-// valueRef is an edge/meta/ref field source: either a literal (a bare scalar or
-// `{literal: X}`) or `{arg: Column}` naming a column of the derived relation.
+// valueRef is an edge/meta/ref field source: a literal (a bare scalar or
+// `{literal: X}`), `{arg: Column}` naming a column of the derived relation, or
+// `{template: "..."}` — a string with `{Column}` placeholders substituted from
+// the row (rails_filters' edge label is "<Kind> :<Cb>", which no single column
+// holds and datalog cannot concatenate).
 type valueRef struct {
-	Arg     string
-	Literal string
-	isLit   bool
+	Arg      string
+	Literal  string
+	Template string
+	isLit    bool
 }
 
 // UnmarshalYAML accepts a bare scalar (⇒ literal) or a mapping with `arg` /
-// `literal`.
+// `literal` / `template`.
 func (v *valueRef) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
 		v.Literal, v.isLit = n.Value, true
 		return nil
 	}
 	var m struct {
-		Arg     string  `yaml:"arg"`
-		Literal *string `yaml:"literal"`
+		Arg      string  `yaml:"arg"`
+		Literal  *string `yaml:"literal"`
+		Template string  `yaml:"template"`
 	}
 	if err := n.Decode(&m); err != nil {
 		return err
 	}
 	v.Arg = m.Arg
+	v.Template = m.Template
 	if m.Literal != nil {
 		v.Literal, v.isLit = *m.Literal, true
 	}
 	return nil
 }
 
-func (v valueRef) set() bool { return v.Arg != "" || v.isLit }
+func (v valueRef) set() bool { return v.Arg != "" || v.isLit || v.Template != "" }
+
+var templatePlaceholder = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 func (v valueRef) resolve(row map[string]string) string {
 	if v.Arg != "" {
 		return row[v.Arg]
+	}
+	if v.Template != "" {
+		return templatePlaceholder.ReplaceAllStringFunc(v.Template, func(m string) string {
+			return row[m[1:len(m)-1]]
+		})
 	}
 	return v.Literal
 }
@@ -91,7 +105,7 @@ type edgeSpec struct {
 	From   valueRef `yaml:"from"`
 	To     valueRef `yaml:"to"`
 	Type   string   `yaml:"type"`
-	Label  string   `yaml:"label"`
+	Label  valueRef `yaml:"label"` // literal or {arg: Column} — rails_filters' label is "<kind> :<cb>"
 	Method valueRef `yaml:"method"`
 	Path   valueRef `yaml:"path"`
 }
@@ -113,7 +127,7 @@ type unresolvedRefSpec struct {
 	Name    valueRef `yaml:"name"`
 	File    valueRef `yaml:"file"`
 	Line    valueRef `yaml:"line"`
-	Kind    string   `yaml:"kind"`
+	Kind    valueRef `yaml:"kind"` // literal or {arg: Column}
 }
 
 type unresolvedSpec struct {
@@ -198,7 +212,7 @@ func compileEmit(s EmitSpec) (CompiledEmit, error) {
 	if !frozenEdgeTypes[s.Edge.Type] {
 		return ce, fmt.Errorf("edge type %q is not in the frozen vocabulary", s.Edge.Type)
 	}
-	if s.Unresolved != nil && s.Unresolved.Ref.Kind == "" {
+	if s.Unresolved != nil && !s.Unresolved.Ref.Kind.set() {
 		return ce, fmt.Errorf("unresolved.ref needs a kind")
 	}
 
@@ -329,9 +343,10 @@ func (e *CompiledEmit) buildEdge(row map[string]string, all []map[string]string,
 	s := e.spec
 	from := s.Edge.From.resolve(row)
 	to := s.Edge.To.resolve(row)
+	label := s.Edge.Label.resolve(row)
 	id := from + "->" + to + ":"
-	if s.Edge.Label != "" {
-		id += s.Edge.Label
+	if label != "" {
+		id += label
 	} else {
 		id += s.Edge.Type
 	}
@@ -342,7 +357,15 @@ func (e *CompiledEmit) buildEdge(row map[string]string, all []map[string]string,
 	if len(s.Meta) > 0 {
 		meta = make(map[string]string, len(s.Meta))
 		for _, k := range sortedKeys(s.Meta) {
-			meta[k] = s.Meta[k].resolve(row)
+			// An empty value is an absent key: the Go link passes build their
+			// meta maps conditionally (`if len(reg.only) > 0`), so a byte-diff
+			// against them must not carry `only: ""`.
+			if v := s.Meta[k].resolve(row); v != "" {
+				meta[k] = v
+			}
+		}
+		if len(meta) == 0 {
+			meta = nil
 		}
 	}
 
@@ -351,7 +374,7 @@ func (e *CompiledEmit) buildEdge(row map[string]string, all []map[string]string,
 		From:       from,
 		To:         to,
 		Type:       graph.EdgeType(s.Edge.Type),
-		Label:      s.Edge.Label,
+		Label:      label,
 		Confidence: conf,
 		Meta:       meta,
 	}
@@ -391,7 +414,7 @@ func (e *CompiledEmit) confidenceFor(row map[string]string, all []map[string]str
 
 func (e *CompiledEmit) buildUnresolved(row map[string]string) graph.UnresolvedRef {
 	r := e.spec.Unresolved.Ref
-	out := graph.UnresolvedRef{Kind: r.Kind}
+	out := graph.UnresolvedRef{Kind: r.Kind.resolve(row)}
 	if r.Service.set() {
 		out.Service = r.Service.resolve(row)
 	}

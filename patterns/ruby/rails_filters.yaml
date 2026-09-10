@@ -1,0 +1,414 @@
+# Rails filter chain (Tier FX FX.8 reference migration). Replaces
+# internal/linker/rails_filters.go + rails_filters_dl.go: a before_action /
+# skip_before_action / rescue_from / AR-lifecycle registration becomes the
+# handler --calls--> callback edges it stands for, per action, minus what a
+# skip retracts.
+#
+# Stage 1 (this file's `facts:` blocks) lowers every registration to flat facts
+# keyed by (File, Line, Kind) — the DL recovers the owning class by line-range
+# containment against the FX.1 bridge's node/node_line, the same idiom
+# gin_middleware.dl uses, because enclosing_name(class) is namespace-blind and
+# would merge two same-named controllers.
+#
+# Stage 3 (rules/ruby/rails_filters.dl) does the ancestor closure, concern
+# propagation, only:/except: retraction and callback resolution (via the
+# bridge's defines + ancestor_dist + min(Depth)).
+#
+# Stage 4 (this file's `emit:` block) turns the derived class_filter /
+# action_filter relations into edges + the blind-spot ledger.
+#
+# Gate: Rails. before_action &c exist only under ActionController / ActiveModel;
+# the `railties` dependency is the disambiguator.
+#
+# FX.8 (Tier FX): this replaces internal/linker/rails_filters.go +
+# rails_filters_dl.go, run by the factpipe_frameworks pass.
+#
+# cedar differential vs the retired Go pass: ~1,857 added / ~930 dropped
+# rails_filter edges, ACCEPTED as correctness improvements (not a regression) —
+# every sample is a Go bug the declarative version fixes:
+#   - rails_filters.go:resolveSuper failed on `::`-prefixed and namespaced
+#     `X::BaseController` superclasses, so org_admin/site_admin/pcda controllers
+#     silently lost ApplicationController's whole filter chain. Consuming the
+#     semantic layer's `inherits` edges (class_super) resolves them.
+#   - Go's methodQN/byName keyed callbacks by *simple* class name, bolting the
+#     wrong filter chain onto `CommentsController`/`DrugsController` action nodes
+#     across Api::V1 / IntegrationApi::V1 / top-level. Node-keyed `defines` is
+#     correct. This also removes 156 spurious `partial` + 15 spurious
+#     rails_filter_ambiguous ledger rows.
+#
+# Deferred: orphan-concern `rails_filter_unattributed` ledger rows (Go's stray
+# bare-before_action detection in model files — cleaner without); Q5 dedup
+# tie-break (no meta collisions observed).
+language: ruby
+version: "1"
+package: railties
+
+patterns:
+  # --- action-filter registrations, one pattern per chain family ----------
+  # before_action / prepend_before_action / append_before_action :sym[, :sym2]
+  #   [, only: %i[...]] [, except: [...]] [, if:/unless: ...]
+  - name: before_action_symbol
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m
+        (#match? @m "^(before_action|prepend_before_action|append_before_action|before_filter|append_before_filter|prepend_before_filter)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: filter_call
+        args:
+          file:        { extract: file }
+          line:        { capture: call, extract: line }
+          kind:        { capture: m }
+          family:      { literal: before_action }
+          form:        { literal: "" }
+          only_csv:    { capture: call, extract: "keyword_arg(only)", then: list_csv }
+          except_csv:  { capture: call, extract: "keyword_arg(except)", then: list_csv }
+          cond:        { capture: call, extract: "has_keyword(if,unless)" }
+      - pred: filter_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          cb:     { capture: cb, extract: string_value }
+          cb_idx: { capture: cb, extract: position_in_parent }
+      - pred: filter_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: filter_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  - name: around_action_symbol
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m
+        (#match? @m "^(around_action|prepend_around_action|append_around_action|around_filter)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: filter_call
+        args:
+          file:        { extract: file }
+          line:        { capture: call, extract: line }
+          kind:        { capture: m }
+          family:      { literal: around_action }
+          form:        { literal: "" }
+          only_csv:    { capture: call, extract: "keyword_arg(only)", then: list_csv }
+          except_csv:  { capture: call, extract: "keyword_arg(except)", then: list_csv }
+          cond:        { capture: call, extract: "has_keyword(if,unless)" }
+      - pred: filter_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          cb:     { capture: cb, extract: string_value }
+          cb_idx: { capture: cb, extract: position_in_parent }
+      - pred: filter_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: filter_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  - name: after_action_symbol
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m
+        (#match? @m "^(after_action|prepend_after_action|append_after_action|after_filter|action_callback)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: filter_call
+        args:
+          file:        { extract: file }
+          line:        { capture: call, extract: line }
+          kind:        { capture: m }
+          family:      { literal: after_action }
+          form:        { literal: "" }
+          only_csv:    { capture: call, extract: "keyword_arg(only)", then: list_csv }
+          except_csv:  { capture: call, extract: "keyword_arg(except)", then: list_csv }
+          cond:        { capture: call, extract: "has_keyword(if,unless)" }
+      - pred: filter_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          cb:     { capture: cb, extract: string_value }
+          cb_idx: { capture: cb, extract: position_in_parent }
+      - pred: filter_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: filter_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  # --- inline block form: before_action [opts] do <receiverless call> end --
+  - name: before_action_block
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#eq? @m "before_action")
+        (do_block (body_statement (call !receiver method: (identifier) @cb)))) @call
+    facts:
+      - pred: filter_call
+        args:
+          file:        { extract: file }
+          line:        { capture: call, extract: line }
+          kind:        { literal: before_action }
+          family:      { literal: before_action }
+          form:        { literal: block }
+          only_csv:    { capture: call, extract: "keyword_arg(only)", then: list_csv }
+          except_csv:  { capture: call, extract: "keyword_arg(except)", then: list_csv }
+          cond:        { capture: call, extract: "has_keyword(if,unless)" }
+      - pred: filter_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          cb:     { capture: cb }
+          cb_idx: { literal: "0" }
+      - pred: filter_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: filter_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  # --- ActiveRecord / ActiveModel lifecycle: family == kind -------------
+  - name: ar_lifecycle_symbol
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m
+        (#match? @m "^(validate|before_validation|after_validation|before_save|around_save|after_save|before_create|around_create|after_create|before_update|around_update|after_update|before_destroy|around_destroy|after_destroy|after_commit|after_rollback|after_initialize|after_find|after_touch)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: filter_call
+        args:
+          file:        { extract: file }
+          line:        { capture: call, extract: line }
+          kind:        { capture: m }
+          family:      { capture: m }
+          form:        { literal: "" }
+          only_csv:    { literal: "" }
+          except_csv:  { literal: "" }
+          cond:        { capture: call, extract: "has_keyword(if,unless)" }
+      - pred: filter_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { capture: m }
+          cb:     { capture: cb, extract: string_value }
+          cb_idx: { capture: cb, extract: position_in_parent }
+
+  # --- rescue_from ExceptionClass, with: :method_name -------------------
+  - name: rescue_from_with
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#eq? @m "rescue_from")
+        arguments: (argument_list
+          (pair key: (_) @k (#match? @k "^with:?$") value: (simple_symbol) @cb))) @call
+    facts:
+      - pred: filter_call
+        args:
+          file:        { extract: file }
+          line:        { capture: call, extract: line }
+          kind:        { literal: rescue_from }
+          family:      { literal: rescue_from }
+          form:        { literal: "" }
+          only_csv:    { literal: "" }
+          except_csv:  { literal: "" }
+          cond:        { literal: "" }
+      - pred: filter_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          kind:   { literal: rescue_from }
+          cb:     { capture: cb, extract: string_value }
+          cb_idx: { literal: "0" }
+
+  # --- retractions: skip_*_action, one pattern per family (Q3 bounded split)
+  - name: skip_before_action
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#match? @m "^(skip_before_action|skip_before_filter|skip_action_callback|skip_filter)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: skip_call
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          family: { literal: before_action }
+      - pred: skip_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          family: { literal: before_action }
+          cb:     { capture: cb, extract: string_value }
+      - pred: skip_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: skip_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  - name: skip_around_action
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#match? @m "^(skip_around_action|skip_around_filter)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: skip_call
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          family: { literal: around_action }
+      - pred: skip_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          family: { literal: around_action }
+          cb:     { capture: cb, extract: string_value }
+      - pred: skip_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: skip_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  - name: skip_after_action
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#match? @m "^(skip_after_action|skip_after_filter)$")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: skip_call
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          family: { literal: after_action }
+      - pred: skip_cb
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          family: { literal: after_action }
+          cb:     { capture: cb, extract: string_value }
+      - pred: skip_only
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          action: { capture: call, extract: "keyword_arg(only)", then: list_elements }
+      - pred: skip_except
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          action: { capture: call, extract: "keyword_arg(except)", then: list_elements }
+
+  # --- action domain: public instance methods of a class ---------------
+  # A bare `private` / `protected` before the def switches visibility; only
+  # public methods are dispatchable actions. The DL restricts the join to
+  # controller classes and drops methods with a nonzero private count.
+  - name: public_method
+    query: |
+      (method name: (identifier) @name) @def
+    facts:
+      - pred: pub_method
+        args:
+          file:      { extract: file }
+          name:      { capture: name }
+          line:      { capture: def, extract: line }
+          priv_before: { capture: def, extract: "preceded_by((identifier) @p (#match? @p \"^(private|protected)$\"))" }
+
+emit:
+  # handler --calls--> callback, class scope: what the source literally says.
+  - relation: class_filter
+    columns: [Handler, Target, Kind, Cb, Conf, Only, Except, Form, InheritedFrom, Conditional]
+    edge:
+      from: { arg: Handler }
+      to:   { arg: Target }
+      type: calls
+      label: { template: "{Kind} :{Cb}" }
+    meta:
+      via: rails_filter
+      scope: class
+      filter: { arg: Kind }
+      only: { arg: Only }
+      except: { arg: Except }
+      form: { arg: Form }
+      inherited_from: { arg: InheritedFrom }
+      conditional: { arg: Conditional }
+    confidence:
+      - { when: "Conf == \"static\"", value: static }
+      - { when: "Conf == \"inferred\"", value: inferred }
+      - { else: partial }
+    dedup: [from, to, label]
+
+  # handler --calls--> callback, action scope: what a request actually runs.
+  - relation: action_filter
+    columns: [Handler, Target, Kind, Cb, Action, Conf, Only, Except, Form, InheritedFrom, Conditional]
+    edge:
+      from: { arg: Handler }
+      to:   { arg: Target }
+      type: calls
+      label: { template: "{Kind} :{Cb}" }
+    meta:
+      via: rails_filter
+      scope: action
+      action: { arg: Action }
+      filter: { arg: Kind }
+      only: { arg: Only }
+      except: { arg: Except }
+      form: { arg: Form }
+      inherited_from: { arg: InheritedFrom }
+      conditional: { arg: Conditional }
+    confidence:
+      - { when: "Conf == \"static\"", value: static }
+      - { when: "Conf == \"inferred\"", value: inferred }
+      - { else: partial }
+    dedup: [from, to, label]
+
+  # a registration whose callback resolves to no indexed method — the SA
+  # "never empty" ledger, one row per (class, callback) miss.
+  - relation: filter_miss
+    columns: [Cb, File, Line, MissKind]
+    edge: { from: {arg: Cb}, to: {arg: Cb}, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref: { name: {arg: Cb}, file: {arg: File}, line: {arg: Line}, kind: {arg: MissKind} }

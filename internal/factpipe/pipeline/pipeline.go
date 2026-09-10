@@ -349,6 +349,23 @@ func factRelations(fw *Framework, src factpipe.FactSet) *datalog.FactRelations {
 	return fr
 }
 
+// EvalOnce runs stages 1–3 (extract → bridge → derive) for one framework over
+// one service and returns the tuples of every relation named in goals (the
+// emit relations plus anything passed in extraGoals). It is the introspection
+// point for the FX.8 differential harness and for debugging a rule set; stage 4
+// (emit) is Run's job.
+func (fw *Framework) EvalOnce(files []ParsedFile, graphSoFar graph.Snapshot, extraGoals ...string) (map[string][]datalog.Tuple, error) {
+	fset := factpipe.NewFactSet()
+	factpipe.GraphFacts(graphSoFar, fset)
+	if err := extractFramework(fw, files, fset); err != nil {
+		return nil, err
+	}
+	fr := factRelations(fw, fset)
+	fr.Goals = append(append([]string(nil), fr.Goals...), extraGoals...)
+	derived, _, err := fw.Rules.Eval(fr)
+	return derived, err
+}
+
 func sortUnresolved(u []graph.UnresolvedRef) {
 	sort.SliceStable(u, func(i, j int) bool {
 		a, b := u[i], u[j]

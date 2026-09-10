@@ -1,122 +1,235 @@
-% Rails filter chain — Tier DL.1.
+% Rails filter chain — Tier FX FX.8. Replaces internal/linker/rails_filters.go
+% (1,196 lines) + rails_filters_dl.go (294): the ancestor closure, concern
+% propagation, only:/except: retraction, and callback resolution.
 %
-% The relations below are the whole of what `internal/linker/rails_filters.go`
-% computes in seven mutually-recursive functions (resolveSuper, eachSuperclass,
-% eachIncludedModule, effectiveFilters, chainSkips, retracted, skippedFor),
-% recomputing the ancestor chain once per class. Parsing stays in Go — a rule
-% cannot read a tree-sitter node — and so does callback resolution, which is an
-% *ordered* search with a depth that grades the edge's confidence, not a set.
+% Stage-1 facts (patterns/ruby/rails_filters.yaml), keyed by (File, Line, Kind):
+%   filter_call(File, Line, Kind, Family, Form, OnlyCsv, ExceptCsv, Cond)
+%       Cond is "true" when the registration carries if:/unless:, else "".
+%       Form is "" or "block"; OnlyCsv/ExceptCsv are the verbatim list meta.
+%   filter_cb(File, Line, Kind, Cb, CbIdx)          one per callback symbol
+%   filter_only(File, Line, Kind, Action)           fan-out; absent ⇒ no only:
+%   filter_except(File, Line, Kind, Action)
+%   skip_call(File, Line, Family)
+%   skip_cb(File, Line, Family, Cb)
+%   skip_only(File, Line, Action) / skip_except(File, Line, Action)
+%   pub_method(File, Name, MethodLine, PrivBefore)  PrivBefore int; 0 ⇒ public
 %
-% Every key is pre-normalized by the emitter. No rule calls a normalizer:
-% `filterFamily("skip_before_action") = "before_action"` is applied at
-% assertion time, so `reg_family` joins on an already-canonical string.
-%
-% Base relations, all asserted by internal/linker/rails_filters_dl.go:
-%
-%   class_decl(C)            one per parsed class or module body
-%   subclass_of(C, S)        C's `< S`, after lexical constant resolution
-%   includes_module(C, M)    C's include/extend/prepend, one row per declaration
-%   action(C, A)             a public instance method of a controller class
-%   filter_reg(C, R)         C's body registers filter R
-%   skip_reg(C, R)           C's body retracts with skip registration R
-%   reg_family(R, F)         the chain R acts on, e.g. "before_action"
-%   reg_callback(R, CB)      one row per callback symbol R names
-%   skip_total(R)            R is a skip carrying neither only: nor except:
-%   reg_has_only(R)          R carries only:
-%   reg_only(R, A)           R's only: names action A
-%   reg_except(R, A)         R's except: names action A
+% Bridge (FX.1): node, node_line, node_label, defines, class_super,
+%   includes_module, ancestor_dist.
 
-% --- ancestry -------------------------------------------------------------
-% Only the superclass chain propagates registrations by inheritance. A module
-% cannot legally declare a filter in its body — the spelling is `included do`,
-% which the emitter attributes to the module and which reaches a class through
-% filter_owner below, not through ancestor.
-%
-% Stating this as two relations is the defect fix the tier gets for free: the
-% `inherits` edge conflates superclasses with mixins (1595 vs 670), forcing
-% every caller to filter meta.via != "mixin" first. No rule can conflate them.
-ancestor(C, S) :- subclass_of(C, S).
-ancestor(C, A) :- subclass_of(C, S), ancestor(S, A).
+% ---------------------------------------------------------------------------
+% class identity — the innermost class node whose span contains a line
+% ---------------------------------------------------------------------------
+% enclosing_name(class) is namespace-blind; recover the class node the same
+% way gin_middleware.dl recovers the wrapping function: span containment, then
+% max(start line) picks the innermost when namespaces nest.
+class_span(K, File, KL, KE) :-
+    node(K, "class", File, _), node_line(K, KL, KE).
 
-% --- who owns a registration that binds to C ------------------------------
-% C itself, every superclass, and every module any of those include —
-% transitively, because a concern routinely includes another concern.
-filter_owner(C, C) :- class_decl(C).
-filter_owner(C, A) :- ancestor(C, A).
-filter_owner(C, M) :- filter_owner(C, X), includes_module(X, M).
+reg_cover(File, Line, Kind, K, KL) :-
+    filter_call(File, Line, Kind, _, _, _, _, _),
+    class_span(K, File, KL, KE), le(KL, Line), le(Line, KE).
+reg_cover_max(File, Line, Kind, MaxL) :-
+    reg_cover(File, Line, Kind, _, L), max(MaxL, L).
+reg_owner(File, Line, Kind, K) :-
+    reg_cover_max(File, Line, Kind, L), reg_cover(File, Line, Kind, K, L).
 
-registered(C, R) :- filter_owner(C, O), filter_reg(O, R).
+skip_cover(File, Line, K, KL) :-
+    skip_call(File, Line, _),
+    class_span(K, File, KL, KE), le(KL, Line), le(Line, KE).
+skip_cover_max(File, Line, MaxL) :- skip_cover(File, Line, _, L), max(MaxL, L).
+skip_owner(File, Line, K) :-
+    skip_cover_max(File, Line, L), skip_cover(File, Line, K, L).
 
-own_filter(C, R) :- filter_reg(C, R).
+% ---------------------------------------------------------------------------
+% ancestry — superclass chain, and the owner-source closure
+% ---------------------------------------------------------------------------
+% Only the superclass chain propagates a registration by inheritance. A module
+% reaches a class through includes_module, never as a superclass — the
+% class_super / includes_module split (FX.1 bridge) is what lets this rule set
+% state that without the meta.via != "mixin" filter every Go caller carries.
+super_anc(C, S) :- class_super(C, S).
+super_anc(C, A) :- class_super(C, S), super_anc(S, A).
 
-% An inherited edge is never better than `inferred`, and only an inherited
-% filter is subject to a partial (only:/except:) skip — the class that writes
-% the registration is not retracting its own line.
-inherited_filter(C, R) :- registered(C, R), not own_filter(C, R).
+% owns(C, O): O is C, a superclass of C, or a module included (transitively,
+% concern-in-concern) by C or any superclass.
+owns(C, C)  :- node(C, "class", _, _).
+owns(C, A)  :- super_anc(C, A).
+owns(C, M)  :- owns(C, X), includes_module(X, M).
 
-% --- retraction -----------------------------------------------------------
-% A skip applies to the class that writes it and to everything below it.
-skip_in_force(C, S) :- skip_reg(C, S).
-skip_in_force(C, S) :- ancestor(C, A), skip_reg(A, S).
+% C is subject to a registration whose owning class is an owner-source of C.
+subject(C, File, Line, Kind) :-
+    owns(C, O), reg_owner(File, Line, Kind, O).
 
-% A skip carrying neither only: nor except: cancels the registration outright.
-% One carrying either survives here and is decided per action, below.
-retracts(S, R) :- skip_total(S), reg_family(S, F), reg_family(R, F),
-                  reg_callback(S, CB), reg_callback(R, CB).
-retracted(C, R) :- skip_in_force(C, S), retracts(S, R).
+own_reg(C, File, Line, Kind) :- reg_owner(File, Line, Kind, C).
+inherited(C, File, Line, Kind) :-
+    subject(C, File, Line, Kind), not own_reg(C, File, Line, Kind).
 
-effective_filter(C, R) :- registered(C, R), not retracted(C, R).
+% ---------------------------------------------------------------------------
+% retraction — skip_before_action &c
+% ---------------------------------------------------------------------------
+skip_has_only(SF, SL)   :- skip_only(SF, SL, _).
+skip_has_except(SF, SL) :- skip_except(SF, SL, _).
+skip_total(SF, SL) :-
+    skip_call(SF, SL, _), not skip_has_only(SF, SL), not skip_has_except(SF, SL).
 
-% --- the two edges --------------------------------------------------------
-% class scope: what the source literally says, and the only edge a base
-% controller can produce, since it declares filters and defines no actions.
-class_filter(C, R, CB) :- effective_filter(C, R), reg_callback(R, CB).
+% A skip is in force for the class that writes it and every subclass.
+skip_in_force(C, SF, SL) :- skip_owner(SF, SL, C).
+skip_in_force(C, SF, SL) :- super_anc(C, A), skip_owner(SF, SL, A).
 
-% only:/except:. `reg_blocked` used to manufacture a service-wide action domain
-% (`action_name` × every registration carrying only:, minus the listed ones)
-% purely to be read back as `not reg_blocked(R, A)` with *both* arguments already
-% bound. DL.1 §5.2 / DL.3 D.1: case-split on which list the registration carries
-% and place `action(C, A)` first, so the negation is a bounded index probe over
-% the class's own handful of actions instead of a global cross-product.
-reg_has_except(R) :- reg_except(R, _).
+% A skip carrying neither only: nor except: cancels the registration outright
+% (same family + a shared callback symbol).
+retracted(C, RF, RL, RK) :-
+    subject(C, RF, RL, RK),
+    filter_call(RF, RL, RK, Fam, _, _, _, _),
+    skip_in_force(C, SF, SL),
+    skip_call(SF, SL, Fam),
+    skip_total(SF, SL),
+    filter_cb(RF, RL, RK, Cb, _),
+    skip_cb(SF, SL, Fam, Cb).
 
-% A partial skip retracts one callback for one action, and only where the
-% filter was inherited — which is the whole reason skip_before_action means
-% something: it is what stands between `before_action :authenticate_user!` in
-% ApplicationController and an edge onto the login form. Three branches, by
-% whether the skip carries only:, except:, or neither (skip_total).
-action_skipped(C, R, CB, A) :-
-    inherited_filter(C, R), action(C, A),
-    skip_in_force(C, S),
-    reg_family(S, F), reg_family(R, F),
-    reg_callback(S, CB), reg_callback(R, CB),
-    skip_total(S).
-action_skipped(C, R, CB, A) :-
-    inherited_filter(C, R), action(C, A),
-    skip_in_force(C, S),
-    reg_family(S, F), reg_family(R, F),
-    reg_callback(S, CB), reg_callback(R, CB),
-    reg_has_only(S), reg_only(S, A).
-action_skipped(C, R, CB, A) :-
-    inherited_filter(C, R), action(C, A),
-    skip_in_force(C, S),
-    reg_family(S, F), reg_family(R, F),
-    reg_callback(S, CB), reg_callback(R, CB),
-    reg_has_except(S), not reg_except(S, A).
+effective(C, RF, RL, RK) :-
+    subject(C, RF, RL, RK), not retracted(C, RF, RL, RK).
 
-% action scope: what a request actually does. Three disjoint, total branches —
-% a registration carries only:, or except:, or neither (the emitter normalizes
-% so it is never both). `action(C, A)` is first so `A` is bound to this class's
-% own actions before any negation.
-action_filter(C, R, CB, A) :-
-    effective_filter(C, R), reg_callback(R, CB), action(C, A),
-    reg_has_only(R), reg_only(R, A),
-    not action_skipped(C, R, CB, A).
-action_filter(C, R, CB, A) :-
-    effective_filter(C, R), reg_callback(R, CB), action(C, A),
-    reg_has_except(R), not reg_except(R, A),
-    not action_skipped(C, R, CB, A).
-action_filter(C, R, CB, A) :-
-    effective_filter(C, R), reg_callback(R, CB), action(C, A),
-    not reg_has_only(R), not reg_has_except(R),
-    not action_skipped(C, R, CB, A).
+% ---------------------------------------------------------------------------
+% callback resolution — from the registration's OWNING class, level order
+% ---------------------------------------------------------------------------
+% `before_action :x` in ApplicationController names ApplicationController's `x`
+% even when a subclass defines its own. resolveCallback's level-order BFS is
+% min(Depth) over ancestor_dist; every hit at the minimal level is a candidate
+% (naming one would be the fan-out bug).
+owner_class(O) :- reg_owner(_, _, _, O).
+
+% Resolve only the names that are actually callbacks — not every method the
+% owner or its ancestors define. Without this the ancestor walk fans every
+% helper/concern method into cb_hit (cedar: 50k rows vs ~700).
+cb_name(Cb) :- filter_cb(_, _, _, Cb, _).
+
+cb_hit(O, Cb, T, 0) :- cb_name(Cb), owner_class(O), defines(O, Cb, T).
+cb_hit(O, Cb, T, D) :- cb_name(Cb), owner_class(O), ancestor_dist(O, A, D), defines(A, Cb, T).
+cb_hit_any(O, Cb)   :- cb_hit(O, Cb, _, _).
+
+cb_depth(O, Cb, MinD) :- cb_hit(O, Cb, _, D), min(MinD, D).
+cb_target(O, Cb, T, D) :- cb_depth(O, Cb, D), cb_hit(O, Cb, T, D).
+
+cb_ntargets(O, Cb, N) :- cb_target(O, Cb, T, _), count(N, T).
+cb_ambiguous(O, Cb)   :- cb_ntargets(O, Cb, N), le(2, N).
+
+% ---------------------------------------------------------------------------
+% confidence — exactly rails_filters.go's ladder
+% ---------------------------------------------------------------------------
+%   ambiguous (>1 target)        ⇒ partial
+%   depth > 0 or inherited edge  ⇒ inferred
+%   otherwise                    ⇒ static
+filt_conf(C, RF, RL, RK, Cb, "partial") :-
+    effective(C, RF, RL, RK), filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O), cb_ambiguous(O, Cb).
+filt_conf(C, RF, RL, RK, Cb, "inferred") :-
+    effective(C, RF, RL, RK), filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O), not cb_ambiguous(O, Cb),
+    cb_target(O, Cb, _, D), ne(D, 0).
+filt_conf(C, RF, RL, RK, Cb, "inferred") :-
+    effective(C, RF, RL, RK), filter_cb(RF, RL, RK, Cb, _),
+    inherited(C, RF, RL, RK),
+    reg_owner(RF, RL, RK, O), not cb_ambiguous(O, Cb).
+filt_conf(C, RF, RL, RK, Cb, "static") :-
+    effective(C, RF, RL, RK), filter_cb(RF, RL, RK, Cb, _),
+    not inherited(C, RF, RL, RK),
+    reg_owner(RF, RL, RK, O), not cb_ambiguous(O, Cb),
+    cb_target(O, Cb, _, 0).
+
+% ---------------------------------------------------------------------------
+% action domain — public instance methods of a controller class
+% ---------------------------------------------------------------------------
+% Actions are a controller concept: only:/except: scope a filter to some of a
+% class's dispatchable methods, meaningless for an AR instance method or a
+% concern's mixin method, so Go's collectActions is `!isModule` + a
+% /app/controllers/ path gate. Concerns live under /concerns/ and never route.
+concern_file(File) :- node(_, "class", File, _), contains(File, "app/controllers/concerns/").
+
+action(C, A, MId) :-
+    node(C, "class", File, _),
+    contains(File, "app/controllers/"), not concern_file(File),
+    defines(C, A, MId),
+    node_start(MId, ML),
+    pub_method(File, A, ML, 0).
+
+% only:/except: — three disjoint branches, action(C, A) first so A is bound to
+% this class's own methods before the negation.
+reg_has_only(RF, RL, RK)   :- filter_only(RF, RL, RK, _).
+reg_has_except(RF, RL, RK) :- filter_except(RF, RL, RK, _).
+
+applies(C, RF, RL, RK, A) :-
+    effective(C, RF, RL, RK), action(C, A, _),
+    reg_has_only(RF, RL, RK), filter_only(RF, RL, RK, A).
+applies(C, RF, RL, RK, A) :-
+    effective(C, RF, RL, RK), action(C, A, _),
+    reg_has_except(RF, RL, RK), not filter_except(RF, RL, RK, A).
+applies(C, RF, RL, RK, A) :-
+    effective(C, RF, RL, RK), action(C, A, _),
+    not reg_has_only(RF, RL, RK), not reg_has_except(RF, RL, RK).
+
+% per-action retraction by a partial (only:/except:) skip, inherited filters only
+skip_has_only_a(SF, SL, A)   :- skip_only(SF, SL, A).
+action_skipped(C, RF, RL, RK, A) :-
+    inherited(C, RF, RL, RK), action(C, A, _),
+    filter_call(RF, RL, RK, Fam, _, _, _, _),
+    skip_in_force(C, SF, SL), skip_call(SF, SL, Fam),
+    filter_cb(RF, RL, RK, Cb, _), skip_cb(SF, SL, Fam, Cb),
+    skip_has_only(SF, SL), skip_only(SF, SL, A).
+action_skipped(C, RF, RL, RK, A) :-
+    inherited(C, RF, RL, RK), action(C, A, _),
+    filter_call(RF, RL, RK, Fam, _, _, _, _),
+    skip_in_force(C, SF, SL), skip_call(SF, SL, Fam),
+    filter_cb(RF, RL, RK, Cb, _), skip_cb(SF, SL, Fam, Cb),
+    skip_has_except(SF, SL), not skip_except(SF, SL, A).
+
+action_effective(C, RF, RL, RK, A) :-
+    applies(C, RF, RL, RK, A), not action_skipped(C, RF, RL, RK, A).
+
+% ---------------------------------------------------------------------------
+% the two edges
+% ---------------------------------------------------------------------------
+% class scope: what the source literally says (own filters + inherited).
+class_filter(C, T, RK, Cb, Conf, Only, Except, Form, "", Cond) :-
+    effective(C, RF, RL, RK),
+    filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O), cb_target(O, Cb, T, _),
+    filt_conf(C, RF, RL, RK, Cb, Conf),
+    filter_call(RF, RL, RK, _, Form, Only, Except, Cond),
+    not inherited(C, RF, RL, RK).
+class_filter(C, T, RK, Cb, Conf, Only, Except, Form, Owner, Cond) :-
+    effective(C, RF, RL, RK),
+    filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O), cb_target(O, Cb, T, _),
+    filt_conf(C, RF, RL, RK, Cb, Conf),
+    filter_call(RF, RL, RK, _, Form, Only, Except, Cond),
+    inherited(C, RF, RL, RK), node_label(O, Owner).
+
+% action scope: what a request actually runs.
+action_filter(H, T, RK, Cb, A, Conf, Only, Except, Form, "", Cond) :-
+    action_effective(C, RF, RL, RK, A), action(C, A, H),
+    filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O), cb_target(O, Cb, T, _),
+    filt_conf(C, RF, RL, RK, Cb, Conf),
+    filter_call(RF, RL, RK, _, Form, Only, Except, Cond),
+    not inherited(C, RF, RL, RK).
+action_filter(H, T, RK, Cb, A, Conf, Only, Except, Form, Owner, Cond) :-
+    action_effective(C, RF, RL, RK, A), action(C, A, H),
+    filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O), cb_target(O, Cb, T, _),
+    filt_conf(C, RF, RL, RK, Cb, Conf),
+    filter_call(RF, RL, RK, _, Form, Only, Except, Cond),
+    inherited(C, RF, RL, RK), node_label(O, Owner).
+
+% ---------------------------------------------------------------------------
+% the blind-spot ledger (SA "never empty")
+% ---------------------------------------------------------------------------
+filter_miss(Cb, RF, RL, "rails_filter_unresolved") :-
+    filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O),
+    not cb_hit_any(O, Cb).
+filter_miss(Cb, RF, RL, "rails_filter_ambiguous") :-
+    filter_cb(RF, RL, RK, Cb, _),
+    reg_owner(RF, RL, RK, O),
+    cb_ambiguous(O, Cb).
