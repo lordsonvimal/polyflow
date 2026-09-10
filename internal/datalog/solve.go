@@ -388,7 +388,21 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) er
 	if e.recordProv {
 		steps = make([]DerivationStep, 0, len(r.Body))
 	}
-	return e.join(src, r, newRulePatterns(r), 0, &fr, binds, t, steps)
+
+	// Reuse the rule's cached patterns; hand a re-entrant call (a recursive rule
+	// solved top-down) a fresh set so it can't corrupt the outer join's vals (D.4).
+	var rp *rulePatterns
+	if r.patBusy {
+		rp = newRulePatterns(r)
+	} else {
+		if r.pat == nil {
+			r.pat = newRulePatterns(r)
+		}
+		rp = r.pat
+		r.patBusy = true
+		defer func() { r.patBusy = false }()
+	}
+	return e.join(src, r, rp, 0, &fr, binds, t, steps)
 }
 
 func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *frame, binds []*string, t *table, steps []DerivationStep) error {

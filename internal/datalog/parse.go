@@ -48,6 +48,15 @@ type Rule struct {
 	// NVars is the number of distinct variables in the rule — the size of the
 	// binding frame join allocates. assignVars sets it.
 	NVars int
+
+	// pat is the rule's sub-call patterns, cached across evalRule calls (D.4).
+	// The structure is immutable; only vals/head are written during a join and
+	// both are fully overwritten before each read, and evaluation is
+	// single-threaded. patBusy guards the one case the cache is unsafe for —
+	// a recursive rule re-entered top-down while an outer join over it is still
+	// live — by handing the re-entrant call a fresh set instead.
+	pat     *rulePatterns
+	patBusy bool
 }
 
 func (l Literal) arity() int { return len(l.Args) }
