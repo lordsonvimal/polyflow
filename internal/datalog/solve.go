@@ -322,6 +322,44 @@ func newRulePatterns(r *Rule) *rulePatterns {
 	return rp
 }
 
+// litPlan is one body literal's relation resolved once for the life of the rule
+// (docs/datalog-engine-performance-plan.md D.9). `join`, `topDown.litTuples` and
+// `bottomUp.litTuples` all used to classify a literal by string every firing —
+// `e.base[rel]`, `len(e.rules[rel])`, `s.full[rel]` — and `mapaccess_faststr`
+// was ~23% of a bulk pass on keys that never change for a rule.
+//
+// derived (has rules) is stratification-stable; base never moves once Assert
+// creates it. buSrc is the one handle that is mode-specific and mutable: the
+// bottom-up materialized relation to read at every non-delta position. It is
+// primed by evalComponent before its rounds and read only inside that
+// solveBottomUp; the top-down path leaves it nil and never consults it.
+type litPlan struct {
+	rel     string
+	neg     bool
+	derived bool
+	base    *relation // e.base[rel], nil when the relation has no asserted facts
+	buSrc   *relation // bottom-up only: the full materialized relation for this literal
+}
+
+// planBody builds and memoizes r.plan. Idempotent; reset clears it when the
+// classification could have changed.
+func (e *Engine) planBody(r *Rule) []litPlan {
+	if r.plan != nil {
+		return r.plan
+	}
+	p := make([]litPlan, len(r.Body))
+	for i, l := range r.Body {
+		p[i] = litPlan{
+			rel:     l.Rel,
+			neg:     l.Neg,
+			derived: len(e.rules[l.Rel]) > 0,
+			base:    e.base[l.Rel],
+		}
+	}
+	r.plan = p
+	return p
+}
+
 // frame is a rule's binding environment: a variable's value is frame.val[Var]
 // and set records which slots are bound (Var < 64, checked at load). It
 // replaces the `env map[string]string` that evalRule allocated per call and the
@@ -379,10 +417,10 @@ func (e *Engine) evalRule(src bodySource, r *Rule, binds []*string, t *table) er
 		r.patBusy = true
 		defer func() { r.patBusy = false }()
 	}
-	return e.join(src, r, rp, 0, &fr, binds, t, steps)
+	return e.join(src, r, rp, e.planBody(r), 0, &fr, binds, t, steps)
 }
 
-func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *frame, binds []*string, t *table, steps []DerivationStep) error {
+func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan, i int, fr *frame, binds []*string, t *table, steps []DerivationStep) error {
 	if i == len(r.Body) {
 		// Reuse the per-rule scratch head instead of make(Tuple, …) per firing;
 		// record clones it only when the tuple is genuinely new (D.3). The
@@ -417,6 +455,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 	}
 
 	lit := r.Body[i]
+	lp := &plan[i]
 	sub := rp.ptr[i]
 	for k, term := range lit.Args {
 		if !term.IsVar {
@@ -431,18 +470,17 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 	}
 
 	if lit.Neg {
-		found, err := src.negated(lit.Rel, sub)
+		found, err := src.negated(lp, sub)
 		if err != nil {
 			return err
 		}
 		if found {
 			return nil
 		}
-		return e.join(src, r, rp, i+1, fr, binds, t, steps)
+		return e.join(src, r, rp, plan, i+1, fr, binds, t, steps)
 	}
 
-	_, isBase := e.base[lit.Rel]
-	isBase = isBase && len(e.rules[lit.Rel]) == 0
+	isBase := !lp.derived && lp.base != nil
 	rec := e.recordProv
 
 	// Iterate the candidate slice directly instead of handing eachLit a callback.
@@ -451,7 +489,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 	// along with the `joinErr` it closed over — together 58% of this benchmark's
 	// allocation (docs/datalog-engine-performance-plan.md §6.5/§6.6). Pulling the
 	// tuples lets the recursion return its error straight up the stack.
-	tuples, err := src.litTuples(i, lit.Rel, sub)
+	tuples, err := src.litTuples(i, lp, sub)
 	if err != nil {
 		return err
 	}
@@ -484,7 +522,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, i int, fr *fram
 			if rec {
 				next = append(steps, DerivationStep{Relation: lit.Rel, Tuple: tup, Base: isBase})
 			}
-			if e2 := e.join(src, r, rp, i+1, fr, binds, t, next); e2 != nil {
+			if e2 := e.join(src, r, rp, plan, i+1, fr, binds, t, next); e2 != nil {
 				fr.set &^= added
 				return e2
 			}

@@ -40,9 +40,9 @@ type bodySource interface {
 	// Candidates are pre-filtered on at most one bound position (the index bucket
 	// join probed); join re-checks every bound position as it binds, so a
 	// candidate that does not match is simply skipped there.
-	litTuples(pos int, rel string, binds []*string) ([]Tuple, error)
-	// negated decides `not rel(binds)`.
-	negated(rel string, binds []*string) (bool, error)
+	litTuples(pos int, lp *litPlan, binds []*string) ([]Tuple, error)
+	// negated decides `not lp.rel(binds)`.
+	negated(lp *litPlan, binds []*string) (bool, error)
 }
 
 // topDown is the tabled evaluator: a body literal is another subgoal, and a
@@ -52,19 +52,18 @@ type topDown struct {
 	rs *roundState
 }
 
-func (s topDown) litTuples(_ int, rel string, binds []*string) ([]Tuple, error) {
-	if len(s.e.rules[rel]) == 0 {
-		br := s.e.base[rel]
-		if br == nil {
-			return nil, fmt.Errorf("datalog: unknown relation %q", rel)
+func (s topDown) litTuples(_ int, lp *litPlan, binds []*string) ([]Tuple, error) {
+	if !lp.derived {
+		if lp.base == nil {
+			return nil, fmt.Errorf("datalog: unknown relation %q", lp.rel)
 		}
-		return br.selectCands(binds), nil
+		return lp.base.selectCands(binds), nil
 	}
-	return s.e.solve(s.rs, rel, binds)
+	return s.e.solve(s.rs, lp.rel, binds)
 }
 
-func (s topDown) negated(rel string, binds []*string) (bool, error) {
-	return s.e.solveNegated(rel, binds)
+func (s topDown) negated(lp *litPlan, binds []*string) (bool, error) {
+	return s.e.solveNegated(lp.rel, binds)
 }
 
 // bottomUp evaluates against materialized relations. Exactly one body position
@@ -97,14 +96,20 @@ func (s *bottomUp) source(rel string) *relation {
 	return s.e.base[rel]
 }
 
-func (s *bottomUp) litTuples(pos int, rel string, binds []*string) ([]Tuple, error) {
-	src := s.source(rel)
+func (s *bottomUp) litTuples(pos int, lp *litPlan, binds []*string) ([]Tuple, error) {
+	// buSrc is primed by evalComponent for every literal of every rule it runs;
+	// fall back to the string-keyed lookup only if it was not (a base-only
+	// literal that evalComponent still resolves, or a defensive path).
+	src := lp.buSrc
 	if src == nil {
-		return nil, fmt.Errorf("datalog: unknown relation %q", rel)
+		src = s.source(lp.rel)
+	}
+	if src == nil {
+		return nil, fmt.Errorf("datalog: unknown relation %q", lp.rel)
 	}
 	if pos == s.pos {
 		// Semi-naive: this occurrence reads only what the previous round added.
-		src = s.delta[rel]
+		src = s.delta[lp.rel]
 		if src == nil {
 			return nil, nil
 		}
@@ -112,10 +117,11 @@ func (s *bottomUp) litTuples(pos int, rel string, binds []*string) ([]Tuple, err
 	return src.selectCands(binds), nil
 }
 
-func (s *bottomUp) negated(rel string, binds []*string) (bool, error) {
-	if len(s.e.rules[rel]) == 0 {
+func (s *bottomUp) negated(lp *litPlan, binds []*string) (bool, error) {
+	rel := lp.rel
+	if !lp.derived {
 		// Base relation: complete from the moment it was asserted.
-		br := s.e.base[rel]
+		br := lp.base
 		if br == nil {
 			return false, fmt.Errorf("datalog: unknown relation %q", rel)
 		}
@@ -350,6 +356,26 @@ func (e *Engine) evalComponent(bu *bottomUp, rels []string) error {
 			recursive = true
 		}
 		work = append(work, w)
+	}
+
+	// Prime each rule's D.9 body plan with the materialized relation to read at
+	// every non-delta position. bu.full holds every relation in goal's cone by
+	// now — evalComponent's first loop populates it for the current component and
+	// the dependency-first order populated it for every earlier one — so a
+	// derived literal resolves to its full relation and a base-only literal to
+	// its facts. The delta position is still chosen per round via bu.pos.
+	for _, w := range work {
+		plan := e.planBody(w.rule)
+		for i := range plan {
+			lp := &plan[i]
+			if lp.derived {
+				if r, ok := bu.full[lp.rel]; ok {
+					lp.buSrc = r
+					continue
+				}
+			}
+			lp.buSrc = lp.base
+		}
 	}
 
 	// Round 0: every literal reads the full relation.

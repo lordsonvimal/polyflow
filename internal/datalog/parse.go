@@ -57,6 +57,13 @@ type Rule struct {
 	// live — by handing the re-entrant call a fresh set instead.
 	pat     *rulePatterns
 	patBusy bool
+
+	// plan resolves each body literal's relation once — base vs derived, and the
+	// base relation pointer — so join and both bodySources stop hashing lit.Rel
+	// into e.base / e.rules on every firing (docs/datalog-engine-performance-plan.md
+	// D.9). Built lazily by Engine.planBody, cleared by Engine.reset when facts or
+	// rules change.
+	plan []litPlan
 }
 
 func (l Literal) arity() int { return len(l.Args) }

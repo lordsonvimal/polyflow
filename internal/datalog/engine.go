@@ -574,6 +574,11 @@ func (e *Engine) reset() {
 	e.tables = map[sgKey]*table{}
 	e.evalDepth = 0
 	e.grown = 0
+	// New facts or rules can change a literal's base/derived classification, so
+	// the cached body plans (D.9) are no longer trustworthy.
+	for _, r := range e.ruleOrder {
+		r.plan = nil
+	}
 }
 
 func dedupe(in []string) []string {
