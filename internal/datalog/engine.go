@@ -27,10 +27,64 @@
 package datalog
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// interner maps a term string to a small dense integer and back. Tuple keys,
+// subgoal keys and the fixpoint `seen` set all key on the integers instead of
+// on joined strings — string keys were 36% of allocation after P.2
+// (docs/datalog-engine-performance-plan.md §1.2, P.3). The public API stays
+// []string; interning happens at the relation boundary, which is a dozen
+// relations asserted once, not the join.
+type interner struct {
+	ids  map[string]uint32
+	strs []string
+}
+
+func newInterner() *interner { return &interner{ids: make(map[string]uint32)} }
+
+func (in *interner) id(s string) uint32 {
+	if v, ok := in.ids[s]; ok {
+		return v
+	}
+	v := uint32(len(in.strs))
+	in.strs = append(in.strs, s)
+	in.ids[s] = v
+	return v
+}
+
+// tkey is a comparable, allocation-free key for a tuple: the interned symbols
+// packed two-per-uint64. Arity <=4 (every relation this engine sees) packs
+// exactly and cannot collide; a wider tuple spills its tail into ext.
+type tkey struct {
+	lo, hi uint64
+	ext    string
+}
+
+func (in *interner) key(t Tuple) tkey {
+	var k tkey
+	for i, s := range t {
+		id := uint64(in.id(s))
+		switch i {
+		case 0:
+			k.lo |= id << 32
+		case 1:
+			k.lo |= id
+		case 2:
+			k.hi |= id << 32
+		case 3:
+			k.hi |= id
+		default:
+			var b [4]byte
+			binary.LittleEndian.PutUint32(b[:], uint32(id))
+			k.ext += string(b[:])
+		}
+	}
+	return k
+}
 
 // Tuple is one fact. All terms are strings; the emitter types them.
 type Tuple []string
@@ -92,19 +146,20 @@ type relation struct {
 	name   string
 	arity  int
 	tuples []Tuple
-	seen   map[string]bool
+	in     *interner
+	seen   map[tkey]bool
 	idx    []map[string][]Tuple // by argument position, nil until first use
 }
 
-func newRelation(name string, arity int) *relation {
-	return &relation{name: name, arity: arity, seen: map[string]bool{}}
+func newRelation(name string, arity int, in *interner) *relation {
+	return &relation{name: name, arity: arity, in: in, seen: map[tkey]bool{}}
 }
 
 func tupleKey(t Tuple) string { return strings.Join(t, "\x00") }
 
 // add returns true when the tuple was new.
 func (r *relation) add(t Tuple) bool {
-	k := tupleKey(t)
+	k := r.in.key(t)
 	if r.seen[k] {
 		return false
 	}
@@ -113,6 +168,9 @@ func (r *relation) add(t Tuple) bool {
 	r.idx = nil // invalidated; rebuilt on next indexed lookup
 	return true
 }
+
+// has reports whether an exact tuple is present.
+func (r *relation) has(t Tuple) bool { return r.seen[r.in.key(t)] }
 
 // selectCands returns the candidate bucket to scan for a call pattern: the
 // smallest per-argument index bucket among the bound positions, or every tuple
@@ -217,6 +275,59 @@ const (
 	tableComplete
 )
 
+// sgKey identifies a subgoal — a relation name plus its call pattern — as a
+// comparable, allocation-free value. The bound argument symbols are packed
+// like tkey; mask records which of the first four positions are bound (so a
+// bound symbol 0 is not confused with a free slot), and a wider pattern spills
+// its tail into ext. Replaces the strings.Builder key of P.2.
+type sgKey struct {
+	rel    string
+	lo, hi uint64
+	mask   uint8
+	ext    string
+}
+
+func (e *Engine) subgoalKey(rel string, binds []*string) sgKey {
+	k := sgKey{rel: rel}
+	for i, b := range binds {
+		var id uint64
+		bound := b != nil
+		if bound {
+			id = uint64(e.syms.id(*b))
+		}
+		switch i {
+		case 0:
+			k.lo |= id << 32
+			if bound {
+				k.mask |= 1
+			}
+		case 1:
+			k.lo |= id
+			if bound {
+				k.mask |= 2
+			}
+		case 2:
+			k.hi |= id << 32
+			if bound {
+				k.mask |= 4
+			}
+		case 3:
+			k.hi |= id
+			if bound {
+				k.mask |= 8
+			}
+		default:
+			var b [5]byte
+			if bound {
+				b[0] = 1
+				binary.LittleEndian.PutUint32(b[1:], uint32(id))
+			}
+			k.ext += string(b[:])
+		}
+	}
+	return k
+}
+
 // table is the memo for one subgoal: a relation plus its lifecycle state.
 type table struct {
 	rel   *relation
@@ -234,13 +345,14 @@ type Engine struct {
 	ruleOrder []*Rule
 	strata    map[string]int
 
-	tables    map[string]*table
+	syms      *interner
+	tables    map[sgKey]*table
 	evalDepth int   // nested solveComplete calls in flight; 0 => a top-level fixpoint
 	grown     int64 // incremented on every new tuple; the fixpoint signal
 
 	// derivs records every way a tuple was derived, keyed relation+tuple.
 	// Deduped, because a rule re-fires on every fixpoint round.
-	derivs   map[string][]Derivation
+	derivs   map[dgKey][]Derivation
 	derivSet map[string]bool
 
 	loaded bool // rules stratified; set on first Query
@@ -257,10 +369,11 @@ func New(opts Options) *Engine {
 	}
 	return &Engine{
 		opts:     opts.withDefaults(),
+		syms:     newInterner(),
 		base:     map[string]*relation{},
 		rules:    map[string][]*Rule{},
-		tables:   map[string]*table{},
-		derivs:   map[string][]Derivation{},
+		tables:   map[sgKey]*table{},
+		derivs:   map[dgKey][]Derivation{},
 		derivSet: map[string]bool{},
 	}
 }
@@ -283,7 +396,7 @@ func (e *Engine) Assert(rel string, tuples []Tuple) error {
 		if len(tuples) > 0 {
 			arity = len(tuples[0])
 		}
-		r = newRelation(rel, arity)
+		r = newRelation(rel, arity, e.syms)
 		e.base[rel] = r
 	}
 	for _, t := range tuples {
@@ -403,7 +516,7 @@ func (e *Engine) Relations() []Relation {
 }
 
 func (e *Engine) reset() {
-	e.tables = map[string]*table{}
+	e.tables = map[sgKey]*table{}
 	e.evalDepth = 0
 	e.grown = 0
 }

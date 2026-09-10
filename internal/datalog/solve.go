@@ -1,6 +1,7 @@
 package datalog
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
@@ -54,9 +55,9 @@ func (e *Engine) Provenance(goal string, t Tuple) ([]Derivation, error) {
 	if _, err := e.solveComplete(goal, bindsOf(pattern)); err != nil {
 		return nil, err
 	}
-	ds := e.derivs[goal+"\x01"+tupleKey(t)]
+	ds := e.derivs[e.groupKey(goal, t)]
 	if len(ds) == 0 {
-		if _, ok := e.base[goal]; ok && e.base[goal].seen[tupleKey(t)] {
+		if r, ok := e.base[goal]; ok && r.has(t) {
 			// A base fact has no derivation and that is the answer, not a
 			// failure: the walk back stops here.
 			return nil, nil
@@ -105,20 +106,6 @@ func bindsOf(pattern []string) []*string {
 	return binds
 }
 
-func subgoalKey(rel string, binds []*string) string {
-	var sb strings.Builder
-	sb.WriteString(rel)
-	for _, b := range binds {
-		sb.WriteByte('\x01')
-		if b != nil {
-			sb.WriteString(*b)
-		} else {
-			sb.WriteByte('*')
-		}
-	}
-	return sb.String()
-}
-
 // roundState is the per-round memo of one fixpoint: the set of subgoals already
 // evaluated this round, so a subgoal reached twice in one round is not
 // recomputed. It is owned by the solveComplete invocation that created it — a
@@ -127,7 +114,7 @@ func subgoalKey(rel string, binds []*string) string {
 // cross-fixpoint interference, via a shared global counter, was the defect in
 // docs/datalog-engine-performance-plan.md §1.1.
 type roundState struct {
-	seen map[string]bool
+	seen map[sgKey]bool
 }
 
 // solveComplete drives the fixpoint for one subgoal: re-evaluate until a whole
@@ -141,7 +128,7 @@ func (e *Engine) solveComplete(rel string, binds []*string) ([]Tuple, error) {
 	var out []Tuple
 	for i := 0; i < e.opts.MaxRounds; i++ {
 		before := e.grown
-		rs := &roundState{seen: map[string]bool{}}
+		rs := &roundState{seen: map[sgKey]bool{}}
 		var err error
 		out, err = e.solve(rs, rel, binds)
 		if err != nil {
@@ -176,10 +163,10 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 		return baseRel.match(binds), nil
 	}
 
-	key := subgoalKey(rel, binds)
+	key := e.subgoalKey(rel, binds)
 	t := e.tables[key]
 	if t == nil {
-		t = &table{rel: newRelation(rel, len(binds))}
+		t = &table{rel: newRelation(rel, len(binds), e.syms)}
 		e.tables[key] = t
 	}
 	if t.state == tableComplete || t.state == tableProducing || rs.seen[key] {
@@ -212,7 +199,7 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*string) ([]Tuple, er
 		// relation, then filter. Never the default — this is what makes a
 		// closure over a large ancestor set explode.
 		free := make([]*string, len(binds))
-		if subgoalKey(rel, free) != key {
+		if e.subgoalKey(rel, free) != key {
 			all, err := e.solve(rs, rel, free)
 			if err != nil {
 				return nil, err
@@ -266,7 +253,7 @@ func (e *Engine) solveNegated(rel string, binds []*string) (bool, error) {
 		return br.exists(binds), nil
 	}
 	free := make([]*string, len(binds))
-	key := subgoalKey(rel, free)
+	key := e.subgoalKey(rel, free)
 	if t := e.tables[key]; t != nil && t.state == tableComplete {
 		return t.rel.exists(binds), nil
 	}
@@ -452,14 +439,52 @@ func (e *Engine) record(t *table, tup Tuple, d *Derivation) error {
 		}
 	}
 	if d != nil {
-		k := derivKey(*d)
+		k := e.derivKeyFast(*d)
 		if !e.derivSet[k] {
 			e.derivSet[k] = true
-			gk := t.rel.name + "\x01" + tupleKey(tup)
+			gk := e.groupKey(t.rel.name, tup)
 			e.derivs[gk] = append(e.derivs[gk], *d)
 		}
 	}
 	return nil
+}
+
+// dgKey groups derivations by the tuple they explain. Interned, so it costs no
+// string concatenation on the hot path (docs/datalog-engine-performance-plan.md P.3).
+type dgKey struct {
+	rel string
+	k   tkey
+}
+
+func (e *Engine) groupKey(rel string, t Tuple) dgKey { return dgKey{rel: rel, k: e.syms.key(t)} }
+
+// derivKeyFast is the dedup key for a derivation on the hot path: interned
+// symbols packed four bytes each, one allocation for the final string instead
+// of a strings.Join per body tuple. Order is not meaningful here — dedup only —
+// so leaking interning order into it is harmless; the Provenance sort still
+// uses the string-ordered derivKey.
+func (e *Engine) derivKeyFast(d Derivation) string {
+	var sb strings.Builder
+	sb.Grow(4 + 4*len(d.Head) + len(d.Body)*(4+16))
+	e.writeSym(&sb, d.Rule)
+	e.writeSyms(&sb, d.Head)
+	for _, b := range d.Body {
+		e.writeSym(&sb, b.Relation)
+		e.writeSyms(&sb, b.Tuple)
+	}
+	return sb.String()
+}
+
+func (e *Engine) writeSym(sb *strings.Builder, s string) {
+	var b [4]byte
+	binary.LittleEndian.PutUint32(b[:], e.syms.id(s))
+	sb.Write(b[:])
+}
+
+func (e *Engine) writeSyms(sb *strings.Builder, t Tuple) {
+	for _, s := range t {
+		e.writeSym(sb, s)
+	}
 }
 
 func derivKey(d Derivation) string {
