@@ -1,7 +1,9 @@
 package factpipe
 
 import (
+	"path"
 	"sort"
+	"strings"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
@@ -33,6 +35,14 @@ const ancestorDistCap = 32
 //	file_rank(File, N)                   2    distinct node files, lexical order (int atom)
 //	import(File, Package)                2    Snapshot.Imports
 //	resolved(Site, Name, Target, Depth)  4    Snapshot.Resolved (Depth is an int atom)
+//	service_file(Path, Dir, Stem, Ext)   4    Snapshot.Files, path-decomposed (all Str)
+//
+// service_file carries every file in the service, not just those with a node,
+// with its path split into directory / extensionless base / extension so a
+// path-resolution rule (the resolve_path family: rails_views, sprockets_assets,
+// stylesheet_imports, import_edges) can join framework-declared candidate forms
+// against the real file set without path arithmetic in datalog. Path is a Str
+// atom — an asset manifest of nothing but `//= require` lines has no node.
 //
 // ancestor_dist is the transitive closure of "inherits" carrying the minimum
 // hop count from Sub to Anc — a class is at its own distance 0 is NOT emitted;
@@ -235,6 +245,29 @@ func GraphFacts(s graph.Snapshot, fs FactSet) {
 				}
 			}
 			frontier = next
+		}
+	}
+
+	// service_file: sorted + deduped for determinism regardless of how the
+	// caller assembled Snapshot.Files.
+	if len(s.Files) > 0 {
+		sf := append([]string(nil), s.Files...)
+		sort.Strings(sf)
+		seenFile := make(map[string]bool, len(sf))
+		for _, f := range sf {
+			if f == "" || seenFile[f] {
+				continue
+			}
+			seenFile[f] = true
+			dir, base := path.Split(f)
+			dir = strings.TrimSuffix(dir, "/")
+			ext := path.Ext(base)
+			stem := strings.TrimSuffix(base, ext)
+			fs.Add(Fact{
+				Pred:   "service_file",
+				Args:   []Atom{Str(f), Str(dir), Str(stem), Str(ext)},
+				Origin: origin("service_file", f, 0),
+			})
 		}
 	}
 

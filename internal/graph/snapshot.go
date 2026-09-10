@@ -17,6 +17,14 @@ type Snapshot struct {
 	Edges    []Edge
 	Imports  []SnapshotImport
 	Resolved []ResolvedName
+
+	// Files is the service's complete file list (repo-relative paths, matching
+	// Node.File), including files that declare nothing and so have no node — an
+	// all-`//= require` asset manifest, a Sass partial of only `$variables`. The
+	// bridge asserts it as service_file(Path, Dir, Stem, Ext) so a path
+	// resolution rule (the resolve_path family) can probe candidate filenames
+	// against the real file set. May be nil, in which case service_file is empty.
+	Files []string
 }
 
 // SnapshotImport is one `import(File, Package)` base fact: a source file and a

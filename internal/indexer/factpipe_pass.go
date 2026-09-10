@@ -50,7 +50,9 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 
 		// Test-harness nodes (a spec's DummyController) are excluded, matching
 		// the hand-written link passes' n.Meta[graph.MetaIsTest] skip.
-		snap := graph.Snapshot{}
+		// Files is the whole service tree (asset resolution needs vendored +
+		// declare-nothing files), not just the parsed subset.
+		snap := graph.Snapshot{Files: sf.files}
 		realNode := make(map[string]bool)
 		for i := range st.enrichedNodes {
 			n := &st.enrichedNodes[i]

@@ -28,6 +28,12 @@ func fixtureSnapshot() graph.Snapshot {
 			// contains from a non-class parent must NOT produce defines
 			{ID: "e6", From: "svc\x00ctrl.rb:5", To: "svc\x00base.rb:3", Type: graph.EdgeTypeContains},
 		},
+		Files: []string{
+			"app/assets/javascripts/application.js",
+			"ctrl.rb",
+			"app/assets/stylesheets/_colors.scss",
+			"ctrl.rb", // duplicate: deduped
+		},
 		Imports: []graph.SnapshotImport{{File: "ctrl.rb", Package: "devise"}},
 		Resolved: []graph.ResolvedName{
 			{Site: "svc\x00ctrl.rb:5", Name: "authenticate", Target: "svc\x00base.rb:3", Depth: 1},
@@ -67,6 +73,28 @@ func TestGraphFactsCounts(t *testing.T) {
 	for pred, n := range want {
 		if got := len(byPred(fs, pred)); got != n {
 			t.Errorf("%s: %d facts, want %d", pred, got, n)
+		}
+	}
+}
+
+func TestGraphFactsServiceFile(t *testing.T) {
+	fs := NewFactSet()
+	GraphFacts(fixtureSnapshot(), fs)
+	got := byPred(fs, "service_file")
+	if len(got) != 3 {
+		t.Fatalf("service_file: %d facts, want 3 (deduped)", len(got))
+	}
+	// sorted by Path
+	want := [][4]string{
+		{"app/assets/javascripts/application.js", "app/assets/javascripts", "application", ".js"},
+		{"app/assets/stylesheets/_colors.scss", "app/assets/stylesheets", "_colors", ".scss"},
+		{"ctrl.rb", "", "ctrl", ".rb"},
+	}
+	for i, w := range want {
+		for j := 0; j < 4; j++ {
+			if got[i].Args[j].Kind != AtomStr || got[i].Args[j].Str != w[j] {
+				t.Errorf("service_file[%d].Args[%d] = %v, want Str %q", i, j, got[i].Args[j], w[j])
+			}
 		}
 	}
 }
