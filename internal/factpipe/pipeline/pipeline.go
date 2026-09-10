@@ -85,6 +85,7 @@ type Framework struct {
 	Patterns *patterns.PatternFile
 	Rules    *datalog.Program
 	Emits    []factpipe.CompiledEmit
+	Resolves []factpipe.CompiledResolve
 
 	goals []string // the emit relations, materialized by Eval
 }
@@ -164,6 +165,17 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		return nil, fmt.Errorf("factpipe: pattern %s: %w", yamlPath, err)
 	}
 
+	var rdoc struct {
+		Resolve []factpipe.ResolveSpec `yaml:"resolve"`
+	}
+	if err := yaml.Unmarshal(ydata, &rdoc); err != nil {
+		return nil, fmt.Errorf("factpipe: pattern %s resolve: %w", yamlPath, err)
+	}
+	resolves, err := factpipe.CompileResolveSpecs(rdoc.Resolve)
+	if err != nil {
+		return nil, fmt.Errorf("factpipe: pattern %s: %w", yamlPath, err)
+	}
+
 	rdata, err := fs.ReadFile(ruleFS, dlPath)
 	if err != nil {
 		return nil, err
@@ -193,6 +205,7 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		Patterns: &pf,
 		Rules:    prog,
 		Emits:    emits,
+		Resolves: resolves,
 		goals:    goals,
 	}, nil
 }
@@ -254,6 +267,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		if err := extractFramework(fw, files, fset); err != nil {
 			return Result{}, fmt.Errorf("factpipe: framework %s: %w", fw.Name, err)
 		}
+		factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 
 		fr := factRelations(fw, fset)
 		derived, prov, err := fw.Rules.Eval(fr)
@@ -360,6 +374,7 @@ func (fw *Framework) EvalOnce(files []ParsedFile, graphSoFar graph.Snapshot, ext
 	if err := extractFramework(fw, files, fset); err != nil {
 		return nil, err
 	}
+	factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 	fr := factRelations(fw, fset)
 	fr.Goals = append(append([]string(nil), fr.Goals...), extraGoals...)
 	derived, _, err := fw.Rules.Eval(fr)
