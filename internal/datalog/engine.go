@@ -207,13 +207,26 @@ func (o Options) withDefaults() Options {
 // index matters: without it every join degrades to a full scan, and the pass
 // this tier replaces is a closure over thousands of classes.
 type relation struct {
-	name   string
-	arity  int
+	name  string
+	arity int
+	// tuples holds one itup view per row. FX.4: the views are subslices of the
+	// fixed-capacity blocks in `chunks`, not individually heap-allocated buffers —
+	// a fixpoint round that adds N tuples used to be N allocations of arity*4 B
+	// each (the GC floor D.5/D.6/D.11/D.13 kept hitting), now it is one block per
+	// chunkRows rows. The view still never moves: a block is never grown past its
+	// capacity, so `idx` buckets, `deltaRelation` subslices and borrowed scan
+	// results stay valid for the life of the relation.
 	tuples []itup
+	chunks [][]uint32
 	in     *interner
 	seen   map[tkey]bool
 	idx    []map[uint32][]itup // by argument position, nil until first use
 }
+
+// chunkRows is how many rows one storage block holds. A block's capacity is
+// fixed at allocation (chunkRows * arity) and append never exceeds it, so the
+// backing array never moves.
+const chunkRows = 512
 
 func newRelation(name string, arity int, in *interner) *relation {
 	return &relation{name: name, arity: arity, in: in, seen: map[tkey]bool{}}
@@ -232,8 +245,9 @@ func (r *relation) add(t itup) bool {
 	// caller may hand us a scratch buffer it reuses per rule firing — join builds
 	// the head tuple into rulePatterns.head — so a tuple that is genuinely new is
 	// cloned here, at the one point it starts being retained, and a re-derived
-	// one costs nothing.
-	stored := append(itup(nil), t...)
+	// one costs nothing. FX.4: the clone lands in a shared fixed-capacity block
+	// rather than its own allocation.
+	stored := r.alloc(t)
 	r.tuples = append(r.tuples, stored)
 	if r.idx != nil {
 		// The index is only ever added to — relations are monotone within a run —
@@ -244,6 +258,37 @@ func (r *relation) add(t itup) bool {
 		r.indexTuple(stored)
 	}
 	return true
+}
+
+// alloc copies t into the current storage block, opening a new one when the
+// current block is full (or none exists yet). The returned view is a
+// full-slice-expression subslice, so appending to it can never scribble into the
+// next row.
+func (r *relation) alloc(t itup) itup {
+	w := r.arity
+	if w < 1 {
+		w = 1
+	}
+	last := len(r.chunks) - 1
+	if last < 0 || len(r.chunks[last])+r.arity > cap(r.chunks[last]) {
+		// Grow the block size with the relation, capped at chunkRows: a relation
+		// that stays tiny (most derived relations in a rule file) never grabs an
+		// 8 KB block, one that fills to thousands settles on full blocks.
+		rows := len(r.tuples)
+		if rows < 64 {
+			rows = 64
+		}
+		if rows > chunkRows {
+			rows = chunkRows
+		}
+		r.chunks = append(r.chunks, make([]uint32, 0, rows*w))
+		last++
+	}
+	c := r.chunks[last]
+	start := len(c)
+	c = append(c, t...)
+	r.chunks[last] = c
+	return c[start : start+r.arity : start+r.arity]
 }
 
 // reserve grows the tuple slice's capacity and, while it is still empty,
