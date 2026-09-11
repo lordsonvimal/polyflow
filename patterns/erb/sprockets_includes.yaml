@@ -1,0 +1,78 @@
+# ERB page -> asset-manifest include tags (Tier FX FX.8, resolve_path
+# step 4). Replaces the include-tag half of
+# internal/linker/sprockets_assets.go (linkIncludeTags) +
+# internal/sprockets.ScanIncludeTags: a `javascript_include_tag`/
+# `stylesheet_link_tag` call in a view/layout becomes an `imports` edge to the
+# manifest(s) it names, via call_ref (resolve_path step 3) + resolve_path
+# (steps 1-2).
+#
+# The two helpers are split into separate facts/resolve pairs because each
+# resolves against its own asset-pipeline extension/root precedence — a bare
+# "application" is application.js for javascript_include_tag and
+# application.scss for stylesheet_link_tag in the same app — and
+# resolve_path's roots/extensions are per-block YAML knobs, not per-row data.
+# A call whose argument isn't a string literal (`javascript_include_tag
+# @bundle`) reads as its raw expression text, which resolve_path then simply
+# never resolves — same ledger idiom as the retired Go pass's Dynamic flag.
+#
+# `<%# ... %>` is a comment_directive node, a different type than
+# output_directive, so a commented-out helper call is never matched — no
+# hand-rolled `<%#` skip needed (see internal/patterns/erb_call_ref_test.go).
+language: erb
+version: "1"
+package: sprockets
+
+patterns:
+  - name: asset_ref
+    query: |
+      (output_directive (code) @code) @tag
+    facts:
+      - pred: erb_js_include
+        args:
+          file: { extract: file }
+          line: { capture: tag, extract: line }
+          spec: { capture: code, extract: "call_ref(spec,javascript_include_tag)" }
+      - pred: erb_css_include
+        args:
+          file: { extract: file }
+          line: { capture: tag, extract: line }
+          spec: { capture: code, extract: "call_ref(spec,stylesheet_link_tag)" }
+
+resolve:
+  - relation: erb_js_target
+    from: erb_js_include
+    own_dir_first: true
+    roots:
+      - app/assets/javascripts
+      - vendor/assets/javascripts
+      - lib/assets/javascripts
+    extensions: [".js", ".es6", ".js.es6", ".js.erb", ".coffee"]
+
+  - relation: erb_css_target
+    from: erb_css_include
+    own_dir_first: true
+    roots:
+      - app/assets/stylesheets
+      - vendor/assets/stylesheets
+      - lib/assets/stylesheets
+    extensions: [".css", ".scss", ".sass", ".css.erb"]
+
+emit:
+  - relation: erb_include_edge
+    columns: [From, To, Helper, Spec]
+    edge:
+      from: { arg: From }
+      to: { arg: To }
+      type: imports
+      label: { template: "{Helper} {Spec}" }
+    meta: { helper: { arg: Helper }, logical_path: { arg: Spec }, mechanism: include_tag }
+    confidence:
+      - { else: static }
+    dedup: [from, to, label]
+
+  - relation: erb_include_unresolved
+    columns: [File, Line, Helper, Spec]
+    edge: { from: { arg: File }, to: { arg: File }, type: imports }
+    unresolved:
+      when: "1 == 1"
+      ref: { file: { arg: File }, line: { arg: Line }, name: { arg: Spec }, kind: sprockets_include_unresolved }

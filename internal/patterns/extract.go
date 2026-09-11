@@ -336,8 +336,8 @@ type headerDirective struct {
 	line            int64
 }
 
-// scanHeaderDirectives reads root's leading run of `comment` siblings and
-// returns every `= verb path [ext]` line inside them whose verb is in the
+// scanHeaderDirectives reads a leading run of `comment` siblings and returns
+// every `= verb path [ext]` line inside them whose verb is in the
 // comma-listed allow set. Blank lines between comments aren't nodes, so they
 // never break the run; the first non-comment named child does, which is
 // Sprockets' own rule — a `//=` line in a file's body is not a directive,
@@ -345,19 +345,33 @@ type headerDirective struct {
 // tree-sitter-native reading of what internal/sprockets.ScanDirectives does
 // by hand-walking source text a line at a time (FX.8 resolve_path step 3b,
 // the JS/CSS half of step 3).
-func scanHeaderDirectives(root *sitter.Node, allowCSV string, src []byte) []headerDirective {
+//
+// n is either the file's root (program) node — the run starts at its first
+// named child — or a comment node directly, which lets a pattern query
+// anchor its capture on the first comment itself (`(program . (comment)
+// @root)`), so a file with no leading comment produces zero query matches
+// instead of one query match with zero directives. Both shapes are common:
+// the whole-root form is what a bare `(program) @root` capture (and every
+// existing test) hands in; the anchored form is what
+// patterns/javascript/sprockets_directives.yaml's fixture-harness-compatible
+// query uses (internal/patterns/fixtures_test.go requires a negative fixture
+// to produce zero matches, which a query that always matches the file root
+// cannot do).
+func scanHeaderDirectives(n *sitter.Node, allowCSV string, src []byte) []headerDirective {
 	allow := map[string]bool{}
 	for _, v := range strings.Split(allowCSV, ",") {
 		if v = strings.TrimSpace(v); v != "" {
 			allow[v] = true
 		}
 	}
+	var first *sitter.Node
+	if n.Type() == "comment" {
+		first = n
+	} else if n.NamedChildCount() > 0 {
+		first = n.NamedChild(0)
+	}
 	var out []headerDirective
-	for i := 0; i < int(root.NamedChildCount()); i++ {
-		c := root.NamedChild(i)
-		if c.Type() != "comment" {
-			break
-		}
+	for c := first; c != nil && c.Type() == "comment"; c = c.NextNamedSibling() {
 		text := c.Content(src)
 		startLine := int(c.StartPoint().Row) + 1
 		block := strings.HasPrefix(text, "/*")

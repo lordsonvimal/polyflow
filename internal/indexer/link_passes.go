@@ -1336,26 +1336,14 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			return nil
 		}},
 		// Tier K.3: Rails asset pipeline — `//= require` directives plus the
-		// `javascript_include_tag` page bindings that sit on top of them.
-		{"sprockets_assets", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			assetNodes, assetEdges, assetUnresolved := linker.LinkSprocketsAssets(st.allNodes, svcFiles)
-			for i := range assetNodes {
-				n := assetNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
-				}
-				st.allNodes = append(st.allNodes, n)
-			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			if err := st.writeEdges(assetEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, assetUnresolved...)
-			return nil
-		}},
+		// `javascript_include_tag` page bindings that sit on top of them — is
+		// Tier FX FX.8 (resolve_path step 4): patterns/javascript/
+		// sprockets_directives.yaml + rules/javascript/sprockets_directives.dl
+		// (the header-directive half) and patterns/erb/sprockets_includes.yaml
+		// + rules/erb/sprockets_includes.dl (the include-tag half), both run by
+		// the factpipe_frameworks pass below. Replaces
+		// internal/linker/sprockets_assets.go + internal/sprockets.
+		//
 		// Tier K.2: Rails view layer — partial nesting, the controller→template
 		// convention, and the react_component mount seam.
 		{"rails_views", scopeSameServiceOnly, func() error {

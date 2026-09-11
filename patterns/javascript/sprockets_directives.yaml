@@ -1,0 +1,141 @@
+# Sprockets asset-manifest header directives (Tier FX FX.8, resolve_path
+# step 4). Replaces the header-directive half of
+# internal/linker/sprockets_assets.go + internal/sprockets.ScanDirectives: a
+# `//= require "x"` / `//= require_tree .` line in a JS asset manifest's
+# leading comment block becomes an `imports` edge to the file(s) it names,
+# using the header_directive primitive (resolve_path step 3b) + resolve_path
+# (steps 1-2) for path resolution.
+#
+# Three directive shapes, three facts/resolve pairs:
+#   sprockets_require        single-file verbs (require, link, depend_on,
+#                             depend_on_asset) -> resolve_path (file lookup)
+#   sprockets_require_tree   recursive directory verbs (require_tree,
+#                             link_tree) -> resolve_path (dir: true, recursive)
+#   sprockets_require_dir    flat directory verbs (require_directory,
+#                             link_directory) -> resolve_path (dir: true)
+#
+# `link`/`depend_on`/`depend_on_asset` are folded into the same single-file
+# relation as `require`: Sprockets treats all four as "this asset needs that
+# one" for graph purposes — the runtime difference (reordering vs adding a
+# non-executed dependency) is invisible to a static import graph, same as the
+# retired Go pass.
+#
+# Fact arg order is (file, line, spec, verb) / (file, line, spec, ext, verb) —
+# spec at index 2 (and ext at index 3 for the directory shapes) is the
+# resolve_path primitive's fixed input layout; verb rides along as a trailing
+# column the .dl rejoins by (File, Line, Spec) to label the edge.
+#
+# Scope: `.es6`/`.coffee` manifests are out — no grammar is wired for them
+# (patternLangForFile only recognises .js/.mjs/.cjs/.jsx/.ts/.tsx). CSS/SCSS
+# directives are out too — no CSS grammar exists anywhere in this repo's
+# dependency tree. Both are documented gaps (see docs/factpipe-vocabulary.md's
+# resolve_path step 3b note), not silently dropped.
+#
+# Roots are the conventional Sprockets asset trees (app/vendor/lib × assets/
+# {javascripts,stylesheets,images}). The retired Go pass discovered load roots
+# dynamically — every immediate subdirectory of app/assets, not just the
+# conventional names — so a manifest requiring a non-conventionally-named
+# subdirectory (`//= require utility/common` where `utility` isn't
+# `javascripts`/`stylesheets`/`images`) will not resolve here. Deferred, not
+# dropped: resolve_path's `roots:` is a static YAML list, not a data-driven
+# directory scan; that would be its own primitive extension.
+language: javascript
+version: "1"
+package: sprockets
+
+patterns:
+  - name: header
+    # Anchored on the file's first named child being a comment, so a file with
+    # no leading comment produces zero query matches (the fixture harness's
+    # no-false-positives gate needs this, not just "zero directives found") —
+    # a bare `(program) @root` matches every file unconditionally. The capture
+    # is underscore-prefixed (`@_root`, positional-only) rather than `@root`
+    # because the shared comment-capture repair in matcher.go
+    # (repairCommentCaptures) drops any match whose *named* capture still
+    # binds a comment node after repair — by design, for the anchored-argument
+    # patterns it exists to protect — so a plain `@root` here would be
+    # silently dropped on every match. Args below omit `capture:` and so
+    # default to the match's anchor node, which is set from the first capture
+    # regardless of its underscore prefix.
+    query: |
+      (program . (comment) @_root)
+    facts:
+      - pred: sprockets_require
+        args:
+          file: { extract: file }
+          line: { extract: "header_directive(line,require,link,depend_on,depend_on_asset)" }
+          spec: { extract: "header_directive(path,require,link,depend_on,depend_on_asset)" }
+          verb: { extract: "header_directive(verb,require,link,depend_on,depend_on_asset)" }
+      - pred: sprockets_require_tree
+        args:
+          file: { extract: file }
+          line: { extract: "header_directive(line,require_tree,link_tree)" }
+          spec: { extract: "header_directive(path,require_tree,link_tree)" }
+          ext:  { extract: "header_directive(ext,require_tree,link_tree)" }
+          verb: { extract: "header_directive(verb,require_tree,link_tree)" }
+      - pred: sprockets_require_dir
+        args:
+          file: { extract: file }
+          line: { extract: "header_directive(line,require_directory,link_directory)" }
+          spec: { extract: "header_directive(path,require_directory,link_directory)" }
+          ext:  { extract: "header_directive(ext,require_directory,link_directory)" }
+          verb: { extract: "header_directive(verb,require_directory,link_directory)" }
+
+resolve:
+  - relation: sprockets_require_target
+    from: sprockets_require
+    own_dir_first: true
+    roots:
+      - app/assets/javascripts
+      - app/assets/stylesheets
+      - app/assets/images
+      - vendor/assets/javascripts
+      - vendor/assets/stylesheets
+      - lib/assets/javascripts
+      - lib/assets/stylesheets
+    extensions: [".js", ".es6", ".js.es6", ".js.erb", ".coffee", ".css", ".scss", ".sass", ".css.erb"]
+
+  - relation: sprockets_require_tree_target
+    from: sprockets_require_tree
+    dir: true
+    recursive: true
+    own_dir_first: true
+    roots:
+      - app/assets/javascripts
+      - app/assets/stylesheets
+      - vendor/assets/javascripts
+      - vendor/assets/stylesheets
+      - lib/assets/javascripts
+      - lib/assets/stylesheets
+
+  - relation: sprockets_require_dir_target
+    from: sprockets_require_dir
+    dir: true
+    own_dir_first: true
+    roots:
+      - app/assets/javascripts
+      - app/assets/stylesheets
+      - vendor/assets/javascripts
+      - vendor/assets/stylesheets
+      - lib/assets/javascripts
+      - lib/assets/stylesheets
+
+emit:
+  - relation: sprockets_edge
+    columns: [From, To, Verb, Spec]
+    edge:
+      from: { arg: From }
+      to: { arg: To }
+      type: imports
+      label: { template: "//= {Verb} {Spec}" }
+    meta: { directive: { arg: Verb }, logical_path: { arg: Spec }, mechanism: sprockets }
+    confidence:
+      - { else: static }
+    dedup: [from, to, label]
+
+  - relation: sprockets_unresolved
+    columns: [File, Line, Verb, Spec]
+    edge: { from: { arg: File }, to: { arg: File }, type: imports }
+    unresolved:
+      when: "1 == 1"
+      ref: { file: { arg: File }, line: { arg: Line }, name: { arg: Spec }, kind: sprockets_require_unresolved }

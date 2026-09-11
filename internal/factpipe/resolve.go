@@ -39,6 +39,16 @@ import (
 //	    extensions: [".scss", ".css"]
 //	    partial_prefix: "_"            # also try _<base> in the same directory
 //	    index_files: ["index"]         # a bare directory ref -> <dir>/index<ext>
+//
+// `dir: true` switches from file lookup to directory-fanout resolution
+// (Sprockets' `require_tree`/`require_directory`): the input relation's arg 3
+// is an optional extension filter, spec names a directory rather than a file,
+// and a hit produces one output row per file the winning candidate directory
+// contains — `recursive: true` walks subdirectories (require_tree), false
+// stops at immediate children (require_directory). Sprockets' own rule (the
+// first load path holding *any* matching file wins, matching the plain file
+// mode's first-candidate-wins precedence) is why this is still one candidate
+// walk, just over directory contents instead of an exact name.
 type ResolveSpec struct {
 	Relation      string   `yaml:"relation"`
 	From          string   `yaml:"from"`
@@ -47,6 +57,8 @@ type ResolveSpec struct {
 	PartialPrefix string   `yaml:"partial_prefix"`
 	IndexFiles    []string `yaml:"index_files"`
 	OwnDirFirst   bool     `yaml:"own_dir_first"`
+	Dir           bool     `yaml:"dir"`
+	Recursive     bool     `yaml:"recursive"`
 }
 
 // CompiledResolve is a validated ResolveSpec.
@@ -156,6 +168,78 @@ func (r CompiledResolve) resolve(fromFile, spec string, rank map[string]int) (ta
 	return "", 0, false
 }
 
+// dirCandidates lists the directories spec could name, most-preferred first
+// (own directory before roots, root order otherwise) — the directory-fanout
+// sibling of candidates(), with no extension trial since a directory has none.
+func (r CompiledResolve) dirCandidates(fromFile, spec string) []string {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, anchor := range r.anchors(fromFile) {
+		p := path.Clean(path.Join(anchor, spec))
+		if p == "/" || strings.HasPrefix(p, "../") {
+			continue
+		}
+		p = strings.TrimPrefix(p, "/")
+		if p == "." {
+			p = ""
+		}
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// resolveDir walks dirCandidates in order and returns every file the first
+// matching directory contains (respecting Recursive and an optional ext
+// filter), mirroring Sprockets' "first load path holding the directory wins"
+// rule — the same precedence resolve() applies to a single file, just tested
+// against a directory's contents instead of one exact name.
+func (r CompiledResolve) resolveDir(fromFile, spec, ext string, files []string) ([]string, bool) {
+	for _, c := range r.dirCandidates(fromFile, spec) {
+		var out []string
+		for _, f := range files {
+			if f == "" || f == fromFile {
+				continue
+			}
+			if !underResolvedDir(f, c, r.spec.Recursive) {
+				continue
+			}
+			if ext != "" && !strings.EqualFold(path.Ext(f), ext) {
+				continue
+			}
+			out = append(out, f)
+		}
+		if len(out) > 0 {
+			sort.Strings(out)
+			return out, true
+		}
+	}
+	return nil, false
+}
+
+// underResolvedDir reports whether file sits under dir — immediately (dir ==
+// path.Dir(file)) or, when recursive, anywhere beneath it. dir == "" is the
+// repo root.
+func underResolvedDir(file, dir string, recursive bool) bool {
+	if recursive {
+		if dir == "" {
+			return true
+		}
+		return strings.HasPrefix(file, dir+"/")
+	}
+	if dir == "" {
+		return path.Dir(file) == "."
+	}
+	return path.Dir(file) == dir
+}
+
 // ApplyResolves runs every `resolve:` block against the facts already in fs
 // (its input relation, produced by extract or the bridge) and the service file
 // list, adding one Target fact per resolved reference. It is a no-op when the
@@ -174,19 +258,35 @@ func ApplyResolves(rs []CompiledResolve, files []string, fs FactSet) {
 				continue
 			}
 			fromFile, spec := f.Args[0].Str, f.Args[2].Str
+			origin := Origin{Kind: OriginPrimitive, File: fromFile, Line: int(f.Args[1].Int), Pattern: r.Relation()}
+
+			if r.spec.Dir {
+				ext := ""
+				if len(f.Args) > 3 {
+					ext = f.Args[3].Str
+				}
+				targets, ok := r.resolveDir(fromFile, spec, ext, files)
+				if !ok {
+					continue
+				}
+				for _, t := range targets {
+					fs.Add(Fact{
+						Pred:   r.Relation(),
+						Args:   []Atom{f.Args[0], f.Args[1], Str(spec), Str(t), Int(int64(rank[t]))},
+						Origin: origin,
+					})
+				}
+				continue
+			}
+
 			target, rk, ok := r.resolve(fromFile, spec, rank)
 			if !ok {
 				continue
 			}
 			fs.Add(Fact{
-				Pred: r.Relation(),
-				Args: []Atom{f.Args[0], f.Args[1], Str(spec), Str(target), Int(int64(rk))},
-				Origin: Origin{
-					Kind:    OriginPrimitive,
-					File:    fromFile,
-					Line:    int(f.Args[1].Int),
-					Pattern: r.Relation(),
-				},
+				Pred:   r.Relation(),
+				Args:   []Atom{f.Args[0], f.Args[1], Str(spec), Str(target), Int(int64(rk))},
+				Origin: origin,
 			})
 		}
 	}

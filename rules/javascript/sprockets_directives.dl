@@ -1,0 +1,52 @@
+% Sprockets asset-manifest header directives -> imports edges.
+% Tier FX FX.8 resolve_path step 4. Replaces the header-directive half of
+% internal/linker/sprockets_assets.go (linkAssetDirectives) +
+% internal/sprockets.ScanDirectives.
+%
+% Stage-1 facts (patterns/javascript/sprockets_directives.yaml):
+%   sprockets_require(File, Line, Spec, Verb)              single-file verbs
+%   sprockets_require_tree(File, Line, Spec, Ext, Verb)     recursive dir verbs
+%   sprockets_require_dir(File, Line, Spec, Ext, Verb)      flat dir verbs
+%
+% Stage-2 resolve_path (steps 1-3) turns each into a *_target relation of
+% (File, Line, Spec, Target, Rank) / one row per file for the directory
+% shapes. This rule set's only job is rejoining Verb (dropped by resolve_path,
+% which only carries File/Line/Spec/Target/Rank) and mapping File/Target paths
+% to node IDs via the FX.1 bridge's node relation.
+%
+% Bridge (FX.1): node.
+
+file_node(Path, Id) :- node(Id, "file", Path, _).
+
+req_edge(From, To, Verb, Spec) :-
+    sprockets_require(File, Line, Spec, Verb),
+    sprockets_require_target(File, Line, Spec, Target, _),
+    file_node(File, From), file_node(Target, To).
+
+tree_edge(From, To, Verb, Spec) :-
+    sprockets_require_tree(File, Line, Spec, Ext, Verb),
+    sprockets_require_tree_target(File, Line, Spec, Target, _),
+    file_node(File, From), file_node(Target, To).
+
+dir_edge(From, To, Verb, Spec) :-
+    sprockets_require_dir(File, Line, Spec, Ext, Verb),
+    sprockets_require_dir_target(File, Line, Spec, Target, _),
+    file_node(File, From), file_node(Target, To).
+
+sprockets_edge(From, To, Verb, Spec) :- req_edge(From, To, Verb, Spec).
+sprockets_edge(From, To, Verb, Spec) :- tree_edge(From, To, Verb, Spec).
+sprockets_edge(From, To, Verb, Spec) :- dir_edge(From, To, Verb, Spec).
+
+% ---------------------------------------------------------------------------
+% blind-spot ledger — a directive whose spec resolved to nothing.
+% ---------------------------------------------------------------------------
+req_hit(File, Line, Spec)  :- sprockets_require_target(File, Line, Spec, _, _).
+tree_hit(File, Line, Spec) :- sprockets_require_tree_target(File, Line, Spec, _, _).
+dir_hit(File, Line, Spec)  :- sprockets_require_dir_target(File, Line, Spec, _, _).
+
+sprockets_unresolved(File, Line, Verb, Spec) :-
+    sprockets_require(File, Line, Spec, Verb), not req_hit(File, Line, Spec).
+sprockets_unresolved(File, Line, Verb, Spec) :-
+    sprockets_require_tree(File, Line, Spec, Ext, Verb), not tree_hit(File, Line, Spec).
+sprockets_unresolved(File, Line, Verb, Spec) :-
+    sprockets_require_dir(File, Line, Spec, Ext, Verb), not dir_hit(File, Line, Spec).

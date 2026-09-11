@@ -1,0 +1,40 @@
+% ERB page -> asset-manifest include tags -> imports edges.
+% Tier FX FX.8 resolve_path step 4. Replaces the include-tag half of
+% internal/linker/sprockets_assets.go (linkIncludeTags) +
+% internal/sprockets.ScanIncludeTags.
+%
+% Stage-1 facts (patterns/erb/sprockets_includes.yaml):
+%   erb_js_include(File, Line, Spec)   javascript_include_tag call sources
+%   erb_css_include(File, Line, Spec)  stylesheet_link_tag call sources
+%
+% Stage-2 resolve_path turns each into a *_target relation of
+% (File, Line, Spec, Target, Rank). This rule set maps File/Target paths to
+% node IDs via the FX.1 bridge's node relation and tags the edge with which
+% helper produced it (a literal here, not rejoined — each relation is
+% single-helper by construction).
+%
+% Bridge (FX.1): node.
+
+file_node(Path, Id) :- node(Id, "file", Path, _).
+
+js_edge(From, To, "javascript_include_tag", Spec) :-
+    erb_js_target(File, Line, Spec, Target, _),
+    file_node(File, From), file_node(Target, To).
+
+css_edge(From, To, "stylesheet_link_tag", Spec) :-
+    erb_css_target(File, Line, Spec, Target, _),
+    file_node(File, From), file_node(Target, To).
+
+erb_include_edge(From, To, Helper, Spec) :- js_edge(From, To, Helper, Spec).
+erb_include_edge(From, To, Helper, Spec) :- css_edge(From, To, Helper, Spec).
+
+% ---------------------------------------------------------------------------
+% blind-spot ledger — an include-tag source that resolved to nothing.
+% ---------------------------------------------------------------------------
+js_hit(File, Line, Spec)  :- erb_js_target(File, Line, Spec, _, _).
+css_hit(File, Line, Spec) :- erb_css_target(File, Line, Spec, _, _).
+
+erb_include_unresolved(File, Line, "javascript_include_tag", Spec) :-
+    erb_js_include(File, Line, Spec), not js_hit(File, Line, Spec).
+erb_include_unresolved(File, Line, "stylesheet_link_tag", Spec) :-
+    erb_css_include(File, Line, Spec), not css_hit(File, Line, Spec).

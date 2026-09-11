@@ -40,7 +40,7 @@ func newFileNodeIndex(nodes []graph.Node) *fileNodeIndex {
 // ensure returns the file node ID for service/file, minting the node and its
 // service→file contains edge when containment did not.
 func (x *fileNodeIndex) ensure(service, file string) string {
-	// Callers here (rails_views.go, sprockets_assets.go, stylesheet_imports.go)
+	// Callers here (rails_views.go, stylesheet_imports.go)
 	// source `file` from the indexer's raw absolute file-walk list (needed for
 	// their own os.ReadFile calls), unlike the parser-minted nodes already in
 	// `nodes` — those carry the cwd-relative convention (see

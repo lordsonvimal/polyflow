@@ -159,3 +159,116 @@ func TestApplyResolvesNoBlockIsNoop(t *testing.T) {
 		t.Errorf("Len = %d, want 1 (no resolve block ⇒ inert)", fs.Len())
 	}
 }
+
+// --- dir mode (Sprockets require_tree / require_directory) ---------------
+
+func treeResolve() CompiledResolve {
+	return CompiledResolve{spec: ResolveSpec{
+		Relation:    "sprockets_tree_target",
+		From:        "sprockets_tree_ref",
+		Dir:         true,
+		Recursive:   true,
+		OwnDirFirst: true,
+		Roots:       []string{"app/assets/javascripts"},
+	}}
+}
+
+func dirResolve() CompiledResolve {
+	return CompiledResolve{spec: ResolveSpec{
+		Relation:    "sprockets_dir_target",
+		From:        "sprockets_dir_ref",
+		Dir:         true,
+		OwnDirFirst: true,
+		Roots:       []string{"app/assets/javascripts"},
+	}}
+}
+
+func TestDirCandidatesOwnDot(t *testing.T) {
+	// Own dir and the (identical) root both name "app/assets/javascripts" for
+	// this file — dedup collapses them to one candidate.
+	got := treeResolve().dirCandidates("app/assets/javascripts/application.js", ".")
+	want := []string{"app/assets/javascripts"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("dirCandidates(.) = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveDirRecursive(t *testing.T) {
+	files := []string{
+		"app/assets/javascripts/application.js",
+		"app/assets/javascripts/widgets/a.js",
+		"app/assets/javascripts/widgets/nested/b.js",
+		"app/assets/javascripts/widgets/c.css", // ext-filtered out below
+	}
+	got, ok := treeResolve().resolveDir("app/assets/javascripts/application.js", ".", "", files)
+	if !ok {
+		t.Fatal("resolveDir reported no match")
+	}
+	want := []string{
+		"app/assets/javascripts/widgets/a.js",
+		"app/assets/javascripts/widgets/c.css",
+		"app/assets/javascripts/widgets/nested/b.js",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("resolveDir recursive =\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestResolveDirFlatExcludesNested(t *testing.T) {
+	files := []string{
+		"app/assets/javascripts/application.js",
+		"app/assets/javascripts/widgets/a.js",
+		"app/assets/javascripts/widgets/nested/b.js",
+	}
+	got, ok := dirResolve().resolveDir("app/assets/javascripts/application.js", "widgets", "", files)
+	if !ok {
+		t.Fatal("resolveDir reported no match")
+	}
+	want := []string{"app/assets/javascripts/widgets/a.js"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("resolveDir flat =\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestResolveDirExtFilter(t *testing.T) {
+	files := []string{
+		"app/assets/javascripts/fonts/reset.css",
+		"app/assets/javascripts/fonts/icons.js",
+	}
+	got, ok := dirResolve().resolveDir("app/assets/javascripts/application.js", "fonts", ".css", files)
+	if !ok {
+		t.Fatal("resolveDir reported no match")
+	}
+	want := []string{"app/assets/javascripts/fonts/reset.css"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("resolveDir ext filter =\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestApplyResolvesDirFanout(t *testing.T) {
+	fs := NewFactSet()
+	fs.Add(Fact{Pred: "sprockets_tree_ref", Args: []Atom{
+		Str("app/assets/javascripts/application.js"), Int(2), Str("."), Str(""),
+	}})
+	files := []string{
+		"app/assets/javascripts/application.js",
+		"app/assets/javascripts/widgets/a.js",
+		"app/assets/javascripts/widgets/nested/b.js",
+	}
+	ApplyResolves([]CompiledResolve{treeResolve()}, files, fs)
+
+	var got []Fact
+	for _, f := range fs.All() {
+		if f.Pred == "sprockets_tree_target" {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("sprockets_tree_target: %d facts, want 2 (one per file under the tree): %+v", len(got), got)
+	}
+	for _, f := range got {
+		if f.Args[0].Str != "app/assets/javascripts/application.js" || f.Args[1].Int != 2 || f.Args[2].Str != "." {
+			t.Errorf("sprockets_tree_target row = %#v", f.Args)
+		}
+	}
+}
