@@ -54,6 +54,38 @@ func (m Mapping) Rule(artifactFile string) string {
 	return "artifacts/" + m.Kind + "#" + artifactFile
 }
 
+// Row is one fact a qualified artifact contributes: the entity its leaf
+// belongs to, the accessor key within that entity, and the leaf's scalar
+// value.
+type Row struct {
+	Entity string
+	Key    string
+	Value  string
+}
+
+// Rows converts a Verdict's matched leaves into fact rows, using
+// v.EntityDepth to split each leaf's Path into (entity, key). Returns nil for
+// an unqualified verdict. This is SA.3's missing last step: reader and gate
+// decide an artifact qualifies; Rows is what turns that decision into facts a
+// caller (FX.8's table_facts primitive) can assert. Ported straight from the
+// leaf/EntityDepth convention chooseEntityDepth already established — no new
+// concept, just the conversion nobody wrote yet.
+func (m Mapping) Rows(v Verdict) []Row {
+	if !v.Qualified {
+		return nil
+	}
+	out := make([]Row, 0, len(v.Matched))
+	for _, l := range v.Matched {
+		entity := strings.Join(l.Path[:v.EntityDepth], ".")
+		key := ""
+		if len(l.Path) > v.EntityDepth {
+			key = strings.Join(l.Path[v.EntityDepth:], ".")
+		}
+		out = append(out, Row{Entity: entity, Key: key, Value: l.Value})
+	}
+	return out
+}
+
 var (
 	mappingsOnce sync.Once
 	mappingsAll  []Mapping

@@ -46,3 +46,46 @@ func TestMapping_Rule(t *testing.T) {
 		t.Fatalf("Rule = %q", got)
 	}
 }
+
+func TestMapping_RowsSplitsOnEntityDepth(t *testing.T) {
+	m, _ := MappingFor("endpoint_table")
+	src := []byte(`{"resources":{
+		"widget":{"endpoint":"/api/widgets"},
+		"gadget":{"endpoint":"/api/gadgets"},
+		"sprocket":{"endpoint":"/api/sprockets"}}}`)
+	a, _ := ReadFile("x.json", src)
+	a.Service = "svc"
+	k := known("svc", "/api/widgets", "/api/gadgets", "/api/sprockets")
+
+	v := m.GateSpec().Evaluate(a, k, true) // declared: bypass the 5-match default
+	if !v.Qualified {
+		t.Fatalf("not qualified: %s", v.Reason)
+	}
+	rows := m.Rows(v)
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3: %+v", len(rows), rows)
+	}
+	want := map[string]string{
+		"resources.widget":   "endpoint",
+		"resources.gadget":   "endpoint",
+		"resources.sprocket": "endpoint",
+	}
+	for _, r := range rows {
+		if wantKey, ok := want[r.Entity]; !ok {
+			t.Errorf("unexpected entity %q", r.Entity)
+		} else if r.Key != wantKey {
+			t.Errorf("entity %q: key = %q, want %q", r.Entity, r.Key, wantKey)
+		}
+		delete(want, r.Entity)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing entities: %v", want)
+	}
+}
+
+func TestMapping_RowsUnqualifiedIsNil(t *testing.T) {
+	m, _ := MappingFor("endpoint_table")
+	if rows := m.Rows(Verdict{Qualified: false}); rows != nil {
+		t.Fatalf("want nil, got %v", rows)
+	}
+}
