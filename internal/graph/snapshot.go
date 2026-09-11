@@ -25,6 +25,16 @@ type Snapshot struct {
 	// resolution rule (the resolve_path family) can probe candidate filenames
 	// against the real file set. May be nil, in which case service_file is empty.
 	Files []string
+
+	// ServicePath is the service's root directory on disk (absolute or
+	// cwd-relative, matching workspace.Service.Path) — the config_value
+	// primitive's only disk access point: it reads the checked-in .env / k8s /
+	// tfvars files under it (internal/configsrc.Load). Unlike Files, which is
+	// an in-memory candidate list, config values live in file *contents*, so
+	// this primitive genuinely needs a directory to scan rather than a name to
+	// probe. May be "", in which case config_value's primitive relations are
+	// empty — a framework with no `config:` block never reads it.
+	ServicePath string
 }
 
 // SnapshotImport is one `import(File, Package)` base fact: a source file and a

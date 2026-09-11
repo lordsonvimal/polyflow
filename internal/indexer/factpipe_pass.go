@@ -52,7 +52,11 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 		// the hand-written link passes' n.Meta[graph.MetaIsTest] skip.
 		// Files is the whole service tree (asset resolution needs vendored +
 		// declare-nothing files), not just the parsed subset.
-		snap := graph.Snapshot{Files: sf.files}
+		absSvcPath, err := filepath.Abs(sf.svc.Path)
+		if err != nil {
+			absSvcPath = sf.svc.Path
+		}
+		snap := graph.Snapshot{Files: sf.files, ServicePath: absSvcPath}
 		realNode := make(map[string]bool)
 		for i := range st.enrichedNodes {
 			n := &st.enrichedNodes[i]
