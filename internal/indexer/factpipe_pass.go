@@ -126,6 +126,8 @@ func patternLangForFile(path string) (lang, grammar string) {
 		return "javascript", "tsx"
 	case ".rb", ".rake":
 		return "ruby", "ruby"
+	case ".erb":
+		return "erb", "erb"
 	}
 	return "", ""
 }

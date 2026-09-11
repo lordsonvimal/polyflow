@@ -19,6 +19,9 @@ var fanoutVerbs = map[string]bool{
 	// declared table set; the other inflect rules yield exactly one value, a
 	// one-element fan-out dimension.
 	"inflect": true,
+	// call_ref(helper, ...) / call_ref(spec, ...) zip like hash_pairs(key)/
+	// hash_pairs(value): one row per matched call argument.
+	"call_ref": true,
 }
 
 // MatchToFacts lowers one pattern match to the facts its `facts:` block

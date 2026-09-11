@@ -9,6 +9,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/factpipe"
 	"github.com/lordsonvimal/polyflow/internal/railsinflect"
+	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
 
 // ExtractContext carries what the `extract:` verbs need beyond the tree-sitter
@@ -152,6 +153,9 @@ func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
 		return []verbVal{{Str: keyExpr(node, ec), Kind: factpipe.AtomStr}}
 	case "inflect":
 		return inflectVerb(node.Content(ec.Src), arg)
+	case "call_ref":
+		field, names, _ := strings.Cut(arg, ",")
+		return callRefVals(node, strings.TrimSpace(field), names, ec.Src)
 
 	default:
 		// Unknown verb: fail soft to the source text so a typo in a YAML is a
@@ -252,6 +256,72 @@ func inflectVerb(text, rule string) []verbVal {
 	default:
 		return []verbVal{{Str: text, Kind: factpipe.AtomStr}}
 	}
+}
+
+// callRef is one (helper, spec) hit of call_ref's scan — spec is either a bare
+// string-literal source or, when the call's arguments aren't a literal
+// prefix, the raw remaining argument text (resolve_path then simply never
+// resolves it, which is what should happen to a dynamic reference — no
+// separate "dynamic" flag needed).
+type callRef struct{ helper, spec string }
+
+// scanCallRefs finds every standalone call to one of names' comma-listed
+// identifiers in text and reads its leading string-literal arguments —
+// `javascript_include_tag "application", "print"` in an ERB `<%= %>` code
+// span reads the same as the JS/CSS asset-pipeline's `//= require` directive:
+// a spec that resolve_path (Tier FX resolve_path) then turns into a real
+// path. This is the ERB half of FX.8 step 3; internal/railsview's argument
+// primitives already back render/react_component scanning the same way, so
+// call_ref is a generic third consumer of them, not new framework logic.
+func scanCallRefs(text, namesCSV string) []callRef {
+	var out []callRef
+	for _, helper := range strings.Split(namesCSV, ",") {
+		helper = strings.TrimSpace(helper)
+		if helper == "" {
+			continue
+		}
+		for idx := 0; ; {
+			rel := strings.Index(text[idx:], helper)
+			if rel < 0 {
+				break
+			}
+			at := idx + rel
+			idx = at + len(helper)
+			if at > 0 && railsview.IsRubyNameByte(text[at-1]) {
+				continue // `custom_javascript_include_tag`
+			}
+			if idx < len(text) && railsview.IsRubyNameByte(text[idx]) {
+				continue // a longer identifier sharing this prefix
+			}
+			args := strings.TrimSpace(text[idx:])
+			args = strings.TrimPrefix(args, "(")
+			names, dynamic := railsview.LiteralSources(args)
+			if dynamic {
+				out = append(out, callRef{helper: helper, spec: strings.TrimSpace(args)})
+				continue
+			}
+			for _, n := range names {
+				out = append(out, callRef{helper: helper, spec: n})
+			}
+		}
+	}
+	return out
+}
+
+// callRefVals projects scanCallRefs' (helper, spec) pairs onto one field —
+// call_ref(helper, ...)/call_ref(spec, ...) applied to the same capture zip
+// via matchtofacts.go's fan-out pairing, the same idiom hash_pairs(key)/
+// hash_pairs(value) already established.
+func callRefVals(n *sitter.Node, field, namesCSV string, src []byte) []verbVal {
+	var out []verbVal
+	for _, m := range scanCallRefs(n.Content(src), namesCSV) {
+		v := m.helper
+		if field == "spec" {
+			v = m.spec
+		}
+		out = append(out, verbVal{Str: v, Kind: factpipe.AtomStr})
+	}
+	return out
 }
 
 func stringValue(n *sitter.Node, src []byte) string {

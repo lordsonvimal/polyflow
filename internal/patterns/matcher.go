@@ -27,6 +27,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
+	erbsitter "github.com/lordsonvimal/polyflow/internal/embeddedtemplate"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
@@ -237,6 +238,8 @@ func languageFor(lang string) *sitter.Language {
 		return bashsitter.GetLanguage()
 	case "sql":
 		return sqlsitter.GetLanguage()
+	case "erb":
+		return erbsitter.GetLanguage()
 	default:
 		return nil
 	}
