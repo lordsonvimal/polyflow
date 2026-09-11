@@ -80,6 +80,21 @@ type MatchResult struct {
 	// nil otherwise (the flat Captures map stays the path for legacy patterns).
 	CaptureNodes map[string]*sitter.Node
 	AnchorNode   *sitter.Node
+
+	// IsFacts is true when this match's pattern carries a `facts:` block
+	// (Tier FX). Such a pattern lowers to relations a .dl rule derives over —
+	// it does not describe a graph node/edge shape (no node_type/edge_type
+	// classification exists for it), so MatchToGraph must skip it rather than
+	// falling through classifyPattern's generic default. Before this field
+	// existed, every facts-only pattern's raw match was *also* minted as a
+	// legacy node by every parser's MatchToGraph call (ruby.go and friends
+	// call it unconditionally on the matcher's full result set) — e.g.
+	// rails_model_tables.yaml's `model_class` pattern, matching every Ruby
+	// `class Foo`, minted a bogus NodeTypeFunction node with no end_line for
+	// each one, which is an *unbounded* scope to linkRubyEnclosingCalls'
+	// nearest-innermost-scope search and silently swallowed every real
+	// definition below it in the file.
+	IsFacts bool
 }
 
 // keyWalkerKeyCaptureNames is the bounded allow-list of capture names whose
@@ -872,6 +887,7 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 		Lang:        keyWalkerLangFor(pc.grammarLang),
 	}
 	if len(pat.Facts) > 0 {
+		mr.IsFacts = true
 		mr.Grammar = pc.grammarLang
 		mr.AnchorNode = anchor
 		cn := make(map[string]*sitter.Node, len(matchCaps))
@@ -1320,10 +1336,16 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 	var edges []graph.Edge
 	var unresolved []graph.UnresolvedRef
 
-	// Separate call-reference results from definition results.
+	// Separate call-reference results from definition results. A facts-only
+	// match (see MatchResult.IsFacts) is neither — it lowers through
+	// MatchToFacts/a .dl rule, not classifyPattern, so it is dropped here
+	// entirely rather than falling into either bucket.
 	var callRefs []MatchResult
 	var defResults []MatchResult
 	for _, r := range results {
+		if r.IsFacts {
+			continue
+		}
 		if isCallRef(r.PatternName) {
 			callRefs = append(callRefs, r)
 		} else {
