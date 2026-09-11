@@ -156,6 +156,9 @@ func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
 	case "call_ref":
 		field, names, _ := strings.Cut(arg, ",")
 		return callRefVals(node, strings.TrimSpace(field), names, ec.Src)
+	case "header_directive":
+		field, allow, _ := strings.Cut(arg, ",")
+		return headerDirectiveVals(node, strings.TrimSpace(field), allow, ec.Src)
 
 	default:
 		// Unknown verb: fail soft to the source text so a typo in a YAML is a
@@ -320,6 +323,93 @@ func callRefVals(n *sitter.Node, field, namesCSV string, src []byte) []verbVal {
 			v = m.spec
 		}
 		out = append(out, verbVal{Str: v, Kind: factpipe.AtomStr})
+	}
+	return out
+}
+
+// headerDirective is one `= <verb> <args>` line from a file's leading
+// comment block — the Sprockets asset-directive header convention (`//=
+// require "x"`, `/*= require_tree . */`). Line is the file's absolute line
+// number, not an offset into the comment.
+type headerDirective struct {
+	verb, path, ext string
+	line            int64
+}
+
+// scanHeaderDirectives reads root's leading run of `comment` siblings and
+// returns every `= verb path [ext]` line inside them whose verb is in the
+// comma-listed allow set. Blank lines between comments aren't nodes, so they
+// never break the run; the first non-comment named child does, which is
+// Sprockets' own rule — a `//=` line in a file's body is not a directive,
+// only one in the file's leading header comment(s) is. This is the
+// tree-sitter-native reading of what internal/sprockets.ScanDirectives does
+// by hand-walking source text a line at a time (FX.8 resolve_path step 3b,
+// the JS/CSS half of step 3).
+func scanHeaderDirectives(root *sitter.Node, allowCSV string, src []byte) []headerDirective {
+	allow := map[string]bool{}
+	for _, v := range strings.Split(allowCSV, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			allow[v] = true
+		}
+	}
+	var out []headerDirective
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		c := root.NamedChild(i)
+		if c.Type() != "comment" {
+			break
+		}
+		text := c.Content(src)
+		startLine := int(c.StartPoint().Row) + 1
+		block := strings.HasPrefix(text, "/*")
+		text = strings.TrimPrefix(text, "//")
+		text = strings.TrimPrefix(text, "/*")
+		text = strings.TrimSuffix(text, "*/")
+		for j, raw := range strings.Split(text, "\n") {
+			line := strings.TrimSpace(raw)
+			if block {
+				line = strings.TrimSpace(strings.TrimPrefix(line, "*"))
+			}
+			if !strings.HasPrefix(line, "=") {
+				continue
+			}
+			fields := strings.Fields(strings.TrimPrefix(line, "="))
+			if len(fields) == 0 || !allow[fields[0]] {
+				continue
+			}
+			d := headerDirective{verb: fields[0], line: int64(startLine + j)}
+			if len(fields) > 1 {
+				d.path = strings.Trim(fields[1], `"'`)
+			}
+			if len(fields) > 2 && strings.HasPrefix(fields[2], ".") {
+				d.ext = fields[2]
+			}
+			if d.path == "" {
+				continue
+			}
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// headerDirectiveVals projects scanHeaderDirectives' rows onto one field —
+// header_directive(verb,...)/header_directive(path,...)/header_directive(ext,...)/
+// header_directive(line,...) applied to the same root capture zip via
+// matchtofacts.go's fan-out pairing, the same idiom call_ref and
+// hash_pairs(key)/hash_pairs(value) already established.
+func headerDirectiveVals(root *sitter.Node, field, allowCSV string, src []byte) []verbVal {
+	var out []verbVal
+	for _, d := range scanHeaderDirectives(root, allowCSV, src) {
+		switch field {
+		case "line":
+			out = append(out, verbVal{Int: d.line, Kind: factpipe.AtomInt})
+		case "path":
+			out = append(out, verbVal{Str: d.path, Kind: factpipe.AtomStr})
+		case "ext":
+			out = append(out, verbVal{Str: d.ext, Kind: factpipe.AtomStr})
+		default: // "verb"
+			out = append(out, verbVal{Str: d.verb, Kind: factpipe.AtomStr})
+		}
 	}
 	return out
 }

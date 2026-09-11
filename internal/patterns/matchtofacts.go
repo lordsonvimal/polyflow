@@ -22,6 +22,9 @@ var fanoutVerbs = map[string]bool{
 	// call_ref(helper, ...) / call_ref(spec, ...) zip like hash_pairs(key)/
 	// hash_pairs(value): one row per matched call argument.
 	"call_ref": true,
+	// header_directive(verb|path|ext|line, ...) zip the same way: one row per
+	// `//= require ...`-shaped line in a file's leading comment block.
+	"header_directive": true,
 }
 
 // MatchToFacts lowers one pattern match to the facts its `facts:` block
