@@ -186,6 +186,10 @@ func evalArg(a ArgSpec, capNodes map[string]*sitter.Node, anchor *sitter.Node, e
 			return []verbVal{{Str: "", Kind: factpipe.AtomStr}}
 		}
 	}
+	if a.Extract == "path_transform" {
+		// Structured config, not a string arg — see path_transform.go.
+		return applyPathTransform(node.Content(ec.Src), a.PathTransform)
+	}
 	vals := runVerb(a.Extract, node, ec)
 	if a.Then == "" {
 		return vals

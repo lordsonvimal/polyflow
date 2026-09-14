@@ -36,6 +36,12 @@ type ArgSpec struct {
 	Literal *string `yaml:"literal"` // a constant value (mutually exclusive with Capture/Extract)
 	Extract string  `yaml:"extract"` // verb spec, e.g. "enclosing_name(class)" (default: "text")
 	Then    string  `yaml:"then"`    // optional chained verb
+
+	// PathTransform is path_transform's config (FX.8.P5). It rides alongside
+	// Extract == "path_transform" instead of being packed into a string arg —
+	// its match/replace/action rules are structured, not a single value a
+	// generic "(arg)" parser can split.
+	PathTransform *PathTransformSpec `yaml:"path_transform"`
 }
 
 // UnmarshalYAML reads the args mapping in document order.
@@ -69,6 +75,9 @@ func (f FactSpec) Validate() error {
 	for _, a := range f.Args {
 		if a.Literal != nil && (a.Capture != "" || a.Extract != "" || a.Then != "") {
 			return fmt.Errorf("fact %q arg %q: literal is exclusive with capture/extract/then", f.Pred, a.Name)
+		}
+		if (a.Extract == "path_transform") != (a.PathTransform != nil) {
+			return fmt.Errorf("fact %q arg %q: extract: path_transform requires a path_transform: block, and vice versa", f.Pred, a.Name)
 		}
 	}
 	return nil
