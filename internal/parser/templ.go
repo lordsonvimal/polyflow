@@ -651,7 +651,12 @@ func (v *templVisitor) addSignalBind(idKey, label, signal string, lineNo int) {
 		Language: "templ",
 		Meta:     map[string]string{"signal": signal},
 	})
-	v.edges = append(v.edges, componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarBind))
+	// FX.8.V: domain edge type (dom_write) instead of the framework-named
+	// datastar_bind; the label/meta keep the datastar flavour visible.
+	e := componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDOMWrite)
+	e.Label = "datastar_bind"
+	e.Meta = map[string]string{"via": "datastar"}
+	v.edges = append(v.edges, e)
 }
 
 // addDatastarAction parses a datastar backend action (`@verb('/path')`) out of
@@ -678,8 +683,12 @@ func (v *templVisitor) addDatastarAction(val string, lineNo int) bool {
 		Language: "templ",
 		Meta:     map[string]string{"method": method, "path": path, "datastar": "true", "confidence": conf},
 	})
-	e := componentEdge(v.currentComponent, nodeID, graph.EdgeTypeDatastarAction)
+	// FX.8.V: domain edge type (calls) instead of the framework-named
+	// datastar_action; the label/meta keep the datastar flavour visible.
+	e := componentEdge(v.currentComponent, nodeID, graph.EdgeTypeCalls)
 	e.Confidence = conf
+	e.Label = "datastar_action"
+	e.Meta = map[string]string{"via": "datastar"}
 	v.edges = append(v.edges, e)
 	return true
 }

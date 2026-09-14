@@ -345,13 +345,16 @@ func LinkJSClientRoutes(nodes []graph.Node, serviceFiles map[string][]string) (n
 				"path":    path,
 				"hash":    boolStr(hash),
 				"pattern": e.pattern,
+				// FX.8.V: domain node type (route) instead of the
+				// framework-named client_route; via carries the SPA flavour.
+				"via": "spa_client_route",
 			}
 			if frag != "" {
 				meta["hash_fragment"] = frag
 			}
 			newNodes = append(newNodes, graph.Node{
 				ID:       routeID,
-				Type:     graph.NodeTypeClientRoute,
+				Type:     graph.NodeTypeRoute,
 				Label:    e.name,
 				Service:  svc,
 				File:     e.rel,

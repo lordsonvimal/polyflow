@@ -57,7 +57,7 @@ var ledgerKindClass = map[string]struct {
 	"job":                         {graph.EdgeTypeJobEnqueue, ScopeCross},
 	"kafka":                       {graph.EdgeTypeKafkaPublish, ScopeCross},
 	"nats":                        {graph.EdgeTypeNATSPublish, ScopeCross},
-	"pusher":                      {graph.EdgeTypePusherTrigger, ScopeCross},
+	"pusher":                      {graph.EdgeTypePublishes, ScopeCross}, // FX.8.V: fold
 	"redis_pubsub":                {graph.EdgeTypeRedisPublish, ScopeCross},
 	"websocket":                   {graph.EdgeTypeWSSend, ScopeCross},
 	"graphql":                     {graph.EdgeTypeGraphQLCall, ScopeCross},

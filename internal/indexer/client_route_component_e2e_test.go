@@ -101,7 +101,7 @@ export const SettingsConfig = { tabs: ["a", "b"] };
 	byLabel := map[string][]*graph.Node{}
 	for _, n := range idx.Nodes {
 		byLabel[n.Label] = append(byLabel[n.Label], n)
-		if n.Type != graph.NodeTypeClientRoute {
+		if n.Type != graph.NodeTypeRoute {
 			continue
 		}
 		for _, e := range idx.OutEdges[n.ID] {

@@ -265,7 +265,7 @@ p.subscribe("room-" + idB);
 	require.Len(t, result.Edges, 2, "one pusher_trigger edge per subscriber sharing the reconstructed channel")
 	targets := map[string]bool{}
 	for _, e := range result.Edges {
-		assert.Equal(t, graph.EdgeTypePusherTrigger, e.Type)
+		assert.Equal(t, graph.EdgeTypePublishes, e.Type)
 		targets[e.To] = true
 	}
 	assert.True(t, targets[subscribers[0].ID])

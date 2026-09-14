@@ -17,11 +17,14 @@ const (
 	NodeTypeMethod     NodeType = "method"
 	NodeTypeComponent  NodeType = "component"
 	NodeTypeRoute      NodeType = "route"
-	// NodeTypeClientRoute is one entry of a single-page-app's client-side route
-	// table (`{ cdm: "/standards/:id#cdm/:m", … }`). Meta: path (normalised
-	// pre-hash path, :seg→*), hash ("true"|"false"), pattern (raw), hash_fragment.
-	// `client_route --renders--> component` and `http_handler --navigates_to-->
-	// client_route` are emitted by LinkJSClientRoutes (SPA.2).
+	// NodeTypeClientRoute is kept as a deprecated alias for stored graphs
+	// (FX.8.V type-vocab fold); new minting uses NodeTypeRoute + meta.via=
+	// "spa_client_route" (job_enqueue/sidekiq_enqueue precedent). One entry of
+	// a single-page-app's client-side route table (`{ cdm:
+	// "/standards/:id#cdm/:m", … }`). Meta: path (normalised pre-hash path,
+	// :seg→*), hash ("true"|"false"), pattern (raw), hash_fragment.
+	// `route --renders--> component` and `http_handler --navigates_to-->
+	// route` are emitted by LinkJSClientRoutes (SPA.2).
 	NodeTypeClientRoute NodeType = "client_route"
 	NodeTypeWorker     NodeType = "worker"
 	NodeTypePublisher  NodeType = "publisher"
@@ -222,6 +225,10 @@ const (
 	EdgeTypeDefinedIn      EdgeType = "defined_in"
 	EdgeTypeSpawns         EdgeType = "spawns"
 	EdgeTypeSSEEndpoint    EdgeType = "sse_endpoint"
+	// EdgeTypeDatastarAction/EdgeTypeDatastarBind are kept as deprecated
+	// aliases for stored graphs (FX.8.V type-vocab fold); new minting uses
+	// EdgeTypeCalls / EdgeTypeDOMWrite + meta.via="datastar" (job_enqueue/
+	// sidekiq_enqueue precedent).
 	EdgeTypeDatastarAction EdgeType = "datastar_action"
 	EdgeTypeDatastarBind   EdgeType = "datastar_bind"
 	// Generic background-job edges: delayed_job, solid_queue, ActiveJob,
@@ -232,6 +239,9 @@ const (
 	// generic job_enqueue/job_perform types.
 	EdgeTypeSidekiqEnqueue  EdgeType = "sidekiq_enqueue"
 	EdgeTypeSidekiqPerform  EdgeType = "sidekiq_perform"
+	// EdgeTypePusherTrigger/EdgeTypePusherSubscribe are kept as deprecated
+	// aliases for stored graphs (FX.8.V type-vocab fold); new minting uses
+	// EdgeTypePublishes / EdgeTypeSubscribes + meta.via="pusher".
 	EdgeTypePusherTrigger   EdgeType = "pusher_trigger"
 	EdgeTypePusherSubscribe EdgeType = "pusher_subscribe"
 	EdgeTypeDOMRead         EdgeType = "dom_read"

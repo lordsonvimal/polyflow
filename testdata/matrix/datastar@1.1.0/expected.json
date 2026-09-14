@@ -12,7 +12,7 @@
     {"type": "http_client", "label_contains": "legacy/hyphen"}
   ],
   "must_edges": [
-    {"type": "datastar_action", "from_label": "ActionPanel", "to_label": "POST /play/static/resign"},
-    {"type": "datastar_action", "from_label": "ActionPanel", "to_label_contains": "/rows/"}
+    {"type": "calls", "from_label": "ActionPanel", "to_label": "POST /play/static/resign"},
+    {"type": "calls", "from_label": "ActionPanel", "to_label_contains": "/rows/"}
   ]
 }

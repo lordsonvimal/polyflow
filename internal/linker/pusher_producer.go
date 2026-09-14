@@ -174,6 +174,9 @@ func EnrichPusherProducers(nodes []graph.Node, serviceFiles map[string][]string)
 					"fn":           "trigger",
 					"resolved_via": "pusher_producer_forward",
 					"wrapper":      className,
+					// FX.8.V: contracts/pusher.yaml emits a domain "publishes"
+					// edge; via carries the pusher flavour (G.7 producer→edge fallback).
+					"via": "pusher",
 				},
 			})
 			if fn := enclosingFn(relFile, line); fn != "" {

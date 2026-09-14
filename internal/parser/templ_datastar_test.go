@@ -74,7 +74,7 @@ func TestTemplParser_DatastarActions(t *testing.T) {
 	// Every datastar action has a datastar_action edge with matching confidence.
 	var actionEdges int
 	for _, e := range edges {
-		if e.Type == graph.EdgeTypeDatastarAction {
+		if e.Type == graph.EdgeTypeCalls && e.Label == "datastar_action" {
 			actionEdges++
 			if e.Confidence == "" {
 				t.Errorf("datastar_action edge %s has no confidence", e.ID)

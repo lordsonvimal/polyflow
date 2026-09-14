@@ -432,7 +432,7 @@ func TestPusherRule_TriggerToSubscribe(t *testing.T) {
 	res := runKind(t, contract.KindPusher, nodes)
 	require.Len(t, res.Edges, 1)
 	assert.Equal(t, "pusher:rails:pub->web:sub", res.Edges[0].ID)
-	assert.Equal(t, graph.EdgeTypePusherTrigger, res.Edges[0].Type)
+	assert.Equal(t, graph.EdgeTypePublishes, res.Edges[0].Type)
 }
 
 // Positive: pusher_trigger_async variant also matches.
@@ -445,7 +445,7 @@ func TestPusherRule_TriggerAsync_LinksToSubscribe(t *testing.T) {
 	}
 	res := runKind(t, contract.KindPusher, nodes)
 	require.Len(t, res.Edges, 1)
-	assert.Equal(t, graph.EdgeTypePusherTrigger, res.Edges[0].Type)
+	assert.Equal(t, graph.EdgeTypePublishes, res.Edges[0].Type)
 }
 
 // Positive: quote_strip normalises quoted channel names.
@@ -495,7 +495,7 @@ func TestPusherRule_ForwardToERB_ChannelEvent(t *testing.T) {
 	res := runKind(t, contract.KindPusher, nodes)
 	require.Len(t, res.Edges, 1)
 	assert.Equal(t, "pusher:ng:pub->ng:sub", res.Edges[0].ID)
-	assert.Equal(t, graph.EdgeTypePusherTrigger, res.Edges[0].Type)
+	assert.Equal(t, graph.EdgeTypePublishes, res.Edges[0].Type)
 }
 
 // PU.4 negative: same channel, different event → no edge (two views on one
@@ -522,7 +522,7 @@ func TestPusherRule_ForwardToERB_ChannelOnly(t *testing.T) {
 	}
 	res := runKind(t, contract.KindPusher, nodes)
 	require.Len(t, res.Edges, 1)
-	assert.Equal(t, graph.EdgeTypePusherTrigger, res.Edges[0].Type)
+	assert.Equal(t, graph.EdgeTypePublishes, res.Edges[0].Type)
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────

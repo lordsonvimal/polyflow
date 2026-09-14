@@ -11,7 +11,7 @@
     {"type": "http_client", "label_contains": "modern/colon"}
   ],
   "must_edges": [
-    {"type": "datastar_action", "from_label": "HyphenPanel", "to_label": "POST /boards/create"},
-    {"type": "datastar_action", "from_label": "HyphenPanel", "to_label_contains": "/boards/"}
+    {"type": "calls", "from_label": "HyphenPanel", "to_label": "POST /boards/create"},
+    {"type": "calls", "from_label": "HyphenPanel", "to_label_contains": "/boards/"}
   ]
 }

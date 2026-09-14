@@ -1564,6 +1564,22 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			}
 		}
 
+		// FX.8.V type-vocab fold: pusher_trigger/pusher_subscribe and
+		// datastar_action/datastar_bind now mint domain node/edge types
+		// (publisher+publishes, subscriber+subscribes, http_client+calls,
+		// function+dom_write) instead of framework-named ones — the framework
+		// flavour that used to live in the type moves here, onto meta.via, so
+		// it is not lost. The contract engine (contracts/pusher.yaml) picks
+		// this up off the producer node and propagates it onto the edge (G.7).
+		switch {
+		case strings.HasPrefix(r.PatternName, "pusher_trigger"),
+			strings.HasPrefix(r.PatternName, "pusher_subscribe"),
+			strings.HasPrefix(r.PatternName, "pusher_channel"):
+			meta["via"] = "pusher"
+		case strings.HasPrefix(r.PatternName, "datastar_"):
+			meta["via"] = "datastar"
+		}
+
 		// Datastore call sites: record whether this is a read or a write so
 		// the linker can emit queries/persists edges to the service store node.
 		if nodeType == graph.NodeTypeDatastore {
@@ -2737,15 +2753,18 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeTypeAlias, graph.EdgeTypeCalls
 
 	// ── Datastar / SSE ────────────────────────────────────────────────────────
+	// FX.8.V: datastar_action/datastar_bind fold to their domain edge type
+	// (calls / dom_write); the framework flavour moves to meta.via="datastar",
+	// stamped in Pass 1 below, instead of living in the type itself.
 	case lower == "datastar_on_signal":
 		// Client-side signal subscription (JS onSignal callback), not an HTTP action.
-		return graph.NodeTypeFunction, graph.EdgeTypeDatastarBind
+		return graph.NodeTypeFunction, graph.EdgeTypeDOMWrite
 	case strings.HasPrefix(lower, "datastar_sse") || strings.HasPrefix(lower, "sse_"):
 		return graph.NodeTypeHTTPHandler, graph.EdgeTypeSSEEndpoint
 	case strings.HasPrefix(lower, "datastar_action") || strings.HasPrefix(lower, "datastar_on"):
-		return graph.NodeTypeHTTPClient, graph.EdgeTypeDatastarAction
+		return graph.NodeTypeHTTPClient, graph.EdgeTypeCalls
 	case strings.HasPrefix(lower, "datastar_bind") || strings.HasPrefix(lower, "datastar_signal"):
-		return graph.NodeTypeFunction, graph.EdgeTypeDatastarBind
+		return graph.NodeTypeFunction, graph.EdgeTypeDOMWrite
 
 	// ── Background jobs (delayed_job, solid_queue, ActiveJob, Sidekiq, Celery) ─
 	case strings.HasPrefix(lower, "sidekiq_perform") || strings.Contains(lower, "perform_async") ||
@@ -2780,10 +2799,12 @@ func classifyPattern(patternName string) (graph.NodeType, graph.EdgeType) {
 		return graph.NodeTypeFunction, graph.EdgeTypeCalls
 
 	// ── Pusher ────────────────────────────────────────────────────────────────
+	// FX.8.V: pusher_trigger/pusher_subscribe fold to their domain edge type
+	// (publishes/subscribes); meta.via="pusher" is stamped in Pass 1 below.
 	case strings.HasPrefix(lower, "pusher_trigger"):
-		return graph.NodeTypePublisher, graph.EdgeTypePusherTrigger
+		return graph.NodeTypePublisher, graph.EdgeTypePublishes
 	case strings.HasPrefix(lower, "pusher_subscribe") || strings.HasPrefix(lower, "pusher_channel"):
-		return graph.NodeTypeSubscriber, graph.EdgeTypePusherSubscribe
+		return graph.NodeTypeSubscriber, graph.EdgeTypeSubscribes
 
 	// ── DOM ───────────────────────────────────────────────────────────────────
 	case strings.HasPrefix(lower, "dom_access") || strings.HasPrefix(lower, "query_selector") ||

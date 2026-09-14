@@ -8,6 +8,12 @@
 # Consumer is restricted to pusher_subscribe_client (the only subscriber
 # pattern that captures a channel name); pusher_channel_bind captures an
 # event name instead and is not matched here, matching the bespoke linker.
+#
+# FX.8.V: edge type is the domain "publishes", not a framework-named
+# "pusher_trigger" — the pusher-specific flavour rides on meta.via="pusher"
+# instead, stamped on every pusher_trigger*/pusher_subscribe* producer node
+# by patterns/matcher.go and propagated onto the edge by the engine's G.7
+# producer→edge via fallback.
 version: "1"
 contracts:
   - kind: pusher
@@ -25,7 +31,7 @@ contracts:
                                      # chain consistency with http.yaml (X.1b).
     match: [exact, normalized]
     edge:
-      type: pusher_trigger
+      type: publishes
       id_prefix: pusher
       same_service: keep
     unmatched: ledger
@@ -45,7 +51,7 @@ contracts:
                                      # chain consistency with http.yaml (X.1b).
     match: [exact, normalized]
     edge:
-      type: pusher_trigger
+      type: publishes
       id_prefix: pusher
       same_service: keep
     unmatched: ledger
@@ -70,7 +76,7 @@ contracts:
     normalizers: [quote_strip]
     match: [exact, normalized]
     edge:
-      type: pusher_trigger
+      type: publishes
       id_prefix: pusher
       same_service: keep
     unmatched: drop
@@ -91,7 +97,7 @@ contracts:
     normalizers: [quote_strip]
     match: [exact, normalized]
     edge:
-      type: pusher_trigger
+      type: publishes
       id_prefix: pusher
       same_service: keep
     unmatched: drop

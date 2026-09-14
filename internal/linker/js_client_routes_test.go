@@ -36,7 +36,7 @@ func anchorNode(svc, file string) graph.Node {
 func crNodesByLabel(nodes []graph.Node) map[string]graph.Node {
 	m := make(map[string]graph.Node)
 	for _, n := range nodes {
-		if n.Type == graph.NodeTypeClientRoute {
+		if n.Type == graph.NodeTypeRoute {
 			m[n.Label] = n
 		}
 	}
@@ -517,7 +517,7 @@ func TestClientRouteTargets_MintsNoSecondNode(t *testing.T) {
 	nodes, tagged, _, _, _ := rtFixture(t)
 
 	for _, n := range nodes {
-		if n.Type != graph.NodeTypeClientRoute {
+		if n.Type != graph.NodeTypeRoute {
 			t.Errorf("js_client_routes minted a non-route node %s (%s); "+
 				"re-typed targets belong in tagged, not newNodes", n.ID, n.Type)
 		}
