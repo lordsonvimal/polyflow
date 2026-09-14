@@ -152,54 +152,11 @@ func TestEnrichPusherProducers_ResolvesChannelAndEvent(t *testing.T) {
 	assert.Contains(t, edgeTargets, "svc:execution_history.rb:method:lro:7")
 }
 
-func TestEnrichPusherProducers_HelperIndirection(t *testing.T) {
-	dir := t.TempDir()
-	wrapper := writeFile(t, dir, "pusher_client.rb", pusherWrapperFixture)
-	// def and call sites in different files (the concern-into-controller shape).
-	concern := writeFile(t, dir, "delete_pusher_notifier.rb", `module DeletePusherNotifier
-  def pusher(msg, status, link = nil)
-    PusherClient.new(standard, msg, status, link).push
-  end
-end
-`)
-	controller := writeFile(t, dir, "things_controller.rb", `class ThingsController
-  include DeletePusherNotifier
-  def destroy
-    pusher(I18n.t("pusher.things.deleted"), STATUS_START)
-  end
-  def other
-    pusher("done", STATUS_END)
-  end
-  def reader
-    pusher
-  end
-end
-`)
-	nodes := []graph.Node{
-		{ID: "svc:pusher_client.rb:publisher:pusher_trigger:20", Type: graph.NodeTypePublisher,
-			File: wrapper, Line: 20, Meta: map[string]string{"pattern": "pusher_trigger", "key_dynamic": "true"}},
-		{ID: "svc:things_controller.rb:method:destroy:3", Type: graph.NodeTypeMethod,
-			File: controller, Line: 3, EndLine: 5},
-		{ID: "svc:things_controller.rb:method:other:6", Type: graph.NodeTypeMethod,
-			File: controller, Line: 6, EndLine: 8},
-		{ID: "svc:things_controller.rb:method:reader:9", Type: graph.NodeTypeMethod,
-			File: controller, Line: 9, EndLine: 11},
-	}
-
-	helperEdges := linker.EnrichPusherHelperCalls(nodes, map[string][]string{"svc": {wrapper, concern, controller}})
-	require.Len(t, helperEdges, 2, "one edge per enclosing method that calls the pusher helper")
-	targets := map[string]bool{}
-	froms := map[string]bool{}
-	for _, e := range helperEdges {
-		assert.Equal(t, graph.EdgeTypeCalls, e.Type)
-		assert.Equal(t, "svc:pusher_client.rb:publisher:pusher_trigger:20", e.To)
-		targets[e.To] = true
-		froms[e.From] = true
-	}
-	assert.True(t, froms["svc:things_controller.rb:method:destroy:3"])
-	assert.True(t, froms["svc:things_controller.rb:method:other:6"])
-	assert.False(t, froms["svc:things_controller.rb:method:reader:9"], "zero-arg pusher reader is not a helper call")
-}
+// PU.2e (the `pusher(msg, status)` helper indirection) migrated to
+// patterns/ruby/pusher_helper_calls.yaml + rules/ruby/pusher_helper_calls.dl
+// (Tier FX FX.8) — see internal/factpipe/pipeline/pusher_helper_calls_test.go
+// for its replacement coverage, following the same real-parse convention
+// internal/contract's FX.8.14 test and ruby_associations_test.go established.
 
 func TestEnrichPusherProducers_IvarHeldInstance(t *testing.T) {
 	dir := t.TempDir()

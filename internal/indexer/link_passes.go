@@ -740,9 +740,10 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 					return err
 				}
 			}
-			// PU.2e: `pusher(msg, status)` helper call sites → the canonical
-			// PusherClient trigger publisher, across `include`d concerns.
-			pubEdges = append(pubEdges, linker.EnrichPusherHelperCalls(st.allNodes, st.svcFilesOf())...)
+			// PU.2e (`pusher(msg, status)` helper call sites → the canonical
+			// PusherClient trigger publisher, across `include`d concerns) is
+			// Tier FX FX.8: patterns/ruby/pusher_helper_calls.yaml + rules/ruby/
+			// pusher_helper_calls.dl, run by the factpipe_frameworks pass below.
 			return st.writeEdges(pubEdges)
 		}},
 		// Tier PU.3: the Pusher consumer half. Mint one `subscriber` node per

@@ -1,0 +1,95 @@
+# Tier FX FX.8 — replaces the PU.2e half of
+# internal/linker/pusher_producer.go's EnrichPusherHelperCalls. Dozens of
+# controllers/concerns/importers/jobs call a local `def pusher` (or
+# `BaseImporter.non_instance_pusher`) that forwards to
+# `PusherClient.new(...).push` -> `.trigger`; the def and the call routinely
+# live in different files (a concern `include`d into a controller), so no
+# same-file walk connects them and every call site otherwise dead-ends at an
+# unresolved `pusher` call_ref. This wires each such call's enclosing
+# method/function straight to the canonical PusherClient trigger publisher
+# node the base patterns/ruby/pusher.yaml pattern already mints at parse
+# time (pusher_trigger / pusher_trigger_async) — a plain convention + join,
+# the same owning-scope-by-line-span-containment idiom as
+# ruby_associations.dl / rails_filters.dl.
+#
+# This pass does NOT need the wrapper's notify_*->event constant table (that
+# is EnrichPusherProducers' and EnrichPusherConsumers' job, both of which stay
+# hand-written Go — see internal/linker/pusher_producer.go's package doc and
+# internal/linker/pusher_consumer.go's for why) — it only needs the def name
+# to exist with a PusherClient-touching body, not its event mapping.
+#
+# Gate: pusher (same package as patterns/ruby/pusher.yaml).
+language: ruby
+version: "1"
+package: pusher
+
+patterns:
+  # `def pusher(msg, status); PusherClient.new(...).push(...); end`
+  - name: pusher_helper_def
+    query: |
+      (method
+        name: (identifier) @name
+        (#match? @name "^(pusher|non_instance_pusher)$")
+        body: (_) @body
+        (#match? @body "PusherClient")) @def
+    facts:
+      - pred: pusher_helper_def
+        args:
+          method: { capture: name, extract: text }
+
+  # `def self.non_instance_pusher(msg, status); ...; end` (BaseImporter's form).
+  - name: pusher_helper_singleton_def
+    query: |
+      (singleton_method
+        name: (identifier) @name
+        (#match? @name "^(pusher|non_instance_pusher)$")
+        body: (_) @body
+        (#match? @body "PusherClient")) @def
+    facts:
+      - pred: pusher_helper_def
+        args:
+          method: { capture: name, extract: text }
+
+  # Bare `pusher(msg, status)` — at least two positional args, so a zero-arg
+  # `pusher` reader / a 1-arg `pusher(notification)` sink don't match.
+  - name: pusher_helper_call_bare
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m
+        (#match? @m "^(pusher|non_instance_pusher)$")
+        arguments: (argument_list . (_) . (_))) @call
+    facts:
+      - pred: pusher_helper_call
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          method: { capture: m, extract: text }
+
+  # `self.pusher(msg, status)` / `BaseImporter.non_instance_pusher(msg, status)`.
+  - name: pusher_helper_call_recv
+    query: |
+      (call
+        receiver: [(self) (constant) (scope_resolution)]
+        method: (identifier) @m
+        (#match? @m "^(pusher|non_instance_pusher)$")
+        arguments: (argument_list . (_) . (_))) @call
+    facts:
+      - pred: pusher_helper_call
+        args:
+          file:   { extract: file }
+          line:   { capture: call, extract: line }
+          method: { capture: m, extract: text }
+
+emit:
+  - relation: pusher_helper_edge
+    columns: [Fn, Pub]
+    edge:
+      from: { arg: Fn }
+      to:   { arg: Pub }
+      type: calls
+    meta:
+      via: pusher_helper_call
+    confidence:
+      - { else: inferred }
+    dedup: [from, to]

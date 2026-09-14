@@ -1,0 +1,10 @@
+{
+  "patterns": [
+    "pusher_helper_def",
+    "pusher_helper_singleton_def",
+    "pusher_helper_call_bare",
+    "pusher_helper_call_recv",
+    "pusher_helper_call_recv"
+  ],
+  "node_types": []
+}

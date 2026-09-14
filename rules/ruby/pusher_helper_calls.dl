@@ -1,0 +1,53 @@
+% Tier FX FX.8 — pusher_helper_calls. Replaces the PU.2e half of
+% internal/linker/pusher_producer.go's EnrichPusherHelperCalls: every bare
+% pusher(...)/non_instance_pusher(...) call (>= 2 args) whose method name is
+% a def this service also declares (with a PusherClient-touching body) gets a
+% `calls` edge from its enclosing method/function to the canonical
+% PusherClient trigger publisher(s) the base pusher.yaml pattern mints at
+% parse time.
+%
+% Stage-1 facts (patterns/ruby/pusher_helper_calls.yaml):
+%   pusher_helper_def(Method)               a real `def pusher`/`def
+%       non_instance_pusher` whose body mentions PusherClient
+%   pusher_helper_call(File, Line, Method)  a bare/self/Const-receiver call
+%       site with >= 2 args
+%
+% Bridge (FX.1): node, node_line, node_meta. Builtins: le, contains, count.
+
+% ---------------------------------------------------------------------------
+% owning function/method — same span-containment idiom as
+% ruby_associations.dl / rails_filters.dl (the innermost function/method node
+% whose span contains the call site's line).
+% ---------------------------------------------------------------------------
+phc_scope(K, File, KL, KE) :- node(K, "function", File, _), node_line(K, KL, KE).
+phc_scope(K, File, KL, KE) :- node(K, "method", File, _), node_line(K, KL, KE).
+
+phc_cover(File, Line, K, KL) :-
+    pusher_helper_call(File, Line, _),
+    phc_scope(K, File, KL, KE), le(KL, Line), le(Line, KE).
+phc_cover_max(File, Line, MaxL) :- phc_cover(File, Line, _, L), max(MaxL, L).
+phc_owner(File, Line, K) :- phc_cover_max(File, Line, L), phc_cover(File, Line, K, L).
+
+% ---------------------------------------------------------------------------
+% canonical PusherClient trigger publisher(s) — prefer the wrapper file
+% (path contains "pusher_client"); fall back to every pusher_trigger*
+% publisher when none is recognisably the wrapper, mirroring the retired
+% canonicalPusherTriggerPublishers.
+% ---------------------------------------------------------------------------
+phc_pub_all(P)   :- node(P, "publisher", File, _), node_meta(P, "pattern", "pusher_trigger").
+phc_pub_all(P)   :- node(P, "publisher", File, _), node_meta(P, "pattern", "pusher_trigger_async").
+phc_pub_canon(P) :- node(P, "publisher", File, _), node_meta(P, "pattern", "pusher_trigger"), contains(File, "pusher_client").
+phc_pub_canon(P) :- node(P, "publisher", File, _), node_meta(P, "pattern", "pusher_trigger_async"), contains(File, "pusher_client").
+phc_pub_canon_n(N) :- phc_pub_canon(P), count(N, P).
+
+phc_pub(P) :- phc_pub_canon(P).
+phc_pub(P) :- phc_pub_all(P), phc_pub_canon_n(N), le(N, 0).
+
+% ---------------------------------------------------------------------------
+% the join
+% ---------------------------------------------------------------------------
+pusher_helper_edge(Fn, Pub) :-
+    pusher_helper_call(File, Line, Method),
+    pusher_helper_def(Method),
+    phc_owner(File, Line, Fn),
+    phc_pub(Pub).
