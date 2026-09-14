@@ -146,6 +146,89 @@ emit:
 	}
 }
 
+func TestEmitMintOnlyNoEdge(t *testing.T) {
+	ce := mustCompile(t, `
+emit:
+  - relation: config_hint
+    columns: [Service, File]
+    mint:
+      node: file
+      id: {template: "{Service}:{File}:file"}
+      service: {arg: Service}
+      file: {arg: File}
+      label: {arg: File}
+      meta: {basename: {arg: File}}
+`)
+	res := ce.Apply([]datalog.Tuple{
+		{"web", "app/assets/x.scss"},
+	}, nil)
+	if len(res.Edges) != 0 {
+		t.Fatalf("mint-only spec produced %d edges, want 0", len(res.Edges))
+	}
+	if len(res.Nodes) != 1 {
+		t.Fatalf("got %d nodes, want 1", len(res.Nodes))
+	}
+	n := res.Nodes[0]
+	if n.ID != "web:app/assets/x.scss:file" || n.Type != "file" || n.Service != "web" || n.File != "app/assets/x.scss" {
+		t.Errorf("mint = %+v", n)
+	}
+	if n.Meta["basename"] != "app/assets/x.scss" {
+		t.Errorf("meta = %+v", n.Meta)
+	}
+}
+
+func TestEmitMintDedupAcrossRows(t *testing.T) {
+	ce := mustCompile(t, `
+emit:
+  - relation: stylesheet_import
+    columns: [FromID, ToService, ToFile]
+    mint:
+      node: file
+      id: {template: "{ToService}:{ToFile}:file"}
+      service: {arg: ToService}
+      file: {arg: ToFile}
+    edge: { from: {arg: FromID}, to: {template: "{ToService}:{ToFile}:file"}, type: imports }
+`)
+	res := ce.Apply([]datalog.Tuple{
+		{"f1", "web", "app/assets/shared.scss"},
+		{"f2", "web", "app/assets/shared.scss"},
+	}, nil)
+	if len(res.Edges) != 2 {
+		t.Fatalf("got %d edges, want 2", len(res.Edges))
+	}
+	if len(res.Nodes) != 1 {
+		t.Fatalf("mint fired %d times for the same id, want 1 (deduped)", len(res.Nodes))
+	}
+	for _, e := range res.Edges {
+		if e.To != res.Nodes[0].ID {
+			t.Errorf("edge.To %q does not match minted node id %q", e.To, res.Nodes[0].ID)
+		}
+	}
+}
+
+func TestCompileEmitRejectsUnknownMintNodeType(t *testing.T) {
+	_, err := CompileEmits([]byte(`
+emit:
+  - relation: r
+    columns: [A]
+    mint: { node: bogus_type, id: {arg: A} }
+`))
+	if err == nil {
+		t.Fatal("expected an error for a node type outside frozenNodeTypes")
+	}
+}
+
+func TestCompileEmitRejectsEmptySpec(t *testing.T) {
+	_, err := CompileEmits([]byte(`
+emit:
+  - relation: r
+    columns: [A]
+`))
+	if err == nil {
+		t.Fatal("expected an error for a spec with neither edge nor mint")
+	}
+}
+
 func TestCompileEmitRejectsUnknownEdgeType(t *testing.T) {
 	_, err := CompileEmits([]byte(`
 emit:

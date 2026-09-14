@@ -50,6 +50,14 @@ var frozenEdgeTypes = map[string]bool{
 	"dom_listen": true, "dom_contract": true, "backed_by": true,
 }
 
+// frozenNodeTypes is the closed node-type vocabulary a `mint:` block may
+// construct (plan § FX.0's "generic-only" invariant, extended to nodes). Kept
+// narrow on purpose — only the node types a proven mint consumer needs are
+// listed here; add one only when a real pass needs it, not speculatively.
+var frozenNodeTypes = map[string]bool{
+	"file": true,
+}
+
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or
 // `{literal: X}`), `{arg: Column}` naming a column of the derived relation, or
 // `{template: "..."}` — a string with `{Column}` placeholders substituted from
@@ -110,6 +118,23 @@ type edgeSpec struct {
 	Path   valueRef `yaml:"path"`
 }
 
+// mintSpec is a `mint:` block — the counterpart of `edgeSpec` for ensuring a
+// graph.Node exists (constructing it if not), the terminal step several FX.8
+// roster passes need and `edge:` alone cannot express. A row that resolves to
+// the same `id` as an earlier row in the same Apply call mints only once
+// (§ Apply's seenNode dedup) — a mint-per-row relation is expected to name the
+// same node repeatedly (e.g. one row per edge landing on a shared file node).
+type mintSpec struct {
+	Node     string              `yaml:"node"` // graph.NodeType; validated against frozenNodeTypes
+	ID       valueRef            `yaml:"id"`
+	Label    valueRef            `yaml:"label"`
+	Service  valueRef            `yaml:"service"`
+	File     valueRef            `yaml:"file"`
+	Line     valueRef            `yaml:"line"`
+	Language valueRef            `yaml:"language"`
+	Meta     map[string]valueRef `yaml:"meta"`
+}
+
 type confRule struct {
 	When  string `yaml:"when"`
 	Value string `yaml:"value"`
@@ -141,6 +166,7 @@ type EmitSpec struct {
 	Columns    []string            `yaml:"columns"`
 	Rule       string              `yaml:"rule"` // SA.1 provenance Rule; defaults to Relation
 	Edge       edgeSpec            `yaml:"edge"`
+	Mint       *mintSpec           `yaml:"mint"`
 	Meta       map[string]valueRef `yaml:"meta"`
 	Confidence []confRule          `yaml:"confidence"`
 	Abstain    struct {
@@ -172,6 +198,7 @@ func (e *CompiledEmit) Relation() string { return e.spec.Relation }
 // three are sorted and deterministic.
 type EmitResult struct {
 	Edges      []graph.Edge
+	Nodes      []graph.Node
 	Unresolved []graph.UnresolvedRef
 	Ledger     []graph.UnresolvedRef
 }
@@ -206,11 +233,25 @@ func compileEmit(s EmitSpec) (CompiledEmit, error) {
 	if s.Relation == "" {
 		return ce, fmt.Errorf("missing relation")
 	}
-	if !s.Edge.From.set() || !s.Edge.To.set() {
-		return ce, fmt.Errorf("edge needs both from and to")
+	hasEdge := s.Edge.Type != ""
+	if hasEdge {
+		if !s.Edge.From.set() || !s.Edge.To.set() {
+			return ce, fmt.Errorf("edge needs both from and to")
+		}
+		if !frozenEdgeTypes[s.Edge.Type] {
+			return ce, fmt.Errorf("edge type %q is not in the frozen vocabulary", s.Edge.Type)
+		}
 	}
-	if !frozenEdgeTypes[s.Edge.Type] {
-		return ce, fmt.Errorf("edge type %q is not in the frozen vocabulary", s.Edge.Type)
+	if s.Mint != nil {
+		if !frozenNodeTypes[s.Mint.Node] {
+			return ce, fmt.Errorf("mint node type %q is not in the frozen vocabulary", s.Mint.Node)
+		}
+		if !s.Mint.ID.set() {
+			return ce, fmt.Errorf("mint needs an id")
+		}
+	}
+	if !hasEdge && s.Mint == nil {
+		return ce, fmt.Errorf("emit needs an edge, a mint, or both")
 	}
 	if s.Unresolved != nil && !s.Unresolved.Ref.Kind.set() {
 		return ce, fmt.Errorf("unresolved.ref needs a kind")
@@ -259,6 +300,8 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 
 	var res EmitResult
 	seen := map[string]bool{}
+	seenNode := map[string]bool{}
+	hasEdge := e.spec.Edge.Type != ""
 
 	type pending struct {
 		edge   graph.Edge
@@ -272,6 +315,15 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 		}
 		if e.unresolved != nil && e.unresolved(row, rmaps) {
 			res.Unresolved = append(res.Unresolved, e.buildUnresolved(row))
+			continue
+		}
+		if e.spec.Mint != nil {
+			if n, ok := e.buildMint(row); ok && !seenNode[n.ID] {
+				seenNode[n.ID] = true
+				res.Nodes = append(res.Nodes, n)
+			}
+		}
+		if !hasEdge {
 			continue
 		}
 		edge := e.buildEdge(row, rmaps, rows[i], prov)
@@ -334,9 +386,46 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 	}
 
 	sort.Slice(res.Edges, func(i, j int) bool { return res.Edges[i].ID < res.Edges[j].ID })
+	sort.Slice(res.Nodes, func(i, j int) bool { return res.Nodes[i].ID < res.Nodes[j].ID })
 	sortUnresolved(res.Unresolved)
 	sortUnresolved(res.Ledger)
 	return res
+}
+
+// buildMint resolves one row into a graph.Node per the spec's `mint:` block.
+// ok is false when the id resolves empty (the row's join left the mint's key
+// column unset — nothing to construct).
+func (e *CompiledEmit) buildMint(row map[string]string) (n graph.Node, ok bool) {
+	m := e.spec.Mint
+	id := m.ID.resolve(row)
+	if id == "" {
+		return graph.Node{}, false
+	}
+	n = graph.Node{
+		ID:       id,
+		Type:     graph.NodeType(m.Node),
+		Label:    m.Label.resolve(row),
+		Service:  m.Service.resolve(row),
+		File:     m.File.resolve(row),
+		Language: m.Language.resolve(row),
+	}
+	if m.Line.set() {
+		if v, err := strconv.Atoi(m.Line.resolve(row)); err == nil {
+			n.Line = v
+		}
+	}
+	if len(m.Meta) > 0 {
+		meta := make(map[string]string, len(m.Meta))
+		for _, k := range sortedKeys(m.Meta) {
+			if v := m.Meta[k].resolve(row); v != "" {
+				meta[k] = v
+			}
+		}
+		if len(meta) > 0 {
+			n.Meta = meta
+		}
+	}
+	return n, true
 }
 
 func (e *CompiledEmit) buildEdge(row map[string]string, all []map[string]string, tup datalog.Tuple, prov *datalog.Provenance) graph.Edge {

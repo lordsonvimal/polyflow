@@ -79,6 +79,21 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 		if err != nil {
 			return fmt.Errorf("factpipe: service %s: %w", sf.svc.Name, err)
 		}
+		for i := range res.Nodes {
+			n := res.Nodes[i]
+			if svcOf[n.ID] != "" {
+				continue // already a real node (containment reached it); mint is a gap-fill only
+			}
+			if err := st.bw.AddNode(st.ctx, &n); err != nil {
+				return err
+			}
+			st.allNodes = append(st.allNodes, n)
+			st.enrichedNodes = append(st.enrichedNodes, n)
+			svcOf[n.ID] = n.Service
+		}
+		if err := st.bw.Flush(st.ctx); err != nil {
+			return err
+		}
 		if err := st.writeEdges(res.Edges); err != nil {
 			return err
 		}

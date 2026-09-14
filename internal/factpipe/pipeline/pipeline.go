@@ -268,6 +268,7 @@ type ParsedFile struct {
 // Result is everything the active frameworks produced for one service.
 type Result struct {
 	Edges      []graph.Edge
+	Nodes      []graph.Node
 	Unresolved []graph.UnresolvedRef
 	Ledger     []graph.UnresolvedRef
 }
@@ -285,6 +286,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 	}
 
 	var res Result
+	seenNode := map[string]bool{}
 	for _, fw := range fws {
 		fset := factpipe.NewFactSet()
 		for _, f := range base.All() {
@@ -306,12 +308,19 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		for _, e := range fw.Emits {
 			er := e.Apply(derived[e.Relation()], prov)
 			res.Edges = append(res.Edges, er.Edges...)
+			for _, n := range er.Nodes {
+				if !seenNode[n.ID] {
+					seenNode[n.ID] = true
+					res.Nodes = append(res.Nodes, n)
+				}
+			}
 			res.Unresolved = append(res.Unresolved, stampService(er.Unresolved, svc)...)
 			res.Ledger = append(res.Ledger, stampService(er.Ledger, svc)...)
 		}
 	}
 
 	sort.SliceStable(res.Edges, func(i, j int) bool { return res.Edges[i].ID < res.Edges[j].ID })
+	sort.SliceStable(res.Nodes, func(i, j int) bool { return res.Nodes[i].ID < res.Nodes[j].ID })
 	sortUnresolved(res.Unresolved)
 	sortUnresolved(res.Ledger)
 	return res, nil
