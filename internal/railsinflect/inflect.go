@@ -144,6 +144,25 @@ func Underscore(className string) string {
 	return b.String()
 }
 
+// Classify converts a snake_case name to the PascalCase class name Rails'
+// naming convention pairs it with (`deliverable` → `Deliverable`,
+// `lyra_batch_job` → `LyraBatchJob`). The inverse direction of Underscore,
+// for an ActiveRecord association's bare symbol
+// (`has_many :deliverables` → singularize, then classify) or an explicit
+// `class_name:`-free belongs_to/has_one target.
+func Classify(s string) string {
+	parts := strings.Split(s, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String()
+}
+
 // TableNameCandidates returns the conventional table names for a class name,
 // most specific first — the regular pluralization forms only, for a caller
 // that validates each against the declared table set (an irregular plural like

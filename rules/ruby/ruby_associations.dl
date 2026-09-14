@@ -1,0 +1,56 @@
+% ActiveRecord associations — Tier FX FX.8.25. Replaces
+% internal/linker/ruby_associations.go: has_many/belongs_to/has_one resolve to
+% class-granularity `calls` edges.
+%
+% Stage-1 facts (patterns/ruby/ruby_associations.yaml):
+%   assoc_call(File, Line, Target, Override)
+%     Target is already singularize+classify'd (has_many) or classify'd
+%     (belongs_to/has_one); Override is the class_name: literal, or "".
+%
+% Bridge (FX.1): node, node_line, node_label.
+
+% ---------------------------------------------------------------------------
+% owning class — same span-containment idiom as rails_filters.dl /
+% rails_model_tables.dl: the innermost class node whose span contains the
+% macro call's line.
+% ---------------------------------------------------------------------------
+assoc_class_span(K, File, KL, KE) :- node(K, "class", File, _), node_line(K, KL, KE).
+
+assoc_cover(File, Line, K, KL) :-
+    assoc_call(File, Line, _, _),
+    assoc_class_span(K, File, KL, KE), le(KL, Line), le(Line, KE).
+assoc_cover_max(File, Line, MaxL) :- assoc_cover(File, Line, _, L), max(MaxL, L).
+assoc_owner(File, Line, K) :- assoc_cover_max(File, Line, L), assoc_cover(File, Line, K, L).
+
+% ---------------------------------------------------------------------------
+% wanted class name — the class_name: override wins over the inflected symbol
+% ---------------------------------------------------------------------------
+assoc_wanted(File, Line, Target) :- assoc_call(File, Line, Target, "").
+assoc_wanted(File, Line, Want)   :- assoc_call(File, Line, _, Want), ne(Want, "").
+
+% ---------------------------------------------------------------------------
+% resolution — same service only (Ruby constant lookup is process-local, same
+% rule Tier K.7a's guard already established); count candidates so a
+% same-name collision demotes confidence instead of picking a first match.
+% ---------------------------------------------------------------------------
+assoc_owner_service(K, Service) :- node(K, "class", _, Service).
+
+assoc_candidate(File, Line, Owner, Target) :-
+    assoc_owner(File, Line, Owner),
+    assoc_wanted(File, Line, Want),
+    assoc_owner_service(Owner, Service),
+    node(Target, "class", _, Service),
+    node_label(Target, Want).
+
+assoc_cand_n(File, Line, N) :- assoc_candidate(File, Line, _, T), count(N, T).
+
+assoc_edge(Owner, Target, "inferred") :-
+    assoc_candidate(File, Line, Owner, Target), assoc_cand_n(File, Line, N), le(N, 1).
+assoc_edge(Owner, Target, "partial") :-
+    assoc_candidate(File, Line, Owner, Target), assoc_cand_n(File, Line, N), le(2, N).
+
+assoc_collision(File, Line, Owner, OwnerName, Want) :-
+    assoc_owner(File, Line, Owner),
+    node_label(Owner, OwnerName),
+    assoc_wanted(File, Line, Want),
+    assoc_cand_n(File, Line, N), le(2, N).

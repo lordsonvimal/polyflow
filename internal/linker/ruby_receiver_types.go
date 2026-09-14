@@ -520,7 +520,7 @@ func collectRubyCanCanIvarTypes(node *sitter.Node, src []byte, file string, ivar
 			}
 		}
 		if _, ok := ivarType[class+"\x00@"+resource]; !ok {
-			ivarType[class+"\x00@"+resource] = snakeToClassName(resource)
+			ivarType[class+"\x00@"+resource] = railsinflect.Classify(resource)
 		}
 	}
 

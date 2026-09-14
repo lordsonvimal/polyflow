@@ -590,19 +590,11 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, receiverTypeUnresolved...)
 			return nil
 		}},
-		// ActiveRecord has_many/belongs_to/has_one associations — a
-		// class-granularity `calls` edge to the associated model, the same
-		// shape emitClassMethodCall uses for a call that lands on no method
-		// node (an ActiveRecord finder, a `scope` macro).
-		{"ruby_associations", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			assocEdges, assocUnresolved := linker.LinkRubyAssociations(st.allNodes, svcFiles)
-			if err := st.writeEdges(assocEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, assocUnresolved...)
-			return nil
-		}},
+		// ActiveRecord has_many/belongs_to/has_one associations (a
+		// class-granularity `calls` edge to the associated model) is Tier FX
+		// FX.8.25: patterns/ruby/ruby_associations.yaml + rules/ruby/
+		// ruby_associations.dl, run by the factpipe_frameworks pass below.
+		//
 		// Tier AT.2 (ActiveRecord model class → db/schema.rb table) is Tier FX
 		// FX.8: patterns/ruby/rails_model_tables.yaml + rules/ruby/
 		// rails_model_tables.dl, run by the factpipe_frameworks pass below.

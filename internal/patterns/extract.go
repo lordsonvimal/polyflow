@@ -253,6 +253,10 @@ func inflectVerb(text, rule string) []verbVal {
 		return []verbVal{{Str: railsinflect.Pluralize(text), Kind: factpipe.AtomStr}}
 	case "singularize":
 		return []verbVal{{Str: railsinflect.Singularize(text), Kind: factpipe.AtomStr}}
+	case "classify":
+		return []verbVal{{Str: railsinflect.Classify(text), Kind: factpipe.AtomStr}}
+	case "singularize_classify":
+		return []verbVal{{Str: railsinflect.Classify(railsinflect.Singularize(text)), Kind: factpipe.AtomStr}}
 	case "tableize":
 		cands := railsinflect.TableNameCandidates(text)
 		out := make([]verbVal, 0, len(cands))

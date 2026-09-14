@@ -1,0 +1,85 @@
+# Tier FX FX.8.25 — replaces internal/linker/ruby_associations.go.
+#
+# has_many/belongs_to/has_one macros resolve to class-granularity `calls`
+# edges via the naive Rails convention: singularize (has_many only) + classify
+# the association symbol, or the explicit class_name: override when present.
+# `through:`/`as:` (polymorphic) and has_and_belongs_to_many are out of scope
+# (docs/ruby-activerecord-association-plan.md's Non-goals) — the query only
+# ever captures a leading `simple_symbol`, so a dynamic/computed association
+# name just produces no fact, never a wrong edge.
+#
+# Stage 1 (this file's `facts:` blocks) lowers each macro call to
+# assoc_call(File, Line, Target, Override): Target is already inflected at
+# extraction time (has_many: singularize_classify; belongs_to/has_one:
+# classify — Rails inflection is a naming-convention primitive, not a string
+# op a `.dl` rule could express).
+#
+# Stage 3 (rules/ruby/ruby_associations.dl) recovers the owning class by
+# line-span containment against the FX.1 bridge (the same idiom
+# rails_filters.dl / rails_model_tables.dl use), resolves the wanted class
+# name against same-service `class` nodes, and counts candidates so a
+# same-service same-name collision demotes confidence and ledgers instead of
+# picking a first match.
+#
+# Gate: ActiveRecord. has_many &c only exist under activerecord.
+language: ruby
+version: "1"
+package: activerecord
+
+patterns:
+  - name: has_many_symbol
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#eq? @m "has_many")
+        arguments: (argument_list (simple_symbol) @sym)) @call
+    facts:
+      - pred: assoc_call
+        args:
+          file:     { extract: file }
+          line:     { capture: call, extract: line }
+          target:   { capture: sym, extract: "inflect(singularize_classify)" }
+          override: { capture: call, extract: "keyword_arg(class_name)", then: string_value }
+
+  - name: belongs_to_or_has_one_symbol
+    query: |
+      (call
+        !receiver
+        method: (identifier) @m (#match? @m "^(belongs_to|has_one)$")
+        arguments: (argument_list (simple_symbol) @sym)) @call
+    facts:
+      - pred: assoc_call
+        args:
+          file:     { extract: file }
+          line:     { capture: call, extract: line }
+          target:   { capture: sym, extract: "inflect(classify)" }
+          override: { capture: call, extract: "keyword_arg(class_name)", then: string_value }
+
+emit:
+  - relation: assoc_edge
+    columns: [Owner, Target, Conf]
+    edge:
+      from: { arg: Owner }
+      to:   { arg: Target }
+      type: calls
+    meta:
+      via: association
+      granularity: class
+    confidence:
+      - { when: "Conf == \"inferred\"", value: inferred }
+      - { else: partial }
+    dedup: [from, to]
+
+  # A same-service, same-target-name collision — two classes named alike —
+  # demotes every candidate edge to partial (above) and ledgers once per
+  # (owner, wanted name), mirroring the retired Go's missKey dedup.
+  - relation: assoc_collision
+    columns: [File, Line, Owner, OwnerName, Want]
+    edge: { from: { arg: Owner }, to: { arg: Owner }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        name: { template: "{OwnerName}->{Want}" }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: association_collision

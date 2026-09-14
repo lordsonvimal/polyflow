@@ -1,0 +1,8 @@
+{
+  "patterns": [
+    "has_many_symbol",
+    "belongs_to_or_has_one_symbol",
+    "belongs_to_or_has_one_symbol"
+  ],
+  "node_types": []
+}

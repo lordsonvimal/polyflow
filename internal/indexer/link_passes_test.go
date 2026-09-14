@@ -33,7 +33,6 @@ var wantLinkPasses = []struct {
 	{"ruby_job_inherit", scopeSameServiceOnly},
 	{"ruby_class_method_calls", scopeSameServiceOnly},
 	{"ruby_receiver_type_calls", scopeSameServiceOnly},
-	{"ruby_associations", scopeSameServiceOnly},
 	{"ruby_mixin_methods", scopeSameServiceOnly},
 	{"ruby_mixin_constants", scopeSameServiceOnly},
 	{"ruby_sole_definer_calls", scopeSameServiceOnly},
