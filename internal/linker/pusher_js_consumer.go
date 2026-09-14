@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
@@ -595,4 +597,82 @@ func extractPusherConfigHash(
 		}
 	}
 	return out
+}
+
+// parsePusherRubySource parses a raw Ruby byte slice (the virtual-Ruby view of
+// an ERB template). Unlike rubyParse it takes bytes, not a path, and always
+// owns the tree — the caller must call release.
+//
+// Retained here (moved from the now-retired pusher_consumer.go, Tier FX
+// FX.8 2026-09-14 — its ERB scanning half migrated to
+// internal/factpipe/hub_pusher_consumer.go's pusher_wrapper_erb hub
+// provider) because this file's own pusherPropConfigFromERB still needs it:
+// it stays hand-written Go, not a hub consumer, because its output only
+// feeds this pass's JS-dataflow subscribe-site record (see this file's
+// package doc) rather than minting anything on its own.
+func parsePusherRubySource(src []byte) (root *sitter.Node, release func()) {
+	p := sitter.NewParser()
+	p.SetLanguage(rubysitter.GetLanguage())
+	tree, err := p.ParseCtx(context.Background(), nil, src)
+	if err != nil || tree == nil {
+		return nil, func() {}
+	}
+	return tree.RootNode(), func() { tree.Close() }
+}
+
+// pusherRefSegment reduces an ERB channel expression to the one stable segment
+// both sides agree on: a bare string's literal middle segment, a
+// `PusherClient::CONST` value, or a `PusherClient::CHANNELS[:sym]` lookup.
+func pusherRefSegment(
+	n *sitter.Node, src []byte,
+	constVals map[string]map[string]string,
+	hashConstVals map[string]map[string]map[string]string,
+) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
+	case "string":
+		return pusherChannelFromString(n, src)
+	case "scope_resolution":
+		scope := n.ChildByFieldName("scope")
+		name := n.ChildByFieldName("name")
+		if scope != nil && name != nil {
+			return constVals[scope.Content(src)][name.Content(src)]
+		}
+	case "element_reference":
+		obj := n.ChildByFieldName("object")
+		if obj == nil || obj.Type() != "scope_resolution" || n.NamedChildCount() < 2 {
+			return ""
+		}
+		s := obj.ChildByFieldName("scope")
+		nm := obj.ChildByFieldName("name")
+		if s == nil || nm == nil {
+			return ""
+		}
+		key := strings.TrimPrefix(strings.Trim(n.NamedChild(1).Content(src), `"'`), ":")
+		if h := hashConstVals[s.Content(src)][nm.Content(src)]; h != nil {
+			return h[key]
+		}
+	}
+	return ""
+}
+
+// pusherRefLiteral resolves an ERB event expression to its string value: a
+// literal, or a `PusherClient::CONST`.
+func pusherRefLiteral(n *sitter.Node, src []byte, constVals map[string]map[string]string) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
+	case "string":
+		return pusherStringLiteral(n, src)
+	case "scope_resolution":
+		scope := n.ChildByFieldName("scope")
+		name := n.ChildByFieldName("name")
+		if scope != nil && name != nil {
+			return constVals[scope.Content(src)][name.Content(src)]
+		}
+	}
+	return ""
 }

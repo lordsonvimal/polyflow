@@ -1,0 +1,46 @@
+% Tier FX FX.8 (2026-09-14) — pusher_consumer. Replaces the ERB half of
+% internal/linker/pusher_consumer.go's EnrichPusherConsumers.
+%
+% Base fact (from the pusher_wrapper_erb hub provider,
+% internal/factpipe/hub_pusher_consumer.go — NOT a tree-sitter facts: block;
+% see patterns/ruby/pusher_consumer.yaml's package doc):
+%
+%   pusher_subscribe_site(Svc, File, Line, Pattern, Seg, Event, Label)
+%       one fully-resolved ERB `pusher_config(channel:, event:)` /
+%       `render "shared/pusher", pusher_channel:` call site.
+%
+% Bridge (FX.1): node.
+
+% ---------------------------------------------------------------------------
+% mint: pass the hub's rows straight through to the emit spec's `mint:`
+% block — the join-free case, same idiom as a `.dl` that has nothing to
+% derive beyond "this row exists, build the node".
+% ---------------------------------------------------------------------------
+pusher_subscribe_mint(Svc, File, Line, Pattern, Seg, Event, Label) :-
+    pusher_subscribe_site(Svc, File, Line, Pattern, Seg, Event, Label).
+
+% ---------------------------------------------------------------------------
+% containing-file edge — join the site's File to its file node (Svc scoped,
+% matching the retired pass's fileNodeID[Service + File] lookup).
+% ---------------------------------------------------------------------------
+pusher_subscribe_file(Svc, File, Line, Pattern, Seg, Event, Label, FileID) :-
+    pusher_subscribe_site(Svc, File, Line, Pattern, Seg, Event, Label),
+    node(FileID, "file", File, Svc).
+
+% ---------------------------------------------------------------------------
+% PU.5 — thin bridge from each ERB subscriber to the browser's Pusher
+% singleton entry point (`common/PusherConnection/PusherConnection.{jsx,tsx}`
+% `subscribe` function). The channel/event strings never survive into JS (the
+% React layer is a pure pass-through of the `pusherConfig` prop), so the
+% contract engine cannot join the ERB node to the runtime
+% `pusher_subscribe_client` node; without this edge a forward trace from a
+% Rails `notify_*` dead-ends at the ERB view.
+% ---------------------------------------------------------------------------
+pusher_subscribe_singleton(S) :-
+    node(S, "function", File, _),
+    contains(File, "PusherConnection"),
+    contains(S, ":function:subscribe:").
+
+pusher_subscribe_bridge(Svc, File, Line, Pattern, Seg, Event, Label, S) :-
+    pusher_subscribe_site(Svc, File, Line, Pattern, Seg, Event, Label),
+    pusher_subscribe_singleton(S).

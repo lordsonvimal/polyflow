@@ -746,30 +746,10 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			// pusher_helper_calls.dl, run by the factpipe_frameworks pass below.
 			return st.writeEdges(pubEdges)
 		}},
-		// Tier PU.3: the Pusher consumer half. Mint one `subscriber` node per
-		// resolvable ERB `pusher_config(channel:, event:)` /
-		// `render "shared/pusher", pusher_channel:` call site — the browser's
-		// channel/event arrive as a server-built prop and never appear as JS
-		// literals, so the keyed consumer node lives on the ERB call site.
-		// Runs before the contract engine so contracts/pusher.yaml joins these
-		// to the PU.2 producer nodes.
-		{"pusher_consumer_erb", scopeSameServiceOnly, func() error {
-			subNodes, subEdges := linker.EnrichPusherConsumers(st.allNodes, st.svcFilesOf())
-			if len(subNodes) == 0 {
-				return nil
-			}
-			for i := range subNodes {
-				n := subNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
-				}
-				st.allNodes = append(st.allNodes, n)
-			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			return st.writeEdges(subEdges)
-		}},
+		// Tier PU.3 (the ERB half) is Tier FX FX.8 (2026-09-14):
+		// patterns/ruby/pusher_consumer.yaml + rules/ruby/pusher_consumer.dl,
+		// run by the factpipe_frameworks pass below — same "runs before the
+		// contract engine" slot the hand-written pass held.
 		// SPA.7: the JS half of the Pusher consumer side. Mint one `subscriber`
 		// node per `instance.subscribe(name)` / `channel.bind("evt", …)` site
 		// in JS — the shape `pusher_consumer_erb` (orion's `pusher_config`

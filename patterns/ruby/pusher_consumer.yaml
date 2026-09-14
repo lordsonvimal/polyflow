@@ -1,0 +1,72 @@
+# Tier FX FX.8 (2026-09-14) — replaces internal/linker/pusher_consumer.go's
+# EnrichPusherConsumers (Tier PU.3, the ERB half of Pusher realtime
+# consumer-side linking).
+#
+# The pusher-js subscribe call in the browser takes its channel/event from
+# the `pusherConfig` prop, which every view builds in ERB through
+# `PusherConfigHelper#pusher_config(channel:, event:)` (or the shared-partial
+# path, `render "shared/pusher", pusher_channel:`). The React layer is a pure
+# pass-through — the channel/event strings never appear as JS literals — so
+# the keyed consumer node has to be minted from the ERB call site, resolving
+# `PusherClient::` constants against the same wrapper class
+# patterns/ruby/pusher.yaml's `pusher_trigger`/`pusher_trigger_async`
+# publisher already lives in.
+#
+# This framework carries NO `facts:` patterns. Both things a `.dl` rule
+# cannot express here — (a) re-parsing a DIFFERENT wrapper .rb file's class
+# body into a notify_*->event/const/hash-const table, and (b) reaching a
+# `pusher_config(...)` call's keyword-argument structure inside an .erb
+# file's embedded Ruby, which the dedicated `erb` tree-sitter grammar hands
+# over as a flat, childless leaf (see hub_pusher_consumer.go's package doc)
+# — are the `pusher_wrapper_erb` hub provider's job (Tier FX's
+# cross-framework fact-sharing mechanism, internal/factpipe/hub.go). It
+# computes the fully-resolved (Svc, File, Line, Pattern, ChannelSeg, Event,
+# Label) rows once per run; rules/ruby/pusher_consumer.dl only joins them
+# against the graph-so-far to mint the subscriber node, its containing-file
+# edge, and PU.5's thin bridge to the browser's Pusher singleton entry point.
+language: ruby
+version: "1"
+package: pusher
+
+hub:
+  - name: pusher_wrapper_erb
+
+emit:
+  - relation: pusher_subscribe_mint
+    columns: [Svc, File, Line, Pattern, Seg, Event, Label]
+    mint:
+      node: subscriber
+      id: { template: "{Svc}:{File}:subscriber:{Pattern}:{Line}" }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: erb }
+      meta:
+        pattern: { arg: Pattern }
+        channel: { arg: Seg }
+        event: { arg: Event }
+        package: { literal: pusher-js }
+        resolved_via: { literal: pusher_consumer_erb }
+
+  - relation: pusher_subscribe_file
+    columns: [Svc, File, Line, Pattern, Seg, Event, Label, FileID]
+    edge:
+      from: { arg: FileID }
+      to: { template: "{Svc}:{File}:subscriber:{Pattern}:{Line}" }
+      type: contains
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: pusher_subscribe_bridge
+    columns: [Svc, File, Line, Pattern, Seg, Event, Label, Singleton]
+    edge:
+      from: { template: "{Svc}:{File}:subscriber:{Pattern}:{Line}" }
+      to: { arg: Singleton }
+      type: calls
+    meta:
+      via: pusher_subscribe_singleton
+    confidence:
+      - { else: inferred }
+    dedup: [from, to]

@@ -96,6 +96,14 @@ func TestPatternFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("load pattern file: %v", err)
 			}
+			if len(pf.Patterns) == 0 {
+				// A hub-only framework (Tier FX's cross-framework fact-sharing
+				// mechanism, internal/factpipe/hub.go) carries no `patterns:`
+				// tree-sitter queries at all — nothing for this harness to
+				// fixture-match. Its correctness is covered by its
+				// internal/factpipe/pipeline/*_test.go instead.
+				t.Skip("no patterns: block, nothing to fixture-match")
+			}
 
 			fixtureDir := strings.TrimSuffix(yamlPath, ".yaml") + "_test"
 			if _, err := os.Stat(fixtureDir); os.IsNotExist(err) {

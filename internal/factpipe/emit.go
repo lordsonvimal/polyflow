@@ -56,6 +56,10 @@ var frozenEdgeTypes = map[string]bool{
 // listed here; add one only when a real pass needs it, not speculatively.
 var frozenNodeTypes = map[string]bool{
 	"file": true,
+	// subscriber: added for pusher_consumer (FX.8 2026-09-14) — one
+	// `subscriber` node per resolved ERB `pusher_config`/`render
+	// "shared/pusher"` call site.
+	"subscriber": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or

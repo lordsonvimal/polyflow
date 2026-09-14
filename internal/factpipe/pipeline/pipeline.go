@@ -88,6 +88,7 @@ type Framework struct {
 	Resolves []factpipe.CompiledResolve
 	Configs  []factpipe.CompiledConfig
 	Tables   []factpipe.CompiledTable
+	Hubs     []factpipe.CompiledHub
 
 	goals []string // the emit relations, materialized by Eval
 }
@@ -200,6 +201,17 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		return nil, fmt.Errorf("factpipe: pattern %s: %w", yamlPath, err)
 	}
 
+	var hdoc struct {
+		Hub []factpipe.HubSpec `yaml:"hub"`
+	}
+	if err := yaml.Unmarshal(ydata, &hdoc); err != nil {
+		return nil, fmt.Errorf("factpipe: pattern %s hub: %w", yamlPath, err)
+	}
+	hubs, err := factpipe.CompileHubSpecs(hdoc.Hub)
+	if err != nil {
+		return nil, fmt.Errorf("factpipe: pattern %s: %w", yamlPath, err)
+	}
+
 	rdata, err := fs.ReadFile(ruleFS, dlPath)
 	if err != nil {
 		return nil, err
@@ -232,6 +244,7 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		Resolves: resolves,
 		Configs:  configs,
 		Tables:   tables,
+		Hubs:     hubs,
 		goals:    goals,
 	}, nil
 }
@@ -298,6 +311,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 		factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 		factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
+		factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, fset)
 
 		fr := factRelations(fw, fset)
 		derived, prov, err := fw.Rules.Eval(fr)
@@ -348,7 +362,7 @@ func extractFramework(fw *Framework, files []ParsedFile, dst factpipe.FactSet) e
 			specsByPattern[p.Name] = p.Facts
 		}
 	}
-	if len(specsByPattern) == 0 {
+	if len(specsByPattern) == 0 && len(fw.Hubs) == 0 {
 		return fmt.Errorf("no patterns carry a facts: block")
 	}
 
@@ -414,6 +428,7 @@ func (fw *Framework) EvalOnce(files []ParsedFile, graphSoFar graph.Snapshot, ext
 	factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 	factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 	factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
+	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, fset)
 	fr := factRelations(fw, fset)
 	fr.Goals = append(append([]string(nil), fr.Goals...), extraGoals...)
 	derived, _, err := fw.Rules.Eval(fr)
