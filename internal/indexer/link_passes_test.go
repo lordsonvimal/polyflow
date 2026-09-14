@@ -89,7 +89,6 @@ var wantLinkPasses = []struct {
 	{"factpipe_frameworks", scopeSameServiceOnly},
 	{"enrich_aliases", scopeCrossService},
 	{"amqp_handshake", scopeCrossService},
-	{"amqp_message_type_dispatch", scopeCrossService},
 	{"contract_engine", scopeCrossService},
 	{"sse_push", scopeCrossService},
 	{"contract_coverage", scopeCrossService},

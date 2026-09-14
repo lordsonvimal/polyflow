@@ -1649,19 +1649,12 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, handshakeUnresolved...)
 			return nil
 		}},
-		// AH follow-up: the message-type dispatch join, distinct from and
-		// unblocked by the queue-name handshake above — it answers "what breaks
-		// if I change this message's shape" rather than "where does it go".
-		// Emits edges directly (not through the contract engine) since the join
-		// is on a bare constant name, not a structural role any contracts/*.yaml
-		// rule already models.
-		{"amqp_message_type_dispatch", scopeCrossService, func() error {
-			mtEdges := st.filterByTargetServices(linker.LinkAMQPMessageTypeDispatch(st.enrichedNodes))
-			if len(mtEdges) == 0 {
-				return nil
-			}
-			return st.writeEdges(mtEdges)
-		}},
+		// FX.8.14: the message-type dispatch join, distinct from and unblocked
+		// by the queue-name handshake above — it answers "what breaks if I
+		// change this message's shape" rather than "where does it go". Now a
+		// contracts/amqp.yaml rule (message_type key, confidence_ceiling
+		// stamped at pattern-match time), so it runs inside contract_engine
+		// below rather than as its own pass.
 		{"contract_engine", scopeCrossService, func() error {
 			eng := &contract.Engine{}
 			result := eng.Link(st.enrichedNodes, st.contractRules, st.cfg.Links)

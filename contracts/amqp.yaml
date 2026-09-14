@@ -75,3 +75,30 @@ contracts:
       id_prefix: broker_queue
       same_service: skip
     unmatched: drop
+  # FX.8.14: message-type dispatch, the payload-shape analogue of the two
+  # channel contracts above — replaces internal/linker/amqp_message_type.go.
+  # Neither repo shares a literal: the producer sets `message_type:
+  # MT_CREATE_USER` in the publish payload and the consumer dispatches on
+  # `message_hash["message_type"]` against a `when MT_CREATE_USER` branch,
+  # each repo defining its own `MT_CREATE_USER = "..."` independently. The
+  # shared constant NAME is the one static token both sides agree on
+  # (patterns/ruby/amqp_message_type.yaml), so the join is on that name
+  # directly — like the queue-name handshake below, agreement on a name is
+  # not proof of reachability, so the producer pattern stamps
+  # confidence_ceiling=partial at match time (matcher.go) to keep an
+  # exact-name match from reading `static`.
+  - kind: amqp
+    producer:
+      node: channel
+      where: {pattern: amqp_message_type_pair}
+      key: [message_type]
+    consumer:
+      node: channel
+      where: {pattern: amqp_message_type_dispatch}
+      key: [message_type]
+    match: [exact]
+    edge:
+      type: publishes
+      id_prefix: amqp_message_type
+      same_service: skip
+    unmatched: drop

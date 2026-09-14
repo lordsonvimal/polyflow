@@ -1580,6 +1580,17 @@ func MatchToGraph(service string, results []MatchResult) ([]graph.Node, []graph.
 			meta["via"] = "datastar"
 		}
 
+		// FX.8.14: amqp_message_type_pair's key (the shared constant NAME) is
+		// never proof of reachability, only that the two repos agree on a
+		// message shape — same trust posture as the K.6 handshake's
+		// confidence_ceiling, but stamped directly since no field-symbol
+		// resolution is involved. contracts/amqp.yaml reads it off the
+		// producer node to cap an exact-name match at `partial` instead of
+		// `static`.
+		if r.PatternName == "amqp_message_type_pair" {
+			meta["confidence_ceiling"] = "partial"
+		}
+
 		// Datastore call sites: record whether this is a read or a write so
 		// the linker can emit queries/persists edges to the service store node.
 		if nodeType == graph.NodeTypeDatastore {
