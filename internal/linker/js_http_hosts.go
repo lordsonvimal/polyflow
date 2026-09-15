@@ -1,16 +1,27 @@
 package linker
 
 import (
+	"regexp"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/valuegraph"
 )
 
 // ResolveJSHTTPHosts is Tier JH — the JS/TS analogue of ResolveGoHTTPHosts /
-// ResolveRubyHTTPHosts. Neither of those passes has ever run on a JS/TS
-// http_client: a client built from `` `${_backendUrl}/api/graph` `` already
+// ResolveRubyHTTPHosts, and VG.7's third migrated pass: the module-scope
+// identifier resolution below is the valuegraph engine's ordinary
+// resolveSymbol/bindingsIn behaviour (internal/valuegraph/engine.go), not a
+// bespoke walk — this pass supplies only what the engine has no vocabulary
+// for: finding the host identifier at the call site, and recognising a
+// resolved member-expression as an env read. Unlike ruby_http_hosts (Tier
+// FX), this stayed on Tier VG because the JS binding spec already existed
+// and needed no new construct; see docs/js-value-graph-pilot-plan.md VG.7.
+//
+// A JS/TS http_client built from a template literal such as
+// `${_backendUrl}/api/graph` already
 // gets its host segment reduced to a wildcard by the JS KeyWalker's
 // template-reconstruction (patterns/matcher.go, X.1b) — `Meta["url"]` reads
 // `*/api/graph` — but the identifier that produced the hole
@@ -20,28 +31,32 @@ import (
 //
 // This pass re-parses the file to recover that identifier from the call
 // site's own AST (the reconstruction is lossy; the source on disk is not)
-// and resolves it to its single unambiguous module-scope textual origin:
+// and resolves it to its single unambiguous module-scope origin, via the
+// engine:
 //
 //  1. an env read (`process.env.X`, `import.meta.env.X`) — the direct JS/TS
 //     equivalent of what Tier L/J.2b already trace for Ruby/Go, stamped
 //     Meta["env_var"] so ResolveConfigBaseURLPaths (Tier CB) consumes it
 //     exactly as it already does for the other two languages.
-//  2. a module-level `let`/`const` string-literal default
-//     (`let _backendUrl = 'http://localhost:4747'`) — a genuinely different,
-//     weaker evidence class: the value is not read from any config source
-//     Tier CB's configsrc.Load knows about, and it may be overwritten at
-//     runtime (GitNexus's own `setBackendUrl`). Stamped
-//     Meta["host_default_literal"] instead of Meta["env_var"], with
-//     Meta["confidence_ceiling"] capped at graph.ConfidencePartial so it is
-//     never treated as equivalent-confidence to a committed env value.
+//  2. a module-level string-literal default (`let _backendUrl =
+//     'http://localhost:4747'`) — a genuinely different, weaker evidence
+//     class: the value is not read from any config source Tier CB's
+//     configsrc.Load knows about, and it may be overwritten at runtime (an
+//     exported setter). Stamped Meta["host_default_literal"] instead of
+//     Meta["env_var"], with Meta["confidence_ceiling"] capped at
+//     graph.ConfidencePartial so it is never treated as equivalent-confidence
+//     to a committed env value.
 //
-// Everything else — no interpolation at the host position, an interpolation
-// that is not a bare identifier, an identifier with no module-scope
-// declaration, an identifier reassigned elsewhere at module scope with a
-// non-literal value — resolves to nothing. An honest miss over a guess
-// (#12). Reassignment *inside* a function body (an exported setter) does not
-// disqualify case 2: that is precisely the weaker-evidence shape the
-// confidence cap exists for, not an ambiguity to abstain on.
+// Everything else resolves to nothing: no interpolation at the host
+// position, an interpolation that is not a bare identifier, an identifier
+// the engine cannot bind to exactly one value (no declaration, more than
+// one, or a value that isn't a literal or a recognised env read), or a
+// module-scope reassignment — the engine folds that into the same Union the
+// declaration sits in, which is neither Literal nor a bare env-member
+// Opaque, so it abstains without this pass having to special-case it. An
+// honest miss over a guess (#12). Reassignment *inside* a function body (an
+// exported setter) does not disqualify case 2: bindingsIn already skips a
+// nested scope that does not span the use site.
 //
 // Returns the mutated http_client nodes so the caller can re-persist them;
 // the node metas are also mutated in place in the passed slice.
@@ -72,7 +87,7 @@ func ResolveJSHTTPHosts(nodes []graph.Node, serviceFiles map[string][]string) []
 			continue
 		}
 		ident := jf.hostIdentAtLine(n.Line)
-		if ident == "" {
+		if ident == nil {
 			continue
 		}
 		val, kind := jf.resolveModuleIdent(ident)
@@ -134,36 +149,36 @@ func parseJSHostFile(file string) *jsHostFile {
 // a candidate template literal / concatenation may start on. The node's line
 // is the enclosing call site's start (`streamSSE(` / `fetchWithTimeout(`),
 // but a wrapped call frequently puts its URL argument on the next line or
-// two — confirmed on GitNexus's own backend-client.ts (`deleteRepo`'s
+// two — confirmed on a real backend-client.ts (`deleteRepo`'s
 // `fetchWithTimeout(\n  \`${_backendUrl}/api/repo?...\`,\n  ...)`). A window
 // small enough that it can't cross into an unrelated statement.
 const jsHostLineSlack = 5
 
 // hostIdentAtLine finds a template literal or `+`-concatenation whose host
 // position (the very first hole, before any literal text) is a bare
-// identifier, and returns its name. Literal text appearing before the first
-// hole (`https://${x}`) is not this shape — the KeyWalker only wildcards the
-// *host*, not a scheme prefix, so a node whose path/url starts with "*" was
-// produced by a hole in the leading position. Searched in document order
-// across a small line window starting at line, so the first candidate found
-// is the one lexically nearest the call site.
-func (jf *jsHostFile) hostIdentAtLine(line int) string {
-	var found string
+// identifier, and returns that identifier's node. Literal text appearing
+// before the first hole (`https://${x}`) is not this shape — the KeyWalker
+// only wildcards the *host*, not a scheme prefix, so a node whose path/url
+// starts with "*" was produced by a hole in the leading position. Searched
+// in document order across a small line window starting at line, so the
+// first candidate found is the one lexically nearest the call site.
+func (jf *jsHostFile) hostIdentAtLine(line int) *sitter.Node {
+	var found *sitter.Node
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
-		if found != "" || n == nil {
+		if found != nil || n == nil {
 			return
 		}
 		row := int(n.StartPoint().Row) + 1
 		if row >= line && row <= line+jsHostLineSlack {
 			switch n.Type() {
 			case "template_string":
-				if id := jsTemplateHostIdent(n, jf.src); id != "" {
+				if id := jsTemplateHostIdent(n, jf.src); id != nil {
 					found = id
 					return
 				}
 			case "binary_expression":
-				if id := jsConcatHostIdent(n, jf.src); id != "" {
+				if id := jsConcatHostIdent(n, jf.src); id != nil {
 					found = id
 					return
 				}
@@ -177,11 +192,11 @@ func (jf *jsHostFile) hostIdentAtLine(line int) string {
 	return found
 }
 
-// jsTemplateHostIdent returns the identifier inside a template literal's
-// first `${...}` hole, provided that hole is the template's very first
-// segment (no literal text or backtick-adjacent content precedes it) and
-// the hole contains nothing but a bare identifier.
-func jsTemplateHostIdent(n *sitter.Node, src []byte) string {
+// jsTemplateHostIdent returns the identifier node inside a template
+// literal's first `${...}` hole, provided that hole is the template's very
+// first segment (no literal text or backtick-adjacent content precedes it)
+// and the hole contains nothing but a bare identifier.
+func jsTemplateHostIdent(n *sitter.Node, src []byte) *sitter.Node {
 	for i := 0; i < int(n.ChildCount()); i++ {
 		c := n.Child(i)
 		switch c.Type() {
@@ -189,36 +204,36 @@ func jsTemplateHostIdent(n *sitter.Node, src []byte) string {
 			continue
 		case "template_substitution":
 			if c.NamedChildCount() != 1 {
-				return ""
+				return nil
 			}
 			inner := c.NamedChild(0)
 			if inner.Type() != "identifier" {
-				return ""
+				return nil
 			}
-			return inner.Content(src)
+			return inner
 		default:
-			return "" // literal text before the first hole — not the host position
+			return nil // literal text before the first hole — not the host position
 		}
 	}
-	return ""
+	return nil
 }
 
-// jsConcatHostIdent returns the identifier at the leftmost operand of a
+// jsConcatHostIdent returns the identifier node at the leftmost operand of a
 // `+`-chained concatenation, provided that operand is a bare identifier. A
 // chain rooted in anything but `+`, or whose leftmost operand is not a bare
 // identifier, is not this shape.
-func jsConcatHostIdent(n *sitter.Node, src []byte) string {
+func jsConcatHostIdent(n *sitter.Node, src []byte) *sitter.Node {
 	if !jsIsPlus(n, src) {
-		return ""
+		return nil
 	}
 	left := n.ChildByFieldName("left")
 	for left != nil && jsIsPlus(left, src) {
 		left = left.ChildByFieldName("left")
 	}
 	if left != nil && left.Type() == "identifier" {
-		return left.Content(src)
+		return left
 	}
-	return ""
+	return nil
 }
 
 func jsIsPlus(n *sitter.Node, src []byte) bool {
@@ -239,108 +254,36 @@ const (
 	jsHostDefaultLiteral
 )
 
-// resolveModuleIdent resolves ident to its single module-scope declaration's
-// initializer — an env read or a string literal — or ("", jsHostNone) when
-// there is none, more than one, or a module-scope (not function-scope)
-// reassignment makes the declared value untrustworthy as "the" value.
-func (jf *jsHostFile) resolveModuleIdent(ident string) (string, jsHostKind) {
-	var declRHS *sitter.Node
-	declCount := 0
-	for i := 0; i < int(jf.root.NamedChildCount()); i++ {
-		stmt := jf.root.NamedChild(i)
-		decl := stmt
-		if stmt.Type() == "export_statement" {
-			if d := stmt.ChildByFieldName("declaration"); d != nil {
-				decl = d
+// reJSEnvMember matches a resolved member-expression's source text against
+// the two env-read shapes Tier L/J.2b already recognise for the other
+// languages. Matched on text rather than re-walking the node: the engine has
+// already stopped at this member_expression and handed back only its source
+// span (Value.Origin.Text), which is all a caller needs to tell "this
+// Opaque IS an env var" from any other member read (VG.4 §7.2 precedent —
+// policy the lattice itself does not carry, applied in the adapter).
+var reJSEnvMember = regexp.MustCompile(`^(?:process\.env|import\.meta\.env)\.([A-Za-z_$][A-Za-z0-9_$]*)$`)
+
+// resolveModuleIdent resolves ident to its single module-scope value via the
+// valuegraph engine — an env read or a string literal — or ("", jsHostNone)
+// for anything else: no binding, more than one (the engine folds multiple
+// bindings of one name into a Union, which matches neither case below), a
+// call or other opaque expression the engine cannot follow, or a
+// module-scope reassignment (also folded into the same disqualifying
+// Union — see the engine's bindingsIn: a nested function scope that does not
+// span ident's use site is skipped entirely, which is what keeps an
+// exported setter's reassignment from disqualifying case 2).
+func (jf *jsHostFile) resolveModuleIdent(ident *sitter.Node) (string, jsHostKind) {
+	eng := valuegraph.New(jsValuegraphSpec(), jsEngineFileSource{}, valuegraph.Options{})
+	v := eng.Resolve(valuegraph.Query{Src: jf.src, Root: jf.root, Expr: ident})
+	switch v.Kind {
+	case valuegraph.KindLiteral:
+		return v.Text, jsHostDefaultLiteral
+	case valuegraph.KindOpaque:
+		if v.Origin.Reason == valuegraph.ReasonMember {
+			if m := reJSEnvMember.FindStringSubmatch(v.Origin.Text); m != nil {
+				return m[1], jsHostEnvVar
 			}
 		}
-		if decl.Type() != "lexical_declaration" && decl.Type() != "variable_declaration" {
-			continue
-		}
-		for j := 0; j < int(decl.NamedChildCount()); j++ {
-			d := decl.NamedChild(j)
-			if d.Type() != "variable_declarator" {
-				continue
-			}
-			nameNode := d.ChildByFieldName("name")
-			if nameNode == nil || nameNode.Type() != "identifier" || nameNode.Content(jf.src) != ident {
-				continue
-			}
-			declCount++
-			declRHS = d.ChildByFieldName("value")
-		}
-	}
-	if declCount != 1 || declRHS == nil {
-		return "", jsHostNone
-	}
-	if jf.hasModuleScopeReassign(ident) {
-		return "", jsHostNone
-	}
-	if env := jsEnvReadVar(declRHS, jf.src); env != "" {
-		return env, jsHostEnvVar
-	}
-	if lit, ok := jsStringLiteral(declRHS, jf.src); ok {
-		return lit, jsHostDefaultLiteral
 	}
 	return "", jsHostNone
-}
-
-// hasModuleScopeReassign reports whether ident is reassigned by a top-level
-// (module-scope, not inside any function) assignment expression elsewhere in
-// the file. Such a reassignment means the declared initializer is not
-// actually the value in force, unlike a reassignment nested in a function
-// body (an exported setter, the common real shape) that only runs when
-// called — that case is exactly what the confidence cap on case 2 exists
-// for, not a reason to abstain outright.
-func (jf *jsHostFile) hasModuleScopeReassign(ident string) bool {
-	for i := 0; i < int(jf.root.NamedChildCount()); i++ {
-		stmt := jf.root.NamedChild(i)
-		if stmt.Type() != "expression_statement" || stmt.NamedChildCount() == 0 {
-			continue
-		}
-		expr := stmt.NamedChild(0)
-		if expr.Type() != "assignment_expression" {
-			continue
-		}
-		left := expr.ChildByFieldName("left")
-		if left != nil && left.Type() == "identifier" && left.Content(jf.src) == ident {
-			return true
-		}
-	}
-	return false
-}
-
-// jsEnvReadVar returns the env var name of a `process.env.X` /
-// `import.meta.env.X` member-expression, or "". Matched on the object
-// subexpression's own source text rather than its node shape, since
-// `import.meta` parses as its own construct in the TS grammar rather than an
-// ordinary identifier chain.
-func jsEnvReadVar(n *sitter.Node, src []byte) string {
-	if n == nil || n.Type() != "member_expression" {
-		return ""
-	}
-	prop := n.ChildByFieldName("property")
-	obj := n.ChildByFieldName("object")
-	if prop == nil || obj == nil {
-		return ""
-	}
-	switch strings.TrimSpace(obj.Content(src)) {
-	case "process.env", "import.meta.env":
-		return prop.Content(src)
-	}
-	return ""
-}
-
-// jsStringLiteral returns a plain string literal node's content (quotes
-// stripped), or ("", false) for anything else — a template literal or any
-// other expression is not a literal default.
-func jsStringLiteral(n *sitter.Node, src []byte) (string, bool) {
-	if n == nil || n.Type() != "string" {
-		return "", false
-	}
-	text := n.Content(src)
-	if len(text) < 2 {
-		return "", false
-	}
-	return text[1 : len(text)-1], true
 }
