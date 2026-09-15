@@ -27,6 +27,7 @@ var migratedFrameworks = []string{
 	"rails_helpers",
 	"js_hoc",
 	"js_mobx",
+	"js_client_routes",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names

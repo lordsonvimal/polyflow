@@ -74,6 +74,13 @@ var frozenNodeTypes = map[string]bool{
 	// default-export component node, minted only when no existing node
 	// already owns that file+label.
 	"variable": true,
+	// route: added for js_client_routes (FX.8.10 2026-09-15) — one node per
+	// SPA client-side route-table entry.
+	"route": true,
+	// component: added for js_client_routes (FX.8.10 2026-09-15) — SPA.3's
+	// external feature-registry component node, and `patch:`'s RT.1
+	// variable->component retype-in-place Type override.
+	"component": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or
@@ -195,8 +202,17 @@ func (r *replaceSpec) asMint() mintSpec {
 // optional component/end_line bump), same "report-only, caller applies"
 // discipline `replace:`/`delete:` already established — the caller merges
 // into the existing node's Meta map instead of replacing it.
+//
+// `node:` (optional, FX.8.10) additionally reports a Type override — RT.1's
+// "a client_route's render target turns out to be a real component, retype
+// the existing `variable` node to `component` in place" needs the node's
+// OTHER fields (Label/File/Line/Language/Service, and every untouched Meta
+// key) preserved exactly, which is `patch:`'s whole reason to exist; only
+// the Type itself also needs to change, alongside the Meta overlay. Gated
+// against frozenNodeTypes like `mint:`/`replace:` when set.
 type patchSpec struct {
 	ID        valueRef            `yaml:"id"`
+	Node      string              `yaml:"node"` // optional Type override; validated against frozenNodeTypes
 	Component valueRef            `yaml:"component"` // "true" bumps meta["component"]="true" + end_line (if larger)
 	EndLine   valueRef            `yaml:"end_line"`
 	Meta      map[string]valueRef `yaml:"meta"`
@@ -210,6 +226,21 @@ type patchSpec struct {
 // pruning.
 type deleteSpec struct {
 	Old valueRef `yaml:"old"`
+}
+
+// resolvedSpec is a `resolved:` block (FX.8.10) — an auxiliary output
+// channel orthogonal to edge/mint/replace/delete/patch: it reports
+// (service, name) pairs a row resolved, for the caller to retract matching
+// Kind-tagged rows an EARLIER pass already ledgered. `js_client_routes`
+// mints/joins a feature-registry key that a prior JSX-scan pass had already
+// recorded as `jsx_component_unresolved`; the retired Go's own caller glue
+// (internal/indexer/link_passes.go) already did exactly this retraction for
+// two other passes (js_link's importedNames, js_globals'
+// globallyResolved) — `resolved:` generalizes that shape into the emit spec
+// instead of leaving it caller-side ad hoc.
+type resolvedSpec struct {
+	Service valueRef `yaml:"service"`
+	Name    valueRef `yaml:"name"`
 }
 
 type confRule struct {
@@ -247,6 +278,7 @@ type EmitSpec struct {
 	Replace    *replaceSpec        `yaml:"replace"`
 	Delete     *deleteSpec         `yaml:"delete"`
 	Patch      *patchSpec          `yaml:"patch"`
+	Resolved   *resolvedSpec       `yaml:"resolved"`
 	Meta       map[string]valueRef `yaml:"meta"`
 	Confidence []confRule          `yaml:"confidence"`
 	Abstain    struct {
@@ -290,15 +322,20 @@ type EmitResult struct {
 	// Patches lists meta overlays a `patch:` block produced — the caller
 	// merges Meta into the existing node's own Meta map (not a replace).
 	Patches []NodePatch
+	// Resolved lists "service\x00name" pairs a `resolved:` block reported —
+	// the caller retracts matching ledger rows an earlier pass recorded.
+	Resolved []string
 }
 
 // NodePatch is one `patch:` row resolved: overlay Meta onto the existing
 // node named by ID (merge, not replace); if Component, also set
 // meta["component"]="true" and, when EndLine exceeds the node's current
 // EndLine, bump it and stamp meta["end_line"] — mirroring js_hoc's retired
-// stampMeta closure exactly.
+// stampMeta closure exactly. Type is empty unless the spec's `node:` field
+// set a Type override (FX.8.10's RT.1 retype-in-place).
 type NodePatch struct {
 	ID        string
+	Type      graph.NodeType
 	Meta      map[string]string
 	Component bool
 	EndLine   int
@@ -365,8 +402,18 @@ func compileEmit(s EmitSpec) (CompiledEmit, error) {
 	if s.Delete != nil && !s.Delete.Old.set() {
 		return ce, fmt.Errorf("delete needs an old id")
 	}
-	if s.Patch != nil && !s.Patch.ID.set() {
-		return ce, fmt.Errorf("patch needs an id")
+	if s.Patch != nil {
+		if !s.Patch.ID.set() {
+			return ce, fmt.Errorf("patch needs an id")
+		}
+		if s.Patch.Node != "" && !frozenNodeTypes[s.Patch.Node] {
+			return ce, fmt.Errorf("patch node type %q is not in the frozen vocabulary", s.Patch.Node)
+		}
+	}
+	if s.Resolved != nil {
+		if !s.Resolved.Service.set() || !s.Resolved.Name.set() {
+			return ce, fmt.Errorf("resolved needs both service and name")
+		}
 	}
 	nVerbs := 0
 	for _, set := range []bool{s.Mint != nil, s.Replace != nil, s.Delete != nil, s.Patch != nil} {
@@ -377,8 +424,8 @@ func compileEmit(s EmitSpec) (CompiledEmit, error) {
 	if nVerbs > 1 {
 		return ce, fmt.Errorf("emit allows at most one of mint/replace/delete/patch")
 	}
-	if !hasEdge && s.Mint == nil && s.Replace == nil && s.Delete == nil && s.Patch == nil {
-		return ce, fmt.Errorf("emit needs an edge, a mint, a replace, a delete, a patch, or a combination")
+	if !hasEdge && s.Mint == nil && s.Replace == nil && s.Delete == nil && s.Patch == nil && s.Resolved == nil {
+		return ce, fmt.Errorf("emit needs an edge, a mint, a replace, a delete, a patch, a resolved, or a combination")
 	}
 	if s.Unresolved != nil && !s.Unresolved.Ref.Kind.set() {
 		return ce, fmt.Errorf("unresolved.ref needs a kind")
@@ -472,6 +519,12 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 				res.Patches = append(res.Patches, p)
 			}
 		}
+		if e.spec.Resolved != nil {
+			svc, name := e.spec.Resolved.Service.resolve(row), e.spec.Resolved.Name.resolve(row)
+			if svc != "" && name != "" {
+				res.Resolved = append(res.Resolved, svc+"\x00"+name)
+			}
+		}
 		if !hasEdge {
 			continue
 		}
@@ -543,6 +596,10 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 		res.Deleted = dedupStrings(res.Deleted)
 	}
 	sort.Slice(res.Patches, func(i, j int) bool { return res.Patches[i].ID < res.Patches[j].ID })
+	if len(res.Resolved) > 0 {
+		sort.Strings(res.Resolved)
+		res.Resolved = dedupStrings(res.Resolved)
+	}
 	return res
 }
 
@@ -554,7 +611,7 @@ func (e *CompiledEmit) buildPatch(row map[string]string) (NodePatch, bool) {
 	if id == "" {
 		return NodePatch{}, false
 	}
-	p := NodePatch{ID: id, Component: s.Component.resolve(row) == "true"}
+	p := NodePatch{ID: id, Type: graph.NodeType(s.Node), Component: s.Component.resolve(row) == "true"}
 	if s.EndLine.set() {
 		if v, err := strconv.Atoi(s.EndLine.resolve(row)); err == nil {
 			p.EndLine = v

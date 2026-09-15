@@ -321,6 +321,9 @@ type Result struct {
 	// overlays for existing nodes the caller merges in (not a rebuild). See
 	// factpipe.NodePatch.
 	Patches []factpipe.NodePatch
+	// Resolved is FX.8.10's `resolved:` channel — "service\x00name" pairs the
+	// caller uses to retract matching ledger rows an earlier pass recorded.
+	Resolved []string
 }
 
 // Run executes stages 1–4 for one service. graphSoFar is the language-semantic
@@ -376,6 +379,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 			}
 			res.Deleted = append(res.Deleted, er.Deleted...)
 			res.Patches = append(res.Patches, er.Patches...)
+			res.Resolved = append(res.Resolved, er.Resolved...)
 		}
 	}
 
@@ -394,6 +398,16 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		res.Deleted = deduped
 	}
 	sort.SliceStable(res.Patches, func(i, j int) bool { return res.Patches[i].ID < res.Patches[j].ID })
+	if len(res.Resolved) > 0 {
+		sort.Strings(res.Resolved)
+		deduped := res.Resolved[:1]
+		for _, r := range res.Resolved[1:] {
+			if r != deduped[len(deduped)-1] {
+				deduped = append(deduped, r)
+			}
+		}
+		res.Resolved = deduped
+	}
 	return res, nil
 }
 

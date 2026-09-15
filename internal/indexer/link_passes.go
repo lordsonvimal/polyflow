@@ -386,24 +386,70 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.deleteNodes(removeIDs)
 		}},
-		// SPA.2: model the SPA client-side router — a `client_route` node per
-		// route-table entry, `client_route --renders--> component` from the
-		// `switch (routeName)` block, and `http_handler --navigates_to-->
-		// client_route` where path shapes agree. Runs after js_link so the
+		// Tier FX FX.8.10 (2026-09-15) — declarative js_client_routes, replacing
+		// linker.LinkJSClientRoutes (SPA.2 client router + SPA.3 feature-registry
+		// resolution + RT.1 render-target retyping). Its own dedicated
+		// pipeline.Run call (not the shared factpipe_frameworks slot, which
+		// applies no `patch:`/`resolved:`): patches merge into an existing
+		// node's Meta (and retype its Type, RT.1), mint gap-fills route +
+		// external feature-component nodes, resolved retracts matching
+		// jsx_component_unresolved ledger rows. Runs after js_link so the
 		// render-target component nodes are already resolved/stamped.
 		{"js_client_routes", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			crNodes, crTagged, crEdges, crLedger, crResolved := linker.LinkJSClientRoutes(st.allNodes, svcFiles)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("js_client_routes: load registry: %w", err)
+			}
+			fw := reg.ByName("js_client_routes")
+			if fw == nil {
+				return fmt.Errorf("js_client_routes: framework not embedded")
+			}
+			// Run once per service (the pusher_producer/rails_helpers/
+			// rails_route_actions convention) rather than one call over the
+			// whole graph: the hub's per-file service inference falls back
+			// to "the service every node in this call belongs to" for a
+			// file with no declared nodes of its own (a pure route table —
+			// `export default {...}`, nothing else — the common case for
+			// this pass specifically), which only holds when one hub call
+			// covers exactly one service.
+			var res pipeline.Result
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				snap := graph.Snapshot{Nodes: svcNodes, Files: sf.files}
+				svcRes, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+				if err != nil {
+					return fmt.Errorf("js_client_routes: service %s: %w", sf.svc.Name, err)
+				}
+				res.Edges = append(res.Edges, svcRes.Edges...)
+				res.Nodes = append(res.Nodes, svcRes.Nodes...)
+				res.Unresolved = append(res.Unresolved, svcRes.Unresolved...)
+				res.Patches = append(res.Patches, svcRes.Patches...)
+				res.Resolved = append(res.Resolved, svcRes.Resolved...)
+			}
+
 			// SPA.3: retract jsx_component_unresolved rows for keys the feature
 			// registry resolved; record the non-literal lookups it couldn't.
+			resolved := make(map[string]bool, len(res.Resolved))
+			for _, r := range res.Resolved {
+				resolved[r] = true
+			}
 			filtered := st.allUnresolved[:0]
 			for _, u := range st.allUnresolved {
-				if u.Kind == "jsx_component_unresolved" && crResolved[u.Service+"\x00"+u.Name] {
+				if u.Kind == "jsx_component_unresolved" && resolved[u.Service+"\x00"+u.Name] {
 					continue
 				}
 				filtered = append(filtered, u)
 			}
-			st.allUnresolved = append(filtered, crLedger...)
+			st.allUnresolved = append(filtered, res.Unresolved...)
+
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
@@ -411,17 +457,30 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			// RT.1: re-typed render targets replace their existing entry rather
 			// than appending. A second node with the same label would be a
 			// second render target and would mint fan-out.
-			for i := range crTagged {
-				n := crTagged[i]
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.allNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta)+2)
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				n.Meta = m
+				if p.Type != "" {
+					n.Type = p.Type
+				}
+				st.allNodes[idx] = n
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}
-				if idx, ok := byID[n.ID]; ok {
-					st.allNodes[idx] = n
-				}
 			}
-			for i := range crNodes {
-				n := crNodes[i]
+			for i := range res.Nodes {
+				n := res.Nodes[i]
 				if _, exists := byID[n.ID]; exists {
 					continue
 				}
@@ -434,7 +493,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			return st.writeEdges(crEdges)
+			return st.writeEdges(res.Edges)
 		}},
 		// L.W1: global/window symbol resolution + inline handler linking.
 		// Runs after LinkJS so imports-first ordering is enforced via jsImportedNames.

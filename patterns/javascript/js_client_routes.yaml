@@ -1,0 +1,115 @@
+# Tier FX FX.8.10 (2026-09-15) — replaces internal/linker/js_client_routes.go's
+# LinkJSClientRoutes (SPA.2 client-side router modelling + SPA.3
+# string-keyed feature-component resolution + RT.1 render-target retyping).
+#
+# NO `facts:` block — a route table, a `switch (routeName)` case map, the
+# feature-registry resolution, and which existing node a route/switch case
+# resolves to (an index built once over the WHOLE graph-so-far, then
+# consulted and MUTATED by SPA.3's own resolution — a `.dl` fact set has no
+# "inject this resolution back into the same index for a later lookup in
+# this same evaluation" concept) all stayed hand-written Go, ported into the
+# `js_client_routes_sites` hub provider (internal/factpipe/
+# hub_js_client_routes.go). rules/javascript/js_client_routes.dl is pure
+# pass-through.
+#
+# `mint:` builds the route nodes and SPA.3's external feature-registry
+# component nodes — both brand new, nothing pre-existing to preserve.
+# `patch:` (FX.8.8's primitive, extended with FX.8.10's `node:` Type
+# override) does RT.1's variable->component retype-in-place: the existing
+# node's Label/File/Line/Language/Service and every OTHER meta key must
+# survive untouched, only Type and two meta keys change. `resolved:`
+# (FX.8.10's other new primitive) rides on the feature-mint relation to
+# report which (service, key) pairs got resolved, for the caller to retract
+# matching `jsx_component_unresolved` ledger rows an earlier pass recorded.
+#
+# Not run through the shared factpipe_frameworks slot (no `patch:`/
+# `resolved:` there) — a dedicated pipeline.Run call in
+# internal/indexer/link_passes.go's js_client_routes pass does the actual
+# st.allNodes merge/retype and the ledger retraction.
+language: javascript
+version: "1"
+
+hub:
+  - name: js_client_routes_sites
+
+emit:
+  - relation: js_cr_route_mint_rel
+    columns: [ID, Label, Svc, File, Path, Hash, Pattern, HashFragment]
+    mint:
+      node: route
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      language: { literal: javascript }
+      meta:
+        path: { arg: Path }
+        hash: { arg: Hash }
+        pattern: { arg: Pattern }
+        via: { literal: spa_client_route }
+        hash_fragment: { arg: HashFragment }
+
+  - relation: js_cr_render_edge_rel
+    columns: [From, To, Spa]
+    edge: { from: { arg: From }, to: { arg: To }, type: renders }
+    meta:
+      spa: { arg: Spa }
+    dedup: [from, to]
+
+  - relation: js_cr_navigate_edge_rel
+    columns: [From, To]
+    edge: { from: { arg: From }, to: { arg: To }, type: navigates_to }
+    meta:
+      spa: { literal: client_route }
+      via: { literal: path_shape }
+    dedup: [from, to]
+
+  - relation: js_cr_retype_rel
+    columns: [TargetID]
+    patch:
+      id: { arg: TargetID }
+      node: component
+      meta:
+        component: { literal: "true" }
+        retyped_from: { literal: variable }
+
+  - relation: js_cr_not_component_rel
+    columns: [Svc, File, Line, Name]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Name }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: client_route_target_not_component
+
+  - relation: js_cr_feat_mint_rel
+    columns: [ID, Label, Svc, Key]
+    mint:
+      node: component
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { literal: "(feature_registry)" }
+      language: { literal: javascript }
+      meta:
+        spa: { literal: feature_component }
+        external: { literal: "true" }
+        key: { arg: Key }
+    resolved:
+      service: { arg: Svc }
+      name: { arg: Key }
+
+  - relation: js_cr_dynamic_rel
+    columns: [Svc, File, Line]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { literal: "(dynamic)" }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: feature_component_dynamic

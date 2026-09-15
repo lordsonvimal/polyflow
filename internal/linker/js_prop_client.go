@@ -13,6 +13,19 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
+// crIsTestFile reports whether rel is a JS test/spec/mock file. Moved here
+// from the now-deleted js_client_routes.go (Tier FX FX.8.10, 2026-09-15) —
+// this file and schema_url_link.go/schema_url_table.go/
+// valuegraph_adapter.go are its remaining callers.
+func crIsTestFile(rel string) bool {
+	for _, s := range []string{"__tests__/", "__mocks__/", "/spec/", ".test.", ".spec.", "-test.", "-spec.", "/test-support/"} {
+		if strings.Contains(rel, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // SPA.4 — prop-injected HTTP-client wrapper.
 //
 // The dominant client-fetch pattern in a big Flow/React SPA is

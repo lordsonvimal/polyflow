@@ -6,6 +6,18 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
+// hasEdge reports whether edges contains one of type typ from -> to. Moved
+// here from the now-deleted js_client_routes_test.go (Tier FX FX.8.10,
+// 2026-09-15) — this file is its only remaining caller.
+func hasEdge(edges []graph.Edge, typ graph.EdgeType, from, to string) bool {
+	for _, e := range edges {
+		if e.Type == typ && e.From == from && e.To == to {
+			return true
+		}
+	}
+	return false
+}
+
 // ajaxStatusHOC is the minimal shape of a transport-forwarding HOC: a
 // `Name(Wrapped)` function that renders `<Wrapped ajaxStatus={this} />` and
 // declares a class whose `get(msg, url)` reaches `window.$.ajax` via `ajax`.

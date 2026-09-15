@@ -1,0 +1,42 @@
+% Tier FX FX.8.10 (2026-09-15) — js_client_routes. Replaces
+% internal/linker/js_client_routes.go's LinkJSClientRoutes.
+%
+% Base facts (from the js_client_routes_sites hub provider,
+% internal/factpipe/hub_js_client_routes.go — NOT a tree-sitter facts:
+% block; see patterns/javascript/js_client_routes.yaml's package doc):
+%
+%   js_cr_route_mint(ID, Label, Svc, File, Path, Hash, Pattern, HashFragment)
+%       one client-route-table entry, already normalised.
+%   js_cr_render_edge(From, To, Spa)
+%       a route-switch case or feature-render site's resolved renders edge.
+%   js_cr_navigate_edge(From, To)
+%       an http_handler -> client_route path-shape match.
+%   js_cr_retype(TargetID)
+%       RT.1: an existing variable node confirmed to declare a component.
+%   js_cr_not_component(Svc, File, Line, Name)
+%       RT.1: a render target that is NOT a component (ledger).
+%   js_cr_feat_mint(ID, Label, Svc, Key)
+%       SPA.3: one resolved feature-registry key (existing node id, or a
+%       fresh external component id — both already decided by the hub).
+%   js_cr_dynamic(Svc, File, Line)
+%       SPA.3: a non-literal feature-registry lookup (ledger).
+%
+% All relations the emit spec consumes are pure pass-through — the hub
+% already built and resolved the whole-graph index (component rank,
+% function/method lookup, http_handler path table) and the SPA.3
+% same-run injection a `.dl` join could not express.
+
+js_cr_route_mint_rel(ID, Label, Svc, File, Path, Hash, Pattern, HashFragment) :-
+    js_cr_route_mint(ID, Label, Svc, File, Path, Hash, Pattern, HashFragment).
+
+js_cr_render_edge_rel(From, To, Spa) :- js_cr_render_edge(From, To, Spa).
+
+js_cr_navigate_edge_rel(From, To) :- js_cr_navigate_edge(From, To).
+
+js_cr_retype_rel(TargetID) :- js_cr_retype(TargetID).
+
+js_cr_not_component_rel(Svc, File, Line, Name) :- js_cr_not_component(Svc, File, Line, Name).
+
+js_cr_feat_mint_rel(ID, Label, Svc, Key) :- js_cr_feat_mint(ID, Label, Svc, Key).
+
+js_cr_dynamic_rel(Svc, File, Line) :- js_cr_dynamic(Svc, File, Line).
