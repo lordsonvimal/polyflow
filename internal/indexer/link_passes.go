@@ -1737,13 +1737,53 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// unrelated fleet service. Mutates the working copy in place so
 		// ApplyHints/EnrichRouteGroups carry the grade to the contract engine;
 		// re-persists so the stored graph carries it too.
+		//
+		// Tier FX FX.8.16 (2026-09-16): patterns/generic/js_http_grade.yaml +
+		// rules/generic/js_http_grade.dl, backed by the js_http_grade hub
+		// (internal/factpipe/hub_js_http_grade.go), replacing
+		// internal/linker/js_http_grade.go's GradeJSHTTPProducers. A dedicated
+		// pipeline.Run call, not the shared factpipe_frameworks slot (which
+		// runs too late — this must land before ApplyHints/the contract
+		// engine, same as every other early dedicated-call FX.8 pass). Called
+		// globally over st.allNodes, not per-service — the hub grades each
+		// node purely off its own Meta, no cross-node lookup at all, matching
+		// the retired Go's own st.allNodes call shape exactly (gorm_tables
+		// precedent).
 		{"js_http_grade", scopeCrossService, func() error {
-			changed := linker.GradeJSHTTPProducers(st.allNodes)
-			if len(changed) == 0 {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("js_http_grade: load registry: %w", err)
+			}
+			fw := reg.ByName("js_http_grade")
+			if fw == nil {
+				return fmt.Errorf("js_http_grade: framework not embedded")
+			}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.allNodes})
+			if err != nil {
+				return fmt.Errorf("js_http_grade: %w", err)
+			}
+			if len(res.Patches) == 0 {
 				return nil
 			}
-			for i := range changed {
-				n := changed[i]
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.allNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta))
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				n.Meta = m
+				st.allNodes[idx] = n
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}

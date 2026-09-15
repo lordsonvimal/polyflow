@@ -1,0 +1,37 @@
+# Tier FX FX.8.16 — replaces internal/linker/js_http_grade.go's
+# GradeJSHTTPProducers (JG.1): stamps path_evidence="weak" (+ an initial
+# confidence_ceiling="partial", unless another pass already set one) on a
+# JS/TS http_client whose host segment stayed an opaque wildcard
+# (`${this.props.some_url}/x/unlock`) and whose path names only a
+# convention segment (`/unlock`, `/health`), not a real route — so the
+# contract engine's weak-path fan-out suppressor sees it, matching Go's
+# inline SSA-wrapper grading (go_wrapper_urls.go:emitResolvedClient).
+#
+# NO `facts:` block — this needs no tree-sitter parsing at all, only
+# already-stamped Meta on the candidate node itself (no cross-node lookup,
+# no file I/O), so the whole classification stays in the "js_http_grade"
+# hub provider (internal/factpipe/hub_js_http_grade.go), ported verbatim
+# from the retired Go; rules/generic/js_http_grade.dl is pure pass-through.
+# `language: generic` is documentation only, same as config_baseurl/
+# templ_layer/file_routes — this pass is hub-only and runs via a dedicated
+# pipeline.Run call, never through the per-language Active() gate.
+language: generic
+version: "1"
+
+hub:
+  - name: js_http_grade
+
+emit:
+  - relation: js_http_grade_evidence_rel
+    columns: [Id]
+    patch:
+      id: { arg: Id }
+      meta:
+        path_evidence: weak
+
+  - relation: js_http_grade_ceiling_rel
+    columns: [Id]
+    patch:
+      id: { arg: Id }
+      meta:
+        confidence_ceiling: partial

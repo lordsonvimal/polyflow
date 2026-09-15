@@ -43,6 +43,7 @@ var migratedFrameworks = []string{
 	"pusher_js_consumer",
 	"ruby_job_inherit",
 	"rails_route_actions",
+	"js_http_grade",
 }
 
 // "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike

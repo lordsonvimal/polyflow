@@ -1,0 +1,14 @@
+% JS/TS http_client path-evidence grading — Tier FX FX.8.16. Replaces
+% internal/linker/js_http_grade.go's GradeJSHTTPProducers (JG.1).
+%
+% Base facts (from the js_http_grade hub provider,
+% internal/factpipe/hub_js_http_grade.go — pure Meta classification, no
+% parsing, no cross-node lookup):
+%
+%   js_http_grade_evidence(Id)  a weak-path-evidence node, always stamped
+%   js_http_grade_ceiling(Id)   the same node, only when no ceiling existed
+%
+% Both relations the emit spec consumes are pure pass-through.
+
+js_http_grade_evidence_rel(Id) :- js_http_grade_evidence(Id).
+js_http_grade_ceiling_rel(Id) :- js_http_grade_ceiling(Id).
