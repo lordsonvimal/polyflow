@@ -493,33 +493,69 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// JCM.4: MobX reactivity — tags observable/action/computed class members
 		// (makeObservable / makeAutoObservable) and links autorun/reaction/when
 		// callbacks to the observable members they read.
+		// Tier FX FX.8.9 (2026-09-15) — declarative js_mobx, replacing
+		// linker.LinkJSMobx. Its own dedicated pipeline.Run call (not the shared
+		// factpipe_frameworks slot, which applies no `patch:`): patches merge
+		// into an existing node's Meta (js_mobx_sites hub,
+		// patterns/javascript/js_mobx.yaml), mint gap-fills a member no parser
+		// captured.
 		{"js_mobx", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			mobxNew, mobxTagged, mobxEdges := linker.LinkJSMobx(st.allNodes, svcFiles)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("js_mobx: load registry: %w", err)
+			}
+			fw := reg.ByName("js_mobx")
+			if fw == nil {
+				return fmt.Errorf("js_mobx: framework not embedded")
+			}
+			var allFiles []string
+			for _, sf := range st.allSvcFiles {
+				allFiles = append(allFiles, sf.files...)
+			}
+			snap := graph.Snapshot{Nodes: st.allNodes, Files: allFiles}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+			if err != nil {
+				return fmt.Errorf("js_mobx: %w", err)
+			}
+
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
 			}
-			for i := range mobxTagged {
-				n := mobxTagged[i]
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.allNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta)+2)
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				n.Meta = m
+				st.allNodes[idx] = n
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}
-				if idx, ok := byID[n.ID]; ok {
-					st.allNodes[idx] = n
-				}
 			}
-			for i := range mobxNew {
-				n := mobxNew[i]
+			for i := range res.Nodes {
+				n := res.Nodes[i]
+				if _, exists := byID[n.ID]; exists {
+					continue
+				}
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}
 				st.allNodes = append(st.allNodes, n)
+				byID[n.ID] = len(st.allNodes) - 1
 			}
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			return st.writeEdges(mobxEdges)
+			return st.writeEdges(res.Edges)
 		}},
 		// Ruby cross-file inherits/implements/instantiates edges.
 		{"ruby_type_relations", scopeSameServiceOnly, func() error {

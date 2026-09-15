@@ -48,6 +48,9 @@ var frozenEdgeTypes = map[string]bool{
 	"publishes": true, "subscribes": true, "job_enqueue": true, "job_perform": true,
 	"navigates_to": true, "spawns": true, "dom_read": true, "dom_write": true,
 	"dom_listen": true, "dom_contract": true, "backed_by": true,
+	// reads: added for js_mobx (FX.8.9 2026-09-15) — a callback/computed/
+	// observer-render reactive read of an observable|computed member.
+	"reads": true,
 }
 
 // frozenNodeTypes is the closed node-type vocabulary a `mint:` block may

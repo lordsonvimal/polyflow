@@ -1,4 +1,4 @@
-package linker
+package factpipe
 
 import (
 	"fmt"
@@ -9,44 +9,73 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
-	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
-// LinkJSMobx models MobX reactivity (Tier JCM.4) that the structural JS parser
-// cannot see: which class members are observable / action / computed, and which
-// observable members an autorun / reaction / when callback re-runs on.
+// hub_js_mobx.go is the "js_mobx_sites" hub provider (see hub.go) — the Tier
+// FX FX.8.9 migration of internal/linker/js_mobx.go's retired LinkJSMobx.
 //
-//   - makeObservable(this, { count: observable, tick: action, total: computed })
-//     stamps the matching member nodes with Meta["mobx"]=<kind>.
-//   - makeAutoObservable(this) applies MobX's own default rule: data fields →
-//     observable, methods → action, getters → computed (honouring an overrides
-//     object's `key: false` / `key: <annotation>`).
-//   - autorun(() => … this.x …) / reaction(() => this.x, …) / when(…) emit
-//     callSite --reads--> <observable member> with Meta["mobx"]="reactive_read"
-//     so "what recomputes when x changes" is a reverse-reads query.
+// Every piece of this stays hand-written Go, for the same reasons
+// hub_js_hoc.go's package doc gives (FX.8.8): this is real, order-sensitive
+// tree-sitter structural analysis across FOUR sequential passes that share
+// live, mutating state (a same-run `tagged` overlay Pass B/C/D all consult
+// to see Pass A's member-kind stamps, since a `.dl` fact set has no
+// "overwrite and re-read within this same hub call" concept) plus a
+// cross-file import-following resolver (mobxComputeBindings) no `.dl` join
+// could express. rules/javascript/js_mobx.dl is pure pass-through.
 //
-// Member tags are delivered by re-emitting the existing member node with the
-// extra Meta key (UpsertNode overwrites by ID). Reactive-read edges are
-// ConfidenceInferred and Meta["tier"]="jcm4" so verification filters can drop
-// the tier wholesale. Members named in a makeObservable map that no parser
-// captured are minted as synthetic `variable` nodes.
-//
-// It returns freshly minted synthetic nodes (newNodes), existing member nodes
-// re-emitted with an added Meta["mobx"] tag (taggedNodes), and the reactive-read
-// edges. The caller upserts every node but only appends newNodes to its working
-// set — taggedNodes already live there.
-func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes, taggedNodes []graph.Node, newEdges []graph.Edge) {
-	var outNodes []graph.Node // synthetic nodes minted below
-	// --- index existing nodes ---
-	declsByFile := make(map[string][]lineNode)
+// `patch:` for existing-node member tagging (Pass A → observable/action/
+// computed), `mint:` for a member no parser captured (synthetic
+// `variable` node, frozenNodeTypes already has it from FX.8.8). The three
+// "reads" edge shapes (Pass B autorun/reaction/when, Pass C observer-render,
+// Pass D computed→observable dependency) branch their Tier/Via meta in Go —
+// the "no string-emptiness test in `.dl`" restriction FX.8.44/45 already
+// established — landing in three separate relations distinguished by a
+// literal `label:` (so their graph.Edge IDs, which fold in `from`/`to`/
+// `label`, never collide the way three same-(from,to) reads from different
+// tiers legitimately can and, in the retired Go's own per-pass `seenEdge`
+// keying, were meant to coexist as distinct edges).
+func init() { RegisterHub("js_mobx_sites", jsMobxSitesHub) }
+
+const (
+	jsMobxPatchPred = "js_mobx_patch"  // (TargetID, Kind)
+	jsMobxMintPred  = "js_mobx_mint"   // (ID, Label, Svc, File, Line, EndLine, Class, Kind)
+	jsMobxReadBPred = "js_mobx_read_b" // (From, To, Tier, Via) — Pass B: autorun/reaction/when
+	jsMobxReadCPred = "js_mobx_read_c" // (From, To, Via) — Pass C: observer-render
+	jsMobxReadDPred = "js_mobx_read_d" // (From, To) — Pass D: computed->observable dep
+)
+
+// jsmLineNode / jsmNearestDecl: ported from internal/linker's lineNode /
+// nearestDecl (js_linker.go / js_type_relations.go) — the "nearest preceding
+// declaration" idiom Pass B's attrFrom uses to attribute an autorun call
+// site with no enclosing function to the nearest declaration above it.
+type jsmLineNode struct {
+	line int
+	id   string
+}
+
+func jsmNearestDecl(fileDecls []jsmLineNode, refLine int) string {
+	id := ""
+	for _, d := range fileDecls {
+		if d.line <= refLine {
+			id = d.id
+		} else {
+			break
+		}
+	}
+	return id
+}
+
+type jsmMint struct {
+	label, svc, file, class, kind string
+	line, endLine                 int
+}
+
+func jsMobxSitesHub(nodes []graph.Node, files []string) []Fact {
+	declsByFile := make(map[string][]jsmLineNode)
 	declIndex := make(map[string]map[string]string)
 	fileNodeID := make(map[string]string)
 	svcOfFile := make(map[string]string)
-	// membersByFileClass: file → className → memberLabel → node index into `nodes`
 	membersByFileClass := make(map[string]map[string]map[string]int)
-	// JCM.7 cross-file lookups: className → memberLabel → node index, and a
-	// case-insensitive class-name index (a `this.props.grid` prop resolves to a
-	// `Grid` store class by name).
 	membersByClass := make(map[string]map[string]int)
 	classLower := make(map[string]string)
 	for i := range nodes {
@@ -61,7 +90,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 					classLower[strings.ToLower(n.Label)] = n.Label
 				}
 			}
-			declsByFile[n.File] = append(declsByFile[n.File], lineNode{line: n.Line, id: n.ID})
+			declsByFile[n.File] = append(declsByFile[n.File], jsmLineNode{line: n.Line, id: n.ID})
 			if declIndex[n.File] == nil {
 				declIndex[n.File] = make(map[string]string)
 			}
@@ -99,43 +128,53 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		sort.Slice(declsByFile[f], func(i, j int) bool { return declsByFile[f][i].line < declsByFile[f][j].line })
 	}
 
-	indexed := make(map[string]bool)
-	type fileEnt struct{ abs, svc string }
-	var jsFiles []fileEnt
-	for svc, files := range serviceFiles {
-		for _, f := range files {
-			indexed[f] = true
-			if isJSFile(f) {
-				jsFiles = append(jsFiles, fileEnt{abs: f, svc: svc})
-			}
+	var jsFiles []string
+	for _, f := range files {
+		if jhcIsJSFile(f) {
+			jsFiles = append(jsFiles, f)
 		}
 	}
+	if len(jsFiles) == 0 {
+		return nil
+	}
+	sort.Strings(jsFiles)
 
-	// nodes we re-emit with an added Meta["mobx"] tag, keyed by ID
-	tagged := make(map[string]graph.Node)
+	jsAbsSet := make(map[string]bool, len(jsFiles))
+	for _, f := range jsFiles {
+		jsAbsSet[f] = true
+	}
+
+	tagged := make(map[string]string) // node ID -> final mobx kind
+	var taggedOrder []string
 	seenNode := make(map[string]bool)
 	seenEdge := make(map[string]bool)
+	minted := make(map[string]*jsmMint)
+	var mintedOrder []string
 
-	// JCM.8: cross-store reactive-read resolution. jsAbsSet bounds import
-	// following to the indexed workspace; bindCache memoises per-file
-	// identifier/`this.<prop>` → store-class-name bindings.
-	jsAbsSet := make(map[string]bool, len(jsFiles))
-	for _, fe := range jsFiles {
-		jsAbsSet[fe.abs] = true
+	var out []Fact
+
+	tag := func(idx int, kind string) {
+		id := nodes[idx].ID
+		if tagged[id] == kind {
+			return
+		}
+		if _, seen := tagged[id]; !seen {
+			taggedOrder = append(taggedOrder, id)
+		}
+		tagged[id] = kind
 	}
+
 	type mobxBinds struct{ ident, thisProp map[string]string }
 	bindCache := make(map[string]mobxBinds)
 	getBinds := func(abs string, root *sitter.Node, src []byte) mobxBinds {
 		if b, ok := bindCache[abs]; ok {
 			return b
 		}
-		i, tp := mobxComputeBindings(abs, root, src, classLower, jsAbsSet)
+		i, tp := jsmComputeBindings(abs, root, src, classLower, jsAbsSet)
 		b := mobxBinds{i, tp}
 		bindCache[abs] = b
 		return b
 	}
-	// memberReactiveID resolves <class>.<member> to a node ID iff that member is
-	// tagged observable|computed (consulting the live `tagged` overlay).
 	memberReactiveID := func(canon, member string) string {
 		mm := membersByClass[canon]
 		if mm == nil {
@@ -147,64 +186,22 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		}
 		k := nodes[idx].Meta["mobx"]
 		if t, ok2 := tagged[nodes[idx].ID]; ok2 {
-			k = t.Meta["mobx"]
+			k = t
 		}
 		if k == "observable" || k == "computed" {
 			return nodes[idx].ID
 		}
 		return ""
 	}
-	// addReactiveEdge emits callSite --reads--> observable. Same-class `this.x`
-	// reads keep tier jcm4 (JCM.4 Pass B); cross-store hops are tier jcm8 and
-	// carry Meta["mobx_resolve"]=<via>.
-	addReactiveEdge := func(from, to, via string) {
-		if from == "" || to == "" || from == to {
-			return
-		}
-		eid := fmt.Sprintf("reads:%s->%s#mobx", from, to)
-		if seenEdge[eid] {
-			return
-		}
-		seenEdge[eid] = true
-		meta := map[string]string{"mobx": "reactive_read"}
-		if via == "" || via == "this" {
-			meta["tier"] = "jcm4"
-		} else {
-			meta["tier"] = "jcm8"
-			meta["mobx_resolve"] = via
-		}
-		newEdges = append(newEdges, graph.Edge{
-			ID: eid, From: from, To: to, Type: graph.EdgeTypeReads, Confidence: graph.ConfidenceInferred,
-			Meta: meta,
-		})
-	}
 
-	tag := func(idx int, kind string) {
-		n := nodes[idx]
-		if n.Meta != nil && n.Meta["mobx"] == kind {
-			return
-		}
-		m := make(map[string]string, len(n.Meta)+2)
-		for k, v := range n.Meta {
-			m[k] = v
-		}
-		m["mobx"] = kind
-		m["tier"] = "jcm4"
-		n.Meta = m
-		tagged[n.ID] = n
-	}
-
-	for _, fe := range jsFiles {
-		rel := patterns.RelativizeToCwd(fe.abs)
-		svc := fe.svc
-		if svc == "" {
-			svc = svcOfFile[rel]
-		}
-		src, root, _, ok := jsParse(fe.abs)
-		if !ok {
+	// --- Pass A: makeObservable / makeAutoObservable / legacy decorators. ---
+	for _, abs := range jsFiles {
+		rel := jhcRelativize(abs)
+		svc := svcOfFile[rel]
+		src, root, ok := jhcParseJS(abs)
+		if !ok || root == nil {
 			continue
 		}
-		// cheap reject: no makeObservable surface and no legacy decorator surface
 		low := string(src)
 		hasMake := strings.Contains(low, "makeObservable") || strings.Contains(low, "makeAutoObservable") ||
 			strings.Contains(low, "makeSimpleObservable")
@@ -215,8 +212,6 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 		}
 		classMembers := membersByFileClass[rel]
 
-		// resolve a member label within a class to its node ID, minting a
-		// synthetic variable node when the parser never captured the field.
 		memberID := func(cls, label string, line int) string {
 			if m := classMembers[cls]; m != nil {
 				if idx, ok := m[label]; ok {
@@ -226,16 +221,14 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			id := fmt.Sprintf("%s:%s:variable:%s:%d", svc, rel, label, line)
 			if !seenNode[id] {
 				seenNode[id] = true
-				outNodes = append(outNodes, graph.Node{
-					ID: id, Type: graph.NodeTypeVariable, Label: label, Service: svc, File: rel,
-					Line: line, EndLine: line, Language: "javascript",
-					Meta: map[string]string{"class": cls, "scope": "class_field", "tier": "jcm4", "synthetic": "true"},
-				})
+				mintedOrder = append(mintedOrder, id)
+				minted[id] = &jsmMint{
+					label: label, svc: svc, file: rel, class: cls,
+					line: line, endLine: line,
+				}
 			}
 			return id
 		}
-		_ = memberID
-
 		mobxTag := func(cls, label, kind string, line int) {
 			if m := classMembers[cls]; m != nil {
 				if idx, ok := m[label]; ok {
@@ -244,28 +237,20 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				}
 			}
 			id := memberID(cls, label, line)
-			// stamp the freshly minted synthetic node
-			for i := range outNodes {
-				if outNodes[i].ID == id {
-					outNodes[i].Meta["mobx"] = kind
-				}
+			if m := minted[id]; m != nil {
+				m.kind = kind
 			}
 		}
 
-		// Pass A: annotate members from makeObservable / makeAutoObservable, and
-		// from legacy `@observable` / `@action` / `@computed` / `@flow` decorators
-		// (MobX 4/5 and mid-migration codebases).
-		mobxWalk(root, func(n *sitter.Node) {
+		jsmWalk(root, func(n *sitter.Node) {
 			if n.Type() == "decorator" {
 				if !hasDeco || n.NamedChildCount() == 0 {
 					return
 				}
-				kind := mobxNormalizeAnnotation(mobxBaseAnnotation(n.NamedChild(0), src))
+				kind := jsmNormalizeAnnotation(jsmBaseAnnotation(n.NamedChild(0), src))
 				if kind == "" {
 					return
 				}
-				// A field decorator is a child of the field def; a method
-				// decorator is a preceding sibling of the method_definition.
 				owner := n.Parent()
 				if owner != nil && owner.Type() == "class_body" {
 					owner = n.NextNamedSibling()
@@ -282,7 +267,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				if nm == nil {
 					return
 				}
-				cls := mobxEnclosingClass(owner, src)
+				cls := jsmEnclosingClass(owner, src)
 				if cls == "" {
 					return
 				}
@@ -303,7 +288,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				if args == nil || args.NamedChildCount() < 2 {
 					return
 				}
-				cls := mobxEnclosingClass(n, src)
+				cls := jsmEnclosingClass(n, src)
 				if cls == "" {
 					return
 				}
@@ -320,7 +305,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 					if k == nil || v == nil {
 						continue
 					}
-					kind := mobxNormalizeAnnotation(mobxBaseAnnotation(v, src))
+					kind := jsmNormalizeAnnotation(jsmBaseAnnotation(v, src))
 					if kind == "" {
 						continue
 					}
@@ -329,11 +314,10 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				}
 
 			case "makeAutoObservable", "makeSimpleObservable":
-				cls := mobxEnclosingClass(n, src)
+				cls := jsmEnclosingClass(n, src)
 				if cls == "" {
 					return
 				}
-				// overrides: makeAutoObservable(this, { key: false | annotation })
 				overrides := map[string]string{}
 				if args != nil && args.NamedChildCount() >= 2 && args.NamedChild(1).Type() == "object" {
 					o := args.NamedChild(1)
@@ -346,18 +330,18 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 						if k == nil || v == nil {
 							continue
 						}
-						overrides[strings.Trim(k.Content(src), "\"'`")] = mobxBaseAnnotation(v, src)
+						overrides[strings.Trim(k.Content(src), "\"'`")] = jsmBaseAnnotation(v, src)
 					}
 				}
 				for label, idx := range classMembers[cls] {
 					if label == "constructor" {
-						continue // MobX never annotates the constructor
+						continue
 					}
 					if ov, ok := overrides[label]; ok {
 						if ov == "false" {
 							continue
 						}
-						if kind := mobxNormalizeAnnotation(ov); kind != "" {
+						if kind := jsmNormalizeAnnotation(ov); kind != "" {
 							tag(idx, kind)
 							continue
 						}
@@ -374,20 +358,14 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				}
 			}
 		})
-
 	}
 
-	// Pass B (JCM.4 + JCM.8): wire autorun / reaction / when callbacks to the
-	// observable members they read. Runs as its own loop after Pass A so every
-	// file's member tags are final before cross-file store resolution.
-	for _, fe := range jsFiles {
-		rel := patterns.RelativizeToCwd(fe.abs)
-		svc := fe.svc
-		if svc == "" {
-			svc = svcOfFile[rel]
-		}
-		src, root, _, ok := jsParse(fe.abs)
-		if !ok {
+	// --- Pass B (JCM.4 + JCM.8): autorun / reaction / when callbacks. ---
+	for _, abs := range jsFiles {
+		rel := jhcRelativize(abs)
+		svc := svcOfFile[rel]
+		src, root, ok := jhcParseJS(abs)
+		if !ok || root == nil {
 			continue
 		}
 		low := string(src)
@@ -395,13 +373,13 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			continue
 		}
 		attrFrom := func(line int) string {
-			if id := nearestDecl(declsByFile[rel], line); id != "" {
+			if id := jsmNearestDecl(declsByFile[rel], line); id != "" {
 				return id
 			}
 			return fileNodeID[svc+"\x00"+rel]
 		}
-		bnd := getBinds(fe.abs, root, src)
-		mobxWalk(root, func(n *sitter.Node) {
+		bnd := getBinds(abs, root, src)
+		jsmWalk(root, func(n *sitter.Node) {
 			if n.Type() != "call_expression" {
 				return
 			}
@@ -422,53 +400,66 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			if cb.Type() != "arrow_function" && cb.Type() != "function_expression" && cb.Type() != "function" {
 				return
 			}
-			cls := mobxEnclosingClass(n, src)
+			cls := jsmEnclosingClass(n, src)
 			site := attrFrom(int(n.StartPoint().Row) + 1)
-			mobxWalk(cb, func(m *sitter.Node) {
+			jsmWalk(cb, func(m *sitter.Node) {
 				if m.Type() != "member_expression" {
 					return
 				}
-				canon, obs, via := mobxReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
+				canon, obs, via := jsmReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
 				if canon == "" {
 					return
 				}
-				if id := memberReactiveID(canon, obs); id != "" {
-					addReactiveEdge(site, id, via)
+				id := memberReactiveID(canon, obs)
+				if id == "" {
+					return
 				}
+				if site == "" || id == "" || site == id {
+					return
+				}
+				eid := "reads:" + site + "->" + id + "#mobx"
+				if seenEdge[eid] {
+					return
+				}
+				seenEdge[eid] = true
+				tier, viaOut := "jcm4", ""
+				if via != "" && via != "this" {
+					tier, viaOut = "jcm8", via
+				}
+				out = append(out, Fact{
+					Pred:   jsMobxReadBPred,
+					Args:   []Atom{Str(site), Str(id), Str(tier), Str(viaOut)},
+					Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadBPred},
+				})
 			})
 		})
 	}
 
-	// Pass C (JCM.7): an `observer(Component)` re-renders when the observables its
-	// render body reads change. Walk every `observer(...)` wrapper, find the
-	// render scope of its argument, resolve `this.props.<store>.<obs>` /
-	// `this.<store>.<obs>` / `<store>.<obs>` reads to an observable|computed
-	// member of a store class (matched case-insensitively by name), and emit
-	// componentNode --reads--> member with Meta["mobx_via"]="observer_render".
-	for _, fe := range jsFiles {
-		rel := patterns.RelativizeToCwd(fe.abs)
-		src, root, _, ok := jsParse(fe.abs)
-		if !ok || !strings.Contains(string(src), "observer") {
+	// --- Pass C (JCM.7): observer(Component) render-body reads. ---
+	for _, abs := range jsFiles {
+		rel := jhcRelativize(abs)
+		src, root, ok := jhcParseJS(abs)
+		if !ok || root == nil || !strings.Contains(string(src), "observer") {
 			continue
 		}
 		perComp := map[string]int{}
-		bnd := getBinds(fe.abs, root, src)
-		hocWalk(root, func(call *sitter.Node) {
-			if hocCalleeName(call, src) != "observer" {
+		bnd := getBinds(abs, root, src)
+		jhcWalk(root, func(call *sitter.Node) {
+			if jhcCalleeName(call, src) != "observer" {
 				return
 			}
-			arg0 := hocFirstArg(call)
+			arg0 := jhcFirstArg(call)
 			if arg0 == nil {
 				return
 			}
-			wrapperName, _ := hocBinding(call, src)
+			wrapperName, _ := jhcBinding(call, src)
 			var compID, compClass string
 			var bodies []*sitter.Node
 			switch arg0.Type() {
 			case "identifier":
 				compID = declIndex[rel][arg0.Content(src)]
-				if sub := mobxDeclSubtree(root, src, arg0.Content(src)); sub != nil {
-					bodies = mobxRenderBodies(sub, src)
+				if sub := jsmDeclSubtree(root, src, arg0.Content(src)); sub != nil {
+					bodies = jsmRenderBodies(sub, src)
 					if nm := sub.ChildByFieldName("name"); nm != nil {
 						compClass = nm.Content(src)
 					}
@@ -481,7 +472,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				if compID == "" && wrapperName != "" {
 					compID = declIndex[rel][wrapperName]
 				}
-				bodies = mobxRenderBodies(arg0, src)
+				bodies = jsmRenderBodies(arg0, src)
 			case "arrow_function", "function", "function_expression":
 				if wrapperName != "" {
 					compID = declIndex[rel][wrapperName]
@@ -499,11 +490,11 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				return
 			}
 			for _, body := range bodies {
-				mobxWalk(body, func(m *sitter.Node) {
+				jsmWalk(body, func(m *sitter.Node) {
 					if m.Type() != "member_expression" || perComp[compID] >= 64 {
 						return
 					}
-					canon, obs, via := mobxReadResolve(m, src, compClass, classLower, bnd.ident, bnd.thisProp)
+					canon, obs, via := jsmReadResolve(m, src, compClass, classLower, bnd.ident, bnd.thisProp)
 					if canon == "" {
 						return
 					}
@@ -511,48 +502,49 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 					if id == "" {
 						return
 					}
-					eid := fmt.Sprintf("reads:%s->%s#mobx_obs", compID, id)
+					eid := "reads:" + compID + "->" + id + "#mobx_obs"
 					if seenEdge[eid] {
 						return
 					}
 					seenEdge[eid] = true
 					perComp[compID]++
-					meta := map[string]string{"mobx": "reactive_read", "mobx_via": "observer_render", "tier": "jcm7"}
+					viaOut := ""
 					if via != "" && via != "this" && via != "props" {
-						meta["mobx_resolve"] = via
+						viaOut = via
 					}
-					newEdges = append(newEdges, graph.Edge{
-						ID: eid, From: compID, To: id, Type: graph.EdgeTypeReads,
-						Confidence: graph.ConfidenceInferred, Meta: meta,
+					out = append(out, Fact{
+						Pred:   jsMobxReadCPred,
+						Args:   []Atom{Str(compID), Str(id), Str(viaOut)},
+						Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadCPred},
 					})
 				})
 			}
 		})
 	}
 
-	// Pass D (JCM.9): computed → observable dependency edges. For every member
-	// tagged mobx=computed, walk its getter/method body for `this.<obs>` reads
-	// (and cross-store reads via the JCM.8 resolver) that resolve to an
-	// observable|computed sibling, and emit computedMember --reads--> observable
-	// Meta["mobx"]="computed_dep". Reverse-`reads` on an observable then
-	// transitively reaches `observer` consumers through their computeds.
+	// --- Pass D (JCM.9): computed -> observable dependency edges. ---
 	computedFiles := make(map[string]bool)
-	for _, n := range tagged {
-		if n.Meta["mobx"] == "computed" {
-			computedFiles[n.File] = true
+	for id, kind := range tagged {
+		if kind == "computed" {
+			for i := range nodes {
+				if nodes[i].ID == id {
+					computedFiles[nodes[i].File] = true
+					break
+				}
+			}
 		}
 	}
-	for _, fe := range jsFiles {
-		rel := patterns.RelativizeToCwd(fe.abs)
+	for _, abs := range jsFiles {
+		rel := jhcRelativize(abs)
 		if !computedFiles[rel] {
 			continue
 		}
-		src, root, _, ok := jsParse(fe.abs)
-		if !ok {
+		src, root, ok := jhcParseJS(abs)
+		if !ok || root == nil {
 			continue
 		}
-		bnd := getBinds(fe.abs, root, src)
-		mobxWalk(root, func(n *sitter.Node) {
+		bnd := getBinds(abs, root, src)
+		jsmWalk(root, func(n *sitter.Node) {
 			if n.Type() != "method_definition" {
 				return
 			}
@@ -561,7 +553,7 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			if nm == nil || body == nil {
 				return
 			}
-			cls := mobxEnclosingClass(n, src)
+			cls := jsmEnclosingClass(n, src)
 			if cls == "" {
 				return
 			}
@@ -575,18 +567,18 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 			}
 			kind := nodes[idx].Meta["mobx"]
 			if t, ok2 := tagged[nodes[idx].ID]; ok2 {
-				kind = t.Meta["mobx"]
+				kind = t
 			}
 			if kind != "computed" {
 				return
 			}
 			from := nodes[idx].ID
 			deps := 0
-			mobxWalk(body, func(m *sitter.Node) {
+			jsmWalk(body, func(m *sitter.Node) {
 				if m.Type() != "member_expression" || deps >= 64 {
 					return
 				}
-				canon, obs, _ := mobxReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
+				canon, obs, _ := jsmReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
 				if canon == "" {
 					return
 				}
@@ -594,30 +586,45 @@ func LinkJSMobx(nodes []graph.Node, serviceFiles map[string][]string) (newNodes,
 				if to == "" || to == from {
 					return
 				}
-				eid := fmt.Sprintf("reads:%s->%s#mobx_cdep", from, to)
+				eid := "reads:" + from + "->" + to + "#mobx_cdep"
 				if seenEdge[eid] {
 					return
 				}
 				seenEdge[eid] = true
 				deps++
-				newEdges = append(newEdges, graph.Edge{
-					ID: eid, From: from, To: to, Type: graph.EdgeTypeReads,
-					Confidence: graph.ConfidenceInferred,
-					Meta:       map[string]string{"mobx": "computed_dep", "tier": "jcm9"},
+				out = append(out, Fact{
+					Pred:   jsMobxReadDPred,
+					Args:   []Atom{Str(from), Str(to)},
+					Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadDPred},
 				})
 			})
 		})
 	}
 
-	for _, n := range tagged {
-		taggedNodes = append(taggedNodes, n)
+	for _, id := range taggedOrder {
+		out = append(out, Fact{
+			Pred:   jsMobxPatchPred,
+			Args:   []Atom{Str(id), Str(tagged[id])},
+			Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxPatchPred},
+		})
 	}
-	return outNodes, taggedNodes, newEdges
+	for _, id := range mintedOrder {
+		m := minted[id]
+		out = append(out, Fact{
+			Pred: jsMobxMintPred,
+			Args: []Atom{
+				Str(id), Str(m.label), Str(m.svc), Str(m.file),
+				Int(int64(m.line)), Int(int64(m.endLine)), Str(m.class), Str(m.kind),
+			},
+			Origin: Origin{Kind: OriginPrimitive, File: m.file, Line: m.line, Pattern: jsMobxMintPred},
+		})
+	}
+	return out
 }
 
-// mobxRenderBodies returns the reactive render scope(s) of a component: a class's
-// `render` method body, or a function/arrow component's body.
-func mobxRenderBodies(decl *sitter.Node, src []byte) []*sitter.Node {
+// --- ported structural helpers (jsm-prefixed, from js_mobx.go) ---
+
+func jsmRenderBodies(decl *sitter.Node, src []byte) []*sitter.Node {
 	switch decl.Type() {
 	case "class", "class_declaration":
 		var body *sitter.Node
@@ -630,7 +637,7 @@ func mobxRenderBodies(decl *sitter.Node, src []byte) []*sitter.Node {
 		if body == nil {
 			return nil
 		}
-		var out []*sitter.Node
+		var outB []*sitter.Node
 		for i := 0; i < int(body.NamedChildCount()); i++ {
 			md := body.NamedChild(i)
 			if md.Type() != "method_definition" {
@@ -638,11 +645,11 @@ func mobxRenderBodies(decl *sitter.Node, src []byte) []*sitter.Node {
 			}
 			if nm := md.ChildByFieldName("name"); nm != nil && nm.Content(src) == "render" {
 				if b := md.ChildByFieldName("body"); b != nil {
-					out = append(out, b)
+					outB = append(outB, b)
 				}
 			}
 		}
-		return out
+		return outB
 	case "arrow_function", "function", "function_expression":
 		if b := decl.ChildByFieldName("body"); b != nil {
 			return []*sitter.Node{b}
@@ -651,9 +658,7 @@ func mobxRenderBodies(decl *sitter.Node, src []byte) []*sitter.Node {
 	return nil
 }
 
-// mobxDeclSubtree finds the class/function/arrow subtree bound to `name` at file
-// scope, so an `observer(Name)` by identifier can be followed to its render body.
-func mobxDeclSubtree(root *sitter.Node, src []byte, name string) *sitter.Node {
+func jsmDeclSubtree(root *sitter.Node, src []byte, name string) *sitter.Node {
 	var found *sitter.Node
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
@@ -685,21 +690,7 @@ func mobxDeclSubtree(root *sitter.Node, src []byte, name string) *sitter.Node {
 	return found
 }
 
-// mobxReadResolve classifies a `member_expression` read `<recv>.<obs>` as
-// targeting an observable member of a store class, and reports which resolution
-// rule matched (via):
-//
-//   - "this"       — same-class `this.<obs>` (JCM.4 Pass B)
-//   - "import"     — `<ident>.<obs>` where <ident> is an imported/module-local
-//     store instance (`import s from "./s"` / `const s = new S()`)
-//   - "this_field" — `this.<prop>.<obs>` where <prop> = `new StoreClass()`
-//   - "props"      — `this.props.<store>.<obs>` (store class matched by name)
-//   - "root_store" — `<root>.<sub>.<obs>` / `this.<root>.<sub>.<obs>` where
-//     <root> is a store instance and <sub> names a store class (one hop)
-//
-// classLower maps a lowercased class name to its canonical label; identStore /
-// thisPropStore come from mobxComputeBindings.
-func mobxReadResolve(m *sitter.Node, src []byte, sameClass string, classLower, identStore, thisPropStore map[string]string) (canon, obs, via string) {
+func jsmReadResolve(m *sitter.Node, src []byte, sameClass string, classLower, identStore, thisPropStore map[string]string) (canon, obs, via string) {
 	prop := m.ChildByFieldName("property")
 	obj := m.ChildByFieldName("object")
 	if prop == nil || obj == nil || prop.Type() != "property_identifier" {
@@ -715,8 +706,6 @@ func mobxReadResolve(m *sitter.Node, src []byte, sameClass string, classLower, i
 		if c := identStore[obj.Content(src)]; c != "" {
 			return c, obs, "import"
 		}
-		// fallback: a bare `grid.total` where the receiver name *is* a store
-		// class (destructured / same-name singleton the import walk missed).
 		if c := classLower[strings.ToLower(obj.Content(src))]; c != "" {
 			return c, obs, "name"
 		}
@@ -760,9 +749,7 @@ func mobxReadResolve(m *sitter.Node, src []byte, sameClass string, classLower, i
 	return "", "", ""
 }
 
-// mobxNewExprClass returns the canonical store-class label a `new_expression`
-// constructs, or "" when the constructor isn't a known class.
-func mobxNewExprClass(n *sitter.Node, src []byte, classLower map[string]string) string {
+func jsmNewExprClass(n *sitter.Node, src []byte, classLower map[string]string) string {
 	if n.Type() != "new_expression" {
 		return ""
 	}
@@ -773,10 +760,7 @@ func mobxNewExprClass(n *sitter.Node, src []byte, classLower map[string]string) 
 	return classLower[strings.ToLower(c.Content(src))]
 }
 
-// mobxNewBindingName reports what a `new_expression` is bound to: a plain
-// identifier (`const s = new S()`) or a `this.<prop>` field
-// (`this.s = new S()` / class field `s = new S()`).
-func mobxNewBindingName(n *sitter.Node, src []byte) (ident, thisProp string) {
+func jsmNewBindingName(n *sitter.Node, src []byte) (ident, thisProp string) {
 	for p, hops := n.Parent(), 0; p != nil && hops < 4; p, hops = p.Parent(), hops+1 {
 		switch p.Type() {
 		case "variable_declarator":
@@ -809,18 +793,14 @@ func mobxNewBindingName(n *sitter.Node, src []byte) (ident, thisProp string) {
 	return "", ""
 }
 
-// mobxModuleStoreExports reports which store class a module's default export is
-// an instance of, and a name→class map for its named exports of store
-// instances (`export default new S()`, `export const s = new S()`,
-// `const s = new S(); export default s`, `export { s }`).
-func mobxModuleStoreExports(root *sitter.Node, src []byte, classLower map[string]string) (def string, named map[string]string) {
+func jsmModuleStoreExports(root *sitter.Node, src []byte, classLower map[string]string) (def string, named map[string]string) {
 	named = map[string]string{}
 	local := map[string]string{}
 	var collect func(n *sitter.Node)
 	collect = func(n *sitter.Node) {
 		if n.Type() == "new_expression" {
-			if canon := mobxNewExprClass(n, src, classLower); canon != "" {
-				if id, _ := mobxNewBindingName(n, src); id != "" {
+			if canon := jsmNewExprClass(n, src, classLower); canon != "" {
+				if id, _ := jsmNewBindingName(n, src); id != "" {
 					local[id] = canon
 				}
 			}
@@ -837,7 +817,7 @@ func mobxModuleStoreExports(root *sitter.Node, src []byte, classLower map[string
 			if v := n.ChildByFieldName("value"); v != nil {
 				switch v.Type() {
 				case "new_expression":
-					if canon := mobxNewExprClass(v, src, classLower); canon != "" {
+					if canon := jsmNewExprClass(v, src, classLower); canon != "" {
 						def = canon
 					}
 				case "identifier":
@@ -852,7 +832,7 @@ func mobxModuleStoreExports(root *sitter.Node, src []byte, classLower map[string
 					if m.Type() == "variable_declarator" {
 						nm, val := m.ChildByFieldName("name"), m.ChildByFieldName("value")
 						if nm != nil && val != nil && val.Type() == "new_expression" {
-							if canon := mobxNewExprClass(val, src, classLower); canon != "" {
+							if canon := jsmNewExprClass(val, src, classLower); canon != "" {
 								named[nm.Content(src)] = canon
 							}
 						}
@@ -877,12 +857,12 @@ func mobxModuleStoreExports(root *sitter.Node, src []byte, classLower map[string
 					if nm == nil {
 						continue
 					}
-					out := nm.Content(src)
+					outName := nm.Content(src)
 					if al := sp.ChildByFieldName("alias"); al != nil {
-						out = al.Content(src)
+						outName = al.Content(src)
 					}
 					if canon := local[nm.Content(src)]; canon != "" {
-						named[out] = canon
+						named[outName] = canon
 					}
 				}
 			}
@@ -895,11 +875,7 @@ func mobxModuleStoreExports(root *sitter.Node, src []byte, classLower map[string
 	return def, named
 }
 
-// mobxComputeBindings resolves, for one file, which local identifiers and
-// `this.<prop>` fields refer to a store-class instance — via module-local
-// `new S()`, `this.x = new S()`, and imported store singletons (following
-// relative imports one level, bounded by jsAbs).
-func mobxComputeBindings(fileAbs string, root *sitter.Node, src []byte, classLower map[string]string, jsAbs map[string]bool) (identStore, thisPropStore map[string]string) {
+func jsmComputeBindings(fileAbs string, root *sitter.Node, src []byte, classLower map[string]string, jsAbs map[string]bool) (identStore, thisPropStore map[string]string) {
 	identStore = map[string]string{}
 	thisPropStore = map[string]string{}
 
@@ -924,8 +900,8 @@ func mobxComputeBindings(fileAbs string, root *sitter.Node, src []byte, classLow
 	walk = func(n *sitter.Node) {
 		switch n.Type() {
 		case "new_expression":
-			if canon := mobxNewExprClass(n, src, classLower); canon != "" {
-				id, tp := mobxNewBindingName(n, src)
+			if canon := jsmNewExprClass(n, src, classLower); canon != "" {
+				id, tp := jsmNewBindingName(n, src)
 				if id != "" {
 					identStore[id] = canon
 				}
@@ -942,11 +918,11 @@ func mobxComputeBindings(fileAbs string, root *sitter.Node, src []byte, classLow
 			if target == "" {
 				break
 			}
-			tsrc, troot, _, ok := jsParse(target)
-			if !ok {
+			tsrc, troot, ok := jhcParseJS(target)
+			if !ok || troot == nil {
 				break
 			}
-			def, namedExp := mobxModuleStoreExports(troot, tsrc, classLower)
+			def, namedExp := jsmModuleStoreExports(troot, tsrc, classLower)
 			for i := 0; i < int(n.NamedChildCount()); i++ {
 				ic := n.NamedChild(i)
 				if ic.Type() != "import_clause" {
@@ -989,10 +965,7 @@ func mobxComputeBindings(fileAbs string, root *sitter.Node, src []byte, classLow
 	return identStore, thisPropStore
 }
 
-// mobxBaseAnnotation returns the leftmost identifier of a MobX annotation
-// expression: `observable` / `observable.ref` / `action.bound` / `computed()` /
-// `false` → "observable"/"action"/"computed"/"false".
-func mobxBaseAnnotation(v *sitter.Node, src []byte) string {
+func jsmBaseAnnotation(v *sitter.Node, src []byte) string {
 	switch v.Type() {
 	case "identifier":
 		return v.Content(src)
@@ -1000,17 +973,17 @@ func mobxBaseAnnotation(v *sitter.Node, src []byte) string {
 		return v.Type()
 	case "member_expression":
 		if o := v.ChildByFieldName("object"); o != nil {
-			return mobxBaseAnnotation(o, src)
+			return jsmBaseAnnotation(o, src)
 		}
 	case "call_expression":
 		if f := v.ChildByFieldName("function"); f != nil {
-			return mobxBaseAnnotation(f, src)
+			return jsmBaseAnnotation(f, src)
 		}
 	}
 	return ""
 }
 
-func mobxNormalizeAnnotation(base string) string {
+func jsmNormalizeAnnotation(base string) string {
 	switch base {
 	case "observable":
 		return "observable"
@@ -1022,9 +995,7 @@ func mobxNormalizeAnnotation(base string) string {
 	return ""
 }
 
-// mobxEnclosingClass walks up from a node to the nearest class and returns its
-// name, or "".
-func mobxEnclosingClass(n *sitter.Node, src []byte) string {
+func jsmEnclosingClass(n *sitter.Node, src []byte) string {
 	for p := n.Parent(); p != nil; p = p.Parent() {
 		if p.Type() == "class_declaration" || p.Type() == "class" {
 			if nm := p.ChildByFieldName("name"); nm != nil {
@@ -1036,9 +1007,9 @@ func mobxEnclosingClass(n *sitter.Node, src []byte) string {
 	return ""
 }
 
-func mobxWalk(n *sitter.Node, fn func(*sitter.Node)) {
+func jsmWalk(n *sitter.Node, fn func(*sitter.Node)) {
 	fn(n)
 	for i := 0; i < int(n.NamedChildCount()); i++ {
-		mobxWalk(n.NamedChild(i), fn)
+		jsmWalk(n.NamedChild(i), fn)
 	}
 }

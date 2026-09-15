@@ -1,0 +1,34 @@
+% Tier FX FX.8.9 (2026-09-15) — js_mobx. Replaces
+% internal/linker/js_mobx.go's LinkJSMobx.
+%
+% Base facts (from the js_mobx_sites hub provider,
+% internal/factpipe/hub_js_mobx.go — NOT a tree-sitter facts: block; see
+% patterns/javascript/js_mobx.yaml's package doc):
+%
+%   js_mobx_patch(TargetID, Kind)
+%       Pass A: an existing function/class/method/variable node's member
+%       kind (observable|action|computed), already resolved.
+%   js_mobx_mint(ID, Label, Svc, File, Line, EndLine, Class, Kind)
+%       Pass A: a member no parser captured, synthetic node + its kind.
+%   js_mobx_read_b(From, To, Tier, Via)
+%       Pass B: autorun/reaction/when callback -> observable read.
+%   js_mobx_read_c(From, To, Via)
+%       Pass C: observer(Component) render-body -> observable read.
+%   js_mobx_read_d(From, To)
+%       Pass D: computed member -> observable dependency.
+%
+% All five relations the emit spec consumes are pure pass-through — the hub
+% already resolved every join (member-kind lookup consulting its own
+% same-run overlay, cross-file import following) a `.dl` rule would
+% otherwise attempt, and for the live-overlay reads, could not.
+
+js_mobx_patch_rel(TargetID, Kind) :- js_mobx_patch(TargetID, Kind).
+
+js_mobx_mint_rel(ID, Label, Svc, File, Line, EndLine, Class, Kind) :-
+    js_mobx_mint(ID, Label, Svc, File, Line, EndLine, Class, Kind).
+
+js_mobx_read_b_rel(From, To, Tier, Via) :- js_mobx_read_b(From, To, Tier, Via).
+
+js_mobx_read_c_rel(From, To, Via) :- js_mobx_read_c(From, To, Via).
+
+js_mobx_read_d_rel(From, To) :- js_mobx_read_d(From, To).

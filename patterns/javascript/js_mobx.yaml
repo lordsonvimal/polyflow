@@ -1,0 +1,92 @@
+# Tier FX FX.8.9 (2026-09-15) — replaces internal/linker/js_mobx.go's
+# LinkJSMobx: MobX reactivity (which class members are observable/action/
+# computed, and which observables an autorun/reaction/when/observer-render/
+# computed callback reads).
+#
+# NO `facts:` block — four sequential passes share live, mutating state (a
+# same-run member-kind overlay Pass B/C/D all consult to see Pass A's
+# stamps) plus a cross-file import-following resolver, none of which a
+# `.dl` fact set/rule can express (a fact set has no "write, then read
+# within the same hub call" concept). Everything lives in the `js_mobx_sites`
+# hub provider (internal/factpipe/hub_js_mobx.go); rules/javascript/
+# js_mobx.dl is pure pass-through.
+#
+# `patch:` (not `mint:`) for Pass A's existing-node member tagging, same
+# FX.8.8 rationale: rebuilding a function/class/method/variable node from
+# scratch would drop whatever other pass already stamped on it. `mint:` IS
+# correct for a member no parser captured (frozenNodeTypes already has
+# "variable" from FX.8.8).
+#
+# Three separate `reads` edge relations (Pass B/C/D) rather than one: the
+# Tier/Via meta branch is decided in Go at fact-emission time (no
+# string-emptiness test in `.dl`, the FX.8.44/45 restriction) AND each
+# pass's edges must stay distinguishable from the others even when they
+# share the same (from, to) pair — the retired Go's own per-pass `seenEdge`
+# keying treated a Pass B read and a Pass D computed-dep between the same
+# two nodes as two coexisting edges, not a dedup collision. Giving each
+# relation its own literal `label:` reproduces that (graph.Edge IDs fold in
+# from/to/label) more visibly than the retired Go's hidden `#mobx`/
+# `#mobx_obs`/`#mobx_cdep` ID-suffix discriminator did.
+#
+# Not run through the shared factpipe_frameworks slot (no `patch:` there) —
+# a dedicated pipeline.Run call in internal/indexer/link_passes.go's
+# js_mobx pass merges Patches into st.allNodes itself, same as js_hoc.
+language: javascript
+version: "1"
+
+hub:
+  - name: js_mobx_sites
+
+emit:
+  - relation: js_mobx_patch_rel
+    columns: [TargetID, Kind]
+    patch:
+      id: { arg: TargetID }
+      meta:
+        mobx: { arg: Kind }
+        tier: { literal: jcm4 }
+
+  - relation: js_mobx_mint_rel
+    columns: [ID, Label, Svc, File, Line, EndLine, Class, Kind]
+    mint:
+      node: variable
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: javascript }
+      meta:
+        class: { arg: Class }
+        scope: { literal: class_field }
+        tier: { literal: jcm4 }
+        synthetic: { literal: "true" }
+        mobx: { arg: Kind }
+        end_line: { arg: EndLine }
+
+  - relation: js_mobx_read_b_rel
+    columns: [From, To, Tier, Via]
+    edge: { from: { arg: From }, to: { arg: To }, type: reads, label: mobx }
+    meta:
+      mobx: { literal: reactive_read }
+      tier: { arg: Tier }
+      mobx_resolve: { arg: Via }
+    dedup: [from, to, label]
+
+  - relation: js_mobx_read_c_rel
+    columns: [From, To, Via]
+    edge: { from: { arg: From }, to: { arg: To }, type: reads, label: mobx_obs }
+    meta:
+      mobx: { literal: reactive_read }
+      mobx_via: { literal: observer_render }
+      tier: { literal: jcm7 }
+      mobx_resolve: { arg: Via }
+    dedup: [from, to, label]
+
+  - relation: js_mobx_read_d_rel
+    columns: [From, To]
+    edge: { from: { arg: From }, to: { arg: To }, type: reads, label: mobx_cdep }
+    meta:
+      mobx: { literal: computed_dep }
+      tier: { literal: jcm9 }
+    dedup: [from, to, label]

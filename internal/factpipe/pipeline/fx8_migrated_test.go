@@ -26,6 +26,7 @@ var migratedFrameworks = []string{
 	"pusher_producer",
 	"rails_helpers",
 	"js_hoc",
+	"js_mobx",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names
