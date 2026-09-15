@@ -80,12 +80,28 @@ func jsHOCSitesHub(nodes []graph.Node, files []string) []Fact {
 	varByFileLabel := make(map[string]string)
 	declByFileLabel := make(map[string]string)
 	declBySvcLabel := make(map[string]string)
-	svc := ""
+	svcOfFile := make(map[string]string)
+	// defaultSvc: svcOfFile only resolves a file that owns at least one
+	// function/class/variable/method node — a file whose only HOC call is
+	// an app-local default export wrapping an inline class/arrow (no
+	// separately-declared identifier in that file) can have none. Falls
+	// back to "the service this whole call's nodes belong to", correct as
+	// long as the caller (internal/indexer/link_passes.go) runs this hub
+	// once per service — the same fix FX.8.10 (js_client_routes) needed;
+	// see docs/declarative-framework-pipeline-plan.md's FX.8.10 row. Before
+	// this fix, this hub used ONE global svc (the first non-empty Service
+	// seen across the WHOLE nodes slice) for every file regardless of which
+	// service it belonged to — silently wrong for every service after the
+	// first in a multi-service call.
+	defaultSvc := ""
 	for i := range nodes {
 		n := &nodes[i]
 		nodeIdx[n.ID] = true
-		if svc == "" && n.Service != "" {
-			svc = n.Service
+		if n.Service != "" && n.File != "" {
+			svcOfFile[n.File] = n.Service
+		}
+		if defaultSvc == "" && n.Service != "" {
+			defaultSvc = n.Service
 		}
 		switch n.Type {
 		case graph.NodeTypeVariable:
@@ -164,6 +180,10 @@ func jsHOCSitesHub(nodes []graph.Node, files []string) []Fact {
 			continue
 		}
 		seenFile[rel] = true
+		svc := svcOfFile[rel]
+		if svc == "" {
+			svc = defaultSvc
+		}
 
 		s := string(src)
 		if !jhcHOCMentioned(s) && !strings.Contains(s, "export ") {

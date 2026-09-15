@@ -306,14 +306,31 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if fw == nil {
 				return fmt.Errorf("js_hoc: framework not embedded")
 			}
-			var allFiles []string
+			// Run once per service (matching FX.8.10's fix, see
+			// docs/declarative-framework-pipeline-plan.md's FX.8.8 row) —
+			// the hub's per-file service inference falls back to "the
+			// service every node in this call belongs to" for a file with
+			// no declared nodes of its own, which only holds when one hub
+			// call covers exactly one service.
+			var res pipeline.Result
 			for _, sf := range st.allSvcFiles {
-				allFiles = append(allFiles, sf.files...)
-			}
-			snap := graph.Snapshot{Nodes: st.allNodes, Files: allFiles}
-			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
-			if err != nil {
-				return fmt.Errorf("js_hoc: %w", err)
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				snap := graph.Snapshot{Nodes: svcNodes, Files: sf.files}
+				svcRes, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+				if err != nil {
+					return fmt.Errorf("js_hoc: service %s: %w", sf.svc.Name, err)
+				}
+				res.Edges = append(res.Edges, svcRes.Edges...)
+				res.Nodes = append(res.Nodes, svcRes.Nodes...)
+				res.Patches = append(res.Patches, svcRes.Patches...)
 			}
 
 			byID := make(map[string]int, len(st.allNodes))
