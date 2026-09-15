@@ -6,6 +6,24 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
+// itoa is a tiny, dependency-free int->string helper shared by several
+// hand-built-fixture test files in this package (originally
+// rails_route_actions_test.go, retired by the FX.8.24 migration to
+// patterns/ruby/rails_route_actions.yaml + rules/ruby/rails_route_actions.dl
+// — kept here since ruby_class_method_calls_test.go, ruby_mixin_constants_
+// test.go and ruby_mixin_methods_test.go still build node IDs with it).
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}
+
 // classCallFuncNode builds a method node owned by class `owner`, the shape
 // extractRubyVariables emits.
 func classCallFuncNode(svc, file, owner, name string, line int) graph.Node {

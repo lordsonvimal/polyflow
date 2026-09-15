@@ -1,0 +1,50 @@
+# Tier FX FX.8.24 — replaces internal/linker/rails_route_actions.go.
+#
+# Rails routes name their target by convention (resource/action), not by the
+# receiver-qualified Meta["handler"] string LinkRouteHandlers keys on, so they
+# need their own resolution. Hub-only (no `patterns:`/`facts:` block, the same
+# shape as patterns/ruby/pusher_consumer.yaml): every fact this framework
+# needs is either the FX.1 bridge's node_meta/defines/ancestor_dist, or the
+# "rails_route_actions" HubProvider (internal/factpipe/
+# hub_rails_route_actions.go) — real Go, ported from the retired pass, for the
+# two things no tree-sitter query or `.dl` join could reach: recovering a verb
+# route's (action, resource, namespace) from its node_meta plus a URL-path
+# fallback, and the controller file's own (namespace, resource) split off its
+# path. See that file's doc comment for the full account, including why this
+# needed a hub rather than the `derive:` primitive FX.8.24's blocker entry
+# proposed.
+#
+# Stage 3 (rules/ruby/rails_route_actions.dl) does the direct-then-inherited
+# resolution, reusing rails_filters.dl's ancestor_dist/min(Depth)/ambiguity
+# idiom for the inherited half.
+#
+# Gate: routing is core Rails (railties), not a separate gem — same gate as
+# rails_filters.yaml / rails_model_tables.yaml.
+language: ruby
+version: "1"
+package: railties
+
+hub:
+  - name: rails_route_actions
+
+emit:
+  - relation: route_target
+    columns: [H, MId]
+    edge:
+      from: { arg: H }
+      to:   { arg: MId }
+      type: calls
+    confidence:
+      - { else: static }
+    dedup: [from]
+
+  - relation: route_miss
+    columns: [H, Resource, Action, File, Line]
+    edge: { from: { arg: H }, to: { arg: H }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        name: { template: "{Resource}#{Action}" }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: rails_route_action_unresolved

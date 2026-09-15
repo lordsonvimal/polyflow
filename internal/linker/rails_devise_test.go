@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lordsonvimal/polyflow/internal/deps"
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,9 +154,10 @@ end
 // TestLinkDeviseDefaultRoutes_NoDanglingEdges is this phase's bug-class #10
 // check (the plan's own framing, matching TestLinkRailsFilters_NoDanglingEdges's
 // equivalent): every synthesized node has no in-repo controller behind it, so
-// LinkRailsRouteActions must ledger every single one as
-// UnresolvedRailsRouteAction and produce zero `calls` edges — never a
-// fabricated link to a controller that doesn't exist.
+// rails_route_actions (Tier FX FX.8.24: patterns/ruby/rails_route_actions.yaml
+// + rules/ruby/rails_route_actions.dl, driven by pipeline.Run) must ledger
+// every single one as rails_route_action_unresolved and produce zero `calls`
+// edges — never a fabricated link to a controller that doesn't exist.
 func TestLinkDeviseDefaultRoutes_NoDanglingEdges(t *testing.T) {
 	t.Parallel()
 	routesFile, modelFile := writeDeviseFixture(t, `
@@ -172,11 +175,16 @@ end
 	})
 	require.NotEmpty(t, nodes)
 
-	edges, unresolved := LinkRailsRouteActions(nodes, nil)
-	assert.Empty(t, edges, "no controller exists for any default-scope node; must never fabricate a calls edge")
-	assert.Len(t, unresolved, len(nodes), "every synthesized node must be ledgered")
-	for _, u := range unresolved {
-		assert.Equal(t, UnresolvedRailsRouteAction, u.Kind)
+	reg, err := pipeline.LoadEmbedded()
+	require.NoError(t, err)
+	active := reg.Active([]deps.Dependency{{Name: "railties", Version: "7.1.0"}})
+	res, err := pipeline.Run(active, nil, graph.Snapshot{Nodes: nodes})
+	require.NoError(t, err)
+
+	assert.Empty(t, res.Edges, "no controller exists for any default-scope node; must never fabricate a calls edge")
+	assert.Len(t, res.Unresolved, len(nodes), "every synthesized node must be ledgered")
+	for _, u := range res.Unresolved {
+		assert.Equal(t, "rails_route_action_unresolved", u.Kind)
 	}
 }
 

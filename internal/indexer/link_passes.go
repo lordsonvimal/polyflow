@@ -1104,15 +1104,9 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			return st.bw.Flush(st.ctx)
 		}},
 		// Rails routes name their action by convention, not by the Meta["handler"]
-		// receiver string LinkRouteHandlers keys on, so they need their own pass.
-		{"rails_route_actions", scopeSameServiceOnly, func() error {
-			railsActionEdges, railsActionUnresolved := linker.LinkRailsRouteActions(st.allNodes, st.allEdges)
-			if err := st.writeEdges(railsActionEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, railsActionUnresolved...)
-			return nil
-		}},
+		// receiver string LinkRouteHandlers keys on. That resolution is Tier FX
+		// FX.8.24: patterns/ruby/rails_route_actions.yaml + rules/ruby/
+		// rails_route_actions.dl, run by the factpipe_frameworks pass below.
 		{"route_components", scopeSameServiceOnly, func() error {
 			routeCompEdges, routeCompUnresolved := linker.LinkRouteComponents(st.allNodes)
 			if err := st.writeEdges(routeCompEdges); err != nil {

@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
-	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/meta"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
@@ -33,6 +32,23 @@ func TestRun_SingularResourceReachesPluralController(t *testing.T) {
 	ctrls := filepath.Join(svc, "app", "controllers")
 	require.NoError(t, os.MkdirAll(filepath.Join(svc, "config"), 0o755))
 	require.NoError(t, os.MkdirAll(ctrls, 0o755))
+
+	// rails_route_actions is Tier FX FX.8.24 — a package-gated framework pass
+	// (railties, matching rails_filters/rails_model_tables), so the fixture
+	// has to resolve it the way a real Rails app does.
+	writeFile(t, svc, "Gemfile", "source 'https://rubygems.org'\ngem 'rails'\n")
+	writeFile(t, svc, "Gemfile.lock", `GEM
+  remote: https://rubygems.org/
+  specs:
+    railties (7.1.3)
+    rails (7.1.3)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rails
+`)
 
 	writeFile(t, filepath.Join(svc, "config"), "routes.rb", `Rails.application.routes.draw do
   resource :session, only: [:create]
@@ -122,7 +138,7 @@ end
 	require.NoError(t, err)
 	var routeRefs []string
 	for _, u := range unresolved {
-		if u.Kind == linker.UnresolvedRailsRouteAction {
+		if u.Kind == "rails_route_action_unresolved" {
 			routeRefs = append(routeRefs, u.Name)
 		}
 	}

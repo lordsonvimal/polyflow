@@ -1,0 +1,95 @@
+% Rails route -> controller action — Tier FX FX.8.24. Replaces
+% internal/linker/rails_route_actions.go's LinkRailsRouteActions (534 lines).
+%
+% Hub facts (internal/factpipe/hub_rails_route_actions.go's
+% "rails_route_actions" provider — real Go, ported near-verbatim from the
+% retired pass; see that file's doc comment for why this needed a hub rather
+% than a `derive:`/`inflect` primitive):
+%   rra_route_action(H, Action)                  colon already stripped
+%   rra_route_ns(H, Namespace)                    the module a route resolves against
+%   rra_cand_resource(H, Name, Rank)              Rank 0 = as written, 1 = pluralized
+%   rra_ctrl_ns_resource(Id, Namespace, Resource)  any controller-file declaration
+%
+% Bridge (FX.1): node, node_label, node_meta, defines, ancestor_dist.
+%
+% Resolution order, confirmed against the retired lookup()/lookupInherited()
+% caller chain (LinkRailsRouteActions): every candidate name is tried against
+% the DIRECT index first (as-written, then pluralized), and only if BOTH
+% direct attempts miss does the INHERITED (ancestor) walk run, again
+% as-written then pluralized — direct-verbatim, direct-plural,
+% inherited-verbatim, inherited-plural. Ambiguity only arises at the
+% inherited level (the direct index silently collapses a same-label
+% duplicate onto its lowest node ID, pinned by
+% TestLinkRailsRouteActions_OneEdgePerRoute); an ambiguous inherited hit at
+% the lower rank (verbatim) short-circuits the walk exactly like the retired
+% loop's early `break` — the plural candidate's ancestors are never
+% consulted once the verbatim one is genuinely ambiguous. That is reproduced
+% here by picking the minimum Rank that has ANY hit before ever looking at
+% ambiguity, the same way the retired loop tries rank 0 to completion before
+% rank 1.
+
+% ---------------------------------------------------------------------------
+% declaration discriminator — a pattern-derived call site is not a def
+% ---------------------------------------------------------------------------
+has_end_line(Id) :- node_meta(Id, "end_line", _).
+call_site(Id) :- node_meta(Id, "pattern", _), not has_end_line(Id).
+
+% ---------------------------------------------------------------------------
+% direct lookup — the controller's own declarations only
+% ---------------------------------------------------------------------------
+direct_hit(H, Rank, MId) :-
+    rra_cand_resource(H, R, Rank), rra_route_ns(H, NS), rra_route_action(H, A),
+    rra_ctrl_ns_resource(MId, NS, R),
+    node_label(MId, A),
+    not call_site(MId).
+
+direct_rank(H, MinRank) :- direct_hit(H, Rank, _), min(MinRank, Rank).
+% Same-label duplicate at the winning rank collapses at emit time (dedup:
+% [from] on the route_target relation) — the retired byPath map's
+% sorted-insert-once behaviour, never an ambiguity. Node atoms cannot be
+% min()-aggregated (the engine's aggregates are integer-only), so the
+% dedup lives in emit.go's Apply, not here.
+direct_target(H, MId) :- direct_rank(H, MinRank), direct_hit(H, MinRank, MId).
+resolved_direct(H) :- direct_target(H, _).
+
+% ---------------------------------------------------------------------------
+% inherited lookup — only once the direct index misses at every rank
+% ---------------------------------------------------------------------------
+class_ctrl(K, NS, R) :- rra_ctrl_ns_resource(K, NS, R), node(K, "class", _, _).
+
+inh_hit(H, Rank, MId, D) :-
+    not resolved_direct(H),
+    rra_cand_resource(H, R, Rank), rra_route_ns(H, NS), rra_route_action(H, A),
+    class_ctrl(K, NS, R),
+    ancestor_dist(K, Anc, D),
+    defines(Anc, A, MId),
+    not call_site(MId).
+
+% Lowest rank with ANY hit wins outright — the retired loop's per-rank
+% `break`, before ambiguity is ever considered.
+inh_rank(H, MinRank) :- inh_hit(H, Rank, _, _), min(MinRank, Rank).
+inh_depth(H, MinD) :- inh_rank(H, MinRank), inh_hit(H, MinRank, _, D), min(MinD, D).
+inh_target(H, MId) :- inh_rank(H, MinRank), inh_depth(H, MinD), inh_hit(H, MinRank, MId, MinD).
+
+inh_ntargets(H, N) :- inh_target(H, MId), count(N, MId).
+inh_ambiguous(H) :- inh_ntargets(H, N), le(2, N).
+inh_resolved(H, MId) :- inh_target(H, MId), not inh_ambiguous(H).
+inh_hit_any(H) :- inh_target(H, _).
+
+% ---------------------------------------------------------------------------
+% the edge
+% ---------------------------------------------------------------------------
+route_target(H, MId) :- direct_target(H, MId).
+route_target(H, MId) :- not resolved_direct(H), inh_resolved(H, MId).
+
+% ---------------------------------------------------------------------------
+% the ledger — a route with an action but no pinned target, at any level
+% ---------------------------------------------------------------------------
+route_miss(H, R, A, File, Line) :-
+    rra_route_action(H, A), node_meta(H, "resource", R),
+    node(H, "http_handler", File, _), node_start(H, Line),
+    not resolved_direct(H), not inh_hit_any(H).
+route_miss(H, R, A, File, Line) :-
+    rra_route_action(H, A), node_meta(H, "resource", R),
+    node(H, "http_handler", File, _), node_start(H, Line),
+    not resolved_direct(H), inh_ambiguous(H).

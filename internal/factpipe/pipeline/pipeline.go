@@ -89,6 +89,7 @@ type Framework struct {
 	Configs  []factpipe.CompiledConfig
 	Tables   []factpipe.CompiledTable
 	Hubs     []factpipe.CompiledHub
+	Derives  []factpipe.CompiledDerive
 
 	goals []string // the emit relations, materialized by Eval
 }
@@ -212,6 +213,17 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		return nil, fmt.Errorf("factpipe: pattern %s: %w", yamlPath, err)
 	}
 
+	var ddoc struct {
+		Derive []factpipe.DeriveSpec `yaml:"derive"`
+	}
+	if err := yaml.Unmarshal(ydata, &ddoc); err != nil {
+		return nil, fmt.Errorf("factpipe: pattern %s derive: %w", yamlPath, err)
+	}
+	derives, err := factpipe.CompileDeriveSpecs(ddoc.Derive)
+	if err != nil {
+		return nil, fmt.Errorf("factpipe: pattern %s: %w", yamlPath, err)
+	}
+
 	rdata, err := fs.ReadFile(ruleFS, dlPath)
 	if err != nil {
 		return nil, err
@@ -245,6 +257,7 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		Configs:  configs,
 		Tables:   tables,
 		Hubs:     hubs,
+		Derives:  derives,
 		goals:    goals,
 	}, nil
 }
@@ -312,6 +325,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 		factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
 		factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, fset)
+		factpipe.ApplyDerive(fw.Derives, fset)
 
 		fr := factRelations(fw, fset)
 		derived, prov, err := fw.Rules.Eval(fr)
@@ -429,6 +443,7 @@ func (fw *Framework) EvalOnce(files []ParsedFile, graphSoFar graph.Snapshot, ext
 	factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 	factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
 	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, fset)
+	factpipe.ApplyDerive(fw.Derives, fset)
 	fr := factRelations(fw, fset)
 	fr.Goals = append(append([]string(nil), fr.Goals...), extraGoals...)
 	derived, _, err := fw.Rules.Eval(fr)
