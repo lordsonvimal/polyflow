@@ -36,6 +36,13 @@ var migratedFrameworks = []string{
 	"file_routes",
 	"go_http_hosts",
 	"js_lazy_import_calls",
+	"amqp_message_type",
+	"ruby_associations",
+	"pusher_helper_calls",
+	"pusher_consumer",
+	"pusher_js_consumer",
+	"ruby_job_inherit",
+	"rails_route_actions",
 }
 
 // "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike
