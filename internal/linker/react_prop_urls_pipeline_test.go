@@ -1,16 +1,71 @@
 package linker_test
 
+// Ported from the retired internal/linker/react_prop_urls.go (Tier FX
+// migration of LinkReactPropURLs to patterns/generic/react_prop_urls.yaml +
+// internal/factpipe/hub_react_prop_urls.go): reactPropURLsApply below runs
+// the framework and merges its patch: output exactly like
+// internal/indexer/link_passes.go's react_prop_urls pass does, in place of
+// the retired function's direct node mutation. Returns only the nodes that
+// were actually patched, matching the retired function's `changed []graph.Node`
+// return contract the assertions below rely on.
+
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
-	"github.com/lordsonvimal/polyflow/internal/linker"
 )
+
+func reactPropURLsApply(t *testing.T, nodes []graph.Node, serviceFiles map[string][]string) []graph.Node {
+	t.Helper()
+	reg, err := pipeline.LoadEmbedded()
+	require.NoError(t, err)
+	fw := reg.ByName("react_prop_urls")
+	require.NotNil(t, fw, "react_prop_urls framework not embedded")
+
+	var allFiles []string
+	for _, fs := range serviceFiles {
+		allFiles = append(allFiles, fs...)
+	}
+
+	res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: nodes, Files: allFiles})
+	require.NoError(t, err)
+
+	byID := make(map[string]int, len(nodes))
+	for i := range nodes {
+		byID[nodes[i].ID] = i
+	}
+	var changed []graph.Node
+	for _, p := range res.Patches {
+		idx, ok := byID[p.ID]
+		if !ok {
+			continue
+		}
+		n := nodes[idx]
+		m := make(map[string]string, len(n.Meta)+len(p.Meta))
+		for k, v := range n.Meta {
+			m[k] = v
+		}
+		for _, k := range p.DeleteMeta {
+			delete(m, k)
+		}
+		for k, v := range p.Meta {
+			m[k] = v
+		}
+		n.Meta = m
+		if p.Label != "" {
+			n.Label = p.Label
+		}
+		changed = append(changed, n)
+	}
+	return changed
+}
 
 func TestLinkReactPropURLs_ResolvesPropFedEndpoint(t *testing.T) {
 	t.Parallel()
@@ -34,7 +89,7 @@ func TestLinkReactPropURLs_ResolvesPropFedEndpoint(t *testing.T) {
 	}
 	client := func(line int, wrapper, urlExpr string) graph.Node {
 		return graph.Node{
-			ID:      "js:UppyUploader.jsx:http_client:x:" + wrapper, Type: graph.NodeTypeHTTPClient,
+			ID: "js:UppyUploader.jsx:http_client:x:" + wrapper + ":" + strconv.Itoa(line), Type: graph.NodeTypeHTTPClient,
 			Service: "js", File: "UppyUploader.jsx", Line: line, Language: "javascript",
 			Meta: map[string]string{"pattern": "js_api_wrapper_call_site", "wrapper": wrapper, "url_expr": urlExpr, "key_dynamic": "true", "key_dynamic_raw": urlExpr},
 		}
@@ -56,12 +111,12 @@ func TestLinkReactPropURLs_ResolvesPropFedEndpoint(t *testing.T) {
 			Meta: map[string]string{"global_symbol": "UppyUploader", "scope": "global"},
 		},
 		client(10, "apiPost", "create_lro_url"),
-		client(20, "apiPost", `sign_part_url.replace("/0/", ` + "`/${x}/`" + `)`),
+		client(20, "apiPost", `sign_part_url.replace("/0/", `+"`/${x}/`"+`)`),
 		client(30, "apiPost", "bogus_url"),
 		client(40, "apiPost", "url"), // bare `url` — must abstain (local-var risk)
 	}
 
-	changed := linker.LinkReactPropURLs(nodes, map[string][]string{"orion": {erb}, "js": {"UppyUploader.jsx"}})
+	changed := reactPropURLsApply(t, nodes, map[string][]string{"orion": {erb}, "js": {"UppyUploader.jsx"}})
 
 	byLine := map[int]graph.Node{}
 	for _, n := range changed {
@@ -120,7 +175,7 @@ export function ProgressiveFeedbackCard({ lroInfo }) {
 		},
 	}
 
-	changed := linker.LinkReactPropURLs(nodes, map[string][]string{"js": {child, parent}})
+	changed := reactPropURLsApply(t, nodes, map[string][]string{"js": {child, parent}})
 	require.Len(t, changed, 1)
 	assert.Equal(t, "/app/lro/*", changed[0].Meta["url"])
 	assert.Equal(t, "GET", changed[0].Meta["method"])
@@ -138,7 +193,7 @@ func TestLinkReactPropURLs_OneHopLocalAssignment(t *testing.T) {
 	require.NoError(t, os.WriteFile(jsx, []byte(`export const Up = (props) => {
   const { add_lro_details_url } = props;
   const send = async (lroId) => {
-    const url = add_lro_details_url.replace("/0/", ` + "`/${lroId}/`" + `);
+    const url = add_lro_details_url.replace("/0/", `+"`/${lroId}/`"+`);
     const r = await apiPost(url, { x: 1 });
     return r;
   };
@@ -165,7 +220,7 @@ window.Up = Up;
 		},
 	}
 
-	changed := linker.LinkReactPropURLs(nodes, map[string][]string{"orion": {erb}, "js": {jsx}})
+	changed := reactPropURLsApply(t, nodes, map[string][]string{"orion": {erb}, "js": {jsx}})
 	require.Len(t, changed, 1)
 	assert.Equal(t, "/client_api/v1/lros/*/add_details", changed[0].Meta["url"])
 	assert.Equal(t, "POST", changed[0].Meta["method"])

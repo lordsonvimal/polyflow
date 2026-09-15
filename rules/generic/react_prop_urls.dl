@@ -1,0 +1,8 @@
+% Tier FX (2026-09-16) — pure pass-through. All the real resolution (ERB
+% props-hash scan, JSX prop-forwarding scan, component registry, one-hop
+% local-assignment trace) happens in the "react_prop_urls" hub
+% (internal/factpipe/hub_react_prop_urls.go); this rule only republishes its
+% already-resolved fact under the emit relation's name.
+
+react_prop_urls_patch_rel(ID, URL, Method, Label, OwnerService) :-
+    react_prop_urls_patch(ID, URL, Method, Label, OwnerService).

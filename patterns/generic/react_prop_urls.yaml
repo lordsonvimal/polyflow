@@ -1,0 +1,41 @@
+# Tier FX (2026-09-16) — replaces internal/linker/react_prop_urls.go's
+# LinkReactPropURLs: resolves the URL of a React API call whose endpoint
+# arrives as a component prop set on the Rails side
+# (`react_component("X", { some_url: foo_path })`), or forwarded JSX-to-JSX
+# (`<Modal url={...} />`).
+#
+# language: generic, not javascript/erb — this framework needs the WHOLE
+# graph and every service's file list in one call (a component's Rails ERB
+# and its JSX implementation are routinely different services), which the
+# shared per-service factpipe_frameworks loop cannot give it.
+# patternLangForFile has no case for "generic", so that loop always sees an
+# empty file list here and skips it; only the dedicated pipeline.Run call in
+# internal/indexer/link_passes.go's "react_prop_urls" pass invokes this
+# framework, over the whole node graph + every service's files flattened.
+# Same shielding mechanism as amqp_handshake/hints/config_baseurl/
+# js_http_grade.
+#
+# All the real extraction (ERB props-hash scan, JSX prop-forwarding scan,
+# component registry, one-hop local-assignment trace, destructuring check)
+# is real cross-language AST work no `.dl` join can express — it stays in
+# the "react_prop_urls" hub (internal/factpipe/hub_react_prop_urls.go),
+# which reports one already-resolved patch per matching http_client node.
+# rules/generic/react_prop_urls.dl is pure pass-through.
+language: generic
+version: "1"
+
+hub:
+  - name: react_prop_urls
+
+emit:
+  - relation: react_prop_urls_patch_rel
+    columns: [ID, URL, Method, Label, OwnerService]
+    patch:
+      id: { arg: ID }
+      delete_meta: [key_dynamic, key_dynamic_raw]
+      label: { arg: Label }
+      meta:
+        url: { arg: URL }
+        path_resolved_via: react_prop_url
+        method: { arg: Method }
+        owner_service: { arg: OwnerService }

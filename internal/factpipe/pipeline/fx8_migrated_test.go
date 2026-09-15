@@ -46,6 +46,7 @@ var migratedFrameworks = []string{
 	"js_http_grade",
 	"hints",
 	"amqp_handshake",
+	"react_prop_urls",
 }
 
 // "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike

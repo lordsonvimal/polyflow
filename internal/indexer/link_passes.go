@@ -1716,12 +1716,50 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// after rails_views + js_api_wrapper_calls, before the contract engine.
 		{"react_prop_urls", scopeCrossService, func() error {
 			svcFiles := st.svcFilesOf()
-			changed := linker.LinkReactPropURLs(st.allNodes, svcFiles)
-			if len(changed) == 0 {
+			var allFiles []string
+			for _, fs := range svcFiles {
+				allFiles = append(allFiles, fs...)
+			}
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("react_prop_urls: load registry: %w", err)
+			}
+			fw := reg.ByName("react_prop_urls")
+			if fw == nil {
+				return fmt.Errorf("react_prop_urls: framework not embedded")
+			}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.allNodes, Files: allFiles})
+			if err != nil {
+				return fmt.Errorf("react_prop_urls: %w", err)
+			}
+			if len(res.Patches) == 0 {
 				return nil
 			}
-			for i := range changed {
-				n := changed[i]
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.allNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta))
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for _, k := range p.DeleteMeta {
+					delete(m, k)
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				n.Meta = m
+				if p.Label != "" {
+					n.Label = p.Label
+				}
+				st.allNodes[idx] = n
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}
