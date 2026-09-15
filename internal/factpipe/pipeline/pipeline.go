@@ -317,6 +317,10 @@ type Result struct {
 	// The caller performs the actual graph swap/delete.
 	Replaced map[string]string
 	Deleted  []string
+	// Patches is FX.8.8's node-mutation channel (`patch:` emit blocks) — meta
+	// overlays for existing nodes the caller merges in (not a rebuild). See
+	// factpipe.NodePatch.
+	Patches []factpipe.NodePatch
 }
 
 // Run executes stages 1–4 for one service. graphSoFar is the language-semantic
@@ -371,6 +375,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 				res.Replaced[old] = newID
 			}
 			res.Deleted = append(res.Deleted, er.Deleted...)
+			res.Patches = append(res.Patches, er.Patches...)
 		}
 	}
 
@@ -388,6 +393,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		}
 		res.Deleted = deduped
 	}
+	sort.SliceStable(res.Patches, func(i, j int) bool { return res.Patches[i].ID < res.Patches[j].ID })
 	return res, nil
 }
 

@@ -25,6 +25,7 @@ var migratedFrameworks = []string{
 	"sprockets_assets",
 	"pusher_producer",
 	"rails_helpers",
+	"js_hoc",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names

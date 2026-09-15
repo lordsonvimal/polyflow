@@ -1,0 +1,76 @@
+# Tier FX FX.8.8 (2026-09-15) — replaces internal/linker/js_hoc.go's
+# LinkJSHOC: unwrapping React/MobX higher-order-component wrapper identity
+# (`observer`/`memo`/`forwardRef`/`withRouter`/`pure`/`hot`, plus SPA.1's
+# app-local structural HOC detection) so the render-tree graph lands on the
+# real component.
+#
+# NO `facts:` block — every piece of this (arbitrary-depth curried-call
+# peeling, a recursive JSX-presence scan, a class-superclass substring
+# check, and resolving a bare identifier against an index of every
+# function/class/method/variable node in the file/service) is real
+# order-sensitive tree-sitter structural analysis a `.dl` rule cannot
+# express; it all lives in the `js_hoc_sites` hub provider
+# (internal/factpipe/hub_js_hoc.go). rules/javascript/js_hoc.dl is pure
+# pass-through.
+#
+# `patch:` (NOT `mint:`) for the stamp case: mint:/replace: rebuild a node
+# from scratch out of only the keys the spec names, silently dropping every
+# other meta key an earlier pass already stamped on the target
+# function/class/method/variable node. `patch:` (FX.8.8's new emit
+# primitive) instead reports a meta OVERLAY the caller merges into the
+# existing node — see internal/factpipe/emit.go's patchSpec doc and the
+# FX.8.7 `nav_link` regression this generalizes the fix for.
+#
+# `mint:` IS correct for the SPA.1 synthetic default-export component
+# (js_hoc_mint) — that node doesn't exist yet, so there is nothing to
+# preserve.
+#
+# Not run through the shared factpipe_frameworks slot (which treats mint as
+# gap-fill-only and applies neither replace: nor patch:) — a dedicated
+# pipeline.Run call in internal/indexer/link_passes.go's js_hoc pass merges
+# Patches into st.allNodes itself, the same "own dedicated Run call"
+# discipline rails_helpers (FX.8.7) and ruby_job_inherit (FX.8.15) use.
+language: javascript
+version: "1"
+
+hub:
+  - name: js_hoc_sites
+
+emit:
+  - relation: js_hoc_patch_rel
+    columns: [TargetID, Hoc, Wrapper, Inner, Component, EndLine]
+    patch:
+      id: { arg: TargetID }
+      component: { arg: Component }
+      end_line: { arg: EndLine }
+      meta:
+        tier: { literal: jcm6 }
+        hoc: { arg: Hoc }
+        hoc_wrapper: { arg: Wrapper }
+        hoc_inner: { arg: Inner }
+
+  - relation: js_hoc_mint_rel
+    columns: [ID, Label, Svc, File, Line, EndLine, Wrapper]
+    mint:
+      node: variable
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: javascript }
+      meta:
+        component: { literal: "true" }
+        tier: { literal: jcm6 }
+        scope: { literal: module }
+        end_line: { arg: EndLine }
+        hoc: { literal: app_local }
+        hoc_wrapper: { arg: Wrapper }
+
+  - relation: js_hoc_edge_rel
+    columns: [BindingID, InnerID, Wrapper]
+    edge: { from: { arg: BindingID }, to: { arg: InnerID }, type: component_impl }
+    meta:
+      via: { literal: app_hoc }
+      wrapper: { arg: Wrapper }
+    dedup: [from, to]

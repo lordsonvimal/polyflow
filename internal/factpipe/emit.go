@@ -67,6 +67,10 @@ var frozenNodeTypes = map[string]bool{
 	// nav_link_rails_helper client node resolved in place (same id) or
 	// fanned into candidate ids on a helper->route collision.
 	"http_client": true,
+	// variable: added for js_hoc (FX.8.8 2026-09-15) — SPA.1's synthetic
+	// default-export component node, minted only when no existing node
+	// already owns that file+label.
+	"variable": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or
@@ -175,6 +179,26 @@ func (r *replaceSpec) asMint() mintSpec {
 	}
 }
 
+// patchSpec is a `patch:` block — the FX.8.8 counterpart of `mint:` for a row
+// that ADDS/OVERWRITES a handful of named meta keys on an EXISTING node
+// without rebuilding it. `mint:`/`replace:` both construct a graph.Node from
+// scratch out of only the keys the spec names — fine when the target node's
+// whole meta set is known and narrow (rails_helpers' http_client nodes), but
+// wrong for a pass (js_hoc) that stamps a handful of keys onto a
+// function/class/method/variable node whose OTHER meta (stamped by earlier
+// parse-time or link passes — js_variables.go's global_symbol/global_path,
+// etc.) must survive untouched. `patch:` never sees or needs the untouched
+// keys: EmitResult.Patches reports only (id, the named meta to overlay,
+// optional component/end_line bump), same "report-only, caller applies"
+// discipline `replace:`/`delete:` already established — the caller merges
+// into the existing node's Meta map instead of replacing it.
+type patchSpec struct {
+	ID        valueRef            `yaml:"id"`
+	Component valueRef            `yaml:"component"` // "true" bumps meta["component"]="true" + end_line (if larger)
+	EndLine   valueRef            `yaml:"end_line"`
+	Meta      map[string]valueRef `yaml:"meta"`
+}
+
 // deleteSpec is a `delete:` block — the FX.8.15 counterpart that drops an
 // existing node ID outright (ruby_job_inherit's un-promoted candidates: a
 // class that never reaches an ActiveJob root is bookkeeping, not a node).
@@ -219,6 +243,7 @@ type EmitSpec struct {
 	Mint       *mintSpec           `yaml:"mint"`
 	Replace    *replaceSpec        `yaml:"replace"`
 	Delete     *deleteSpec         `yaml:"delete"`
+	Patch      *patchSpec          `yaml:"patch"`
 	Meta       map[string]valueRef `yaml:"meta"`
 	Confidence []confRule          `yaml:"confidence"`
 	Abstain    struct {
@@ -259,6 +284,21 @@ type EmitResult struct {
 	Replaced map[string]string
 	// Deleted lists node IDs a `delete:` block named for removal outright.
 	Deleted []string
+	// Patches lists meta overlays a `patch:` block produced — the caller
+	// merges Meta into the existing node's own Meta map (not a replace).
+	Patches []NodePatch
+}
+
+// NodePatch is one `patch:` row resolved: overlay Meta onto the existing
+// node named by ID (merge, not replace); if Component, also set
+// meta["component"]="true" and, when EndLine exceeds the node's current
+// EndLine, bump it and stamp meta["end_line"] — mirroring js_hoc's retired
+// stampMeta closure exactly.
+type NodePatch struct {
+	ID        string
+	Meta      map[string]string
+	Component bool
+	EndLine   int
 }
 
 // CompileEmits parses a YAML document with a top-level `emit:` list.
@@ -322,17 +362,20 @@ func compileEmit(s EmitSpec) (CompiledEmit, error) {
 	if s.Delete != nil && !s.Delete.Old.set() {
 		return ce, fmt.Errorf("delete needs an old id")
 	}
+	if s.Patch != nil && !s.Patch.ID.set() {
+		return ce, fmt.Errorf("patch needs an id")
+	}
 	nVerbs := 0
-	for _, set := range []bool{s.Mint != nil, s.Replace != nil, s.Delete != nil} {
+	for _, set := range []bool{s.Mint != nil, s.Replace != nil, s.Delete != nil, s.Patch != nil} {
 		if set {
 			nVerbs++
 		}
 	}
 	if nVerbs > 1 {
-		return ce, fmt.Errorf("emit allows at most one of mint/replace/delete")
+		return ce, fmt.Errorf("emit allows at most one of mint/replace/delete/patch")
 	}
-	if !hasEdge && s.Mint == nil && s.Replace == nil && s.Delete == nil {
-		return ce, fmt.Errorf("emit needs an edge, a mint, a replace, a delete, or a combination")
+	if !hasEdge && s.Mint == nil && s.Replace == nil && s.Delete == nil && s.Patch == nil {
+		return ce, fmt.Errorf("emit needs an edge, a mint, a replace, a delete, a patch, or a combination")
 	}
 	if s.Unresolved != nil && !s.Unresolved.Ref.Kind.set() {
 		return ce, fmt.Errorf("unresolved.ref needs a kind")
@@ -421,6 +464,11 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 				res.Deleted = append(res.Deleted, oldID)
 			}
 		}
+		if e.spec.Patch != nil {
+			if p, ok := e.buildPatch(row); ok {
+				res.Patches = append(res.Patches, p)
+			}
+		}
 		if !hasEdge {
 			continue
 		}
@@ -491,7 +539,36 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 		sort.Strings(res.Deleted)
 		res.Deleted = dedupStrings(res.Deleted)
 	}
+	sort.Slice(res.Patches, func(i, j int) bool { return res.Patches[i].ID < res.Patches[j].ID })
 	return res
+}
+
+// buildPatch resolves one row into a NodePatch per the spec's `patch:`
+// block. ok is false when the id resolves empty.
+func (e *CompiledEmit) buildPatch(row map[string]string) (NodePatch, bool) {
+	s := e.spec.Patch
+	id := s.ID.resolve(row)
+	if id == "" {
+		return NodePatch{}, false
+	}
+	p := NodePatch{ID: id, Component: s.Component.resolve(row) == "true"}
+	if s.EndLine.set() {
+		if v, err := strconv.Atoi(s.EndLine.resolve(row)); err == nil {
+			p.EndLine = v
+		}
+	}
+	if len(s.Meta) > 0 {
+		meta := make(map[string]string, len(s.Meta))
+		for _, k := range sortedKeys(s.Meta) {
+			if v := s.Meta[k].resolve(row); v != "" {
+				meta[k] = v
+			}
+		}
+		if len(meta) > 0 {
+			p.Meta = meta
+		}
+	}
+	return p, true
 }
 
 // buildMint resolves one row into a graph.Node per the spec's `mint:` block.

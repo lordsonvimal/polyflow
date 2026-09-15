@@ -1,0 +1,27 @@
+% Tier FX FX.8.8 (2026-09-15) — js_hoc. Replaces
+% internal/linker/js_hoc.go's LinkJSHOC.
+%
+% Base facts (from the js_hoc_sites hub provider,
+% internal/factpipe/hub_js_hoc.go — NOT a tree-sitter facts: block; see
+% patterns/javascript/js_hoc.yaml's package doc):
+%
+%   js_hoc_patch(TargetID, Hoc, Wrapper, Inner, Component, EndLine)
+%       one row per existing node whose meta the emit spec's `patch:`
+%       block should overlay (library HOC stamp or SPA.1 named binding).
+%   js_hoc_mint(ID, Label, Svc, File, Line, EndLine, Wrapper)
+%       SPA.1's synthetic default-export component, already resolved.
+%   js_hoc_edge(BindingID, InnerID, Wrapper)
+%       SPA.1's component_impl bridge, already resolved + deduped.
+%
+% All three relations the emit spec consumes are pure pass-through — the
+% hub already did every join and resolution a `.dl` rule would otherwise
+% attempt (and, for the curried-call peel and JSX scan, could not).
+
+js_hoc_patch_rel(TargetID, Hoc, Wrapper, Inner, Component, EndLine) :-
+    js_hoc_patch(TargetID, Hoc, Wrapper, Inner, Component, EndLine).
+
+js_hoc_mint_rel(ID, Label, Svc, File, Line, EndLine, Wrapper) :-
+    js_hoc_mint(ID, Label, Svc, File, Line, EndLine, Wrapper).
+
+js_hoc_edge_rel(BindingID, InnerID, Wrapper) :-
+    js_hoc_edge(BindingID, InnerID, Wrapper).

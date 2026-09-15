@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 
 	contractdata "github.com/lordsonvimal/polyflow/contracts"
 	"github.com/lordsonvimal/polyflow/internal/contract"
@@ -290,26 +291,65 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// JCM.6: unwrap HOC wrapper identity (observer / memo / forwardRef …) —
 		// stamps Meta["hoc"] and Meta["component"] so js_link Pass 1's render-
 		// target index and JCM.7 can see the real component. Must precede js_link.
+		// Tier FX FX.8.8 (2026-09-15) — declarative js_hoc, replacing
+		// linker.LinkJSHOC. Its own dedicated pipeline.Run call (not the shared
+		// factpipe_frameworks slot, which applies neither `patch:` nor a
+		// stamp-in-place semantic): patches merge into an existing node's Meta
+		// (js_hoc_sites hub, patterns/javascript/js_hoc.yaml), mint gap-fills
+		// SPA.1's synthetic default-export component.
 		{"js_hoc", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			hocNodes, hocNew, hocEdges := linker.LinkJSHOC(st.allNodes, svcFiles)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("js_hoc: load registry: %w", err)
+			}
+			fw := reg.ByName("js_hoc")
+			if fw == nil {
+				return fmt.Errorf("js_hoc: framework not embedded")
+			}
+			var allFiles []string
+			for _, sf := range st.allSvcFiles {
+				allFiles = append(allFiles, sf.files...)
+			}
+			snap := graph.Snapshot{Nodes: st.allNodes, Files: allFiles}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+			if err != nil {
+				return fmt.Errorf("js_hoc: %w", err)
+			}
+
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
 			}
-			for i := range hocNodes {
-				n := hocNodes[i]
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.allNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta)+2)
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				if p.Component {
+					m["component"] = "true"
+					if p.EndLine > n.EndLine {
+						n.EndLine = p.EndLine
+						m["end_line"] = strconv.Itoa(p.EndLine)
+					}
+				}
+				n.Meta = m
+				st.allNodes[idx] = n
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
-				}
-				if idx, ok := byID[n.ID]; ok {
-					st.allNodes[idx] = n
 				}
 			}
 			// SPA.1: synthetic default-export component nodes for app-local
 			// HOC-wrapped exports (`export default withAjax(connect(...)(Inner))`).
-			for i := range hocNew {
-				n := hocNew[i]
+			for i := range res.Nodes {
+				n := res.Nodes[i]
 				if _, exists := byID[n.ID]; exists {
 					continue
 				}
@@ -322,7 +362,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			return st.writeEdges(hocEdges)
+			return st.writeEdges(res.Edges)
 		}},
 		// JS/TS component + import-aware linking.
 		{"js_link", scopeSameServiceOnly, func() error {
