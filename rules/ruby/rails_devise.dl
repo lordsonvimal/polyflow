@@ -1,0 +1,16 @@
+% Devise default-route synthesis — Tier FX FX.8.28. Replaces
+% internal/linker/rails_devise.go's LinkDeviseDefaultRoutes (Phase DV.2).
+%
+% Base fact (from the rails_devise hub provider, internal/factpipe/
+% hub_rails_devise.go — cross-file join between routes.rb's `devise_for`
+% and the mapped model's `devise :module, ...` declaration, real Go
+% re-parsing both files):
+%
+%   rd_route_mint(ID, Label, Svc, File, Line, Path, Method, Action, Resource)
+%       one Devise default-scope route with no in-repo controller behind it.
+%
+% Pure pass-through — the hub already decided which scopes are enabled,
+% not overridden (controllers:), and not skipped (skip:).
+
+rd_route_mint_rel(ID, Label, Svc, File, Line, Path, Method, Action, Resource) :-
+    rd_route_mint(ID, Label, Svc, File, Line, Path, Method, Action, Resource).

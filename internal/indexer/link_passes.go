@@ -1304,20 +1304,51 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, grpcUnresolved...)
 			return nil
 		}},
-		// Rails routes name their action by convention, not by the Meta["handler"]
-		// receiver string LinkRouteHandlers keys on, so they need their own pass.
+		// Tier FX FX.8.28: synthesize http_handler nodes for Devise's default
+		// (non-overridden, non-skipped) route scopes. Replaces
+		// internal/linker/rails_devise.go's LinkDeviseDefaultRoutes (365
+		// lines). A dedicated pipeline.Run call, looped per service (the
+		// hub derives its `svc` string from nodes[0].Service, so each call
+		// must be scoped to exactly one service's own nodes — the FX.8.8/
+		// 8.10 convention), not the shared factpipe_frameworks slot.
 		{"rails_devise_default_routes", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			deviseNodes := linker.LinkDeviseDefaultRoutes(svcFiles)
-			if len(deviseNodes) == 0 {
-				return nil
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("rails_devise: load registry: %w", err)
 			}
-			for i := range deviseNodes {
-				n := deviseNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
+			fw := reg.ByName("rails_devise")
+			if fw == nil {
+				return fmt.Errorf("rails_devise: framework not embedded")
+			}
+			byID := make(map[string]bool, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = true
+			}
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
 				}
-				st.allNodes = append(st.allNodes, n)
+				if len(svcNodes) == 0 {
+					continue
+				}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				if err != nil {
+					return fmt.Errorf("rails_devise: service %s: %w", sf.svc.Name, err)
+				}
+				for i := range res.Nodes {
+					n := res.Nodes[i]
+					if byID[n.ID] {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = true
+				}
 			}
 			return st.bw.Flush(st.ctx)
 		}},

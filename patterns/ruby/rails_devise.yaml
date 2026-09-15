@@ -1,0 +1,48 @@
+# Tier FX FX.8.28 — replaces internal/linker/rails_devise.go's
+# LinkDeviseDefaultRoutes (Phase DV.2): synthesizes http_handler nodes for
+# Devise's default (non-overridden, non-skipped) scopes.
+#
+# NO `patterns:`/`facts:` block — deciding the default route set needs a
+# cross-file join (the model's `devise :module, ...` declaration lives in
+# app/models/*.rb, a different file than routes.rb's `devise_for` call),
+# real Go re-parsing both files, exactly what a hub is for. Everything
+# lives in the "rails_devise" hub provider (internal/factpipe/
+# hub_rails_devise.go); rules/ruby/rails_devise.dl is pure pass-through.
+#
+# `controller_module: ""` is a LITERAL, not an {arg:} — buildNode (FX.8.28)
+# keeps a literal "" instead of treating it as absent, because
+# rails_route_actions.dl needs the KEY PRESENT (moduleKnown=true) to
+# resolve a devise default node's ledger entry honestly; an absent key
+# falls through to path-segment namespace inference, which silently fails
+# for a devise route (its resource is the devise scope, never a literal
+# path segment).
+#
+# Gate: same as rails_route_actions.yaml/rails_filters.yaml — routing is
+# core Rails (railties), not a separate gem.
+language: ruby
+version: "1"
+package: railties
+
+hub:
+  - name: rails_devise
+
+emit:
+  - relation: rd_route_mint_rel
+    columns: [ID, Label, Svc, File, Line, Path, Method, Action, Resource]
+    mint:
+      node: http_handler
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      end_line: { arg: Line }
+      language: ruby
+      meta:
+        pattern: devise_default_route
+        path: { arg: Path }
+        full_path: { arg: Path }
+        method: { arg: Method }
+        action: { arg: Action }
+        resource: { arg: Resource }
+        controller_module: ""

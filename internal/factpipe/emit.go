@@ -88,6 +88,10 @@ var frozenNodeTypes = map[string]bool{
 	// node minted from a templ component's dom_ids/dom_classes meta when no
 	// HTML/JSX/stylesheet-sourced element node already claims that id/class.
 	"element": true,
+	// http_handler: added for rails_devise (FX.8.28 2026-09-15) — a
+	// synthesized Devise default-route node with no in-repo controller
+	// behind it (controller_module is always an explicit "").
+	"http_handler": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or
@@ -157,12 +161,18 @@ type edgeSpec struct {
 // (§ Apply's seenNode dedup) — a mint-per-row relation is expected to name the
 // same node repeatedly (e.g. one row per edge landing on a shared file node).
 type mintSpec struct {
-	Node     string              `yaml:"node"` // graph.NodeType; validated against frozenNodeTypes
-	ID       valueRef            `yaml:"id"`
-	Label    valueRef            `yaml:"label"`
-	Service  valueRef            `yaml:"service"`
-	File     valueRef            `yaml:"file"`
-	Line     valueRef            `yaml:"line"`
+	Node    string   `yaml:"node"` // graph.NodeType; validated against frozenNodeTypes
+	ID      valueRef `yaml:"id"`
+	Label   valueRef `yaml:"label"`
+	Service valueRef `yaml:"service"`
+	File    valueRef `yaml:"file"`
+	Line    valueRef `yaml:"line"`
+	// EndLine (FX.8.28) sets graph.Node.EndLine directly — rails_devise's
+	// synthesized single-line route node has no real body span, so its
+	// EndLine equals Line (ported behavior: the retired Go always set both
+	// to the same value). Unset (the default) leaves EndLine at its
+	// zero-value, unchanged from every mint consumer before this one.
+	EndLine  valueRef            `yaml:"end_line"`
 	Language valueRef            `yaml:"language"`
 	Meta     map[string]valueRef `yaml:"meta"`
 }
@@ -693,10 +703,24 @@ func buildNode(m *mintSpec, row map[string]string) (n graph.Node, ok bool) {
 			n.Line = v
 		}
 	}
+	if m.EndLine.set() {
+		if v, err := strconv.Atoi(m.EndLine.resolve(row)); err == nil {
+			n.EndLine = v
+		}
+	}
 	if len(m.Meta) > 0 {
 		meta := make(map[string]string, len(m.Meta))
 		for _, k := range sortedKeys(m.Meta) {
-			if v := m.Meta[k].resolve(row); v != "" {
+			ref := m.Meta[k]
+			// A literal (even "") is an explicit author decision to force the
+			// key present — rails_devise's controller_module: "" (FX.8.28)
+			// must always exist as an empty-string key, distinguishing "no
+			// in-repo controller" (moduleKnown=true, "") from "not derivable
+			// here" (key absent) downstream in rails_route_actions.dl. Only a
+			// {arg:}/{template:} value that resolves empty is still treated
+			// as absent — the existing "Go link passes build their meta maps
+			// conditionally" discipline every other mint consumer relies on.
+			if v := ref.resolve(row); v != "" || ref.isLit {
 				meta[k] = v
 			}
 		}

@@ -32,6 +32,7 @@ var migratedFrameworks = []string{
 	"gorm_tables",
 	"config_baseurl",
 	"templ_layer",
+	"rails_devise",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names
