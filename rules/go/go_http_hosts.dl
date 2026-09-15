@@ -1,0 +1,110 @@
+% Go HTTP client host attribution — Tier FX. Replaces
+% internal/linker/go_http_hosts.go's ResolveGoHTTPHosts (Tier J.2b).
+%
+% Base facts (from the go_http_hosts hub provider,
+% internal/factpipe/hub_go_http_hosts.go — parsing Go source and walking its
+% AST for these facts is unavoidably real Go; everything below this point is
+% the fixpoint the retired pass computed by hand in Go, now expressed as
+% stratified joins + count aggregates):
+%
+%   go_name_env_occ(Name, Env)
+%       a bare name (struct field key, variable, constant) was assigned from
+%       an env-derived expression at some site, service-wide.
+%   go_ctor_field_direct(FnName, TypeName, FieldName, Env)
+%       inside FnName, a `&TypeName{FieldName: <env expr>}` composite literal.
+%   go_ctor_field_param(FnName, TypeName, FieldName, ParamIdx)
+%       inside FnName, a composite literal field set from FnName's own
+%       parameter ParamIdx.
+%   go_call_arg_direct(CalleeFn, ArgIdx, Env)
+%       a call site passes an env-derived expression as positional arg ArgIdx.
+%   go_call_arg_name(CalleeFn, ArgIdx, Name)
+%       a call site passes a bare name/selector as positional arg ArgIdx.
+%   go_forward_param(CallerFn, ParamIdx, CalleeFn, ArgIdx)
+%       inside CallerFn, a call to CalleeFn forwards CallerFn's own
+%       (host-ish-named) parameter ParamIdx at position ArgIdx.
+%   go_client_recv(NodeID, TypeName)
+%       a dynamic Go http_client node's enclosing method's receiver type.
+%   go_client_ref(NodeID, FieldName)
+%       a host-ish field of that receiver type referenced in the method body.
+%
+% The retired maxHostHops=4 bound ("not a performance guard... bounds
+% credulity", go_http_hosts.go:555-566) is unrolled as four explicit hop
+% layers below — the datalog engine has no arithmetic builtin to compute a
+% round counter, and the bound is a deliberate policy pinned by
+% TestResolveGoHTTPHosts_HopLimitBoundary, not an implementation detail free
+% to drift. Each layer inherits the previous layer's FILTERED (unambiguous)
+% facts before adding one more round of forwarding, and is re-filtered
+% before the next layer reads it — this is what makes an ambiguity found at
+% hop k a STICKY poison that never un-resolves at hop k+1, matching
+% recordArgEnv's envConflict semantics exactly (a naive "union everything
+% found within 4 hops, filter once at the end" version would let two
+% genuinely-conflicting paths that only collide at hop 2 each propagate
+% untouched through hops 3-4, which is a real behavioural divergence, not a
+% simplification).
+
+% ── name -> env, service-wide, single-valued only ──────────────────────────
+name_env_n(Name, N) :- go_name_env_occ(Name, Env), count(N, Env).
+name_env(Name, Env) :- go_name_env_occ(Name, Env), name_env_n(Name, 1).
+
+% ── call-argument -> env, hop 0 (direct: no forwarding needed) ─────────────
+call_arg_env_0(Fn, Idx, Env) :- go_call_arg_direct(Fn, Idx, Env).
+call_arg_env_0(Fn, Idx, Env) :- go_call_arg_name(Fn, Idx, Name), name_env(Name, Env).
+
+% ── hop 1 ───────────────────────────────────────────────────────────────
+call_arg_env_1_raw(Fn, Idx, Env) :- call_arg_env_0(Fn, Idx, Env).
+call_arg_env_1_raw(Callee, Idx, Env) :-
+    go_forward_param(Caller, ParamIdx, Callee, Idx), call_arg_env_0(Caller, ParamIdx, Env).
+call_arg_env_1_n(Fn, Idx, N) :- call_arg_env_1_raw(Fn, Idx, Env), count(N, Env).
+call_arg_env_1(Fn, Idx, Env) :- call_arg_env_1_raw(Fn, Idx, Env), call_arg_env_1_n(Fn, Idx, 1).
+
+% ── hop 2 ───────────────────────────────────────────────────────────────
+call_arg_env_2_raw(Fn, Idx, Env) :- call_arg_env_1(Fn, Idx, Env).
+call_arg_env_2_raw(Callee, Idx, Env) :-
+    go_forward_param(Caller, ParamIdx, Callee, Idx), call_arg_env_1(Caller, ParamIdx, Env).
+call_arg_env_2_n(Fn, Idx, N) :- call_arg_env_2_raw(Fn, Idx, Env), count(N, Env).
+call_arg_env_2(Fn, Idx, Env) :- call_arg_env_2_raw(Fn, Idx, Env), call_arg_env_2_n(Fn, Idx, 1).
+
+% ── hop 3 ───────────────────────────────────────────────────────────────
+call_arg_env_3_raw(Fn, Idx, Env) :- call_arg_env_2(Fn, Idx, Env).
+call_arg_env_3_raw(Callee, Idx, Env) :-
+    go_forward_param(Caller, ParamIdx, Callee, Idx), call_arg_env_2(Caller, ParamIdx, Env).
+call_arg_env_3_n(Fn, Idx, N) :- call_arg_env_3_raw(Fn, Idx, Env), count(N, Env).
+call_arg_env_3(Fn, Idx, Env) :- call_arg_env_3_raw(Fn, Idx, Env), call_arg_env_3_n(Fn, Idx, 1).
+
+% ── hop 4 (the bound) ───────────────────────────────────────────────────
+call_arg_env_4_raw(Fn, Idx, Env) :- call_arg_env_3(Fn, Idx, Env).
+call_arg_env_4_raw(Callee, Idx, Env) :-
+    go_forward_param(Caller, ParamIdx, Callee, Idx), call_arg_env_3(Caller, ParamIdx, Env).
+call_arg_env_4_n(Fn, Idx, N) :- call_arg_env_4_raw(Fn, Idx, Env), count(N, Env).
+call_arg_env(Fn, Idx, Env) :- call_arg_env_4_raw(Fn, Idx, Env), call_arg_env_4_n(Fn, Idx, 1).
+
+% ── type.field -> env, service-wide, single-valued only ────────────────────
+type_field_env_raw(TypeName, FieldName, Env) :- go_ctor_field_direct(_, TypeName, FieldName, Env).
+type_field_env_raw(TypeName, FieldName, Env) :-
+    go_ctor_field_param(FnName, TypeName, FieldName, ParamIdx), call_arg_env(FnName, ParamIdx, Env).
+type_field_env_n(TypeName, FieldName, N) :- type_field_env_raw(TypeName, FieldName, Env), count(N, Env).
+type_field_env(TypeName, FieldName, Env) :-
+    type_field_env_raw(TypeName, FieldName, Env), type_field_env_n(TypeName, FieldName, 1).
+
+% A type with ANY ambiguous field abstains its sole-field fallback entirely —
+% envForNode's loop returns "" the moment it sees one conflict-marked field,
+% even if every OTHER field agrees (go_http_hosts.go:243-244).
+type_field_ambig(TypeName) :- type_field_env_n(TypeName, _, N), ne(N, 1).
+
+type_sole_n(TypeName, N) :- type_field_env(TypeName, _, Env), count(N, Env).
+type_sole(TypeName, Env) :-
+    type_field_env(TypeName, _, Env), type_sole_n(TypeName, 1), not type_field_ambig(TypeName).
+
+% ── per-node grading (envForNode) ───────────────────────────────────────
+client_ref_env(NodeID, Env) :-
+    go_client_ref(NodeID, FieldName), go_client_recv(NodeID, TypeName),
+    type_field_env(TypeName, FieldName, Env).
+client_ref_env_n(NodeID, N) :- client_ref_env(NodeID, Env), count(N, Env).
+client_has_ref(NodeID) :- client_ref_env(NodeID, _).
+
+% Exactly one distinct env referenced in the method body -> that one.
+go_host_resolved_rel(NodeID, Env) :- client_ref_env(NodeID, Env), client_ref_env_n(NodeID, 1).
+% No env-derived field referenced at all -> the receiver type's sole field
+% (if it has exactly one, and none of its fields are themselves ambiguous).
+go_host_resolved_rel(NodeID, Env) :-
+    go_client_recv(NodeID, TypeName), not client_has_ref(NodeID), type_sole(TypeName, Env).

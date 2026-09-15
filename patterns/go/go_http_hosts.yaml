@@ -1,0 +1,33 @@
+# Tier FX — replaces internal/linker/go_http_hosts.go's ResolveGoHTTPHosts
+# (Tier J.2b): stamps Meta["env_var"] on a Go http_client node whose base
+# URL traces back to an os.Getenv/os.LookupEnv read, through up to 4 hops of
+# constructor-argument forwarding, so ApplyHints (J.2c) can turn a workspace
+# `hint: SOME_URL` into a target_service allowlist entry.
+#
+# NO `patterns:`/`facts:` block — this is a whole-service fixpoint over Go
+# source (go/parser, go/ast), not a per-file tree-sitter match. Everything
+# lives in the "go_http_hosts" hub provider
+# (internal/factpipe/hub_go_http_hosts.go, real AST extraction only) plus
+# rules/go/go_http_hosts.dl (the fixpoint join + count aggregates that
+# replace the retired pass's hand-rolled propagation rounds).
+#
+# Originally scoped onto Tier VG's VG.7 (docs/js-value-graph-pilot-plan.md)
+# as a "generalize the value engine to Go" job — re-scoped here after
+# reading the retired Go: it is a whole-program least-fixpoint dataflow
+# analysis (service-wide facts -> bounded-hop propagation -> lookup), not a
+# bounded per-expression traversal, and the datalog engine's stratified
+# bottom-up evaluation is the natural fit, not valuegraph.Engine.
+language: go
+version: "1"
+
+hub:
+  - name: go_http_hosts
+
+emit:
+  - relation: go_host_resolved_rel
+    columns: [NodeID, Env]
+    patch:
+      id: { arg: NodeID }
+      meta:
+        env_var: { arg: Env }
+        host_resolved_via: go_env_field

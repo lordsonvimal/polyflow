@@ -984,17 +984,66 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// J.2b: the Go analogue — stamp Meta["env_var"] on Go http_client nodes
 		// whose base URL traces back to an os.Getenv read, so ApplyHints (J.2c)
 		// can turn a workspace `hint: SOME_URL` into a target_service allowlist.
-		// Must run before ApplyHints, like the Ruby pass.
+		// Must run before ApplyHints, like the Ruby pass. Tier FX migration:
+		// replaces internal/linker/go_http_hosts.go's ResolveGoHTTPHosts.
+		// Originally scoped onto Tier VG's VG.7 ("generalize the value engine
+		// to Go/Ruby"); re-scoped to Tier FX/datalog after reading the retired
+		// Go — it is a whole-service least-fixpoint dataflow analysis (facts to
+		// a fixpoint, then a lookup), not a bounded per-expression traversal,
+		// so patterns/go/go_http_hosts.yaml + rules/go/go_http_hosts.dl (the
+		// "go_http_hosts" hub provider + a hop-unrolled fixpoint join) is the
+		// natural fit, not valuegraph.Engine. A dedicated pipeline.Run call,
+		// looped per service (the hub's fixpoint is scoped to one service's own
+		// files — the FX.8.30 convention), not the shared factpipe_frameworks
+		// slot.
 		{"go_http_hosts", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			hostNodes := linker.ResolveGoHTTPHosts(st.allNodes, svcFiles)
-			if len(hostNodes) == 0 {
-				return nil
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("go_http_hosts: load registry: %w", err)
 			}
-			for i := range hostNodes {
-				n := hostNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
+			fw := reg.ByName("go_http_hosts")
+			if fw == nil {
+				return fmt.Errorf("go_http_hosts: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				if err != nil {
+					return fmt.Errorf("go_http_hosts: service %s: %w", sf.svc.Name, err)
+				}
+				for _, p := range res.Patches {
+					idx, ok := byID[p.ID]
+					if !ok {
+						continue
+					}
+					n := st.allNodes[idx]
+					m := make(map[string]string, len(n.Meta)+len(p.Meta))
+					for k, v := range n.Meta {
+						m[k] = v
+					}
+					for k, v := range p.Meta {
+						m[k] = v
+					}
+					for _, k := range p.DeleteMeta {
+						delete(m, k)
+					}
+					n.Meta = m
+					st.allNodes[idx] = n
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
 				}
 			}
 			return st.bw.Flush(st.ctx)

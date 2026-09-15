@@ -34,6 +34,7 @@ var migratedFrameworks = []string{
 	"templ_layer",
 	"rails_devise",
 	"file_routes",
+	"go_http_hosts",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names
