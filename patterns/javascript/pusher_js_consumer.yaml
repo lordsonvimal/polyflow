@@ -1,0 +1,136 @@
+# Tier FX FX.8 (2026-09-15) — replaces internal/linker/pusher_js_consumer.go's
+# EnrichPusherConsumersJS (SPA.7, the JS half of the Pusher consumer side).
+#
+# Codebases that wire Pusher entirely in JS — `new Pusher(...)` / `window.pusher`
+# then `channel = instance.subscribe(<name>)` and `channel.bind("<event>", cb)`
+# — get no `subscriber` node from the ERB-only `pusher_consumer` framework, so a
+# forward trace from a Rails `Pusher.trigger` dead-ends. This framework mints
+# one `subscriber` node per JS subscribe site.
+#
+# This framework carries NO `facts:` patterns (hub-only, like pusher_consumer
+# before it). Finding a JS subscribe site needs order-sensitive dataflow
+# tracking a tree-sitter query cannot express in one match — a `new
+# Pusher(...)` instance binding correlated by identifier text against a LATER
+# `.subscribe()`/`.bind()` site, with a single-subscribe-per-file fallback —
+# so that tracking stays hand-written Go inside the `pusher_js_subscribe_sites`
+# hub provider (internal/factpipe/hub_pusher_js_consumer.go). It also merges in
+# the `pusher_wrapper_erb` hub's `pusher_react_prop_config` fact (the
+# `react_component(..., pusherConfig: {...})` ERB prop, resolved against the
+# same PusherClient:: wrapper-constant table `pusher_consumer` uses) since that
+# merge is a "literal wins, else ERB, independently per field" map lookup no
+# `.dl` rule can express (the engine forbids string-emptiness tests).
+#
+# What IS declarative here: minting the subscriber node (two mint relations —
+# literal-or-ERB-resolved vs still-dynamic — since a `.dl` rule cannot branch
+# on which bucket a row is in, so the hub asserts them as two separate
+# predicates), the containing-file edge, the dynamic-channel ledger entry (an
+# `unresolved:` block, gin_blind-style — see rules/javascript/
+# pusher_js_consumer.dl's comment for why it needs its own pass-through
+# relation), and the event-literal bridge to a matching `pusher_trigger*`
+# publisher (a plain join against the `node`/`node_meta` base facts FX.1's
+# bridge already exposes, fan-out capped instead of the retired Go's
+# first-4-in-encounter-order cap — `emit:`'s fan_out drops the WHOLE
+# over-cap group to the ledger rather than keeping an arbitrary 4, the more
+# conservative policy already established for gin_guard/rails_filters).
+language: javascript
+version: "1"
+package: pusher-js
+
+hub:
+  - name: pusher_wrapper_erb
+  - name: pusher_js_subscribe_sites
+
+emit:
+  - relation: pusher_js_subscribe_mint
+    columns: [Svc, File, Line, Channel, Event, PropConfigLabel, EventsExtra, Label]
+    mint:
+      node: subscriber
+      id: { template: "{Svc}:{File}:subscriber:pusher_subscribe_js:{Line}" }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: javascript }
+      meta:
+        pattern: { literal: pusher_subscribe_js }
+        package: { literal: pusher-js }
+        resolved_via: { literal: pusher_consumer_js }
+        channel: { arg: Channel }
+        event: { arg: Event }
+        pusher_config: { arg: PropConfigLabel }
+        events: { arg: EventsExtra }
+
+  - relation: pusher_js_subscribe_mint_dynamic
+    columns: [Svc, File, Line, ChannelExpr, Event, PropConfigLabel, EventsExtra, Label]
+    mint:
+      node: subscriber
+      id: { template: "{Svc}:{File}:subscriber:pusher_subscribe_js:{Line}" }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: javascript }
+      meta:
+        pattern: { literal: pusher_subscribe_js }
+        package: { literal: pusher-js }
+        resolved_via: { literal: pusher_consumer_js }
+        key_dynamic: { literal: "true" }
+        key_dynamic_raw: { arg: ChannelExpr }
+        event: { arg: Event }
+        pusher_config: { arg: PropConfigLabel }
+        events: { arg: EventsExtra }
+
+  # honest witness: every dynamic site both mints its "(dynamic)" placeholder
+  # (above) AND logs the blind spot — emit.go's `unresolved:` short-circuits
+  # past mint/edge on the SAME relation, so this reads a pass-through relation
+  # the `.dl` derives from pusher_js_subscribe_dynamic (gin_blind's own
+  # pattern; see rules/javascript/pusher_js_consumer.dl).
+  - relation: pusher_js_subscribe_dynamic_ledger
+    columns: [Svc, File, Line, ChannelExpr, Event, PropConfigLabel, EventsExtra, Label]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls } # never built: unresolved always fires
+    unresolved:
+      when: "1 == 1"
+      ref:
+        kind: pusher_channel_dynamic
+        name: { arg: ChannelExpr }
+        service: { arg: Svc }
+        file: { arg: File }
+        line: { arg: Line }
+
+  - relation: pusher_js_subscribe_file
+    columns: [Svc, File, Line, FileID]
+    edge:
+      from: { arg: FileID }
+      to: { template: "{Svc}:{File}:subscriber:pusher_subscribe_js:{Line}" }
+      type: contains
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: pusher_js_subscribe_bridge_resolved
+    columns: [Svc, File, Line, Event, Publisher]
+    edge:
+      from: { arg: Publisher }
+      to: { template: "{Svc}:{File}:subscriber:pusher_subscribe_js:{Line}" }
+      type: publishes
+    meta:
+      via: { literal: pusher_channel_event }
+      event: { arg: Event }
+    confidence:
+      - { else: inferred }
+    fan_out: { key: [Svc, File, Line], max: 4, on_exceed: ledger_only }
+    dedup: [from, to]
+
+  - relation: pusher_js_subscribe_bridge_dynamic
+    columns: [Svc, File, Line, Event, Publisher]
+    edge:
+      from: { arg: Publisher }
+      to: { template: "{Svc}:{File}:subscriber:pusher_subscribe_js:{Line}" }
+      type: publishes
+    meta:
+      via: { literal: pusher_event_only }
+      event: { arg: Event }
+    confidence:
+      - { else: inferred }
+    fan_out: { key: [Svc, File, Line], max: 4, on_exceed: ledger_only }
+    dedup: [from, to]

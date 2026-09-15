@@ -750,30 +750,15 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// patterns/ruby/pusher_consumer.yaml + rules/ruby/pusher_consumer.dl,
 		// run by the factpipe_frameworks pass below — same "runs before the
 		// contract engine" slot the hand-written pass held.
-		// SPA.7: the JS half of the Pusher consumer side. Mint one `subscriber`
-		// node per `instance.subscribe(name)` / `channel.bind("evt", …)` site
-		// in JS — the shape `pusher_consumer_erb` (orion's `pusher_config`
-		// ERB helper) never sees. Dynamic channels get a `pusher_channel_dynamic`
-		// ledger entry; a matching `.bind` event literal bridges to a
-		// `pusher_trigger*` publisher. Runs before the contract engine.
-		{"pusher_consumer_js", scopeSameServiceOnly, func() error {
-			subNodes, subEdges, subLedger := linker.EnrichPusherConsumersJS(st.allNodes, st.svcFilesOf())
-			st.allUnresolved = append(st.allUnresolved, subLedger...)
-			if len(subNodes) == 0 {
-				return nil
-			}
-			for i := range subNodes {
-				n := subNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
-				}
-				st.allNodes = append(st.allNodes, n)
-			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			return st.writeEdges(subEdges)
-		}},
+		// SPA.7 (the JS half, formerly "pusher_consumer_js") is Tier FX FX.8
+		// (2026-09-15): patterns/javascript/pusher_js_consumer.yaml + rules/
+		// javascript/pusher_js_consumer.dl, run by the factpipe_frameworks pass
+		// below. The JS-dataflow site detection (instance/subscribe/bind
+		// correlation) stays hand-written Go inside the
+		// pusher_js_subscribe_sites hub provider
+		// (internal/factpipe/hub_pusher_js_consumer.go) — everything downstream
+		// of "here is a resolved site" (mint, edges, confidence, fan-out, the
+		// dynamic-channel ledger, the producer-event bridge) is declarative.
 		// Tier-L: rewrite dynamic Ruby http_client URLs (`url`, `path: url`) to the
 		// concrete `ENV.fetch("VAR")` their host method resolves to, cross-file, so
 		// the downstream config_resolve provider can bind them (or ledger a *named*

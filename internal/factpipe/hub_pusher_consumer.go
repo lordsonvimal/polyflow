@@ -3,6 +3,7 @@ package factpipe
 import (
 	"context"
 	"os"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -51,6 +52,17 @@ func init() { RegisterHub("pusher_wrapper_erb", pusherWrapperERBHub) }
 // (Svc, File, Line, Pattern, ChannelSeg, Event, Label).
 const pusherSubscribeSitePred = "pusher_subscribe_site"
 
+// pusherReactPropConfigPred is the fact predicate this hub asserts for the
+// react_component(..., pusherConfig: {...}) half (Tier FX 2026-09-15,
+// internal/linker/pusher_js_consumer.go's retired pusherPropConfigFromERB):
+// (Svc, Component, Channel, Event) — one row per component name, later ERB
+// files winning on a repeat, matching the retired pass's plain
+// `out[comp] = cfg` map-assignment semantics. pusher_js_consumer.yaml's `.dl`
+// joins this against the pusher_js_subscribe_sites hub's dynamic sites by
+// component/enclosing-class name; it cannot resolve a controller-built
+// `@pusher_config` ivar, same honest gap as the retired Go.
+const pusherReactPropConfigPred = "pusher_react_prop_config"
+
 func pusherWrapperERBHub(nodes []graph.Node, files []string) []Fact {
 	hubFiles := map[string]bool{}
 	for i := range nodes {
@@ -90,8 +102,12 @@ func pusherWrapperERBHub(nodes []graph.Node, files []string) []Fact {
 		svc = nodes[0].Service
 	}
 
+	sortedFiles := append([]string(nil), files...)
+	sort.Strings(sortedFiles)
+
+	reactCfg := map[string]map[string]string{}
 	var out []Fact
-	for _, file := range files {
+	for _, file := range sortedFiles {
 		if !strings.HasSuffix(file, ".erb") || graph.IsTestFilePath(file) {
 			continue
 		}
@@ -105,7 +121,136 @@ func pusherWrapperERBHub(nodes []graph.Node, files []string) []Fact {
 			continue
 		}
 		out = append(out, pchWalkERBCalls(root, ruby, file, svc, constVals, hashConstVals)...)
+		pchWalkERBReactComponents(root, ruby, reactCfg, constVals, hashConstVals)
 		release()
+	}
+
+	comps := make([]string, 0, len(reactCfg))
+	for c := range reactCfg {
+		comps = append(comps, c)
+	}
+	sort.Strings(comps)
+	for _, comp := range comps {
+		cfg := reactCfg[comp]
+		out = append(out, Fact{
+			Pred:   pusherReactPropConfigPred,
+			Args:   []Atom{Str(svc), Str(comp), Str(cfg["channel"]), Str(cfg["event"])},
+			Origin: Origin{Kind: OriginPrimitive, Pattern: pusherReactPropConfigPred},
+		})
+	}
+	return out
+}
+
+// pchWalkERBReactComponents harvests `react_component("X", { pusherConfig: {
+// channel:, event: } })` (or `pusherConfig: pusher_config(channel:, event:)`)
+// call sites into dst, keyed by component label. Ported from the retired
+// internal/linker/pusher_js_consumer.go's pusherPropConfigFromERB (Tier FX
+// 2026-09-15) — reuses this file's own pchRefSegment/pchRefLiteral, since the
+// channel/event resolution rules (literal string, PusherClient:: constant,
+// CHANNELS[:x] hash lookup) are identical to the ERB-helper call shape
+// pchWalkERBCalls already resolves.
+func pchWalkERBReactComponents(
+	root *sitter.Node, ruby []byte, dst map[string]map[string]string,
+	constVals map[string]map[string]string,
+	hashConstVals map[string]map[string]map[string]string,
+) {
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n.Type() == "call" {
+			if mn := n.ChildByFieldName("method"); mn != nil && mn.Content(ruby) == "react_component" {
+				comp := ""
+				if a0 := pchArgAt(n, 0); a0 != nil && a0.Type() == "string" {
+					comp = pchStringLiteral(a0, ruby)
+				}
+				if hv := pchDescendantPairValue(n, ruby, "pusherConfig"); comp != "" && hv != nil {
+					if cfg := pchExtractConfigHash(hv, ruby, constVals, hashConstVals); len(cfg) > 0 {
+						dst[comp] = cfg
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+}
+
+// pchDescendantPairValue returns the value node of the first `pair` under n
+// whose key matches (bare symbol, `:sym`, or `"str"`).
+func pchDescendantPairValue(n *sitter.Node, src []byte, key string) *sitter.Node {
+	var found *sitter.Node
+	var walk func(*sitter.Node)
+	walk = func(m *sitter.Node) {
+		if found != nil {
+			return
+		}
+		if m.Type() == "pair" {
+			if k := m.ChildByFieldName("key"); k != nil {
+				kk := strings.Trim(strings.TrimSuffix(strings.TrimPrefix(k.Content(src), ":"), ":"), `"'`)
+				if kk == key {
+					found = m.ChildByFieldName("value")
+					return
+				}
+			}
+		}
+		for i := 0; i < int(m.NamedChildCount()); i++ {
+			walk(m.NamedChild(i))
+		}
+	}
+	walk(n)
+	return found
+}
+
+// pchExtractConfigHash pulls channel/event/key out of either a hash literal or
+// a `pusher_config(channel:, event:)` helper call.
+func pchExtractConfigHash(
+	v *sitter.Node, src []byte,
+	constVals map[string]map[string]string,
+	hashConstVals map[string]map[string]map[string]string,
+) map[string]string {
+	out := map[string]string{}
+	getPair := func(node *sitter.Node, key string) *sitter.Node {
+		for i := 0; i < int(node.NamedChildCount()); i++ {
+			p := node.NamedChild(i)
+			if p.Type() != "pair" {
+				continue
+			}
+			k := p.ChildByFieldName("key")
+			if k == nil {
+				continue
+			}
+			if strings.TrimSuffix(strings.TrimPrefix(k.Content(src), ":"), ":") == key {
+				return p.ChildByFieldName("value")
+			}
+		}
+		return nil
+	}
+	container := v
+	if v.Type() == "call" {
+		container = v.ChildByFieldName("arguments")
+	}
+	if container == nil {
+		return out
+	}
+	if cv := getPair(container, "channel"); cv != nil {
+		if cv.Type() == "string" {
+			if lit := pchStringLiteral(cv, src); lit != "" {
+				out["channel"] = lit
+			} else {
+				out["channel"] = pchChannelFromString(cv, src) // interpolated → segment
+			}
+		} else {
+			out["channel"] = pchRefSegment(cv, src, constVals, hashConstVals)
+		}
+	}
+	if ev := getPair(container, "event"); ev != nil {
+		out["event"] = pchRefLiteral(ev, src, constVals)
+	}
+	for k, val := range out {
+		if val == "" {
+			delete(out, k)
+		}
 	}
 	return out
 }

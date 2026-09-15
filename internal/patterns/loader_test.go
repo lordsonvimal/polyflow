@@ -49,6 +49,15 @@ func TestLoadFileJavaScriptPatterns(t *testing.T) {
 			// patterns/ruby/devise.yaml.
 			continue
 		}
+		if len(pf.Patterns) == 0 {
+			// A hub-only framework (Tier FX's cross-framework fact-sharing
+			// mechanism, internal/factpipe/hub.go — e.g. pusher_js_consumer.yaml)
+			// carries no `patterns:` tree-sitter queries at all — nothing for
+			// this harness to check. Its correctness is covered by
+			// internal/factpipe/pipeline/*_test.go instead, same as
+			// internal/patterns/fixtures_test.go's own skip for this shape.
+			continue
+		}
 		assert.NotEmpty(t, pf.Patterns)
 	}
 }

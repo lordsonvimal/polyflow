@@ -1,0 +1,82 @@
+% Tier FX FX.8 (2026-09-15) — pusher_js_consumer. Replaces the JS-dataflow
+% half of internal/linker/pusher_js_consumer.go's retired
+% EnrichPusherConsumersJS.
+%
+% Base facts (from the pusher_js_subscribe_sites hub,
+% internal/factpipe/hub_pusher_js_consumer.go, and the pusher_wrapper_erb hub,
+% internal/factpipe/hub_pusher_consumer.go — NOT tree-sitter facts: blocks;
+% see patterns/javascript/pusher_js_consumer.yaml's package doc):
+%
+%   pusher_js_subscribe_resolved(Svc, File, Line, Channel, Event,
+%       PropConfigLabel, EventsExtra, Label)
+%       one JS subscribe site whose channel is a plain string literal, or was
+%       resolved through a react_component pusherConfig prop against the ERB
+%       wrapper-constant table.
+%
+%   pusher_js_subscribe_dynamic(Svc, File, Line, ChannelExpr, Event,
+%       PropConfigLabel, EventsExtra, Label)
+%       a subscribe site whose channel stays runtime-built — the honest,
+%       unresolved case.
+%
+%   pusher_js_subscribe_event(Svc, File, Line, Event)
+%       one row per `.bind("evt", ...)` literal a subscribe site carries (a
+%       site may bind more than one event) — the fan-out candidate set for
+%       the producer bridge below.
+%
+% Bridge (FX.1): node, node_meta.
+
+% ---------------------------------------------------------------------------
+% mint: pass the hub's rows straight through — the join-free case, same idiom
+% as pusher_consumer.dl's own pusher_subscribe_mint.
+% ---------------------------------------------------------------------------
+pusher_js_subscribe_mint(Svc, File, Line, Channel, Event, PropConfigLabel, EventsExtra, Label) :-
+    pusher_js_subscribe_resolved(Svc, File, Line, Channel, Event, PropConfigLabel, EventsExtra, Label).
+
+% ---------------------------------------------------------------------------
+% dynamic sites feed BOTH a placeholder mint AND a ledger row — two distinct
+% pass-through relations off the one hub fact (gin_blind's pattern,
+% patterns/go/gin_middleware.yaml), because emit.go's `unresolved:` always
+% short-circuits past a spec's own mint/edge for the same relation, so one
+% relation cannot drive both outcomes.
+% ---------------------------------------------------------------------------
+pusher_js_subscribe_mint_dynamic(Svc, File, Line, ChannelExpr, Event, PropConfigLabel, EventsExtra, Label) :-
+    pusher_js_subscribe_dynamic(Svc, File, Line, ChannelExpr, Event, PropConfigLabel, EventsExtra, Label).
+
+pusher_js_subscribe_dynamic_ledger(Svc, File, Line, ChannelExpr, Event, PropConfigLabel, EventsExtra, Label) :-
+    pusher_js_subscribe_dynamic(Svc, File, Line, ChannelExpr, Event, PropConfigLabel, EventsExtra, Label).
+
+% ---------------------------------------------------------------------------
+% containing-file edge — join the site's File to its file node (Svc scoped),
+% either bucket.
+% ---------------------------------------------------------------------------
+pusher_js_subscribe_any(Svc, File, Line) :-
+    pusher_js_subscribe_resolved(Svc, File, Line, _, _, _, _, _).
+pusher_js_subscribe_any(Svc, File, Line) :-
+    pusher_js_subscribe_dynamic(Svc, File, Line, _, _, _, _, _).
+
+pusher_js_subscribe_file(Svc, File, Line, FileID) :-
+    pusher_js_subscribe_any(Svc, File, Line),
+    node(FileID, "file", File, Svc).
+
+% ---------------------------------------------------------------------------
+% event-literal bridge to a matching `pusher_trigger`/`pusher_trigger_async`
+% publisher — a plain join against the graph-so-far's own node_meta facts (the
+% producer side is unmigrated Go, internal/linker/pusher_producer.go, but its
+% minted nodes are ordinary graph nodes FX.1's bridge already exposes). Split
+% resolved vs dynamic only for the edge's `via` meta value (pusher_channel_event
+% vs pusher_event_only, matching the retired Go); the join itself is identical.
+% ---------------------------------------------------------------------------
+pusher_js_trigger(P, Event) :-
+    node(P, "publisher", _, _), node_meta(P, "pattern", "pusher_trigger"), node_meta(P, "event", Event).
+pusher_js_trigger(P, Event) :-
+    node(P, "publisher", _, _), node_meta(P, "pattern", "pusher_trigger_async"), node_meta(P, "event", Event).
+
+pusher_js_subscribe_bridge_resolved(Svc, File, Line, Event, P) :-
+    pusher_js_subscribe_event(Svc, File, Line, Event),
+    pusher_js_subscribe_resolved(Svc, File, Line, _, _, _, _, _),
+    pusher_js_trigger(P, Event).
+
+pusher_js_subscribe_bridge_dynamic(Svc, File, Line, Event, P) :-
+    pusher_js_subscribe_event(Svc, File, Line, Event),
+    pusher_js_subscribe_dynamic(Svc, File, Line, _, _, _, _, _),
+    pusher_js_trigger(P, Event).
