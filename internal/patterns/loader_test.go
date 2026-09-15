@@ -17,7 +17,12 @@ func TestLoadGoPatterns(t *testing.T) {
 	var totalPatterns int
 	for _, pf := range files {
 		assert.Equal(t, "go", pf.Language, "all files should be language=go")
-		assert.NotEmpty(t, pf.Patterns, "each file should have at least one pattern")
+		// A Tier FX hub-only framework (e.g. gorm_tables.yaml) has no
+		// `patterns:` block by design — its facts come from a HubProvider,
+		// not tree-sitter extraction — so this loader (which only knows
+		// about the legacy `patterns:`/`package`/`reflect_dispatched_
+		// methods` fields, not `hub:`/`emit:`) legitimately sees it as
+		// empty. Only files this loader actually drives need patterns.
 		totalPatterns += len(pf.Patterns)
 	}
 	assert.Greater(t, totalPatterns, 0, "should have loaded patterns")

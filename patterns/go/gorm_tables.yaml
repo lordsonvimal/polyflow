@@ -1,0 +1,84 @@
+# Tier FX FX.8.23 — replaces internal/linker/gorm_tables.go's
+# LinkGormModelTables (Tier GT): terminates a GORM datastore call node
+# (no literal SQL) at the schema-declared table its Go model maps to.
+#
+# NO `facts:` block — the roster's original blocker note called this "a
+# new primitive: scan sibling Go files for a literal-returning method, no
+# existing analogue," but that framing predates HubProvider (FX.8.44,
+# 2026-09-15): reading a model's TableName() body, a local var's declared
+# type, or a .Model()/.Table() chain a few lines above a call is real Go
+# over the graph-so-far, exactly what a hub is for. Everything lives in the
+# "gorm_tables" hub provider (internal/factpipe/hub_gorm_tables.go);
+# rules/go/gorm_tables.dl is pure pass-through.
+#
+# Never mints a synthetic table node — a resolved name with no CREATE
+# TABLE declaration indexed in the workspace ledgers gorm_table_unresolved
+# and stops (see the retired file's own doc comment for the "phantom
+# exec_configs" cautionary tale). Edge type (queries vs persists) can't
+# vary row-to-row within one `emit:` relation, so the hub emits two
+# distinct predicates instead of a single Type column.
+language: go
+version: "1"
+package: gorm.io/gorm
+
+hub:
+  - name: gorm_tables
+
+emit:
+  - relation: gorm_query_edge_rel
+    columns: [From, To, Model, Table]
+    edge: { from: { arg: From }, to: { arg: To }, type: queries }
+    meta:
+      via: gorm_model
+      model: { arg: Model }
+      table: { arg: Table }
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: gorm_persist_edge_rel
+    columns: [From, To, Model, Table]
+    edge: { from: { arg: From }, to: { arg: To }, type: persists }
+    meta:
+      via: gorm_model
+      model: { arg: Model }
+      table: { arg: Table }
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: gorm_model_unresolved_rel
+    columns: [Svc, File, Line, Model]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Model }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: gorm_model_unresolved
+
+  - relation: gorm_table_unresolved_rel
+    columns: [Svc, File, Line, Table]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Table }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: gorm_table_unresolved
+
+  - relation: gorm_table_collision_rel
+    columns: [Svc, File, Line, Table]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Table }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: gorm_table_collision

@@ -1623,15 +1623,38 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, tableUnresolved...)
 			return st.writeEdges(tableEdges)
 		}},
-		// Tier GT: terminate GORM datastore call nodes (no literal SQL) at
-		// the schema-declared table their Go model maps to. Runs after
-		// "tables" so every CREATE TABLE node already exists in st.allNodes.
+		// Tier GT / Tier FX FX.8.23: terminate GORM datastore call nodes (no
+		// literal SQL) at the schema-declared table their Go model maps to.
+		// Runs after "tables" so every CREATE TABLE node already exists in
+		// st.allNodes, and before "datastores" so a resolved GORM call is
+		// never also fanned onto a generic engine node as unresolved — a
+		// dedicated pipeline.Run call (not the shared factpipe_frameworks
+		// slot every other Tier FX framework runs through, which runs after
+		// "datastores", too late for this one), backed by
+		// patterns/go/gorm_tables.yaml + rules/go/gorm_tables.dl and the
+		// "gorm_tables" hub provider (internal/factpipe/hub_gorm_tables.go).
+		// Replaces internal/linker/gorm_tables.go's LinkGormModelTables
+		// (529 lines). Called globally over st.allNodes, not per-service —
+		// the hub keys every lookup off each node's own n.Service (no
+		// nodes[0].Service single-service fallback to get wrong), matching
+		// the retired Go's own call shape exactly.
 		{"gorm_model_tables", scopeSameServiceOnly, func() error {
-			gormEdges, gormUnresolved := linker.LinkGormModelTables(st.allNodes)
-			if err := st.writeEdges(gormEdges); err != nil {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("gorm_tables: load registry: %w", err)
+			}
+			fw := reg.ByName("gorm_tables")
+			if fw == nil {
+				return fmt.Errorf("gorm_tables: framework not embedded")
+			}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.allNodes})
+			if err != nil {
+				return fmt.Errorf("gorm_tables: %w", err)
+			}
+			if err := st.writeEdges(res.Edges); err != nil {
 				return err
 			}
-			st.allUnresolved = append(st.allUnresolved, gormUnresolved...)
+			st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			return nil
 		}},
 		// Terminate any datastore call node that "tables" / "gorm_model_tables"

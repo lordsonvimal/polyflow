@@ -51,6 +51,9 @@ var frozenEdgeTypes = map[string]bool{
 	// reads: added for js_mobx (FX.8.9 2026-09-15) — a callback/computed/
 	// observer-render reactive read of an observable|computed member.
 	"reads": true,
+	// queries/persists: added for gorm_tables (FX.8.23 2026-09-15) — a GORM
+	// datastore call terminating at its schema-declared table.
+	"queries": true, "persists": true,
 }
 
 // frozenNodeTypes is the closed node-type vocabulary a `mint:` block may
@@ -212,7 +215,7 @@ func (r *replaceSpec) asMint() mintSpec {
 // against frozenNodeTypes like `mint:`/`replace:` when set.
 type patchSpec struct {
 	ID        valueRef            `yaml:"id"`
-	Node      string              `yaml:"node"` // optional Type override; validated against frozenNodeTypes
+	Node      string              `yaml:"node"`      // optional Type override; validated against frozenNodeTypes
 	Component valueRef            `yaml:"component"` // "true" bumps meta["component"]="true" + end_line (if larger)
 	EndLine   valueRef            `yaml:"end_line"`
 	Meta      map[string]valueRef `yaml:"meta"`

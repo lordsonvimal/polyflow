@@ -1,0 +1,27 @@
+% GORM model -> schema table — Tier FX FX.8.23. Replaces
+% internal/linker/gorm_tables.go's LinkGormModelTables (Tier GT).
+%
+% Base facts (from the gorm_tables hub provider,
+% internal/factpipe/hub_gorm_tables.go — resolving a GORM call's target
+% table needs a model's own TableName() method body, a local variable's
+% declared type read off its enclosing function/method's source span, or a
+% .Model()/.Table() chain scanned a few lines above the call — none of
+% which is a value already sitting in one node_meta column, so this is real
+% Go over the graph-so-far, ported near-verbatim from the retired pass. See
+% that file's doc comment for the full account):
+%
+%   gorm_query_edge(From, To, Model, Table)      a read reaching its table
+%   gorm_persist_edge(From, To, Model, Table)     a write reaching its table
+%   gorm_model_unresolved(Svc, File, Line, Model) a model with no table match
+%   gorm_table_unresolved(Svc, File, Line, Table) a table name with no schema
+%   gorm_table_collision(Svc, File, Line, Table)  a table name matching >1 node
+%
+% All five relations the emit spec consumes are pure pass-through — the hub
+% already resolved the winning table (or ledgered why it couldn't) before
+% asserting one fact per outcome.
+
+gorm_query_edge_rel(From, To, Model, Table) :- gorm_query_edge(From, To, Model, Table).
+gorm_persist_edge_rel(From, To, Model, Table) :- gorm_persist_edge(From, To, Model, Table).
+gorm_model_unresolved_rel(Svc, File, Line, Model) :- gorm_model_unresolved(Svc, File, Line, Model).
+gorm_table_unresolved_rel(Svc, File, Line, Table) :- gorm_table_unresolved(Svc, File, Line, Table).
+gorm_table_collision_rel(Svc, File, Line, Table) :- gorm_table_collision(Svc, File, Line, Table).
