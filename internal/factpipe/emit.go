@@ -84,6 +84,10 @@ var frozenNodeTypes = map[string]bool{
 	// external feature-registry component node, and `patch:`'s RT.1
 	// variable->component retype-in-place Type override.
 	"component": true,
+	// element: added for templ_layer (FX.8.27 2026-09-15) — a DOM element
+	// node minted from a templ component's dom_ids/dom_classes meta when no
+	// HTML/JSX/stylesheet-sourced element node already claims that id/class.
+	"element": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or
@@ -272,6 +276,11 @@ type unresolvedRefSpec struct {
 	File    valueRef `yaml:"file"`
 	Line    valueRef `yaml:"line"`
 	Kind    valueRef `yaml:"kind"` // literal or {arg: Column}
+	// Targets (FX.8.27) carries a fan-out cap's suppressed-target sample
+	// (templ_layer's dom_class_high_fanout — "file:line" entries, one per
+	// line, truncated with a "+N more" marker) — graph.UnresolvedRef's own
+	// Targets field, unused by every unresolved: block before this one.
+	Targets valueRef `yaml:"targets"`
 }
 
 type unresolvedSpec struct {
@@ -782,6 +791,9 @@ func (e *CompiledEmit) buildUnresolved(row map[string]string) graph.UnresolvedRe
 	}
 	if r.File.set() {
 		out.File = r.File.resolve(row)
+	}
+	if r.Targets.set() {
+		out.Targets = r.Targets.resolve(row)
 	}
 	if r.Line.set() {
 		if n, err := strconv.Atoi(r.Line.resolve(row)); err == nil {

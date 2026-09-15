@@ -31,6 +31,7 @@ var migratedFrameworks = []string{
 	"stylesheet_imports",
 	"gorm_tables",
 	"config_baseurl",
+	"templ_layer",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names

@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
-	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
@@ -52,7 +52,13 @@ func TestERBElementLinksToJQuerySelector_RealParse(t *testing.T) {
 	require.NotNil(t, erbElement, "ERB view element #save-btn missing from element index; nodes: %+v", nodes)
 	require.NotNil(t, jqSelector, "jQuery selector dom_target missing")
 
-	_, edges, _ := linker.LinkDOMDefinitions(nodes)
+	fxReg, err := pipeline.LoadEmbedded()
+	require.NoError(t, err)
+	fw := fxReg.ByName("templ_layer")
+	require.NotNil(t, fw, "templ_layer framework not embedded")
+	res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: nodes})
+	require.NoError(t, err)
+	edges := res.Edges
 	var found bool
 	for _, e := range edges {
 		if e.To == erbElement.ID && e.From == jqSelector.ID {

@@ -1,0 +1,40 @@
+% templ script imports + DOM element definitions — Tier FX FX.8.27.
+% Replaces internal/linker/templ_layer.go's LinkTemplScripts +
+% LinkDOMDefinitions (Tier K.4/DS.3).
+%
+% Base facts (from the templ_layer hub provider, internal/factpipe/
+% hub_templ_layer.go — pure graph-derived logic, no file I/O at all):
+%
+%   tl_script_edge(From, To, Asset, Conf)
+%       a templ component's <script src> resolved to a JS file.
+%   tl_script_unresolved(Svc, File, Line, Asset)
+%       a <script src> asset with no indexed JS file match.
+%   tl_id_def(FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID)
+%       a #id DOM-target resolved to the element that declares it.
+%   tl_class_def(FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID)
+%       a .class DOM-target resolved to a declaring element (fans out).
+%   tl_listen_edge(ElemID, Handler, Event, Delegated, DelegateRoot)
+%       a jQuery DOM-target's bound handler, reachable from its element.
+%   tl_dom_ref_unresolved(Svc, File, Line, Name)
+%       a #id DOM-target with no declaring element indexed anywhere.
+%   tl_selector_dynamic_unresolved(Svc, File, Line, Name)
+%       a selector too complex (descendant/pseudo/interpolated) to resolve.
+%   tl_dom_class_fanout_unresolved(Svc, File, Line, Name, Targets)
+%       a .class DOM-target whose match count exceeded the fan-out cap.
+%
+% All relations are pure pass-through — the hub already built the id/class
+% index and resolved every DOM-target against it.
+
+tl_script_edge_rel(From, To, Asset, Conf) :- tl_script_edge(From, To, Asset, Conf).
+tl_script_unresolved_rel(Svc, File, Line, Asset) :- tl_script_unresolved(Svc, File, Line, Asset).
+tl_id_def_rel(FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID) :-
+    tl_id_def(FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID).
+tl_class_def_rel(FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID) :-
+    tl_class_def(FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID).
+tl_listen_edge_rel(ElemID, Handler, Event, Delegated, DelegateRoot) :-
+    tl_listen_edge(ElemID, Handler, Event, Delegated, DelegateRoot).
+tl_dom_ref_unresolved_rel(Svc, File, Line, Name) :- tl_dom_ref_unresolved(Svc, File, Line, Name).
+tl_selector_dynamic_unresolved_rel(Svc, File, Line, Name) :-
+    tl_selector_dynamic_unresolved(Svc, File, Line, Name).
+tl_dom_class_fanout_unresolved_rel(Svc, File, Line, Name, Targets) :-
+    tl_dom_class_fanout_unresolved(Svc, File, Line, Name, Targets).

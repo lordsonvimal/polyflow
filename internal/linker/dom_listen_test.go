@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
-	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
@@ -42,8 +42,13 @@ func domListenFixture(t *testing.T) ([]graph.Node, []graph.Edge, []graph.Unresol
 		edges = append(edges, es...)
 		unresolved = append(unresolved, us...)
 	}
-	_, linkEdges, linkUnresolved := linker.LinkDOMDefinitions(nodes)
-	return nodes, append(edges, linkEdges...), append(unresolved, linkUnresolved...)
+	fxReg, err := pipeline.LoadEmbedded()
+	require.NoError(t, err)
+	fw := fxReg.ByName("templ_layer")
+	require.NotNil(t, fw, "templ_layer framework not embedded")
+	res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: nodes})
+	require.NoError(t, err)
+	return nodes, append(edges, res.Edges...), append(unresolved, res.Unresolved...)
 }
 
 // elementIDs returns the node IDs of every element node declaring the given id

@@ -173,3 +173,36 @@ func attrMatches(d attrDef, consumerVal string, consumerDynamic bool) bool {
 	}
 	return strings.HasPrefix(d.value, consumerVal) || strings.HasPrefix(consumerVal, d.value)
 }
+
+// maxFanoutTargetsListed caps how many definition sites a suppressed ref's
+// Targets field lists, so a single ledger entry for an extreme case
+// (hundreds of matches) doesn't itself become a token dump. Moved here from
+// the now-migrated templ_layer.go (Tier FX FX.8.27) — still needed by both
+// this file and ruby_override_dispatch.go's identical convention.
+const maxFanoutTargetsListed = 15
+
+// splitIDLine splits a "id@line" dom_ids/dom_classes-style entry into its
+// name and line number. Moved here from templ_layer.go (FX.8.27) — still
+// needed by this file's own attribute-entry parsing.
+func splitIDLine(entry string) (string, int) {
+	i := strings.LastIndexByte(entry, '@')
+	if i < 0 {
+		return entry, 0
+	}
+	line := 0
+	fmt.Sscanf(entry[i+1:], "%d", &line)
+	return entry[:i], line
+}
+
+// stripQuote removes a single matching pair of surrounding quotes (single,
+// double, or backtick) from a captured selector literal. Moved here from
+// templ_layer.go (FX.8.27) — still needed by this file's ledger Name field.
+func stripQuote(s string) string {
+	if len(s) >= 2 {
+		c := s[0]
+		if (c == '"' || c == '\'' || c == '`') && s[len(s)-1] == c {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}

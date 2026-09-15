@@ -1,0 +1,139 @@
+# Tier FX FX.8.27 — replaces internal/linker/templ_layer.go's
+# LinkTemplScripts + LinkDOMDefinitions (Tier K.4/DS.3): templ `<script src>`
+# → JS file `imports` edges, and JS DOM-target selectors (querySelector/
+# getElementById/jQuery) → the element node their id=/class= names.
+#
+# NO `patterns:`/`facts:` block — both passes operate purely over
+# `nodes []graph.Node`, no file I/O at all (id/class indexing, asset-path
+# resolution, fan-out capping are pure graph-derived logic). Everything
+# lives in the "templ_layer" hub provider (internal/factpipe/
+# hub_templ_layer.go); rules/generic/templ_layer.dl is pure pass-through.
+# Genuinely cross-language (templ component nodes, JS DOM-target/file
+# nodes, HTML/JSX element nodes, CSS-derived stylesheet_selector nodes all
+# feed the same id/class index), same `patterns/generic/` home as
+# config_baseurl.yaml — `language: generic` is documentation only.
+#
+# `mint:` (frozenNodeTypes["element"]) builds the DOM element node a templ
+# component's dom_ids/dom_classes meta implies when no HTML/JSX/stylesheet
+# -sourced element node already claims that id/class — every row still
+# carries a full mint spec even when the target already exists, relying
+# on the caller's "mint is gap-fill only" discipline to skip it.
+#
+# Run as a dedicated `pipeline.Run` call (internal/indexer/link_passes.go),
+# not the shared `factpipe_frameworks` slot — `dom_declutter` (downstream)
+# must run right after this pass and `dom_contracts`, well before
+# `factpipe_frameworks`'s late position (after `containment`).
+language: generic
+version: "1"
+
+hub:
+  - name: templ_layer
+
+emit:
+  - relation: tl_script_edge_rel
+    columns: [From, To, Asset, Conf]
+    edge: { from: { arg: From }, to: { arg: To }, type: imports }
+    meta:
+      via: script_src
+      asset: { arg: Asset }
+    confidence:
+      - { when: 'Conf == "partial"', value: partial }
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: tl_script_unresolved_rel
+    columns: [Svc, File, Line, Asset]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Asset }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: import_ref
+
+  - relation: tl_id_def_rel
+    columns: [FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID]
+    mint:
+      node: element
+      id: { arg: ElemID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { arg: Lang }
+      meta:
+        dom_id: { arg: Name }
+        component: { arg: CompID }
+    edge: { from: { arg: FromID }, to: { arg: ElemID }, type: defined_in }
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: tl_class_def_rel
+    columns: [FromID, ElemID, Label, Svc, File, Line, Lang, Name, CompID]
+    mint:
+      node: element
+      id: { arg: ElemID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { arg: Lang }
+      meta:
+        dom_class: { arg: Name }
+        component: { arg: CompID }
+    edge: { from: { arg: FromID }, to: { arg: ElemID }, type: defined_in }
+    confidence:
+      - { else: inferred }
+    dedup: [from, to]
+
+  - relation: tl_listen_edge_rel
+    columns: [ElemID, Handler, Event, Delegated, DelegateRoot]
+    edge: { from: { arg: ElemID }, to: { arg: Handler }, type: dom_listen }
+    meta:
+      event: { arg: Event }
+      via: jquery
+      delegated: { arg: Delegated }
+      delegate_root: { arg: DelegateRoot }
+    confidence:
+      - { else: inferred }
+    dedup: [from, to]
+
+  - relation: tl_dom_ref_unresolved_rel
+    columns: [Svc, File, Line, Name]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Name }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: dom_ref
+
+  - relation: tl_selector_dynamic_unresolved_rel
+    columns: [Svc, File, Line, Name]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Name }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: selector_dynamic
+
+  - relation: tl_dom_class_fanout_unresolved_rel
+    columns: [Svc, File, Line, Name, Targets]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Name }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: dom_class_high_fanout
+        targets: { arg: Targets }

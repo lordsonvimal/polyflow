@@ -1336,32 +1336,50 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		{"templ_components", scopeSameServiceOnly, func() error {
 			return st.writeEdges(linker.LinkTemplComponents(st.allNodes))
 		}},
-		// templ <script src> → JS file imports.
-		{"templ_scripts", scopeSameServiceOnly, func() error {
-			scriptEdges, scriptUnresolved := linker.LinkTemplScripts(st.allNodes)
-			if err := st.writeEdges(scriptEdges); err != nil {
-				return err
+		// Tier FX FX.8.27: templ <script src> → JS file imports, and JS DOM
+		// target → templ/HTML/JSX/stylesheet element `defined_in` (mints
+		// element nodes). Replaces internal/linker/templ_layer.go's
+		// LinkTemplScripts + LinkDOMDefinitions (531 lines) — merged into
+		// one pass (was two: templ_scripts, dom_definitions) since both are
+		// one hub provider now. A dedicated pipeline.Run call, not the
+		// shared factpipe_frameworks slot — dom_declutter (downstream)
+		// must run right after this pass and dom_contracts, well before
+		// factpipe_frameworks's late position (after containment).
+		{"templ_layer", scopeSameServiceOnly, func() error {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("templ_layer: load registry: %w", err)
 			}
-			st.allUnresolved = append(st.allUnresolved, scriptUnresolved...)
-			return nil
-		}},
-		// JS DOM target → templ element `defined_in` (creates templ_element nodes).
-		{"dom_definitions", scopeSameServiceOnly, func() error {
-			domNodes, domEdges, domUnresolved := linker.LinkDOMDefinitions(st.allNodes)
-			for i := range domNodes {
-				n := domNodes[i]
+			fw := reg.ByName("templ_layer")
+			if fw == nil {
+				return fmt.Errorf("templ_layer: framework not embedded")
+			}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.allNodes})
+			if err != nil {
+				return fmt.Errorf("templ_layer: %w", err)
+			}
+			byID := make(map[string]bool, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = true
+			}
+			for i := range res.Nodes {
+				n := res.Nodes[i]
+				if byID[n.ID] {
+					continue
+				}
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}
 				st.allNodes = append(st.allNodes, n)
+				byID[n.ID] = true
 			}
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			if err := st.writeEdges(domEdges); err != nil {
+			if err := st.writeEdges(res.Edges); err != nil {
 				return err
 			}
-			st.allUnresolved = append(st.allUnresolved, domUnresolved...)
+			st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			return nil
 		}},
 		// templ producer (data-testid/id) attribute -> JS attribute-selector
