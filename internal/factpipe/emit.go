@@ -60,6 +60,9 @@ var frozenNodeTypes = map[string]bool{
 	// `subscriber` node per resolved ERB `pusher_config`/`render
 	// "shared/pusher"` call site.
 	"subscriber": true,
+	// publisher: added for pusher_producer (FX.8.11 2026-09-15) — one
+	// `publisher` node per resolved `notify_*`-forwarding call site.
+	"publisher": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or

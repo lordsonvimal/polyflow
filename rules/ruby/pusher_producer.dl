@@ -1,0 +1,43 @@
+% Tier FX FX.8.11 (2026-09-15) — pusher_producer. Replaces
+% internal/linker/pusher_producer.go's EnrichPusherProducers.
+%
+% Base fact (from the pusher_producer_sites hub provider,
+% internal/factpipe/hub_pusher_producer.go — NOT a tree-sitter facts: block;
+% see patterns/ruby/pusher_producer.yaml's package doc):
+%
+%   pusher_producer_site(Svc, File, Line, Method, Class, Seg, Event, Label)
+%       one fully-resolved `PusherClient.new(...).notify_x(...)`-style
+%       forwarding call site (chained, assigned-local, same-class ivar, or
+%       cross-file mixin holder — all three/four shapes already collapsed by
+%       the hub into one row).
+%
+% Bridge (FX.1): node, node_line.
+
+% ---------------------------------------------------------------------------
+% mint: pass the hub's rows straight through to the emit spec's `mint:`
+% block — the join-free case, same idiom as pusher_consumer.dl.
+% ---------------------------------------------------------------------------
+pusher_producer_mint(Svc, File, Line, Method, Class, Seg, Event, Label) :-
+    pusher_producer_site(Svc, File, Line, Method, Class, Seg, Event, Label).
+
+% ---------------------------------------------------------------------------
+% enclosing function/method — the same span-containment idiom
+% gin_middleware.dl's mw_fn_cand uses for "the function lexically wrapping
+% the call": restricted to function/method nodes, innermost = latest-starting
+% among the spans covering the call line.
+% ---------------------------------------------------------------------------
+prod_fn_cand(File, Line, Fn, L) :-
+    pusher_producer_site(_, File, Line, _, _, _, _, _),
+    node(Fn, "function", File, _),
+    node_line(Fn, L, E), le(L, Line), le(Line, E).
+prod_fn_cand(File, Line, Fn, L) :-
+    pusher_producer_site(_, File, Line, _, _, _, _, _),
+    node(Fn, "method", File, _),
+    node_line(Fn, L, E), le(L, Line), le(Line, E).
+
+prod_fn_start(File, Line, MaxL) :- prod_fn_cand(File, Line, _, L), max(MaxL, L).
+prod_fn(File, Line, Fn)         :- prod_fn_start(File, Line, L), prod_fn_cand(File, Line, Fn, L).
+
+pusher_producer_edge(Svc, File, Line, Method, Class, Seg, Event, Label, Fn) :-
+    pusher_producer_site(Svc, File, Line, Method, Class, Seg, Event, Label),
+    prod_fn(File, Line, Fn).

@@ -1,0 +1,65 @@
+# Tier FX FX.8.11 (2026-09-15) — replaces internal/linker/pusher_producer.go's
+# EnrichPusherProducers (Tier PU.2, the producer half of Pusher realtime
+# linking).
+#
+# The server-side `.trigger(channel, event, data)` sink lives inside one
+# private wrapper (patterns/ruby/pusher.yaml's `pusher_trigger` /
+# `pusher_trigger_async`), whose channel/event are both runtime values at
+# that one AST location — the real producers are the `PusherClient.new(obj,
+# <chan>).notify_x(...)` call sites scattered across models/services/jobs,
+# where BOTH the channel (the `.new` argument) and the event (which
+# `notify_*` method forwards to `push`) ARE statically knowable.
+#
+# This framework carries NO `facts:` patterns. Discovering a forwarding call
+# site is real tree-sitter traversal over three distinct Ruby binding shapes
+# (chained `.new(...).notify_x`, an assigned local, an ivar held across
+# methods of the same class — plus a cross-file mixin-holder variant, PU.2d)
+# a `.dl` rule cannot express; resolving the channel/event needs the SAME
+# wrapper-class constant table (notify_*->event, CONST, CHANNELS[:x]) the
+# pusher_wrapper_erb hub already builds for the ERB consumer side
+# (patterns/ruby/pusher_consumer.yaml). The pusher_producer_sites hub
+# provider (internal/factpipe/hub_pusher_producer.go) reuses that table
+# builder verbatim and does its own call-site walk, emitting one fully
+# resolved (Svc, File, Line, Method, Class, ChannelSeg, Event, Label) row per
+# site; rules/ruby/pusher_producer.dl only joins them against the
+# graph-so-far to mint the publisher node and its enclosing-function `calls`
+# edge (span-containment idiom, same as gin_middleware.dl / rails_filters.dl).
+language: ruby
+version: "1"
+package: pusher
+
+hub:
+  - name: pusher_producer_sites
+
+emit:
+  - relation: pusher_producer_mint
+    columns: [Svc, File, Line, Method, Class, Seg, Event, Label]
+    mint:
+      node: publisher
+      id: { template: "{Svc}:{File}:publisher:pusher_trigger_forward:{Method}:{Line}" }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: ruby }
+      meta:
+        pattern: { literal: pusher_trigger_forward }
+        channel: { arg: Seg }
+        event: { arg: Event }
+        package: { literal: pusher }
+        fn: { literal: trigger }
+        resolved_via: { literal: pusher_producer_forward }
+        wrapper: { arg: Class }
+        via: { literal: pusher }
+
+  - relation: pusher_producer_edge
+    columns: [Svc, File, Line, Method, Class, Seg, Event, Label, Fn]
+    edge:
+      from: { arg: Fn }
+      to: { template: "{Svc}:{File}:publisher:pusher_trigger_forward:{Method}:{Line}" }
+      type: calls
+    meta:
+      via: pusher_producer_forward
+    confidence:
+      - { else: inferred }
+    dedup: [from, to]

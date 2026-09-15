@@ -270,8 +270,9 @@ func pchParseRuby(src []byte) (root *sitter.Node, release func()) {
 
 // pchCollectWrapperFacts is collectPusherWrapperFacts, ported verbatim from
 // the retired internal/linker/pusher_producer.go (both EnrichPusherProducers
-// and EnrichPusherConsumers called the same function there — see that file's
-// package doc for why the producer side stays hand-written Go).
+// and EnrichPusherConsumers called the same function there). Reused as-is
+// (not duplicated) by hub_pusher_producer.go's pusher_producer_sites hub,
+// FX.8.11's own migration of EnrichPusherProducers.
 func pchCollectWrapperFacts(
 	root *sitter.Node, src []byte,
 	eventByMethod map[string]map[string]string,

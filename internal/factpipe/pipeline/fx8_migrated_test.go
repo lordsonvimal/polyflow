@@ -23,6 +23,7 @@ var migratedFrameworks = []string{
 	"rails_filters",
 	"rails_model_tables",
 	"sprockets_assets",
+	"pusher_producer",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names

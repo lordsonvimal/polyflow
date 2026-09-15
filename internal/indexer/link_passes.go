@@ -764,32 +764,15 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(wrapperEdges)
 		}},
-		// Tier PU.2: the Pusher producer half. Mint one `publisher` node per
-		// resolvable `PusherClient.new(obj, <chan>).notify_x(...)` call site
-		// (channel segment + event name both statically knowable there),
-		// instead of leaving them all collapsed onto the wrapper's single
-		// key_dynamic `.trigger` node. Runs before the contract engine so
-		// contracts/pusher.yaml can join these to the ERB consumer side.
-		{"pusher_producer_forward", scopeSameServiceOnly, func() error {
-			pubNodes, pubEdges := linker.EnrichPusherProducers(st.allNodes, st.svcFilesOf())
-			for i := range pubNodes {
-				n := pubNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
-				}
-				st.allNodes = append(st.allNodes, n)
-			}
-			if len(pubNodes) > 0 {
-				if err := st.bw.Flush(st.ctx); err != nil {
-					return err
-				}
-			}
-			// PU.2e (`pusher(msg, status)` helper call sites → the canonical
-			// PusherClient trigger publisher, across `include`d concerns) is
-			// Tier FX FX.8: patterns/ruby/pusher_helper_calls.yaml + rules/ruby/
-			// pusher_helper_calls.dl, run by the factpipe_frameworks pass below.
-			return st.writeEdges(pubEdges)
-		}},
+		// Tier PU.2 (the producer half) is Tier FX FX.8.11 (2026-09-15):
+		// patterns/ruby/pusher_producer.yaml + rules/ruby/pusher_producer.dl,
+		// run by the factpipe_frameworks pass below — same "runs before the
+		// contract engine so contracts/pusher.yaml can join these to the ERB
+		// consumer side" slot the hand-written pass held.
+		// PU.2e (`pusher(msg, status)` helper call sites → the canonical
+		// PusherClient trigger publisher, across `include`d concerns) is
+		// Tier FX FX.8: patterns/ruby/pusher_helper_calls.yaml + rules/ruby/
+		// pusher_helper_calls.dl, run by the factpipe_frameworks pass below.
 		// Tier PU.3 (the ERB half) is Tier FX FX.8 (2026-09-14):
 		// patterns/ruby/pusher_consumer.yaml + rules/ruby/pusher_consumer.dl,
 		// run by the factpipe_frameworks pass below — same "runs before the
