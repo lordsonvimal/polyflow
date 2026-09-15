@@ -1,0 +1,22 @@
+% Config-supplied base URL path composition — Tier FX FX.8.30. Replaces
+% internal/linker/config_baseurl.go's ResolveConfigBaseURLPaths (Tier CB).
+%
+% Base facts (from the config_baseurl hub provider,
+% internal/factpipe/hub_config_baseurl.go — internal/configsrc.Load needs a
+% real service checkout directory, real filesystem I/O no `.dl` join can
+% express):
+%
+%   config_baseurl_patch(ID, Path, PrefixFrom, PrefixRef)
+%       a client node whose path gets the config-supplied prefix composed on.
+%   config_baseurl_regrade(ID)
+%       that same node's stale weak path_evidence/confidence_ceiling stamp,
+%       when the newly-composed path makes it no longer weak, must clear.
+%
+% Both relations are pure pass-through — the hub already resolved the
+% winning prefix (or decided a source disagreement means abstain) before
+% asserting a fact.
+
+config_baseurl_patch_rel(ID, Path, PrefixFrom, PrefixRef) :-
+    config_baseurl_patch(ID, Path, PrefixFrom, PrefixRef).
+
+config_baseurl_regrade_rel(ID) :- config_baseurl_regrade(ID).

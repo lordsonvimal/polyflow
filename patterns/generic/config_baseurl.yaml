@@ -1,0 +1,46 @@
+# Tier FX FX.8.30 — replaces internal/linker/config_baseurl.go's
+# ResolveConfigBaseURLPaths (Tier CB): composes the path component of a
+# client's config-supplied base URL onto its own path, so a client deployed
+# behind `API_URL=https://host/api/v2` can match the `/api/v2/...` route it
+# really calls.
+#
+# NO `patterns:`/`facts:` block — this is genuinely cross-language (it
+# patches whichever HTTPClient node Go/Ruby/JS host-resolution passes
+# already stamped Meta["env_var"]/["host_env_var"]/["host_default_literal"]
+# on), so it lives under `patterns/generic/` rather than a single-language
+# directory. Called via a dedicated `pipeline.Run` (internal/indexer/
+# link_passes.go), never through the shared `factpipe_frameworks` slot's
+# per-language Active() gate — `language: generic` here is documentation
+# only, no grammar is ever compiled against it.
+#
+# The roster's original caveat ("not FX-shaped — meta-mutation only, no
+# edge path exists") was already false once `patch:` landed (FX.8.8); the
+# REAL gap was that `internal/configsrc.Load` needs the service's own
+# checkout directory (.env/k8s/terraform search), which no HubProvider
+# before this one received — hub.go's HubProvider signature grew a third
+# `svcPath` parameter for this migration. The retired pass also
+# conditionally DELETES a stale path_evidence/confidence_ceiling stamp on
+# re-grade, which `patch:`'s Meta overlay (add/overwrite only) can't
+# express — `patchSpec` grew `delete_meta:`, applied via a second relation
+# the hub only populates for rows that should clear.
+language: generic
+version: "1"
+
+hub:
+  - name: config_baseurl
+
+emit:
+  - relation: config_baseurl_patch_rel
+    columns: [ID, Path, PrefixFrom, PrefixRef]
+    patch:
+      id: { arg: ID }
+      meta:
+        path: { arg: Path }
+        path_prefix_from: { arg: PrefixFrom }
+        path_prefix_ref: { arg: PrefixRef }
+
+  - relation: config_baseurl_regrade_rel
+    columns: [ID]
+    patch:
+      id: { arg: ID }
+      delete_meta: [path_evidence, confidence_ceiling]

@@ -219,6 +219,14 @@ type patchSpec struct {
 	Component valueRef            `yaml:"component"` // "true" bumps meta["component"]="true" + end_line (if larger)
 	EndLine   valueRef            `yaml:"end_line"`
 	Meta      map[string]valueRef `yaml:"meta"`
+	// DeleteMeta (FX.8.30) names existing meta keys to strip outright — a
+	// literal list, the same key set for every row this relation resolves,
+	// not a per-row value. config_baseurl's re-grade needs to REMOVE a
+	// stale path_evidence/confidence_ceiling stamp, which Meta's overlay-
+	// only merge (skip-if-empty) cannot express; the conditionality (which
+	// rows regrade) lives in which relation a row lands in — a hub only
+	// emits a fact to this relation for the rows that should clear.
+	DeleteMeta []string `yaml:"delete_meta"`
 }
 
 // deleteSpec is a `delete:` block — the FX.8.15 counterpart that drops an
@@ -337,11 +345,12 @@ type EmitResult struct {
 // stampMeta closure exactly. Type is empty unless the spec's `node:` field
 // set a Type override (FX.8.10's RT.1 retype-in-place).
 type NodePatch struct {
-	ID        string
-	Type      graph.NodeType
-	Meta      map[string]string
-	Component bool
-	EndLine   int
+	ID         string
+	Type       graph.NodeType
+	Meta       map[string]string
+	Component  bool
+	EndLine    int
+	DeleteMeta []string
 }
 
 // CompileEmits parses a YAML document with a top-level `emit:` list.
@@ -614,7 +623,7 @@ func (e *CompiledEmit) buildPatch(row map[string]string) (NodePatch, bool) {
 	if id == "" {
 		return NodePatch{}, false
 	}
-	p := NodePatch{ID: id, Type: graph.NodeType(s.Node), Component: s.Component.resolve(row) == "true"}
+	p := NodePatch{ID: id, Type: graph.NodeType(s.Node), Component: s.Component.resolve(row) == "true", DeleteMeta: s.DeleteMeta}
 	if s.EndLine.set() {
 		if v, err := strconv.Atoi(s.EndLine.resolve(row)); err == nil {
 			p.EndLine = v

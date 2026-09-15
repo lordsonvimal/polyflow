@@ -36,7 +36,14 @@ import (
 // fresh per Run call. Scoped this way, `pipeline.Framework`/`Load`/`Run`
 // needed no interface change: `Run` gains one more Apply* step, the same
 // shape as ApplyResolves/ApplyConfig/ApplyTable.
-type HubProvider func(nodes []graph.Node, files []string) []Fact
+//
+// svcPath (FX.8.30, added for config_baseurl) is graph.Snapshot.ServicePath
+// verbatim — the one input a hub cannot derive from any node or file path
+// when it needs to walk a service's checked-in config tree itself
+// (internal/configsrc.Load's own k8s/terraform subdirectory search, not a
+// single file a node already points at). Empty unless the caller sets
+// Snapshot.ServicePath; every hub before FX.8.30 ignores it.
+type HubProvider func(nodes []graph.Node, files []string, svcPath string) []Fact
 
 var hubRegistry = map[string]HubProvider{}
 
@@ -81,13 +88,13 @@ func CompileHubSpecs(specs []HubSpec) ([]CompiledHub, error) {
 // framework declares no hub block, so every framework that doesn't need this
 // mechanism pays nothing for it — the same inert-by-default shape as
 // ApplyConfig / ApplyTable.
-func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, dst FactSet) {
+func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, dst FactSet) {
 	for _, h := range hs {
 		fn := hubRegistry[h.Name()]
 		if fn == nil {
 			continue
 		}
-		for _, f := range fn(nodes, files) {
+		for _, f := range fn(nodes, files, svcPath) {
 			dst.Add(f)
 		}
 	}

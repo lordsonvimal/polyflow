@@ -37,7 +37,7 @@ func init() { RegisterHub("pusher_producer_sites", pusherProducerSitesHub) }
 // resolvable `notify_x`-style forwarding call site.
 const pusherProducerSitePred = "pusher_producer_site"
 
-func pusherProducerSitesHub(nodes []graph.Node, files []string) []Fact {
+func pusherProducerSitesHub(nodes []graph.Node, files []string, _ string) []Fact {
 	hubFiles := map[string]bool{}
 	for i := range nodes {
 		switch nodes[i].Meta["pattern"] {

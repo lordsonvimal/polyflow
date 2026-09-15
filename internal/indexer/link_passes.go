@@ -1213,18 +1213,57 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// `/api/v2/...` route it really calls. Runs here so it sees fresh stamps
 		// from all three, and well before ApplyHints.
 		{"config_baseurl", scopeSameServiceOnly, func() error {
-			svcDirs := make(map[string]string, len(st.allSvcFiles))
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("config_baseurl: load registry: %w", err)
+			}
+			fw := reg.ByName("config_baseurl")
+			if fw == nil {
+				return fmt.Errorf("config_baseurl: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
 			for _, sf := range st.allSvcFiles {
-				svcDirs[sf.svc.Name] = sf.svc.Path
-			}
-			prefixNodes := linker.ResolveConfigBaseURLPaths(st.allNodes, svcDirs)
-			if len(prefixNodes) == 0 {
-				return nil
-			}
-			for i := range prefixNodes {
-				n := prefixNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
+				absPath, err := filepath.Abs(sf.svc.Path)
+				if err != nil {
+					absPath = sf.svc.Path
+				}
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, ServicePath: absPath})
+				if err != nil {
+					return fmt.Errorf("config_baseurl: service %s: %w", sf.svc.Name, err)
+				}
+				for _, p := range res.Patches {
+					idx, ok := byID[p.ID]
+					if !ok {
+						continue
+					}
+					n := st.allNodes[idx]
+					m := make(map[string]string, len(n.Meta)+len(p.Meta))
+					for k, v := range n.Meta {
+						m[k] = v
+					}
+					for k, v := range p.Meta {
+						m[k] = v
+					}
+					for _, k := range p.DeleteMeta {
+						delete(m, k)
+					}
+					n.Meta = m
+					st.allNodes[idx] = n
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
 				}
 			}
 			return st.bw.Flush(st.ctx)
