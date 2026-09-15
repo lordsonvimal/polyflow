@@ -1,0 +1,69 @@
+# Tier FX — replaces internal/linker/amqp_handshake.go's LinkAMQPHandshake
+# (K.6 step 3, the cross-service half of the AMQP registration handshake).
+#
+# NO `patterns:`/`facts:` block — the extraction side (amqp_field_pair /
+# amqp_field_symbol / amqp_field_string_dig) already lives in
+# patterns/ruby/amqp_handshake.yaml, consumed by the general matcher
+# registry; this framework only needs the resulting Meta-tagged nodes
+# (already in the graph by link time), plus the broker-field call sites
+# earlier passes ledgered as key_dynamic. `language: generic` (like
+# hints/config_baseurl) so the shared `factpipe_frameworks` per-service loop
+# — which only ever hands a hub ONE service's nodes at a time — never picks
+# this framework up: a same-service-only view can't do this pass's job
+# (every candidate declaration is same-service and gets filtered out by
+# the cross-repo exclusion), so it must only run through the dedicated
+# `pipeline.Run` call in internal/indexer/link_passes.go's amqp_handshake
+# pass, over the WHOLE graph.
+#
+# Three relations because the per-node decision the hub makes (in
+# hub_amqp_handshake.go) has three distinct outcomes that need different
+# shapes: a resolved site's Meta overlay deletes key_dynamic/key_dynamic_raw
+# (a static per-relation delete_meta: list, so it can't share a relation
+# with a case that must NOT delete those keys); an ambiguous site's Meta
+# overlay does the opposite; and both the "no declaring service" and
+# "ambiguous" outcomes also need a call-site-keyed unresolved ledger row
+# (the resolved case doesn't — a successfully patched node needs no ledger
+# entry). `patch:`'s `label:` field (this framework's reason for existing)
+# is the ONLY per-row-conditional field here: the retired Go only
+# overwrites a still-"dynamic"/empty label, never a label some earlier pass
+# already set — the hub decides that in Go and reports "" (skip) or the
+# winning value, same "empty means don't touch" convention as Meta.
+language: generic
+version: "1"
+
+hub:
+  - name: amqp_handshake
+
+emit:
+  - relation: amqp_resolved_patch_rel
+    columns: [ID, QueueName, Label]
+    patch:
+      id: { arg: ID }
+      delete_meta: [key_dynamic, key_dynamic_raw]
+      label: { arg: Label }
+      meta:
+        queue_name: { arg: QueueName }
+        key_resolved_via: amqp_handshake
+        confidence_ceiling: partial
+
+  - relation: amqp_ambiguous_patch_rel
+    columns: [ID, KeyCandidates]
+    patch:
+      id: { arg: ID }
+      label: branch_enum
+      meta:
+        key_candidates: { arg: KeyCandidates }
+        key_resolved_via: amqp_handshake
+        confidence_ceiling: partial
+
+  - relation: amqp_unresolved_rel
+    columns: [Service, File, Line, Field, Kind]
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        name: { arg: Field }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: { arg: Kind }

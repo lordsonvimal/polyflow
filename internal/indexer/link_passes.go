@@ -2129,11 +2129,69 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// across the repo boundary on the registration handshake's field symbol, so
 		// the existing queue_name contract can join publisher to consumer. Resolves
 		// keys only — it emits no edges of its own.
+		// Tier FX (2026-09-16): patterns/generic/amqp_handshake.yaml +
+		// rules/generic/amqp_handshake.dl, backed by the amqp_handshake hub
+		// (internal/factpipe/hub_amqp_handshake.go), replacing
+		// internal/linker/amqp_handshake.go's LinkAMQPHandshake. Extraction
+		// (amqp_field_pair/amqp_field_symbol/amqp_field_string_dig) still
+		// lives in patterns/ruby/amqp_handshake.yaml, consumed by the
+		// general matcher registry, untouched — only the cross-service join
+		// migrated. A dedicated pipeline.Run call over the WHOLE graph
+		// (st.enrichedNodes), same reason as hints: the join needs both
+		// sides of the repo boundary in one pass, which the shared
+		// factpipe_frameworks per-service loop can never see (and never
+		// tries to — this framework's `language: generic` shields it from
+		// that loop, same as hints/config_baseurl).
 		{"amqp_handshake", scopeCrossService, func() error {
-			handshakeUnresolved, handshakeResolved := linker.LinkAMQPHandshake(st.enrichedNodes)
-			st.handshakeResolved = handshakeResolved
-			st.allUnresolved = linker.DropResolvedRefs(st.allUnresolved, handshakeResolved)
-			st.allUnresolved = append(st.allUnresolved, handshakeUnresolved...)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("amqp_handshake: load registry: %w", err)
+			}
+			fw := reg.ByName("amqp_handshake")
+			if fw == nil {
+				return fmt.Errorf("amqp_handshake: framework not embedded")
+			}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.enrichedNodes})
+			if err != nil {
+				return fmt.Errorf("amqp_handshake: %w", err)
+			}
+
+			byID := make(map[string]int, len(st.enrichedNodes))
+			for i := range st.enrichedNodes {
+				byID[st.enrichedNodes[i].ID] = i
+			}
+			resolved := map[string]bool{}
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.enrichedNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta))
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for _, k := range p.DeleteMeta {
+					delete(m, k)
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				n.Meta = m
+				if p.Label != "" {
+					n.Label = p.Label
+				}
+				st.enrichedNodes[idx] = n
+				// Only the resolved (not the ambiguous) relation sets
+				// queue_name — exactly the case DropResolvedRefs' original
+				// `resolved` map tracked.
+				if p.Meta["queue_name"] != "" {
+					resolved[linker.HandshakeSiteKey(n.Service, n.File, n.Line)] = true
+				}
+			}
+			st.handshakeResolved = resolved
+			st.allUnresolved = linker.DropResolvedRefs(st.allUnresolved, resolved)
+			st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			return nil
 		}},
 		// FX.8.14: the message-type dispatch join, distinct from and unblocked

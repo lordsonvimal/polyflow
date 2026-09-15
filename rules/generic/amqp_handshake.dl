@@ -1,0 +1,30 @@
+% AMQP registration handshake — Tier FX. Replaces
+% internal/linker/amqp_handshake.go's LinkAMQPHandshake (Tier K.6 step 3).
+%
+% Base facts (from the "amqp_handshake" hub provider, internal/factpipe/
+% hub_amqp_handshake.go — the per-service queue-method registry and the
+% cross-repo declaration join are real Go, not `.dl`-expressible without
+% distinct-count aggregation the engine doesn't have):
+%
+%   amqp_handshake_resolved_patch(ID, QueueName, Label)
+%       exactly one OTHER service declares this call site's broker_field —
+%       Label is "" unless the node's existing label was still
+%       "dynamic"/empty (the hub's per-row conditional override).
+%   amqp_handshake_ambiguous_patch(ID, KeyCandidates)
+%       two or more services declare the field with different queues.
+%   amqp_handshake_unresolved_fact(Service, File, Line, Field, Kind)
+%       no declaring service (Kind=amqp_handshake_unresolved) or an
+%       ambiguous one (Kind=amqp_handshake_ambiguous) — a call-site-keyed
+%       ledger row.
+%
+% Pure pass-through — the hub already resolved the winning outcome per node
+% before asserting a fact.
+
+amqp_resolved_patch_rel(ID, QueueName, Label) :-
+    amqp_handshake_resolved_patch(ID, QueueName, Label).
+
+amqp_ambiguous_patch_rel(ID, KeyCandidates) :-
+    amqp_handshake_ambiguous_patch(ID, KeyCandidates).
+
+amqp_unresolved_rel(Service, File, Line, Field, Kind) :-
+    amqp_handshake_unresolved_fact(Service, File, Line, Field, Kind).

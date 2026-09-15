@@ -230,6 +230,7 @@ func (r *replaceSpec) asMint() mintSpec {
 type patchSpec struct {
 	ID        valueRef            `yaml:"id"`
 	Node      string              `yaml:"node"`      // optional Type override; validated against frozenNodeTypes
+	Label     valueRef            `yaml:"label"`     // optional Label override, skipped when it resolves empty (amqp_handshake — the hub decides in Go whether the row should overwrite, same "empty means don't touch" convention as Meta)
 	Component valueRef            `yaml:"component"` // "true" bumps meta["component"]="true" + end_line (if larger)
 	EndLine   valueRef            `yaml:"end_line"`
 	Meta      map[string]valueRef `yaml:"meta"`
@@ -366,6 +367,7 @@ type EmitResult struct {
 type NodePatch struct {
 	ID         string
 	Type       graph.NodeType
+	Label      string
 	Meta       map[string]string
 	Component  bool
 	EndLine    int
@@ -642,7 +644,7 @@ func (e *CompiledEmit) buildPatch(row map[string]string) (NodePatch, bool) {
 	if id == "" {
 		return NodePatch{}, false
 	}
-	p := NodePatch{ID: id, Type: graph.NodeType(s.Node), Component: s.Component.resolve(row) == "true", DeleteMeta: s.DeleteMeta}
+	p := NodePatch{ID: id, Type: graph.NodeType(s.Node), Label: s.Label.resolve(row), Component: s.Component.resolve(row) == "true", DeleteMeta: s.DeleteMeta}
 	if s.EndLine.set() {
 		if v, err := strconv.Atoi(s.EndLine.resolve(row)); err == nil {
 			p.EndLine = v

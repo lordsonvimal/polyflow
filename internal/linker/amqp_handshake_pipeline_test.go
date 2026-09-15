@@ -9,6 +9,13 @@ package linker_test
 //
 // so "where does a Vega progress event go" is answerable across the repo
 // boundary, without either repo ever sharing a queue literal.
+//
+// Ported from the retired internal/linker/amqp_handshake_test.go (Tier FX
+// migration of LinkAMQPHandshake to patterns/generic/amqp_handshake.yaml +
+// internal/factpipe/hub_amqp_handshake.go): amqpHandshakeApply below runs the
+// framework and merges its patch: output exactly like
+// internal/indexer/link_passes.go's amqp_handshake pass does, in place of the
+// retired function's direct node mutation.
 
 import (
 	"testing"
@@ -18,11 +25,60 @@ import (
 
 	contractdata "github.com/lordsonvimal/polyflow/contracts"
 	"github.com/lordsonvimal/polyflow/internal/contract"
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
+
+// amqpHandshakeApply runs the "amqp_handshake" framework over nodes and
+// merges its patch: output into a fresh copy, mirroring
+// internal/indexer/link_passes.go's amqp_handshake pass caller loop.
+func amqpHandshakeApply(t *testing.T, nodes []graph.Node) ([]graph.Node, []graph.UnresolvedRef, map[string]bool) {
+	t.Helper()
+	reg, err := pipeline.LoadEmbedded()
+	require.NoError(t, err)
+	fw := reg.ByName("amqp_handshake")
+	require.NotNil(t, fw, "amqp_handshake framework not embedded")
+
+	res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: nodes})
+	require.NoError(t, err)
+
+	merged := make([]graph.Node, len(nodes))
+	copy(merged, nodes)
+	byID := make(map[string]int, len(merged))
+	for i := range merged {
+		byID[merged[i].ID] = i
+	}
+	resolved := map[string]bool{}
+	for _, p := range res.Patches {
+		idx, ok := byID[p.ID]
+		if !ok {
+			continue
+		}
+		n := merged[idx]
+		m := make(map[string]string, len(n.Meta)+len(p.Meta))
+		for k, v := range n.Meta {
+			m[k] = v
+		}
+		for _, k := range p.DeleteMeta {
+			delete(m, k)
+		}
+		for k, v := range p.Meta {
+			m[k] = v
+		}
+		n.Meta = m
+		if p.Label != "" {
+			n.Label = p.Label
+		}
+		merged[idx] = n
+		if p.Meta["queue_name"] != "" {
+			resolved[linker.HandshakeSiteKey(n.Service, n.File, n.Line)] = true
+		}
+	}
+	return merged, res.Unresolved, resolved
+}
 
 // handshakeFixture parses the two-repo fixture and runs the handshake pass.
 // Nodes are returned post-enrichment, matching what the engine sees.
@@ -52,8 +108,7 @@ func handshakeFixture(t *testing.T) ([]graph.Node, []graph.UnresolvedRef, map[st
 			nodes = append(nodes, ns...)
 		}
 	}
-	unresolved, resolved := linker.LinkAMQPHandshake(nodes)
-	return nodes, unresolved, resolved
+	return amqpHandshakeApply(t, nodes)
 }
 
 // findNode returns the single node matching a predicate, failing otherwise.
@@ -131,7 +186,7 @@ func TestAMQPHandshake_ResolvesZeroMiddleSegmentField(t *testing.T) {
 			nodes = append(nodes, ns...)
 		}
 	}
-	_, _ = linker.LinkAMQPHandshake(nodes)
+	nodes, _, _ = amqpHandshakeApply(t, nodes)
 
 	pub := findNode(t, nodes, func(n *graph.Node) bool {
 		return n.Service == "agent" && n.Type == graph.NodeTypeChannel &&
@@ -184,7 +239,7 @@ func TestAMQPHandshake_ResolvesStringKeyedTwoArgDig(t *testing.T) {
 	assert.Equal(t, "amqp_queue_name", consumer.Meta["broker_field"],
 		"string-keyed two-arg dig field was not normalized like the symbol form")
 
-	_, _ = linker.LinkAMQPHandshake(nodes)
+	nodes, _, _ = amqpHandshakeApply(t, nodes)
 
 	pub := findNode(t, nodes, func(n *graph.Node) bool {
 		return n.Service == "agent" && n.Type == graph.NodeTypeChannel &&
@@ -343,7 +398,7 @@ func TestAMQPHandshake_SameServiceIsNotAHandshake(t *testing.T) {
 		}
 		single[i].Meta = meta
 	}
-	_, _ = linker.LinkAMQPHandshake(single)
+	single, _, _ = amqpHandshakeApply(t, single)
 
 	for i := range single {
 		n := &single[i]
