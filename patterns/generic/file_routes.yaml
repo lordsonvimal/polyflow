@@ -1,0 +1,92 @@
+# Tier FX FX.8.32 — replaces internal/linker/file_routes.go's
+# SynthesizeFileRoutes (Phase M.0): filesystem-convention route synthesis
+# for Next.js (pages + app router), SvelteKit, Nuxt (pages + server), and
+# Remix — no call site required, the route is implied by the file's own
+# path.
+#
+# NO `patterns:`/`facts:` block — deciding which of six dialects applies,
+# walking each dialect's route root, and mapping a file path to a route
+# key are pure filesystem-derived logic, exactly what a hub is for.
+# Everything lives in the "file_routes" hub provider (internal/factpipe/
+# hub_file_routes.go); rules/generic/file_routes.dl is pure pass-through.
+# Genuinely cross-framework (Next/SvelteKit/Nuxt/Remix all funnel through
+# one hub, one npm-dependency presence check per dialect), so it lives
+# under `patterns/generic/` alongside `config_baseurl.yaml`/
+# `templ_layer.yaml`.
+#
+# `mint:` for the route/handler node itself, the file node its
+# component_impl edge falls back to when no parsed function target
+# exists, and — unlike any previous mint consumer — the file mint and the
+# route/handler mint are two SEPARATE relations so the file only mints
+# once per Apply call (the hub's own `mintedFile` dedup) regardless of how
+# many verbs/pages point at it.
+language: generic
+version: "1"
+
+hub:
+  - name: file_routes
+
+emit:
+  - relation: fr_file_mint_rel
+    columns: [ID, File, Svc, Language, Basename]
+    mint:
+      node: file
+      id: { arg: ID }
+      label: { arg: File }
+      service: { arg: Svc }
+      file: { arg: File }
+      language: { arg: Language }
+      meta:
+        basename: { arg: Basename }
+
+  - relation: fr_route_mint_rel
+    columns: [ID, Label, Svc, File, Language, Path, Framework, TargetID]
+    mint:
+      node: route
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      language: { arg: Language }
+      meta:
+        path: { arg: Path }
+        defined_by: file_convention
+        framework: { arg: Framework }
+    edge: { from: { arg: ID }, to: { arg: TargetID }, type: component_impl }
+    meta:
+      via: file_convention
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: fr_handler_mint_rel
+    columns: [ID, Label, Svc, File, Language, Path, Method, Framework, TargetID]
+    mint:
+      node: http_handler
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      language: { arg: Language }
+      meta:
+        method: { arg: Method }
+        path: { arg: Path }
+        defined_by: file_convention
+        framework: { arg: Framework }
+    edge: { from: { arg: ID }, to: { arg: TargetID }, type: component_impl }
+    meta:
+      via: file_convention
+    confidence:
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: fr_unresolved_rel
+    columns: [Svc, File, Name]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Name }
+        file: { arg: File }
+        kind: route_convention_unresolved

@@ -1,14 +1,16 @@
-package linker
+package factpipe
 
-import (
-	"testing"
+// FX.8.32 (2026-09-15): file_routes — Tier FX migration of
+// internal/linker/file_routes.go's SynthesizeFileRoutes (Phase M.0). These
+// port the retired Go test's pure path-mapping/classification unit tests
+// verbatim (fr-prefixed), same-package (white-box) since those helpers stay
+// unexported. See internal/factpipe/pipeline/file_routes_test.go for the
+// full hub-through-pipeline.Run integration coverage the retired test
+// suite never had.
 
-	"github.com/stretchr/testify/assert"
-)
+import "testing"
 
-// TestNextPagesPath verifies the next-pages / nuxt path-mapping dialect.
-func TestNextPagesPath(t *testing.T) {
-	t.Parallel()
+func TestFRNextPagesPath(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string
@@ -21,17 +23,17 @@ func TestNextPagesPath(t *testing.T) {
 		{"blog/index.tsx", "/blog", true},
 	}
 	for _, c := range cases {
-		got, ok := nextPagesPath(c.in)
-		assert.Equal(t, c.ok, ok, "ok for %q", c.in)
-		if c.ok {
-			assert.Equal(t, c.want, got, "path for %q", c.in)
+		got, ok := frNextPagesPath(c.in)
+		if ok != c.ok {
+			t.Errorf("ok for %q = %v, want %v", c.in, ok, c.ok)
+		}
+		if c.ok && got != c.want {
+			t.Errorf("path for %q = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-// TestNextSegmentPath verifies route-group stripping and ledger triggers.
-func TestNextSegmentPath(t *testing.T) {
-	t.Parallel()
+func TestFRNextSegmentPath(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string
@@ -41,25 +43,22 @@ func TestNextSegmentPath(t *testing.T) {
 		{"dashboard", "/dashboard", true},
 		{"(marketing)/pricing", "/pricing", true},
 		{"api/users/[id]", "/api/users/:id", true},
-		// parallel route → ledger
 		{"@modal/inbox", "", false},
-		// optional catch-all → ledger
 		{"[[...opt]]", "", false},
-		// catch-all → wildcard
 		{"[...slug]", "/*", true},
 	}
 	for _, c := range cases {
-		got, ok := nextSegmentPath(c.in, true)
-		assert.Equal(t, c.ok, ok, "ok for %q", c.in)
-		if c.ok {
-			assert.Equal(t, c.want, got, "path for %q", c.in)
+		got, ok := frNextSegmentPath(c.in, true)
+		if ok != c.ok {
+			t.Errorf("ok for %q = %v, want %v", c.in, ok, c.ok)
+		}
+		if c.ok && got != c.want {
+			t.Errorf("path for %q = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-// TestNuxtServerPath verifies method extraction from filename suffix.
-func TestNuxtServerPath(t *testing.T) {
-	t.Parallel()
+func TestFRNuxtServerPath(t *testing.T) {
 	cases := []struct {
 		in     string
 		path   string
@@ -68,23 +67,27 @@ func TestNuxtServerPath(t *testing.T) {
 	}{
 		{"items.get.ts", "/api/items", "GET", true},
 		{"items.post.ts", "/api/items", "POST", true},
-		{"items.ts", "/api/items", "", true},   // no suffix → ALL (method="")
+		{"items.ts", "/api/items", "", true},
 		{"users/[id].get.ts", "/api/users/:id", "GET", true},
 		{"[...slug].ts", "/api/*", "", true},
 	}
 	for _, c := range cases {
-		rp, m, ok := nuxtServerPath(c.in)
-		assert.Equal(t, c.ok, ok, "ok for %q", c.in)
+		rp, m, ok := frNuxtServerPath(c.in)
+		if ok != c.ok {
+			t.Errorf("ok for %q = %v, want %v", c.in, ok, c.ok)
+		}
 		if c.ok {
-			assert.Equal(t, c.path, rp, "path for %q", c.in)
-			assert.Equal(t, c.method, m, "method for %q", c.in)
+			if rp != c.path {
+				t.Errorf("path for %q = %q, want %q", c.in, rp, c.path)
+			}
+			if m != c.method {
+				t.Errorf("method for %q = %q, want %q", c.in, m, c.method)
+			}
 		}
 	}
 }
 
-// TestRemixPath verifies the Remix dot-separator and $param conventions.
-func TestRemixPath(t *testing.T) {
-	t.Parallel()
+func TestFRRemixPath(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string
@@ -96,25 +99,25 @@ func TestRemixPath(t *testing.T) {
 		{"settings.profile.tsx", "/settings/profile", true},
 	}
 	for _, c := range cases {
-		got, ok := remixPath(c.in)
-		assert.Equal(t, c.ok, ok, "ok for %q", c.in)
-		if c.ok {
-			assert.Equal(t, c.want, got, "path for %q", c.in)
+		got, ok := frRemixPath(c.in)
+		if ok != c.ok {
+			t.Errorf("ok for %q = %v, want %v", c.in, ok, c.ok)
+		}
+		if c.ok && got != c.want {
+			t.Errorf("path for %q = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-// TestIsPageFile and TestIsHandlerFile verify per-framework file classification.
-func TestIsPageFile(t *testing.T) {
-	t.Parallel()
+func TestFRIsPageFile(t *testing.T) {
 	cases := []struct {
 		framework string
 		file      string
 		want      bool
 	}{
 		{"next-pages", "about.tsx", true},
-		{"next-pages", "api/users.ts", false},   // api → handler, not page
-		{"next-pages", "_app.tsx", false},        // _ prefix → skip
+		{"next-pages", "api/users.ts", false},
+		{"next-pages", "_app.tsx", false},
 		{"next-app", "dashboard/page.tsx", true},
 		{"next-app", "dashboard/route.ts", false},
 		{"next-app", "dashboard/layout.tsx", false},
@@ -125,13 +128,13 @@ func TestIsPageFile(t *testing.T) {
 		{"remix", "_index.tsx", true},
 	}
 	for _, c := range cases {
-		got := isPageFile(c.file, c.framework)
-		assert.Equal(t, c.want, got, "isPageFile(%q, %q)", c.file, c.framework)
+		if got := frIsPageFile(c.file, c.framework); got != c.want {
+			t.Errorf("frIsPageFile(%q, %q) = %v, want %v", c.file, c.framework, got, c.want)
+		}
 	}
 }
 
-func TestIsHandlerFile(t *testing.T) {
-	t.Parallel()
+func TestFRIsHandlerFile(t *testing.T) {
 	cases := []struct {
 		framework string
 		file      string
@@ -147,7 +150,8 @@ func TestIsHandlerFile(t *testing.T) {
 		{"nuxt", "pages/users.vue", false},
 	}
 	for _, c := range cases {
-		got := isHandlerFile(c.file, c.framework)
-		assert.Equal(t, c.want, got, "isHandlerFile(%q, %q)", c.file, c.framework)
+		if got := frIsHandlerFile(c.file, c.framework); got != c.want {
+			t.Errorf("frIsHandlerFile(%q, %q) = %v, want %v", c.file, c.framework, got, c.want)
+		}
 	}
 }

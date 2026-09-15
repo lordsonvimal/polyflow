@@ -1840,35 +1840,55 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// contract engine, so synthesized http_handler nodes participate in
 		// cross-service linking.
 		{"file_route_synthesis", scopeSameServiceOnly, func() error {
-			fileNodeMap := make(map[string][]graph.Node, len(st.allNodes))
-			for _, n := range st.allNodes {
-				if n.File != "" {
-					fileNodeMap[n.File] = append(fileNodeMap[n.File], n)
-				}
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("file_routes: load registry: %w", err)
 			}
-			nodesInFile := func(absFile string) []graph.Node { return fileNodeMap[absFile] }
-
+			fw := reg.ByName("file_routes")
+			if fw == nil {
+				return fmt.Errorf("file_routes: framework not embedded")
+			}
+			byID := make(map[string]bool, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = true
+			}
 			for _, sf := range st.allSvcFiles {
 				absSvcPath, _ := filepath.Abs(sf.svc.Path)
 				// Route synthesis needs ALL service files (including unparsed like .svelte, .vue),
 				// not just the parser-handled subset — file-based routers are identified by their
 				// filesystem paths, which exist regardless of whether a parser is registered.
 				allSvcFilesList := walkAllFiles(absSvcPath)
-				fr := linker.SynthesizeFileRoutes(absSvcPath, sf.svc.Name, allSvcFilesList, sf.deps, nodesInFile)
-				for i := range fr.Nodes {
-					n := fr.Nodes[i]
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: allSvcFilesList, ServicePath: absSvcPath})
+				if err != nil {
+					return fmt.Errorf("file_routes: service %s: %w", sf.svc.Name, err)
+				}
+				for i := range res.Nodes {
+					n := res.Nodes[i]
+					if byID[n.ID] {
+						continue
+					}
 					if err := st.bw.AddNode(st.ctx, &n); err != nil {
 						return err
 					}
 					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = true
 				}
 				if err := st.bw.Flush(st.ctx); err != nil {
 					return err
 				}
-				if err := st.writeEdges(fr.Edges); err != nil {
+				if err := st.writeEdges(res.Edges); err != nil {
 					return err
 				}
-				st.allUnresolved = append(st.allUnresolved, fr.Unresolved...)
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			}
 			return nil
 		}},

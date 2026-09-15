@@ -1,0 +1,32 @@
+% Filesystem-convention route synthesis — Tier FX FX.8.32. Replaces
+% internal/linker/file_routes.go's SynthesizeFileRoutes (Phase M.0).
+%
+% Base facts (from the file_routes hub provider, internal/factpipe/
+% hub_file_routes.go — dialect detection, route-root walking, and file-path
+% -to-route-key mapping are pure filesystem-derived logic, real Go over the
+% service's file list):
+%
+%   fr_file_mint(ID, File, Svc, Language, Basename)
+%       a file node the route/handler's component_impl edge falls back to.
+%   fr_route_mint(ID, Label, Svc, File, Language, Path, Framework, TargetID)
+%       one page route, resolved to its file (M.0 never detects a
+%       default-export component for a page).
+%   fr_handler_mint(ID, Label, Svc, File, Language, Path, Method, Framework, TargetID)
+%       one API handler, resolved to its exported verb function or its file.
+%   fr_unresolved(Svc, File, Name)
+%       a file the dialect table cannot map (parallel routes, optional
+%       catch-alls, a verb-less route.ts file).
+%
+% All four relations are pure pass-through — the hub already decided which
+% dialect applies and resolved every path.
+
+fr_file_mint_rel(ID, File, Svc, Language, Basename) :-
+    fr_file_mint(ID, File, Svc, Language, Basename).
+
+fr_route_mint_rel(ID, Label, Svc, File, Language, Path, Framework, TargetID) :-
+    fr_route_mint(ID, Label, Svc, File, Language, Path, Framework, TargetID).
+
+fr_handler_mint_rel(ID, Label, Svc, File, Language, Path, Method, Framework, TargetID) :-
+    fr_handler_mint(ID, Label, Svc, File, Language, Path, Method, Framework, TargetID).
+
+fr_unresolved_rel(Svc, File, Name) :- fr_unresolved(Svc, File, Name).
