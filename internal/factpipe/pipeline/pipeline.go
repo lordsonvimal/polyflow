@@ -267,6 +267,19 @@ func (r *Registry) All() []*Framework {
 	return append([]*Framework(nil), r.frameworks...)
 }
 
+// ByName returns the named framework, gate ignored — for a caller that runs
+// one specific framework directly rather than through Active's dependency
+// gate (FX.8.15's ruby_job_inherit, which the retired Go pass ran
+// unconditionally for every ruby service, no gem marker required).
+func (r *Registry) ByName(name string) *Framework {
+	for _, fw := range r.frameworks {
+		if fw.Name == name {
+			return fw
+		}
+	}
+	return nil
+}
+
 // Active returns the frameworks whose gate is satisfied by svcDeps. A gated-out
 // framework is never compiled into a run — cost is O(active), not O(all).
 func (r *Registry) Active(svcDeps []deps.Dependency) []*Framework {
@@ -297,6 +310,13 @@ type Result struct {
 	Nodes      []graph.Node
 	Unresolved []graph.UnresolvedRef
 	Ledger     []graph.UnresolvedRef
+	// Replaced/Deleted are FX.8.15's node-mutation channels (`replace:`/
+	// `delete:` emit blocks) — a `mint:`-only framework never populates
+	// either. Replaced maps an old node ID to the new node that supersedes
+	// it (also present in Nodes); Deleted names node IDs to drop outright.
+	// The caller performs the actual graph swap/delete.
+	Replaced map[string]string
+	Deleted  []string
 }
 
 // Run executes stages 1–4 for one service. graphSoFar is the language-semantic
@@ -344,6 +364,13 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 			}
 			res.Unresolved = append(res.Unresolved, stampService(er.Unresolved, svc)...)
 			res.Ledger = append(res.Ledger, stampService(er.Ledger, svc)...)
+			for old, newID := range er.Replaced {
+				if res.Replaced == nil {
+					res.Replaced = map[string]string{}
+				}
+				res.Replaced[old] = newID
+			}
+			res.Deleted = append(res.Deleted, er.Deleted...)
 		}
 	}
 
@@ -351,6 +378,16 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 	sort.SliceStable(res.Nodes, func(i, j int) bool { return res.Nodes[i].ID < res.Nodes[j].ID })
 	sortUnresolved(res.Unresolved)
 	sortUnresolved(res.Ledger)
+	if len(res.Deleted) > 0 {
+		sort.Strings(res.Deleted)
+		deduped := res.Deleted[:1]
+		for _, id := range res.Deleted[1:] {
+			if id != deduped[len(deduped)-1] {
+				deduped = append(deduped, id)
+			}
+		}
+		res.Deleted = deduped
+	}
 	return res, nil
 }
 

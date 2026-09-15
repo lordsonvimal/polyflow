@@ -1,0 +1,79 @@
+% CJ / ActiveJob inherited `perform` — Tier FX FX.8.15. Replaces
+% internal/linker/ruby_job_inherit.go's PromoteInheritedJobPerform (409
+% lines).
+%
+% Hub facts (internal/factpipe/hub_ruby_job_inherit.go's "ruby_job_inherit"
+% provider — the node-position half of the retired jobInheritIndex; see that
+% file's doc comment for why this needed a hub, not a bare `.dl` join):
+%   job_seed(NodeID, JobClass)                the direct-match subscriber, root-confirmed already
+%   job_seed_perform(NodeID, PerformID)        seed's resolved `perform` method target
+%   job_candidate(NodeID, ClassID, JobClass)   a class-resolved, non-redundant candidate
+%   job_candidate_perform(NodeID, PerformID)   candidate's resolved `perform` method target
+%   job_drop_immediate(NodeID)                 redundant or class-unresolved candidate
+%
+% Bridge (FX.1): node, node_label, node_start, ancestor_dist.
+%
+% The closure the retired hopsToRoot walked (bounded BFS, hop cap 4,
+% nearest-hop-wins) is exactly ancestor_dist's min-hop transitive closure of
+% `inherits`, the same idiom rails_filters.dl/rails_route_actions.dl already
+% use for their own ancestor lookups. A class IS its own root at hop 0
+% (hopsToRoot's own pre-loop check, since ancestor_dist never emits a node's
+% distance to itself); every other hop comes from ancestor_dist directly.
+
+job_root(A) :- node_label(A, "ApplicationJob").
+job_root(A) :- node_label(A, "ActiveJob::Base").
+
+job_hop(N, 0) :-
+    job_candidate(N, ClassID, _), job_root(ClassID).
+job_hop(N, D) :-
+    job_candidate(N, ClassID, _), ancestor_dist(ClassID, Anc, D), job_root(Anc), le(D, 4).
+
+job_reached(N) :- job_hop(N, _).
+job_min_hop(N, MinD) :- job_hop(N, D), min(MinD, D).
+
+% "Exhausted": the class had an ancestor strictly past the hop bound (a real
+% chain longer than 4, not a dead end) and never reached a root within it —
+% hopsToRoot's "still climbing when the bound hit" case, a "cannot tell",
+% never a "no". Depth 5 is the first depth ancestor_dist can report past the
+% le(D,4) cap tested above.
+job_exhausted(N) :-
+    job_candidate(N, ClassID, _), ancestor_dist(ClassID, Anc, D), le(5, D), not job_reached(N).
+
+% Ordinary PORO: reaches a root of its own that is not an ActiveJob (or no
+% root at all). Never a job.
+job_ordinary(N) :-
+    job_candidate(N, _, _), not job_reached(N), not job_exhausted(N).
+
+% ---------------------------------------------------------------------------
+% promotion — the candidate becomes a subscriber
+% ---------------------------------------------------------------------------
+job_promote_row(N, Svc, File, Line, JobClass, MinD) :-
+    job_reached(N), job_min_hop(N, MinD), job_candidate(N, _, JobClass),
+    node(N, _, File, Svc), node_start(N, Line).
+
+job_promote_contains(N, ClassID, Svc, File, Line) :-
+    job_reached(N), job_candidate(N, ClassID, _),
+    node(N, _, File, Svc), node_start(N, Line).
+
+job_promote_perform(N, Svc, File, Line, PerformID) :-
+    job_reached(N), job_candidate_perform(N, PerformID),
+    node(N, _, File, Svc), node_start(N, Line).
+
+% ---------------------------------------------------------------------------
+% seed perform edges — direct-match subscribers need no promotion
+% ---------------------------------------------------------------------------
+job_seed_perform_row(N, PerformID) :- job_seed(N, _), job_seed_perform(N, PerformID).
+
+% ---------------------------------------------------------------------------
+% drop — bookkeeping candidates that never become a node
+% ---------------------------------------------------------------------------
+job_drop(N) :- job_drop_immediate(N).
+job_drop(N) :- job_ordinary(N).
+job_drop(N) :- job_exhausted(N).
+
+% ---------------------------------------------------------------------------
+% ledger — a real inheritance chain deeper than the hop bound
+% ---------------------------------------------------------------------------
+job_ledger_row(N, JobClass, File, Line) :-
+    job_exhausted(N), job_candidate(N, _, JobClass),
+    node(N, _, File, _), node_start(N, Line).

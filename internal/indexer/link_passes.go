@@ -10,6 +10,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/evidence"
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/pluginloader"
@@ -490,78 +491,121 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			st.allUnresolved = append(st.allUnresolved, rubyTypeUnresolved...)
 			return nil
 		}},
-		// CJ: ActiveJob `perform` classes whose base class is a project class,
-		// not ApplicationJob — invisible to the pattern file's direct-superclass
-		// predicate, recoverable by walking the `inherits` edges the pass above
-		// just emitted. Runs here, early, for two reasons: promotion rewrites a
-		// candidate node's ID (the ID embeds the node type), so it must land
-		// before `containment` hangs edges off the old ID; and the promoted
-		// subscribers must exist before the contract engine matches enqueue
-		// sites against them.
+		// CJ / Tier FX FX.8.15: ActiveJob `perform` classes whose base class is a
+		// project class, not ApplicationJob — invisible to the pattern file's
+		// direct-superclass predicate, recoverable by walking the `inherits`
+		// edges the pass above just emitted. Runs here, early, for two reasons:
+		// promotion rewrites a candidate node's ID (the ID embeds the node
+		// type), so it must land before `containment` hangs edges off the old
+		// ID; and the promoted subscribers must exist before the contract
+		// engine matches enqueue sites against them. A dedicated
+		// pipeline.Run call — not the shared `factpipe_frameworks` slot every
+		// other Tier FX framework runs through (which runs after
+		// `containment`, too late for this one) — backed by
+		// patterns/ruby/ruby_job_inherit.yaml + rules/ruby/ruby_job_inherit.dl
+		// and the `replace:`/`delete:` emit primitives those needed
+		// (internal/factpipe/emit.go). Replaces
+		// internal/linker/ruby_job_inherit.go's PromoteInheritedJobPerform
+		// (409 lines).
 		{"ruby_job_inherit", scopeSameServiceOnly, func() error {
-			res := linker.PromoteInheritedJobPerform(st.allNodes, st.allEdges)
-			if len(res.Promoted) == 0 && len(res.Dropped) == 0 {
-				st.allUnresolved = append(st.allUnresolved, res.Ledger...)
-				return st.writeEdges(res.Edges)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("ruby_job_inherit: load registry: %w", err)
 			}
-			for i := range res.Promoted {
-				if err := st.bw.AddNode(st.ctx, &res.Promoted[i]); err != nil {
+			fw := reg.ByName("ruby_job_inherit")
+			if fw == nil {
+				return fmt.Errorf("ruby_job_inherit: framework not embedded")
+			}
+
+			for _, sf := range st.allSvcFiles {
+				var snap graph.Snapshot
+				realNode := make(map[string]bool)
+				for i := range st.allNodes {
+					n := &st.allNodes[i]
+					if n.Service != sf.svc.Name || n.Language != "ruby" {
+						continue
+					}
+					snap.Nodes = append(snap.Nodes, *n)
+					realNode[n.ID] = true
+				}
+				if len(snap.Nodes) == 0 {
+					continue
+				}
+				for i := range st.allEdges {
+					if realNode[st.allEdges[i].From] {
+						snap.Edges = append(snap.Edges, st.allEdges[i])
+					}
+				}
+
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+				if err != nil {
+					return fmt.Errorf("ruby_job_inherit: service %s: %w", sf.svc.Name, err)
+				}
+
+				for i := range res.Nodes {
+					if err := st.bw.AddNode(st.ctx, &res.Nodes[i]); err != nil {
+						return err
+					}
+				}
+				if err := st.bw.Flush(st.ctx); err != nil {
+					return err
+				}
+				// Replace each candidate in place rather than appending, so the
+				// class keeps exactly one node and the enqueue matcher sees
+				// exactly one target (a second one would be fan-out, the one
+				// thing this tier may not introduce).
+				newByID := make(map[string]*graph.Node, len(res.Nodes))
+				for i := range res.Nodes {
+					newByID[res.Nodes[i].ID] = &res.Nodes[i]
+				}
+				for i := range st.allNodes {
+					newID, ok := res.Replaced[st.allNodes[i].ID]
+					if !ok {
+						continue
+					}
+					if p := newByID[newID]; p != nil {
+						st.allNodes[i] = *p
+					}
+				}
+				// A candidate this pass did not promote is bookkeeping for a
+				// class that is not a job; deleting it keeps the graph exactly
+				// as it was before CJ for every PORO that happens to define
+				// `perform`.
+				dropped := make(map[string]bool, len(res.Deleted))
+				for _, id := range res.Deleted {
+					dropped[id] = true
+				}
+				if err := st.deleteNodes(dropped); err != nil {
+					return err
+				}
+				// The store rows for replaced candidates are keyed by the old
+				// ID, which no in-memory node carries any more — drop them
+				// directly (deleteNodes would also strip the replacement from
+				// allNodes, since promotion reuses nothing of the old ID).
+				replacedIDs := make(map[string]bool, len(res.Replaced))
+				for old := range res.Replaced {
+					replacedIDs[old] = true
+				}
+				if len(replacedIDs) > 0 {
+					if err := st.store.DeleteNodes(st.ctx, replacedIDs); err != nil {
+						return fmt.Errorf("delete promoted job candidates: %w", err)
+					}
+					kept := st.allEdges[:0]
+					for _, e := range st.allEdges {
+						if replacedIDs[e.From] || replacedIDs[e.To] {
+							continue
+						}
+						kept = append(kept, e)
+					}
+					st.allEdges = kept
+				}
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
+				st.allUnresolved = append(st.allUnresolved, res.Ledger...)
+				if err := st.writeEdges(res.Edges); err != nil {
 					return err
 				}
 			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			// Replace each candidate in place rather than appending, so the
-			// class keeps exactly one node and the enqueue matcher sees exactly
-			// one target (a second one would be fan-out, the one thing this
-			// tier may not introduce).
-			promotedByID := make(map[string]*graph.Node, len(res.Promoted))
-			for i := range res.Promoted {
-				promotedByID[res.Promoted[i].ID] = &res.Promoted[i]
-			}
-			for i := range st.allNodes {
-				newID, ok := res.Replaced[st.allNodes[i].ID]
-				if !ok {
-					continue
-				}
-				if p := promotedByID[newID]; p != nil {
-					st.allNodes[i] = *p
-				}
-			}
-			// A candidate this pass did not promote is bookkeeping for a class
-			// that is not a job; deleting it keeps the graph exactly as it was
-			// before CJ for every PORO that happens to define `perform`.
-			dropped := make(map[string]bool, len(res.Dropped))
-			for _, id := range res.Dropped {
-				dropped[id] = true
-			}
-			if err := st.deleteNodes(dropped); err != nil {
-				return err
-			}
-			// The store rows for replaced candidates are keyed by the old ID,
-			// which no in-memory node carries any more — drop them directly
-			// (deleteNodes would also strip the replacement from allNodes,
-			// since promotion reuses nothing of the old ID).
-			replacedIDs := make(map[string]bool, len(res.Replaced))
-			for old := range res.Replaced {
-				replacedIDs[old] = true
-			}
-			if len(replacedIDs) > 0 {
-				if err := st.store.DeleteNodes(st.ctx, replacedIDs); err != nil {
-					return fmt.Errorf("delete promoted job candidates: %w", err)
-				}
-				kept := st.allEdges[:0]
-				for _, e := range st.allEdges {
-					if replacedIDs[e.From] || replacedIDs[e.To] {
-						continue
-					}
-					kept = append(kept, e)
-				}
-				st.allEdges = kept
-			}
-			st.allUnresolved = append(st.allUnresolved, res.Ledger...)
-			return st.writeEdges(res.Edges)
+			return nil
 		}},
 		// Cross-file `ClassName.method_name` calls (Product.find_by,
 		// UserCategoryRuleSet.latest_for, LicenseReportJob.create!) — the

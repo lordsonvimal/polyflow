@@ -1,24 +1,54 @@
-package linker
+package pipeline_test
+
+// FX.8.15 (2026-09-15): ruby_job_inherit — Tier FX migration of
+// internal/linker/ruby_job_inherit.go's PromoteInheritedJobPerform, replaced
+// by patterns/ruby/ruby_job_inherit.yaml + rules/ruby/ruby_job_inherit.dl,
+// driven by the "ruby_job_inherit" hub provider
+// (internal/factpipe/hub_ruby_job_inherit.go) plus the `replace:`/`delete:`
+// emit primitives (internal/factpipe/emit.go) FX.8.15's rescoping added.
+//
+// This framework is hub-only: no source files are parsed, so these fixtures
+// hand-build graph.Node/graph.Edge exactly like the retired pass's own tests
+// did (ported near-verbatim) — mirroring rails_route_actions_test.go's
+// convention for a hub-only framework with no tree-sitter extraction. The
+// retired JobInheritResult.Promoted/Replaced/Dropped/Edges/Ledger map onto
+// pipeline.Result.Nodes/Replaced/Deleted/Edges/Unresolved — Ledger becomes
+// Unresolved here because job_ledger_row goes through an `unresolved:` block,
+// not a fan_out ledger.
 
 import (
 	"fmt"
 	"testing"
 
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
-// The CJ fixtures below model what the parser + LinkRubyTypeRelations have
-// already put in the graph by the time this pass runs: one class node and one
-// `perform` method node per job file, `inherits` edges between the class
-// nodes, and one `aj_perform_method_candidate` function node per
-// `perform`-defining class (the unpredicated pattern), sitting on the class's
-// own line.
+func jiActive(t *testing.T) []*pipeline.Framework {
+	t.Helper()
+	reg, err := pipeline.LoadEmbedded()
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	fw := reg.ByName("ruby_job_inherit")
+	if fw == nil {
+		t.Fatal("ruby_job_inherit framework not embedded")
+	}
+	return []*pipeline.Framework{fw}
+}
+
+func jiRun(t *testing.T, nodes []graph.Node, edges []graph.Edge) pipeline.Result {
+	t.Helper()
+	res, err := pipeline.Run(jiActive(t), nil, graph.Snapshot{Nodes: nodes, Edges: edges})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return res
+}
 
 const cjService = "orion"
 
-func cjFile(class string) string {
-	return fmt.Sprintf("app/jobs/%s.rb", class)
-}
+func cjFile(class string) string { return fmt.Sprintf("app/jobs/%s.rb", class) }
 
 func cjClassID(class string) string {
 	return fmt.Sprintf("%s:%s:class:%s:1", cjService, cjFile(class), class)
@@ -36,8 +66,6 @@ func cjPerformID(class string) string {
 	return fmt.Sprintf("%s:%s:function:perform:2", cjService, cjFile(class))
 }
 
-// cjClass emits the three nodes a `perform`-defining class contributes: the
-// class node, its `perform` method node, and the candidate nomination.
 func cjClass(class string) []graph.Node {
 	file := cjFile(class)
 	return []graph.Node{
@@ -52,8 +80,6 @@ func cjClass(class string) []graph.Node {
 	}
 }
 
-// cjBareClass emits a class node with no `perform` and no candidate — a base
-// class that only exists to be inherited from (ApplicationJob itself).
 func cjBareClass(class string) graph.Node {
 	return graph.Node{ID: cjClassID(class), Type: graph.NodeTypeClass, Label: class,
 		Service: cjService, File: cjFile(class), Line: 1, Language: "ruby"}
@@ -66,10 +92,6 @@ func cjInherits(sub, super string) graph.Edge {
 	}
 }
 
-// cjChain builds ApplicationJob plus `depth` project classes above it, each
-// defining `perform`: job0 < ApplicationJob, job1 < job0, … The class at
-// index i is `depth-i` hops from the root… counted the other way round:
-// job0 is 1 hop, job1 is 2, and so on.
 func cjChain(depth int) ([]graph.Node, []graph.Edge) {
 	nodes := []graph.Node{cjBareClass("ApplicationJob")}
 	var edges []graph.Edge
@@ -84,31 +106,33 @@ func cjChain(depth int) ([]graph.Node, []graph.Edge) {
 	return nodes, edges
 }
 
-func cjPromotedIDs(res JobInheritResult) map[string]bool {
+func cjPromotedIDs(res pipeline.Result) map[string]bool {
 	ids := map[string]bool{}
-	for _, n := range res.Promoted {
+	for _, n := range res.Nodes {
 		ids[n.ID] = true
 	}
 	return ids
 }
 
-// TestPromoteInheritedJobPerform_ChainDepths is the tier's core claim: a
-// project base class between the job and ApplicationJob no longer hides the
-// job. Depth 1 is the shape the predicated pattern already handles; 2 and 4
-// are what only an inherits walk can see.
-func TestPromoteInheritedJobPerform_ChainDepths(t *testing.T) {
-	t.Parallel()
+// maxJobInheritHops mirrors the retired internal/linker/ruby_job_inherit.go
+// constant (the rules/ruby/ruby_job_inherit.dl hop cap, le(D,4)).
+const maxJobInheritHops = 4
+
+// TestJobInherit_ChainDepths is the tier's core claim: a project base class
+// between the job and ApplicationJob no longer hides the job. Depth 1 is the
+// shape the predicated pattern already handles; 2 and 4 are what only an
+// ancestor_dist walk can see.
+func TestJobInherit_ChainDepths(t *testing.T) {
 	for _, depth := range []int{1, 2, 4} {
 		t.Run(fmt.Sprintf("depth%d", depth), func(t *testing.T) {
-			t.Parallel()
 			nodes, edges := cjChain(depth)
-			res := PromoteInheritedJobPerform(nodes, edges)
+			res := jiRun(t, nodes, edges)
 
-			if len(res.Promoted) != depth {
-				t.Fatalf("depth %d: promoted %d classes, want %d", depth, len(res.Promoted), depth)
+			if len(res.Nodes) != depth {
+				t.Fatalf("depth %d: promoted %d classes, want %d", depth, len(res.Nodes), depth)
 			}
-			if len(res.Ledger) != 0 {
-				t.Fatalf("depth %d: unexpected ledger %+v", depth, res.Ledger)
+			if len(res.Unresolved) != 0 {
+				t.Fatalf("depth %d: unexpected unresolved %+v", depth, res.Unresolved)
 			}
 			promoted := cjPromotedIDs(res)
 			for i := 0; i < depth; i++ {
@@ -120,8 +144,7 @@ func TestPromoteInheritedJobPerform_ChainDepths(t *testing.T) {
 					t.Errorf("depth %d: %s candidate not mapped to its subscriber", depth, class)
 				}
 			}
-			// hops must be the real distance to ApplicationJob, not a constant.
-			for _, n := range res.Promoted {
+			for _, n := range res.Nodes {
 				var want string
 				for i := 0; i < depth; i++ {
 					if n.ID == cjSubscriberID(fmt.Sprintf("job%d", i)) {
@@ -143,75 +166,68 @@ func TestPromoteInheritedJobPerform_ChainDepths(t *testing.T) {
 	}
 }
 
-// TestPromoteInheritedJobPerform_BeyondHopBound proves the bound is a real
-// stop, and that stopping is ledgered rather than silent: a chain this deep is
-// probably a job, but saying so would be a guess.
-func TestPromoteInheritedJobPerform_BeyondHopBound(t *testing.T) {
-	t.Parallel()
+// TestJobInherit_BeyondHopBound proves the bound is a real stop, and that
+// stopping is ledgered rather than silent.
+func TestJobInherit_BeyondHopBound(t *testing.T) {
 	nodes, edges := cjChain(maxJobInheritHops + 1)
-	res := PromoteInheritedJobPerform(nodes, edges)
+	res := jiRun(t, nodes, edges)
 
 	deepest := fmt.Sprintf("job%d", maxJobInheritHops)
 	if cjPromotedIDs(res)[cjSubscriberID(deepest)] {
 		t.Fatalf("%s is %d hops from the root and must not promote", deepest, maxJobInheritHops+1)
 	}
-	if len(res.Promoted) != maxJobInheritHops {
-		t.Fatalf("promoted %d, want %d (everything inside the bound)", len(res.Promoted), maxJobInheritHops)
+	if len(res.Nodes) != maxJobInheritHops {
+		t.Fatalf("promoted %d, want %d (everything inside the bound)", len(res.Nodes), maxJobInheritHops)
 	}
-	if len(res.Ledger) != 1 {
-		t.Fatalf("ledger %+v, want exactly one job_base_unresolved", res.Ledger)
+	if len(res.Unresolved) != 1 {
+		t.Fatalf("unresolved %+v, want exactly one job_base_unresolved", res.Unresolved)
 	}
-	got := res.Ledger[0]
+	got := res.Unresolved[0]
 	if got.Kind != "job_base_unresolved" || got.Name != deepest || got.File != cjFile(deepest) {
-		t.Errorf("ledger entry %+v, want job_base_unresolved for %s", got, deepest)
+		t.Errorf("unresolved entry %+v, want job_base_unresolved for %s", got, deepest)
 	}
 }
 
-// TestPromoteInheritedJobPerform_NoPathToRoot is the over-promotion guard: the
-// tier must not turn every PORO with a `perform` method into a job. Widening
-// the pattern's regex to `.*Job$` would have done exactly that.
-func TestPromoteInheritedJobPerform_NoPathToRoot(t *testing.T) {
-	t.Parallel()
+// TestJobInherit_NoPathToRoot is the over-promotion guard: the tier must not
+// turn every PORO with a `perform` method into a job.
+func TestJobInherit_NoPathToRoot(t *testing.T) {
 	nodes := append(cjClass("Presenter"), cjBareClass("BasePresenter"))
 	nodes = append(nodes, cjBareClass("ApplicationJob"))
 	edges := []graph.Edge{cjInherits("Presenter", "BasePresenter")}
 
-	res := PromoteInheritedJobPerform(nodes, edges)
+	res := jiRun(t, nodes, edges)
 
-	if len(res.Promoted) != 0 {
-		t.Fatalf("promoted %+v; a class that reaches no ActiveJob root is not a job", res.Promoted)
+	if len(res.Nodes) != 0 {
+		t.Fatalf("promoted %+v; a class that reaches no ActiveJob root is not a job", res.Nodes)
 	}
-	if len(res.Ledger) != 0 {
-		t.Errorf("ledger %+v; a PORO is a decided no, not an unresolved", res.Ledger)
+	if len(res.Unresolved) != 0 {
+		t.Errorf("unresolved %+v; a PORO is a decided no, not an unresolved", res.Unresolved)
 	}
-	if len(res.Dropped) != 1 || res.Dropped[0] != cjCandidateID("Presenter") {
-		t.Errorf("dropped %v, want just the Presenter candidate", res.Dropped)
+	if len(res.Deleted) != 1 || res.Deleted[0] != cjCandidateID("Presenter") {
+		t.Errorf("deleted %v, want just the Presenter candidate", res.Deleted)
 	}
 	for _, e := range res.Edges {
 		t.Errorf("unexpected edge %s -> %s", e.From, e.To)
 	}
 }
 
-// TestPromoteInheritedJobPerform_Diamond covers a class that reaches the root
-// two ways at once (a superclass *and* an included module that inherits). The
-// walk must settle on one node, not one per path — two subscriber nodes for
-// one class is exactly the fan-out this tier may not introduce.
-func TestPromoteInheritedJobPerform_Diamond(t *testing.T) {
-	t.Parallel()
+// TestJobInherit_Diamond covers a class that reaches the root two ways at
+// once (a superclass *and* an included module that inherits). The walk must
+// settle on one node, not one per path.
+func TestJobInherit_Diamond(t *testing.T) {
 	nodes, edges := cjChain(1) // job0 < ApplicationJob
 	nodes = append(nodes, cjClass("DiamondJob")...)
 	nodes = append(nodes, cjBareClass("Retryable"))
 	edges = append(edges,
 		cjInherits("DiamondJob", "job0"),
-		// `include Retryable` is emitted as an inherits edge too.
 		cjInherits("DiamondJob", "Retryable"),
 		cjInherits("Retryable", "job0"),
 	)
 
-	res := PromoteInheritedJobPerform(nodes, edges)
+	res := jiRun(t, nodes, edges)
 
 	seen := 0
-	for _, n := range res.Promoted {
+	for _, n := range res.Nodes {
 		if n.ID == cjSubscriberID("DiamondJob") {
 			seen++
 		}
@@ -221,27 +237,23 @@ func TestPromoteInheritedJobPerform_Diamond(t *testing.T) {
 	}
 }
 
-// TestPromoteInheritedJobPerform_ReplacesCandidateInPlace pins the node-count
-// invariant the mutating-pass rule exists for: promotion is a replacement, so
-// applying the result must leave the graph with the same number of nodes and
-// no duplicate ID.
-func TestPromoteInheritedJobPerform_ReplacesCandidateInPlace(t *testing.T) {
-	t.Parallel()
+// TestJobInherit_ReplacesCandidateInPlace pins the node-count invariant the
+// mutating-pass rule exists for.
+func TestJobInherit_ReplacesCandidateInPlace(t *testing.T) {
 	nodes, edges := cjChain(2)
 	before := len(nodes)
 
-	res := PromoteInheritedJobPerform(nodes, edges)
+	res := jiRun(t, nodes, edges)
 
-	// Apply the result the way link_passes.go does.
 	promotedByID := map[string]graph.Node{}
-	for _, n := range res.Promoted {
+	for _, n := range res.Nodes {
 		promotedByID[n.ID] = n
 	}
-	applied := make([]graph.Node, 0, len(nodes))
 	dropped := map[string]bool{}
-	for _, id := range res.Dropped {
+	for _, id := range res.Deleted {
 		dropped[id] = true
 	}
+	applied := make([]graph.Node, 0, len(nodes))
 	for _, n := range nodes {
 		if dropped[n.ID] {
 			continue
@@ -270,12 +282,10 @@ func TestPromoteInheritedJobPerform_ReplacesCandidateInPlace(t *testing.T) {
 	}
 }
 
-// TestPromoteInheritedJobPerform_SeedIsNotDuplicated covers the class the
-// predicated pattern already matched: it has a seed subscriber *and* a
-// candidate on the same line. Promoting the candidate would hand the enqueue
-// matcher two identical targets.
-func TestPromoteInheritedJobPerform_SeedIsNotDuplicated(t *testing.T) {
-	t.Parallel()
+// TestJobInherit_SeedIsNotDuplicated covers the class the predicated pattern
+// already matched: it has a seed subscriber *and* a candidate on the same
+// line.
+func TestJobInherit_SeedIsNotDuplicated(t *testing.T) {
 	nodes, edges := cjChain(1)
 	seed := graph.Node{
 		ID: cjSubscriberID("job0"), Type: graph.NodeTypeSubscriber, Label: "perform",
@@ -284,32 +294,26 @@ func TestPromoteInheritedJobPerform_SeedIsNotDuplicated(t *testing.T) {
 	}
 	nodes = append(nodes, seed)
 
-	res := PromoteInheritedJobPerform(nodes, edges)
+	res := jiRun(t, nodes, edges)
 
-	if len(res.Promoted) != 0 {
-		t.Fatalf("promoted %+v; the seed already covers job0", res.Promoted)
+	if len(res.Nodes) != 0 {
+		t.Fatalf("promoted %+v; the seed already covers job0", res.Nodes)
 	}
-	if len(res.Dropped) != 1 || res.Dropped[0] != cjCandidateID("job0") {
-		t.Fatalf("dropped %v, want the redundant candidate", res.Dropped)
+	if len(res.Deleted) != 1 || res.Deleted[0] != cjCandidateID("job0") {
+		t.Fatalf("deleted %v, want the redundant candidate", res.Deleted)
 	}
-	// The seed still gets its job_perform edge — that half is not conditional
-	// on promotion.
 	if len(res.Edges) != 1 || res.Edges[0].From != seed.ID || res.Edges[0].To != cjPerformID("job0") {
 		t.Fatalf("edges %+v, want one job_perform seed -> perform method", res.Edges)
 	}
 }
 
-// TestPromoteInheritedJobPerform_Edges is the second half of the tier's edge
-// gain. A subscriber with no edge to the method it stands for is a leaf and the
-// trace stops one node short of the code that runs; a subscriber with no
-// `contains` edge from its class hangs off nothing at all, which is what a
-// directly-matched subscriber gets from the parser and a promoted one must be
-// given here.
-func TestPromoteInheritedJobPerform_Edges(t *testing.T) {
-	t.Parallel()
+// TestJobInherit_Edges is the second half of the tier's edge gain: a
+// subscriber with no edge to the method it stands for is a leaf, and a
+// subscriber with no `contains` edge from its class hangs off nothing.
+func TestJobInherit_Edges(t *testing.T) {
 	nodes, edges := cjChain(2)
 
-	res := PromoteInheritedJobPerform(nodes, edges)
+	res := jiRun(t, nodes, edges)
 
 	perform := map[string]string{}
 	contains := map[string]string{}

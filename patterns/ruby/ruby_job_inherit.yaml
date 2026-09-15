@@ -1,0 +1,99 @@
+# Tier FX FX.8.15 — replaces internal/linker/ruby_job_inherit.go's
+# PromoteInheritedJobPerform.
+#
+# patterns/ruby/active_job.yaml's `aj_perform_method` predicate only tests a
+# job class's DIRECT superclass name (`ApplicationJob`/`ActiveJob(::Base)?`),
+# so a project that introduces its own base class
+# (ReportJob < ProjectBaseJob < ApplicationJob) mints no subscriber for any
+# of its jobs — a missing target node, not a matching failure. A tree-sitter
+# predicate cannot walk an inheritance chain; `active_job.yaml`'s
+# `aj_perform_method_candidate` pattern instead nominates every `perform`
+# -defining class with ANY superclass, classified as inert bookkeeping
+# (matcher.go), and this framework decides: a candidate that reaches an
+# ActiveJob root over `inherits` edges within 4 hops is promoted to a real
+# `subscriber` node (replacing the candidate, which is bookkeeping-only and
+# must not survive); every other candidate is deleted outright.
+#
+# Hub-only (no `patterns:`/`facts:` block, the same shape as
+# patterns/ruby/pusher_consumer.yaml / rails_route_actions.yaml): the
+# "ruby_job_inherit" hub provider (internal/factpipe/hub_ruby_job_inherit.go)
+# does the node-position classification (candidate -> its own class,
+# candidate/seed -> its `perform` method) that needs no tree-sitter query,
+# only a scan of the graph-so-far; the ancestor closure itself is
+# rules/ruby/ruby_job_inherit.dl's job_hop/ancestor_dist join, no Go at all.
+#
+# No `package:` gate: the retired Go pass ran unconditionally for every ruby
+# service (ActiveJob's inheritance shape needs no gem marker to detect), and
+# internal/indexer/link_passes.go's `ruby_job_inherit` slot loads this
+# framework by name (pipeline.Registry.ByName), not through the
+# dependency-gated Active() path other FX.8 frameworks use — kept in its own
+# early slot, still ahead of `containment`, rather than the shared
+# `factpipe_frameworks` slot every other framework runs in (that slot runs
+# after `containment`, too late for a node ID a downstream edge might already
+# be hanging off of).
+language: ruby
+version: "1"
+
+hub:
+  - name: ruby_job_inherit
+
+emit:
+  - relation: job_promote_row
+    columns: [N, Svc, File, Line, JobClass, MinD]
+    replace:
+      old: { arg: N }
+      node: subscriber
+      id: { template: "{Svc}:{File}:subscriber:aj_perform_method:{Line}" }
+      label: perform
+      service: { arg: Svc }
+      file: { arg: File }
+      language: ruby
+      meta:
+        pattern: aj_perform_method
+        job_class: { arg: JobClass }
+        job_inherit_hops: { arg: MinD }
+
+  - relation: job_promote_contains
+    columns: [N, ClassID, Svc, File, Line]
+    edge:
+      from: { arg: ClassID }
+      to:   { template: "{Svc}:{File}:subscriber:aj_perform_method:{Line}" }
+      type: contains
+
+  - relation: job_promote_perform
+    columns: [N, Svc, File, Line, PerformID]
+    edge:
+      from: { template: "{Svc}:{File}:subscriber:aj_perform_method:{Line}" }
+      to:   { arg: PerformID }
+      type: job_perform
+    meta:
+      via: aj_perform_method
+    confidence:
+      - { else: inferred }
+
+  - relation: job_seed_perform_row
+    columns: [N, PerformID]
+    edge:
+      from: { arg: N }
+      to:   { arg: PerformID }
+      type: job_perform
+    meta:
+      via: aj_perform_method
+    confidence:
+      - { else: inferred }
+
+  - relation: job_drop
+    columns: [N]
+    delete:
+      old: { arg: N }
+
+  - relation: job_ledger_row
+    columns: [N, JobClass, File, Line]
+    edge: { from: { arg: N }, to: { arg: N }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        name: { arg: JobClass }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: job_base_unresolved

@@ -139,6 +139,45 @@ type mintSpec struct {
 	Meta     map[string]valueRef `yaml:"meta"`
 }
 
+// replaceSpec is a `replace:` block — the FX.8.15 counterpart of `mint:` for a
+// row that SUPERSEDES an existing node rather than gap-filling a missing one
+// (ruby_job_inherit's candidate->subscriber promotion: the promoted node's ID
+// embeds its new type, so it cannot keep the candidate's old ID). `old` names
+// the row column carrying the ID being superseded; everything else builds the
+// new node exactly like `mint:` (same frozen-type gate). The caller (stage 4's
+// consumer, e.g. internal/indexer/link_passes.go) is responsible for the
+// actual graph-level swap: EmitResult only reports which old ID maps to which
+// new node, the same "gap-fill only" discipline `mint:` already has — this
+// primitive never mutates anything itself.
+type replaceSpec struct {
+	Old      valueRef            `yaml:"old"`
+	Node     string              `yaml:"node"`
+	ID       valueRef            `yaml:"id"`
+	Label    valueRef            `yaml:"label"`
+	Service  valueRef            `yaml:"service"`
+	File     valueRef            `yaml:"file"`
+	Line     valueRef            `yaml:"line"`
+	Language valueRef            `yaml:"language"`
+	Meta     map[string]valueRef `yaml:"meta"`
+}
+
+func (r *replaceSpec) asMint() mintSpec {
+	return mintSpec{
+		Node: r.Node, ID: r.ID, Label: r.Label, Service: r.Service,
+		File: r.File, Line: r.Line, Language: r.Language, Meta: r.Meta,
+	}
+}
+
+// deleteSpec is a `delete:` block — the FX.8.15 counterpart that drops an
+// existing node ID outright (ruby_job_inherit's un-promoted candidates: a
+// class that never reaches an ActiveJob root is bookkeeping, not a node).
+// `old` names the row column carrying the ID to delete. Like `replace:`, this
+// primitive only reports the ID; the caller performs the actual delete + edge
+// pruning.
+type deleteSpec struct {
+	Old valueRef `yaml:"old"`
+}
+
 type confRule struct {
 	When  string `yaml:"when"`
 	Value string `yaml:"value"`
@@ -171,6 +210,8 @@ type EmitSpec struct {
 	Rule       string              `yaml:"rule"` // SA.1 provenance Rule; defaults to Relation
 	Edge       edgeSpec            `yaml:"edge"`
 	Mint       *mintSpec           `yaml:"mint"`
+	Replace    *replaceSpec        `yaml:"replace"`
+	Delete     *deleteSpec         `yaml:"delete"`
 	Meta       map[string]valueRef `yaml:"meta"`
 	Confidence []confRule          `yaml:"confidence"`
 	Abstain    struct {
@@ -205,6 +246,12 @@ type EmitResult struct {
 	Nodes      []graph.Node
 	Unresolved []graph.UnresolvedRef
 	Ledger     []graph.UnresolvedRef
+	// Replaced maps an old node ID (a `replace:` block's `old`) to the new
+	// node built for it — that new node is also in Nodes, the same "gap-fill"
+	// shape `mint:` already has. The caller performs the actual swap.
+	Replaced map[string]string
+	// Deleted lists node IDs a `delete:` block named for removal outright.
+	Deleted []string
 }
 
 // CompileEmits parses a YAML document with a top-level `emit:` list.
@@ -254,8 +301,31 @@ func compileEmit(s EmitSpec) (CompiledEmit, error) {
 			return ce, fmt.Errorf("mint needs an id")
 		}
 	}
-	if !hasEdge && s.Mint == nil {
-		return ce, fmt.Errorf("emit needs an edge, a mint, or both")
+	if s.Replace != nil {
+		if !s.Replace.Old.set() {
+			return ce, fmt.Errorf("replace needs an old id")
+		}
+		if !frozenNodeTypes[s.Replace.Node] {
+			return ce, fmt.Errorf("replace node type %q is not in the frozen vocabulary", s.Replace.Node)
+		}
+		if !s.Replace.ID.set() {
+			return ce, fmt.Errorf("replace needs an id")
+		}
+	}
+	if s.Delete != nil && !s.Delete.Old.set() {
+		return ce, fmt.Errorf("delete needs an old id")
+	}
+	nVerbs := 0
+	for _, set := range []bool{s.Mint != nil, s.Replace != nil, s.Delete != nil} {
+		if set {
+			nVerbs++
+		}
+	}
+	if nVerbs > 1 {
+		return ce, fmt.Errorf("emit allows at most one of mint/replace/delete")
+	}
+	if !hasEdge && s.Mint == nil && s.Replace == nil && s.Delete == nil {
+		return ce, fmt.Errorf("emit needs an edge, a mint, a replace, a delete, or a combination")
 	}
 	if s.Unresolved != nil && !s.Unresolved.Ref.Kind.set() {
 		return ce, fmt.Errorf("unresolved.ref needs a kind")
@@ -327,6 +397,23 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 				res.Nodes = append(res.Nodes, n)
 			}
 		}
+		if e.spec.Replace != nil {
+			if n, oldID, ok := e.buildReplace(row); ok {
+				if !seenNode[n.ID] {
+					seenNode[n.ID] = true
+					res.Nodes = append(res.Nodes, n)
+				}
+				if res.Replaced == nil {
+					res.Replaced = map[string]string{}
+				}
+				res.Replaced[oldID] = n.ID
+			}
+		}
+		if e.spec.Delete != nil {
+			if oldID := e.spec.Delete.Old.resolve(row); oldID != "" {
+				res.Deleted = append(res.Deleted, oldID)
+			}
+		}
 		if !hasEdge {
 			continue
 		}
@@ -393,6 +480,10 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 	sort.Slice(res.Nodes, func(i, j int) bool { return res.Nodes[i].ID < res.Nodes[j].ID })
 	sortUnresolved(res.Unresolved)
 	sortUnresolved(res.Ledger)
+	if len(res.Deleted) > 0 {
+		sort.Strings(res.Deleted)
+		res.Deleted = dedupStrings(res.Deleted)
+	}
 	return res
 }
 
@@ -400,7 +491,26 @@ func (e *CompiledEmit) Apply(rows []datalog.Tuple, prov *datalog.Provenance) Emi
 // ok is false when the id resolves empty (the row's join left the mint's key
 // column unset — nothing to construct).
 func (e *CompiledEmit) buildMint(row map[string]string) (n graph.Node, ok bool) {
-	m := e.spec.Mint
+	return buildNode(e.spec.Mint, row)
+}
+
+// buildReplace resolves one row into a graph.Node per the spec's `replace:`
+// block, plus the old ID it supersedes. ok is false when either the new id or
+// the old id resolves empty.
+func (e *CompiledEmit) buildReplace(row map[string]string) (n graph.Node, oldID string, ok bool) {
+	oldID = e.spec.Replace.Old.resolve(row)
+	if oldID == "" {
+		return graph.Node{}, "", false
+	}
+	m := e.spec.Replace.asMint()
+	n, ok = buildNode(&m, row)
+	if !ok {
+		return graph.Node{}, "", false
+	}
+	return n, oldID, true
+}
+
+func buildNode(m *mintSpec, row map[string]string) (n graph.Node, ok bool) {
 	id := m.ID.resolve(row)
 	if id == "" {
 		return graph.Node{}, false
