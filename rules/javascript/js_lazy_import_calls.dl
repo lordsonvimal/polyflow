@@ -1,0 +1,73 @@
+% Tier FX FX.8 (2026-09-15) — js_lazy_import_calls. Replaces
+% internal/linker/js_lazy_import_calls.go's LinkJSLazyImportCalls.
+%
+% Base facts (patterns/javascript/js_lazy_import_calls.yaml):
+%   lazy_import_call(File, Line, Spec, ExportName)   one per lazy-loader call
+%   lazy_import_target(File, Line, Spec, Target, Rank)   resolve_path output
+% Bridge (FX.1): node, node_label, node_line.
+
+% --- who exports ExportName -------------------------------------------------
+% Only a top-level function or variable declaration can be reached by a
+% runtime `module[exportName]` lookup — matches the retired Go's
+% fileExportIndex, which only ever indexed those two node types.
+export_decl(File, Label, Id) :- node(Id, "function", File, _), node_label(Id, Label).
+export_decl(File, Label, Id) :- node(Id, "variable", File, _), node_label(Id, Label).
+
+lic_target_decl(File, Line, Spec, ExportName, To) :-
+    lazy_import_target(File, Line, Spec, Target, _),
+    lazy_import_call(File, Line, Spec, ExportName),
+    export_decl(Target, ExportName, To).
+
+% --- attribution: the innermost declaration whose span covers the call site,
+% falling back to the file node for a module-level registration -------------
+lic_cand(File, Line, Fn, L) :-
+    lazy_import_call(File, Line, _, _),
+    node(Fn, "function", File, _), node_line(Fn, L, E), le(L, Line), le(Line, E).
+lic_cand(File, Line, Fn, L) :-
+    lazy_import_call(File, Line, _, _),
+    node(Fn, "method", File, _), node_line(Fn, L, E), le(L, Line), le(Line, E).
+lic_cand(File, Line, Fn, L) :-
+    lazy_import_call(File, Line, _, _),
+    node(Fn, "variable", File, _), node_line(Fn, L, E), le(L, Line), le(Line, E).
+lic_cand(File, Line, Fn, L) :-
+    lazy_import_call(File, Line, _, _),
+    node(Fn, "class", File, _), node_line(Fn, L, E), le(L, Line), le(Line, E).
+lic_cand(File, Line, Fn, L) :-
+    lazy_import_call(File, Line, _, _),
+    node(Fn, "interface", File, _), node_line(Fn, L, E), le(L, Line), le(Line, E).
+
+lic_cand_start(File, Line, MaxL) :- lic_cand(File, Line, _, L), max(MaxL, L).
+lic_enclosing(File, Line, Fn)    :- lic_cand_start(File, Line, L), lic_cand(File, Line, Fn, L).
+
+lic_has_enclosing(File, Line) :- lic_enclosing(File, Line, _).
+
+lic_from_file(File, Line, FileID) :-
+    lazy_import_call(File, Line, _, _),
+    not lic_has_enclosing(File, Line),
+    node(FileID, "file", File, _).
+
+lic_from(File, Line, Fn) :- lic_enclosing(File, Line, Fn).
+lic_from(File, Line, Fn) :- lic_from_file(File, Line, Fn).
+
+% --- the edge ----------------------------------------------------------
+lic_edge_rel(From, To, ExportName) :-
+    lic_target_decl(File, Line, _, ExportName, To),
+    lic_from(File, Line, From),
+    ne(From, To).
+
+% --- the blind-spot ledger ----------------------------------------------
+% Two misses fold into one relation: the specifier never resolved to a real
+% file, or it did but that file declares no export by ExportName — the
+% retired Go ledgered both identically as lazy_import_export_unresolved.
+lic_spec_resolved(File, Line, Spec) :- lazy_import_target(File, Line, Spec, _, _).
+
+lic_unresolved_rel(File, Line, ExportName) :-
+    lazy_import_call(File, Line, Spec, ExportName),
+    not lic_spec_resolved(File, Line, Spec).
+
+lic_has_target_decl(File, Line, Spec) :- lic_target_decl(File, Line, Spec, _, _).
+
+lic_unresolved_rel(File, Line, ExportName) :-
+    lazy_import_call(File, Line, Spec, ExportName),
+    lic_spec_resolved(File, Line, Spec),
+    not lic_has_target_decl(File, Line, Spec).

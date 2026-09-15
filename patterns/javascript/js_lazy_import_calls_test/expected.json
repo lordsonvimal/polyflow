@@ -1,0 +1,4 @@
+{
+  "patterns": ["lazy_action_arrow_then_name", "lazy_action_name_then_arrow"],
+  "node_types": []
+}

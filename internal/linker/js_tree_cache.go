@@ -14,9 +14,8 @@ import (
 // workspace: resolveImportCalls (js_link), resolveJSTypeRelations +
 // findDefaultExportClassName (js_type_relations), resolveJSReceiverTypeCalls,
 // scanJSWrapperCallSites + discoverJSTransitiveWrappers (js_api_wrapper_calls),
-// the js_lazy_import_calls loop, parseJSHostFile (js_http_hosts) and
-// parseJSImportSources (js_import_edges) — 8+ full grammar parses of the same
-// tree on a frontend-heavy repo.
+// parseJSHostFile (js_http_hosts) and parseJSImportSources (js_import_edges) —
+// several full grammar parses of the same tree on a frontend-heavy repo.
 //
 // EnableJSTreeCache turns on process-wide memoization for a link phase;
 // jsParse then parses each file once. Unlike rubyParse there is nothing to

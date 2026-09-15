@@ -1574,19 +1574,12 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.writeEdges(barrelEdges)
 		}},
-		// A lazy-loaded, string-keyed dynamic import (`fn(() => import(path),
-		// 'exportName')`) is a runtime property lookup on the resolved module
-		// object -- no static call site names the export directly, so it
-		// reads as permanently zero-caller. Runs after ensure_scanned_files
-		// so every file already has a NodeTypeFile node to fall back to when
-		// the call site has no enclosing function (module-level command
-		// registration, gitnexus's confirmed live shape).
-		{"js_lazy_import_calls", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			lazyEdges, lazyUnresolved := linker.LinkJSLazyImportCalls(st.allNodes, svcFiles)
-			st.allUnresolved = append(st.allUnresolved, lazyUnresolved...)
-			return st.writeEdges(lazyEdges)
-		}},
+		// js_lazy_import_calls (a lazy-loaded, string-keyed dynamic import —
+		// `fn(() => import(path), 'exportName')`) migrated to Tier FX
+		// (patterns/javascript/js_lazy_import_calls.yaml +
+		// rules/javascript/js_lazy_import_calls.dl), run by the
+		// "factpipe_frameworks" pass below, itself after ensure_scanned_files
+		// so every file already has a NodeTypeFile node to fall back to.
 		// JS/TS + Ruby file-level import edges (file→file between NodeTypeFile nodes).
 		// Runs after LinkContainment so the file nodes are present in allNodes.
 		{"js_import_edges", scopeSameServiceOnly, func() error {

@@ -35,6 +35,7 @@ var migratedFrameworks = []string{
 	"rails_devise",
 	"file_routes",
 	"go_http_hosts",
+	"js_lazy_import_calls",
 }
 
 // "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike

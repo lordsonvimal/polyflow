@@ -31,6 +31,56 @@ func sprocketsResolve() CompiledResolve {
 	}}
 }
 
+func jsImportResolve() CompiledResolve {
+	return CompiledResolve{spec: ResolveSpec{
+		Relation:    "js_target",
+		From:        "js_spec",
+		OwnDirFirst: true,
+		Extensions:  []string{".js", ".ts", ".tsx"},
+		StripExt:    []string{".js"},
+	}}
+}
+
+// TestResolveCandidatesStripExt covers js_lazy_import_calls' confirmed live
+// shape: a specifier naming the compiled ".js" output of a ".ts" source
+// (Node16/TS module resolution). The verbatim ".js" candidate must still
+// come first — a real same-name .js file is never shadowed by the swap.
+func TestResolveCandidatesStripExt(t *testing.T) {
+	got := jsImportResolve().candidates("src/index.ts", "./serve.js")
+	want := []string{
+		"src/serve.js",
+		"src/serve.ts",
+		"src/serve.tsx",
+		"src/serve.js.js",
+		"src/serve.js.ts",
+		"src/serve.js.tsx",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("candidates:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+// TestResolveApplyStripExt proves the swap actually resolves to a real
+// candidate when the literal .js file doesn't exist but the .ts one does.
+func TestResolveApplyStripExt(t *testing.T) {
+	fs := NewFactSet()
+	fs.Add(Fact{Pred: "js_spec", Args: []Atom{
+		Str("src/index.ts"), Int(5), Str("./serve.js"),
+	}})
+	files := []string{"src/index.ts", "src/serve.ts"}
+	ApplyResolves([]CompiledResolve{jsImportResolve()}, files, fs)
+
+	var got []Fact
+	for _, f := range fs.All() {
+		if f.Pred == "js_target" {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 1 || got[0].Args[3].Str != "src/serve.ts" {
+		t.Fatalf("js_target = %+v, want one row resolving to src/serve.ts", got)
+	}
+}
+
 func TestResolveCandidatesSassPartial(t *testing.T) {
 	got := sassResolve().candidates("app/assets/stylesheets/application.scss", "colors")
 	want := []string{

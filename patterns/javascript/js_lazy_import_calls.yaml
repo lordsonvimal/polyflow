@@ -1,0 +1,120 @@
+# Tier FX FX.8 (2026-09-15) — js_lazy_import_calls. Replaces
+# internal/linker/js_lazy_import_calls.go's LinkJSLazyImportCalls.
+#
+# Reclassified off VG.7's "needs-language-layer" bucket during the 2026-09-15
+# VG.7 re-survey (docs/js-value-graph-pilot-plan.md): the retired pass never
+# did dataflow backtracking — spec and export name are both read directly off
+# the call site's own literal arguments, no identifier resolution at all. It
+# is an ordinary single-pattern-match (this file) + resolve_path (steps
+# 1-2) + cross-file label index join (the `.dl` below), the same shape as
+# every other FX.8 `resolve_path` consumer.
+#
+#	someCall(() => import('./serve.js'), 'serveCommand')
+#
+# Confirmed live on gitnexus's src/cli/index.ts: every CLI subcommand is wired
+# via createLazyAction(() => import(path), exportName), which awaits the
+# dynamic import and indexes the resulting module object by the string
+# (module[exportName]) — a runtime property lookup no static call-graph pass
+# can see on its own. The outer call's own name is never inspected — this is a
+# generic lazy-route/plugin-loader shape, not gitnexus-specific vocabulary.
+#
+# Two pattern blocks cover the loader-arg / export-name-arg appearing in
+# either order. Scope cut from the retired Go (documented, not silently
+# dropped): only an arrow function whose body is the bare expression
+# `import('spec')` matches. The retired Go also accepted a plain
+# `function_expression` loader and a `{ return import('./x'); }`
+# single-statement-block body — neither has a confirmed live site (gitnexus's
+# own shape is the arrow-with-expression-body form), and the
+# function_expression variant does not even parse as a query against this
+# grammar (`function_expression` has no `body` field tree-sitter-typescript
+# recognises in expression position), so it is not ported. Such a call now
+# reads as ordinary unresolved dead code instead of a
+# lazy_import_export_unresolved ledger row.
+#
+# The specifier commonly names the compiled ".js" output of a ".ts" source
+# (Node16/TS module resolution) — resolve_path's `strip_ext` knob (added for
+# this consumer) tries the stem with the ".js" dropped against every
+# configured extension, verbatim ".js" still tried first so a real same-name
+# .js file is never shadowed by the .ts swap.
+#
+# `export` can only name a top-level function or variable declaration (a
+# runtime `module[exportName]` lookup cannot reach a class method or
+# block-scoped local) — the `.dl`'s export_decl relation is deliberately
+# narrow to those two node types, matching the retired Go's fileExportIndex.
+#
+# Attribution (the call site's own caller, for the `calls` edge's From) uses
+# the innermost function/method whose node_line span contains the call site,
+# falling back to the file node when no such span exists (a module-level
+# registration) — the same containment idiom gin_middleware.dl's mw_fn_cand
+# already uses, in place of the retired Go's nearestDecl "closest preceding
+# top-level declaration by line" heuristic (span containment is strictly more
+# precise and needs no new primitive).
+language: javascript
+version: "1"
+
+patterns:
+  - name: lazy_action_arrow_then_name
+    query: |
+      (call_expression
+        arguments: (arguments
+          (arrow_function
+            body: (call_expression
+              function: (import)
+              arguments: (arguments (string) @spec)))
+          [(string) (template_string)] @export_name)) @call
+    facts:
+      - pred: lazy_import_call
+        args:
+          file: { extract: file }
+          line: { capture: call, extract: line }
+          spec: { capture: spec, extract: string_value }
+          export: { capture: export_name, extract: string_value }
+
+  - name: lazy_action_name_then_arrow
+    query: |
+      (call_expression
+        arguments: (arguments
+          [(string) (template_string)] @export_name
+          (arrow_function
+            body: (call_expression
+              function: (import)
+              arguments: (arguments (string) @spec))))) @call
+    facts:
+      - pred: lazy_import_call
+        args:
+          file: { extract: file }
+          line: { capture: call, extract: line }
+          spec: { capture: spec, extract: string_value }
+          export: { capture: export_name, extract: string_value }
+
+resolve:
+  - relation: lazy_import_target
+    from: lazy_import_call
+    own_dir_first: true
+    extensions: [".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs"]
+    index_files: ["index"]
+    strip_ext: [".js"]
+
+emit:
+  - relation: lic_edge_rel
+    columns: [From, To, ExportName]
+    edge:
+      from: { arg: From }
+      to: { arg: To }
+      type: calls
+      label: { arg: ExportName }
+    meta: { via: lazy_import_export }
+    confidence:
+      - { else: inferred }
+    dedup: [from, to, label]
+
+  - relation: lic_unresolved_rel
+    columns: [File, Line, ExportName]
+    edge: { from: { arg: File }, to: { arg: File }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: ExportName }
+        kind: lazy_import_export_unresolved

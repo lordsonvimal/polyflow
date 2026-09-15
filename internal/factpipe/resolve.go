@@ -59,6 +59,16 @@ type ResolveSpec struct {
 	OwnDirFirst   bool     `yaml:"own_dir_first"`
 	Dir           bool     `yaml:"dir"`
 	Recursive     bool     `yaml:"recursive"`
+	// StripExt lists specifier extensions tried BOTH verbatim and with the
+	// extension dropped and every configured Extensions candidate tried
+	// against the bare stem — the Node16/TS module-resolution convention
+	// where a relative specifier names the compiled ".js" output but the
+	// indexed source is ".ts" (js_lazy_import_calls' confirmed live shape,
+	// mirroring internal/linker/import_edges.go's resolveJSImportPath, kept
+	// hand-written Go precisely for this rule). Verbatim always wins first
+	// (added before the stripped candidates), so a real same-extension file
+	// is never shadowed by the swap.
+	StripExt []string `yaml:"strip_ext"`
 }
 
 // CompiledResolve is a validated ResolveSpec.
@@ -93,6 +103,14 @@ func (r CompiledResolve) exts() []string {
 		return []string{""}
 	}
 	return r.spec.Extensions
+}
+
+func (r CompiledResolve) stripExtSet() map[string]bool {
+	m := make(map[string]bool, len(r.spec.StripExt))
+	for _, e := range r.spec.StripExt {
+		m[e] = true
+	}
+	return m
 }
 
 // anchors is the ordered list of base directories to resolve a spec against.
@@ -137,8 +155,15 @@ func (r CompiledResolve) candidates(fromFile, spec string) []string {
 		dir = strings.TrimSuffix(dir, "/")
 
 		// the spec already carries an extension (`jquery.min.js`, `_mixins.scss`)
-		if path.Ext(base) != "" {
+		specExt := path.Ext(base)
+		if specExt != "" {
 			add(stem)
+		}
+		if specExt != "" && r.stripExtSet()[specExt] {
+			stemNoExt := stem[:len(stem)-len(specExt)]
+			for _, ext := range r.exts() {
+				add(stemNoExt + ext)
+			}
 		}
 		for _, ext := range r.exts() {
 			add(stem + ext)
