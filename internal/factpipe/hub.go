@@ -43,7 +43,13 @@ import (
 // (internal/configsrc.Load's own k8s/terraform subdirectory search, not a
 // single file a node already points at). Empty unless the caller sets
 // Snapshot.ServicePath; every hub before FX.8.30 ignores it.
-type HubProvider func(nodes []graph.Node, files []string, svcPath string) []Fact
+//
+// links (FX.8.31, added for "hints") is graph.Snapshot.Links verbatim — a
+// fleet-wide config a hub cannot derive from nodes/files/svcPath at all,
+// since a link rule names two services and lives in the workspace root
+// config. Nil unless the caller sets Snapshot.Links; every hub before
+// FX.8.31 ignores it.
+type HubProvider func(nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint) []Fact
 
 var hubRegistry = map[string]HubProvider{}
 
@@ -88,13 +94,13 @@ func CompileHubSpecs(specs []HubSpec) ([]CompiledHub, error) {
 // framework declares no hub block, so every framework that doesn't need this
 // mechanism pays nothing for it — the same inert-by-default shape as
 // ApplyConfig / ApplyTable.
-func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, dst FactSet) {
+func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, dst FactSet) {
 	for _, h := range hs {
 		fn := hubRegistry[h.Name()]
 		if fn == nil {
 			continue
 		}
-		for _, f := range fn(nodes, files, svcPath) {
+		for _, f := range fn(nodes, files, svcPath, links) {
 			dst.Add(f)
 		}
 	}

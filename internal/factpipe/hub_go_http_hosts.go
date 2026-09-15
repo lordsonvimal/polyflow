@@ -53,7 +53,7 @@ const (
 	ghClientRef       = "go_client_ref"        // (NodeID, FieldName)
 )
 
-func goHTTPHostsHub(nodes []graph.Node, files []string, _ string) []Fact {
+func goHTTPHostsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
 	svcNeeds := false
 	for i := range nodes {
 		if ghDynamicHTTPNode(&nodes[i]) {

@@ -104,7 +104,7 @@ func indexWSConnect(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Work
 	}
 	require.NoError(t, bwRoute.Flush(ctx))
 
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	hintedNodes := applyHintsViaPipeline(t, cfg.Links, allNodes)
 
 	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)

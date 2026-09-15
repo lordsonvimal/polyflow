@@ -112,7 +112,7 @@ func indexPythonGo(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Works
 	require.NoError(t, bwRoute.Flush(ctx))
 
 	// Apply workspace link hints (base_url → target_service + path strip).
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	hintedNodes := applyHintsViaPipeline(t, cfg.Links, allNodes)
 
 	// Contract engine: cross-service http_call edges.
 	contractRules, err := contract.Load(contractdata.FS, "")

@@ -1,0 +1,18 @@
+% Fleet link-hint attribution — Tier FX FX.8.31. Replaces
+% internal/linker/hints.go's ApplyHints (Tier JH).
+%
+% Base fact (from the "hints" hub provider, internal/factpipe/hub_hints.go —
+% workspace.WorkspaceConfig.Links is fleet-wide config no `.dl` join could
+% reach on its own; real rule-precedence logic, not a convention + join):
+%
+%   hints_patch(ID, TargetService, Path, KeyDynamic)
+%       a client node's resolved target_service/path/key_dynamic. Any of
+%       TargetService/Path/KeyDynamic may be "" — the hub already decided
+%       which of the three won for this node, and patch:'s Meta overlay
+%       skips whichever column resolves empty.
+%
+% Pure pass-through — the hub already resolved the winning rule (or decided
+% none applied) before asserting a fact.
+
+hints_patch_rel(ID, TargetService, Path, KeyDynamic) :-
+    hints_patch(ID, TargetService, Path, KeyDynamic).

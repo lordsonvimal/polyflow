@@ -20,7 +20,6 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/contract"
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/graph"
-	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/parser"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
@@ -95,7 +94,7 @@ func indexPythonCelery(t *testing.T) *graph.SQLiteStore {
 	}
 	require.NoError(t, bw.Flush(ctx))
 
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	hintedNodes := applyHintsViaPipeline(t, cfg.Links, allNodes)
 
 	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)

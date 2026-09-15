@@ -35,6 +35,27 @@ type Snapshot struct {
 	// probe. May be "", in which case config_value's primitive relations are
 	// empty — a framework with no `config:` block never reads it.
 	ServicePath string
+
+	// Links (FX.8.31, added for the "hints" hub) is the workspace's
+	// fleet-wide cross-service link config (workspace.WorkspaceConfig.Links,
+	// converted verbatim field-for-field) — the one input, like ServicePath,
+	// a HubProvider cannot derive from any node/file/service-directory it
+	// already sees, because a link rule names TWO services (From/To) and
+	// lives in the workspace root config, not under either service's own
+	// checkout. graph cannot import workspace (workspace already imports
+	// graph), hence the local LinkHint mirror type rather than
+	// []workspace.Link directly. May be nil, in which case a hub that reads
+	// it simply sees no rules.
+	Links []LinkHint
+}
+
+// LinkHint mirrors workspace.Link's matching fields (From/To/BaseURL/Hint) —
+// see Snapshot.Links.
+type LinkHint struct {
+	From    string
+	To      string
+	BaseURL string
+	Hint    string
 }
 
 // SnapshotImport is one `import(File, Package)` base fact: a source file and a

@@ -52,7 +52,7 @@ const (
 	jobDropImmediatePred    = "job_drop_immediate"
 )
 
-func rubyJobInheritHub(nodes []graph.Node, files []string, _ string) []Fact {
+func rubyJobInheritHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
 	ix := newJobInheritHubIndex(nodes)
 	if len(ix.candidates) == 0 && len(ix.seeds) == 0 {
 		return nil

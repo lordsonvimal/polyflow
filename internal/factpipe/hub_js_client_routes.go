@@ -54,7 +54,7 @@ type jcrRender struct {
 	inRouteCase  bool
 }
 
-func jsClientRoutesSitesHub(nodes []graph.Node, files []string, _ string) []Fact {
+func jsClientRoutesSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
 	svcOfFile := make(map[string]string)
 	comp := make(map[string]string)
 	compRank := make(map[string]int)

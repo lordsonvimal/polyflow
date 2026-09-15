@@ -105,7 +105,7 @@ func fixtureGraph(t *testing.T) ([]graph.Node, []graph.Edge) {
 
 	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)
-	hintedNodes := linker.ApplyHints(nil, allNodes, allEdges)
+	hintedNodes := applyHintsViaPipeline(t, nil, allNodes)
 	eng := &contract.Engine{}
 	contractResult := eng.Link(hintedNodes, contractRules, nil)
 	allNodes = append(allNodes, contractResult.Nodes...)

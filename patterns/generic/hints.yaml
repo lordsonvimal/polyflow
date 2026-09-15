@@ -1,0 +1,36 @@
+# Tier FX FX.8.31 — replaces internal/linker/hints.go's ApplyHints (Tier
+# JH / J.2 / J.2a / J.2b / J.2c): attributes an http_client node to the
+# fleet service its URL/base_url/env-var hint names, stripping a matched
+# base_url prefix off its path, and marks a literal-host client with no
+# claiming hint as dynamic so the contract engine ledgers it instead of
+# fan-matching it across the fleet.
+#
+# NO `patterns:`/`facts:` block — cross-language like config_baseurl, and
+# for the same reason: it patches whichever HTTPClient node an earlier
+# Go/Ruby/JS host-resolution pass already stamped. Called via a dedicated
+# `pipeline.Run` (internal/indexer/link_passes.go's apply_hints_and_enrich
+# pass), never through the shared `factpipe_frameworks` slot — this pass's
+# output feeds st.hintedNodes/st.enrichedNodes, which EnrichRouteGroups and
+# the contract engine consume before persistence, not a direct store write.
+#
+# One relation, not two: unlike config_baseurl/js_http_grade's "don't
+# clobber an existing value" split, ApplyHints' own rule precedence (a
+# base_url/hint match beats the env-var fallback, which beats the
+# literal-host gate) is already resolved sequentially in Go inside the hub
+# (see hub_hints.go) — each node gets exactly one final decision, so a
+# single patch relation with three optional columns covers every case.
+language: generic
+version: "1"
+
+hub:
+  - name: hints
+
+emit:
+  - relation: hints_patch_rel
+    columns: [ID, TargetService, Path, KeyDynamic]
+    patch:
+      id: { arg: ID }
+      meta:
+        target_service: { arg: TargetService }
+        path: { arg: Path }
+        key_dynamic: { arg: KeyDynamic }

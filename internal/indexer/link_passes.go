@@ -2060,7 +2060,44 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// that normalizers cannot perform; it mutates only the working copy
 		// (hintedNodes/enrichedNodes), not the persisted allNodes.
 		{"apply_hints_and_enrich", scopeCrossService, func() error {
-			st.hintedNodes = linker.ApplyHints(st.cfg.Links, st.allNodes, st.allEdges)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("hints: load registry: %w", err)
+			}
+			fw := reg.ByName("hints")
+			if fw == nil {
+				return fmt.Errorf("hints: framework not embedded")
+			}
+			links := make([]graph.LinkHint, len(st.cfg.Links))
+			for i, l := range st.cfg.Links {
+				links[i] = graph.LinkHint{From: l.From, To: l.To, BaseURL: l.BaseURL, Hint: l.Hint}
+			}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.allNodes, Links: links})
+			if err != nil {
+				return fmt.Errorf("hints: %w", err)
+			}
+			st.hintedNodes = make([]graph.Node, len(st.allNodes))
+			copy(st.hintedNodes, st.allNodes)
+			byID := make(map[string]int, len(st.hintedNodes))
+			for i := range st.hintedNodes {
+				byID[st.hintedNodes[i].ID] = i
+			}
+			for _, p := range res.Patches {
+				idx, ok := byID[p.ID]
+				if !ok {
+					continue
+				}
+				n := st.hintedNodes[idx]
+				m := make(map[string]string, len(n.Meta)+len(p.Meta))
+				for k, v := range n.Meta {
+					m[k] = v
+				}
+				for k, v := range p.Meta {
+					m[k] = v
+				}
+				n.Meta = m
+				st.hintedNodes[idx] = n
+			}
 			st.enrichedNodes = contract.EnrichRouteGroups(st.hintedNodes)
 			// The composition above is computed for matching, on a working copy. Agents
 			// query the *stored* graph, so the composed route has to reach it too —

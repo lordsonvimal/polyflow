@@ -102,7 +102,7 @@ func indexFixture(t *testing.T) (store *graph.SQLiteStore, cfg *workspace.Worksp
 
 	contractRules, err := contract.Load(contractdata.FS, "")
 	require.NoError(t, err)
-	hintedNodes := linker.ApplyHints(cfg.Links, allNodes, allEdges)
+	hintedNodes := applyHintsViaPipeline(t, cfg.Links, allNodes)
 	eng := &contract.Engine{}
 	contractResult := eng.Link(hintedNodes, contractRules, cfg.Links)
 

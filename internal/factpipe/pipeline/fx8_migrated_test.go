@@ -44,6 +44,7 @@ var migratedFrameworks = []string{
 	"ruby_job_inherit",
 	"rails_route_actions",
 	"js_http_grade",
+	"hints",
 }
 
 // "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike

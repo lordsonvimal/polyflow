@@ -34,7 +34,7 @@ const railsHelperRoutePred = "rails_helper_route"
 
 type railsHelperRoute struct{ method, path string }
 
-func railsHelperRoutesHub(nodes []graph.Node, files []string, _ string) []Fact {
+func railsHelperRoutesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
 	type key struct{ svc, helper string }
 	seen := map[string]bool{}
 	grouped := map[key][]railsHelperRoute{}

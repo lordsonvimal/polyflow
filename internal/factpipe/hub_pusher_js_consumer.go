@@ -63,7 +63,7 @@ const (
 	pusherJSSubscribeEventPred = "pusher_js_subscribe_event"
 )
 
-func pusherJSSubscribeSitesHub(nodes []graph.Node, files []string, _ string) []Fact {
+func pusherJSSubscribeSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
 	hubFiles := map[string]bool{}
 	for i := range nodes {
 		switch nodes[i].Meta["pattern"] {

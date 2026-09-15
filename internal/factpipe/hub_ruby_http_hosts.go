@@ -50,7 +50,7 @@ const (
 	rhHostPathPred = "ruby_host_path" // (NodeID, Path)
 )
 
-func rubyHTTPHostsHub(nodes []graph.Node, files []string, _ string) []Fact {
+func rubyHTTPHostsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
 	needsWork := false
 	for i := range nodes {
 		if rhDynamicHTTPNode(&nodes[i]) {
