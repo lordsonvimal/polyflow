@@ -1,0 +1,67 @@
+# Tier FX (2026-09-15) — replaces internal/linker/stylesheet_imports.go's
+# LinkStylesheetImports (Tier K.5): file->file `imports` edges for every
+# Sass `@import`/`@use`/`@forward` that resolves to another indexed
+# stylesheet.
+#
+# NO `facts:` block — internal/css.Scan is a plain byte scanner, not a
+# tree-sitter grammar, and the load-root/probe resolution (Sass's own
+# file-lookup precedence order across a whole service's stylesheet set) is
+# a service-wide index a `.dl` join can't build. Everything lives in the
+# `stylesheet_imports_sites` hub provider
+# (internal/factpipe/hub_stylesheet_imports.go); rules/css/
+# stylesheet_imports.dl is pure pass-through.
+#
+# `mint:` for the missing NodeTypeFile endpoints — reuses
+# `frozenNodeTypes["file"]`, no new vocabulary. `stylesheet_contains_rel`
+# is the file's `contains` edge from its service node, minted alongside it
+# when a service node exists (the same two-step
+# internal/linker/file_nodes.go's `fileNodeIndex.ensure` always did).
+#
+# Ambiguous-vs-unambiguous confidence is decided in Go (the hub emits a
+# `Conf` column) and routed here via the same string-equality `when:`
+# idiom rails_filters.yaml already established, not a new mechanism.
+language: css
+version: "1"
+
+hub:
+  - name: stylesheet_imports_sites
+
+emit:
+  - relation: stylesheet_mint_rel
+    columns: [ID, Label, Svc, File, Language, Basename]
+    mint:
+      node: file
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Svc }
+      file: { arg: File }
+      language: { arg: Language }
+      meta:
+        basename: { arg: Basename }
+
+  - relation: stylesheet_contains_rel
+    columns: [From, To]
+    edge: { from: { arg: From }, to: { arg: To }, type: contains, label: contains }
+
+  - relation: stylesheet_import_rel
+    columns: [From, To, Label, Conf, Rule, Spec]
+    edge: { from: { arg: From }, to: { arg: To }, type: imports, label: { arg: Label } }
+    meta:
+      rule: { arg: Rule }
+      specifier: { arg: Spec }
+    confidence:
+      - { when: 'Conf == "partial"', value: partial }
+      - { else: static }
+    dedup: [from, to]
+
+  - relation: stylesheet_unresolved_rel
+    columns: [Svc, File, Line, Spec]
+    edge: { from: { arg: Svc }, to: { arg: Svc }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Spec }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: stylesheet_import

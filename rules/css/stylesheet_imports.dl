@@ -1,0 +1,29 @@
+% Tier FX (2026-09-15) — stylesheet_imports. Replaces
+% internal/linker/stylesheet_imports.go's LinkStylesheetImports.
+%
+% Base facts (from the stylesheet_imports_sites hub provider,
+% internal/factpipe/hub_stylesheet_imports.go — NOT a tree-sitter facts:
+% block; see patterns/css/stylesheet_imports.yaml's package doc):
+%
+%   stylesheet_mint(ID, Label, Svc, File, Language, Basename)
+%       a missing NodeTypeFile endpoint containment never reached.
+%   stylesheet_contains(From, To)
+%       the minted file's contains edge from its service node.
+%   stylesheet_import(From, To, Label, Conf, Rule, Spec)
+%       one resolved @import/@use/@forward edge, already normalised.
+%   stylesheet_unresolved(Svc, File, Line, Spec)
+%       an import specifier that resolved to no indexed stylesheet.
+%
+% All four relations the emit spec consumes are pure pass-through — the
+% hub already built the whole-service stylesheet index (load roots, Sass
+% lookup precedence) and resolved every specifier against it.
+
+stylesheet_mint_rel(ID, Label, Svc, File, Language, Basename) :-
+    stylesheet_mint(ID, Label, Svc, File, Language, Basename).
+
+stylesheet_contains_rel(From, To) :- stylesheet_contains(From, To).
+
+stylesheet_import_rel(From, To, Label, Conf, Rule, Spec) :-
+    stylesheet_import(From, To, Label, Conf, Rule, Spec).
+
+stylesheet_unresolved_rel(Svc, File, Line, Spec) :- stylesheet_unresolved(Svc, File, Line, Spec).

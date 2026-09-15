@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -121,5 +122,64 @@ func TestLinkContainment_MarkupElements(t *testing.T) {
 	}
 	if contained["app:views/home.templ:element:#btn:5"] {
 		t.Errorf("minted element wrongly contained: it has no source markup pattern")
+	}
+}
+
+// TestLinkContainment_ContainsStylesheetSelectors: the selector nodes a real
+// Rails app mints must hang off their file, not dangle. Element nodes from
+// other passes (JSX, ERB) are untouched — they have their own attribution,
+// and containing them by type here would move counts across the whole
+// fleet. Moved here from the now-deleted stylesheet_imports_test.go (Tier
+// FX, 2026-09-15) — this tests LinkContainment itself, not the migrated
+// stylesheet_imports pass.
+func TestLinkContainment_ContainsStylesheetSelectors(t *testing.T) {
+	t.Parallel()
+	const svc, sheet = "orion", "/app/assets/stylesheets/issues.scss"
+	nodes := []graph.Node{
+		{
+			ID: "sel", Type: graph.NodeTypeElement, Label: ".btn",
+			Service: svc, File: sheet,
+			Meta: map[string]string{"pattern": "stylesheet_selector"},
+		},
+		{
+			ID: "font", Type: graph.NodeTypeExternalService, Label: "DejaVu",
+			Service: svc, File: sheet,
+			Meta: map[string]string{"pattern": "font_face_src"},
+		},
+		{
+			ID: "jsx", Type: graph.NodeTypeElement, Label: "button",
+			Service: svc, File: "/app/javascript/App.jsx",
+			Meta: map[string]string{"tag": "button"},
+		},
+	}
+
+	newNodes, edges := LinkContainment(nodes)
+
+	var fileNode *graph.Node
+	for i := range newNodes {
+		if newNodes[i].Type == graph.NodeTypeFile {
+			if fileNode != nil {
+				t.Fatal("only the stylesheet should get a file node")
+			}
+			fileNode = &newNodes[i]
+		}
+	}
+	if fileNode == nil {
+		t.Fatal("no file node minted")
+	}
+	if fileNode.File != sheet || fileNode.Language != "scss" {
+		t.Errorf("file node = %+v", fileNode)
+	}
+
+	var contained []string
+	for _, e := range edges {
+		if e.Type == graph.EdgeTypeContains && e.From == fileNode.ID {
+			contained = append(contained, e.To)
+		}
+	}
+	sort.Strings(contained)
+	want := []string{"font", "sel"}
+	if len(contained) != len(want) || contained[0] != want[0] || contained[1] != want[1] {
+		t.Errorf("contained = %v, want %v", contained, want)
 	}
 }

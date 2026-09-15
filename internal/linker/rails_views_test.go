@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -24,6 +25,56 @@ func rendersFrom(edges []graph.Edge, fromID string) []string {
 }
 
 func fileID(svc, file string) string { return svc + ":" + file + ":file" }
+
+// stylesheetFixture writes files (relative path -> contents) under a temp
+// service root and returns the root plus the absolute file list. Moved
+// here from the now-deleted stylesheet_imports_test.go (Tier FX, 2026-09-15)
+// — this file is its only remaining caller (the name predates this file's
+// own use of it; nothing here is stylesheet-specific).
+func stylesheetFixture(t *testing.T, files map[string]string) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	var out []string
+	for rel, body := range files {
+		abs := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
+		require.NoError(t, os.WriteFile(abs, []byte(body), 0o644))
+		out = append(out, abs)
+	}
+	sort.Strings(out)
+	return root, out
+}
+
+// fileNodesFor mints the NodeTypeFile backbone LinkContainment would have
+// produced. Moved here from the now-deleted stylesheet_imports_test.go.
+func fileNodesFor(service string, files []string) []graph.Node {
+	nodes := make([]graph.Node, 0, len(files))
+	for _, f := range files {
+		nodes = append(nodes, graph.Node{
+			ID:      service + ":" + f + ":" + string(graph.NodeTypeFile),
+			Type:    graph.NodeTypeFile,
+			Label:   f,
+			Service: service,
+			File:    f,
+		})
+	}
+	return nodes
+}
+
+// edgeBetween finds the edge from the file node of `from` to that of `to`.
+// Moved here from the now-deleted stylesheet_imports_test.go.
+func edgeBetween(t *testing.T, edges []graph.Edge, svc, from, to string) graph.Edge {
+	t.Helper()
+	fromID := svc + ":" + from + ":file"
+	toID := svc + ":" + to + ":file"
+	for _, e := range edges {
+		if e.From == fromID && e.To == toID {
+			return e
+		}
+	}
+	t.Fatalf("no edge %s -> %s", from, to)
+	return graph.Edge{}
+}
 
 // TestLinkRailsViews_PartialGraph is the worked example: a qualified partial, a
 // directory-relative one, a collection, and a layout — plus the three-level

@@ -1445,26 +1445,57 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			// wrapper call-site node.
 			return st.deleteNodes(dupIDs)
 		}},
-		// Tier K.5: stylesheet @import graph + containment for the selector and
-		// @font-face nodes the stylesheet parser mints.
+		// Tier FX (2026-09-15) — declarative stylesheet_imports, replacing
+		// linker.LinkStylesheetImports. Its own dedicated pipeline.Run call,
+		// once per service (the FX.8.8/8.10 convention — the hub's svc
+		// comes from nodes[0].Service, correct only when one call covers
+		// exactly one service): stylesheet @import graph + containment for
+		// the selector and @font-face nodes the stylesheet parser mints.
 		{"stylesheet_imports", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			cssNodes, cssEdges, cssUnresolved := linker.LinkStylesheetImports(st.allNodes, svcFiles)
-			for i := range cssNodes {
-				n := cssNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("stylesheet_imports: load registry: %w", err)
+			}
+			fw := reg.ByName("stylesheet_imports")
+			if fw == nil {
+				return fmt.Errorf("stylesheet_imports: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				snap := graph.Snapshot{Nodes: svcNodes, Files: sf.files}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+				if err != nil {
+					return fmt.Errorf("stylesheet_imports: service %s: %w", sf.svc.Name, err)
+				}
+				for i := range res.Nodes {
+					n := res.Nodes[i]
+					if _, exists := byID[n.ID]; exists {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = len(st.allNodes) - 1
+				}
+				if err := st.writeEdges(res.Edges); err != nil {
 					return err
 				}
-				st.allNodes = append(st.allNodes, n)
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			if err := st.writeEdges(cssEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, cssUnresolved...)
-			return nil
+			return st.bw.Flush(st.ctx)
 		}},
 		// Tier K.3: Rails asset pipeline — `//= require` directives plus the
 		// `javascript_include_tag` page bindings that sit on top of them — is

@@ -28,6 +28,7 @@ var migratedFrameworks = []string{
 	"js_hoc",
 	"js_mobx",
 	"js_client_routes",
+	"stylesheet_imports",
 }
 
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names

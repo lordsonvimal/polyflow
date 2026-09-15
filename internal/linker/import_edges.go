@@ -12,6 +12,17 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
+// isStylesheetFile reports whether file is a Sass/CSS stylesheet. Moved here
+// from the now-deleted stylesheet_imports.go (Tier FX, 2026-09-15) — this
+// file is its only remaining caller.
+func isStylesheetFile(file string) bool {
+	switch strings.ToLower(filepath.Ext(file)) {
+	case ".scss", ".css":
+		return true
+	}
+	return false
+}
+
 // LinkJSImportEdges emits file→file imports edges for JS/TS files between the
 // NodeTypeFile backbone nodes synthesized by LinkContainment. Must run after
 // LinkContainment so the file node IDs exist in nodes.
