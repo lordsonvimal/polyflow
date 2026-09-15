@@ -37,6 +37,18 @@ var migratedFrameworks = []string{
 	"go_http_hosts",
 }
 
+// "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike
+// every other Tier FX entry: ruby_polymorphic_path.go (not migrated — it
+// fits Tier VG's bounded-traversal model, not FX/datalog; see
+// docs/js-value-graph-pilot-plan.md's VG.7 survey) calls
+// buildRubyHostRegistry/rubyFileAST/rubyClientPath/bareCallsTo/
+// finalMethodName directly, so the retired internal/linker/
+// ruby_http_hosts.go was renamed to ruby_host_registry.go and trimmed to
+// just that shared infra (see hub_ruby_http_hosts.go's doc comment) rather
+// than deleted outright — this tripwire's file-name check would never
+// trip on that filename regardless, but a future change should not "fix"
+// that by re-adding the entry.
+
 // TestFX8_NoMigratedFrameworkGoRemains greps internal/linker's file names
 // (not contents — a doc comment or test fixture may legitimately mention a
 // migrated framework's name in passing) for one of migratedFrameworks.

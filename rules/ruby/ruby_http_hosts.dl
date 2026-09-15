@@ -1,0 +1,17 @@
+% Ruby HTTP client host attribution — Tier FX. Replaces
+% internal/linker/ruby_http_hosts.go's ResolveRubyHTTPHosts (Tier L).
+%
+% Unlike go_http_hosts.dl, this is pure pass-through — see
+% internal/factpipe/hub_ruby_http_hosts.go's doc comment for why: the
+% cross-file registry fold IS a genuine whole-service fixpoint (sticky
+% conflict on a host-method name registered with two different env vars,
+% one L.1 "delegate" hop), but resolveHostExpr's per-call-site trace never
+% opens a second file, and the path-template text synthesis it depends on
+% (interpolation-by-interpolation string building, parameter-hole
+% substitution) has no join-shaped equivalent — no `.dl` builtin does
+% string concatenation. The hub already resolved the winning (env, path)
+% pair per node before asserting one fact per outcome; there is nothing
+% left here to join. (Same precedent as gorm_tables.dl.)
+
+ruby_host_env_rel(NodeID, Env, Raw) :- ruby_host_env(NodeID, Env, Raw).
+ruby_host_path_rel(NodeID, Path) :- ruby_host_path(NodeID, Path).

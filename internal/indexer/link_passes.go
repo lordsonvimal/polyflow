@@ -943,16 +943,67 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// the downstream config_resolve provider can bind them (or ledger a *named*
 		// deploy-secret miss) instead of an unactionable token. Runs before the
 		// contract engine + config_resolve so both see the upgraded key_dynamic_raw.
+		// Tier FX migration: replaces internal/linker/ruby_http_hosts.go's
+		// ResolveRubyHTTPHosts. Originally scoped onto Tier VG's VG.7; re-scoped to
+		// Tier FX/datalog after reading the retired Go, same "whole-service fixpoint,
+		// not a bounded traversal" diagnosis as go_http_hosts — see
+		// hub_ruby_http_hosts.go's doc comment for why, unlike go_http_hosts, the
+		// ENTIRE algorithm (registry fold AND per-call-site resolution) stayed in the
+		// hub rather than splitting the fixpoint into `.dl` joins: the call-site trace
+		// needs live map lookups against the folded registry at several branch
+		// points, and the path-template text synthesis it depends on has no
+		// join-shaped equivalent. rules/ruby/ruby_http_hosts.dl is pure pass-through
+		// (the gorm_tables precedent). Same dedicated per-service pipeline.Run loop as
+		// go_http_hosts (the hub's registry fold is scoped to one service's own
+		// files).
 		{"ruby_http_hosts", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			hostNodes := linker.ResolveRubyHTTPHosts(st.allNodes, svcFiles)
-			if len(hostNodes) == 0 {
-				return nil
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("ruby_http_hosts: load registry: %w", err)
 			}
-			for i := range hostNodes {
-				n := hostNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
+			fw := reg.ByName("ruby_http_hosts")
+			if fw == nil {
+				return fmt.Errorf("ruby_http_hosts: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				if err != nil {
+					return fmt.Errorf("ruby_http_hosts: service %s: %w", sf.svc.Name, err)
+				}
+				for _, p := range res.Patches {
+					idx, ok := byID[p.ID]
+					if !ok {
+						continue
+					}
+					n := st.allNodes[idx]
+					m := make(map[string]string, len(n.Meta)+len(p.Meta))
+					for k, v := range n.Meta {
+						m[k] = v
+					}
+					for k, v := range p.Meta {
+						m[k] = v
+					}
+					for _, k := range p.DeleteMeta {
+						delete(m, k)
+					}
+					n.Meta = m
+					st.allNodes[idx] = n
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
 				}
 			}
 			return st.bw.Flush(st.ctx)

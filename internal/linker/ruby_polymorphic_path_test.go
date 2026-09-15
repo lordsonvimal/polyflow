@@ -11,9 +11,59 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 )
+
+// applyRubyHTTPHosts runs the Tier FX "ruby_http_hosts" framework (the
+// migrated replacement for the retired linker.ResolveRubyHTTPHosts) and
+// merges its patches into nodes in place — these ruby_polymorphic_path
+// tests use it only as a precondition (Tier L.2 runs after Tier L resolves
+// the sink's host), not as the thing under test.
+func applyRubyHTTPHosts(t *testing.T, nodes []graph.Node, serviceFiles map[string][]string) {
+	t.Helper()
+	reg, err := pipeline.LoadEmbedded()
+	require.NoError(t, err)
+	fw := reg.ByName("ruby_http_hosts")
+	require.NotNil(t, fw)
+	byID := make(map[string]int, len(nodes))
+	for i := range nodes {
+		byID[nodes[i].ID] = i
+	}
+	for svc, files := range serviceFiles {
+		var svcNodes []graph.Node
+		for i := range nodes {
+			if nodes[i].Service == svc {
+				svcNodes = append(svcNodes, nodes[i])
+			}
+		}
+		if len(svcNodes) == 0 {
+			continue
+		}
+		res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: files})
+		require.NoError(t, err)
+		for _, p := range res.Patches {
+			idx, ok := byID[p.ID]
+			if !ok {
+				continue
+			}
+			n := nodes[idx]
+			m := make(map[string]string, len(n.Meta)+len(p.Meta))
+			for k, v := range n.Meta {
+				m[k] = v
+			}
+			for k, v := range p.Meta {
+				m[k] = v
+			}
+			for _, k := range p.DeleteMeta {
+				delete(m, k)
+			}
+			n.Meta = m
+			nodes[idx] = n
+		}
+	}
+}
 
 const polyConfigRB = `module W
   class Config
@@ -103,7 +153,7 @@ func TestResolveRubyPolymorphicPathSites_VegaImportWatcher(t *testing.T) {
 
 	// Precondition: ruby_http_hosts resolves the host but leaves the sink
 	// key_dynamic (no single path).
-	linker.ResolveRubyHTTPHosts(nodes, serviceFiles)
+	applyRubyHTTPHosts(t, nodes, serviceFiles)
 	var sink *graph.Node
 	for i := range nodes {
 		if nodes[i].Meta["pattern"] == "rest_client_request_included" {
@@ -175,7 +225,7 @@ end
 	})
 	nodes := parseRubyWrapperFixture(t, "vega", paths)
 	serviceFiles := map[string][]string{"vega": paths}
-	linker.ResolveRubyHTTPHosts(nodes, serviceFiles)
+	applyRubyHTTPHosts(t, nodes, serviceFiles)
 
 	newNodes, _ := linker.ResolveRubyPolymorphicPathSites(nodes, serviceFiles)
 	assert.Empty(t, newNodes, "no literal or constant reaches the sink — must abstain")

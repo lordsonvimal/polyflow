@@ -1,0 +1,37 @@
+# Tier FX — replaces internal/linker/ruby_http_hosts.go's
+# ResolveRubyHTTPHosts (Tier L): rewrites a Ruby http_client node's opaque
+# dynamic URL token to the concrete ENV.fetch("VAR") its host method builds
+# it from (plus the literal path suffix the host method appends, when one
+# exists), so a real deploy secret is ledgered by name instead of the call
+# vanishing as an unactionable `config_not_found | url`.
+#
+# NO `patterns:`/`facts:` block — see hub_ruby_http_hosts.go's doc comment
+# for the full account of why this hub carries the entire retired
+# algorithm (registry build AND per-call-site resolution), not just the
+# "real AST" slice go_http_hosts's hub does: the two are inseparable here
+# without reproducing recursive string synthesis (interpolated path-text
+# building, parameter-hole substitution) `.dl` has no builtin for.
+language: ruby
+version: "1"
+
+hub:
+  - name: ruby_http_hosts
+
+emit:
+  - relation: ruby_host_env_rel
+    columns: [NodeID, Env, Raw]
+    patch:
+      id: { arg: NodeID }
+      meta:
+        key_dynamic_raw: { arg: Raw }
+        host_resolved_via: ruby_env_method
+        host_env_var: { arg: Env }
+
+  - relation: ruby_host_path_rel
+    columns: [NodeID, Path]
+    patch:
+      id: { arg: NodeID }
+      meta:
+        path: { arg: Path }
+        path_resolved_via: ruby_host_method
+      delete_meta: [key_dynamic]

@@ -6,124 +6,7 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-
-	"github.com/lordsonvimal/polyflow/internal/graph"
 )
-
-// ResolveRubyHTTPHosts is the Tier-L cross-file depth pass for Ruby HTTP
-// clients. A real agent/client almost never posts to a literal URL — it posts
-// to a *host method* (`server_api_url(...)`, `Connection.instance.update_job_status_url`)
-// whose value is built from an environment variable (`ENV.fetch("LYRA_HOST")`),
-// usually defined in a mixin/singleton in a *different* file. The pattern layer
-// captures only the opaque call-site token (`url`, `path: url`), so the dynamic
-// producer lands in the ledger as an unactionable `config_not_found | url`.
-//
-// This pass rewrites that token to the concrete `ENV.fetch("VAR")` the host is
-// built from, so the downstream config_resolve provider can either bind it to a
-// checked-in `.env`/k8s/terraform value (a real `http_call` edge) or ledger a
-// *named* deploy-secret miss (`config_not_found | ENV.fetch("LYRA_HOST")`) that
-// tells a reviewer exactly which secret to consult — never a fabricated host
-// (#12). It resolves three shapes, all bounded and same-file for the value
-// trace (only the host-method → env registry is service-wide):
-//
-//  1. direct call        rest.get(path: Connection.instance.file_download_url)
-//  2. local assignment   url = server_api_url(...).to_s; RestClient.post(url, …)
-//  3. parameter → caller  def post(url,…); rest.post(path: url) ← post(Conn…url,…)
-//
-// Returns the mutated http_client nodes so the caller can re-persist them; the
-// node metas are also mutated in place in the passed slice.
-func ResolveRubyHTTPHosts(nodes []graph.Node, serviceFiles map[string][]string) []graph.Node {
-	// Cheap gate: only pay the extra parses when at least one dynamic Ruby
-	// http_client node actually needs resolving.
-	svcNeeds := make(map[string]bool)
-	for i := range nodes {
-		if rubyDynamicHTTPNode(&nodes[i]) {
-			svcNeeds[nodes[i].Service] = true
-		}
-	}
-	if len(svcNeeds) == 0 {
-		return nil
-	}
-
-	// Per-service registry: host-method name → {env var, path suffix}
-	// (collision-aware).
-	registry := make(map[string]map[string]rubyHostInfo)
-	for svc, files := range serviceFiles {
-		if !svcNeeds[svc] {
-			continue
-		}
-		registry[svc] = buildRubyHostRegistry(files)
-	}
-
-	// A single Ruby file may be parsed twice (registry + value trace); cache the
-	// parse for the value-trace phase, close everything at the end.
-	fileCache := make(map[string]*rubyFileAST)
-	defer func() {
-		for _, fa := range fileCache {
-			if fa != nil && fa.release != nil {
-				fa.release()
-			}
-		}
-	}()
-
-	var changed []graph.Node
-	for i := range nodes {
-		n := &nodes[i]
-		if !rubyDynamicHTTPNode(n) {
-			continue
-		}
-		reg := registry[n.Service]
-		if len(reg) == 0 {
-			continue
-		}
-		fa := fileCache[n.File]
-		if fa == nil {
-			fa = parseRubyFileAST(n.File)
-			fileCache[n.File] = fa
-		}
-		if fa == nil {
-			continue
-		}
-		expr := stripKeywordLabel(n.Meta["key_dynamic_raw"])
-		env, pathTmpl := fa.resolveHostExpr(expr, fa.enclosingMethod(n.Line), reg, 0)
-		if env == "" {
-			continue
-		}
-		n.Meta["key_dynamic_raw"] = `ENV.fetch("` + env + `")`
-		n.Meta["host_resolved_via"] = "ruby_env_method"
-		n.Meta["host_env_var"] = env
-		// PR.3: the host walk above already traverses the literal path the host
-		// method appends (`Connection#update_job_status_url` →
-		// `"#{service_base_url}/job_items/update_job_status"`); it used to keep
-		// only the env var and discard the path, which is why every Ruby agent
-		// service resolved 0% of its client URLs. Keep the path too and the node
-		// becomes an ordinary static producer the contract engine can join.
-		//
-		// Only nodes that actually gain a path stop being key_dynamic. That is a
-		// real trade: such a node no longer reaches config_resolve, so a missing
-		// deploy secret is no longer ledgered by *name* for it. A matched route
-		// is worth more than a named host miss, and nodes whose path stays empty
-		// keep the previous behaviour exactly.
-		if p := rubyClientPath(pathTmpl); p != "" {
-			n.Meta["path"] = p
-			n.Meta["path_resolved_via"] = "ruby_host_method"
-			delete(n.Meta, "key_dynamic")
-		}
-		changed = append(changed, *n)
-	}
-	return changed
-}
-
-// rubyDynamicHTTPNode reports whether n is a Ruby http_client whose URL went
-// unresolved (key_dynamic) and is still an opaque token — not already an env
-// expression a prior run captured.
-func rubyDynamicHTTPNode(n *graph.Node) bool {
-	if n.Type != graph.NodeTypeHTTPClient || n.Language != "ruby" {
-		return false
-	}
-	raw := n.Meta["key_dynamic_raw"]
-	return n.Meta["key_dynamic"] == "true" && raw != "" && !strings.Contains(raw, "ENV.")
-}
 
 // ── registry: host-method name → env var ────────────────────────────────────
 
@@ -878,179 +761,12 @@ func applySymCase(sym, transform string) string {
 	return sym
 }
 
-// resolveHostExpr resolves a call-site URL expression to an env var and the
-// literal path the host method appends, via the registry, following (bounded) a
-// local assignment or a method-parameter's same-file caller argument. The env
-// var is the success signal: an empty env means unresolved, and the path is
-// whatever came with it (possibly empty).
-func (fa *rubyFileAST) resolveHostExpr(expr string, method *rubyMethodInfo, reg map[string]rubyHostInfo, depth int) (string, string) {
-	if depth > 3 || expr == "" {
-		return "", ""
-	}
-	e := stripToS(expr)
-	id := bareIdent(e)
-
-	// A bare identifier that is locally bound — assigned in this method or one of
-	// its parameters — is a *variable*, and its binding is stronger evidence than
-	// a same-named registry entry. Trace the binding first so a generic host name
-	// (L.1 can register a bare `url` from an env-backed `attr_accessor`) does not
-	// shadow `url = server_api_url("…")`.
-	localBound := id != "" && method != nil &&
-		(fa.assignmentRHS(method.node, id) != "" || paramIndex(method, id) >= 0)
-
-	if !localBound {
-		if m := finalMethodName(e); m != "" {
-			if info, ok := reg[m]; ok {
-				return info.env, fillRubyParamHoles(info, e)
-			}
-		}
-	}
-	if id == "" || method == nil {
-		return "", ""
-	}
-	// (2) local assignment inside the enclosing method.
-	if rhs := fa.assignmentRHS(method.node, id); rhs != "" {
-		if env, path := fa.resolveHostExpr(rhs, method, reg, depth+1); env != "" {
-			return env, path
-		}
-	}
-	// (3) method parameter → same-file caller argument.
-	if idx := paramIndex(method, id); idx >= 0 {
-		for _, call := range fa.bareCallsTo(method.name) {
-			arg := fa.positionalArg(call, idx)
-			if arg == "" {
-				continue
-			}
-			callerMethod := fa.enclosingMethod(int(call.StartPoint().Row) + 1)
-			if callerMethod == method {
-				continue // a method calling itself — avoid a trivial loop
-			}
-			if env, path := fa.resolveHostExpr(arg, callerMethod, reg, depth+1); env != "" {
-				return env, path
-			}
-		}
-	}
-	// A locally-bound name whose binding/caller trace did not resolve can still
-	// be a registry host method — an env-backed accessor referenced bare
-	// (`url`, `delegate`d to a config object). Tried last so a real local
-	// binding always wins.
-	if localBound {
-		if info, ok := reg[id]; ok {
-			return info.env, info.path
-		}
-	}
-	return "", ""
-}
-
 // rubyParamHole brackets a host method's parameter name inside its path
 // template. NUL cannot occur in Ruby source, so a hole can never collide with
 // real path text. Holes the call site does not fill become "*".
 const rubyParamHole = "\x00"
 
 var reRubyParamHole = regexp.MustCompile("\x00[^\x00]*\x00")
-
-// fillRubyParamHoles substitutes the literal arguments a call site passes into
-// the parameter holes of a host method's path template
-// (`server_api_url(endpoint)` → "*/\x00endpoint\x00", called as
-// `server_api_url("client_api/v1/agents/register")` → "*/client_api/v1/agents/register").
-func fillRubyParamHoles(info rubyHostInfo, expr string) string {
-	if !strings.Contains(info.path, rubyParamHole) {
-		return info.path
-	}
-	args := rubyCallArgs(expr)
-	out := info.path
-	for i, p := range info.params {
-		hole := rubyParamHole + p + rubyParamHole
-		if !strings.Contains(out, hole) {
-			continue
-		}
-		repl := "*"
-		if i < len(args) {
-			if t, ok := rubyStringArgTemplate(args[i]); ok {
-				repl = t
-			}
-		}
-		out = strings.ReplaceAll(out, hole, repl)
-	}
-	return out
-}
-
-// rubyCallArgs splits the argument list of a call expression's *source text*
-// into top-level arguments. The call site is only ever available here as text
-// (it arrives via key_dynamic_raw), so this is a small bracket/quote-aware
-// splitter rather than a parse — enough for the literal-endpoint shape it
-// exists to serve, and it yields nothing rather than a wrong split otherwise.
-func rubyCallArgs(expr string) []string {
-	open := strings.IndexByte(expr, '(')
-	if open < 0 {
-		return nil
-	}
-	var (
-		args  []string
-		cur   strings.Builder
-		depth int
-		quote byte
-	)
-	for i := open; i < len(expr); i++ {
-		c := expr[i]
-		if quote != 0 {
-			cur.WriteByte(c)
-			if c == '\\' && i+1 < len(expr) {
-				i++
-				cur.WriteByte(expr[i])
-				continue
-			}
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch c {
-		case '"', '\'', '`':
-			quote = c
-			cur.WriteByte(c)
-		case '(', '[', '{':
-			depth++
-			if depth > 1 {
-				cur.WriteByte(c)
-			}
-		case ')', ']', '}':
-			depth--
-			if depth == 0 {
-				args = append(args, strings.TrimSpace(cur.String()))
-				return args
-			}
-			cur.WriteByte(c)
-		case ',':
-			if depth == 1 {
-				args = append(args, strings.TrimSpace(cur.String()))
-				cur.Reset()
-			} else {
-				cur.WriteByte(c)
-			}
-		default:
-			cur.WriteByte(c)
-		}
-	}
-	return nil // unbalanced — no split is better than a wrong one
-}
-
-var reRubyInterp = regexp.MustCompile(`#\{[^}]*\}`)
-
-// rubyStringArgTemplate turns a quoted string argument's source text into a path
-// template, each `#{…}` interpolation becoming "*". Reports false for anything
-// that is not a plain quoted string.
-func rubyStringArgTemplate(arg string) (string, bool) {
-	arg = strings.TrimSpace(arg)
-	if len(arg) < 2 {
-		return "", false
-	}
-	q := arg[0]
-	if (q != '"' && q != '\'') || arg[len(arg)-1] != q {
-		return "", false
-	}
-	return reRubyInterp.ReplaceAllString(arg[1:len(arg)-1], "*"), true
-}
 
 // rubyClientPath turns a resolved path template into the `path` meta a Ruby
 // http_client node carries, or "" when it carries no routing information.
@@ -1086,35 +802,6 @@ func rubyClientPath(tmpl string) string {
 	return ""
 }
 
-// assignmentRHS returns the source text of the first `id = <rhs>` assignment in
-// method's body, or "".
-func (fa *rubyFileAST) assignmentRHS(method *sitter.Node, id string) string {
-	var found string
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if found != "" || n == nil {
-			return
-		}
-		if n != method && (n.Type() == "method" || n.Type() == "singleton_method") {
-			return
-		}
-		if n.Type() == "assignment" {
-			left := n.ChildByFieldName("left")
-			right := n.ChildByFieldName("right")
-			if left != nil && right != nil && left.Type() == "identifier" &&
-				left.Content(fa.src) == id {
-				found = right.Content(fa.src)
-				return
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
-	}
-	walk(method)
-	return found
-}
-
 // bareCallsTo returns receiver-less call/command nodes invoking method `name`
 // (i.e. `name(args)` — not `obj.name(args)`), the callers of a local method.
 func (fa *rubyFileAST) bareCallsTo(name string) []*sitter.Node {
@@ -1137,27 +824,6 @@ func (fa *rubyFileAST) bareCallsTo(name string) []*sitter.Node {
 	}
 	walk(fa.root)
 	return out
-}
-
-// positionalArg returns the source text of the idx-th positional argument of a
-// call node (keyword pairs/hashes skipped), or "".
-func (fa *rubyFileAST) positionalArg(call *sitter.Node, idx int) string {
-	args := call.ChildByFieldName("arguments")
-	if args == nil {
-		return ""
-	}
-	pos := 0
-	for i := 0; i < int(args.NamedChildCount()); i++ {
-		c := args.NamedChild(i)
-		if c.Type() == "pair" || c.Type() == "hash" {
-			continue
-		}
-		if pos == idx {
-			return c.Content(fa.src)
-		}
-		pos++
-	}
-	return ""
 }
 
 // ── small helpers ───────────────────────────────────────────────────────────
@@ -1209,44 +875,6 @@ func rubyStringLiteral(n *sitter.Node, src []byte) string {
 	return b.String()
 }
 
-var (
-	reKeywordLabel = regexp.MustCompile(`^[a-z_]\w*:\s+(.+)$`)
-	reBareIdent    = regexp.MustCompile(`^[a-z_]\w*[?!]?$`)
-	reToS          = regexp.MustCompile(`\.(to_s|to_str|to_string|freeze)\s*$`)
-)
-
-// stripKeywordLabel turns `path: url` into `url`, leaving a bare expression
-// untouched. The required space after the colon avoids matching `Foo::Bar`.
-func stripKeywordLabel(s string) string {
-	s = strings.TrimSpace(s)
-	if m := reKeywordLabel.FindStringSubmatch(s); m != nil {
-		return strings.TrimSpace(m[1])
-	}
-	return s
-}
-
-// stripToS removes a trailing `.to_s`/`.freeze` conversion so the underlying
-// call/identifier can be resolved.
-func stripToS(s string) string {
-	s = strings.TrimSpace(s)
-	for {
-		next := reToS.ReplaceAllString(s, "")
-		if next == s {
-			return s
-		}
-		s = strings.TrimSpace(next)
-	}
-}
-
-// bareIdent returns e when it is a single local identifier, else "".
-func bareIdent(e string) string {
-	e = strings.TrimSpace(e)
-	if reBareIdent.MatchString(e) {
-		return e
-	}
-	return ""
-}
-
 // finalMethodName extracts the final method identifier of a call-reference
 // expression (`Connection.instance.file_download_url` → file_download_url;
 // `server_api_url("…")` → server_api_url; bare `server_api_uri` → itself),
@@ -1293,14 +921,4 @@ func hostishName(name string) bool {
 		}
 	}
 	return false
-}
-
-// paramIndex returns the positional index of parameter id in method, or -1.
-func paramIndex(m *rubyMethodInfo, id string) int {
-	for i, p := range m.params {
-		if p == id {
-			return i
-		}
-	}
-	return -1
 }
