@@ -1492,15 +1492,39 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// L.W0: resolve Rails route-helper names on nav_link_rails_helper nodes to
 		// real method+path so the http contract rule (G.1 nav variant) can match them.
 		// Must run before ApplyHints so the resolved path is visible to the engine.
+		//
+		// Tier FX FX.8.7 (2026-09-15): patterns/ruby/rails_helpers.yaml +
+		// rules/ruby/rails_helpers.dl, backed by the rails_helper_routes hub
+		// (internal/factpipe/hub_rails_helpers.go), replacing
+		// internal/linker/rails_helpers.go's ResolveRailsNavHelpers. Run through
+		// a dedicated pipeline.Run call — not the shared `factpipe_frameworks`
+		// slot every other Tier FX framework runs through — because this pass
+		// resolves an EXISTING http_client node's meta in place (same id), and
+		// factpipe_frameworks treats `mint:` as gap-fill-only, skipping any id
+		// that already names a real node. Same precedent as ruby_job_inherit.
 		{"rails_nav_helpers", scopeSameServiceOnly, func() error {
-			railsUpdated, railsUnresolved := linker.ResolveRailsNavHelpers(st.allNodes)
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("rails_nav_helpers: load registry: %w", err)
+			}
+			fw := reg.ByName("rails_helpers")
+			if fw == nil {
+				return fmt.Errorf("rails_nav_helpers: framework not embedded")
+			}
+
+			snap := graph.Snapshot{Nodes: st.allNodes}
+			res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, snap)
+			if err != nil {
+				return fmt.Errorf("rails_nav_helpers: %w", err)
+			}
+
 			// Build a quick ID→index map for O(1) in-place updates to allNodes.
 			nodeByID := make(map[string]int, len(st.allNodes))
 			for i, n := range st.allNodes {
 				nodeByID[n.ID] = i
 			}
-			for i := range railsUpdated {
-				n := railsUpdated[i]
+			for i := range res.Nodes {
+				n := res.Nodes[i]
 				if err := st.bw.AddNode(st.ctx, &n); err != nil {
 					return err
 				}
@@ -1514,7 +1538,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			if err := st.bw.Flush(st.ctx); err != nil {
 				return err
 			}
-			st.allUnresolved = append(st.allUnresolved, railsUnresolved...)
+			st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			return nil
 		}},
 		// M.0: file-based route synthesis (Next.js, SvelteKit, Nuxt, Remix).

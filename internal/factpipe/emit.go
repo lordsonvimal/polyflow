@@ -63,6 +63,10 @@ var frozenNodeTypes = map[string]bool{
 	// publisher: added for pusher_producer (FX.8.11 2026-09-15) — one
 	// `publisher` node per resolved `notify_*`-forwarding call site.
 	"publisher": true,
+	// http_client: added for rails_helpers (FX.8.7 2026-09-15) — a
+	// nav_link_rails_helper client node resolved in place (same id) or
+	// fanned into candidate ids on a helper->route collision.
+	"http_client": true,
 }
 
 // valueRef is an edge/meta/ref field source: a literal (a bare scalar or

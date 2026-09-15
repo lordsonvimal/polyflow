@@ -1,0 +1,134 @@
+# Tier FX FX.8.7 (2026-09-15) — replaces internal/linker/rails_helpers.go's
+# ResolveRailsNavHelpers (the L.W0 pass): resolving a nav_link_rails_helper
+# http_client node's `helper` name to the real (method, path) the Rails route
+# walker composed for it.
+#
+# This framework carries NO `facts:` patterns — the helper->route lookup
+# (`_path`/`_url` suffix variants of the walker's already-composed route
+# name) needs a literal string suffix a `.dl` rule body cannot assemble, so
+# it is the `rails_helper_routes` hub provider's job
+# (internal/factpipe/hub_rails_helpers.go). rules/ruby/rails_helpers.dl does
+# the actual method-match + collision-fan-out derivation purely as a join
+# over that hub's rows and the graph-so-far.
+#
+# `mint:` (not `replace:`) is used for the single-match and keep-original
+# rows even though they carry the SAME id as an already-real http_client
+# node — this framework is NOT run through the shared factpipe_frameworks
+# slot (which treats mint as gap-fill-only and skips an id that already
+# exists), but through its own dedicated pipeline.Run call in
+# internal/indexer/link_passes.go's rails_nav_helpers pass, whose existing
+# "overwrite in place when the id is already known, append when it is not"
+# wiring is exactly what a resolved-in-place update needs.
+#
+# `mint:` builds a node from scratch, unlike the retired Go's `copyNode`
+# (a shallow copy of the WHOLE original node, then a few keys patched) — any
+# original meta key not named in this spec's `meta:` block is silently lost,
+# not merely left alone. Found the hard way: dropping `nav_link` broke
+# TestRun_RailsNavHelperResolution, since both patterns/matcher.go's own
+# `nav_link_rails_helper`/`nav_link_rails_redirect_helper` handling AND
+# internal/contract/engine.go's grading gate on `Meta["nav_link"] == "true"`.
+# It is always "true" for every node this framework touches (matcher.go
+# stamps it on anything matched by a `nav_link*`-prefixed pattern), so it is
+# restored as a literal, no join needed. `pattern` is restored via a real
+# node_meta join (it differs: `nav_link_rails_helper` vs
+# `nav_link_rails_redirect_helper`) for the same reason, even though no
+# downstream consumer was found requiring it — cheap insurance against a
+# consumer that keys on it appearing later.
+language: ruby
+version: "1"
+
+hub:
+  - name: rails_helper_routes
+
+emit:
+  # Exactly one candidate route: resolve in place, no fan-out marker.
+  - relation: nav_single
+    columns: [Client, Svc, File, Line, Method, Path, Pattern]
+    mint:
+      node: http_client
+      id: { arg: Client }
+      label: { template: "{Method} {Path}" }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: ruby }
+      meta:
+        path: { arg: Path }
+        method: { arg: Method }
+        pattern: { arg: Pattern }
+        nav_link: { literal: "true" }
+
+  # Collision (>1 distinct route): the lexicographically-smallest (Method,
+  # Path) candidate keeps the client's own id — same replace-in-place
+  # discipline as the retired Go's "the first candidate keeps the original
+  # node's ID" rule, applied deterministically rather than by insertion order.
+  - relation: nav_keep
+    columns: [Client, Svc, File, Line, Method, Path, Pattern]
+    mint:
+      node: http_client
+      id: { arg: Client }
+      label: { template: "{Method} {Path}" }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: ruby }
+      meta:
+        path: { arg: Path }
+        method: { arg: Method }
+        via: rails_helper_candidate
+        pattern: { arg: Pattern }
+        nav_link: { literal: "true" }
+
+  # Collision, the remaining candidates: minted fresh, id suffixed with
+  # method+path (a path-only suffix could not tell two same-path,
+  # different-method routes apart — `session_path` mapping to both
+  # POST /session and DELETE /session).
+  - relation: nav_extra
+    columns: [Client, Svc, File, Line, Method, Path, Pattern]
+    mint:
+      node: http_client
+      id: { template: "{Client}:candidate:{Method}:{Path}" }
+      label: { template: "{Method} {Path}" }
+      service: { arg: Svc }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { literal: ruby }
+      meta:
+        path: { arg: Path }
+        method: { arg: Method }
+        via: rails_helper_candidate
+        pattern: { arg: Pattern }
+        nav_link: { literal: "true" }
+
+  # No route names this helper at all: the ledger, not a confidently wrong
+  # guess. `edge` is a dead self-loop (compileEmit requires one of
+  # edge/mint/replace/delete; `unresolved.when: "1 == 1"` always intercepts
+  # first, the same idiom ruby_associations.yaml's assoc_collision uses).
+  - relation: nav_unresolved
+    columns: [Client, Svc, Helper, File, Line]
+    edge: { from: { arg: Client }, to: { arg: Client }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Helper }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: rails_helper_unresolved
+
+  # A helper naming more than one route: one ledger entry per colliding
+  # client (the retired Go deduped this to one entry per (service, helper)
+  # name; deduping per client-site instead is more traceable and, since no
+  # cedar corpus fixture pins this pass's ledger byte-for-byte, an accepted
+  # divergence — see the plan doc's FX.8.7 entry).
+  - relation: nav_collision
+    columns: [Client, Svc, Helper, File, Line]
+    edge: { from: { arg: Client }, to: { arg: Client }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Svc }
+        name: { arg: Helper }
+        file: { arg: File }
+        line: { arg: Line }
+        kind: rails_helper_collision

@@ -1,0 +1,110 @@
+% Tier FX FX.8.7 (2026-09-15) — rails_helpers. Replaces
+% internal/linker/rails_helpers.go's ResolveRailsNavHelpers.
+%
+% Base fact (from the rails_helper_routes hub provider,
+% internal/factpipe/hub_rails_helpers.go — NOT a tree-sitter facts: block;
+% see patterns/ruby/rails_helpers.yaml's package doc):
+%
+%   rails_helper_route(Svc, Helper, Method, Path, Rank)
+%       one row per named route, once for `_path` and once for `_url`. Rank
+%       is a dense 0-based index over each (Svc, Helper) group, ordered by
+%       (Method, Path) — the engine's lt/le are integer-only, so the
+%       lexicographic sort that picks a deterministic "keeps the id"
+%       candidate happens in the hub, not here.
+%
+% Bridge (FX.1): node, node_start, node_meta.
+
+% ---------------------------------------------------------------------------
+% every nav_link_rails_helper http_client node wanting a helper resolved.
+% ---------------------------------------------------------------------------
+nav_want(Client, Svc, Helper) :-
+    node(Client, "http_client", _, Svc),
+    node_meta(Client, "helper", Helper).
+
+nav_route(Client, Method, Path, Rank) :-
+    nav_want(Client, Svc, Helper),
+    rails_helper_route(Svc, Helper, Method, Path, Rank).
+
+% the client's own method, defaulting to GET when the meta key is absent —
+% matcher.go already uppercases a present value at capture time, so no
+% normalisation is needed here, only the default.
+nav_method_any(Client) :- node_meta(Client, "method", M), ne(M, "").
+nav_method(Client, M)  :- node_meta(Client, "method", M), ne(M, "").
+nav_method(Client, "GET") :- nav_want(Client, _, _), not nav_method_any(Client).
+
+% routes matching the client's method; if none match, every named route is a
+% candidate (method mismatch, let the contract engine decide) — mirrors the
+% retired Go's "no method match: use all routes" fallback.
+nav_matched(Client, Method, Path, Rank) :-
+    nav_route(Client, Method, Path, Rank),
+    nav_method(Client, Method).
+nav_matched_any(Client) :- nav_matched(Client, _, _, _).
+
+nav_final(Client, Method, Path, Rank) :- nav_matched(Client, Method, Path, Rank).
+nav_final(Client, Method, Path, Rank) :-
+    nav_route(Client, Method, Path, Rank),
+    nav_want(Client, _, _),
+    not nav_matched_any(Client).
+
+% ---------------------------------------------------------------------------
+% deterministic minimum pick — the lowest-Rank candidate is the one that
+% keeps the client's own node id.
+% ---------------------------------------------------------------------------
+nav_min_rank(Client, MinR) :- nav_final(Client, _, _, R), min(MinR, R).
+
+nav_minimal(Client, Method, Path)    :- nav_min_rank(Client, R), nav_final(Client, Method, Path, R).
+nav_nonminimal(Client, Method, Path) :- nav_final(Client, Method, Path, R), nav_min_rank(Client, MinR), ne(R, MinR).
+
+nav_multi(Client) :- nav_nonminimal(Client, _, _).
+
+% ---------------------------------------------------------------------------
+% single match — resolve in place, no fan-out marker. Pattern is carried
+% through from the original node's own node_meta — a `mint:` block builds a
+% node from scratch, so any meta key the original carried that isn't named
+% here is lost, not merely left alone; `pattern` and `nav_link` are the two
+% real downstream dependents (internal/contract/engine.go grades on
+% `nav_link`, patterns/matcher.go stamps it on every node this framework
+% touches, so it is always "true" and needs no join — see
+% patterns/ruby/rails_helpers.yaml's package doc).
+% ---------------------------------------------------------------------------
+nav_single(Client, Svc, File, Line, Method, Path, Pattern) :-
+    nav_minimal(Client, Method, Path),
+    nav_want(Client, Svc, _),
+    not nav_multi(Client),
+    node(Client, _, File, Svc), node_start(Client, Line),
+    node_meta(Client, "pattern", Pattern).
+
+% ---------------------------------------------------------------------------
+% collision — the minimal candidate keeps the client's id; the rest mint
+% fresh candidate ids.
+% ---------------------------------------------------------------------------
+nav_keep(Client, Svc, File, Line, Method, Path, Pattern) :-
+    nav_minimal(Client, Method, Path),
+    nav_want(Client, Svc, _),
+    nav_multi(Client),
+    node(Client, _, File, Svc), node_start(Client, Line),
+    node_meta(Client, "pattern", Pattern).
+
+nav_extra(Client, Svc, File, Line, Method, Path, Pattern) :-
+    nav_nonminimal(Client, Method, Path),
+    nav_want(Client, Svc, _),
+    node(Client, _, File, Svc), node_start(Client, Line),
+    node_meta(Client, "pattern", Pattern).
+
+% ---------------------------------------------------------------------------
+% ledger: no route names this helper at all.
+% ---------------------------------------------------------------------------
+nav_has_route(Client) :- nav_route(Client, _, _, _).
+
+nav_unresolved(Client, Svc, Helper, File, Line) :-
+    nav_want(Client, Svc, Helper),
+    not nav_has_route(Client),
+    node(Client, _, File, Svc), node_start(Client, Line).
+
+% ---------------------------------------------------------------------------
+% ledger: a helper naming more than one route (one row per colliding client).
+% ---------------------------------------------------------------------------
+nav_collision(Client, Svc, Helper, File, Line) :-
+    nav_multi(Client),
+    nav_want(Client, Svc, Helper),
+    node(Client, _, File, Svc), node_start(Client, Line).
