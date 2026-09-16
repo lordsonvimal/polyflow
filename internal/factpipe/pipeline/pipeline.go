@@ -29,13 +29,16 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 
+	sitter "github.com/smacker/go-tree-sitter"
 	"gopkg.in/yaml.v3"
 
 	"github.com/lordsonvimal/polyflow/internal/datalog"
@@ -47,10 +50,26 @@ import (
 	"github.com/lordsonvimal/polyflow/rules"
 )
 
+var (
+	embeddedOnce sync.Once
+	embeddedReg  *Registry
+	embeddedErr  error
+)
+
 // LoadEmbedded pairs the rule + pattern trees compiled into the binary. This is
 // the production entry point; Load takes explicit filesystems for tests.
+//
+// The embedded rule+pattern trees never change at runtime, so the parse +
+// datalog-compile work Load does is memoized process-wide (FX.8.PERF,
+// docs/declarative-framework-pipeline-plan.md): internal/indexer calls this
+// once per single-framework pass per service — 21 call sites at the time this
+// cache was added — and without it every one of those re-parsed and
+// re-compiled all ~30 frameworks from scratch.
 func LoadEmbedded() (*Registry, error) {
-	return Load(rules.FS, patterndata.FS)
+	embeddedOnce.Do(func() {
+		embeddedReg, embeddedErr = Load(rules.FS, patterndata.FS)
+	})
+	return embeddedReg, embeddedErr
 }
 
 // Gate is a framework's activation condition: the service must depend on
@@ -91,7 +110,8 @@ type Framework struct {
 	Hubs     []factpipe.CompiledHub
 	Derives  []factpipe.CompiledDerive
 
-	goals []string // the emit relations, materialized by Eval
+	goals   []string // the emit relations, materialized by Eval
+	matcher *patterns.TreeSitterMatcher // built once by loadFramework (FX.8.PERF); TreeSitterMatcher is mutex-guarded, safe to share across concurrent Run calls
 }
 
 // Registry is the full set of frameworks compiled from the embedded rule +
@@ -246,6 +266,11 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 	if lang == "" {
 		lang = path.Base(langDir)
 	}
+
+	reg := patterns.NewRegistry()
+	reg.RegisterFile(&pf)
+	matcher := patterns.NewTreeSitterMatcher(reg)
+
 	return &Framework{
 		Name:     name,
 		Language: lang,
@@ -259,6 +284,7 @@ func loadFramework(ruleFS, patternFS fs.FS, dlPath string) (*Framework, error) {
 		Hubs:     hubs,
 		Derives:  derives,
 		goals:    goals,
+		matcher:  matcher,
 	}, nil
 }
 
@@ -338,6 +364,8 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		svc = graphSoFar.Nodes[0].Service
 	}
 
+	roots := parseFileRoots(files)
+
 	var res Result
 	seenNode := map[string]bool{}
 	for _, fw := range fws {
@@ -345,7 +373,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		for _, f := range base.All() {
 			fset.Add(f)
 		}
-		if err := extractFramework(fw, files, fset); err != nil {
+		if err := extractFramework(fw, files, fset, roots); err != nil {
 			return Result{}, fmt.Errorf("factpipe: framework %s: %w", fw.Name, err)
 		}
 		factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
@@ -420,12 +448,43 @@ func stampService(u []graph.UnresolvedRef, svc string) []graph.UnresolvedRef {
 	return u
 }
 
+// parseFileRoots parses each file once (FX.8.PERF, docs/declarative-
+// framework-pipeline-plan.md) so Run's per-framework loop below doesn't
+// re-parse the same source bytes once per matching-language framework —
+// tree-sitter parse cost, not compiled-query cost, was the remaining
+// dominant cost after LoadEmbedded/matcher caching. A file whose grammar
+// this build has no binding for, or that fails to parse, is simply absent
+// from the map; extractFramework's MatchWithGrammarRoot call falls back to
+// parsing it itself (and surfacing the same error it always did) when its
+// root is missing.
+func parseFileRoots(files []ParsedFile) map[string]*sitter.Node {
+	roots := make(map[string]*sitter.Node, len(files))
+	for _, f := range files {
+		grammar := f.Grammar
+		if grammar == "" {
+			grammar = f.Language
+		}
+		lang := patterns.GrammarFor(grammar)
+		if lang == nil {
+			continue
+		}
+		root, err := sitter.ParseCtx(context.Background(), f.Src, lang)
+		if err != nil {
+			continue
+		}
+		roots[f.Path] = root
+	}
+	return roots
+}
+
 // extractFramework runs stage 1: match this framework's fact-bearing patterns
-// against every file of its language and lower each match to facts.
-func extractFramework(fw *Framework, files []ParsedFile, dst factpipe.FactSet) error {
-	reg := patterns.NewRegistry()
-	reg.RegisterFile(fw.Patterns)
-	m := patterns.NewTreeSitterMatcher(reg)
+// against every file of its language and lower each match to facts. roots is
+// parseFileRoots' pre-parsed-per-file cache, keyed by file path; nil is
+// valid (each match falls back to parsing its own file, as EvalOnce's single-
+// framework introspection callers do — parse-once sharing only pays off
+// across multiple frameworks).
+func extractFramework(fw *Framework, files []ParsedFile, dst factpipe.FactSet, roots map[string]*sitter.Node) error {
+	m := fw.matcher
 
 	specsByPattern := map[string][]patterns.FactSpec{}
 	for _, p := range fw.Patterns.Patterns {
@@ -445,7 +504,7 @@ func extractFramework(fw *Framework, files []ParsedFile, dst factpipe.FactSet) e
 		if grammar == "" {
 			grammar = fw.Language
 		}
-		matches, err := m.MatchWithGrammar(fw.Language, grammar, f.Path, f.Src)
+		matches, err := m.MatchWithGrammarRoot(fw.Language, grammar, f.Path, f.Src, roots[f.Path])
 		if err != nil {
 			return err
 		}
@@ -493,7 +552,7 @@ func factRelations(fw *Framework, src factpipe.FactSet) *datalog.FactRelations {
 func (fw *Framework) EvalOnce(files []ParsedFile, graphSoFar graph.Snapshot, extraGoals ...string) (map[string][]datalog.Tuple, error) {
 	fset := factpipe.NewFactSet()
 	factpipe.GraphFacts(graphSoFar, fset)
-	if err := extractFramework(fw, files, fset); err != nil {
+	if err := extractFramework(fw, files, fset, nil); err != nil {
 		return nil, err
 	}
 	factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)

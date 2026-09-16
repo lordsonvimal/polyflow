@@ -101,6 +101,13 @@ func railsViewsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkH
 	seenEdge := map[string]bool{}
 
 	ensureFile := func(svc, file string) string {
+		// file is sourced from the indexer's raw absolute file-walk list
+		// (rvNewViewIndex's callers, needed for view-lookup logic elsewhere
+		// in this file) — relativize before minting so the ID/File matches
+		// the cwd-relative convention containment's pre-existing file nodes
+		// use, same fix as hub_stylesheet_imports.go's ensure (FK-violation
+		// bug found there and fixed identically here).
+		file = relativizeToCwd(file)
 		key := svc + "\x00" + file
 		if id, ok := fileNodeID[key]; ok {
 			return id

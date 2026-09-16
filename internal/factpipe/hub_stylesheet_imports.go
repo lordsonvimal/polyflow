@@ -73,6 +73,16 @@ func stylesheetImportsSitesHub(nodes []graph.Node, files []string, _ string, _ [
 	var mintedOrder []string
 	mintedFile := map[string]string{} // id -> file
 	ensure := func(file string) string {
+		// file is sourced from the indexer's raw absolute file-walk list
+		// (idx.ordered/idx.resolve, needed for this hub's own os.ReadFile
+		// calls below) — relativize before minting so the ID/File matches
+		// the cwd-relative convention containment's pre-existing file nodes
+		// (and fileNodeID's keys, built from those nodes' n.File) use.
+		// Without this, a target stylesheet_imports resolves to its own
+		// module (never reached by containment) mints a second, absolute-
+		// path-keyed node whose ID collides with nothing real — the FK
+		// violation this fixes.
+		file = relativizeToCwd(file)
 		key := svc + "\x00" + file
 		if id, ok := fileNodeID[key]; ok {
 			return id
