@@ -21,6 +21,27 @@ import (
 //
 // FX.7 migrated gin_middleware + express_middleware here; the per-framework Go
 // files (internal/linker/{gin,express}_middleware.go) are gone.
+//
+// XM.13 (docs/factpipe-cross-framework-matching-plan.md): dedicatedPassFrameworks
+// excludes js_hoc/js_client_routes/js_mobx/ruby_http_hosts from the loop
+// below. Each already has its own named pass elsewhere in buildLinkPasses
+// (link_passes.go) that calls pipeline.Run for just that one framework and
+// fully consumes every output kind its patterns emit (patch:/mint:/edges/
+// unresolved — verified against each framework's yaml, none of the four emit
+// a ledger row) — because the shared loop here doesn't apply patch:/mint:'s
+// stamp-in-place semantics (see js_hoc.yaml's doc comment). Before this fix
+// these 4 also matched reg.Active(sf.deps) and ran a second time here,
+// recomputing the same Hub-driven work (registry folds, tree-sitter site
+// resolution) for output nobody read: real cost measured on cedar's real
+// corpus at ~15.4s of the ~25.8s this pass took (js_mobx 4.60s, ruby_http_hosts
+// 4.52s, js_client_routes 4.36s, js_hoc 1.96s), 100% wasted.
+var dedicatedPassFrameworks = map[string]bool{
+	"js_hoc":           true,
+	"js_client_routes": true,
+	"js_mobx":          true,
+	"ruby_http_hosts":  true,
+}
+
 func runFactpipeFrameworks(st *linkPipelineState) error {
 	reg, err := pipeline.LoadEmbedded()
 	if err != nil {
@@ -46,7 +67,12 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 	}
 
 	for _, sf := range st.allSvcFiles {
-		active := reg.Active(sf.deps)
+		var active []*pipeline.Framework
+		for _, fw := range reg.Active(sf.deps) {
+			if !dedicatedPassFrameworks[fw.Name] {
+				active = append(active, fw)
+			}
+		}
 		if len(active) == 0 {
 			continue
 		}
