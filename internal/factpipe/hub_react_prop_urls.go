@@ -12,6 +12,7 @@ import (
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
 
@@ -596,6 +597,6 @@ func rprParseJS(file string) (src []byte, root *sitter.Node, isJSX bool, ok bool
 	if ext := strings.ToLower(filepath.Ext(file)); ext == ".tsx" || ext == ".jsx" {
 		isJSX = true
 	}
-	src, root, ok = cachedParseJS(file, pjcParseJSUncached)
+	src, root, _, ok = jsast.Parse(file)
 	return src, root, isJSX, ok
 }

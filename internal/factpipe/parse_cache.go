@@ -8,19 +8,29 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// XM.14 (docs/factpipe-cross-framework-matching-plan.md): pjcParseJS and
-// rdReadAndParseRuby each re-read + re-parse a file from scratch on every
-// call, with no memoization. js_hoc/js_client_routes/js_mobx/
-// pusher_js_consumer all share pjcParseJS, and js_mobx alone calls it from 4
-// separate per-file loops — every JS file in a service got parsed up to 4x
-// in one hub call before caching, with more redundancy across hubs on top of
-// that. Real cedar profile: runtime.cgocall was 46% of total index CPU,
-// tree-sitter ParseCtx 15.56% cum, with jhcParseJS/pjcParseJS alone 7.35%.
+// XM.14 (docs/factpipe-cross-framework-matching-plan.md): rdReadAndParseRuby
+// re-read + re-parsed a file from scratch on every call, with no
+// memoization. Real cedar profile: runtime.cgocall was 46% of total index
+// CPU, tree-sitter ParseCtx 15.56% cum.
 //
-// The cache key is (path, size, mtime), not path alone: these hub functions
-// run inside both the one-shot `index` CLI and the long-running `serve`
-// daemon, and `serve` reindexes the same paths repeatedly as files change —
-// a path-only cache would silently serve a stale AST after an edit.
+// JS/TS had the same problem (js_hoc/js_client_routes/js_mobx/
+// pusher_js_consumer/react_prop_urls all re-parsed independently) but XM.14
+// gave it its own cache here (pjcParseJS) rather than reusing
+// internal/jsast's — jsast didn't exist as a neutral shared package yet.
+// XM.17 (2026-09-16) deleted that duplicate cache once jsast did exist:
+// every JS/TS parse in this package now goes through jsast.Parse, sharing
+// internal/linker's cache instead of maintaining a second, independent one —
+// see internal/indexer's EnableJSTreeCache/DisableJSTreeCache, which already
+// wraps every call path that reaches these hubs (verified: every
+// pipeline.Run call site lives inside internal/indexer's link-pass loop),
+// so jsast's enable/disable-per-Run teardown gives the same one-Run
+// freshness guarantee the old (path, size, mtime) key gave, without a
+// second cache to keep in sync.
+//
+// The Ruby cache below still needs its own (path, size, mtime) key: Ruby has
+// no equivalent shared-package cache to fold into, and rdReadAndParseRuby's
+// tree needs an explicit Close() a shared jsast-style cache doesn't have to
+// deal with (see rubyParseCache's doc comment below).
 type fileCacheKey struct {
 	size  int64
 	mtime int64
@@ -63,58 +73,6 @@ func WarmParseTree(root *sitter.Node) {
 	walk(root)
 }
 
-// jsParseCache memoizes pjcParseJS. go-tree-sitter's package-level ParseCtx
-// (bindings.go) registers a runtime.SetFinalizer on the underlying tree, not
-// an explicit Close contract — pjcParseJS never returned a release func, so
-// holding onto the returned *sitter.Node here for reuse is a pure win with no
-// lifetime to manage: the finalizer only runs once nothing (including this
-// cache) still references the node.
-type jsParseEntry struct {
-	key  fileCacheKey
-	src  []byte
-	root *sitter.Node
-	ok   bool
-}
-
-var (
-	jsParseMu    sync.Mutex
-	jsParseCache = map[string]*jsParseEntry{}
-	// jsParseSF (XM.5) dedupes concurrent first-touches of the same file:
-	// without it, two frameworks racing on a cold cache would each parse
-	// independently and the second's cache-store would be a lost update
-	// (benign here since JS has no Close to double-free), but the two
-	// *sitter.Node results would be different Go objects sharing no
-	// WarmParseTree — silently reintroducing the very race this cache
-	// exists to prevent for whichever framework got the losing copy.
-	jsParseSF singleflight.Group
-)
-
-func cachedParseJS(file string, parse func(string) ([]byte, *sitter.Node, bool)) (src []byte, root *sitter.Node, ok bool) {
-	key, statOK := statCacheKey(file)
-	if statOK {
-		jsParseMu.Lock()
-		if e, found := jsParseCache[file]; found && e.key == key {
-			jsParseMu.Unlock()
-			return e.src, e.root, e.ok
-		}
-		jsParseMu.Unlock()
-	}
-
-	v, _, _ := jsParseSF.Do(file, func() (any, error) {
-		src, root, ok := parse(file)
-		WarmParseTree(root)
-		e := &jsParseEntry{key: key, src: src, root: root, ok: ok}
-		if statOK {
-			jsParseMu.Lock()
-			jsParseCache[file] = e
-			jsParseMu.Unlock()
-		}
-		return e, nil
-	})
-	e := v.(*jsParseEntry)
-	return e.src, e.root, e.ok
-}
-
 // rubyParseCache memoizes rdReadAndParseRuby. Unlike the JS path, a Ruby
 // *sitter.Tree needs an explicit tree.Close() once nothing references its
 // root anymore (rdReadAndParseRuby's own release func) — this cache takes
@@ -132,8 +90,12 @@ type rubyParseEntry struct {
 var (
 	rubyParseMu    sync.Mutex
 	rubyParseCache = map[string]*rubyParseEntry{}
-	// rubyParseSF (XM.5): same concurrent-first-touch dedup as jsParseSF,
-	// but load-bearing here in a way JS's cache isn't — without it, two
+	// rubyParseSF (XM.5) dedupes concurrent first-touches of the same file.
+	// jsast.Parse (internal/jsast, XM.17) has no singleflight equivalent —
+	// two frameworks racing a cold JS file can both parse it once before
+	// either's result is cached, which is a bounded perf cost (loses the
+	// race, not correctness: JS's *sitter.Node has no Close to double-free).
+	// Ruby's rubyParseSF is load-bearing in a way that tolerance isn't: two
 	// frameworks racing on a cold cache would each parse+store
 	// independently, and the *second* store's "close the entry I'm
 	// replacing" line would tree.Close() the *first* parse's tree while the

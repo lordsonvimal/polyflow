@@ -1,17 +1,15 @@
 package factpipe
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
-	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/railsview"
 )
 
@@ -210,25 +208,15 @@ func pusherJSSubscribeSitesHub(nodes []graph.Node, files []string, _ string, _ [
 }
 
 // --- pjcParseJS: read + parse one JS/TS/JSX/TSX file. ---
+//
+// XM.17 (docs/factpipe-cross-framework-matching-plan.md): delegates to
+// jsast.Parse, the cache internal/linker's hand-written passes already
+// share, instead of a second, independent cache — every JS/TS file in the
+// link-pass phase now parses once, not once per cache.
 
 func pjcParseJS(file string) (src []byte, root *sitter.Node, ok bool) {
-	return cachedParseJS(file, pjcParseJSUncached)
-}
-
-func pjcParseJSUncached(file string) (src []byte, root *sitter.Node, ok bool) {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return nil, nil, false
-	}
-	lang := tssitter.GetLanguage()
-	if ext := strings.ToLower(filepath.Ext(file)); ext == ".tsx" || ext == ".jsx" {
-		lang = tsxsitter.GetLanguage()
-	}
-	root, err = sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil || root == nil {
-		return nil, nil, false
-	}
-	return src, root, true
+	src, root, _, ok = jsast.Parse(file)
+	return src, root, ok
 }
 
 // --- pjcSub / pjcDetectSubs: ported verbatim (renamed) from the retired
