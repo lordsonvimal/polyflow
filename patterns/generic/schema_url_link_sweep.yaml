@@ -1,0 +1,41 @@
+# Tier FX — schema_url_link + js_prop_clients migration (combined 2026-09-16).
+# See patterns/generic/schema_url_link_props.yaml for the other half and the
+# reason this is a separate framework rather than one combined relation set.
+#
+# This half replaces internal/linker/schema_url_link.go's ResolveSchemaURLs
+# (FX.8.29): the existing-node sweep — rewrites a JS/TS http_client the
+# matcher (or the props half above, or Tier UL) left dynamic when its URL
+# expression reads a discovered data asset. Must run AFTER js_local_urls
+# (Tier UL) so a node it could already read is left alone.
+language: generic
+version: "1"
+
+hub:
+  - name: schema_url_link_sweep
+
+emit:
+  - relation: sul_schema_patch_rel
+    columns: [ID, Label, URL, URLOrigin, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw]
+    patch:
+      id: { arg: ID }
+      label: { arg: Label }
+      meta:
+        url: { arg: URL }
+        url_origin: { arg: URLOrigin }
+        schema_file: { arg: SchemaFile }
+        schema_entity: { arg: SchemaEntity }
+        schema_key: { arg: SchemaKey }
+        schema_url_raw: { arg: SchemaURLRaw }
+      delete_meta: [key_dynamic, key_dynamic_raw, key_candidates]
+
+  - relation: sul_schema_ledger_rel
+    columns: [Service, File, Line, Name, Kind]
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: Name }
+        kind: { arg: Kind }

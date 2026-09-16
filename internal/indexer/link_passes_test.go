@@ -41,7 +41,7 @@ var wantLinkPasses = []struct {
 	{"ruby_poly_path_sites", scopeSameServiceOnly},
 	{"go_http_hosts", scopeSameServiceOnly},
 	{"schema_url_tables", scopeSameServiceOnly},
-	{"js_prop_clients", scopeSameServiceOnly},
+	{"schema_url_link_props", scopeSameServiceOnly},
 	{"js_local_urls", scopeSameServiceOnly},
 	{"js_prop_urls", scopeSameServiceOnly},
 	{"js_prop_transport", scopeSameServiceOnly},

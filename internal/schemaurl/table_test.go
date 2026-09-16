@@ -1,4 +1,4 @@
-package linker
+package schemaurl_test
 
 import (
 	"os"
@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/lordsonvimal/polyflow/internal/workspace"
+	"github.com/lordsonvimal/polyflow/internal/artifact"
+	"github.com/lordsonvimal/polyflow/internal/schemaurl"
 )
 
 // writeSchemaFixture writes files (name→content) under a fresh temp dir and
-// returns the service→abs-file-list map LoadSchemaURLTables expects.
+// returns the service→abs-file-list map LoadTables expects.
 func writeSchemaFixture(t *testing.T, files map[string]string) map[string][]string {
 	t.Helper()
 	dir := t.TempDir()
@@ -49,10 +50,46 @@ func TestNormalizeSchemaPath(t *testing.T) {
 		{"https://host/x", "", false},
 	}
 	for _, c := range cases {
-		got, ok := NormalizeSchemaPath(c.in)
+		got, ok := schemaurl.NormalizeSchemaPath(c.in)
 		assert.Equal(t, c.ok, ok, c.in)
 		if c.ok {
 			assert.Equal(t, c.want, got, c.in)
+		}
+	}
+}
+
+// TestEndpointTableNormalizerChainMatchesNormalizeSchemaPath: the
+// endpoint_table gate's normalizer chain must stay byte-identical to
+// NormalizeSchemaPath — a hub builds handlerPaths with the latter and the
+// gate corroborates against it, so any drift silently drops corroboration.
+func TestEndpointTableNormalizerChainMatchesNormalizeSchemaPath(t *testing.T) {
+	t.Parallel()
+	m, ok := artifact.MappingFor("endpoint_table")
+	if !ok {
+		t.Fatal("endpoint_table mapping missing")
+	}
+	g := m.GateSpec()
+
+	cases := []string{
+		"/api/gadgets/{gadget_id}/widgets",
+		"/api/widgets/<id>",
+		"/api/gadgets/:id/reorder",
+		"/api/things/${id}?type=Form&x=1",
+		"/api//double///slash/",
+		"/api/standards/${standard_id}/forms/${id}",
+		"relative/path",
+		"https://host/x",
+		"",
+		"/",
+		"#frag-only",
+		"/trailing/",
+		"/a/b#x?y",
+	}
+	for _, in := range cases {
+		want, wantOK := schemaurl.NormalizeSchemaPath(in)
+		got, gotOK := g.Norm(in)
+		if gotOK != wantOK || got != want {
+			t.Errorf("%q: gate.Norm = (%q,%v), NormalizeSchemaPath = (%q,%v)", in, got, gotOK, want, wantOK)
 		}
 	}
 }
@@ -65,7 +102,7 @@ const widgetJSON = `{
   }
 }`
 
-func TestLoadSchemaURLTables_JSONDialectQualifies(t *testing.T) {
+func TestLoadTables_JSONDialectQualifies(t *testing.T) {
 	t.Parallel()
 	sf := writeSchemaFixture(t, map[string]string{"config/resources.json": widgetJSON})
 	handlers := handlerSet(
@@ -73,7 +110,7 @@ func TestLoadSchemaURLTables_JSONDialectQualifies(t *testing.T) {
 		"/api/gadgets", "/api/gadgets/*/reorder",
 		"/api/sprockets", "/api/sprockets/*",
 	)
-	tables, ledger := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	tables, ledger := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	require.Contains(t, tables, "svc")
 	tbl := tables["svc"]
 	assert.ElementsMatch(t, []string{"gadget", "sprocket", "widget"}, tbl.Entities())
@@ -116,7 +153,7 @@ const widgetYAML = `resources:
       detail: /api/sprockets/:id
 `
 
-func TestLoadSchemaURLTables_YAMLTwoLevelNest(t *testing.T) {
+func TestLoadTables_YAMLTwoLevelNest(t *testing.T) {
 	t.Parallel()
 	sf := writeSchemaFixture(t, map[string]string{"cfg/res.yaml": widgetYAML})
 	handlers := handlerSet(
@@ -124,7 +161,7 @@ func TestLoadSchemaURLTables_YAMLTwoLevelNest(t *testing.T) {
 		"/api/gadgets", "/api/gadgets/*",
 		"/api/sprockets", "/api/sprockets/*",
 	)
-	tables, _ := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	tables, _ := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	require.Contains(t, tables, "svc")
 	tbl := tables["svc"]
 	assert.ElementsMatch(t, []string{"gadget", "sprocket", "widget"}, tbl.Entities())
@@ -134,7 +171,7 @@ func TestLoadSchemaURLTables_YAMLTwoLevelNest(t *testing.T) {
 	assert.Equal(t, "endpoints.list", e.Key)
 }
 
-func TestLoadSchemaURLTables_RejectsNonAssets(t *testing.T) {
+func TestLoadTables_RejectsNonAssets(t *testing.T) {
 	t.Parallel()
 	sf := writeSchemaFixture(t, map[string]string{
 		"package.json":  `{"name":"x","scripts":{"build":"tsc"},"bin":"/usr/bin/env"}`,
@@ -143,16 +180,16 @@ func TestLoadSchemaURLTables_RejectsNonAssets(t *testing.T) {
 			`"d":{"x":1},"e":{"y":2},"f":{"z":3},"g":{"w":4},"h":{"v":5}}`,
 	})
 	handlers := handlerSet("/api/widgets", "/api/gadgets", "/api/sprockets", "/api/things", "/api/more")
-	tables, _ := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	tables, _ := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	assert.Empty(t, tables)
 }
 
-func TestLoadSchemaURLTables_OpenAPISkipped(t *testing.T) {
+func TestLoadTables_OpenAPISkipped(t *testing.T) {
 	t.Parallel()
 	// declared so the skip row is emitted even though it never corroborates
 	sf := writeSchemaFixture(t, map[string]string{"openapi.json": `{"openapi":"3.0.0","paths":{"/api/widgets":{"get":{}}}}`})
-	tables, ledger := LoadSchemaURLTables(sf, handlerSet("/api/widgets"),
-		workspace.SchemaConfig{Assets: []string{"**/openapi.json"}})
+	tables, ledger := schemaurl.LoadTables(sf, handlerSet("/api/widgets"),
+		schemaurl.Config{Assets: []string{"**/openapi.json"}})
 	assert.Empty(t, tables)
 	var skipped bool
 	for _, l := range ledger {
@@ -164,17 +201,17 @@ func TestLoadSchemaURLTables_OpenAPISkipped(t *testing.T) {
 	assert.True(t, skipped)
 }
 
-func TestLoadSchemaURLTables_FixtureCopySkipped(t *testing.T) {
+func TestLoadTables_FixtureCopySkipped(t *testing.T) {
 	t.Parallel()
 	sf := writeSchemaFixture(t, map[string]string{"spec/fixtures/resources.json": widgetJSON})
 	handlers := handlerSet("/api/widgets", "/api/widgets/*/reorder", "/api/gadgets",
 		"/api/gadgets/*/reorder", "/api/sprockets", "/api/sprockets/*")
-	tables, ledger := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	tables, ledger := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	assert.Empty(t, tables)
 	assert.Empty(t, ledger)
 }
 
-func TestLoadSchemaURLTables_Alias(t *testing.T) {
+func TestLoadTables_Alias(t *testing.T) {
 	t.Parallel()
 	j := `{"resources":{
       "widget":{"model":"widget_v2","endpoint":"/api/widgets","reorder":"/api/widgets/:id/reorder"},
@@ -183,7 +220,7 @@ func TestLoadSchemaURLTables_Alias(t *testing.T) {
 	sf := writeSchemaFixture(t, map[string]string{"r.json": j})
 	handlers := handlerSet("/api/widgets", "/api/widgets/*/reorder", "/api/gadgets",
 		"/api/gadgets/*/reorder", "/api/sprockets", "/api/sprockets/*")
-	tables, _ := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	tables, _ := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	require.Contains(t, tables, "svc")
 	tbl := tables["svc"]
 	assert.Equal(t, "widget", tbl.Aliases["widget_v2"])
@@ -192,7 +229,7 @@ func TestLoadSchemaURLTables_Alias(t *testing.T) {
 	assert.Equal(t, "/api/widgets/*/reorder", e.Path)
 }
 
-func TestLoadSchemaURLTables_DeadEntry(t *testing.T) {
+func TestLoadTables_DeadEntry(t *testing.T) {
 	t.Parallel()
 	j := `{"resources":{
       "widget":{"endpoint":"/api/widgets","reorder":"/api/widgets/:id/reorder"},
@@ -201,7 +238,7 @@ func TestLoadSchemaURLTables_DeadEntry(t *testing.T) {
 	sf := writeSchemaFixture(t, map[string]string{"r.json": j})
 	handlers := handlerSet("/api/widgets", "/api/widgets/*/reorder", "/api/gadgets",
 		"/api/gadgets/*/reorder", "/api/sprockets")
-	_, ledger := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	_, ledger := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	var dead []string
 	for _, l := range ledger {
 		if l.Kind == "schema_route_dead" {
@@ -212,28 +249,28 @@ func TestLoadSchemaURLTables_DeadEntry(t *testing.T) {
 	assert.Equal(t, "/api/sprockets/:id/legacy_action", dead[0])
 }
 
-func TestLoadSchemaURLTables_Deterministic(t *testing.T) {
+func TestLoadTables_Deterministic(t *testing.T) {
 	t.Parallel()
 	sf := writeSchemaFixture(t, map[string]string{"r.json": widgetJSON})
 	handlers := handlerSet("/api/widgets", "/api/widgets/*/reorder", "/api/gadgets",
 		"/api/gadgets/*/reorder", "/api/sprockets", "/api/sprockets/*")
-	t1, l1 := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
-	t2, l2 := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{})
+	t1, l1 := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
+	t2, l2 := schemaurl.LoadTables(sf, handlers, schemaurl.Config{})
 	assert.Equal(t, t1, t2)
 	assert.Equal(t, l1, l2)
 }
 
-func TestLoadSchemaURLTables_Disable(t *testing.T) {
+func TestLoadTables_Disable(t *testing.T) {
 	t.Parallel()
 	sf := writeSchemaFixture(t, map[string]string{"r.json": widgetJSON})
 	handlers := handlerSet("/api/widgets", "/api/widgets/*/reorder", "/api/gadgets",
 		"/api/gadgets/*/reorder", "/api/sprockets", "/api/sprockets/*")
-	tables, ledger := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{Disable: true})
+	tables, ledger := schemaurl.LoadTables(sf, handlers, schemaurl.Config{Disable: true})
 	assert.Empty(t, tables)
 	assert.Empty(t, ledger)
 }
 
-func TestLoadSchemaURLTables_TunedVsTightened(t *testing.T) {
+func TestLoadTables_TunedVsTightened(t *testing.T) {
 	t.Parallel()
 	// 4 corroborated paths — below the default floor of 5, above a loosened 3.
 	j := `{"resources":{
@@ -242,7 +279,7 @@ func TestLoadSchemaURLTables_TunedVsTightened(t *testing.T) {
 	sf := writeSchemaFixture(t, map[string]string{"r.json": j})
 	handlers := handlerSet("/api/widgets", "/api/widgets/*/reorder", "/api/gadgets", "/api/gadgets/*/reorder")
 
-	_, loose := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{MinCorroboratedPaths: 3})
+	_, loose := schemaurl.LoadTables(sf, handlers, schemaurl.Config{MinCorroboratedPaths: 3})
 	var tuned bool
 	for _, l := range loose {
 		if l.Kind == "schema_asset_loaded_tuned" {
@@ -253,13 +290,13 @@ func TestLoadSchemaURLTables_TunedVsTightened(t *testing.T) {
 	assert.True(t, tuned, "loosened threshold must emit schema_asset_loaded_tuned")
 
 	// tightening can only reject — never a tuned row.
-	_, tight := LoadSchemaURLTables(sf, handlers, workspace.SchemaConfig{MinCorroboratedPaths: 10})
+	_, tight := schemaurl.LoadTables(sf, handlers, schemaurl.Config{MinCorroboratedPaths: 10})
 	for _, l := range tight {
 		assert.NotEqual(t, "schema_asset_loaded_tuned", l.Kind)
 	}
 }
 
-func TestLoadSchemaURLTables_DeclaredBypassesGate(t *testing.T) {
+func TestLoadTables_DeclaredBypassesGate(t *testing.T) {
 	t.Parallel()
 	// only 2 corroborated paths; would never self-discover.
 	j := `{"resources":{
@@ -267,8 +304,8 @@ func TestLoadSchemaURLTables_DeclaredBypassesGate(t *testing.T) {
       "gadget":{"endpoint":"/api/gadgets","gone":"/api/gadgets/legacy"}}}`
 	sf := writeSchemaFixture(t, map[string]string{"config/r.json": j})
 	handlers := handlerSet("/api/widgets", "/api/gadgets")
-	tables, ledger := LoadSchemaURLTables(sf, handlers,
-		workspace.SchemaConfig{Assets: []string{"**/config/r.json"}})
+	tables, ledger := schemaurl.LoadTables(sf, handlers,
+		schemaurl.Config{Assets: []string{"**/config/r.json"}})
 	require.Contains(t, tables, "svc")
 	var dead int
 	for _, l := range ledger {
@@ -277,21 +314,4 @@ func TestLoadSchemaURLTables_DeclaredBypassesGate(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, dead)
-}
-
-func TestSchemaConfigEffective(t *testing.T) {
-	t.Parallel()
-	got, loosened := workspace.SchemaConfig{}.Effective()
-	assert.Equal(t, workspace.DefaultMinCorroboratedPaths, got.MinCorroboratedPaths)
-	assert.Equal(t, workspace.DefaultMinCorroboratedRatio, got.MinCorroboratedRatio)
-	assert.Equal(t, workspace.DefaultMinEntityDiscrimination, got.MinEntityDiscrimination)
-	assert.False(t, loosened)
-
-	orig := workspace.SchemaConfig{MinCorroboratedPaths: 2}
-	_, loosened = orig.Effective()
-	assert.True(t, loosened)
-	assert.Equal(t, 2, orig.MinCorroboratedPaths, "Effective must not mutate the receiver")
-
-	_, loosened = workspace.SchemaConfig{MinCorroboratedPaths: 9}.Effective()
-	assert.False(t, loosened, "tightening is not loosening")
 }

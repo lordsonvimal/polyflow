@@ -53,7 +53,7 @@ const (
 	gtTableCollisionPred  = "gorm_table_collision"  // (Svc, File, Line, Table)
 )
 
-func gormTablesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
+func gormTablesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	// service -> table label -> node IDs (schema.sql preferred on a clash).
 	schemaByService := make(map[string]map[string][]string)
 	schemaAnyService := make(map[string][]string)

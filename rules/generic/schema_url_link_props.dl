@@ -1,0 +1,32 @@
+% Tier FX — schema_url_link + js_prop_clients migration (combined 2026-09-16).
+% Replaces internal/linker/js_prop_client.go's LinkJSPropClients (SPA.4/5).
+% See rules/generic/schema_url_link_sweep.dl for the other half.
+%
+% Base facts (from the "schema_url_link_props" hub, internal/factpipe/
+% hub_schema_url_link.go — real per-expression Go: HOC detection,
+% dynamic-URL-builder shape synthesis, entity-pin resolution via
+% internal/schemaurl's accessor-learning resolver):
+%
+%   sul_prop_client_mint(ID, Service, File, Line, Label, Method, URL,
+%       KeyCandidates, URLOrigin, BranchIndex, SchemaFile, SchemaEntity,
+%       SchemaKey, SchemaURLRaw)
+%       one http_client mint request per resolved prop-client call site.
+%       Optional columns may be "" — mint:'s Meta overlay skips whichever
+%       resolves empty.
+%   sul_prop_client_edge(FnID, ID)
+%       the enclosing function's `calls` edge to a minted client, only when
+%       the hub found one (a module-level helper has no enclosing node).
+%   sul_prop_client_ledger(Service, File, Line, Name, Kind)
+%       one row per prop-client site the hub could not resolve to a node.
+%
+% Pure pass-through — the hub already decided every branch before asserting
+% a fact.
+
+sul_prop_client_mint_rel(ID, Service, File, Line, Label, Method, URL, KeyCandidates, URLOrigin, BranchIndex, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw) :-
+    sul_prop_client_mint(ID, Service, File, Line, Label, Method, URL, KeyCandidates, URLOrigin, BranchIndex, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw).
+
+sul_prop_client_edge_rel(FnID, ID) :-
+    sul_prop_client_edge(FnID, ID).
+
+sul_prop_client_ledger_rel(Service, File, Line, Name, Kind) :-
+    sul_prop_client_ledger(Service, File, Line, Name, Kind).

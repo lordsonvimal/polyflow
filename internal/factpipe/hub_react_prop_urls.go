@@ -52,7 +52,7 @@ func init() { RegisterHub("react_prop_urls", reactPropURLsHub) }
 
 const reactPropURLsPatchPred = "react_prop_urls_patch"
 
-func reactPropURLsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
+func reactPropURLsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	type routeInfo struct{ url, method string }
 
 	// 1. route_helper → routes. App-global: a component's Rails side and the

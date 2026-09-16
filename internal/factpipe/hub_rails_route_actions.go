@@ -81,7 +81,7 @@ const (
 	rraCtrlPred         = "rra_ctrl_ns_resource"
 )
 
-func railsRouteActionsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
+func railsRouteActionsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	var out []Fact
 	for i := range nodes {
 		n := &nodes[i]

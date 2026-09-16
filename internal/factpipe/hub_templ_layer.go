@@ -47,7 +47,7 @@ const (
 	tlClassFanoutUnresolved = "tl_dom_class_fanout_unresolved" // (Svc, File, Line, Name, Targets)
 )
 
-func templLayerHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint) []Fact {
+func templLayerHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	var out []Fact
 	out = append(out, tlScriptFacts(nodes)...)
 	out = append(out, tlDOMDefinitionFacts(nodes)...)

@@ -38,7 +38,7 @@ const (
 	cbRegradePred = "config_baseurl_regrade" // (ID) — only rows whose stale weak stamp must clear
 )
 
-func configBaseURLHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint) []Fact {
+func configBaseURLHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	if svcPath == "" {
 		return nil
 	}

@@ -1,0 +1,24 @@
+% Tier FX — schema_url_link + js_prop_clients migration (combined 2026-09-16).
+% Replaces internal/linker/schema_url_link.go's ResolveSchemaURLs (FX.8.29).
+% See rules/generic/schema_url_link_props.dl for the other half.
+%
+% Base facts (from the "schema_url_link_sweep" hub, internal/factpipe/
+% hub_schema_url_link.go):
+%
+%   sul_schema_patch(ID, Label, URL, URLOrigin, SchemaFile, SchemaEntity,
+%       SchemaKey, SchemaURLRaw)
+%       a still-dynamic http_client whose URL expression resolved through
+%       the schema-asset resolver.
+%   sul_schema_ledger(Service, File, Line, Name, Kind)
+%       one row per site that reads a schema asset but could not resolve
+%       (ambiguous pin, ambiguous accessor key, poisoned `.replace()`, or a
+%       resolved value with no known verb).
+%
+% Pure pass-through — the hub already decided every branch before asserting
+% a fact.
+
+sul_schema_patch_rel(ID, Label, URL, URLOrigin, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw) :-
+    sul_schema_patch(ID, Label, URL, URLOrigin, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw).
+
+sul_schema_ledger_rel(Service, File, Line, Name, Kind) :-
+    sul_schema_ledger(Service, File, Line, Name, Kind).

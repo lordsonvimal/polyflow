@@ -15,6 +15,7 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/linker"
 	"github.com/lordsonvimal/polyflow/internal/pluginloader"
+	"github.com/lordsonvimal/polyflow/internal/schemaurl"
 	"github.com/lordsonvimal/polyflow/internal/workspace"
 )
 
@@ -112,10 +113,13 @@ type linkPipelineState struct {
 	// schemaURLTables: set by the schema_url_tables pass (Tier MS.0), one
 	// per service that has a route-corroborated endpoint-declaring data
 	// asset. A lookup table, never a producer — consumed by MS.1+.
-	schemaURLTables map[string]*linker.SchemaURLTable
-	// schemaURLResolver: set by schema_url_tables, consumed by js_prop_clients,
-	// js_local_urls, and schema_url_links (Tier MS.1/MS.2).
-	schemaURLResolver *linker.SchemaURLResolver
+	schemaURLTables map[string]*schemaurl.Table
+	// schemaURLResolver: set by schema_url_tables, consumed by js_local_urls
+	// (Tier MS.1/MS.2) — js_prop_clients and schema_url_links build their own
+	// copy inside the Tier FX "schema_url_link" hub (internal/factpipe/
+	// hub_schema_url_link.go), since a HubProvider recomputes its own facts
+	// fresh per pipeline.Run call rather than sharing this field.
+	schemaURLResolver *schemaurl.Resolver
 	// contractRules: set by load_contract_rules, read by contract_engine and
 	// contract_coverage.
 	contractRules []contract.Rule
@@ -1114,7 +1118,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				if n.Type != graph.NodeTypeHTTPHandler {
 					continue
 				}
-				norm, ok := linker.NormalizeSchemaPath(n.Meta["path"])
+				norm, ok := schemaurl.NormalizeSchemaPath(n.Meta["path"])
 				if !ok {
 					continue
 				}
@@ -1128,43 +1132,75 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				abs, _ := filepath.Abs(sf.svc.Path)
 				svcFiles[sf.svc.Name] = walkAllFiles(abs)
 			}
-			tables, ledger := linker.LoadSchemaURLTables(svcFiles, handlerPaths, st.cfg.Schema)
+			schemaCfg := schemaurl.Config{
+				Assets:                  st.cfg.Schema.Assets,
+				MinCorroboratedPaths:    st.cfg.Schema.MinCorroboratedPaths,
+				MinCorroboratedRatio:    st.cfg.Schema.MinCorroboratedRatio,
+				MinEntityDiscrimination: st.cfg.Schema.MinEntityDiscrimination,
+				Disable:                 st.cfg.Schema.Disable,
+			}
+			tables, ledger := schemaurl.LoadTables(svcFiles, handlerPaths, schemaCfg)
 			st.schemaURLTables = tables
-			st.schemaURLResolver = linker.BuildSchemaURLResolver(tables, svcFiles)
+			st.schemaURLResolver = schemaurl.NewResolver(tables, svcFiles)
 			st.allUnresolved = append(st.allUnresolved, ledger...)
 			return nil
 		}},
-		// SPA.4: prop-injected HTTP-client wrapper. Mints http_client nodes for
-		// `this.props.ajaxStatus.get(msg, url)` call sites (URL KeyWalked) so the
-		// contract engine joins them to Rails routes. Runs before js_http_hosts
-		// (a template-host URL it emits still gets its host recovered) and well
-		// before the contract engine.
-		{"js_prop_clients", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			pcNodes, pcEdges, pcLedger := linker.LinkJSPropClients(st.allNodes, svcFiles, st.schemaURLResolver)
-			st.allUnresolved = append(st.allUnresolved, pcLedger...)
-			if len(pcNodes) == 0 {
-				return st.writeEdges(pcEdges)
+		// SPA.4/SPA.5: prop-injected HTTP-client wrapper (Tier FX, combined
+		// schema_url_link + js_prop_clients migration, 2026-09-16). Mints
+		// http_client nodes for `this.props.ajaxStatus.get(msg, url)` call
+		// sites (URL KeyWalked, dynamic-URL-builder shape synthesis, or the
+		// schema-asset resolver built above) so the contract engine joins
+		// them to Rails routes. Runs before js_http_hosts (a template-host
+		// URL it emits still gets its host recovered), before js_local_urls
+		// (Tier UL) so a prop-client-minted node is a candidate there too,
+		// and well before the contract engine.
+		{"schema_url_link_props", scopeSameServiceOnly, func() error {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("schema_url_link_props: load registry: %w", err)
+			}
+			fw := reg.ByName("schema_url_link_props")
+			if fw == nil {
+				return fmt.Errorf("schema_url_link_props: framework not embedded")
 			}
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
 			}
-			for i := range pcNodes {
-				n := pcNodes[i]
-				if _, exists := byID[n.ID]; exists {
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
 					continue
 				}
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				if err != nil {
+					return fmt.Errorf("schema_url_link_props: service %s: %w", sf.svc.Name, err)
+				}
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
+				for i := range res.Nodes {
+					n := res.Nodes[i]
+					if _, exists := byID[n.ID]; exists {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = len(st.allNodes) - 1
+				}
+				if err := st.bw.Flush(st.ctx); err != nil {
 					return err
 				}
-				st.allNodes = append(st.allNodes, n)
-				byID[n.ID] = len(st.allNodes) - 1
+				if err := st.writeEdges(res.Edges); err != nil {
+					return err
+				}
 			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			return st.writeEdges(pcEdges)
+			return nil
 		}},
 		// Tier UL: read the URL of every JS/TS http_client the matcher left
 		// dynamic, by backtracking its URL expression to the assignments in the
@@ -2063,23 +2099,72 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return nil
 		}},
-		// Tier MS.1/MS.2: pin an entity from a discovered asset's vocabulary and
-		// resolve a direct `<pinned>.<key>` read or a learnt-accessor call on a
-		// JS/TS http_client the matcher left dynamic. Rewrites the existing node
-		// in place with the resolved path + provenance Meta; mints nothing here
-		// (the no-node prop-client sites are handled inside js_prop_clients).
-		// Runs after js_local_urls so a node it could already read is left alone.
+		// Tier MS.1/MS.2 (Tier FX, combined schema_url_link + js_prop_clients
+		// migration, 2026-09-16): pin an entity from a discovered asset's
+		// vocabulary and resolve a direct `<pinned>.<key>` read or a
+		// learnt-accessor call on a JS/TS http_client the matcher left
+		// dynamic. Rewrites the existing node in place with the resolved
+		// path + provenance Meta; mints nothing here (the no-node
+		// prop-client sites are handled inside schema_url_link_props).
+		// Runs after js_local_urls so a node it could already read is left
+		// alone — a dedicated per-service pipeline.Run call, not
+		// factpipe_frameworks, and a SEPARATE framework from
+		// schema_url_link_props even though both share one hub-side
+		// resolver-builder, precisely because of this ordering requirement
+		// (see hub_schema_url_link.go's doc comment).
 		{"schema_url_links", scopeSameServiceOnly, func() error {
-			changed, ledger := linker.ResolveSchemaURLs(st.allNodes, st.schemaURLResolver)
-			st.allUnresolved = append(st.allUnresolved, ledger...)
-			for i := range changed {
-				n := changed[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
-				}
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("schema_url_link_sweep: load registry: %w", err)
 			}
-			if len(changed) == 0 {
-				return nil
+			fw := reg.ByName("schema_url_link_sweep")
+			if fw == nil {
+				return fmt.Errorf("schema_url_link_sweep: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
+					continue
+				}
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				if err != nil {
+					return fmt.Errorf("schema_url_link_sweep: service %s: %w", sf.svc.Name, err)
+				}
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
+				for _, p := range res.Patches {
+					idx, ok := byID[p.ID]
+					if !ok {
+						continue
+					}
+					n := st.allNodes[idx]
+					m := make(map[string]string, len(n.Meta)+len(p.Meta))
+					for k, v := range n.Meta {
+						m[k] = v
+					}
+					for _, k := range p.DeleteMeta {
+						delete(m, k)
+					}
+					for k, v := range p.Meta {
+						m[k] = v
+					}
+					n.Meta = m
+					if p.Label != "" {
+						n.Label = p.Label
+					}
+					st.allNodes[idx] = n
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+				}
 			}
 			return st.bw.Flush(st.ctx)
 		}},

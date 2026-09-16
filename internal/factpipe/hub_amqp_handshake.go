@@ -39,7 +39,7 @@ type amqpHandshakeDecl struct {
 	queue   string
 }
 
-func amqpHandshakeHub(nodes []graph.Node, _ []string, _ string, _ []graph.LinkHint) []Fact {
+func amqpHandshakeHub(nodes []graph.Node, _ []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	decls := amqpCollectHandshakeDeclarations(nodes)
 	if len(decls) == 0 {
 		return nil

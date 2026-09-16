@@ -1,0 +1,74 @@
+# Tier FX — schema_url_link + js_prop_clients migration (combined 2026-09-16).
+# See patterns/generic/schema_url_link_sweep.yaml for the other half — both
+# share internal/factpipe/hub_schema_url_link.go's per-service
+# schemaurl.Resolver (sulBuildResolver), but are separate frameworks because
+# internal/indexer/link_passes.go must call this half (SPA.4/SPA.5, mints
+# http_client nodes for prop-injected transport call sites) BEFORE
+# js_local_urls (Tier UL), and the sweep half AFTER it. Splitting also gives
+# each pipeline.Run call its own unambiguous Result.Unresolved — the two
+# halves can independently produce the same ledger Kind strings for
+# different reasons, so one merged Result.Unresolved would be unattributable.
+#
+# NO `patterns:`/`facts:` block — hub-only, like pusher_producer/
+# react_prop_urls: the whole algorithm (HOC detection, call-site resolution,
+# dynamic-URL-builder shape synthesis) is real per-expression Go inside the
+# hub, not a tree-sitter query. `language: generic` shields it from the
+# shared `factpipe_frameworks` per-service loop; it's called via a dedicated
+# `pipeline.Run` instead (each invocation scoped to one service's
+# nodes/files, the config_baseurl/rails_devise convention).
+#
+# Two branches (mint-vs-edge for a site, resolved-vs-ledger) are decided in
+# Go and asserted into distinct predicates rather than one row plus a
+# boolean column — the gorm_query_edge/gorm_persist_edge precedent.
+language: generic
+version: "1"
+
+hub:
+  - name: schema_url_link_props
+
+emit:
+  - relation: sul_prop_client_mint_rel
+    columns: [ID, Service, File, Line, Label, Method, URL, KeyCandidates, URLOrigin, BranchIndex, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw]
+    mint:
+      node: http_client
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Service }
+      file: { arg: File }
+      line: { arg: Line }
+      language: javascript
+      meta:
+        pattern: prop_client
+        method: { arg: Method }
+        url: { arg: URL }
+        spa: prop_client
+        key_candidates: { arg: KeyCandidates }
+        url_origin: { arg: URLOrigin }
+        branch_index: { arg: BranchIndex }
+        schema_file: { arg: SchemaFile }
+        schema_entity: { arg: SchemaEntity }
+        schema_key: { arg: SchemaKey }
+        schema_url_raw: { arg: SchemaURLRaw }
+
+  - relation: sul_prop_client_edge_rel
+    columns: [FnID, ID]
+    edge:
+      from: { arg: FnID }
+      to: { arg: ID }
+      type: calls
+    meta:
+      spa: prop_client
+    confidence:
+      - else: inferred
+
+  - relation: sul_prop_client_ledger_rel
+    columns: [Service, File, Line, Name, Kind]
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: Name }
+        kind: { arg: Kind }

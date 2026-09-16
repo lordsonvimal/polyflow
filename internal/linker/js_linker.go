@@ -2,16 +2,14 @@ package linker
 
 import (
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
-	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
@@ -274,8 +272,7 @@ func isFrameworkComponent(label string) bool {
 }
 
 func isJSFile(file string) bool {
-	ext := strings.ToLower(filepath.Ext(file))
-	return ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".es6"
+	return jsast.IsJSFile(file)
 }
 
 // resolveImportCalls parses file for import declarations and member-expression
@@ -808,23 +805,13 @@ func moduleDeclSpans(root *sitter.Node, src []byte) []declSpan {
 	return spans
 }
 
-// tsLang/tsxLang are process-wide singletons: GetLanguage() allocates a new Go
-// wrapper around the same static C grammar on every call, but a *sitter.Query
-// is compiled against the wrapper's identity, so reusing one wrapper per
-// grammar is what makes queryCache's pointer-keyed lookups actually hit.
-var (
-	tsLang  = tssitter.GetLanguage()
-	tsxLang = tsxsitter.GetLanguage()
-)
-
+// grammarLangForFile delegates to jsast.GrammarLangForFile (internal/jsast),
+// which owns the single process-wide tsLang/tsxLang singletons — a
+// *sitter.Query is compiled against a grammar wrapper's identity, so
+// queryCache's pointer-keyed lookups only hit if every caller resolves the
+// same grammar object per language, not a locally re-allocated one.
 func grammarLangForFile(file string) *sitter.Language {
-	ext := strings.ToLower(filepath.Ext(file))
-	switch ext {
-	case ".tsx", ".jsx":
-		return tsxLang
-	default:
-		return tsLang
-	}
+	return jsast.GrammarLangForFile(file)
 }
 
 // queryCache compiles each (grammar, query text) pair at most once. Every

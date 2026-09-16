@@ -49,7 +49,13 @@ import (
 // since a link rule names two services and lives in the workspace root
 // config. Nil unless the caller sets Snapshot.Links; every hub before
 // FX.8.31 ignores it.
-type HubProvider func(nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint) []Fact
+//
+// schema (added for the schema_url_link + js_prop_clients hub) is
+// graph.Snapshot.Schema verbatim — Tier MS's endpoint-declaring data-asset
+// corroboration-gate config, a workspace-level input a hub cannot derive
+// from nodes/files/svcPath. Zero value unless the caller sets Snapshot.Schema;
+// every hub before this one ignores it.
+type HubProvider func(nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, schema graph.SchemaConfig) []Fact
 
 var hubRegistry = map[string]HubProvider{}
 
@@ -94,13 +100,13 @@ func CompileHubSpecs(specs []HubSpec) ([]CompiledHub, error) {
 // framework declares no hub block, so every framework that doesn't need this
 // mechanism pays nothing for it — the same inert-by-default shape as
 // ApplyConfig / ApplyTable.
-func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, dst FactSet) {
+func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, schema graph.SchemaConfig, dst FactSet) {
 	for _, h := range hs {
 		fn := hubRegistry[h.Name()]
 		if fn == nil {
 			continue
 		}
-		for _, f := range fn(nodes, files, svcPath, links) {
+		for _, f := range fn(nodes, files, svcPath, links, schema) {
 			dst.Add(f)
 		}
 	}

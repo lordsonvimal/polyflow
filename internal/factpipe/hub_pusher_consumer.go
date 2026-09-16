@@ -63,7 +63,7 @@ const pusherSubscribeSitePred = "pusher_subscribe_site"
 // `@pusher_config` ivar, same honest gap as the retired Go.
 const pusherReactPropConfigPred = "pusher_react_prop_config"
 
-func pusherWrapperERBHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint) []Fact {
+func pusherWrapperERBHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
 	hubFiles := map[string]bool{}
 	for i := range nodes {
 		switch nodes[i].Meta["pattern"] {

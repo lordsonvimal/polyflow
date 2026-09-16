@@ -7,6 +7,8 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
+	"github.com/lordsonvimal/polyflow/internal/schemaurl"
 )
 
 // Tier UL — resolve URLs held in function-local bindings.
@@ -86,11 +88,14 @@ func ResolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (
 // unreadable right-hand side are different facts about the code and collapsing
 // them would make the ledger unable to say which.
 //
-// The walkers that used to answer this were retired in VG.5; the symbolic value
-// engine (internal/valuegraph, via valuegraph_adapter.go) is now the only
-// implementation. The signature is kept because five passes call it.
+// The walkers that used to answer this were retired in VG.5; internal/jsast's
+// ResolveLocalURLBinding (backed by the symbolic value engine,
+// internal/valuegraph) is now the only implementation — moved there (Tier FX,
+// schema_url_link + js_prop_clients migration) so internal/factpipe's hub
+// providers can call it too. The signature is kept because several passes
+// call it.
 func resolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (paths []string, reason string, ok bool) {
-	return resolveLocalURLBindingVG(urlExpr, fn, src)
+	return jsast.ResolveLocalURLBinding(urlExpr, fn, src)
 }
 
 // localURLUnwrapObject returns the expression that actually holds the URL: the
@@ -109,106 +114,31 @@ func localURLUnwrapObject(n *sitter.Node, src []byte) *sitter.Node {
 	return nil
 }
 
-// localURLIdentName returns the name of a bare identifier reference, including
-// the shorthand form an options object contributes. Member expressions
-// (`this.comparisonQueryUrl`) are deliberately not handled here: they need
-// class-member dataflow, and guessing at them is out of scope for this tier.
+// localURLIdentName delegates to internal/jsast.LocalIdentName (moved there,
+// Tier FX schema_url_link + js_prop_clients migration, so factpipe's hub
+// providers can call it too).
 func localURLIdentName(n *sitter.Node, src []byte) string {
-	if n == nil {
-		return ""
-	}
-	switch n.Type() {
-	case "identifier", "shorthand_property_identifier", "property_identifier":
-		return n.Content(src)
-	}
-	return ""
+	return jsast.LocalIdentName(n, src)
 }
 
-// localURLAssignments collects every value bound to name inside fn's subtree
-// before useStart, in source order: `let url = …`, `url = …`, and the
-// declarator form in each arm of a branch.
-//
-// Bindings inside a nested function that does not contain the use site are
-// skipped — a callback's own `url` is not this call's. Nested *blocks* are
-// entered, and must be: the if/else and switch arms that make a site
-// multi-valued live in them, and refusing to look would leave exactly one
-// visible binding and a confidently wrong single path.
+// localURLAssignments delegates to internal/jsast.LocalAssignments.
 func localURLAssignments(fn *sitter.Node, useStart uint32, src []byte, name string) []*sitter.Node {
-	var out []*sitter.Node
-	var visit func(n *sitter.Node)
-	visit = func(n *sitter.Node) {
-		if n == nil {
-			return
-		}
-		if n != fn && localURLFnTypes[n.Type()] &&
-			!(n.StartByte() <= useStart && useStart < n.EndByte()) {
-			return
-		}
-		switch n.Type() {
-		case "variable_declarator":
-			if localURLFieldIdentIs(n, "name", src, name) {
-				if v := n.ChildByFieldName("value"); v != nil && v.StartByte() < useStart {
-					out = append(out, v)
-				}
-			}
-		case "assignment_expression":
-			if localURLFieldIdentIs(n, "left", src, name) {
-				if v := n.ChildByFieldName("right"); v != nil && v.StartByte() < useStart {
-					out = append(out, v)
-				}
-			}
-		}
-		for i := 0; i < int(n.ChildCount()); i++ {
-			visit(n.Child(i))
-		}
-	}
-	visit(fn)
-	return out
+	return jsast.LocalAssignments(fn, useStart, src, name)
 }
 
-func localURLFieldIdentIs(n *sitter.Node, field string, src []byte, name string) bool {
-	f := n.ChildByFieldName(field)
-	if f == nil || f.Type() != "identifier" {
-		return false
-	}
-	return f.Content(src) == name
+// jsObjectKeyValue delegates to internal/jsast.ObjectKeyValue.
+func jsObjectKeyValue(n *sitter.Node, src []byte, key string) *sitter.Node {
+	return jsast.ObjectKeyValue(n, src, key)
 }
 
-// localURLModuleReassign reports whether name is assigned by a top-level
-// statement anywhere in the file. This is the mirror image of
-// jsHostFile.hasModuleScopeReassign: a module-scope write means the name the
-// call site read is not owned by the enclosing function, so the assignments
-// found inside it are not the whole story and the site must abstain.
+// localURLModuleReassign delegates to internal/jsast.ModuleScopeReassign.
 func localURLModuleReassign(fn *sitter.Node, src []byte, name string) bool {
-	root := fn
-	for root.Parent() != nil {
-		root = root.Parent()
-	}
-	for i := 0; i < int(root.NamedChildCount()); i++ {
-		stmt := root.NamedChild(i)
-		if stmt == nil || stmt.Type() != "expression_statement" || stmt.NamedChildCount() == 0 {
-			continue
-		}
-		expr := stmt.NamedChild(0)
-		if expr.Type() != "assignment_expression" {
-			continue
-		}
-		if localURLFieldIdentIs(expr, "left", src, name) {
-			return true
-		}
-	}
-	return false
+	return jsast.ModuleScopeReassign(fn, src, name)
 }
 
-// enclosingJSFunction returns the nearest function-introducing ancestor of n,
-// strictly above it, or nil at module scope.
+// enclosingJSFunction delegates to internal/jsast.EnclosingFunction.
 func enclosingJSFunction(n *sitter.Node) *sitter.Node {
-	for cur := n.Parent(); cur != nil; cur = cur.Parent() {
-		if localURLFnTypes[cur.Type()] {
-			return cur
-		}
-	}
-	return nil
+	return jsast.EnclosingFunction(n)
 }
 
 // ── the mutating pass over matcher-minted clients ───────────────────────────
@@ -230,7 +160,7 @@ func enclosingJSFunction(n *sitter.Node) *sitter.Node {
 // additional branch nodes, and one ledger row per site that could not be read.
 // Must run before the contract engine, and before Tier CB, so a recovered path
 // still gets its host and base-URL treatment.
-func ResolveJSLocalURLs(nodes []graph.Node, sr *SchemaURLResolver) (changed, added []graph.Node, ledger []graph.UnresolvedRef) {
+func ResolveJSLocalURLs(nodes []graph.Node, sr *schemaurl.Resolver) (changed, added []graph.Node, ledger []graph.UnresolvedRef) {
 	fileCache := make(map[string]*jsHostFile)
 	for i := range nodes {
 		n := &nodes[i]
@@ -262,14 +192,14 @@ func ResolveJSLocalURLs(nodes []graph.Node, sr *SchemaURLResolver) (changed, add
 			hit, hok, hkind := sr.ResolveURLExpr(expr, fn, jf.src, n.Service)
 			verb := strings.ToUpper(n.Meta["method"])
 			if hok && verb != "" {
-				applySchemaURL(n, hit, verb)
+				schemaurl.ApplyURL(n, hit, verb)
 				changed = append(changed, *n)
 				continue
 			}
 			if hok || hkind != "" {
 				k := hkind
 				if k == "" {
-					k = ledgerSchemaEntityUnresolved // resolved but no verb
+					k = schemaurl.LedgerSchemaEntityUnresolved // resolved but no verb
 				}
 				ledger = append(ledger, graph.UnresolvedRef{
 					Service: n.Service, File: n.File, Line: n.Line,

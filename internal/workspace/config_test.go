@@ -509,3 +509,20 @@ func TestHasService(t *testing.T) {
 	assert.True(t, cfg.HasService("web"))
 	assert.False(t, cfg.HasService("missing"))
 }
+
+func TestSchemaConfigEffective(t *testing.T) {
+	t.Parallel()
+	got, loosened := workspace.SchemaConfig{}.Effective()
+	assert.Equal(t, workspace.DefaultMinCorroboratedPaths, got.MinCorroboratedPaths)
+	assert.Equal(t, workspace.DefaultMinCorroboratedRatio, got.MinCorroboratedRatio)
+	assert.Equal(t, workspace.DefaultMinEntityDiscrimination, got.MinEntityDiscrimination)
+	assert.False(t, loosened)
+
+	orig := workspace.SchemaConfig{MinCorroboratedPaths: 2}
+	_, loosened = orig.Effective()
+	assert.True(t, loosened)
+	assert.Equal(t, 2, orig.MinCorroboratedPaths, "Effective must not mutate the receiver")
+
+	_, loosened = workspace.SchemaConfig{MinCorroboratedPaths: 9}.Effective()
+	assert.False(t, loosened, "tightening is not loosening")
+}

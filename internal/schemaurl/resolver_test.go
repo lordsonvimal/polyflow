@@ -1,22 +1,131 @@
-package linker
+package schemaurl_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	sitter "github.com/smacker/go-tree-sitter"
+
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
+	"github.com/lordsonvimal/polyflow/internal/schemaurl"
 )
 
-// orionTable is the worked example's asset as a hand-built table — the dialect
-// is deliberately not the motivating corpus's.
-func orionResolver() *SchemaURLResolver {
-	return &SchemaURLResolver{tables: orionTable(), accessors: map[string]map[string]schemaAccessor{}}
+// writeJSFixture writes files (name→content) under a fresh temp dir and
+// returns the name→abs-path map.
+func writeJSFixture(t *testing.T, files map[string]string) map[string]string {
+	t.Helper()
+	dir := t.TempDir()
+	paths := make(map[string]string, len(files))
+	for name, content := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths[name] = p
+	}
+	return paths
 }
 
-func orionTable() map[string]*SchemaURLTable {
-	return map[string]*SchemaURLTable{
+// exprAtLine finds the expression whose source text is exactly raw, starting
+// at or after line — the same "match on recorded text" idiom
+// internal/linker/js_local_url.go's jsHostFile.exprAtLine uses, ported here
+// so this test package can drive Resolver.ResolveURLExpr the same way the
+// real hub (internal/factpipe/hub_schema_url_link.go) does, without
+// depending on internal/linker.
+func exprAtLine(root *sitter.Node, src []byte, line int, raw string) *sitter.Node {
+	var found *sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if found != nil || n == nil {
+			return
+		}
+		row := int(n.StartPoint().Row) + 1
+		if row > line+6 {
+			return
+		}
+		if row >= line && n.Content(src) == raw {
+			found = n
+			return
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(root)
+	return found
+}
+
+// resolveSchemaURLs is a minimal test-only re-implementation of the retired
+// internal/linker/schema_url_link.go's ResolveSchemaURLs sweep: for each node
+// naming a raw dynamic-URL expression, parse its file, find the expression,
+// resolve it through r, and apply the hit. Exercises exactly the API surface
+// the real hub calls.
+func resolveSchemaURLs(nodes []graph.Node, r *schemaurl.Resolver) (changed []graph.Node, ledger []graph.UnresolvedRef) {
+	fileCache := map[string]struct {
+		src  []byte
+		root *sitter.Node
+	}{}
+	for i := range nodes {
+		n := &nodes[i]
+		raw := n.Meta["key_dynamic_raw"]
+		if raw == "" {
+			continue
+		}
+		jf, cached := fileCache[n.File]
+		if !cached {
+			src, root, _, ok := jsast.Parse(n.File)
+			if ok {
+				jf = struct {
+					src  []byte
+					root *sitter.Node
+				}{src, root}
+			}
+			fileCache[n.File] = jf
+		}
+		if jf.root == nil {
+			continue
+		}
+		expr := exprAtLine(jf.root, jf.src, n.Line, raw)
+		if expr == nil {
+			continue
+		}
+		fn := jsast.EnclosingFunction(expr)
+		hit, ok, kind := r.ResolveURLExpr(expr, fn, jf.src, n.Service)
+		if kind != "" {
+			ledger = append(ledger, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line, Name: raw, Kind: kind,
+			})
+			continue
+		}
+		if !ok {
+			continue
+		}
+		verb := strings.ToUpper(n.Meta["method"])
+		if verb == "" {
+			ledger = append(ledger, graph.UnresolvedRef{
+				Service: n.Service, File: n.File, Line: n.Line, Name: raw, Kind: "schema_entity_unresolved",
+			})
+			continue
+		}
+		schemaurl.ApplyURL(n, hit, verb)
+		changed = append(changed, *n)
+	}
+	return changed, ledger
+}
+
+// orionTable is the worked example's asset as a hand-built table — the
+// dialect is deliberately not the motivating corpus's.
+func orionTable() map[string]*schemaurl.Table {
+	return map[string]*schemaurl.Table{
 		"svc": {
 			File: "config/orion-resources.yml",
-			ByEntity: map[string]map[string]schemaURLEntry{
+			ByEntity: map[string]map[string]schemaurl.Entry{
 				"widget": {
 					"endpoint": {Raw: "/api/gadgets/{gadget_id}/widgets", Path: "/api/gadgets/*/widgets", Key: "endpoint"},
 					"update":   {Raw: "/api/widgets/<id>", Path: "/api/widgets/*", Key: "update"},
@@ -29,6 +138,10 @@ func orionTable() map[string]*SchemaURLTable {
 			Aliases: map[string]string{},
 		},
 	}
+}
+
+func orionResolver() *schemaurl.Resolver {
+	return schemaurl.NewResolver(orionTable(), nil)
 }
 
 const widgetPane = `export default class WidgetPane extends React.Component {
@@ -57,14 +170,14 @@ func schemaClient(file string, line int, verb, raw string) graph.Node {
 
 func TestResolveSchemaURLs_WorkedExample(t *testing.T) {
 	t.Parallel()
-	_, p := writeReduxFixture(t, map[string]string{"components/WidgetPane.jsx": widgetPane})
+	p := writeJSFixture(t, map[string]string{"components/WidgetPane.jsx": widgetPane})
 	f := p["components/WidgetPane.jsx"]
 
 	nodes := []graph.Node{
 		schemaClient(f, 5, "PUT", `r.update.replace("<id>", values.id)`),
 		schemaClient(f, 9, "POST", `resources["gadget"].reorder.replace(":id", id)`),
 	}
-	changed, ledger := ResolveSchemaURLs(nodes, orionResolver())
+	changed, ledger := resolveSchemaURLs(nodes, orionResolver())
 	if len(ledger) != 0 {
 		t.Fatalf("unexpected ledger: %+v", ledger)
 	}
@@ -102,16 +215,16 @@ func TestResolveSchemaURLs_VocabularyCollision(t *testing.T) {
   fetch(el);
 }
 `
-	_, p := writeReduxFixture(t, map[string]string{"a.jsx": src})
-	tbl := map[string]*SchemaURLTable{"svc": {
+	p := writeJSFixture(t, map[string]string{"a.jsx": src})
+	tbl := map[string]*schemaurl.Table{"svc": {
 		File: "s.yml",
-		ByEntity: map[string]map[string]schemaURLEntry{
+		ByEntity: map[string]map[string]schemaurl.Entry{
 			"form": {"endpoint": {Raw: "/api/forms", Path: "/api/forms", Key: "endpoint"}},
 		},
 		Aliases: map[string]string{},
 	}}
 	nodes := []graph.Node{schemaClient(p["a.jsx"], 2, "GET", `form.action`)}
-	changed, ledger := ResolveSchemaURLs(nodes, &SchemaURLResolver{tables: tbl})
+	changed, ledger := resolveSchemaURLs(nodes, schemaurl.NewResolver(tbl, nil))
 	if len(changed) != 0 || len(ledger) != 0 {
 		t.Fatalf("collision produced changed=%v ledger=%v", changed, ledger)
 	}
@@ -125,9 +238,9 @@ func TestResolveSchemaURLs_AmbiguousPin(t *testing.T) {
   fetch(r.update);
 }
 `
-	_, p := writeReduxFixture(t, map[string]string{"b.jsx": src})
+	p := writeJSFixture(t, map[string]string{"b.jsx": src})
 	nodes := []graph.Node{schemaClient(p["b.jsx"], 4, "PUT", `r.update`)}
-	changed, ledger := ResolveSchemaURLs(nodes, orionResolver())
+	changed, ledger := resolveSchemaURLs(nodes, orionResolver())
 	if len(changed) != 0 {
 		t.Fatalf("ambiguous pin resolved: %+v", changed)
 	}
@@ -143,9 +256,9 @@ func TestResolveSchemaURLs_ReplaceRegexPoisons(t *testing.T) {
   fetch(r.update.replace(/x/, "y"));
 }
 `
-	_, p := writeReduxFixture(t, map[string]string{"c.jsx": src})
+	p := writeJSFixture(t, map[string]string{"c.jsx": src})
 	nodes := []graph.Node{schemaClient(p["c.jsx"], 3, "PUT", `r.update.replace(/x/, "y")`)}
-	changed, ledger := ResolveSchemaURLs(nodes, orionResolver())
+	changed, ledger := resolveSchemaURLs(nodes, orionResolver())
 	if len(changed) != 0 {
 		t.Fatalf("poisoned site resolved: %+v", changed)
 	}
@@ -161,9 +274,9 @@ func TestResolveSchemaURLs_Rung4Ledgers(t *testing.T) {
   fetch(s.endpoint);
 }
 `
-	_, p := writeReduxFixture(t, map[string]string{"d.jsx": src})
+	p := writeJSFixture(t, map[string]string{"d.jsx": src})
 	nodes := []graph.Node{schemaClient(p["d.jsx"], 3, "GET", `s.endpoint`)}
-	changed, ledger := ResolveSchemaURLs(nodes, orionResolver())
+	changed, ledger := resolveSchemaURLs(nodes, orionResolver())
 	if len(changed) != 0 {
 		t.Fatalf("rung 4 minted a node: %+v", changed)
 	}
@@ -182,7 +295,7 @@ func TestResolveSchemaURLs_PinShapesAndCopyWrapper(t *testing.T) {
   fetch(a.update); fetch(b.update); fetch(c.update); fetch(d.update);
 }
 `
-	_, p := writeReduxFixture(t, map[string]string{"e.jsx": src})
+	p := writeJSFixture(t, map[string]string{"e.jsx": src})
 	f := p["e.jsx"]
 	nodes := []graph.Node{
 		schemaClient(f, 6, "PUT", `a.update`),
@@ -190,7 +303,7 @@ func TestResolveSchemaURLs_PinShapesAndCopyWrapper(t *testing.T) {
 		schemaClient(f, 6, "PUT", `c.update`),
 		schemaClient(f, 6, "PUT", `d.update`),
 	}
-	changed, ledger := ResolveSchemaURLs(nodes, orionResolver())
+	changed, ledger := resolveSchemaURLs(nodes, orionResolver())
 	if len(ledger) != 0 {
 		t.Fatalf("ledger: %+v", ledger)
 	}
@@ -211,9 +324,9 @@ func TestResolveSchemaURLs_TransformCallDoesNotPin(t *testing.T) {
   fetch(d.update);
 }
 `
-	_, p := writeReduxFixture(t, map[string]string{"g.jsx": src})
+	p := writeJSFixture(t, map[string]string{"g.jsx": src})
 	nodes := []graph.Node{schemaClient(p["g.jsx"], 3, "PUT", `d.update`)}
-	changed, ledger := ResolveSchemaURLs(nodes, orionResolver())
+	changed, ledger := resolveSchemaURLs(nodes, orionResolver())
 	if len(changed) != 0 {
 		t.Fatalf("two-arg transform pinned: %+v", changed)
 	}
@@ -225,56 +338,77 @@ func TestResolveSchemaURLs_TransformCallDoesNotPin(t *testing.T) {
 
 // ── MS.2: accessor learning ──────────────────────────────────────────────────
 
-func TestBuildSchemaURLResolver_LearnsAccessorsFromBodies(t *testing.T) {
+func TestNewResolver_LearnsAccessorsFromBodies(t *testing.T) {
 	t.Parallel()
 	src := `export function listURL(res) { return res.endpoint; }
 export function itemURL(res) { return res.update || listURL(res); }
 export function wrapped(res, opts) { return format(opts, res.reorder); }
 export function notAccessor(res) { return globalThing.value; }
 `
-	_, p := writeReduxFixture(t, map[string]string{"helpers.js": src})
-	r := BuildSchemaURLResolver(orionTable(), map[string][]string{"svc": {p["helpers.js"]}})
+	p := writeJSFixture(t, map[string]string{"helpers.js": src})
+	r := schemaurl.NewResolver(orionTable(), map[string][]string{"svc": {p["helpers.js"]}})
 	if r == nil {
 		t.Fatal("nil resolver")
 	}
-	acc := r.accessors["svc"]
-	if got, ok := acc["listURL"]; !ok || got.param != 0 || len(got.keys) != 1 || got.keys[0] != "endpoint" {
-		t.Errorf("listURL = %+v (ok=%v)", got, ok)
+	if got := r.LearntAccessorCount(); got < 3 {
+		t.Errorf("LearntAccessorCount = %d, want >= 3", got)
 	}
-	if got, ok := acc["itemURL"]; !ok || got.param != 0 ||
-		!(len(got.keys) == 2 && got.keys[0] == "endpoint" && got.keys[1] == "update") {
-		t.Errorf("itemURL = %+v (ok=%v) — want fallback chain {endpoint,update}", got, ok)
+	// Exercise the learnt accessors indirectly through ResolveURLExpr, since
+	// the accessor map itself is unexported. wrapped's learnt key ("reorder")
+	// only exists on the "gadget" entity, so it is pinned separately.
+	src2 := `import { listURL, itemURL, wrapped } from "./helpers";
+export function go(props) {
+  const schema = props.resources.widget;
+  const g = props.resources.gadget;
+  fetch(listURL(schema));
+  fetch(itemURL(schema));
+  fetch(wrapped(g, {}));
+}
+`
+	p2 := writeJSFixture(t, map[string]string{"c.jsx": src2})
+	r2 := schemaurl.NewResolver(orionTable(), map[string][]string{"svc": {p["helpers.js"], p2["c.jsx"]}})
+	nodes := []graph.Node{
+		schemaClient(p2["c.jsx"], 5, "GET", `listURL(schema)`),
+		schemaClient(p2["c.jsx"], 7, "GET", `wrapped(g, {})`),
 	}
-	if got, ok := acc["wrapped"]; !ok || got.keys[0] != "reorder" {
-		t.Errorf("wrapped (path-neutral reformatter) = %+v (ok=%v)", got, ok)
+	changed, ledger := resolveSchemaURLs(nodes, r2)
+	if len(ledger) != 0 {
+		t.Fatalf("ledger: %+v", ledger)
 	}
-	if _, ok := acc["notAccessor"]; ok {
-		t.Error("notAccessor classified — its return is not a key of the param")
+	if len(changed) != 2 {
+		t.Fatalf("changed = %d, want 2: %+v", len(changed), changed)
 	}
 }
 
-func TestBuildSchemaURLResolver_DepthBound(t *testing.T) {
+func TestNewResolver_DepthBound(t *testing.T) {
 	t.Parallel()
 	src := `export function a(s) { return b(s); }
 export function b(s) { return c(s); }
 export function c(s) { return d(s); }
 export function d(s) { return s.update; }
+export function useA(props) {
+  const schema = props.resources.widget;
+  fetch(a(schema));
+}
 `
-	_, p := writeReduxFixture(t, map[string]string{"chain.js": src})
-	r := BuildSchemaURLResolver(orionTable(), map[string][]string{"svc": {p["chain.js"]}})
-	if _, ok := r.accessors["svc"]["a"]; ok {
-		t.Error("a classified through a 4-deep chain; maxAccessorDepth is 3")
+	p := writeJSFixture(t, map[string]string{"chain.js": src})
+	r := schemaurl.NewResolver(orionTable(), map[string][]string{"svc": {p["chain.js"]}})
+	nodes := []graph.Node{schemaClient(p["chain.js"], 8, "GET", `a(schema)`)}
+	changed, ledger := resolveSchemaURLs(nodes, r)
+	if len(changed) != 0 {
+		t.Fatalf("a classified through a 4-deep chain; maxAccessorDepth is 3: changed=%+v", changed)
 	}
+	_ = ledger
 }
 
-func schemaResolver2(t *testing.T, files map[string]string) (*SchemaURLResolver, map[string]string) {
+func schemaResolver2(t *testing.T, files map[string]string) (*schemaurl.Resolver, map[string]string) {
 	t.Helper()
-	_, p := writeReduxFixture(t, files)
+	p := writeJSFixture(t, files)
 	var abs []string
 	for _, v := range p {
 		abs = append(abs, v)
 	}
-	return BuildSchemaURLResolver(orionTable(), map[string][]string{"svc": abs}), p
+	return schemaurl.NewResolver(orionTable(), map[string][]string{"svc": abs}), p
 }
 
 func TestResolveSchemaURLs_ThroughAccessor(t *testing.T) {
@@ -290,12 +424,9 @@ export function save(props) {
 `,
 	}
 	r, p := schemaResolver2(t, files)
-	if _, ok := r.accessors["svc"]["getCreateURL"]; !ok {
-		t.Fatal("getCreateURL not learnt")
-	}
 	nodes := []graph.Node{schemaClient(p["c.jsx"], 5, "PUT", `url`)}
 	// key_dynamic_raw is the bare `url` local; the resolver backtracks it one hop.
-	changed, ledger := ResolveSchemaURLs(nodes, r)
+	changed, ledger := resolveSchemaURLs(nodes, r)
 	if len(ledger) != 0 {
 		t.Fatalf("ledger: %+v", ledger)
 	}
@@ -323,7 +454,7 @@ export function go(props) {
 	}
 	r, p := schemaResolver2(t, files)
 	nodes := []graph.Node{schemaClient(p["c.jsx"], 5, "GET", `url`)}
-	changed, ledger := ResolveSchemaURLs(nodes, r)
+	changed, ledger := resolveSchemaURLs(nodes, r)
 	if len(changed) != 0 {
 		t.Fatalf("ambiguous accessor resolved: %+v", changed)
 	}

@@ -47,6 +47,24 @@ type Snapshot struct {
 	// []workspace.Link directly. May be nil, in which case a hub that reads
 	// it simply sees no rules.
 	Links []LinkHint
+
+	// Schema (added for the schema_url_link + js_prop_clients hub) mirrors
+	// workspace.SchemaConfig field-for-field — the corroboration-gate
+	// thresholds and declared-asset globs for Tier MS's endpoint-declaring
+	// data-asset discovery, which a HubProvider cannot derive from any
+	// node/file it sees. Same graph-cannot-import-workspace reasoning as
+	// Links. Zero value means every threshold falls back to its tested
+	// default (see SchemaConfig).
+	Schema SchemaConfig
+}
+
+// SchemaConfig mirrors workspace.SchemaConfig's fields — see Snapshot.Schema.
+type SchemaConfig struct {
+	Assets                  []string
+	MinCorroboratedPaths    int
+	MinCorroboratedRatio    float64
+	MinEntityDiscrimination float64
+	Disable                 bool
 }
 
 // LinkHint mirrors workspace.Link's matching fields (From/To/BaseURL/Hint) —
