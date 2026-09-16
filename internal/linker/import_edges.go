@@ -9,6 +9,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
 )
 
@@ -163,44 +164,12 @@ func parseJSImportSources(file string) (relative []string, externalCount int) {
 	return
 }
 
-// jsExtensions are tried in order when a relative import has no extension.
-var jsExtensions = []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".es6"}
-
-// resolveJSImportPath resolves a relative import specifier (e.g. "./utils",
-// "../lib/foo") to the absolute-or-relative file path used by the service
-// indexer, by probing the indexed file set. Returns "" when not found.
+// resolveJSImportPath is internal/jsast.ResolveImportPath — extracted there
+// (FX.8.33) so internal/factpipe's rails_views hub can share it without
+// duplicating it (factpipe cannot import internal/linker: the transitive
+// cycle factpipe -> linker -> patterns -> factpipe).
 func resolveJSImportPath(importingFile, specifier string, indexedFiles map[string]bool) string {
-	dir := filepath.Dir(importingFile)
-	base := filepath.Clean(filepath.Join(dir, specifier))
-
-	ext := strings.ToLower(filepath.Ext(specifier))
-	switch ext {
-	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".es6", ".css", ".scss":
-		if indexedFiles[base] {
-			return base
-		}
-		// TypeScript projects often use .js extensions pointing at .ts source.
-		if ext == ".js" {
-			ts := base[:len(base)-3] + ".ts"
-			if indexedFiles[ts] {
-				return ts
-			}
-		}
-		return ""
-	}
-
-	// No recognised extension: probe common extensions, then index files.
-	for _, e := range jsExtensions {
-		if c := base + e; indexedFiles[c] {
-			return c
-		}
-	}
-	for _, idx := range []string{"/index.ts", "/index.tsx", "/index.js", "/index.jsx"} {
-		if c := base + idx; indexedFiles[c] {
-			return c
-		}
-	}
-	return ""
+	return jsast.ResolveImportPath(importingFile, specifier, indexedFiles)
 }
 
 // LinkRubyImportEdges emits file→file imports edges for Ruby files between the

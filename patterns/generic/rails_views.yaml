@@ -1,0 +1,105 @@
+# Tier FX (FX.8.33, 2026-09-16) — replaces internal/linker/rails_views.go's
+# LinkRailsViews (Tier K.2): the Rails view layer's partial/template
+# nesting, the controller→template convention, the layout-inheritance
+# chain, and the react_component mount seam into its (usually
+# cross-service) JSX implementation.
+#
+# NO `patterns:`/`facts:` block — hub-only, same shape as pusher_producer/
+# react_prop_urls/ruby_http_hosts: a per-service `viewIndex`, a
+# layout-inheritance walk up the controller ancestry, and a cross-service
+# JS barrel-import resolution are real Go state a `.dl` join can't build.
+# `language: generic` shields it from the shared per-service
+# `factpipe_frameworks` loop (patternLangForFile has no "generic" case) —
+# it's invoked via a dedicated `pipeline.Run` call in
+# internal/indexer/link_passes.go's "rails_views" pass instead, once per
+# Rails-view-owning service, always with the WHOLE unfiltered node graph
+# (the schema_url_link_props convention, adapted: nodes stay cross-service
+# here because a react_component mount and its JSX implementation are
+# routinely different services).
+#
+# `mint:` for the missing NodeTypeFile endpoints (most templates declare
+# nothing a parser records) reuses `frozenNodeTypes["file"]` — the
+# stylesheet_imports precedent. The `span[data-react-class=X]` mount marker
+# reuses `frozenNodeTypes["element"]` (templ_layer's precedent).
+#
+# One `renders` relation covers every render-edge shape (template scan,
+# controller explicit/convention, layout, yield, react_component mount) —
+# they share one edge type and the emit spec's meta-skip-if-empty
+# convention (already established by rails_filters/react_prop_urls) means a
+# shared, wider column set behaves exactly like each shape's own narrower
+# meta map. `component_impl` (mount → JSX implementation) is a separate
+# relation since it's a different edge type.
+language: generic
+version: "1"
+
+hub:
+  - name: rails_views
+
+emit:
+  - relation: rv_file_mint_rel
+    columns: [ID, Label, Service, File, Language, Basename]
+    mint:
+      node: file
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Service }
+      file: { arg: File }
+      language: { arg: Language }
+      meta:
+        basename: { arg: Basename }
+
+  - relation: rv_file_contains_rel
+    columns: [From, To]
+    edge: { from: { arg: From }, to: { arg: To }, type: contains, label: contains }
+    confidence:
+      - else: static
+
+  - relation: rv_component_mint_rel
+    columns: [ID, Label, Service, File, Line, EndLine, DataReactClass]
+    mint:
+      node: element
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Service }
+      file: { arg: File }
+      line: { arg: Line }
+      end_line: { arg: EndLine }
+      language: erb
+      meta:
+        data-react-class: { arg: DataReactClass }
+        mechanism: react_component
+
+  - relation: rv_renders_rel
+    columns: [From, To, Label, Mechanism, Kind, Spec, Collection, Layout, Component]
+    edge: { from: { arg: From }, to: { arg: To }, type: renders, label: { arg: Label } }
+    meta:
+      mechanism: { arg: Mechanism }
+      kind: { arg: Kind }
+      spec: { arg: Spec }
+      collection: { arg: Collection }
+      layout: { arg: Layout }
+      component: { arg: Component }
+    confidence:
+      - else: static
+
+  - relation: rv_component_impl_rel
+    columns: [From, To, Label, Component, Via]
+    edge: { from: { arg: From }, to: { arg: To }, type: component_impl, label: { arg: Label } }
+    meta:
+      mechanism: data-react-class
+      component: { arg: Component }
+      via: { arg: Via }
+    confidence:
+      - else: static
+
+  - relation: rv_ledger_rel
+    columns: [Service, File, Line, Name, Kind]
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: Name }
+        kind: { arg: Kind }

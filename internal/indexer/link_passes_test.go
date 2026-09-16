@@ -61,7 +61,7 @@ var wantLinkPasses = []struct {
 	{"js_import_edges", scopeSameServiceOnly},
 	{"js_api_wrapper_calls", scopeSameServiceOnly},
 	{"stylesheet_imports", scopeSameServiceOnly},
-	{"rails_views", scopeSameServiceOnly},
+	{"rails_views", scopeCrossService},
 	{"react_prop_urls", scopeCrossService},
 	{"js_http_grade", scopeCrossService},
 	{"ruby_import_edges", scopeSameServiceOnly},

@@ -1724,24 +1724,50 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// internal/linker/sprockets_assets.go + internal/sprockets.
 		//
 		// Tier K.2: Rails view layer — partial nesting, the controller→template
-		// convention, and the react_component mount seam.
-		{"rails_views", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			viewNodes, viewEdges, viewUnresolved := linker.LinkRailsViews(st.allNodes, svcFiles)
-			for i := range viewNodes {
-				n := viewNodes[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
+		// convention, and the react_component mount seam. Tier FX (FX.8.33,
+		// 2026-09-16): declarative "rails_views" hub, replacing
+		// linker.LinkRailsViews. Cross-service (a react_component mount and
+		// its JSX implementation are routinely different services), so this
+		// runs the same way react_prop_urls does — one pipeline.Run call over
+		// the whole graph + every service's files flattened, not the
+		// per-service factpipe_frameworks loop.
+		{"rails_views", scopeCrossService, func() error {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("rails_views: load registry: %w", err)
+			}
+			fw := reg.ByName("rails_views")
+			if fw == nil {
+				return fmt.Errorf("rails_views: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, sf := range st.allSvcFiles {
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: st.allNodes, Files: sf.files})
+				if err != nil {
+					return fmt.Errorf("rails_views: service %s: %w", sf.svc.Name, err)
+				}
+				for i := range res.Nodes {
+					n := res.Nodes[i]
+					if _, exists := byID[n.ID]; exists {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = len(st.allNodes) - 1
+				}
+				if err := st.bw.Flush(st.ctx); err != nil {
 					return err
 				}
-				st.allNodes = append(st.allNodes, n)
+				if err := st.writeEdges(res.Edges); err != nil {
+					return err
+				}
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 			}
-			if err := st.bw.Flush(st.ctx); err != nil {
-				return err
-			}
-			if err := st.writeEdges(viewEdges); err != nil {
-				return err
-			}
-			st.allUnresolved = append(st.allUnresolved, viewUnresolved...)
 			return nil
 		}},
 		// React prop URL forwarding: resolve a `js_api_wrapper_call_site`

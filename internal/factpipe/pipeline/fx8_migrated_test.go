@@ -50,6 +50,7 @@ var migratedFrameworks = []string{
 	"schema_url_link",
 	"schema_url_table",
 	"js_prop_client",
+	"rails_views",
 }
 
 // "ruby_http_hosts" is deliberately NOT in migratedFrameworks above, unlike
