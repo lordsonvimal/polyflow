@@ -167,6 +167,20 @@ type linkPipelineState struct {
 
 // writeEdges appends edges to the store and to allEdges — the same helper
 // every pass used inline as a closure before this extraction.
+//
+// XM.16 (docs/factpipe-cross-framework-matching-plan.md): this used to open
+// a brand-new *graph.BatchWriter and Flush it immediately on every call —
+// one SQLite transaction per writeEdges call, ~30+ times per link-pass
+// phase, profiled at 1.29s cum on a real cedar index. Every pass's
+// inter-pass state flows through allNodes/allEdges in memory, not through a
+// live store read, and the whole run builds into a tmp DB that only becomes
+// visible via the atomic rename at the very end of Run — so there is no
+// crash-consistency or read-your-writes reason a pass needs its edges
+// durable in SQLite before the *next* pass runs. Routing through the
+// link-pass phase's shared st.bw and deferring the commit lets consecutive
+// writeEdges/AddNode calls land in the same transaction; deleteNodes (below)
+// flushes st.bw before it deletes, so a buffered-but-not-yet-committed
+// node/edge can never be missed by a delete or resurrected by a later flush.
 func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 	if st.nodeRef == nil || len(st.allNodes) != st.nodeRefLen {
 		st.nodeRef = make(map[string]string, len(st.allNodes))
@@ -181,7 +195,6 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 			st.nodeVGRule[st.allNodes[i].ID] = r
 		}
 	}
-	bwE := graph.NewBatchWriter(st.store)
 	for i := range edges {
 		e := edges[i]
 		layer, rule := "L5", st.currentPass
@@ -198,12 +211,12 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 			layer, rule = "L2", r
 		}
 		evidence.StampStatic(&e, st.nodeRef[e.From], layer, rule)
-		if err := bwE.AddEdge(st.ctx, &e); err != nil {
+		if err := st.bw.AddEdge(st.ctx, &e); err != nil {
 			return err
 		}
 		st.allEdges = append(st.allEdges, e)
 	}
-	return bwE.Flush(st.ctx)
+	return nil
 }
 
 // deleteNodes removes ids from the store and from allNodes, and — critically
@@ -218,6 +231,17 @@ func (st *linkPipelineState) writeEdges(edges []graph.Edge) error {
 func (st *linkPipelineState) deleteNodes(ids map[string]bool) error {
 	if len(ids) == 0 {
 		return nil
+	}
+	// XM.16: writeEdges/AddNode calls now defer their commit (batched across
+	// the whole link-pass phase instead of one transaction per call) — a
+	// node or edge added by an earlier pass this run may still be sitting in
+	// st.bw's in-memory buffer, not yet in SQLite. Flush first so the DELETE
+	// below actually reaches it (otherwise it silently no-ops on a row that
+	// doesn't exist yet in the DB) and so any buffered edge touching a
+	// to-be-deleted node is committed — and thus FK-cascaded — before the
+	// delete, rather than flushed afterward as a dangling reference.
+	if err := st.bw.Flush(st.ctx); err != nil {
+		return fmt.Errorf("flush before delete: %w", err)
 	}
 	if err := st.store.DeleteNodes(st.ctx, ids); err != nil {
 		return fmt.Errorf("delete nodes: %w", err)

@@ -764,6 +764,14 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		}
 		clk.mark("  link: " + pass.name)
 	}
+	// XM.16: writeEdges no longer flushes st.bw itself (batched across the
+	// whole link-pass phase, see writeEdges/deleteNodes) — one final flush
+	// here catches whatever the last pass(es) left buffered before anything
+	// downstream (root classification, evidence fusion, the atomic swap)
+	// runs.
+	if err := bw.Flush(ctx); err != nil {
+		return nil, fmt.Errorf("flush link passes: %w", err)
+	}
 	allNodes = linkState.allNodes
 	allEdges = linkState.allEdges
 	allUnresolved = linkState.allUnresolved
