@@ -1637,17 +1637,29 @@ func walkService(root string, excludes []string) ([]string, map[string]int, erro
 func walkAllFiles(root string) []string {
 	var files []string
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return nil
 		}
-		// Skip node_modules and other common build artifacts to avoid noise.
-		rel, relErr := filepath.Rel(root, p)
-		if relErr == nil {
-			seg := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-			switch seg {
-			case "node_modules", ".git", "dist", ".next", ".nuxt", ".svelte-kit", "build", ".output":
-				return filepath.SkipDir
+		if d.IsDir() {
+			// Skip node_modules, dot-directories (.git, .next, .nuxt,
+			// .svelte-kit, tool caches like .gitnexus, …) and other common
+			// build artifacts entirely — checked on the directory entry
+			// itself so filepath.SkipDir actually prunes the whole subtree.
+			// A prior version checked this on file entries instead, where
+			// SkipDir only skips the remaining siblings in that file's own
+			// containing directory, not the subtree — node_modules/.git
+			// were walked in full regardless of this list.
+			if p != root {
+				name := d.Name()
+				if strings.HasPrefix(name, ".") {
+					return filepath.SkipDir
+				}
+				switch name {
+				case "node_modules", "dist", "build":
+					return filepath.SkipDir
+				}
 			}
+			return nil
 		}
 		files = append(files, p)
 		return nil
