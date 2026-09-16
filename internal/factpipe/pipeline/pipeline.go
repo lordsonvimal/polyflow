@@ -48,7 +48,9 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/deps"
 	"github.com/lordsonvimal/polyflow/internal/factpipe"
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/rubyast"
 	patterndata "github.com/lordsonvimal/polyflow/patterns"
 	"github.com/lordsonvimal/polyflow/rules"
 )
@@ -404,7 +406,12 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 		svc = graphSoFar.Nodes[0].Service
 	}
 
-	roots := parseFileRoots(files)
+	roots, releaseRoots := parseFileRoots(files)
+	// releaseRoots must outlive every read of roots' trees, including the
+	// captured *sitter.Node values inside matchesByFw that the concurrent
+	// per-framework loop below (runFramework/applyMatches) reads from —
+	// deferred to Run's return, not called right after matchAll.
+	defer releaseRoots()
 
 	// XM.1: one shared tree-sitter registry+matcher per language instead of
 	// one per framework — see sharedMatchers/buildSharedMatchers/matchAll.
@@ -729,20 +736,67 @@ func (sm *sharedMatchers) matchAll(files []ParsedFile, roots map[string]*sitter.
 // from the map; extractFramework's MatchWithGrammarRoot call falls back to
 // parsing it itself (and surfacing the same error it always did) when its
 // root is missing.
-func parseFileRoots(files []ParsedFile) map[string]*sitter.Node {
+//
+// XM.27 (docs/factpipe-cross-framework-matching-plan.md): JS/TS and Ruby
+// files route through internal/jsast.Parse / internal/rubyast.Parse instead
+// of a private sitter.ParseCtx call. Both packages own a process-wide cache
+// that internal/indexer enables for the whole link-pass phase
+// (EnableJSTreeCache/EnableRubyTreeCache) and that every hand-written ruby_*/
+// js_* link pass plus several factpipe hub providers (hub_schema_url_
+// link.go, hub_pusher_producer.go, ...) already read and populate — this
+// pass's parse of a given file is, in production, very likely either a
+// cache hit (some other pass already parsed it this run) or the parse that
+// makes it one for whoever asks next, instead of a fourth independent
+// tree-sitter parse of the same bytes. Outside a link phase (tests calling
+// Run directly, cache never enabled) both packages fall back to an
+// uncached, per-call parse — identical cost to what this function always
+// did. Go/ERB files have no such shared-cache package and keep the direct
+// sitter.ParseCtx path. release must be deferred until every reader of
+// roots' trees is done — including the *sitter.Node values matchAll's
+// matches capture, read later by the concurrent per-framework loop in Run —
+// not called right after this function returns.
+func parseFileRoots(files []ParsedFile) (map[string]*sitter.Node, func()) {
 	roots := make(map[string]*sitter.Node, len(files))
+	var releases []func()
 	for _, f := range files {
 		grammar := f.Grammar
 		if grammar == "" {
 			grammar = f.Language
 		}
-		lang := patterns.GrammarFor(grammar)
-		if lang == nil {
-			continue
+		var root *sitter.Node
+		switch {
+		case f.Language == "javascript" && (grammar == "typescript" || grammar == "tsx"):
+			// jsast.Parse always parses under its own tsLang/tsxLang choice
+			// (GrammarLangForFile: tsx for .tsx/.jsx, typescript — a JS
+			// superset — for everything else, including plain .js/.mjs/.cjs).
+			// That only matches what this framework pipeline asks for
+			// (grammar == "typescript" or "tsx") for .ts/.tsx/.jsx files;
+			// plain .js/.mjs/.cjs files want the separate, non-superset
+			// "javascript" grammar patternLangForFile assigns them, which
+			// jsast never produces, so those keep the raw path below —
+			// substituting jsast's tree there silently drops matches from
+			// every framework pattern compiled against the real javascript
+			// grammar (caught via a real-corpus node/edge count regression
+			// on orion before this gate existed).
+			if _, root2, _, ok := jsast.Parse(f.Path); ok {
+				root = root2
+			}
+		case f.Language == "ruby":
+			if _, root2, release, ok := rubyast.Parse(f.Path); ok {
+				root = root2
+				releases = append(releases, release)
+			}
 		}
-		root, err := sitter.ParseCtx(context.Background(), f.Src, lang)
-		if err != nil {
-			continue
+		if root == nil {
+			lang := patterns.GrammarFor(grammar)
+			if lang == nil {
+				continue
+			}
+			var err error
+			root, err = sitter.ParseCtx(context.Background(), f.Src, lang)
+			if err != nil {
+				continue
+			}
 		}
 		// XM.5: roots is read by every active framework's applyMatches (via
 		// matchesByFw's captured nodes) once Run's per-framework loop below
@@ -753,7 +807,11 @@ func parseFileRoots(files []ParsedFile) map[string]*sitter.Node {
 		factpipe.WarmParseTree(root)
 		roots[f.Path] = root
 	}
-	return roots
+	return roots, func() {
+		for _, r := range releases {
+			r()
+		}
+	}
 }
 
 // factSpecsByPattern maps a framework's own (unprefixed) pattern names to

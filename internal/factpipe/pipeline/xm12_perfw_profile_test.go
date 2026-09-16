@@ -96,7 +96,8 @@ func profileFrameworkLoopOnly(t *testing.T, db, root, lang, fwName, tag string) 
 	// Shared, one-time cost — matches production: parse once, match once,
 	// against every active framework so the shared matcher builds its full
 	// per-language pattern set (same as a real service call with `active`).
-	roots := parseFileRoots(files)
+	roots, releaseRoots := parseFileRoots(files)
+	defer releaseRoots()
 	fws := reg.All() // build the shared matcher against the full registry, same footprint as a real multi-framework service call
 	sm := buildSharedMatchers(fws)
 	matchesByFw, err := sm.matchAll(files, roots)

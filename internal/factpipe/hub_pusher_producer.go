@@ -55,6 +55,12 @@ func pusherProducerSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 	constVals := map[string]map[string]string{}
 	hashConstVals := map[string]map[string]map[string]string{}
 
+	// hubFiles is keyed by graph.Node.File, not necessarily the exact same
+	// string representation `files` (graphSoFar.Files, the raw whole-service
+	// file list) uses — parsed independently rather than joined against the
+	// rbFiles-keyed cache below by string equality, which silently dropped
+	// every hubFiles hit (and this hub's entire output) on at least one real
+	// corpus when tried.
 	for file := range hubFiles {
 		src, err := os.ReadFile(file)
 		if err != nil {
@@ -62,6 +68,7 @@ func pusherProducerSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 		}
 		root, release := pchParseRuby(src)
 		if root == nil {
+			release()
 			continue
 		}
 		pchCollectWrapperFacts(root, src, eventByMethod, constVals, hashConstVals)
@@ -84,7 +91,34 @@ func pusherProducerSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 	}
 	sort.Strings(rbFiles)
 
-	holderByModule := pprCollectMixinHolders(rbFiles, eventByMethod, constVals, hashConstVals)
+	// Parse every .rb file exactly once — pprCollectMixinHolders and the
+	// call-site loop below both used to independently os.ReadFile +
+	// pchParseRuby this exact same rbFiles list (2 full passes over every
+	// Ruby file in the service for two different AST walks). release() is
+	// deferred until both consumers are done with the shared trees.
+	parsed := make([]pprParsedFile, 0, len(rbFiles))
+	for _, file := range rbFiles {
+		if graph.IsTestFilePath(file) {
+			continue
+		}
+		src, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		root, release := pchParseRuby(src)
+		if root == nil {
+			release()
+			continue
+		}
+		parsed = append(parsed, pprParsedFile{file: file, src: src, root: root, release: release})
+	}
+	defer func() {
+		for _, pf := range parsed {
+			pf.release()
+		}
+	}()
+
+	holderByModule := pprCollectMixinHolders(parsed, eventByMethod, constVals, hashConstVals)
 
 	seen := map[string]bool{}
 	var out []Fact
@@ -107,18 +141,8 @@ func pusherProducerSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 		})
 	}
 
-	for _, file := range rbFiles {
-		if graph.IsTestFilePath(file) {
-			continue
-		}
-		src, err := os.ReadFile(file)
-		if err != nil {
-			continue
-		}
-		root, release := pchParseRuby(src)
-		if root == nil {
-			continue
-		}
+	for _, pf := range parsed {
+		file, src, root := pf.file, pf.src, pf.root
 
 		eventOf := func(className, methodName string, eventArg *sitter.Node) string {
 			switch methodName {
@@ -144,10 +168,19 @@ func pusherProducerSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 				emit(h.className, mc.method, h.chanSeg, eventOf(h.className, mc.method, pchArgAt(mc.node, 1)), file, mc.line)
 			})
 		}
-		release()
 	}
 
 	return out
+}
+
+// pprParsedFile is one .rb file parsed once and shared across
+// pprCollectMixinHolders and the call-site loop in pusherProducerSitesHub —
+// release must be called exactly once, after both consumers are done.
+type pprParsedFile struct {
+	file    string
+	src     []byte
+	root    *sitter.Node
+	release func()
 }
 
 type pprNotifyCall struct {
@@ -444,25 +477,15 @@ type pprMixinHolder struct {
 // @ivar = <PusherClass>.new(...); end` shapes and returns module name ->
 // holder. First wins on a name collision (deterministic — files are sorted).
 func pprCollectMixinHolders(
-	files []string,
+	parsed []pprParsedFile,
 	eventByMethod map[string]map[string]string,
 	constVals map[string]map[string]string,
 	hashConstVals map[string]map[string]map[string]string,
 ) map[string]pprMixinHolder {
 	isPusherClass := func(name string) bool { _, ok := eventByMethod[name]; return ok }
 	out := map[string]pprMixinHolder{}
-	for _, file := range files {
-		if graph.IsTestFilePath(file) {
-			continue
-		}
-		src, err := os.ReadFile(file)
-		if err != nil {
-			continue
-		}
-		root, release := pchParseRuby(src)
-		if root == nil {
-			continue
-		}
+	for _, pf := range parsed {
+		src, root := pf.src, pf.root
 		var walkClass func(n *sitter.Node)
 		walkClass = func(n *sitter.Node) {
 			if n.Type() == "class" {
@@ -514,7 +537,6 @@ func pprCollectMixinHolders(
 			}
 		}
 		walkClass(root)
-		release()
 	}
 	return out
 }
