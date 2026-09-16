@@ -34,12 +34,14 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
 	"github.com/lordsonvimal/polyflow/internal/datalog"
@@ -421,77 +423,67 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 	// keep-set-size).
 	baseIndex := indexByPred(base)
 
+	// XM.5: each iteration below (fset build, applyMatches, the Apply*
+	// stages, fw.Rules.Eval, and every emit's Apply) reads only shared
+	// read-only inputs (baseIndex, matchesByFw, graphSoFar, fw itself —
+	// fw.Rules is "built once by Load, shared read-only" per Framework's own
+	// doc comment, and fw.Rules.Eval builds a brand-new *Engine per call, no
+	// shared engine state). The only genuinely shared mutable state the old
+	// serial loop touched per-iteration was `res`/`seenNode`, both updated
+	// in fws order — so each framework computes into its own perFwResults
+	// slot fully in parallel, and a second, cheap, strictly-ordered pass
+	// merges slots back in original fws order, preserving the exact
+	// dedup/error semantics (first framework in order wins a duplicate node
+	// ID; first framework in order that errors is the error Run returns) a
+	// caller observing determinism depends on.
+	results := make([]perFwResult, len(fws))
+	{
+		var g errgroup.Group
+		g.SetLimit(runtime.GOMAXPROCS(0))
+		for i, fw := range fws {
+			i, fw := i, fw
+			g.Go(func() error {
+				results[i] = runFramework(fw, matchesByFw[fw.Name], baseIndex, graphSoFar, st != nil)
+				return nil // errors are captured per-slot (results[i].err) and surfaced in fws order below
+			})
+		}
+		_ = g.Wait()
+	}
+
 	var res Result
 	seenNode := map[string]bool{}
-	for _, fw := range fws {
-		var fwStart time.Time
-		if st != nil {
-			fwStart = time.Now()
+	for i, fw := range fws {
+		r := results[i]
+		if r.err != nil {
+			return Result{}, fmt.Errorf("factpipe: framework %s: %w", fw.Name, r.err)
 		}
-		fset := factpipe.NewFactSet()
-		keep := frameworkKeepSet(fw)
-		preds := make([]string, 0, len(keep))
-		for p := range keep {
-			preds = append(preds, p)
-		}
-		sort.Strings(preds)
-		for _, p := range preds {
-			for _, f := range baseIndex[p] {
-				fset.Add(f)
+		res.Edges = append(res.Edges, r.edges...)
+		for _, n := range r.nodes {
+			if !seenNode[n.ID] {
+				seenNode[n.ID] = true
+				res.Nodes = append(res.Nodes, n)
 			}
 		}
-		t0 := time.Now()
-		if err := applyMatches(fw, matchesByFw[fw.Name], fset); err != nil {
-			return Result{}, fmt.Errorf("factpipe: framework %s: %w", fw.Name, err)
-		}
-		if st != nil {
-			st.Extract += time.Since(t0)
-		}
-
-		t1 := time.Now()
-		factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
-		factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
-		factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
-		factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, fset)
-		factpipe.ApplyDerive(fw.Derives, fset)
-
-		fr := factRelations(fw, fset)
-		derived, prov, err := fw.Rules.Eval(fr)
-		if err != nil {
-			return Result{}, fmt.Errorf("factpipe: framework %s eval: %w", fw.Name, err)
-		}
-		if st != nil {
-			st.Derive += time.Since(t1)
-		}
-
-		t2 := time.Now()
-		for _, e := range fw.Emits {
-			er := e.Apply(derived[e.Relation()], prov)
-			res.Edges = append(res.Edges, er.Edges...)
-			for _, n := range er.Nodes {
-				if !seenNode[n.ID] {
-					seenNode[n.ID] = true
-					res.Nodes = append(res.Nodes, n)
-				}
+		res.Unresolved = append(res.Unresolved, stampService(r.unresolved, svc)...)
+		res.Ledger = append(res.Ledger, stampService(r.ledger, svc)...)
+		for old, newID := range r.replaced {
+			if res.Replaced == nil {
+				res.Replaced = map[string]string{}
 			}
-			res.Unresolved = append(res.Unresolved, stampService(er.Unresolved, svc)...)
-			res.Ledger = append(res.Ledger, stampService(er.Ledger, svc)...)
-			for old, newID := range er.Replaced {
-				if res.Replaced == nil {
-					res.Replaced = map[string]string{}
-				}
-				res.Replaced[old] = newID
-			}
-			res.Deleted = append(res.Deleted, er.Deleted...)
-			res.Patches = append(res.Patches, er.Patches...)
-			res.Resolved = append(res.Resolved, er.Resolved...)
+			res.Replaced[old] = newID
 		}
+		res.Deleted = append(res.Deleted, r.deleted...)
+		res.Patches = append(res.Patches, r.patches...)
+		res.Resolved = append(res.Resolved, r.resolved...)
+
 		if st != nil {
-			st.Emit += time.Since(t2)
+			st.Extract += r.extractElapsed
+			st.Derive += r.deriveElapsed
+			st.Emit += r.emitElapsed
 			if st.PerFramework == nil {
 				st.PerFramework = make(map[string]time.Duration, len(fws))
 			}
-			st.PerFramework[fw.Name] += time.Since(fwStart)
+			st.PerFramework[fw.Name] += r.totalElapsed
 		}
 	}
 
@@ -521,6 +513,102 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 		res.Resolved = deduped
 	}
 	return res, nil
+}
+
+// perFwResult is one framework's contribution to Result, computed by
+// runFramework in isolation (XM.5) so Run's per-framework loop can fan the
+// work out across goroutines and merge the slots back in original fws
+// order afterward — see Run's comment above where results is built.
+type perFwResult struct {
+	edges      []graph.Edge
+	nodes      []graph.Node
+	unresolved []graph.UnresolvedRef
+	ledger     []graph.UnresolvedRef
+	replaced   map[string]string
+	deleted    []string
+	patches    []factpipe.NodePatch
+	resolved   []string
+	err        error
+
+	extractElapsed time.Duration
+	deriveElapsed  time.Duration
+	emitElapsed    time.Duration
+	totalElapsed   time.Duration
+}
+
+// runFramework is Run's per-framework loop body (XM.0-era extract/derive/
+// emit staging, unchanged), extracted so it can run concurrently across
+// frameworks. It only reads shared state (baseIndex, matches, graphSoFar,
+// fw itself) and only writes to its own local fset/perFwResult — nothing
+// here mutates anything another concurrent call to runFramework observes.
+// trackTime gates the time.Now() calls the same way Run's `st != nil` check
+// always has (RunStats' "nil skips every clock read" discipline).
+func runFramework(fw *Framework, matches []patterns.MatchResult, baseIndex map[string][]factpipe.Fact, graphSoFar graph.Snapshot, trackTime bool) perFwResult {
+	var r perFwResult
+	var fwStart time.Time
+	if trackTime {
+		fwStart = time.Now()
+	}
+	fset := factpipe.NewFactSet()
+	keep := frameworkKeepSet(fw)
+	preds := make([]string, 0, len(keep))
+	for p := range keep {
+		preds = append(preds, p)
+	}
+	sort.Strings(preds)
+	for _, p := range preds {
+		for _, f := range baseIndex[p] {
+			fset.Add(f)
+		}
+	}
+	t0 := time.Now()
+	if err := applyMatches(fw, matches, fset); err != nil {
+		r.err = err
+		return r
+	}
+	if trackTime {
+		r.extractElapsed += time.Since(t0)
+	}
+
+	t1 := time.Now()
+	factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
+	factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
+	factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
+	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, fset)
+	factpipe.ApplyDerive(fw.Derives, fset)
+
+	fr := factRelations(fw, fset)
+	derived, prov, err := fw.Rules.Eval(fr)
+	if err != nil {
+		r.err = fmt.Errorf("eval: %w", err)
+		return r
+	}
+	if trackTime {
+		r.deriveElapsed += time.Since(t1)
+	}
+
+	t2 := time.Now()
+	for _, e := range fw.Emits {
+		er := e.Apply(derived[e.Relation()], prov)
+		r.edges = append(r.edges, er.Edges...)
+		r.nodes = append(r.nodes, er.Nodes...)
+		r.unresolved = append(r.unresolved, er.Unresolved...)
+		r.ledger = append(r.ledger, er.Ledger...)
+		for old, newID := range er.Replaced {
+			if r.replaced == nil {
+				r.replaced = map[string]string{}
+			}
+			r.replaced[old] = newID
+		}
+		r.deleted = append(r.deleted, er.Deleted...)
+		r.patches = append(r.patches, er.Patches...)
+		r.resolved = append(r.resolved, er.Resolved...)
+	}
+	if trackTime {
+		r.emitElapsed += time.Since(t2)
+		r.totalElapsed += time.Since(fwStart)
+	}
+	return r
 }
 
 func stampService(u []graph.UnresolvedRef, svc string) []graph.UnresolvedRef {
@@ -643,6 +731,13 @@ func parseFileRoots(files []ParsedFile) map[string]*sitter.Node {
 		if err != nil {
 			continue
 		}
+		// XM.5: roots is read by every active framework's applyMatches (via
+		// matchesByFw's captured nodes) once Run's per-framework loop below
+		// runs frameworks concurrently — warm each tree here, still
+		// single-threaded, so every later concurrent navigation is a pure
+		// cache read (see factpipe.WarmParseTree's doc comment for why a
+		// lazily-memoizing *sitter.Tree is otherwise unsafe to share).
+		factpipe.WarmParseTree(root)
 		roots[f.Path] = root
 	}
 	return roots

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"golang.org/x/sync/singleflight"
 )
 
 // XM.14 (docs/factpipe-cross-framework-matching-plan.md): pjcParseJS and
@@ -33,6 +34,35 @@ func statCacheKey(file string) (fileCacheKey, bool) {
 	return fileCacheKey{size: fi.Size(), mtime: fi.ModTime().UnixNano()}, true
 }
 
+// WarmParseTree touches every node in root exactly once, single-threaded,
+// immediately after parsing and before a cached tree/root is ever handed to
+// more than one goroutine (XM.5, docs/factpipe-cross-framework-matching-
+// plan.md). go-tree-sitter's *sitter.Tree lazily memoizes each C node's Go
+// *Node wrapper the first time any navigation method (Child/NamedChild/
+// Parent/NextSibling/...) reaches it (bindings.go's cachedNode: a plain,
+// unsynchronized map read-or-insert) — with XM.5's frameworks now running
+// concurrently, two frameworks whose matches/hub walks both first-touch the
+// same file's shared tree race on that map. Walking via Child (not
+// NamedChild) covers every node, named or anonymous, so every subsequent
+// navigation from any goroutine — via any method, not just the one used
+// here — is a pure map read against an already-fully-populated cache: safe
+// for unlimited concurrent readers with no further writes ever occurring.
+func WarmParseTree(root *sitter.Node) {
+	if root == nil {
+		return
+	}
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		cc := int(n.ChildCount())
+		for i := 0; i < cc; i++ {
+			if c := n.Child(i); c != nil {
+				walk(c)
+			}
+		}
+	}
+	walk(root)
+}
+
 // jsParseCache memoizes pjcParseJS. go-tree-sitter's package-level ParseCtx
 // (bindings.go) registers a runtime.SetFinalizer on the underlying tree, not
 // an explicit Close contract — pjcParseJS never returned a release func, so
@@ -49,6 +79,14 @@ type jsParseEntry struct {
 var (
 	jsParseMu    sync.Mutex
 	jsParseCache = map[string]*jsParseEntry{}
+	// jsParseSF (XM.5) dedupes concurrent first-touches of the same file:
+	// without it, two frameworks racing on a cold cache would each parse
+	// independently and the second's cache-store would be a lost update
+	// (benign here since JS has no Close to double-free), but the two
+	// *sitter.Node results would be different Go objects sharing no
+	// WarmParseTree — silently reintroducing the very race this cache
+	// exists to prevent for whichever framework got the losing copy.
+	jsParseSF singleflight.Group
 )
 
 func cachedParseJS(file string, parse func(string) ([]byte, *sitter.Node, bool)) (src []byte, root *sitter.Node, ok bool) {
@@ -62,13 +100,19 @@ func cachedParseJS(file string, parse func(string) ([]byte, *sitter.Node, bool))
 		jsParseMu.Unlock()
 	}
 
-	src, root, ok = parse(file)
-	if statOK {
-		jsParseMu.Lock()
-		jsParseCache[file] = &jsParseEntry{key: key, src: src, root: root, ok: ok}
-		jsParseMu.Unlock()
-	}
-	return src, root, ok
+	v, _, _ := jsParseSF.Do(file, func() (any, error) {
+		src, root, ok := parse(file)
+		WarmParseTree(root)
+		e := &jsParseEntry{key: key, src: src, root: root, ok: ok}
+		if statOK {
+			jsParseMu.Lock()
+			jsParseCache[file] = e
+			jsParseMu.Unlock()
+		}
+		return e, nil
+	})
+	e := v.(*jsParseEntry)
+	return e.src, e.root, e.ok
 }
 
 // rubyParseCache memoizes rdReadAndParseRuby. Unlike the JS path, a Ruby
@@ -88,6 +132,15 @@ type rubyParseEntry struct {
 var (
 	rubyParseMu    sync.Mutex
 	rubyParseCache = map[string]*rubyParseEntry{}
+	// rubyParseSF (XM.5): same concurrent-first-touch dedup as jsParseSF,
+	// but load-bearing here in a way JS's cache isn't — without it, two
+	// frameworks racing on a cold cache would each parse+store
+	// independently, and the *second* store's "close the entry I'm
+	// replacing" line would tree.Close() the *first* parse's tree while the
+	// first framework might still be actively navigating the very Go *Node
+	// objects backed by that now-freed C tree — a use-after-close, not
+	// merely a lost update.
+	rubyParseSF singleflight.Group
 )
 
 func cachedParseRuby(file string, parse func(string) ([]byte, *sitter.Node, *sitter.Tree, bool)) (src []byte, root *sitter.Node, release func(), ok bool) {
@@ -101,24 +154,35 @@ func cachedParseRuby(file string, parse func(string) ([]byte, *sitter.Node, *sit
 		rubyParseMu.Unlock()
 	}
 
-	var tree *sitter.Tree
-	src, root, tree, ok = parse(file)
 	if !statOK {
 		// Couldn't stat (race, or the file vanished between the caller
-		// resolving this path and us reaching it) — don't cache an entry we
-		// could never validate later; caller owns this tree's lifetime as
-		// rdReadAndParseRuby always did before this cache existed.
+		// resolving this path and us reaching it) — don't cache or dedupe
+		// via singleflight: a shared tree handed to more than one caller
+		// here would hand out more than one caller-owned release(), and the
+		// first Close() would leave every other holder with a use-after-
+		// close. This path can never be validated as fresh later anyway, so
+		// each caller parses (and owns/closes) its own independent tree,
+		// exactly as rdReadAndParseRuby always did before this cache
+		// existed.
+		src, root, tree, ok := parse(file)
 		if tree != nil {
 			return src, root, func() { tree.Close() }, ok
 		}
 		return src, root, func() {}, ok
 	}
 
-	rubyParseMu.Lock()
-	if old, found := rubyParseCache[file]; found && old.tree != nil {
-		old.tree.Close()
-	}
-	rubyParseCache[file] = &rubyParseEntry{key: key, src: src, root: root, tree: tree, ok: ok}
-	rubyParseMu.Unlock()
-	return src, root, func() {}, ok
+	v, _, _ := rubyParseSF.Do(file, func() (any, error) {
+		src, root, tree, ok := parse(file)
+		WarmParseTree(root)
+		rubyParseMu.Lock()
+		if old, found := rubyParseCache[file]; found && old.tree != nil {
+			old.tree.Close()
+		}
+		e := &rubyParseEntry{key: key, src: src, root: root, tree: tree, ok: ok}
+		rubyParseCache[file] = e
+		rubyParseMu.Unlock()
+		return e, nil
+	})
+	e := v.(*rubyParseEntry)
+	return e.src, e.root, func() {}, e.ok
 }
