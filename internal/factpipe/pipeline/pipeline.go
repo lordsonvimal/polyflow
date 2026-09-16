@@ -37,6 +37,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"gopkg.in/yaml.v3"
@@ -110,7 +111,7 @@ type Framework struct {
 	Hubs     []factpipe.CompiledHub
 	Derives  []factpipe.CompiledDerive
 
-	goals   []string // the emit relations, materialized by Eval
+	goals   []string                    // the emit relations, materialized by Eval
 	matcher *patterns.TreeSitterMatcher // built once by loadFramework (FX.8.PERF); TreeSitterMatcher is mutex-guarded, safe to share across concurrent Run calls
 }
 
@@ -352,12 +353,39 @@ type Result struct {
 	Resolved []string
 }
 
+// RunStats optionally captures one Run call's per-phase wall time (XM.0,
+// docs/factpipe-cross-framework-matching-plan.md) — bridge is the one-time
+// GraphFacts cost, Extract/Derive/Emit are summed across every active
+// framework's loop iteration. nil (the default, via Run's variadic stats
+// param) skips every time.Now() call so production callers pay nothing;
+// only a caller that explicitly wants the breakdown (XM.0's at-scale
+// benchmark) passes a non-nil pointer.
+type RunStats struct {
+	Bridge  time.Duration
+	Extract time.Duration
+	Derive  time.Duration
+	Emit    time.Duration
+}
+
 // Run executes stages 1–4 for one service. graphSoFar is the language-semantic
 // output; stage 2 (FX.1's GraphFacts) bridges it into base relations every
 // framework's rules share. Output is deterministic given deterministic input.
-func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Result, error) {
+// stats is optional (variadic so every existing 3-arg call site is
+// unaffected) — pass a non-nil *RunStats to record XM.0's per-phase timing.
+func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats ...*RunStats) (Result, error) {
+	var st *RunStats
+	if len(stats) > 0 {
+		st = stats[0]
+	}
+
 	base := factpipe.NewFactSet()
-	factpipe.GraphFacts(graphSoFar, base)
+	if st != nil {
+		t0 := time.Now()
+		factpipe.GraphFacts(graphSoFar, base)
+		st.Bridge += time.Since(t0)
+	} else {
+		factpipe.GraphFacts(graphSoFar, base)
+	}
 
 	svc := ""
 	if len(graphSoFar.Nodes) > 0 {
@@ -373,9 +401,15 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		for _, f := range base.All() {
 			fset.Add(f)
 		}
+		t0 := time.Now()
 		if err := extractFramework(fw, files, fset, roots); err != nil {
 			return Result{}, fmt.Errorf("factpipe: framework %s: %w", fw.Name, err)
 		}
+		if st != nil {
+			st.Extract += time.Since(t0)
+		}
+
+		t1 := time.Now()
 		factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 		factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 		factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
@@ -387,7 +421,11 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 		if err != nil {
 			return Result{}, fmt.Errorf("factpipe: framework %s eval: %w", fw.Name, err)
 		}
+		if st != nil {
+			st.Derive += time.Since(t1)
+		}
 
+		t2 := time.Now()
 		for _, e := range fw.Emits {
 			er := e.Apply(derived[e.Relation()], prov)
 			res.Edges = append(res.Edges, er.Edges...)
@@ -408,6 +446,9 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot) (Resul
 			res.Deleted = append(res.Deleted, er.Deleted...)
 			res.Patches = append(res.Patches, er.Patches...)
 			res.Resolved = append(res.Resolved, er.Resolved...)
+		}
+		if st != nil {
+			st.Emit += time.Since(t2)
 		}
 	}
 
