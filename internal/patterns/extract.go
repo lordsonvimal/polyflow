@@ -3,6 +3,7 @@ package patterns
 import (
 	"strconv"
 	"strings"
+	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
@@ -630,6 +631,36 @@ func positionInParent(n *sitter.Node) int {
 }
 
 // precededBy counts prior named siblings whose subtree matches query.
+// precededByQueryCache memoizes precededBy's compiled query, keyed by
+// "grammar\x00query" — query is a static string baked into a pattern YAML's
+// `extract:` spec, so every call with the same (grammar, query) pair
+// compiles to an identical *sitter.Query. Without this, sitter.NewQuery ran
+// from scratch on every single matched occurrence across every framework's
+// extraction (profiled at ~42% of a whole-registry Run's wall time on a
+// real-scale corpus) — the exact class of bug predicateRegexCache above
+// already fixed once for regexp.MustCompile; precededBy's own ad-hoc query
+// construction was missed. Cached queries are never Close()'d — they live
+// for the process's lifetime, same as TreeSitterMatcher's own compiled
+// cache.
+var precededByQueryCache sync.Map // string -> *sitter.Query
+
+func cachedPrecededByQuery(query string, lang *sitter.Language, grammar string) *sitter.Query {
+	key := grammar + "\x00" + query
+	if v, ok := precededByQueryCache.Load(key); ok {
+		return v.(*sitter.Query)
+	}
+	// Wrap in an explicit pattern group so a trailing `(#eq? ...)` predicate
+	// binds to the pattern rather than parsing as a second top-level pattern.
+	q, err := sitter.NewQuery([]byte("("+query+")"), lang)
+	if err != nil {
+		if q, err = sitter.NewQuery([]byte(query), lang); err != nil {
+			return nil
+		}
+	}
+	v, _ := precededByQueryCache.LoadOrStore(key, q)
+	return v.(*sitter.Query)
+}
+
 func precededBy(n *sitter.Node, query string, ec *ExtractContext) int64 {
 	p := n.Parent()
 	if p == nil || query == "" {
@@ -639,15 +670,10 @@ func precededBy(n *sitter.Node, query string, ec *ExtractContext) int64 {
 	if lang == nil {
 		return 0
 	}
-	// Wrap in an explicit pattern group so a trailing `(#eq? ...)` predicate
-	// binds to the pattern rather than parsing as a second top-level pattern.
-	q, err := sitter.NewQuery([]byte("("+query+")"), lang)
-	if err != nil {
-		if q, err = sitter.NewQuery([]byte(query), lang); err != nil {
-			return 0
-		}
+	q := cachedPrecededByQuery(query, lang, ec.Grammar)
+	if q == nil {
+		return 0
 	}
-	defer q.Close()
 	var count int64
 	for i := 0; i < int(p.NamedChildCount()); i++ {
 		sib := p.NamedChild(i)
