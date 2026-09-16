@@ -100,6 +100,21 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		}
 	}
 
+	// importsCache memoizes reduxImports per file: Phase 2a, Phase RTK, Phase
+	// 2b and Phase 3 each need a file's import bindings, and previously each
+	// called reduxImports independently — a full extra tree walk per phase
+	// that reaches the same file, for an identical (root, src, file) input
+	// every time. XM.20 (docs/factpipe-cross-framework-matching-plan.md).
+	importsCache := make(map[string]map[string]reduxImport)
+	getImports := func(fe fileEnt, root *sitter.Node, src []byte) map[string]reduxImport {
+		if c, ok := importsCache[fe.abs]; ok {
+			return c
+		}
+		c := reduxImports(root, src, fe.abs, indexed)
+		importsCache[fe.abs] = c
+		return c
+	}
+
 	seenNode := make(map[string]bool)
 	seenEdge := make(map[string]bool)
 	// actionTypeID: file → ACTION_NAME → nodeID
@@ -272,7 +287,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		if !ok {
 			continue
 		}
-		imports := reduxImports(root, src, fe.abs, indexed)
+		imports := getImports(fe, root, src)
 		resolveTypeRef := reduxTypeRefResolver(src, rel, imports, actionTypeID)
 		attrFrom := func(line int) string {
 			if id := nearestDecl(declsByFile[rel], line); id != "" {
@@ -280,6 +295,11 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			}
 			return fileNodeID[svc+"\x00"+rel]
 		}
+		// A single walk dispatches both the creator-registry detection (pair /
+		// object) and the JCM.11 thunk detection (function_declaration /
+		// variable_declarator) below — the two matched node-type sets are
+		// disjoint and neither reads state the other writes mid-walk, so this
+		// is one tree traversal instead of two (XM.20).
 		reduxWalk(root, func(n *sitter.Node) {
 			switch n.Type() {
 			case "pair":
@@ -320,87 +340,86 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 					addEdge(graph.EdgeTypeReferences, from, tid, "creator_type")
 					recordCreator(rel, idToLabel[from], from)
 				}
-			}
-		})
 
-		// --- JCM.11: thunks. `export const load = () => (dispatch) => { … }` /
-		// `function load() { return function(dispatch) { … } }` — attribute the
-		// inner function's dispatch calls to the outer creator node.
-		reduxWalk(root, func(n *sitter.Node) {
-			var nameNode, fnNode *sitter.Node
-			switch n.Type() {
-			case "function_declaration":
-				nameNode, fnNode = n.ChildByFieldName("name"), n
-			case "variable_declarator":
-				if v := n.ChildByFieldName("value"); v != nil &&
-					(v.Type() == "arrow_function" || v.Type() == "function_expression") {
-					nameNode, fnNode = n.ChildByFieldName("name"), v
+			case "function_declaration", "variable_declarator":
+				// JCM.11: thunks. `export const load = () => (dispatch) => { … }` /
+				// `function load() { return function(dispatch) { … } }` — attribute
+				// the inner function's dispatch calls to the outer creator node.
+				var nameNode, fnNode *sitter.Node
+				switch n.Type() {
+				case "function_declaration":
+					nameNode, fnNode = n.ChildByFieldName("name"), n
+				case "variable_declarator":
+					if v := n.ChildByFieldName("value"); v != nil &&
+						(v.Type() == "arrow_function" || v.Type() == "function_expression") {
+						nameNode, fnNode = n.ChildByFieldName("name"), v
+					}
 				}
-			}
-			if nameNode == nil || fnNode == nil || nameNode.Type() != "identifier" {
-				return
-			}
-			inner := reduxThunkInner(fnNode, src)
-			if inner == nil {
-				return
-			}
-			cname := nameNode.Content(src)
-			cid := declIndex[rel][cname]
-			if cid == "" {
-				cid = mkFn(svc, rel, cname, int(nameNode.StartPoint().Row)+1, "creator")
-			}
-			recordCreator(rel, cname, cid)
-			ib := inner.ChildByFieldName("body")
-			if ib == nil {
-				return
-			}
-			reduxWalk(ib, func(d *sitter.Node) {
-				if d.Type() != "call_expression" {
+				if nameNode == nil || fnNode == nil || nameNode.Type() != "identifier" {
 					return
 				}
-				df := d.ChildByFieldName("function")
-				if df == nil || df.Content(src) != "dispatch" {
+				inner := reduxThunkInner(fnNode, src)
+				if inner == nil {
 					return
 				}
-				da := d.ChildByFieldName("arguments")
-				if da == nil || da.NamedChildCount() == 0 {
+				cname := nameNode.Content(src)
+				cid := declIndex[rel][cname]
+				if cid == "" {
+					cid = mkFn(svc, rel, cname, int(nameNode.StartPoint().Row)+1, "creator")
+				}
+				recordCreator(rel, cname, cid)
+				ib := inner.ChildByFieldName("body")
+				if ib == nil {
 					return
 				}
-				arg0 := da.NamedChild(0)
-				switch arg0.Type() {
-				case "call_expression":
-					acf := arg0.ChildByFieldName("function")
-					if acf == nil {
+				reduxWalk(ib, func(d *sitter.Node) {
+					if d.Type() != "call_expression" {
 						return
 					}
-					var to string
-					switch acf.Type() {
-					case "identifier":
-						nm := acf.Content(src)
-						if id := declIndex[rel][nm]; id != "" {
-							to = id
-						} else if imp, ok := imports[nm]; ok {
-							exp := imp.exported
-							if exp == "" {
-								exp = nm
-							}
-							to = reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn)
+					df := d.ChildByFieldName("function")
+					if df == nil || df.Content(src) != "dispatch" {
+						return
+					}
+					da := d.ChildByFieldName("arguments")
+					if da == nil || da.NamedChildCount() == 0 {
+						return
+					}
+					arg0 := da.NamedChild(0)
+					switch arg0.Type() {
+					case "call_expression":
+						acf := arg0.ChildByFieldName("function")
+						if acf == nil {
+							return
 						}
-					case "member_expression":
-						o, p := acf.ChildByFieldName("object"), acf.ChildByFieldName("property")
-						if o != nil && p != nil && o.Type() == "identifier" {
-							if imp, ok := imports[o.Content(src)]; ok {
-								to = reduxCreatorNode(imp.file, p.Content(src), creatorNodeID, svcOfFile, mkFn)
+						var to string
+						switch acf.Type() {
+						case "identifier":
+							nm := acf.Content(src)
+							if id := declIndex[rel][nm]; id != "" {
+								to = id
+							} else if imp, ok := imports[nm]; ok {
+								exp := imp.exported
+								if exp == "" {
+									exp = nm
+								}
+								to = reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn)
 							}
+						case "member_expression":
+							o, p := acf.ChildByFieldName("object"), acf.ChildByFieldName("property")
+							if o != nil && p != nil && o.Type() == "identifier" {
+								if imp, ok := imports[o.Content(src)]; ok {
+									to = reduxCreatorNode(imp.file, p.Content(src), creatorNodeID, svcOfFile, mkFn)
+								}
+							}
+						}
+						addEdge11(graph.EdgeTypeCalls, cid, to, "thunk_dispatch")
+					case "object":
+						if tid := reduxTypeField(arg0, src, resolveTypeRef); tid != "" {
+							addEdge11(graph.EdgeTypeReferences, cid, tid, "thunk_dispatch")
 						}
 					}
-					addEdge11(graph.EdgeTypeCalls, cid, to, "thunk_dispatch")
-				case "object":
-					if tid := reduxTypeField(arg0, src, resolveTypeRef); tid != "" {
-						addEdge11(graph.EdgeTypeReferences, cid, tid, "thunk_dispatch")
-					}
-				}
-			})
+				})
+			}
 		})
 	}
 
@@ -436,7 +455,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			!strings.Contains(s, "configureStore") {
 			continue
 		}
-		imports := reduxImports(root, src, fe.abs, indexed)
+		imports := getImports(fe, root, src)
 		reduxWalk(root, func(n *sitter.Node) {
 			if n.Type() != "call_expression" {
 				return
@@ -578,7 +597,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			continue
 		}
 		_, _, isReducers := reduxPathRole(rel)
-		imports := reduxImports(root, src, fe.abs, indexed)
+		imports := getImports(fe, root, src)
 		isActionsFile := func(frel string) bool {
 			if _, ia, _ := reduxPathRole(frel); ia {
 				return true
@@ -627,76 +646,73 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				absorbAC(imp.file)
 			}
 		}
-		// bindActionCreators(<ident>, …) where <ident> resolves to an actions module
+		// bindActionCreators(<ident>, …) and JCM.11's connect(mapStateToProps?,
+		// { load, save }) object-literal mapDispatchToProps shorthand share one
+		// walk: both match only call_expression, gated on a mutually exclusive
+		// function name, so dispatching on that name in a single pass is
+		// equivalent to two separate walks (XM.20). Both must fully populate
+		// acFiles/fileCreators before the dispatch-site walk below runs, since
+		// source order doesn't guarantee either call appears before its usage.
 		reduxWalk(root, func(n *sitter.Node) {
 			if n.Type() != "call_expression" {
 				return
 			}
 			f := n.ChildByFieldName("function")
-			if f == nil || f.Type() != "identifier" || f.Content(src) != "bindActionCreators" {
+			if f == nil || f.Type() != "identifier" {
 				return
 			}
-			a := n.ChildByFieldName("arguments")
-			if a == nil || a.NamedChildCount() == 0 {
-				return
-			}
-			if a0 := a.NamedChild(0); a0.Type() == "identifier" {
-				if imp, ok := imports[a0.Content(src)]; ok {
-					if isActionsFile(imp.file) {
-						absorbAC(imp.file)
+			switch f.Content(src) {
+			case "bindActionCreators":
+				a := n.ChildByFieldName("arguments")
+				if a == nil || a.NamedChildCount() == 0 {
+					return
+				}
+				if a0 := a.NamedChild(0); a0.Type() == "identifier" {
+					if imp, ok := imports[a0.Content(src)]; ok {
+						if isActionsFile(imp.file) {
+							absorbAC(imp.file)
+						}
 					}
 				}
-			}
-		})
 
-		// JCM.11: connect(mapStateToProps?, { load, save }) — object-literal
-		// mapDispatchToProps shorthand. Each value resolving (via imports) to an
-		// action creator becomes a bound prop, so `this.props.<key>(…)` call sites
-		// link like the bindActionCreators path (role props_bound_dispatch).
-		reduxWalk(root, func(n *sitter.Node) {
-			if n.Type() != "call_expression" {
-				return
-			}
-			f := n.ChildByFieldName("function")
-			if f == nil || f.Type() != "identifier" || f.Content(src) != "connect" {
-				return
-			}
-			a := n.ChildByFieldName("arguments")
-			if a == nil || a.NamedChildCount() < 2 {
-				return
-			}
-			obj := a.NamedChild(1)
-			if obj.Type() != "object" {
-				return
-			}
-			for j := 0; j < int(obj.NamedChildCount()); j++ {
-				p := obj.NamedChild(j)
-				var key, valName string
-				switch p.Type() {
-				case "shorthand_property_identifier":
-					key, valName = p.Content(src), p.Content(src)
-				case "pair":
-					k, v := p.ChildByFieldName("key"), p.ChildByFieldName("value")
-					if k == nil || v == nil || v.Type() != "identifier" {
+			case "connect":
+				a := n.ChildByFieldName("arguments")
+				if a == nil || a.NamedChildCount() < 2 {
+					return
+				}
+				obj := a.NamedChild(1)
+				if obj.Type() != "object" {
+					return
+				}
+				for j := 0; j < int(obj.NamedChildCount()); j++ {
+					p := obj.NamedChild(j)
+					var key, valName string
+					switch p.Type() {
+					case "shorthand_property_identifier":
+						key, valName = p.Content(src), p.Content(src)
+					case "pair":
+						k, v := p.ChildByFieldName("key"), p.ChildByFieldName("value")
+						if k == nil || v == nil || v.Type() != "identifier" {
+							continue
+						}
+						key, valName = strings.Trim(k.Content(src), "\"'`"), v.Content(src)
+					default:
 						continue
 					}
-					key, valName = strings.Trim(k.Content(src), "\"'`"), v.Content(src)
-				default:
-					continue
-				}
-				imp, ok := imports[valName]
-				if !ok {
-					continue
-				}
-				if !isActionsFile(imp.file) {
-					continue
-				}
-				exp := imp.exported
-				if exp == "" {
-					exp = valName
-				}
-				if id := reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn); id != "" {
-					fileCreators[key] = id
+					imp, ok := imports[valName]
+					if !ok {
+						continue
+					}
+					if !isActionsFile(imp.file) {
+						continue
+					}
+					exp := imp.exported
+					if exp == "" {
+						exp = valName
+					}
+					if id := reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn); id != "" {
+						fileCreators[key] = id
+					}
 				}
 			}
 		})
@@ -935,7 +951,7 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			!strings.Contains(s, "createSelector") {
 			continue
 		}
-		imports := reduxImports(root, src, fe.abs, indexed)
+		imports := getImports(fe, root, src)
 		attrFrom := func(line int) string {
 			if id := nearestDecl(declsByFile[rel], line); id != "" {
 				return id
