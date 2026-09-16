@@ -443,12 +443,14 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 
 	// --- Detect call sites ---
 	// Plain call: localName() where localName is a named import → resolve to exportedName
-	plainCallQuery := `
-(call_expression
-  function: (identifier) @callee)`
-
 	// Member call: obj.method() where obj is a named or namespace import
-	memberCallQuery := `
+	// Combined into one query/cursor: a call_expression's `function` field is
+	// either an identifier or a member_expression, never both, so the two
+	// patterns can never double-match the same node — each NextMatch()
+	// result carries only the captures of whichever alternative matched.
+	callQuery := `
+(call_expression
+  function: (identifier) @callee)
 (call_expression
   function: (member_expression
     object: (identifier) @obj
@@ -464,30 +466,7 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	var callSites []callSite
 
 	{
-		q, err := compiledQuery(plainCallQuery, lang)
-		if err == nil {
-			cur := sitter.NewQueryCursor()
-			cur.Exec(q, root)
-			for {
-				m, ok := cur.NextMatch()
-				if !ok {
-					break
-				}
-				for _, c := range m.Captures {
-					local := c.Node.Content(src)
-					if exported, ok := plainImport[local]; ok {
-						callSites = append(callSites, callSite{
-							targetLabel: exported,
-							localName:   local,
-							line:        int(c.Node.StartPoint().Row) + 1,
-						})
-					}
-				}
-			}
-		}
-	}
-	{
-		q, err := compiledQuery(memberCallQuery, lang)
+		q, err := compiledQuery(callQuery, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
@@ -505,6 +484,12 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 						minLine = row
 					}
 				}
+				if callee, ok := caps["callee"]; ok {
+					if exported, ok := plainImport[callee]; ok {
+						callSites = append(callSites, callSite{targetLabel: exported, localName: callee, line: minLine})
+					}
+					continue
+				}
 				obj, method := caps["obj"], caps["method"]
 				// Resolve: obj is a named import (e.g. uiStore exported as-is) or namespace.
 				_, isNS := nsImports[obj]
@@ -521,23 +506,22 @@ func resolveImportCalls(file string, svcFuncByLabel map[string]string, svcVarByL
 	}
 
 	// JSX event prop references: onClick={importedFn} — not a call_expression,
-	// so the plain call query misses them. Only compiles against TSX grammar.
-	jsxEventPropQuery := `
+	// so the call query above misses them. Combined into one query/cursor:
+	// jsx_attribute's name is either a property_identifier or a
+	// jsx_namespace_name, never both, so these can't double-match either.
+	jsxEventQuery := `
 (jsx_attribute
   (property_identifier) @prop
   (#match? @prop "^on[A-Z]")
   (jsx_expression
-    (identifier) @callee))`
-	// Solid delegated/native directives: on:click={importedFn} — the
-	// attribute name parses as a namespaced JSX name.
-	jsxEventDirectiveQuery := `
+    (identifier) @callee))
 (jsx_attribute
   (jsx_namespace_name) @prop
   (#match? @prop "^on(capture)?:")
   (jsx_expression
     (identifier) @callee))`
-	for _, qstr := range []string{jsxEventPropQuery, jsxEventDirectiveQuery} {
-		q, err := compiledQuery(qstr, lang)
+	{
+		q, err := compiledQuery(jsxEventQuery, lang)
 		if err == nil {
 			cur := sitter.NewQueryCursor()
 			cur.Exec(q, root)
