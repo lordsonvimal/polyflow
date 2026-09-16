@@ -423,6 +423,11 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 	// keep-set-size).
 	baseIndex := indexByPred(base)
 
+	// XM.6: convert every base predicate's facts into datalog.Tuple exactly
+	// once per Run call instead of once per framework inside factRelations —
+	// see buildBaseTuples.
+	baseTuples := buildBaseTuples(baseIndex)
+
 	// XM.5: each iteration below (fset build, applyMatches, the Apply*
 	// stages, fw.Rules.Eval, and every emit's Apply) reads only shared
 	// read-only inputs (baseIndex, matchesByFw, graphSoFar, fw itself —
@@ -443,7 +448,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 		for i, fw := range fws {
 			i, fw := i, fw
 			g.Go(func() error {
-				results[i] = runFramework(fw, matchesByFw[fw.Name], baseIndex, graphSoFar, st != nil)
+				results[i] = runFramework(fw, matchesByFw[fw.Name], baseIndex, baseTuples, graphSoFar, st != nil)
 				return nil // errors are captured per-slot (results[i].err) and surfaced in fws order below
 			})
 		}
@@ -543,7 +548,7 @@ type perFwResult struct {
 // here mutates anything another concurrent call to runFramework observes.
 // trackTime gates the time.Now() calls the same way Run's `st != nil` check
 // always has (RunStats' "nil skips every clock read" discipline).
-func runFramework(fw *Framework, matches []patterns.MatchResult, baseIndex map[string][]factpipe.Fact, graphSoFar graph.Snapshot, trackTime bool) perFwResult {
+func runFramework(fw *Framework, matches []patterns.MatchResult, baseIndex map[string][]factpipe.Fact, baseTuples map[string][]datalog.Tuple, graphSoFar graph.Snapshot, trackTime bool) perFwResult {
 	var r perFwResult
 	var fwStart time.Time
 	if trackTime {
@@ -561,6 +566,14 @@ func runFramework(fw *Framework, matches []patterns.MatchResult, baseIndex map[s
 			fset.Add(f)
 		}
 	}
+	// XM.6: baseFactCount marks where the base-copy loop above ends and this
+	// framework's own applyMatches/Apply* facts begin in fset.All() — the
+	// copy itself still has to happen (ApplyResolves/ApplyConfig/ApplyTable/
+	// ApplyHub/ApplyDerive read these as Facts), but factRelationsWithBase
+	// uses it to skip re-converting that prefix into datalog.Tuple, since
+	// baseTuples already holds that exact conversion, done once for every
+	// framework by Run.
+	baseFactCount := fset.Len()
 	t0 := time.Now()
 	if err := applyMatches(fw, matches, fset); err != nil {
 		r.err = err
@@ -577,7 +590,7 @@ func runFramework(fw *Framework, matches []patterns.MatchResult, baseIndex map[s
 	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, fset)
 	factpipe.ApplyDerive(fw.Derives, fset)
 
-	fr := factRelations(fw, fset)
+	fr := factRelationsWithBase(fw, fset, baseFactCount, preds, baseTuples)
 	derived, prov, err := fw.Rules.Eval(fr)
 	if err != nil {
 		r.err = fmt.Errorf("eval: %w", err)
@@ -835,6 +848,69 @@ func indexByPred(fs factpipe.FactSet) map[string][]factpipe.Fact {
 		idx[f.Pred] = append(idx[f.Pred], f)
 	}
 	return idx
+}
+
+// buildBaseTuples converts every base predicate's facts (indexByPred's
+// baseIndex) into datalog.Tuple exactly once per Run call (XM.6,
+// docs/factpipe-cross-framework-matching-plan.md), instead of once per
+// framework inside factRelations. Before this, every active framework that
+// kept a given base predicate (frameworkKeepSet) redid the identical
+// Fact.Args[i].Value() conversion over the identical baseIndex[pred] slice —
+// with cedar's ~20 active ruby frameworks routinely sharing the same handful
+// of GraphFacts-bridged predicates, that conversion ran ~20x for no reason.
+// Read-only afterward: factRelationsWithBase only ever appends these slices
+// into a fresh per-framework *datalog.FactRelations (datalog.Tuple's
+// element type, string, makes an appended tuple immutable in practice), so
+// sharing the same backing slice across every concurrent runFramework call
+// is safe with no lock.
+func buildBaseTuples(baseIndex map[string][]factpipe.Fact) map[string][]datalog.Tuple {
+	out := make(map[string][]datalog.Tuple, len(baseIndex))
+	for pred, facts := range baseIndex {
+		tuples := make([]datalog.Tuple, len(facts))
+		for i, f := range facts {
+			t := make(datalog.Tuple, len(f.Args))
+			for j, a := range f.Args {
+				t[j] = a.Value()
+			}
+			tuples[i] = t
+		}
+		out[pred] = tuples
+	}
+	return out
+}
+
+// factRelationsWithBase is factRelations' XM.6 fast path for runFramework:
+// baseFactCount is fset.Len() captured right after the base-predicate copy
+// loop in runFramework and before applyMatches/Apply* ran, so
+// fset.All()[:baseFactCount] is exactly the facts baseTuples already holds
+// pre-converted (in the same order, since both walk preds/baseIndex[p] in
+// the same order) and fset.All()[baseFactCount:] is this framework's own
+// new facts, which still need today's per-fact conversion. preds is the
+// same sorted keep-set runFramework copied from, reused here instead of
+// recomputed.
+func factRelationsWithBase(fw *Framework, fset factpipe.FactSet, baseFactCount int, preds []string, baseTuples map[string][]datalog.Tuple) *datalog.FactRelations {
+	fr := datalog.NewFactRelations(fw.goals...)
+	present := map[string]bool{}
+	for _, p := range preds {
+		if ts := baseTuples[p]; len(ts) > 0 {
+			fr.Add(p, ts...)
+			present[p] = true
+		}
+	}
+	for _, f := range fset.All()[baseFactCount:] {
+		t := make(datalog.Tuple, len(f.Args))
+		for i, a := range f.Args {
+			t[i] = a.Value()
+		}
+		fr.Add(f.Pred, t)
+		present[f.Pred] = true
+	}
+	for _, rel := range fw.Rules.BaseRelations() {
+		if !present[rel] {
+			fr.Declare(rel)
+		}
+	}
+	return fr
 }
 
 // frameworkKeepSet is the audited (XM.2) set of base predicates a framework
