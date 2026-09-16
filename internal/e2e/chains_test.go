@@ -115,8 +115,18 @@ func TestChain_TemplDatastarGinHubSSE(t *testing.T) {
 	r := trace.Run(idx, root.ID, "forward", 0, false, 0, graph.AllNoiseInclude(), 0)
 	require.NotNil(t, r)
 
+	// FX.8.V folded datastar_action's edge type onto the domain "calls" type
+	// (the click's provenance now lives on the target http_client node's
+	// Meta["datastar"]="true" instead of a framework-named edge type) —
+	// confirm that node-level provenance directly rather than looking for a
+	// literal "-[datastar_action]->" edge label that no longer exists.
+	clickTarget := findChainNode(idx, "ui", func(n *graph.Node) bool {
+		return n.Type == graph.NodeTypeHTTPClient && n.Meta["datastar"] == "true"
+	})
+	require.NotNil(t, clickTarget, "templ button click must mint a datastar-provenanced http_client node in ui service")
+
 	text, ok := chainWith(r,
-		"-[datastar_action]->",
+		"-[calls]->",
 		"-[http_call]-> ‖hub‖",
 		"-[calls]->",
 		"handleMove",
