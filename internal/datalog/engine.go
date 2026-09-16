@@ -521,6 +521,14 @@ type Engine struct {
 	// Deduped, because a rule re-fires on every fixpoint round.
 	derivs   map[dgKey][]Derivation
 	derivSet map[string]bool
+	// fastRule/fastRuleAmbiguous are XM.11's byproduct of the bulk (recording-
+	// off) pass: the one rule name known to have produced a tuple, tracked at
+	// near-zero cost so Provenance.RuleOf can skip Provenance.Of's full
+	// recording-on re-derivation in the common (unambiguous) case. A tuple
+	// reached by two different rule names during the bulk pass moves from
+	// fastRule to fastRuleAmbiguous instead, forcing the accurate slow path.
+	fastRule          map[dgKey]string
+	fastRuleAmbiguous map[dgKey]bool
 	// recordProv gates derivation recording on the hot path. It tracks
 	// opts.Provenance, except Provenance() flips it on for the duration of one
 	// bound recompute (P.6).
@@ -539,15 +547,17 @@ func New(opts Options) *Engine {
 		opts.DemandDriven = true
 	}
 	return &Engine{
-		opts:       opts.withDefaults(),
-		recordProv: opts.Provenance,
-		syms:       newInterner(),
-		base:       map[string]*relation{},
-		rules:      map[string][]*Rule{},
-		aggRel:     map[string]bool{},
-		tables:     map[sgKey]*table{},
-		derivs:     map[dgKey][]Derivation{},
-		derivSet:   map[string]bool{},
+		opts:              opts.withDefaults(),
+		recordProv:        opts.Provenance,
+		syms:              newInterner(),
+		base:              map[string]*relation{},
+		rules:             map[string][]*Rule{},
+		aggRel:            map[string]bool{},
+		tables:            map[sgKey]*table{},
+		derivs:            map[dgKey][]Derivation{},
+		derivSet:          map[string]bool{},
+		fastRule:          map[dgKey]string{},
+		fastRuleAmbiguous: map[dgKey]bool{},
 	}
 }
 

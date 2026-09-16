@@ -138,3 +138,12 @@ type Provenance struct{ e *Engine }
 func (p *Provenance) Of(goal string, t Tuple) ([]Derivation, error) {
 	return p.e.Provenance(goal, t)
 }
+
+// RuleOf answers "which single rule produced t" without Of's full recording-
+// on re-derivation, when the bulk pass already recorded an unambiguous
+// answer (XM.11, docs/factpipe-cross-framework-matching-plan.md). ok is
+// false when the caller must fall back to Of — no fast answer recorded, or
+// t is genuinely derivable more than one way.
+func (p *Provenance) RuleOf(goal string, t Tuple) (string, bool) {
+	return p.e.RuleOf(goal, t)
+}

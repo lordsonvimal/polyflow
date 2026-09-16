@@ -784,7 +784,15 @@ func (e *CompiledEmit) buildEdge(row map[string]string, all []map[string]string,
 		rule = s.Relation
 	}
 	if prov != nil {
-		if ds, err := prov.Of(s.Relation, tup); err == nil && len(ds) > 0 && ds[0].Rule != "" {
+		// XM.11: the fast unambiguous-rule lookup first — buildEdge runs once per
+		// emitted edge, and Of's full recording-on re-derivation per call was
+		// measured (docs/factpipe-cross-framework-matching-plan.md) at ~23% of
+		// cedar's derive-stage CPU. Fall back to Of only when genuinely ambiguous.
+		if name, ok := prov.RuleOf(s.Relation, tup); ok {
+			if name != "" {
+				rule = name
+			}
+		} else if ds, err := prov.Of(s.Relation, tup); err == nil && len(ds) > 0 && ds[0].Rule != "" {
 			rule = ds[0].Rule
 		}
 	}

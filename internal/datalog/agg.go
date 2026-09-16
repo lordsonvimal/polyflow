@@ -123,7 +123,7 @@ func (e *Engine) flushAgg(r *Rule, t *table) error {
 		if e.recordProv {
 			d = &Derivation{Rule: r.Name, Head: e.syms.reveal(head), Body: append([]DerivationStep(nil), acc.steps...)}
 		}
-		if err := e.record(t, head, d); err != nil {
+		if err := e.record(t, head, d, r.Name); err != nil {
 			return err
 		}
 	}

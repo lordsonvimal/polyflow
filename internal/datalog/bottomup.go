@@ -325,7 +325,7 @@ func (e *Engine) evalComponent(bu *bottomUp, rels []string) error {
 		t.state = tableProducing
 		if br := e.base[rel]; br != nil {
 			for _, tup := range br.tuples {
-				if err := e.record(t, tup, nil); err != nil {
+				if err := e.record(t, tup, nil, ""); err != nil {
 					return err
 				}
 			}

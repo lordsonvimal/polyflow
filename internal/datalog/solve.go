@@ -128,6 +128,20 @@ func (e *Engine) Provenance(goal string, t Tuple) ([]Derivation, error) {
 	return out, nil
 }
 
+// RuleOf is XM.11's fast path: the rule name recorded as a byproduct of the
+// bulk (recording-off) pass, when that tuple's derivation was unambiguous.
+// ok is false when no fast answer is available — never reached this run, a
+// base fact, or genuinely derivable by more than one rule — and the caller
+// must fall back to Provenance.Of for the accurate (but expensive) answer.
+func (e *Engine) RuleOf(goal string, t Tuple) (string, bool) {
+	gk := e.groupKey(goal, e.syms.intern(t))
+	if e.fastRuleAmbiguous[gk] {
+		return "", false
+	}
+	name, ok := e.fastRule[gk]
+	return name, ok
+}
+
 func (e *Engine) ready(goal string, arity int) error {
 	if !e.loaded && len(e.rules) == 0 {
 		if _, ok := e.base[goal]; !ok {
@@ -302,7 +316,7 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*uint32) ([]itup, err
 	if hasBase {
 		var rerr error
 		baseRel.each(binds, func(tup itup) bool {
-			if err := e.record(t, tup, nil); err != nil {
+			if err := e.record(t, tup, nil, ""); err != nil {
 				rerr = err
 				return false
 			}
@@ -324,7 +338,7 @@ func (e *Engine) solve(rs *roundState, rel string, binds []*uint32) ([]itup, err
 			}
 			for _, tup := range all {
 				if matches(tup, binds) {
-					if err := e.record(t, tup, nil); err != nil {
+					if err := e.record(t, tup, nil, ""); err != nil {
 						return nil, err
 					}
 				}
@@ -575,9 +589,9 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 			// scratch buffer is about to be reused. Off the hot path by default.
 			hc := append(itup(nil), head...)
 			d = &Derivation{Rule: r.Name, Head: e.syms.reveal(hc), Body: append([]DerivationStep(nil), steps...)}
-			return e.record(t, hc, d)
+			return e.record(t, hc, d, r.Name)
 		}
-		return e.record(t, head, d)
+		return e.record(t, head, d, r.Name)
 	}
 
 	lit := r.Body[i]
@@ -679,7 +693,7 @@ func (e *Engine) join(src bodySource, r *Rule, rp *rulePatterns, plan []litPlan,
 	return nil
 }
 
-func (e *Engine) record(t *table, tup itup, d *Derivation) error {
+func (e *Engine) record(t *table, tup itup, d *Derivation, ruleName string) error {
 	if t.rel.add(tup) {
 		e.grown++
 		if len(t.rel.tuples) > e.opts.MaxTuples {
@@ -692,6 +706,25 @@ func (e *Engine) record(t *table, tup itup, d *Derivation) error {
 			e.derivSet[k] = true
 			gk := e.groupKey(t.rel.name, tup)
 			e.derivs[gk] = append(e.derivs[gk], *d)
+		}
+	} else if ruleName != "" && !e.recordProv {
+		// XM.11 (docs/factpipe-cross-framework-matching-plan.md): track the
+		// producing rule's name as a byproduct of the bulk (recording-off) pass,
+		// at near-zero cost (one map lookup, no Derivation clone) — the answer
+		// Provenance.RuleOf needs for the overwhelmingly common case, without
+		// Provenance.Of's full re-derivation. Only meaningful while recordProv
+		// is off; a recording-on call already gets the exact answer via d above,
+		// and must not let a fast-path entry from this call shadow it.
+		gk := e.groupKey(t.rel.name, tup)
+		if !e.fastRuleAmbiguous[gk] {
+			if prev, ok := e.fastRule[gk]; ok {
+				if prev != ruleName {
+					delete(e.fastRule, gk)
+					e.fastRuleAmbiguous[gk] = true
+				}
+			} else {
+				e.fastRule[gk] = ruleName
+			}
 		}
 	}
 	return nil
