@@ -542,6 +542,77 @@ func cachedCompileRegex(pattern string) *regexp.Regexp {
 	return v.(*regexp.Regexp)
 }
 
+// predicatesForPatternKey identifies one (compiled query, pattern index)
+// pair — the same pair Query.PredicatesForPattern is always called with for
+// the life of a compiled query (patterns never change after Load), so its
+// result is invariant across every match of that pattern. *sitter.Query is
+// stable/pointer-identical for the shared per-language query XM.1 already
+// builds once per Run call, so the pointer itself is a valid cache key.
+type predicatesForPatternKey struct {
+	q   *sitter.Query
+	idx uint32
+}
+
+// predicatesForPatternCache memoizes Query.PredicatesForPattern, keyed by
+// predicatesForPatternKey. Each call is a cgo round-trip
+// (C.ts_query_predicates_for_pattern) plus a fresh []QueryPredicateStep
+// allocation and splitPredicates pass — go-tree-sitter recomputes this from
+// scratch on every single match, the same shape of bug XM.9
+// (docs/factpipe-cross-framework-matching-plan.md) found and fixed in
+// internal/datalog: real per-file work repeated once per match instead of
+// once per (query, pattern) — profiled at ~30% cumulative CPU + ~14% of
+// allocation volume (QueryCursor.NextMatch/PredicatesForPattern/cgocall) on
+// a real corpus's rails_filters run, post-XM.9.
+var predicatesForPatternCache sync.Map // predicatesForPatternKey -> [][]sitter.QueryPredicateStep
+
+func cachedPredicatesForPattern(q *sitter.Query, idx uint32) [][]sitter.QueryPredicateStep {
+	key := predicatesForPatternKey{q, idx}
+	if v, ok := predicatesForPatternCache.Load(key); ok {
+		return v.([][]sitter.QueryPredicateStep)
+	}
+	preds := q.PredicatesForPattern(idx)
+	v, _ := predicatesForPatternCache.LoadOrStore(key, preds)
+	return v.([][]sitter.QueryPredicateStep)
+}
+
+// queryIDKey identifies one (compiled query, numeric id) pair for the two
+// caches below — CaptureNameForId/StringValueForId resolve a query-local
+// numeric id (a capture index or a predicate string-table index) to its
+// static text, which cannot change for the life of a compiled query. Both
+// are called once per capture *per match* (handleMatch and
+// filterPredicatesCached together call these on every capture of every
+// match), each a cgo round-trip (C.ts_query_capture_name_for_id /
+// C.ts_query_string_value_for_id) plus a C.GoStringN allocation — the same
+// invariant-recomputed-per-match shape predicatesForPatternCache above
+// fixes, just at capture granularity instead of pattern granularity.
+type queryIDKey struct {
+	q  *sitter.Query
+	id uint32
+}
+
+var captureNameCache sync.Map // queryIDKey -> string
+var stringValueCache sync.Map // queryIDKey -> string
+
+func cachedCaptureNameForId(q *sitter.Query, id uint32) string {
+	key := queryIDKey{q, id}
+	if v, ok := captureNameCache.Load(key); ok {
+		return v.(string)
+	}
+	name := q.CaptureNameForId(id)
+	v, _ := captureNameCache.LoadOrStore(key, name)
+	return v.(string)
+}
+
+func cachedStringValueForId(q *sitter.Query, id uint32) string {
+	key := queryIDKey{q, id}
+	if v, ok := stringValueCache.Load(key); ok {
+		return v.(string)
+	}
+	val := q.StringValueForId(id)
+	v, _ := stringValueCache.LoadOrStore(key, val)
+	return v.(string)
+}
+
 // filterPredicatesCached is sitter.QueryCursor.FilterPredicates, copied
 // (not forked — this is our own code, calling only exported API) with one
 // change: #match?/#not-match? predicates compile their regex via
@@ -556,7 +627,7 @@ func filterPredicatesCached(q *sitter.Query, m *sitter.QueryMatch, input []byte)
 		PatternIndex: m.PatternIndex,
 	}
 
-	predicates := q.PredicatesForPattern(uint32(qm.PatternIndex))
+	predicates := cachedPredicatesForPattern(q, uint32(qm.PatternIndex))
 	if len(predicates) == 0 {
 		qm.Captures = m.Captures
 		return qm
@@ -565,18 +636,18 @@ func filterPredicatesCached(q *sitter.Query, m *sitter.QueryMatch, input []byte)
 	matchedAll := true
 
 	for _, steps := range predicates {
-		operator := q.StringValueForId(steps[0].ValueId)
+		operator := cachedStringValueForId(q, steps[0].ValueId)
 
 		switch operator {
 		case "eq?", "not-eq?":
 			isPositive := operator == "eq?"
-			expectedCaptureNameLeft := q.CaptureNameForId(steps[1].ValueId)
+			expectedCaptureNameLeft := cachedCaptureNameForId(q, steps[1].ValueId)
 
 			if steps[2].Type == sitter.QueryPredicateStepTypeCapture {
-				expectedCaptureNameRight := q.CaptureNameForId(steps[2].ValueId)
+				expectedCaptureNameRight := cachedCaptureNameForId(q, steps[2].ValueId)
 				var nodeLeft, nodeRight *sitter.Node
 				for _, c := range m.Captures {
-					captureName := q.CaptureNameForId(c.Index)
+					captureName := cachedCaptureNameForId(q, c.Index)
 					if captureName == expectedCaptureNameLeft {
 						nodeLeft = c.Node
 					}
@@ -591,9 +662,9 @@ func filterPredicatesCached(q *sitter.Query, m *sitter.QueryMatch, input []byte)
 					}
 				}
 			} else {
-				expectedValueRight := q.StringValueForId(steps[2].ValueId)
+				expectedValueRight := cachedStringValueForId(q, steps[2].ValueId)
 				for _, c := range m.Captures {
-					captureName := q.CaptureNameForId(c.Index)
+					captureName := cachedCaptureNameForId(q, c.Index)
 					if expectedCaptureNameLeft != captureName {
 						continue
 					}
@@ -610,11 +681,11 @@ func filterPredicatesCached(q *sitter.Query, m *sitter.QueryMatch, input []byte)
 
 		case "match?", "not-match?":
 			isPositive := operator == "match?"
-			expectedCaptureName := q.CaptureNameForId(steps[1].ValueId)
-			regex := cachedCompileRegex(q.StringValueForId(steps[2].ValueId))
+			expectedCaptureName := cachedCaptureNameForId(q, steps[1].ValueId)
+			regex := cachedCompileRegex(cachedStringValueForId(q, steps[2].ValueId))
 
 			for _, c := range m.Captures {
-				captureName := q.CaptureNameForId(c.Index)
+				captureName := cachedCaptureNameForId(q, c.Index)
 				if expectedCaptureName != captureName {
 					continue
 				}
@@ -734,7 +805,7 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 	// A comment between two arguments is a named sibling, so it can bind
 	// to an anchored `(_)` capture and shift every later capture by one.
 	// Re-align before any capture text is read.
-	matchCaps, ok2 := repairCommentCaptures(m2.Captures, q.CaptureNameForId)
+	matchCaps, ok2 := repairCommentCaptures(m2.Captures, func(id uint32) string { return cachedCaptureNameForId(q, id) })
 	if !ok2 {
 		return MatchResult{}, false
 	}
@@ -754,7 +825,7 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 		if anchor == nil {
 			anchor = cap.Node
 		}
-		name := q.CaptureNameForId(cap.Index)
+		name := cachedCaptureNameForId(q, cap.Index)
 		row := int(cap.Node.StartPoint().Row) + 1 // 1-indexed
 		if strings.HasPrefix(name, "_") {
 			// Positional-only capture: it marks the span of the whole
@@ -837,7 +908,7 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 		pat.Name == "wrapper_url_key_axios_config_call" || pat.Name == "wrapper_url_shorthand_axios_config_call" {
 		var argNode *sitter.Node
 		for _, cap := range matchCaps {
-			if q.CaptureNameForId(cap.Index) == "arg_name" {
+			if cachedCaptureNameForId(q, cap.Index) == "arg_name" {
 				argNode = cap.Node
 				break
 			}
@@ -865,7 +936,7 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 	if pat.Name == "producer_alias_url_call" {
 		var urlNode *sitter.Node
 		for _, cap := range matchCaps {
-			if q.CaptureNameForId(cap.Index) == "url" {
+			if cachedCaptureNameForId(q, cap.Index) == "url" {
 				urlNode = cap.Node
 				break
 			}
@@ -892,7 +963,7 @@ func (pc *patternCtx) handleMatch(m2 *sitter.QueryMatch, q *sitter.Query, pat *P
 		mr.AnchorNode = anchor
 		cn := make(map[string]*sitter.Node, len(matchCaps))
 		for _, cap := range matchCaps {
-			name := q.CaptureNameForId(cap.Index)
+			name := cachedCaptureNameForId(q, cap.Index)
 			if strings.HasPrefix(name, "_") {
 				continue
 			}

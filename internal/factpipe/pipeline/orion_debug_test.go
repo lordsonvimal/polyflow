@@ -13,24 +13,15 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 )
 
-// TestOrionRailsFiltersProfile is XM.4's lens 2/3 harness
+// profileRailsFiltersOnCorpus is XM.4/XM.9's lens 2/3 harness
 // (docs/factpipe-cross-framework-matching-plan.md): runs rails_filters alone
-// against real orion data (the single framework factpipe_pass.go's
-// PF_FACTPIPE_PROFILE run just named as ~74% of factpipe_frameworks' total
-// wall time) under a CPU profile + a heap (alloc) profile, so `go tool
-// pprof` can be pointed at the exact hot path instead of the whole
-// ~30-framework loop. Env-gated, throwaway — same shape as
-// TestCedarRailsFiltersDebug, not a permanent measurement (no assertions,
-// PF_ORION_DB unset skips it).
-//
-//	PF_ORION_DB=$HOME/Projects/nextGen/.polyflow/graph.db \
-//	  go test ./internal/factpipe/pipeline/ -run TestOrionRailsFiltersProfile -v
-func TestOrionRailsFiltersProfile(t *testing.T) {
-	db := os.Getenv("PF_ORION_DB")
-	if db == "" {
-		t.Skip("PF_ORION_DB unset")
-	}
-	root := filepath.Join(os.Getenv("HOME"), "Projects/nextGen")
+// against a real corpus's indexed graph under a CPU profile + a heap (alloc)
+// profile, so `go tool pprof` can be pointed at the exact hot path instead of
+// the whole ~30-framework loop. Shared by the orion and cedar variants below
+// — same shape as TestCedarRailsFiltersDebug, not a permanent measurement (no
+// assertions).
+func profileRailsFiltersOnCorpus(t *testing.T, db, root, tag string) {
+	t.Helper()
 	store, err := graph.NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +83,7 @@ func TestOrionRailsFiltersProfile(t *testing.T) {
 	}
 	t.Logf("ruby files=%d", len(files))
 
-	cpuF, err := os.Create("/tmp/xm9_orion_railsfilters_cpu.pprof")
+	cpuF, err := os.Create("/tmp/xm_" + tag + "_railsfilters_cpu.pprof")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +108,7 @@ func TestOrionRailsFiltersProfile(t *testing.T) {
 	pprof.StopCPUProfile()
 	t.Logf("emitted edges=%d ledger=%d (per run, last of %d reps)", len(res.Edges), len(res.Ledger), reps)
 
-	heapF, err := os.Create("/tmp/xm9_orion_railsfilters_heap.pprof")
+	heapF, err := os.Create("/tmp/xm_" + tag + "_railsfilters_heap.pprof")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,5 +116,31 @@ func TestOrionRailsFiltersProfile(t *testing.T) {
 	if err := pprof.WriteHeapProfile(heapF); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("wrote /tmp/xm9_orion_railsfilters_cpu.pprof and /tmp/xm9_orion_railsfilters_heap.pprof")
+	t.Logf("wrote /tmp/xm_%s_railsfilters_{cpu,heap}.pprof", tag)
+}
+
+// TestOrionRailsFiltersProfile: PF_ORION_DB-gated, orion's real graph.
+//
+//	PF_ORION_DB=$HOME/Projects/nextGen/.polyflow/graph.db \
+//	  go test ./internal/factpipe/pipeline/ -run TestOrionRailsFiltersProfile -v
+func TestOrionRailsFiltersProfile(t *testing.T) {
+	db := os.Getenv("PF_ORION_DB")
+	if db == "" {
+		t.Skip("PF_ORION_DB unset")
+	}
+	profileRailsFiltersOnCorpus(t, db, filepath.Join(os.Getenv("HOME"), "Projects/nextGen"), "orion")
+}
+
+// TestCedarRailsFiltersProfile: PF_CEDAR_DB-gated, cedar's real graph — same
+// env var TestCedarRailsFiltersDebug already uses, this is a different lens
+// on the same framework/corpus (CPU+heap profile vs. relation dump).
+//
+//	PF_CEDAR_DB=$HOME/Projects/mdr/.polyflow/graph.db \
+//	  go test ./internal/factpipe/pipeline/ -run TestCedarRailsFiltersProfile -v
+func TestCedarRailsFiltersProfile(t *testing.T) {
+	db := os.Getenv("PF_CEDAR_DB")
+	if db == "" {
+		t.Skip("PF_CEDAR_DB unset")
+	}
+	profileRailsFiltersOnCorpus(t, db, filepath.Join(os.Getenv("HOME"), "Projects/mdr"), "cedar")
 }
