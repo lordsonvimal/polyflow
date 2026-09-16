@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/lordsonvimal/polyflow/internal/factpipe/pipeline"
 	"github.com/lordsonvimal/polyflow/internal/graph"
@@ -27,6 +29,16 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 	if len(reg.All()) == 0 {
 		return nil
 	}
+
+	// XM.4 (docs/factpipe-cross-framework-matching-plan.md): PF_FACTPIPE_PROFILE
+	// threads a *pipeline.RunStats through every Run call and accumulates it
+	// across every service in this index run, then prints the phase totals +
+	// top-5-by-wall-time frameworks at the end. Disabled by default (nil
+	// *RunStats), same "caller must opt in" cost discipline PF_INDEX_TIMING
+	// already uses — production reindexing pays nothing for this.
+	profiling := os.Getenv("PF_FACTPIPE_PROFILE") != ""
+	var totalStats pipeline.RunStats
+	perFwTotal := map[string]time.Duration{}
 
 	svcOf := make(map[string]string, len(st.enrichedNodes))
 	for i := range st.enrichedNodes {
@@ -75,9 +87,22 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 			continue
 		}
 
-		res, err := pipeline.Run(active, files, snap)
+		var runStats *pipeline.RunStats
+		if profiling {
+			runStats = &pipeline.RunStats{}
+		}
+		res, err := pipeline.Run(active, files, snap, runStats)
 		if err != nil {
 			return fmt.Errorf("factpipe: service %s: %w", sf.svc.Name, err)
+		}
+		if profiling {
+			totalStats.Bridge += runStats.Bridge
+			totalStats.Extract += runStats.Extract
+			totalStats.Derive += runStats.Derive
+			totalStats.Emit += runStats.Emit
+			for name, d := range runStats.PerFramework {
+				perFwTotal[name] += d
+			}
 		}
 		for i := range res.Nodes {
 			n := res.Nodes[i]
@@ -100,7 +125,41 @@ func runFactpipeFrameworks(st *linkPipelineState) error {
 		st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
 		st.allUnresolved = append(st.allUnresolved, res.Ledger...)
 	}
+	if profiling {
+		printFactpipeProfile(totalStats, perFwTotal)
+	}
 	return nil
+}
+
+// printFactpipeProfile is XM.4's wall-time lens: phase totals summed across
+// every service's pipeline.Run call in this index invocation, plus the top 5
+// frameworks by wall time (extract-lowering + derive + emit) — the Pareto
+// question of whether cost concentrates in a handful of frameworks or spreads
+// evenly across the ~25-33 active ones.
+func printFactpipeProfile(totalStats pipeline.RunStats, perFwTotal map[string]time.Duration) {
+	fmt.Fprintf(os.Stderr, "  ⏱  factpipe_frameworks phase breakdown (PF_FACTPIPE_PROFILE):\n")
+	fmt.Fprintf(os.Stderr, "      bridge  %8.2fs\n", totalStats.Bridge.Seconds())
+	fmt.Fprintf(os.Stderr, "      extract %8.2fs\n", totalStats.Extract.Seconds())
+	fmt.Fprintf(os.Stderr, "      derive  %8.2fs\n", totalStats.Derive.Seconds())
+	fmt.Fprintf(os.Stderr, "      emit    %8.2fs\n", totalStats.Emit.Seconds())
+
+	type fwTime struct {
+		name string
+		d    time.Duration
+	}
+	ranked := make([]fwTime, 0, len(perFwTotal))
+	for name, d := range perFwTotal {
+		ranked = append(ranked, fwTime{name, d})
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].d > ranked[j].d })
+	n := 5
+	if len(ranked) < n {
+		n = len(ranked)
+	}
+	fmt.Fprintf(os.Stderr, "      top %d frameworks by wall time:\n", n)
+	for _, fw := range ranked[:n] {
+		fmt.Fprintf(os.Stderr, "        %-28s %8.2fs\n", fw.name, fw.d.Seconds())
+	}
 }
 
 // parsedFilesForLanguages reads the subset of paths whose extension maps to one

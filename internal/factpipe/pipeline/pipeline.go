@@ -369,6 +369,12 @@ type RunStats struct {
 	Extract time.Duration
 	Derive  time.Duration
 	Emit    time.Duration
+	// PerFramework is XM.4's addition — total wall time (extract-lowering +
+	// derive + emit; the per-framework loop body) keyed by fw.Name, so a
+	// caller can find which 3-5 frameworks dominate instead of only the
+	// all-frameworks-summed Extract/Derive/Emit totals above. nil unless st
+	// is non-nil, same "caller must opt in" rule as the rest of RunStats.
+	PerFramework map[string]time.Duration
 }
 
 // Run executes stages 1–4 for one service. graphSoFar is the language-semantic
@@ -418,6 +424,10 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 	var res Result
 	seenNode := map[string]bool{}
 	for _, fw := range fws {
+		var fwStart time.Time
+		if st != nil {
+			fwStart = time.Now()
+		}
 		fset := factpipe.NewFactSet()
 		keep := frameworkKeepSet(fw)
 		preds := make([]string, 0, len(keep))
@@ -478,6 +488,10 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 		}
 		if st != nil {
 			st.Emit += time.Since(t2)
+			if st.PerFramework == nil {
+				st.PerFramework = make(map[string]time.Duration, len(fws))
+			}
+			st.PerFramework[fw.Name] += time.Since(fwStart)
 		}
 	}
 

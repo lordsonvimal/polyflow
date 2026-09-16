@@ -184,6 +184,18 @@ func (e *Engine) solveComplete(rel string, binds []*uint32) ([]itup, error) {
 	e.evalDepth++
 	defer func() { e.evalDepth-- }()
 
+	// touched accumulates every subgoal key this call's rounds actually
+	// reached (rs.seen, merged across rounds — a fresh roundState is created
+	// per round on purpose, to let a subgoal be revisited if it grows again,
+	// so no single round's seen set is the full set). Only allocated at the
+	// top level: a nested solveComplete (from solveNegated, reached via an
+	// outer call already at evalDepth>0) never takes the mark-complete branch
+	// below, so it has nothing to accumulate for.
+	var touched map[sgKey]bool
+	if topLevel {
+		touched = map[sgKey]bool{}
+	}
+
 	var out []itup
 	for i := 0; i < e.opts.MaxRounds; i++ {
 		before := e.grown
@@ -193,13 +205,37 @@ func (e *Engine) solveComplete(rel string, binds []*uint32) ([]itup, error) {
 		if err != nil {
 			return nil, err
 		}
+		if topLevel {
+			for k := range rs.seen {
+				touched[k] = true
+			}
+		}
 		if e.grown == before {
 			if topLevel {
 				// A global fixpoint was reached with nothing in flight, so
-				// every table populated along the way is final. Marking them
-				// lets a second Query reuse the work instead of re-deriving it.
-				for _, t := range e.tables {
-					t.state = tableComplete
+				// every table this call actually touched is final — mark
+				// only those, not every table the engine has ever built
+				// (XM.4/XM.9, docs/factpipe-cross-framework-matching-plan.md):
+				// Provenance.Of calls solveComplete once per emitted edge on
+				// an already-bulk-evaluated engine, so this loop previously
+				// walked the engine's whole accumulated table set — every
+				// subgoal/call-pattern ever solved across the service's
+				// entire prior Eval — on every single edge. Scoping to
+				// touched turns that O(edges x all-tables-ever) into
+				// O(edges x subgoals-this-lookup-reaches), typically small
+				// for a bound query. A table left out of this pass simply
+				// stays whatever it already was (dirty/producing) rather
+				// than gaining a completeness stamp — always safe, since
+				// dirty-or-unset only means "re-derive fully on next access,"
+				// never "return a wrong answer": correctness (not caching)
+				// is Provenance.Of's contract, and evalComponent's own
+				// tableComplete check (bottomup.go) already gives aggregate/
+				// bottom-up relations their own independent, already-scoped
+				// completion — this loop never provided their caching.
+				for k := range touched {
+					if t := e.tables[k]; t != nil {
+						t.state = tableComplete
+					}
 				}
 			}
 			return out, nil
