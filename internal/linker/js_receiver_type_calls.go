@@ -200,51 +200,50 @@ func typeAnnotationName(typeAnno *sitter.Node, src []byte) string {
 	return ""
 }
 
-// collectClassFieldTypes records classID+"."+fieldName -> typeName for every
-// type-annotated class field declaration and every constructor parameter
-// property (`constructor(private builder: CfgBuilder)` — a TS shape that is
-// simultaneously a constructor-scoped local and, for the rest of the class,
-// a typed field accessed as `this.builder`). TS's public_field_definition
-// names its field via the "name" field; plain JS's field_definition (no type
-// possible) uses "property" instead — collectClass in js_variables.go only
-// checks "property", so it silently collects nothing for a TS class's field
-// list, a pre-existing gap this pass does not depend on and does not fix.
-func collectClassFieldTypes(root *sitter.Node, src []byte, svcName, relFile string, fieldType map[string]string) {
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "class_declaration" {
-			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
-				classID := fmt.Sprintf("%s:%s:class:%s:%d", svcName, relFile, nameNode.Content(src), int(n.StartPoint().Row)+1)
-				if body := n.ChildByFieldName("body"); body != nil {
-					for i := 0; i < int(body.NamedChildCount()); i++ {
-						m := body.NamedChild(i)
-						switch m.Type() {
-						case "public_field_definition":
-							if fn := m.ChildByFieldName("name"); fn != nil {
-								if tn := typeAnnotationName(m.ChildByFieldName("type"), src); tn != "" {
-									fieldType[classID+"."+fn.Content(src)] = tn
-								}
-							}
-						case "field_definition":
-							if fn := m.ChildByFieldName("property"); fn != nil {
-								if tn := typeAnnotationName(m.ChildByFieldName("type"), src); tn != "" {
-									fieldType[classID+"."+fn.Content(src)] = tn
-								}
-							}
-						case "method_definition":
-							if mn := m.ChildByFieldName("name"); mn != nil && mn.Content(src) == "constructor" {
-								collectParamProperties(m, classID, src, fieldType)
-							}
-						}
-					}
+// collectClassFieldTypesForClass records classID+"."+fieldName -> typeName
+// for classNode's own type-annotated field declarations and constructor
+// parameter properties (`constructor(private builder: CfgBuilder)` — a TS
+// shape that is simultaneously a constructor-scoped local and, for the rest
+// of the class, a typed field accessed as `this.builder`). TS's
+// public_field_definition names its field via the "name" field; plain JS's
+// field_definition (no type possible) uses "property" instead —
+// collectClass in js_variables.go only checks "property", so it silently
+// collects nothing for a TS class's field list, a pre-existing gap this pass
+// does not depend on and does not fix.
+//
+// Takes classNode directly rather than finding it itself via its own
+// full-tree walk: resolveJSReceiverTypeCalls' main walk already visits every
+// class_declaration node (to push classStack), so calling this inline there
+// — before descending into the class's body, so a field's type is always
+// resolved before any call site inside that same class reads it — replaces
+// what used to be a second independent full-tree walk of the file with one
+// more case in the walk it already runs.
+func collectClassFieldTypesForClass(classNode *sitter.Node, classID string, src []byte, fieldType map[string]string) {
+	body := classNode.ChildByFieldName("body")
+	if body == nil {
+		return
+	}
+	for i := 0; i < int(body.NamedChildCount()); i++ {
+		m := body.NamedChild(i)
+		switch m.Type() {
+		case "public_field_definition":
+			if fn := m.ChildByFieldName("name"); fn != nil {
+				if tn := typeAnnotationName(m.ChildByFieldName("type"), src); tn != "" {
+					fieldType[classID+"."+fn.Content(src)] = tn
 				}
 			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+		case "field_definition":
+			if fn := m.ChildByFieldName("property"); fn != nil {
+				if tn := typeAnnotationName(m.ChildByFieldName("type"), src); tn != "" {
+					fieldType[classID+"."+fn.Content(src)] = tn
+				}
+			}
+		case "method_definition":
+			if mn := m.ChildByFieldName("name"); mn != nil && mn.Content(src) == "constructor" {
+				collectParamProperties(m, classID, src, fieldType)
+			}
 		}
 	}
-	walk(root)
 }
 
 // collectParamProperties scans a constructor's parameter list for TS
@@ -295,7 +294,6 @@ func resolveJSReceiverTypeCalls(file, svcName string, classByLabel, ifaceByLabel
 	relFile := patterns.RelativizeToCwd(file)
 
 	fieldType := make(map[string]string) // classID+"."+fieldName -> typeName
-	collectClassFieldTypes(root, src, svcName, relFile, fieldType)
 
 	var edges []graph.Edge
 
@@ -342,6 +340,7 @@ func resolveJSReceiverTypeCalls(file, svcName string, classByLabel, ifaceByLabel
 		if t == "class_declaration" {
 			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
 				classID := fmt.Sprintf("%s:%s:class:%s:%d", svcName, relFile, nameNode.Content(src), int(n.StartPoint().Row)+1)
+				collectClassFieldTypesForClass(n, classID, src, fieldType)
 				classStack = append(classStack, classID)
 				poppedClass = true
 			}

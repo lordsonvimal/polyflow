@@ -362,22 +362,57 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 	var edges []graph.Edge
 	var unresolved []graph.UnresolvedRef
 
-	// Walk the AST to find class declarations with heritage.
-	var walkNode func(n *sitter.Node)
-	walkNode = func(n *sitter.Node) {
-		t := n.Type()
-		if t == "export_statement" {
-			if decl := n.ChildByFieldName("declaration"); decl != nil {
-				walkNode(decl)
-			}
-			for i := 0; i < int(n.NamedChildCount()); i++ {
-				c := n.NamedChild(i)
-				if c != n.ChildByFieldName("declaration") {
-					walkNode(c)
-				}
-			}
+	// emitInstantiate lands the class-granularity `instantiates` edge plus
+	// the constructor `calls` fill-in — shared by the plain/default-import
+	// identifier case and the DC.15 `new window.X(...)` global-symbol case
+	// below, which resolve targetID differently but emit the same two edges.
+	// Moved above walkAll (originally sat between the old walkNode/walkNew
+	// functions) since walkAll's new_expression handling now calls it directly.
+	emitInstantiate := func(enclosingFnID, targetID string) {
+		if enclosingFnID == "" || targetID == "" {
 			return
 		}
+		eid := fmt.Sprintf("instantiates:%s->%s", enclosingFnID, targetID)
+		if !seen[eid] {
+			seen[eid] = true
+			edges = append(edges, graph.Edge{
+				ID: eid, From: enclosingFnID, To: targetID,
+				Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
+				Meta: map[string]string{"count": "1"},
+			})
+		}
+		// Additive: also land a method-granularity `calls` edge on the
+		// class's own explicit constructor, the same shape as the Ruby
+		// `.new` → `initialize` edge in LinkRubyTypeRelations. No edge for a
+		// class with no explicit constructor (constructorByClass has no
+		// entry — JS/TS's implicit default takes no edge).
+		if ctorID, ok := constructorByClass[targetID]; ok {
+			ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
+			if !seen[ceid] {
+				seen[ceid] = true
+				edges = append(edges, graph.Edge{
+					ID: ceid, From: enclosingFnID, To: ctorID,
+					Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
+					Meta: map[string]string{"via": "instantiate_constructor"},
+				})
+			}
+		}
+	}
+
+	// walkAll is the merged form of what used to be three independent
+	// full-tree walks (class/interface heritage, new_expression instantiate
+	// resolution, and cross-file type-reference resolution) — none of them
+	// reads a result another writes, they only append to the shared
+	// edges/unresolved/seen accumulators above, so one recursion threading
+	// walkNew's enclosingFnID replaces all three. export_statement no longer
+	// needs its own recursion-skip: that existed only to stop walkNode's OWN
+	// explicit pre-call into `declaration` from being visited a second time
+	// by its own generic child loop — with a single shared recursion at the
+	// bottom, every node (including a declaration under export_statement) is
+	// visited exactly once regardless of type, so the skip is moot.
+	var walkAll func(n *sitter.Node, enclosingFnID string)
+	walkAll = func(n *sitter.Node, enclosingFnID string) {
+		t := n.Type()
 		if t == "class_declaration" {
 			nameNode := n.ChildByFieldName("name")
 			if nameNode == nil {
@@ -547,53 +582,8 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 				}
 			}
 		}
-
-	children:
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walkNode(n.NamedChild(i))
-		}
-	}
-
-	// emitInstantiate lands the class-granularity `instantiates` edge plus
-	// the constructor `calls` fill-in — shared by the plain/default-import
-	// identifier case and the DC.15 `new window.X(...)` global-symbol case
-	// below, which resolve targetID differently but emit the same two edges.
-	emitInstantiate := func(enclosingFnID, targetID string) {
-		if enclosingFnID == "" || targetID == "" {
-			return
-		}
-		eid := fmt.Sprintf("instantiates:%s->%s", enclosingFnID, targetID)
-		if !seen[eid] {
-			seen[eid] = true
-			edges = append(edges, graph.Edge{
-				ID: eid, From: enclosingFnID, To: targetID,
-				Type: graph.EdgeTypeInstantiates, Confidence: graph.ConfidenceInferred,
-				Meta: map[string]string{"count": "1"},
-			})
-		}
-		// Additive: also land a method-granularity `calls` edge on the
-		// class's own explicit constructor, the same shape as the Ruby
-		// `.new` → `initialize` edge in LinkRubyTypeRelations. No edge for a
-		// class with no explicit constructor (constructorByClass has no
-		// entry — JS/TS's implicit default takes no edge).
-		if ctorID, ok := constructorByClass[targetID]; ok {
-			ceid := fmt.Sprintf("calls:%s->%s", enclosingFnID, ctorID)
-			if !seen[ceid] {
-				seen[ceid] = true
-				edges = append(edges, graph.Edge{
-					ID: ceid, From: enclosingFnID, To: ctorID,
-					Type: graph.EdgeTypeCalls, Confidence: graph.ConfidenceInferred,
-					Meta: map[string]string{"via": "instantiate_constructor"},
-				})
-			}
-		}
-	}
-
-	// Also handle new_expression cross-file instantiates.
-	var walkNew func(n *sitter.Node, enclosingFnID string)
-	walkNew = func(n *sitter.Node, enclosingFnID string) {
-		t := n.Type()
 		if t == "new_expression" {
+			// Cross-file instantiates (used to be walkNew's own full walk).
 			ctor := n.ChildByFieldName("constructor")
 			if ctor != nil {
 				switch ctor.Type() {
@@ -624,31 +614,13 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 				}
 			}
 		}
-		// Track enclosing function for new_expression attribution.
-		newFnID := enclosingFnID
-		if isFunctionLike(t) {
-			// Try to determine the function node ID from classTable-adjacent structures.
-			// Since we don't have function nodes directly, use the file+name pattern.
-			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
-				fnName := nameNode.Content(src)
-				// Function node ID: service:file:function:name:line
-				newFnID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, relFile, fnName, int(n.StartPoint().Row)+1)
-			} else if fnID, ok := constDeclFunctionID(n, svcName, relFile, src); ok {
-				newFnID = fnID
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walkNew(n.NamedChild(i), newFnID)
-		}
-	}
-
-	// Cross-file uses_type: a type_identifier referencing an imported interface/
-	// class (annotations, generic args, member types) binds the nearest enclosing
-	// declaration to the type's definition node. Same-file references are already
-	// handled by the parser's extractTypeUses; only imports resolve here.
-	var walkTypeRefs func(n *sitter.Node)
-	walkTypeRefs = func(n *sitter.Node) {
-		if n.Type() == "type_identifier" && isTypeUseContext(n) {
+		if t == "type_identifier" && isTypeUseContext(n) {
+			// Cross-file uses_type (used to be walkTypeRefs' own full walk): a
+			// type_identifier referencing an imported interface/class
+			// (annotations, generic args, member types) binds the nearest
+			// enclosing declaration to the type's definition node. Same-file
+			// references are already handled by the parser's extractTypeUses;
+			// only imports resolve here.
 			local := n.Content(src)
 			if exportedName, isImport := plainImport[local]; isImport {
 				if targetID, found := classTable[exportedName]; found {
@@ -666,14 +638,25 @@ func resolveJSTypeRelations(file, svcName string, classTable map[string]string, 
 				}
 			}
 		}
+
+	children:
+		// Track enclosing function for new_expression attribution (former
+		// walkNew's own bookkeeping, now shared by every merged concern).
+		newFnID := enclosingFnID
+		if isFunctionLike(t) {
+			if nameNode := n.ChildByFieldName("name"); nameNode != nil {
+				fnName := nameNode.Content(src)
+				newFnID = fmt.Sprintf("%s:%s:function:%s:%d", svcName, relFile, fnName, int(n.StartPoint().Row)+1)
+			} else if fnID, ok := constDeclFunctionID(n, svcName, relFile, src); ok {
+				newFnID = fnID
+			}
+		}
 		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walkTypeRefs(n.NamedChild(i))
+			walkAll(n.NamedChild(i), newFnID)
 		}
 	}
 
-	walkNode(root)
-	walkNew(root, "")
-	walkTypeRefs(root)
+	walkAll(root, "")
 	return edges, unresolved
 }
 
