@@ -61,6 +61,56 @@ const rubySrc = `class DemoController < ApplicationController
 end
 `
 
+// gammaYAML and deltaYAML (XM.1) deliberately reuse the exact same local
+// pattern name ("guard") and an identical query shape across two
+// same-language frameworks — the collision buildSharedMatchers' owner
+// namespacing must survive, since both patterns now live in one shared
+// Registry for "ruby". Each still asserts its own distinct predicate so a
+// misrouted match (gamma's match handed to delta's FactSpecs, or vice
+// versa) would show up as a missing or wrong edge rather than silently
+// matching.
+const gammaYAML = `language: ruby
+patterns:
+  - name: guard
+    query: |
+      (call
+        method: (identifier) @m (#eq? @m "before_action")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: gamma_reg
+        args:
+          klass: { extract: "enclosing_name(class)" }
+          cb:    { capture: cb, extract: string_value }
+emit:
+  - relation: gamma_edge
+    columns: [Klass, Cb]
+    edge: { from: { arg: Klass }, to: { arg: Cb }, type: calls, label: guard }
+    meta: { via: gamma }
+`
+
+const gammaDL = "gamma_edge(K, C) :- gamma_reg(K, C).\n"
+
+const deltaYAML = `language: ruby
+patterns:
+  - name: guard
+    query: |
+      (call
+        method: (identifier) @m (#eq? @m "before_action")
+        arguments: (argument_list (simple_symbol) @cb)) @call
+    facts:
+      - pred: delta_reg
+        args:
+          klass: { extract: "enclosing_name(class)" }
+          cb:    { capture: cb, extract: string_value }
+emit:
+  - relation: delta_edge
+    columns: [Klass, Cb]
+    edge: { from: { arg: Klass }, to: { arg: Cb }, type: calls, label: guard }
+    meta: { via: delta }
+`
+
+const deltaDL = "delta_edge(K, C) :- delta_reg(K, C).\n"
+
 func fixtures() (ruleFS, patternFS fstest.MapFS) {
 	ruleFS = fstest.MapFS{
 		"ruby/fw_alpha.dl": {Data: []byte(alphaDL)},
@@ -176,6 +226,45 @@ func TestLoadEmbeddedFrameworks(t *testing.T) {
 		if got[name] != lang {
 			t.Errorf("framework %q: language %q, want %q (registry: %v)", name, got[name], lang, got)
 		}
+	}
+}
+
+// TestRunSharedMatcherNoCrossContamination is XM.1's own test
+// (docs/factpipe-cross-framework-matching-plan.md): gamma and delta share
+// one language, one local pattern name ("guard"), and one query shape, so
+// buildSharedMatchers packs both into the same "ruby" Registry. Each must
+// still emit only its own edge — a routing bug (owner-namespace stripped
+// wrong, or a match fanned out to every framework in the shared registry
+// instead of just its owner) would show up here as a missing edge, a
+// duplicate, or gamma_reg/delta_reg facts crossing into the wrong
+// framework's FactSet.
+func TestRunSharedMatcherNoCrossContamination(t *testing.T) {
+	ruleFS := fstest.MapFS{
+		"ruby/fw_gamma.dl": {Data: []byte(gammaDL)},
+		"ruby/fw_delta.dl": {Data: []byte(deltaDL)},
+	}
+	patternFS := fstest.MapFS{
+		"ruby/fw_gamma.yaml": {Data: []byte(gammaYAML)},
+		"ruby/fw_delta.yaml": {Data: []byte(deltaYAML)},
+	}
+	reg, err := pipeline.Load(ruleFS, patternFS)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	res := demoRun(t, reg.All())
+	if len(res.Edges) != 2 {
+		t.Fatalf("got %d edges, want 2 (one per framework): %+v", len(res.Edges), res.Edges)
+	}
+	vias := map[string]bool{}
+	for _, e := range res.Edges {
+		if e.From != "DemoController" || e.To != "authenticate" {
+			t.Fatalf("unexpected edge %+v", e)
+		}
+		vias[e.Meta["via"]] = true
+	}
+	if !vias["gamma"] || !vias["delta"] {
+		t.Fatalf("edges vias = %v, want both gamma and delta present", vias)
 	}
 }
 

@@ -1,8 +1,21 @@
 package patterns
 
 import (
+	"strings"
 	"sync"
 )
+
+// ownerSep namespaces a pattern name to the framework that registered it
+// (XM.1, docs/factpipe-cross-framework-matching-plan.md) so several
+// frameworks' patterns can share one Registry/TreeSitterMatcher for a
+// language — one combined tree-sitter query per (Run call, language)
+// instead of one per framework — while a match can still be routed back to
+// its owning Framework. Riding inside PatternName (rather than a new
+// Pattern.Owner field) means this touches nothing outside this file and
+// pipeline.go: Pattern/MatchResult's shape stays exactly what
+// internal/pluginloader, `polyflow pattern synth`, and every
+// TestPatternFixtures-style fixture test already expect.
+const ownerSep = "::"
 
 // Registry holds all loaded patterns indexed by language.
 // Patterns are stored as a slice, not a name-keyed map: multiple query
@@ -64,6 +77,49 @@ func (r *Registry) RegisterFile(pf *PatternFile) {
 		}
 		r.mu.Unlock()
 	}
+}
+
+// RegisterFileOwned is RegisterFile, but every pattern is registered under
+// an owner-namespaced name ("<owner>::<name>") instead of its bare name, so
+// several frameworks' patterns can coexist in one Registry without a
+// PatternName collision (XM.1's shared cross-framework matcher). It copies
+// each Pattern rather than mutating pf.Patterns in place: pf is the same
+// *PatternFile a process-wide singleton Framework holds and reuses across
+// every concurrent pipeline.Run call, so renaming in place would
+// double-prefix on the next call and corrupt every other reader of
+// fw.Patterns (pipeline.EvalOnce, Tier PS's synthesizer).
+func (r *Registry) RegisterFileOwned(pf *PatternFile, owner string) {
+	owned := make([]Pattern, len(pf.Patterns))
+	copy(owned, pf.Patterns)
+	for i := range owned {
+		owned[i].Name = owner + ownerSep + owned[i].Name
+		owned[i].Package = pf.Package
+		owned[i].VersionRange = pf.VersionRange
+		owned[i].Grammars = pf.Grammars
+		r.Register(pf.Language, &owned[i])
+	}
+	if len(pf.ReflectDispatchedMethods) > 0 {
+		r.mu.Lock()
+		for _, m := range pf.ReflectDispatchedMethods {
+			r.reflectMethods[pf.Language] = append(r.reflectMethods[pf.Language], reflectMethodGate{
+				Method: m, Package: pf.Package, VersionRange: pf.VersionRange,
+				PathPrefix: pf.ReflectDispatchedPathPrefix,
+			})
+		}
+		r.mu.Unlock()
+	}
+}
+
+// SplitOwner reverses RegisterFileOwned's namespacing on a MatchResult's
+// PatternName, returning the owner and the original bare pattern name. ok is
+// false for a name that was never owner-namespaced (any Registry populated
+// via plain RegisterFile instead).
+func SplitOwner(patternName string) (owner, name string, ok bool) {
+	i := strings.Index(patternName, ownerSep)
+	if i < 0 {
+		return "", patternName, false
+	}
+	return patternName[:i], patternName[i+len(ownerSep):], true
 }
 
 // ReflectDispatchedMethods returns the set of method names for language that

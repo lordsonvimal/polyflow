@@ -355,8 +355,12 @@ type Result struct {
 
 // RunStats optionally captures one Run call's per-phase wall time (XM.0,
 // docs/factpipe-cross-framework-matching-plan.md) — bridge is the one-time
-// GraphFacts cost, Extract/Derive/Emit are summed across every active
-// framework's loop iteration. nil (the default, via Run's variadic stats
+// GraphFacts cost, Derive/Emit are summed across every active framework's
+// loop iteration. Extract is the one-time shared tree-sitter matching cost
+// (XM.1's matchAll, now hoisted out of the per-framework loop) plus each
+// framework's much cheaper per-framework fact-lowering step summed on top —
+// still "total extract-phase cost," just no longer dominated by redundant
+// per-framework query execution. nil (the default, via Run's variadic stats
 // param) skips every time.Now() call so production callers pay nothing;
 // only a caller that explicitly wants the breakdown (XM.0's at-scale
 // benchmark) passes a non-nil pointer.
@@ -394,6 +398,18 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 
 	roots := parseFileRoots(files)
 
+	// XM.1: one shared tree-sitter registry+matcher per language instead of
+	// one per framework — see sharedMatchers/buildSharedMatchers/matchAll.
+	sharedT0 := time.Now()
+	matchesByFw, err := cachedSharedMatchers(fws).matchAll(files, roots)
+	if err != nil {
+		return Result{}, fmt.Errorf("factpipe: shared match: %w", err)
+	}
+	sharedElapsed := time.Since(sharedT0)
+	if st != nil {
+		st.Extract += sharedElapsed
+	}
+
 	var res Result
 	seenNode := map[string]bool{}
 	for _, fw := range fws {
@@ -402,7 +418,7 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 			fset.Add(f)
 		}
 		t0 := time.Now()
-		if err := extractFramework(fw, files, fset, roots); err != nil {
+		if err := applyMatches(fw, matchesByFw[fw.Name], fset); err != nil {
 			return Result{}, fmt.Errorf("factpipe: framework %s: %w", fw.Name, err)
 		}
 		if st != nil {
@@ -489,6 +505,93 @@ func stampService(u []graph.UnresolvedRef, svc string) []graph.UnresolvedRef {
 	return u
 }
 
+// sharedMatchers holds one patterns.TreeSitterMatcher per distinct
+// Framework.Language among one Run call's active frameworks (XM.1,
+// docs/factpipe-cross-framework-matching-plan.md). Before this,
+// extractFramework built one Registry+TreeSitterMatcher per framework and
+// ran one full tree-sitter query execution per file per framework — for
+// cedar's ~15-20 ruby frameworks, ~15-20 redundant walks of the same
+// ~3,182 ruby files. matcher.go's getQuerySet already concatenates every
+// pattern *registered in one Registry* into a single combined query (one
+// cursor.Exec per file); this just feeds it every active framework's
+// patterns for a language instead of one framework's.
+type sharedMatchers struct {
+	byLang map[string]*patterns.TreeSitterMatcher
+}
+
+// buildSharedMatchers groups fws by Language and builds one owner-namespaced
+// Registry (patterns.RegisterFileOwned) per group, so a match coming back
+// out of the combined query can still be routed to its owning Framework by
+// name.
+func buildSharedMatchers(fws []*Framework) *sharedMatchers {
+	byLang := map[string][]*Framework{}
+	for _, fw := range fws {
+		byLang[fw.Language] = append(byLang[fw.Language], fw)
+	}
+	sm := &sharedMatchers{byLang: make(map[string]*patterns.TreeSitterMatcher, len(byLang))}
+	for lang, group := range byLang {
+		reg := patterns.NewRegistry()
+		for _, fw := range group {
+			reg.RegisterFileOwned(fw.Patterns, fw.Name)
+		}
+		sm.byLang[lang] = patterns.NewTreeSitterMatcher(reg)
+	}
+	return sm
+}
+
+// sharedMatcherCache memoizes buildSharedMatchers by the exact set of active
+// framework names, process-wide — the same "compile once, share read-only"
+// shape as LoadEmbedded and matcher.go's predicateRegexCache. Active's gate
+// makes the same fws slice (by name, not by pointer) recur across many
+// service Run calls with the same dependency profile; without this, every
+// Run call would recompile every active language's combined tree-sitter
+// query from scratch, undoing FX.8.PERF's per-framework matcher cache.
+var sharedMatcherCache sync.Map // key: sorted "\x00"-joined framework names -> *sharedMatchers
+
+func cachedSharedMatchers(fws []*Framework) *sharedMatchers {
+	names := make([]string, len(fws))
+	for i, fw := range fws {
+		names[i] = fw.Name
+	}
+	sort.Strings(names)
+	key := strings.Join(names, "\x00")
+	if v, ok := sharedMatcherCache.Load(key); ok {
+		return v.(*sharedMatchers)
+	}
+	actual, _ := sharedMatcherCache.LoadOrStore(key, buildSharedMatchers(fws))
+	return actual.(*sharedMatchers)
+}
+
+// matchAll runs each language's shared matcher once per matching file and
+// routes every match back to its owning framework by name (the owner
+// namespace patterns.RegisterFileOwned encoded into PatternName).
+func (sm *sharedMatchers) matchAll(files []ParsedFile, roots map[string]*sitter.Node) (map[string][]patterns.MatchResult, error) {
+	out := map[string][]patterns.MatchResult{}
+	for _, f := range files {
+		m := sm.byLang[f.Language]
+		if m == nil {
+			continue
+		}
+		grammar := f.Grammar
+		if grammar == "" {
+			grammar = f.Language
+		}
+		matches, err := m.MatchWithGrammarRoot(f.Language, grammar, f.Path, f.Src, roots[f.Path])
+		if err != nil {
+			return nil, err
+		}
+		for _, mr := range matches {
+			owner, name, ok := patterns.SplitOwner(mr.PatternName)
+			if !ok {
+				continue
+			}
+			mr.PatternName = name
+			out[owner] = append(out[owner], mr)
+		}
+	}
+	return out, nil
+}
+
 // parseFileRoots parses each file once (FX.8.PERF, docs/declarative-
 // framework-pipeline-plan.md) so Run's per-framework loop below doesn't
 // re-parse the same source bytes once per matching-language framework —
@@ -518,6 +621,47 @@ func parseFileRoots(files []ParsedFile) map[string]*sitter.Node {
 	return roots
 }
 
+// factSpecsByPattern maps a framework's own (unprefixed) pattern names to
+// their facts: block, shared by extractFramework (EvalOnce's single-
+// framework path, still runs its own matcher) and applyMatches (Run's XM.1
+// shared-matcher path). A framework with neither a facts-bearing pattern nor
+// a hub provider cannot produce anything — the same "this pass could never
+// have worked" error either path surfaced before this was factored out.
+func factSpecsByPattern(fw *Framework) (map[string][]patterns.FactSpec, error) {
+	specsByPattern := map[string][]patterns.FactSpec{}
+	for _, p := range fw.Patterns.Patterns {
+		if len(p.Facts) > 0 {
+			specsByPattern[p.Name] = p.Facts
+		}
+	}
+	if len(specsByPattern) == 0 && len(fw.Hubs) == 0 {
+		return nil, fmt.Errorf("no patterns carry a facts: block")
+	}
+	return specsByPattern, nil
+}
+
+// applyMatches lowers this framework's share of a sharedMatchers.matchAll
+// result to facts in dst — extractFramework's per-file loop, minus the
+// tree-sitter query execution itself (already done once, shared across
+// every framework of this language, by matchAll).
+func applyMatches(fw *Framework, matches []patterns.MatchResult, dst factpipe.FactSet) error {
+	specsByPattern, err := factSpecsByPattern(fw)
+	if err != nil {
+		return err
+	}
+	for _, mr := range matches {
+		specs := specsByPattern[mr.PatternName]
+		if len(specs) == 0 {
+			continue
+		}
+		ec := &patterns.ExtractContext{}
+		for _, fact := range patterns.MatchToFacts(mr, specs, ec) {
+			dst.Add(fact)
+		}
+	}
+	return nil
+}
+
 // extractFramework runs stage 1: match this framework's fact-bearing patterns
 // against every file of its language and lower each match to facts. roots is
 // parseFileRoots' pre-parsed-per-file cache, keyed by file path; nil is
@@ -527,14 +671,9 @@ func parseFileRoots(files []ParsedFile) map[string]*sitter.Node {
 func extractFramework(fw *Framework, files []ParsedFile, dst factpipe.FactSet, roots map[string]*sitter.Node) error {
 	m := fw.matcher
 
-	specsByPattern := map[string][]patterns.FactSpec{}
-	for _, p := range fw.Patterns.Patterns {
-		if len(p.Facts) > 0 {
-			specsByPattern[p.Name] = p.Facts
-		}
-	}
-	if len(specsByPattern) == 0 && len(fw.Hubs) == 0 {
-		return fmt.Errorf("no patterns carry a facts: block")
+	specsByPattern, err := factSpecsByPattern(fw)
+	if err != nil {
+		return err
 	}
 
 	for _, f := range files {

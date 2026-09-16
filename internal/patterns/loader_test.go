@@ -82,7 +82,6 @@ func TestDefaultRegistry(t *testing.T) {
 	assert.NotEmpty(t, goPatterns)
 }
 
-
 func TestLoad_NonexistentDir(t *testing.T) {
 	_, err := patterns.Load("/no/such/dir")
 	assert.Error(t, err)
@@ -94,6 +93,21 @@ func TestLoadFile_InvalidYAML(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(":\t[invalid"), 0o644))
 	_, err := patterns.LoadFile(path)
 	assert.Error(t, err)
+}
+
+// TestPatternNamesRejectOwnerSeparator forecloses XM.1's namespacing scheme
+// (patterns.RegisterFileOwned prefixes "<owner>::<name>") from ever
+// colliding with a real pattern name: SplitOwner assumes "::" cannot appear
+// in one, and this fails loudly the day a patterns/*/*.yaml `name:` field
+// tries to use it, well before that would silently misroute a match.
+func TestPatternNamesRejectOwnerSeparator(t *testing.T) {
+	reg, err := patterns.EmbeddedRegistry()
+	require.NoError(t, err)
+	for _, lang := range reg.Languages() {
+		for _, p := range reg.List(lang) {
+			assert.NotContains(t, p.Name, "::", "pattern %q (%s) must not contain the owner-namespace separator", p.Name, lang)
+		}
+	}
 }
 
 func TestDefaultRegistry_NonexistentDir(t *testing.T) {
