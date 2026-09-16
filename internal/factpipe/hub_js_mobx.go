@@ -360,169 +360,9 @@ func jsMobxSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.Link
 		})
 	}
 
-	// --- Pass B (JCM.4 + JCM.8): autorun / reaction / when callbacks. ---
-	for _, abs := range jsFiles {
-		rel := jhcRelativize(abs)
-		svc := svcOfFile[rel]
-		src, root, ok := jhcParseJS(abs)
-		if !ok || root == nil {
-			continue
-		}
-		low := string(src)
-		if !strings.Contains(low, "autorun") && !strings.Contains(low, "reaction(") && !strings.Contains(low, "when(") {
-			continue
-		}
-		attrFrom := func(line int) string {
-			if id := jsmNearestDecl(declsByFile[rel], line); id != "" {
-				return id
-			}
-			return fileNodeID[svc+"\x00"+rel]
-		}
-		bnd := getBinds(abs, root, src)
-		jsmWalk(root, func(n *sitter.Node) {
-			if n.Type() != "call_expression" {
-				return
-			}
-			f := n.ChildByFieldName("function")
-			if f == nil || f.Type() != "identifier" {
-				return
-			}
-			switch f.Content(src) {
-			case "autorun", "reaction", "when", "autorunAsync":
-			default:
-				return
-			}
-			args := n.ChildByFieldName("arguments")
-			if args == nil || args.NamedChildCount() == 0 {
-				return
-			}
-			cb := args.NamedChild(0)
-			if cb.Type() != "arrow_function" && cb.Type() != "function_expression" && cb.Type() != "function" {
-				return
-			}
-			cls := jsmEnclosingClass(n, src)
-			site := attrFrom(int(n.StartPoint().Row) + 1)
-			jsmWalk(cb, func(m *sitter.Node) {
-				if m.Type() != "member_expression" {
-					return
-				}
-				canon, obs, via := jsmReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
-				if canon == "" {
-					return
-				}
-				id := memberReactiveID(canon, obs)
-				if id == "" {
-					return
-				}
-				if site == "" || id == "" || site == id {
-					return
-				}
-				eid := "reads:" + site + "->" + id + "#mobx"
-				if seenEdge[eid] {
-					return
-				}
-				seenEdge[eid] = true
-				tier, viaOut := "jcm4", ""
-				if via != "" && via != "this" {
-					tier, viaOut = "jcm8", via
-				}
-				out = append(out, Fact{
-					Pred:   jsMobxReadBPred,
-					Args:   []Atom{Str(site), Str(id), Str(tier), Str(viaOut)},
-					Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadBPred},
-				})
-			})
-		})
-	}
-
-	// --- Pass C (JCM.7): observer(Component) render-body reads. ---
-	for _, abs := range jsFiles {
-		rel := jhcRelativize(abs)
-		src, root, ok := jhcParseJS(abs)
-		if !ok || root == nil || !strings.Contains(string(src), "observer") {
-			continue
-		}
-		perComp := map[string]int{}
-		bnd := getBinds(abs, root, src)
-		jhcWalk(root, func(call *sitter.Node) {
-			if jhcCalleeName(call, src) != "observer" {
-				return
-			}
-			arg0 := jhcFirstArg(call)
-			if arg0 == nil {
-				return
-			}
-			wrapperName, _ := jhcBinding(call, src)
-			var compID, compClass string
-			var bodies []*sitter.Node
-			switch arg0.Type() {
-			case "identifier":
-				compID = declIndex[rel][arg0.Content(src)]
-				if sub := jsmDeclSubtree(root, src, arg0.Content(src)); sub != nil {
-					bodies = jsmRenderBodies(sub, src)
-					if nm := sub.ChildByFieldName("name"); nm != nil {
-						compClass = nm.Content(src)
-					}
-				}
-			case "class", "class_declaration":
-				if nm := arg0.ChildByFieldName("name"); nm != nil {
-					compID = declIndex[rel][nm.Content(src)]
-					compClass = nm.Content(src)
-				}
-				if compID == "" && wrapperName != "" {
-					compID = declIndex[rel][wrapperName]
-				}
-				bodies = jsmRenderBodies(arg0, src)
-			case "arrow_function", "function", "function_expression":
-				if wrapperName != "" {
-					compID = declIndex[rel][wrapperName]
-				}
-				if compID == "" {
-					if nm := arg0.ChildByFieldName("name"); nm != nil {
-						compID = declIndex[rel][nm.Content(src)]
-					}
-				}
-				if b := arg0.ChildByFieldName("body"); b != nil {
-					bodies = append(bodies, b)
-				}
-			}
-			if compID == "" || len(bodies) == 0 {
-				return
-			}
-			for _, body := range bodies {
-				jsmWalk(body, func(m *sitter.Node) {
-					if m.Type() != "member_expression" || perComp[compID] >= 64 {
-						return
-					}
-					canon, obs, via := jsmReadResolve(m, src, compClass, classLower, bnd.ident, bnd.thisProp)
-					if canon == "" {
-						return
-					}
-					id := memberReactiveID(canon, obs)
-					if id == "" {
-						return
-					}
-					eid := "reads:" + compID + "->" + id + "#mobx_obs"
-					if seenEdge[eid] {
-						return
-					}
-					seenEdge[eid] = true
-					perComp[compID]++
-					viaOut := ""
-					if via != "" && via != "this" && via != "props" {
-						viaOut = via
-					}
-					out = append(out, Fact{
-						Pred:   jsMobxReadCPred,
-						Args:   []Atom{Str(compID), Str(id), Str(viaOut)},
-						Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadCPred},
-					})
-				})
-			}
-		})
-	}
-
-	// --- Pass D (JCM.9): computed -> observable dependency edges. ---
+	// computedFiles backs Pass D's gate below — built from Pass A's `tagged`
+	// overlay, so it must be computed after Pass A finishes and before the
+	// merged B/C/D walk starts.
 	computedFiles := make(map[string]bool)
 	for id, kind := range tagged {
 		if kind == "computed" {
@@ -534,70 +374,218 @@ func jsMobxSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.Link
 			}
 		}
 	}
+
+	// --- Passes B (JCM.4+8) / C (JCM.7) / D (JCM.9) merged. ---
+	// Each of these only reads Pass A's `tagged` overlay (via
+	// memberReactiveID / computedFiles) — none reads state either of the
+	// other two writes — so they combine into a single per-file walk instead
+	// of three (XM.20). B and C both match only call_expression (disjoint
+	// callee names: autorun/reaction/when/autorunAsync vs. observer/
+	// React.observer); D matches only method_definition — disjoint node
+	// types, so a single top-level switch dispatches all three.
 	for _, abs := range jsFiles {
 		rel := jhcRelativize(abs)
-		if !computedFiles[rel] {
-			continue
-		}
+		svc := svcOfFile[rel]
 		src, root, ok := jhcParseJS(abs)
 		if !ok || root == nil {
 			continue
 		}
+		low := string(src)
+		hasB := strings.Contains(low, "autorun") || strings.Contains(low, "reaction(") || strings.Contains(low, "when(")
+		hasC := strings.Contains(low, "observer")
+		hasD := computedFiles[rel]
+		if !hasB && !hasC && !hasD {
+			continue
+		}
 		bnd := getBinds(abs, root, src)
+		attrFrom := func(line int) string {
+			if id := jsmNearestDecl(declsByFile[rel], line); id != "" {
+				return id
+			}
+			return fileNodeID[svc+"\x00"+rel]
+		}
+		perComp := map[string]int{}
+
 		jsmWalk(root, func(n *sitter.Node) {
-			if n.Type() != "method_definition" {
-				return
-			}
-			nm := n.ChildByFieldName("name")
-			body := n.ChildByFieldName("body")
-			if nm == nil || body == nil {
-				return
-			}
-			cls := jsmEnclosingClass(n, src)
-			if cls == "" {
-				return
-			}
-			mm := membersByClass[cls]
-			if mm == nil {
-				return
-			}
-			idx, ok := mm[nm.Content(src)]
-			if !ok {
-				return
-			}
-			kind := nodes[idx].Meta["mobx"]
-			if t, ok2 := tagged[nodes[idx].ID]; ok2 {
-				kind = t
-			}
-			if kind != "computed" {
-				return
-			}
-			from := nodes[idx].ID
-			deps := 0
-			jsmWalk(body, func(m *sitter.Node) {
-				if m.Type() != "member_expression" || deps >= 64 {
+			switch n.Type() {
+			case "call_expression":
+				if hasB {
+					if f := n.ChildByFieldName("function"); f != nil && f.Type() == "identifier" {
+						switch f.Content(src) {
+						case "autorun", "reaction", "when", "autorunAsync":
+							args := n.ChildByFieldName("arguments")
+							if args == nil || args.NamedChildCount() == 0 {
+								return
+							}
+							cb := args.NamedChild(0)
+							if cb.Type() != "arrow_function" && cb.Type() != "function_expression" && cb.Type() != "function" {
+								return
+							}
+							cls := jsmEnclosingClass(n, src)
+							site := attrFrom(int(n.StartPoint().Row) + 1)
+							jsmWalk(cb, func(m *sitter.Node) {
+								if m.Type() != "member_expression" {
+									return
+								}
+								canon, obs, via := jsmReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
+								if canon == "" {
+									return
+								}
+								id := memberReactiveID(canon, obs)
+								if id == "" {
+									return
+								}
+								if site == "" || id == "" || site == id {
+									return
+								}
+								eid := "reads:" + site + "->" + id + "#mobx"
+								if seenEdge[eid] {
+									return
+								}
+								seenEdge[eid] = true
+								tier, viaOut := "jcm4", ""
+								if via != "" && via != "this" {
+									tier, viaOut = "jcm8", via
+								}
+								out = append(out, Fact{
+									Pred:   jsMobxReadBPred,
+									Args:   []Atom{Str(site), Str(id), Str(tier), Str(viaOut)},
+									Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadBPred},
+								})
+							})
+							return
+						}
+					}
+				}
+				if hasC && jhcCalleeName(n, src) == "observer" {
+					arg0 := jhcFirstArg(n)
+					if arg0 == nil {
+						return
+					}
+					wrapperName, _ := jhcBinding(n, src)
+					var compID, compClass string
+					var bodies []*sitter.Node
+					switch arg0.Type() {
+					case "identifier":
+						compID = declIndex[rel][arg0.Content(src)]
+						if sub := jsmDeclSubtree(root, src, arg0.Content(src)); sub != nil {
+							bodies = jsmRenderBodies(sub, src)
+							if nm := sub.ChildByFieldName("name"); nm != nil {
+								compClass = nm.Content(src)
+							}
+						}
+					case "class", "class_declaration":
+						if nm := arg0.ChildByFieldName("name"); nm != nil {
+							compID = declIndex[rel][nm.Content(src)]
+							compClass = nm.Content(src)
+						}
+						if compID == "" && wrapperName != "" {
+							compID = declIndex[rel][wrapperName]
+						}
+						bodies = jsmRenderBodies(arg0, src)
+					case "arrow_function", "function", "function_expression":
+						if wrapperName != "" {
+							compID = declIndex[rel][wrapperName]
+						}
+						if compID == "" {
+							if nm := arg0.ChildByFieldName("name"); nm != nil {
+								compID = declIndex[rel][nm.Content(src)]
+							}
+						}
+						if b := arg0.ChildByFieldName("body"); b != nil {
+							bodies = append(bodies, b)
+						}
+					}
+					if compID == "" || len(bodies) == 0 {
+						return
+					}
+					for _, body := range bodies {
+						jsmWalk(body, func(m *sitter.Node) {
+							if m.Type() != "member_expression" || perComp[compID] >= 64 {
+								return
+							}
+							canon, obs, via := jsmReadResolve(m, src, compClass, classLower, bnd.ident, bnd.thisProp)
+							if canon == "" {
+								return
+							}
+							id := memberReactiveID(canon, obs)
+							if id == "" {
+								return
+							}
+							eid := "reads:" + compID + "->" + id + "#mobx_obs"
+							if seenEdge[eid] {
+								return
+							}
+							seenEdge[eid] = true
+							perComp[compID]++
+							viaOut := ""
+							if via != "" && via != "this" && via != "props" {
+								viaOut = via
+							}
+							out = append(out, Fact{
+								Pred:   jsMobxReadCPred,
+								Args:   []Atom{Str(compID), Str(id), Str(viaOut)},
+								Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadCPred},
+							})
+						})
+					}
+				}
+
+			case "method_definition":
+				if !hasD {
 					return
 				}
-				canon, obs, _ := jsmReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
-				if canon == "" {
+				nm := n.ChildByFieldName("name")
+				body := n.ChildByFieldName("body")
+				if nm == nil || body == nil {
 					return
 				}
-				to := memberReactiveID(canon, obs)
-				if to == "" || to == from {
+				cls := jsmEnclosingClass(n, src)
+				if cls == "" {
 					return
 				}
-				eid := "reads:" + from + "->" + to + "#mobx_cdep"
-				if seenEdge[eid] {
+				mm := membersByClass[cls]
+				if mm == nil {
 					return
 				}
-				seenEdge[eid] = true
-				deps++
-				out = append(out, Fact{
-					Pred:   jsMobxReadDPred,
-					Args:   []Atom{Str(from), Str(to)},
-					Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadDPred},
+				idx, ok := mm[nm.Content(src)]
+				if !ok {
+					return
+				}
+				kind := nodes[idx].Meta["mobx"]
+				if t, ok2 := tagged[nodes[idx].ID]; ok2 {
+					kind = t
+				}
+				if kind != "computed" {
+					return
+				}
+				from := nodes[idx].ID
+				deps := 0
+				jsmWalk(body, func(m *sitter.Node) {
+					if m.Type() != "member_expression" || deps >= 64 {
+						return
+					}
+					canon, obs, _ := jsmReadResolve(m, src, cls, classLower, bnd.ident, bnd.thisProp)
+					if canon == "" {
+						return
+					}
+					to := memberReactiveID(canon, obs)
+					if to == "" || to == from {
+						return
+					}
+					eid := "reads:" + from + "->" + to + "#mobx_cdep"
+					if seenEdge[eid] {
+						return
+					}
+					seenEdge[eid] = true
+					deps++
+					out = append(out, Fact{
+						Pred:   jsMobxReadDPred,
+						Args:   []Atom{Str(from), Str(to)},
+						Origin: Origin{Kind: OriginPrimitive, Pattern: jsMobxReadDPred},
+					})
 				})
-			})
+			}
 		})
 	}
 

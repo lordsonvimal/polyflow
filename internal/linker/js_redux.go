@@ -277,14 +277,42 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			creatorNodeID[rel][name] = id
 		}
 	}
+	// rtkObjProp / the RTK case below back Phase RTK (Redux Toolkit:
+	// createSlice / createAsyncThunk / configureStore) — content-gated and
+	// path-independent, unlike Phase 2a's path-gated creator/thunk detection.
+	// XM.20 cont'd merges Phase 2a's and Phase RTK's former separate loops
+	// into one: neither phase reads state the other writes
+	// (creatorNodeID/rtkActionFiles are write-only here, read only by Phase
+	// 2b below), so a file matching both gates (isActions AND RTK-content)
+	// no longer parses/walks its tree twice.
+	rtkObjProp := func(obj *sitter.Node, key string, src []byte) *sitter.Node {
+		if obj == nil || obj.Type() != "object" {
+			return nil
+		}
+		for i := 0; i < int(obj.NamedChildCount()); i++ {
+			p := obj.NamedChild(i)
+			if p.Type() != "pair" {
+				continue
+			}
+			if k := p.ChildByFieldName("key"); k != nil &&
+				strings.Trim(k.Content(src), "\"'`") == key {
+				return p.ChildByFieldName("value")
+			}
+		}
+		return nil
+	}
 	for _, fe := range jsFiles {
 		rel := patterns.RelativizeToCwd(fe.abs)
-		if _, isActions, _ := reduxPathRole(rel); !isActions {
-			continue
-		}
+		_, isActionsFile, _ := reduxPathRole(rel)
 		svc := fe.svc
 		src, root, _, ok := jsParse(fe.abs)
 		if !ok {
+			continue
+		}
+		s := string(src)
+		isRTKFile := strings.Contains(s, "createSlice") || strings.Contains(s, "createAsyncThunk") ||
+			strings.Contains(s, "configureStore")
+		if !isActionsFile && !isRTKFile {
 			continue
 		}
 		imports := getImports(fe, root, src)
@@ -295,14 +323,149 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			}
 			return fileNodeID[svc+"\x00"+rel]
 		}
-		// A single walk dispatches both the creator-registry detection (pair /
-		// object) and the JCM.11 thunk detection (function_declaration /
-		// variable_declarator) below — the two matched node-type sets are
-		// disjoint and neither reads state the other writes mid-walk, so this
-		// is one tree traversal instead of two (XM.20).
+		// A single walk dispatches the creator-registry detection (pair /
+		// object), the JCM.11 thunk detection (function_declaration /
+		// variable_declarator), and Phase RTK's createSlice / createAsyncThunk
+		// / configureStore detection (call_expression) below — the matched
+		// node-type sets are disjoint and none reads state another writes
+		// mid-walk, so this is one tree traversal instead of two or three
+		// (XM.20).
 		reduxWalk(root, func(n *sitter.Node) {
 			switch n.Type() {
+			case "call_expression":
+				if !isRTKFile {
+					return
+				}
+				f := n.ChildByFieldName("function")
+				a := n.ChildByFieldName("arguments")
+				if f == nil || a == nil {
+					return
+				}
+				callee := f.Content(src)
+				line := int(n.StartPoint().Row) + 1
+				bindName := ""
+				if p := n.Parent(); p != nil && p.Type() == "variable_declarator" {
+					if nm := p.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
+						bindName = nm.Content(src)
+					}
+				}
+
+				switch {
+				case callee == "createSlice" || strings.HasSuffix(callee, ".createSlice"):
+					if a.NamedChildCount() == 0 || a.NamedChild(0).Type() != "object" {
+						return
+					}
+					cfg := a.NamedChild(0)
+					name := ""
+					if nv := rtkObjProp(cfg, "name", src); nv != nil {
+						name = strings.Trim(nv.Content(src), "\"'`")
+					}
+					if name == "" {
+						name = strings.TrimSuffix(bindName, "Slice")
+					}
+					if name == "" {
+						return
+					}
+					knownSlices[name] = true
+					rtkActionFiles[rel] = true
+					slID := sliceNode(name, svc, rel, line)
+					redID := mkFn(svc, rel, name+"Reducer", line, "reducer")
+					addEdge10(graph.EdgeTypeContains, slID, redID, "slice_reducer")
+					reducers := rtkObjProp(cfg, "reducers", src)
+					if reducers == nil || reducers.Type() != "object" {
+						return
+					}
+					for i := 0; i < int(reducers.NamedChildCount()); i++ {
+						pr := reducers.NamedChild(i)
+						var key *sitter.Node
+						switch pr.Type() {
+						case "pair":
+							key = pr.ChildByFieldName("key")
+						case "method_definition":
+							key = pr.ChildByFieldName("name")
+						}
+						if key == nil {
+							continue
+						}
+						cname := strings.Trim(key.Content(src), "\"'`")
+						tid := mkVar(svc, rel, name+"/"+cname, line)
+						cid := mkFn(svc, rel, cname, int(key.StartPoint().Row)+1, "creator")
+						addEdge(graph.EdgeTypeReferences, cid, tid, "creator_type")
+						addEdge(graph.EdgeTypeReferences, tid, redID, "type_handled_by")
+						recordCreator(rel, cname, cid)
+					}
+
+				case callee == "createAsyncThunk" || strings.HasSuffix(callee, ".createAsyncThunk"):
+					if bindName == "" {
+						return
+					}
+					cid := declIndex[rel][bindName]
+					if cid == "" {
+						cid = mkFn(svc, rel, bindName, line, "creator")
+					}
+					rtkActionFiles[rel] = true
+					recordCreator(rel, bindName, cid)
+					if a.NamedChildCount() > 0 && a.NamedChild(0).Type() == "string" {
+						if tn := strings.Trim(a.NamedChild(0).Content(src), "\"'`"); tn != "" {
+							addEdge(graph.EdgeTypeReferences, cid, mkVar(svc, rel, tn, line), "creator_type")
+						}
+					}
+
+				case callee == "configureStore" || strings.HasSuffix(callee, ".configureStore"):
+					if a.NamedChildCount() == 0 || a.NamedChild(0).Type() != "object" {
+						return
+					}
+					storeID := "redux_store:" + rel
+					if !seenNode[storeID] {
+						seenNode[storeID] = true
+						newNodes = append(newNodes, graph.Node{
+							ID: storeID, Type: graph.NodeTypeVariable, Label: "redux_store",
+							Service: svc, File: rel, Line: line, EndLine: line, Language: "javascript",
+							Meta: map[string]string{"redux": "store", "tier": "jcm3", "synthetic": "true"},
+						})
+						storeNodesBySvc[svc] = append(storeNodesBySvc[svc], storeID)
+						allStoreNodes = append(allStoreNodes, storeID)
+					}
+					red := rtkObjProp(a.NamedChild(0), "reducer", src)
+					if red == nil || red.Type() != "object" {
+						return
+					}
+					for i := 0; i < int(red.NamedChildCount()); i++ {
+						pr := red.NamedChild(i)
+						if pr.Type() != "pair" {
+							continue
+						}
+						k, v := pr.ChildByFieldName("key"), pr.ChildByFieldName("value")
+						if k == nil || v == nil {
+							continue
+						}
+						sliceName := strings.Trim(k.Content(src), "\"'`")
+						knownSlices[sliceName] = true
+						slID := sliceNode(sliceName, svc, rel, line)
+						addEdge(graph.EdgeTypeContains, storeID, slID, "reducer_slice")
+						if v.Type() == "identifier" {
+							vn := v.Content(src)
+							rid := declIndex[rel][vn]
+							if rid == "" {
+								if imp, ok := imports[vn]; ok {
+									exp := imp.exported
+									if exp == "" {
+										exp = vn
+									}
+									rid = declIndex[imp.file][exp]
+								}
+							}
+							if rid != "" {
+								addEdge10(graph.EdgeTypeContains, slID, rid, "slice_reducer")
+							}
+						}
+					}
+				}
+
 			case "pair":
+				if !isActionsFile {
+					return
+				}
 				// creator:  foo: actionCreator(ActionTypes.FOO, …)
 				key, val := n.ChildByFieldName("key"), n.ChildByFieldName("value")
 				if key == nil || val == nil || val.Type() != "call_expression" {
@@ -322,6 +485,9 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				addEdge(graph.EdgeTypeReferences, cid, resolveTypeRef(a.NamedChild(0)), "creator_type")
 
 			case "object":
+				if !isActionsFile {
+					return
+				}
 				// hand-written creator:  return { type: ActionTypes.FOO, … }
 				for j := 0; j < int(n.NamedChildCount()); j++ {
 					p := n.NamedChild(j)
@@ -342,6 +508,9 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				}
 
 			case "function_declaration", "variable_declarator":
+				if !isActionsFile {
+					return
+				}
 				// JCM.11: thunks. `export const load = () => (dispatch) => { … }` /
 				// `function load() { return function(dispatch) { … } }` — attribute
 				// the inner function's dispatch calls to the outer creator node.
@@ -423,171 +592,6 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 		})
 	}
 
-	// === Phase RTK: Redux Toolkit (createSlice / createAsyncThunk / configureStore) ===
-	// Content-gated and path-independent — modern Redux codebases with any
-	// directory layout. Runs after Phase 2a so its creators are registered
-	// before Phase 2b's dispatch-site detection and Phase 3's selector reads.
-	rtkObjProp := func(obj *sitter.Node, key string, src []byte) *sitter.Node {
-		if obj == nil || obj.Type() != "object" {
-			return nil
-		}
-		for i := 0; i < int(obj.NamedChildCount()); i++ {
-			p := obj.NamedChild(i)
-			if p.Type() != "pair" {
-				continue
-			}
-			if k := p.ChildByFieldName("key"); k != nil &&
-				strings.Trim(k.Content(src), "\"'`") == key {
-				return p.ChildByFieldName("value")
-			}
-		}
-		return nil
-	}
-	for _, fe := range jsFiles {
-		rel := patterns.RelativizeToCwd(fe.abs)
-		svc := fe.svc
-		src, root, _, ok := jsParse(fe.abs)
-		if !ok {
-			continue
-		}
-		s := string(src)
-		if !strings.Contains(s, "createSlice") && !strings.Contains(s, "createAsyncThunk") &&
-			!strings.Contains(s, "configureStore") {
-			continue
-		}
-		imports := getImports(fe, root, src)
-		reduxWalk(root, func(n *sitter.Node) {
-			if n.Type() != "call_expression" {
-				return
-			}
-			f := n.ChildByFieldName("function")
-			a := n.ChildByFieldName("arguments")
-			if f == nil || a == nil {
-				return
-			}
-			callee := f.Content(src)
-			line := int(n.StartPoint().Row) + 1
-			bindName := ""
-			if p := n.Parent(); p != nil && p.Type() == "variable_declarator" {
-				if nm := p.ChildByFieldName("name"); nm != nil && nm.Type() == "identifier" {
-					bindName = nm.Content(src)
-				}
-			}
-
-			switch {
-			case callee == "createSlice" || strings.HasSuffix(callee, ".createSlice"):
-				if a.NamedChildCount() == 0 || a.NamedChild(0).Type() != "object" {
-					return
-				}
-				cfg := a.NamedChild(0)
-				name := ""
-				if nv := rtkObjProp(cfg, "name", src); nv != nil {
-					name = strings.Trim(nv.Content(src), "\"'`")
-				}
-				if name == "" {
-					name = strings.TrimSuffix(bindName, "Slice")
-				}
-				if name == "" {
-					return
-				}
-				knownSlices[name] = true
-				rtkActionFiles[rel] = true
-				slID := sliceNode(name, svc, rel, line)
-				redID := mkFn(svc, rel, name+"Reducer", line, "reducer")
-				addEdge10(graph.EdgeTypeContains, slID, redID, "slice_reducer")
-				reducers := rtkObjProp(cfg, "reducers", src)
-				if reducers == nil || reducers.Type() != "object" {
-					return
-				}
-				for i := 0; i < int(reducers.NamedChildCount()); i++ {
-					pr := reducers.NamedChild(i)
-					var key *sitter.Node
-					switch pr.Type() {
-					case "pair":
-						key = pr.ChildByFieldName("key")
-					case "method_definition":
-						key = pr.ChildByFieldName("name")
-					}
-					if key == nil {
-						continue
-					}
-					cname := strings.Trim(key.Content(src), "\"'`")
-					tid := mkVar(svc, rel, name+"/"+cname, line)
-					cid := mkFn(svc, rel, cname, int(key.StartPoint().Row)+1, "creator")
-					addEdge(graph.EdgeTypeReferences, cid, tid, "creator_type")
-					addEdge(graph.EdgeTypeReferences, tid, redID, "type_handled_by")
-					recordCreator(rel, cname, cid)
-				}
-
-			case callee == "createAsyncThunk" || strings.HasSuffix(callee, ".createAsyncThunk"):
-				if bindName == "" {
-					return
-				}
-				cid := declIndex[rel][bindName]
-				if cid == "" {
-					cid = mkFn(svc, rel, bindName, line, "creator")
-				}
-				rtkActionFiles[rel] = true
-				recordCreator(rel, bindName, cid)
-				if a.NamedChildCount() > 0 && a.NamedChild(0).Type() == "string" {
-					if tn := strings.Trim(a.NamedChild(0).Content(src), "\"'`"); tn != "" {
-						addEdge(graph.EdgeTypeReferences, cid, mkVar(svc, rel, tn, line), "creator_type")
-					}
-				}
-
-			case callee == "configureStore" || strings.HasSuffix(callee, ".configureStore"):
-				if a.NamedChildCount() == 0 || a.NamedChild(0).Type() != "object" {
-					return
-				}
-				storeID := "redux_store:" + rel
-				if !seenNode[storeID] {
-					seenNode[storeID] = true
-					newNodes = append(newNodes, graph.Node{
-						ID: storeID, Type: graph.NodeTypeVariable, Label: "redux_store",
-						Service: svc, File: rel, Line: line, EndLine: line, Language: "javascript",
-						Meta: map[string]string{"redux": "store", "tier": "jcm3", "synthetic": "true"},
-					})
-					storeNodesBySvc[svc] = append(storeNodesBySvc[svc], storeID)
-					allStoreNodes = append(allStoreNodes, storeID)
-				}
-				red := rtkObjProp(a.NamedChild(0), "reducer", src)
-				if red == nil || red.Type() != "object" {
-					return
-				}
-				for i := 0; i < int(red.NamedChildCount()); i++ {
-					pr := red.NamedChild(i)
-					if pr.Type() != "pair" {
-						continue
-					}
-					k, v := pr.ChildByFieldName("key"), pr.ChildByFieldName("value")
-					if k == nil || v == nil {
-						continue
-					}
-					sliceName := strings.Trim(k.Content(src), "\"'`")
-					knownSlices[sliceName] = true
-					slID := sliceNode(sliceName, svc, rel, line)
-					addEdge(graph.EdgeTypeContains, storeID, slID, "reducer_slice")
-					if v.Type() == "identifier" {
-						vn := v.Content(src)
-						rid := declIndex[rel][vn]
-						if rid == "" {
-							if imp, ok := imports[vn]; ok {
-								exp := imp.exported
-								if exp == "" {
-									exp = vn
-								}
-								rid = declIndex[imp.file][exp]
-							}
-						}
-						if rid != "" {
-							addEdge10(graph.EdgeTypeContains, slID, rid, "slice_reducer")
-						}
-					}
-				}
-			}
-		})
-	}
-
 	// === Phase 2b: reducers, dispatch sites, combineReducers slice maps ===
 	for _, fe := range jsFiles {
 		rel := patterns.RelativizeToCwd(fe.abs)
@@ -646,77 +650,6 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				absorbAC(imp.file)
 			}
 		}
-		// bindActionCreators(<ident>, …) and JCM.11's connect(mapStateToProps?,
-		// { load, save }) object-literal mapDispatchToProps shorthand share one
-		// walk: both match only call_expression, gated on a mutually exclusive
-		// function name, so dispatching on that name in a single pass is
-		// equivalent to two separate walks (XM.20). Both must fully populate
-		// acFiles/fileCreators before the dispatch-site walk below runs, since
-		// source order doesn't guarantee either call appears before its usage.
-		reduxWalk(root, func(n *sitter.Node) {
-			if n.Type() != "call_expression" {
-				return
-			}
-			f := n.ChildByFieldName("function")
-			if f == nil || f.Type() != "identifier" {
-				return
-			}
-			switch f.Content(src) {
-			case "bindActionCreators":
-				a := n.ChildByFieldName("arguments")
-				if a == nil || a.NamedChildCount() == 0 {
-					return
-				}
-				if a0 := a.NamedChild(0); a0.Type() == "identifier" {
-					if imp, ok := imports[a0.Content(src)]; ok {
-						if isActionsFile(imp.file) {
-							absorbAC(imp.file)
-						}
-					}
-				}
-
-			case "connect":
-				a := n.ChildByFieldName("arguments")
-				if a == nil || a.NamedChildCount() < 2 {
-					return
-				}
-				obj := a.NamedChild(1)
-				if obj.Type() != "object" {
-					return
-				}
-				for j := 0; j < int(obj.NamedChildCount()); j++ {
-					p := obj.NamedChild(j)
-					var key, valName string
-					switch p.Type() {
-					case "shorthand_property_identifier":
-						key, valName = p.Content(src), p.Content(src)
-					case "pair":
-						k, v := p.ChildByFieldName("key"), p.ChildByFieldName("value")
-						if k == nil || v == nil || v.Type() != "identifier" {
-							continue
-						}
-						key, valName = strings.Trim(k.Content(src), "\"'`"), v.Content(src)
-					default:
-						continue
-					}
-					imp, ok := imports[valName]
-					if !ok {
-						continue
-					}
-					if !isActionsFile(imp.file) {
-						continue
-					}
-					exp := imp.exported
-					if exp == "" {
-						exp = valName
-					}
-					if id := reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn); id != "" {
-						fileCreators[key] = id
-					}
-				}
-			}
-		})
-
 		// resolveCreatorCall turns `AC.setFoo(…)` / a bare imported `setFoo(…)`
 		// into the creator node ID, or "" when the callee isn't an action creator.
 		resolveCreatorCall := func(call *sitter.Node) string {
@@ -752,6 +685,18 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 			return ""
 		}
 
+		// Phase 2b's three former walks (bindActionCreators/connect,
+		// combineReducers/switch/binary reducer detection, and the dispatch-
+		// site detector) merge into one (XM.20 cont'd): switch_case/
+		// binary_expression and combineReducers's call_expression case read
+		// no acFiles/fileCreators state, so they still run immediately.
+		// dispatch(…) and props.<creator>(…) call sites DO depend on
+		// acFiles/fileCreators, which a bindActionCreators/connect call
+		// elsewhere in the same file may populate later in source order — those
+		// candidates are buffered and resolved in a second pass over the
+		// (small) buffer once the walk finishes, rather than a second walk of
+		// the whole tree.
+		var dispatchCandidates []*sitter.Node
 		reduxWalk(root, func(n *sitter.Node) {
 			switch n.Type() {
 			case "switch_case":
@@ -780,159 +725,229 @@ func LinkJSRedux(nodes []graph.Node, serviceFiles map[string][]string) (newNodes
 				}
 
 			case "call_expression":
-				line := int(n.StartPoint().Row) + 1
 				f := n.ChildByFieldName("function")
 				if f == nil {
 					return
 				}
 
-				// combineReducers({ slice: ReducerFn, … }) → store --contains--> reducer
-				if f.Type() == "identifier" && f.Content(src) == "combineReducers" {
-					a := n.ChildByFieldName("arguments")
-					if a == nil || a.NamedChildCount() == 0 {
-						return
-					}
-					obj := a.NamedChild(0)
-					if obj.Type() == "identifier" {
-						obj = reduxObjectDecl(root, src, obj.Content(src))
-					}
-					if obj == nil || obj.Type() != "object" {
-						return
-					}
-					storeID := "redux_store:" + rel
-					if !seenNode[storeID] {
-						seenNode[storeID] = true
-						newNodes = append(newNodes, graph.Node{
-							ID: storeID, Type: graph.NodeTypeVariable, Label: "redux_store",
-							Service: svc, File: rel, Line: line, EndLine: line, Language: "javascript",
-							Meta: map[string]string{"redux": "store", "tier": "jcm3", "synthetic": "true"},
-						})
-						storeNodesBySvc[svc] = append(storeNodesBySvc[svc], storeID)
-						allStoreNodes = append(allStoreNodes, storeID)
-					}
-					for j := 0; j < int(obj.NamedChildCount()); j++ {
-						p := obj.NamedChild(j)
-						if p.Type() != "pair" {
-							continue
+				if f.Type() == "identifier" {
+					switch f.Content(src) {
+					case "bindActionCreators":
+						a := n.ChildByFieldName("arguments")
+						if a == nil || a.NamedChildCount() == 0 {
+							return
 						}
-						v := p.ChildByFieldName("value")
-						if v == nil {
-							continue
-						}
-						sliceName := ""
-						if k := p.ChildByFieldName("key"); k != nil {
-							sliceName = strings.Trim(k.Content(src), "\"'`")
-						}
-						var rid string
-						switch v.Type() {
-						case "identifier":
-							vn := v.Content(src)
-							rid = declIndex[rel][vn]
-							if rid == "" {
-								if imp, ok := imports[vn]; ok {
-									exp := imp.exported
-									if exp == "" {
-										exp = vn
-									}
-									if rid = declIndex[imp.file][exp]; rid == "" {
-										if rid = declIndex[imp.file][vn]; rid == "" {
-											rid = mkFn(svcOfFile[imp.file], imp.file, exp, 1, "reducer")
-										}
-									}
+						if a0 := a.NamedChild(0); a0.Type() == "identifier" {
+							if imp, ok := imports[a0.Content(src)]; ok {
+								if isActionsFile(imp.file) {
+									absorbAC(imp.file)
 								}
 							}
-						case "arrow_function", "function_expression":
-							// JCM.11: inline-arrow slice reducer — mint a synthetic
-							// function node and run action-type detection on its body.
-							rname := sliceName
-							if rname == "" {
-								rname = fmt.Sprintf("slice%d", j)
+						}
+						return
+
+					case "connect":
+						a := n.ChildByFieldName("arguments")
+						if a == nil || a.NamedChildCount() < 2 {
+							return
+						}
+						obj := a.NamedChild(1)
+						if obj.Type() != "object" {
+							return
+						}
+						for j := 0; j < int(obj.NamedChildCount()); j++ {
+							p := obj.NamedChild(j)
+							var key, valName string
+							switch p.Type() {
+							case "shorthand_property_identifier":
+								key, valName = p.Content(src), p.Content(src)
+							case "pair":
+								k, v := p.ChildByFieldName("key"), p.ChildByFieldName("value")
+								if k == nil || v == nil || v.Type() != "identifier" {
+									continue
+								}
+								key, valName = strings.Trim(k.Content(src), "\"'`"), v.Content(src)
+							default:
+								continue
 							}
-							rid = mkFn(svc, rel, rname+"Reducer", int(v.StartPoint().Row)+1, "reducer")
-							if body := v.ChildByFieldName("body"); body != nil {
-								reduxWalk(body, func(m *sitter.Node) {
-									switch m.Type() {
-									case "switch_case":
-										if tid := resolveTypeRef(m.ChildByFieldName("value")); tid != "" {
-											addEdge11(graph.EdgeTypeReferences, tid, rid, "type_handled_by")
+							imp, ok := imports[valName]
+							if !ok {
+								continue
+							}
+							if !isActionsFile(imp.file) {
+								continue
+							}
+							exp := imp.exported
+							if exp == "" {
+								exp = valName
+							}
+							if id := reduxCreatorNode(imp.file, exp, creatorNodeID, svcOfFile, mkFn); id != "" {
+								fileCreators[key] = id
+							}
+						}
+						return
+
+					case "combineReducers":
+						// combineReducers({ slice: ReducerFn, … }) → store --contains--> reducer
+						line := int(n.StartPoint().Row) + 1
+						a := n.ChildByFieldName("arguments")
+						if a == nil || a.NamedChildCount() == 0 {
+							return
+						}
+						obj := a.NamedChild(0)
+						if obj.Type() == "identifier" {
+							obj = reduxObjectDecl(root, src, obj.Content(src))
+						}
+						if obj == nil || obj.Type() != "object" {
+							return
+						}
+						storeID := "redux_store:" + rel
+						if !seenNode[storeID] {
+							seenNode[storeID] = true
+							newNodes = append(newNodes, graph.Node{
+								ID: storeID, Type: graph.NodeTypeVariable, Label: "redux_store",
+								Service: svc, File: rel, Line: line, EndLine: line, Language: "javascript",
+								Meta: map[string]string{"redux": "store", "tier": "jcm3", "synthetic": "true"},
+							})
+							storeNodesBySvc[svc] = append(storeNodesBySvc[svc], storeID)
+							allStoreNodes = append(allStoreNodes, storeID)
+						}
+						for j := 0; j < int(obj.NamedChildCount()); j++ {
+							p := obj.NamedChild(j)
+							if p.Type() != "pair" {
+								continue
+							}
+							v := p.ChildByFieldName("value")
+							if v == nil {
+								continue
+							}
+							sliceName := ""
+							if k := p.ChildByFieldName("key"); k != nil {
+								sliceName = strings.Trim(k.Content(src), "\"'`")
+							}
+							var rid string
+							switch v.Type() {
+							case "identifier":
+								vn := v.Content(src)
+								rid = declIndex[rel][vn]
+								if rid == "" {
+									if imp, ok := imports[vn]; ok {
+										exp := imp.exported
+										if exp == "" {
+											exp = vn
 										}
-									case "binary_expression":
-										op := m.ChildByFieldName("operator")
-										if op == nil || (op.Content(src) != "===" && op.Content(src) != "==") {
-											return
-										}
-										for _, side := range []*sitter.Node{m.ChildByFieldName("left"), m.ChildByFieldName("right")} {
-											if tid := resolveTypeRef(side); tid != "" {
-												addEdge11(graph.EdgeTypeReferences, tid, rid, "type_handled_by")
+										if rid = declIndex[imp.file][exp]; rid == "" {
+											if rid = declIndex[imp.file][vn]; rid == "" {
+												rid = mkFn(svcOfFile[imp.file], imp.file, exp, 1, "reducer")
 											}
 										}
 									}
-								})
+								}
+							case "arrow_function", "function_expression":
+								// JCM.11: inline-arrow slice reducer — mint a synthetic
+								// function node and run action-type detection on its body.
+								rname := sliceName
+								if rname == "" {
+									rname = fmt.Sprintf("slice%d", j)
+								}
+								rid = mkFn(svc, rel, rname+"Reducer", int(v.StartPoint().Row)+1, "reducer")
+								if body := v.ChildByFieldName("body"); body != nil {
+									reduxWalk(body, func(m *sitter.Node) {
+										switch m.Type() {
+										case "switch_case":
+											if tid := resolveTypeRef(m.ChildByFieldName("value")); tid != "" {
+												addEdge11(graph.EdgeTypeReferences, tid, rid, "type_handled_by")
+											}
+										case "binary_expression":
+											op := m.ChildByFieldName("operator")
+											if op == nil || (op.Content(src) != "===" && op.Content(src) != "==") {
+												return
+											}
+											for _, side := range []*sitter.Node{m.ChildByFieldName("left"), m.ChildByFieldName("right")} {
+												if tid := resolveTypeRef(side); tid != "" {
+													addEdge11(graph.EdgeTypeReferences, tid, rid, "type_handled_by")
+												}
+											}
+										}
+									})
+								}
+							default:
+								continue
 							}
-						default:
-							continue
-						}
-						addEdge(graph.EdgeTypeContains, storeID, rid, "reducer_slice")
-						if sliceName != "" && rid != "" {
-							knownSlices[sliceName] = true
-							addEdge10(graph.EdgeTypeContains, sliceNode(sliceName, svc, rel, line), rid, "slice_reducer")
-						}
-					}
-					return
-				}
-
-				// dispatch(AC.x(…)) / this.props.dispatch(AC.x(…)) / dispatch(named(…))
-				isDispatch := false
-				switch f.Type() {
-				case "identifier":
-					isDispatch = f.Content(src) == "dispatch"
-				case "member_expression":
-					if p := f.ChildByFieldName("property"); p != nil && p.Content(src) == "dispatch" {
-						isDispatch = true
-					}
-				}
-				if isDispatch {
-					if a := n.ChildByFieldName("arguments"); a != nil && a.NamedChildCount() > 0 {
-						arg0 := a.NamedChild(0)
-						if cid := resolveCreatorCall(arg0); cid != "" {
-							addEdge(graph.EdgeTypeCalls, attrFrom(line), cid, "dispatch_call")
-						} else if arg0.Type() == "object" {
-							// dispatch({ type: ActionTypes.FOO, payload })
-							if tid := reduxTypeField(arg0, src, resolveTypeRef); tid != "" {
-								addEdge(graph.EdgeTypeReferences, attrFrom(line), tid, "dispatch_type")
+							addEdge(graph.EdgeTypeContains, storeID, rid, "reducer_slice")
+							if sliceName != "" && rid != "" {
+								knownSlices[sliceName] = true
+								addEdge10(graph.EdgeTypeContains, sliceNode(sliceName, svc, rel, line), rid, "slice_reducer")
 							}
-						}
-					}
-					return
-				}
-
-				// props.actions.X(…) / this.props.actions.X(…)
-				// props.X(…) / this.props.X(…) where X is a bound action creator
-				if f.Type() != "member_expression" {
-					return
-				}
-				prop, obj := f.ChildByFieldName("property"), f.ChildByFieldName("object")
-				if prop == nil || obj == nil {
-					return
-				}
-				name := prop.Content(src)
-				if obj.Type() == "member_expression" {
-					op := obj.ChildByFieldName("property")
-					if op != nil && op.Content(src) == "actions" && reduxIsPropsNode(obj.ChildByFieldName("object"), src) {
-						if acRel := reduxCreatorHome(acFiles, name, creatorNodeID); acRel != "" {
-							toID := reduxCreatorNode(acRel, name, creatorNodeID, svcOfFile, mkFn)
-							addEdge(graph.EdgeTypeCalls, attrFrom(line), toID, "props_actions_dispatch")
 						}
 						return
 					}
 				}
-				if reduxIsPropsNode(obj, src) {
-					if id := fileCreators[name]; id != "" {
-						addEdge(graph.EdgeTypeCalls, attrFrom(line), id, "props_bound_dispatch")
-					}
-				}
+
+				// dispatch(…) / props.actions.X(…) / props.X(…): resolved after
+				// the walk, once acFiles/fileCreators above are complete.
+				dispatchCandidates = append(dispatchCandidates, n)
 			}
 		})
+
+		for _, n := range dispatchCandidates {
+			line := int(n.StartPoint().Row) + 1
+			f := n.ChildByFieldName("function")
+			if f == nil {
+				continue
+			}
+
+			// dispatch(AC.x(…)) / this.props.dispatch(AC.x(…)) / dispatch(named(…))
+			isDispatch := false
+			switch f.Type() {
+			case "identifier":
+				isDispatch = f.Content(src) == "dispatch"
+			case "member_expression":
+				if p := f.ChildByFieldName("property"); p != nil && p.Content(src) == "dispatch" {
+					isDispatch = true
+				}
+			}
+			if isDispatch {
+				if a := n.ChildByFieldName("arguments"); a != nil && a.NamedChildCount() > 0 {
+					arg0 := a.NamedChild(0)
+					if cid := resolveCreatorCall(arg0); cid != "" {
+						addEdge(graph.EdgeTypeCalls, attrFrom(line), cid, "dispatch_call")
+					} else if arg0.Type() == "object" {
+						// dispatch({ type: ActionTypes.FOO, payload })
+						if tid := reduxTypeField(arg0, src, resolveTypeRef); tid != "" {
+							addEdge(graph.EdgeTypeReferences, attrFrom(line), tid, "dispatch_type")
+						}
+					}
+				}
+				continue
+			}
+
+			// props.actions.X(…) / this.props.actions.X(…)
+			// props.X(…) / this.props.X(…) where X is a bound action creator
+			if f.Type() != "member_expression" {
+				continue
+			}
+			prop, obj := f.ChildByFieldName("property"), f.ChildByFieldName("object")
+			if prop == nil || obj == nil {
+				continue
+			}
+			name := prop.Content(src)
+			if obj.Type() == "member_expression" {
+				op := obj.ChildByFieldName("property")
+				if op != nil && op.Content(src) == "actions" && reduxIsPropsNode(obj.ChildByFieldName("object"), src) {
+					if acRel := reduxCreatorHome(acFiles, name, creatorNodeID); acRel != "" {
+						toID := reduxCreatorNode(acRel, name, creatorNodeID, svcOfFile, mkFn)
+						addEdge(graph.EdgeTypeCalls, attrFrom(line), toID, "props_actions_dispatch")
+					}
+					continue
+				}
+			}
+			if reduxIsPropsNode(obj, src) {
+				if id := fileCreators[name]; id != "" {
+					addEdge(graph.EdgeTypeCalls, attrFrom(line), id, "props_bound_dispatch")
+				}
+			}
+		}
 	}
 
 	// === Phase 3 (JCM.10): selector / read side ===

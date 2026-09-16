@@ -176,22 +176,22 @@ func jsClientRoutesSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 			continue
 		}
 
-		for _, obj := range jcrExportedObjectLiterals(root) {
-			for _, e := range jcrRouteTableEntries(obj, src) {
-				key := svc + "\x00" + rel + "\x00" + e.name
-				if seenRoute[key] {
-					continue
-				}
-				seenRoute[key] = true
-				routesBySvc[svc] = append(routesBySvc[svc], jcrEntry{e.name, e.pattern, rel})
+		scan := jcrScanFile(root, src, rel)
+
+		for _, e := range scan.routeEntries {
+			key := svc + "\x00" + rel + "\x00" + e.name
+			if seenRoute[key] {
+				continue
 			}
+			seenRoute[key] = true
+			routesBySvc[svc] = append(routesBySvc[svc], jcrEntry{e.name, e.pattern, rel})
 		}
 
-		if decls := jcrComponentVarDecls(root, src); len(decls) > 0 {
-			varIsComponent[rel] = decls
+		if len(scan.componentVarDecls) > 0 {
+			varIsComponent[rel] = scan.componentVarDecls
 		}
 
-		for name, tags := range jcrRouteCaseComponents(root, src) {
+		for name, tags := range scan.routeCaseComps {
 			m := caseBySvc[svc]
 			if m == nil {
 				m = make(map[string][]string)
@@ -200,11 +200,11 @@ func jsClientRoutesSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 			m[name] = append(m[name], tags...)
 		}
 
-		if sc := jcrScanFeatureComponents(root, src, rel); sc != nil && !jcrIsTestFile(rel) {
-			for k := range sc.keys {
+		if !jcrIsTestFile(rel) && (len(scan.keys) > 0 || len(scan.registry) > 0 || len(scan.dynamic) > 0) {
+			for k := range scan.keys {
 				addFeatKey(svc, k)
 			}
-			for v, k := range sc.varToKey {
+			for v, k := range scan.varToKey {
 				m := featVarKeyBySvc[svc]
 				if m == nil {
 					m = make(map[string]string)
@@ -212,7 +212,7 @@ func jsClientRoutesSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 				}
 				m[v] = k
 			}
-			for k, lbl := range sc.registry {
+			for k, lbl := range scan.registry {
 				m := regBySvc[svc]
 				if m == nil {
 					m = make(map[string]string)
@@ -220,8 +220,8 @@ func jsClientRoutesSitesHub(nodes []graph.Node, files []string, _ string, _ []gr
 				}
 				m[k] = lbl
 			}
-			rendersBySvc[svc] = append(rendersBySvc[svc], sc.renders...)
-			for _, ln := range sc.dynamic {
+			rendersBySvc[svc] = append(rendersBySvc[svc], scan.renders...)
+			for _, ln := range scan.dynamic {
 				out = append(out, Fact{
 					Pred:   jsCRDynamicPred,
 					Args:   []Atom{Str(svc), Str(rel), Int(int64(ln))},
@@ -424,28 +424,6 @@ func jcrIsComponentHOC(name string) bool {
 	return name == "connect" || jhcHOCNames[name]
 }
 
-func jcrComponentVarDecls(root *sitter.Node, src []byte) map[string]bool {
-	out := make(map[string]bool)
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "variable_declarator" {
-			nm := n.ChildByFieldName("name")
-			if nm != nil && nm.Type() == "identifier" {
-				if label := nm.Content(src); label != "" {
-					if _, seen := out[label]; !seen {
-						out[label] = jcrDeclaresComponent(n.ChildByFieldName("value"), src)
-					}
-				}
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
-	}
-	walk(root)
-	return out
-}
-
 func jcrDeclaresComponent(v *sitter.Node, src []byte) bool {
 	for i := 0; v != nil && i < 8; i++ {
 		switch v.Type() {
@@ -472,22 +450,39 @@ func jcrLooksLikeRegistryName(s string) bool {
 	return strings.HasSuffix(s, "Registry") || strings.HasSuffix(s, "Components")
 }
 
-type jcrFcScanResult struct {
-	keys     map[string]bool
-	varToKey map[string]string
-	registry map[string]string
-	renders  []jcrRender
-	dynamic  []int
+// jcrFileScan holds everything a single per-file tree-sitter walk can
+// produce for js_client_routes: exported route-table entries, which
+// variable_declarators declare a component, switch(routeName)-case component
+// tags, and SPA.3's feature-registry scan (keys / var-to-key bindings /
+// registry entries / JSX renders / dynamic-key sites). XM.20: these were 4
+// independent full-tree walks (jcrExportedObjectLiterals,
+// jcrComponentVarDecls, jcrRouteCaseComponents, jcrScanFeatureComponents,
+// the last of which also called jcrExportedObjectLiterals a second time
+// internally) — none reads state another writes, so one walk with a single
+// top-level switch produces all of them.
+type jcrFileScan struct {
+	routeEntries      []jcrPair
+	componentVarDecls map[string]bool
+	routeCaseComps    map[string][]string
+	keys              map[string]bool
+	varToKey          map[string]string
+	registry          map[string]string
+	renders           []jcrRender
+	dynamic           []int
 }
 
-func jcrScanFeatureComponents(root *sitter.Node, src []byte, rel string) *jcrFcScanResult {
-	res := &jcrFcScanResult{
-		keys:     make(map[string]bool),
-		varToKey: make(map[string]string),
-		registry: make(map[string]string),
+func jcrScanFile(root *sitter.Node, src []byte, rel string) *jcrFileScan {
+	res := &jcrFileScan{
+		componentVarDecls: make(map[string]bool),
+		routeCaseComps:    make(map[string][]string),
+		keys:              make(map[string]bool),
+		varToKey:          make(map[string]string),
+		registry:          make(map[string]string),
 	}
-	for _, obj := range jcrExportedObjectLiterals(root) {
-		for k, v := range jcrComponentRegistryEntries(obj, src) {
+
+	scanExportedObject := func(o *sitter.Node) {
+		res.routeEntries = append(res.routeEntries, jcrRouteTableEntries(o, src)...)
+		for k, v := range jcrComponentRegistryEntries(o, src) {
 			res.registry[k] = v
 		}
 	}
@@ -495,6 +490,24 @@ func jcrScanFeatureComponents(root *sitter.Node, src []byte, rel string) *jcrFcS
 	var walk func(n *sitter.Node, fn string, inCase bool)
 	walk = func(n *sitter.Node, fn string, inCase bool) {
 		switch n.Type() {
+		case "export_statement":
+			if v := n.ChildByFieldName("value"); v != nil {
+				if o := jcrUnwrapToObject(v); o != nil {
+					scanExportedObject(o)
+				}
+			}
+			if d := n.ChildByFieldName("declaration"); d != nil {
+				for i := 0; i < int(d.NamedChildCount()); i++ {
+					vd := d.NamedChild(i)
+					if vd.Type() != "variable_declarator" {
+						continue
+					}
+					if o := jcrUnwrapToObject(vd.ChildByFieldName("value")); o != nil {
+						scanExportedObject(o)
+					}
+				}
+			}
+
 		case "function_declaration":
 			if nm := n.ChildByFieldName("name"); nm != nil {
 				fn = nm.Content(src)
@@ -504,18 +517,63 @@ func jcrScanFeatureComponents(root *sitter.Node, src []byte, rel string) *jcrFcS
 				fn = nm.Content(src)
 			}
 		case "variable_declarator":
-			if v := n.ChildByFieldName("value"); v != nil {
-				switch v.Type() {
-				case "arrow_function", "function_expression", "function":
-					if nm := n.ChildByFieldName("name"); nm != nil {
-						fn = nm.Content(src)
+			nmNode := n.ChildByFieldName("name")
+			if nmNode == nil {
+				break
+			}
+			v := n.ChildByFieldName("value")
+			if nmNode.Type() == "identifier" {
+				if label := nmNode.Content(src); label != "" {
+					if _, seen := res.componentVarDecls[label]; !seen {
+						res.componentVarDecls[label] = jcrDeclaresComponent(v, src)
 					}
 				}
 			}
+			if v != nil {
+				switch v.Type() {
+				case "arrow_function", "function_expression", "function":
+					fn = nmNode.Content(src)
+				}
+			}
+
 		case "switch_statement":
 			if jcrIsRouteSwitchDiscriminant(n, src) {
 				inCase = true
+				// SPA.1: collect this route switch's case→JSX-tag map directly
+				// (ported from the retired jcrRouteCaseComponents).
+				body := n.ChildByFieldName("body")
+				if body == nil {
+					for i := 0; i < int(n.NamedChildCount()); i++ {
+						if c := n.NamedChild(i); c.Type() == "switch_body" {
+							body = c
+							break
+						}
+					}
+				}
+				if body != nil {
+					var pending []string
+					for i := 0; i < int(body.NamedChildCount()); i++ {
+						c := body.NamedChild(i)
+						if c.Type() != "switch_case" {
+							continue
+						}
+						lbl, ok := jcrStringLit(c.ChildByFieldName("value"), src)
+						if !ok {
+							continue
+						}
+						tags := jcrJSXTagsIn(c, src)
+						if len(tags) == 0 {
+							pending = append(pending, lbl)
+							continue
+						}
+						for _, name := range append(pending, lbl) {
+							res.routeCaseComps[name] = append(res.routeCaseComps[name], tags...)
+						}
+						pending = pending[:0]
+					}
+				}
 			}
+
 		case "call_expression":
 			if callee := n.ChildByFieldName("function"); callee != nil &&
 				callee.Type() == "identifier" && featureComponentAccessors[callee.Content(src)] {
@@ -557,10 +615,6 @@ func jcrScanFeatureComponents(root *sitter.Node, src []byte, rel string) *jcrFcS
 		}
 	}
 	walk(root, "(module)", false)
-
-	if len(res.keys) == 0 && len(res.registry) == 0 && len(res.dynamic) == 0 {
-		return nil
-	}
 	return res
 }
 
@@ -623,36 +677,6 @@ func jcrAssignedNames(n *sitter.Node, src []byte) []string {
 			return out
 		}
 	}
-	return out
-}
-
-func jcrExportedObjectLiterals(root *sitter.Node) []*sitter.Node {
-	var out []*sitter.Node
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "export_statement" {
-			if v := n.ChildByFieldName("value"); v != nil {
-				if o := jcrUnwrapToObject(v); o != nil {
-					out = append(out, o)
-				}
-			}
-			if d := n.ChildByFieldName("declaration"); d != nil {
-				for i := 0; i < int(d.NamedChildCount()); i++ {
-					vd := d.NamedChild(i)
-					if vd.Type() != "variable_declarator" {
-						continue
-					}
-					if o := jcrUnwrapToObject(vd.ChildByFieldName("value")); o != nil {
-						out = append(out, o)
-					}
-				}
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
-	}
-	walk(root)
 	return out
 }
 
@@ -738,51 +762,6 @@ func jcrStringLit(n *sitter.Node, src []byte) (string, bool) {
 		return t[1 : len(t)-1], true
 	}
 	return "", false
-}
-
-func jcrRouteCaseComponents(root *sitter.Node, src []byte) map[string][]string {
-	res := make(map[string][]string)
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "switch_statement" && jcrIsRouteSwitchDiscriminant(n, src) {
-			body := n.ChildByFieldName("body")
-			if body == nil {
-				for i := 0; i < int(n.NamedChildCount()); i++ {
-					if c := n.NamedChild(i); c.Type() == "switch_body" {
-						body = c
-						break
-					}
-				}
-			}
-			if body != nil {
-				var pending []string
-				for i := 0; i < int(body.NamedChildCount()); i++ {
-					c := body.NamedChild(i)
-					if c.Type() != "switch_case" {
-						continue
-					}
-					lbl, ok := jcrStringLit(c.ChildByFieldName("value"), src)
-					if !ok {
-						continue
-					}
-					tags := jcrJSXTagsIn(c, src)
-					if len(tags) == 0 {
-						pending = append(pending, lbl)
-						continue
-					}
-					for _, nm := range append(pending, lbl) {
-						res[nm] = append(res[nm], tags...)
-					}
-					pending = pending[:0]
-				}
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
-	}
-	walk(root)
-	return res
 }
 
 func jcrIsRouteSwitchDiscriminant(sw *sitter.Node, src []byte) bool {
