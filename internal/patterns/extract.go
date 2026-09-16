@@ -675,12 +675,19 @@ func precededBy(n *sitter.Node, query string, ec *ExtractContext) int64 {
 		return 0
 	}
 	var count int64
+	// ts_query_cursor_exec (Exec) is designed to be called repeatedly on one
+	// cursor for successive nodes — reusing it here instead of allocating a
+	// fresh *sitter.QueryCursor per sibling avoids O(siblings) cgo allocations
+	// per call (XM.15: this loop was ~72% memory-allocation CPU in profile,
+	// dominating rails_filters' cost — the single biggest remaining
+	// index-time lever after XM.13/XM.14).
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
 	for i := 0; i < int(p.NamedChildCount()); i++ {
 		sib := p.NamedChild(i)
 		if sib.StartByte() >= n.StartByte() {
 			break
 		}
-		qc := sitter.NewQueryCursor()
 		qc.Exec(q, sib)
 		for {
 			m, ok := qc.NextMatch()
@@ -693,7 +700,6 @@ func precededBy(n *sitter.Node, query string, ec *ExtractContext) int64 {
 				break
 			}
 		}
-		qc.Close()
 	}
 	return count
 }
