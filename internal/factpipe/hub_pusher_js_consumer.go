@@ -212,6 +212,10 @@ func pusherJSSubscribeSitesHub(nodes []graph.Node, files []string, _ string, _ [
 // --- pjcParseJS: read + parse one JS/TS/JSX/TSX file. ---
 
 func pjcParseJS(file string) (src []byte, root *sitter.Node, ok bool) {
+	return cachedParseJS(file, pjcParseJSUncached)
+}
+
+func pjcParseJSUncached(file string) (src []byte, root *sitter.Node, ok bool) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, nil, false

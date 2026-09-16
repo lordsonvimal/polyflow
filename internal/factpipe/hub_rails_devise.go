@@ -333,15 +333,19 @@ func rdSymbolList(n *sitter.Node, src []byte) []string {
 // rdReadAndParseRuby reads file off disk and parses it with the ruby
 // tree-sitter grammar. release must be called once done with root.
 func rdReadAndParseRuby(file string) (src []byte, root *sitter.Node, release func(), ok bool) {
+	return cachedParseRuby(file, rdReadAndParseRubyUncached)
+}
+
+func rdReadAndParseRubyUncached(file string) (src []byte, root *sitter.Node, tree *sitter.Tree, ok bool) {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, nil, func() {}, false
+		return nil, nil, nil, false
 	}
 	p := sitter.NewParser()
 	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err := p.ParseCtx(context.Background(), nil, data)
+	tree, err = p.ParseCtx(context.Background(), nil, data)
 	if err != nil || tree == nil {
-		return nil, nil, func() {}, false
+		return nil, nil, nil, false
 	}
-	return data, tree.RootNode(), func() { tree.Close() }, true
+	return data, tree.RootNode(), tree, true
 }

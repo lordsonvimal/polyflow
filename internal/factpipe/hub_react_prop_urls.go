@@ -1,7 +1,6 @@
 package factpipe
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,7 +10,6 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	tsxsitter "github.com/smacker/go-tree-sitter/typescript/tsx"
-	tssitter "github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/railsview"
@@ -595,18 +593,9 @@ func rprWrapperMethod(w string) string {
 // tsx grammar (isJSX) was selected — the JSX query needs the matching
 // compiled *sitter.Query for whichever grammar produced the tree.
 func rprParseJS(file string) (src []byte, root *sitter.Node, isJSX bool, ok bool) {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return nil, nil, false, false
-	}
-	lang := tssitter.GetLanguage()
 	if ext := strings.ToLower(filepath.Ext(file)); ext == ".tsx" || ext == ".jsx" {
-		lang = tsxsitter.GetLanguage()
 		isJSX = true
 	}
-	root, err = sitter.ParseCtx(context.Background(), src, lang)
-	if err != nil || root == nil {
-		return nil, nil, false, false
-	}
-	return src, root, isJSX, true
+	src, root, ok = cachedParseJS(file, pjcParseJSUncached)
+	return src, root, isJSX, ok
 }
