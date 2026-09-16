@@ -123,6 +123,70 @@ service LinkPlugin {
   rpc Reconcile(ReconcileRequest) returns (ReconcileResponse);
 }
 
+// VerbAstNode is a serializable snapshot of one tree-sitter node — never a
+// live pointer, since a plugin's ExtractVerb runs out-of-process. It carries
+// exactly what internal/patterns/extract.go's in-tree verbs actually read
+// off a node (raw text via Content(src), Type(), start/end line): enough for
+// a generic AST-shape verb, not a general remote-tree-walk API. A verb that
+// needs its node's ancestry (e.g. the reference ancestor_matching verb) reads
+// ExtractVerbRequest.ancestors instead of walking a live parent pointer.
+message VerbAstNode {
+  string type = 1;
+  string text = 2;
+  int64 start_line = 3;
+  int64 end_line = 4;
+}
+
+// ExtractVerbRequest is one `extract:` verb call — see FX.9
+// (docs/declarative-framework-pipeline-plan.md): a plugin registers a named
+// verb `(node, ctx) -> (value, ok)` that a framework's pattern YAML can name
+// in an extract: field exactly like an in-tree verb. ancestors is node's
+// parent chain, immediate parent first, tree root last — the one piece of
+// tree structure a verb cannot get from node alone.
+message ExtractVerbRequest {
+  string verb = 1;
+  string arg = 2;
+  VerbAstNode node = 3;
+  repeated VerbAstNode ancestors = 4;
+  string file = 5;
+  string grammar = 6;
+}
+
+// VerbValue is one verbVal-equivalent a plugin verb yields. A plugin verb
+// never has a live *sitter.Node (it never received one), so unlike the
+// in-tree runVerb switch this has no node-kind case — only str/int.
+message VerbValue {
+  string str = 1;
+  int64 int_val = 2;
+  bool is_int = 3;
+}
+
+message ExtractVerbResponse {
+  repeated VerbValue values = 1;
+  bool ok = 2;
+}
+
+message VerbsRequest {}
+
+// VerbsResponse is a plugin's advertised extract: verb names, queried once at
+// load time — the same role RequiresResponse plays for LinkPlugin
+// capabilities. Core uses this list for FX.9's generic-only enforcement
+// (rejecting any name that names a framework) before wiring anything into
+// internal/patterns' verb dispatch.
+message VerbsResponse {
+  repeated string names = 1;
+}
+
+// VerbProvider is an optional second role a plugin subprocess may serve
+// alongside LinkPlugin (FX.9) — registered unconditionally by
+// sdk/linkplugin.Serve; a plugin that does not implement the SDK's
+// VerbProvider interface just answers every call with an empty/not-ok
+// response, the same optionality shape as Reconcile.
+service VerbProvider {
+  rpc Verbs(VerbsRequest) returns (VerbsResponse);
+  rpc ExtractVerb(ExtractVerbRequest) returns (ExtractVerbResponse);
+}
+
 message BulkResolveRequest {
   repeated string files = 1;
 }

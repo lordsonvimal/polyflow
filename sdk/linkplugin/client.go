@@ -24,15 +24,20 @@ func (HostPlugin) GRPCServer(*goplugin.GRPCBroker, *grpc.Server) error {
 }
 
 func (HostPlugin) GRPCClient(_ context.Context, broker *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
-	return &Client{client: pb.NewLinkPluginClient(conn), broker: broker}, nil
+	return &Client{client: pb.NewLinkPluginClient(conn), verbClient: pb.NewVerbProviderClient(conn), broker: broker}, nil
 }
 
 // Client is core's handle to a running plugin subprocess, returned by
 // grpcPlugin.GRPCClient. internal/pluginloader drives it; a plugin author
-// never sees this type.
+// never sees this type. verbClient is dialed unconditionally (VerbProvider is
+// registered server-side regardless of whether the plugin implements it,
+// see plugin.go's grpcPlugin.GRPCServer) — Verbs()/ExtractVerb() calls
+// against a plugin that doesn't implement VerbProvider just get an
+// empty/not-ok response, never a dial error.
 type Client struct {
-	client pb.LinkPluginClient
-	broker *goplugin.GRPCBroker
+	client     pb.LinkPluginClient
+	verbClient pb.VerbProviderClient
+	broker     *goplugin.GRPCBroker
 }
 
 // Handshake validates protocol_version and returns the plugin's declared

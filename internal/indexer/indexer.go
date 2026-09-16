@@ -264,7 +264,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 	// run before the scan loop below so a qualifying component's patterns
 	// are registered before NewTreeSitterMatcherForService compiles queries
 	// per service.
-	pluginManifests := loadLinkPlugins(reg, workspaceRoot, logw)
+	pluginManifests, verbPluginClients := loadLinkPlugins(reg, workspaceRoot, logw)
 
 	var allSvcFiles []serviceFiles
 	for _, svc := range services {
@@ -743,6 +743,7 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		allEdges:        allEdges,
 		allUnresolved:   allUnresolved,
 		pluginManifests: pluginManifests,
+		pluginClients:   verbPluginClients,
 	}
 	defer func() {
 		for _, c := range linkState.pluginClients {

@@ -145,6 +145,47 @@ type Reconciler interface {
 	Reconcile(ctx *ReconcileContext) (Result, error)
 }
 
+// VerbNode is a serializable snapshot of one tree-sitter node — an
+// ExtractVerb call's whole input, since a plugin verb runs out-of-process and
+// never holds a live *sitter.Node. Ancestors is the node's parent chain,
+// immediate parent first, tree root last (FX.9's reference ancestor_matching
+// verb reads exactly this and nothing else).
+type VerbNode struct {
+	Type      string
+	Text      string
+	StartLine int64
+	EndLine   int64
+	Ancestors []VerbNode
+}
+
+// VerbValue is one value a plugin verb yields — the wire-safe subset of
+// internal/patterns' own verbVal: a plugin verb never has a live
+// *sitter.Node, so there is no node-kind case here, only str/int.
+type VerbValue struct {
+	Str   string
+	Int   int64
+	IsInt bool
+}
+
+// VerbProvider is an optional extension to Plugin (FX.9,
+// docs/declarative-framework-pipeline-plan.md) — the same "implement it only
+// if you need it" shape as Reconciler. A plugin that also implements this
+// interface can register named `extract:` verbs a framework's pattern YAML
+// names exactly like an in-tree verb (internal/patterns/extract.go's
+// runVerb). Verbs is queried once at load time so core can apply the
+// generic-only enforcement (a verb named/documented after a framework is
+// rejected) before wiring anything into the verb dispatch; ExtractVerb is
+// then called once per capture, per verb use, same call shape as an in-tree
+// verb function.
+type VerbProvider interface {
+	// Verbs lists every extract: verb name this plugin advertises.
+	Verbs() []string
+	// ExtractVerb runs one named verb against node. ok mirrors an in-tree
+	// verb's own "declined" convention (see verb.go's normalizeHTTPVerb doc):
+	// false means "this input does not apply", not an error.
+	ExtractVerb(verb, arg string, node VerbNode, file, grammar string) ([]VerbValue, bool)
+}
+
 // Serve starts the plugin subprocess and blocks until core disconnects. It
 // is the entire body of a plugin's main().
 func Serve(p Plugin) {
@@ -168,11 +209,17 @@ type grpcPlugin struct {
 
 func (g *grpcPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	pb.RegisterLinkPluginServer(s, &linkPluginServer{impl: g.impl, broker: broker})
+	// VerbProvider is registered unconditionally (not just when impl
+	// implements it) — the server methods themselves type-assert and answer
+	// empty/not-ok, the same optionality shape Reconcile already uses below.
+	// This keeps core's loader from needing two different subprocess dial
+	// protocols depending on which optional interfaces a plugin implements.
+	pb.RegisterVerbProviderServer(s, &verbProviderServer{impl: g.impl})
 	return nil
 }
 
 func (g *grpcPlugin) GRPCClient(_ context.Context, broker *goplugin.GRPCBroker, conn *grpc.ClientConn) (interface{}, error) {
-	return &Client{client: pb.NewLinkPluginClient(conn), broker: broker}, nil
+	return &Client{client: pb.NewLinkPluginClient(conn), verbClient: pb.NewVerbProviderClient(conn), broker: broker}, nil
 }
 
 // linkPluginServer adapts a Plugin implementation to the generated

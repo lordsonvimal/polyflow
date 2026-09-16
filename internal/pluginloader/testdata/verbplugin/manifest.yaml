@@ -1,0 +1,12 @@
+name: verbplugin
+version: "0.0.1"
+protocol_version: 1
+entrypoint: ./verbplugin
+
+components:
+  - id: verbs
+    package: verbplugin-marker
+    language: go
+    patterns: patterns/verb.yaml
+    requires: []
+    provides_verbs: [ancestor_matching]

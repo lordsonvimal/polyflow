@@ -161,6 +161,33 @@ func runVerb(spec string, node *sitter.Node, ec *ExtractContext) []verbVal {
 		return headerDirectiveVals(node, strings.TrimSpace(field), allow, ec.Src)
 
 	default:
+		// FX.9: a name with no in-tree case may be a registered plugin verb —
+		// checked here, after every in-tree case, so a plugin can never shadow
+		// a core verb name. Only a name with an actual registered provider
+		// pays the ancestor-chain walk; everything else falls straight through
+		// to the unknown-verb fallback below.
+		if fn := lookupVerbProvider(name); fn != nil {
+			vn := VerbNode{
+				Type:      node.Type(),
+				Text:      node.Content(ec.Src),
+				StartLine: int64(node.StartPoint().Row) + 1,
+				EndLine:   int64(node.EndPoint().Row) + 1,
+				Ancestors: buildAncestorChain(node, ec.Src),
+			}
+			results, ok := fn(vn, arg, ec.File, ec.Grammar)
+			if !ok {
+				return []verbVal{{Str: "", Kind: factpipe.AtomStr}}
+			}
+			out := make([]verbVal, 0, len(results))
+			for _, r := range results {
+				if r.IsInt {
+					out = append(out, verbVal{Int: r.Int, Kind: factpipe.AtomInt})
+				} else {
+					out = append(out, verbVal{Str: r.Str, Kind: factpipe.AtomStr})
+				}
+			}
+			return out
+		}
 		// Unknown verb: fail soft to the source text so a typo in a YAML is a
 		// wrong-value bug caught by the .dl diff test, not a panic mid-index.
 		return []verbVal{{Str: node.Content(ec.Src), Kind: factpipe.AtomStr}}

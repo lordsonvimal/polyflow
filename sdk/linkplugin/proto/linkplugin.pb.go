@@ -916,6 +916,371 @@ func (x *ReconcileResponse) GetResult() *Result {
 	return nil
 }
 
+// VerbAstNode is a serializable snapshot of one tree-sitter node — never a
+// live pointer, since a plugin's ExtractVerb runs out-of-process. It carries
+// exactly what internal/patterns/extract.go's in-tree verbs actually read
+// off a node (raw text via Content(src), Type(), start/end line): enough for
+// a generic AST-shape verb, not a general remote-tree-walk API. A verb that
+// needs its node's ancestry (e.g. the reference ancestor_matching verb) reads
+// ExtractVerbRequest.ancestors instead of walking a live parent pointer.
+type VerbAstNode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	StartLine     int64                  `protobuf:"varint,3,opt,name=start_line,json=startLine,proto3" json:"start_line,omitempty"`
+	EndLine       int64                  `protobuf:"varint,4,opt,name=end_line,json=endLine,proto3" json:"end_line,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerbAstNode) Reset() {
+	*x = VerbAstNode{}
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerbAstNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerbAstNode) ProtoMessage() {}
+
+func (x *VerbAstNode) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerbAstNode.ProtoReflect.Descriptor instead.
+func (*VerbAstNode) Descriptor() ([]byte, []int) {
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *VerbAstNode) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *VerbAstNode) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *VerbAstNode) GetStartLine() int64 {
+	if x != nil {
+		return x.StartLine
+	}
+	return 0
+}
+
+func (x *VerbAstNode) GetEndLine() int64 {
+	if x != nil {
+		return x.EndLine
+	}
+	return 0
+}
+
+// ExtractVerbRequest is one `extract:` verb call — see FX.9
+// (docs/declarative-framework-pipeline-plan.md): a plugin registers a named
+// verb `(node, ctx) -> (value, ok)` that a framework's pattern YAML can name
+// in an extract: field exactly like an in-tree verb. ancestors is node's
+// parent chain, immediate parent first, tree root last — the one piece of
+// tree structure a verb cannot get from node alone.
+type ExtractVerbRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Verb          string                 `protobuf:"bytes,1,opt,name=verb,proto3" json:"verb,omitempty"`
+	Arg           string                 `protobuf:"bytes,2,opt,name=arg,proto3" json:"arg,omitempty"`
+	Node          *VerbAstNode           `protobuf:"bytes,3,opt,name=node,proto3" json:"node,omitempty"`
+	Ancestors     []*VerbAstNode         `protobuf:"bytes,4,rep,name=ancestors,proto3" json:"ancestors,omitempty"`
+	File          string                 `protobuf:"bytes,5,opt,name=file,proto3" json:"file,omitempty"`
+	Grammar       string                 `protobuf:"bytes,6,opt,name=grammar,proto3" json:"grammar,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtractVerbRequest) Reset() {
+	*x = ExtractVerbRequest{}
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtractVerbRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtractVerbRequest) ProtoMessage() {}
+
+func (x *ExtractVerbRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtractVerbRequest.ProtoReflect.Descriptor instead.
+func (*ExtractVerbRequest) Descriptor() ([]byte, []int) {
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ExtractVerbRequest) GetVerb() string {
+	if x != nil {
+		return x.Verb
+	}
+	return ""
+}
+
+func (x *ExtractVerbRequest) GetArg() string {
+	if x != nil {
+		return x.Arg
+	}
+	return ""
+}
+
+func (x *ExtractVerbRequest) GetNode() *VerbAstNode {
+	if x != nil {
+		return x.Node
+	}
+	return nil
+}
+
+func (x *ExtractVerbRequest) GetAncestors() []*VerbAstNode {
+	if x != nil {
+		return x.Ancestors
+	}
+	return nil
+}
+
+func (x *ExtractVerbRequest) GetFile() string {
+	if x != nil {
+		return x.File
+	}
+	return ""
+}
+
+func (x *ExtractVerbRequest) GetGrammar() string {
+	if x != nil {
+		return x.Grammar
+	}
+	return ""
+}
+
+// VerbValue is one verbVal-equivalent a plugin verb yields. A plugin verb
+// never has a live *sitter.Node (it never received one), so unlike the
+// in-tree runVerb switch this has no node-kind case — only str/int.
+type VerbValue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Str           string                 `protobuf:"bytes,1,opt,name=str,proto3" json:"str,omitempty"`
+	IntVal        int64                  `protobuf:"varint,2,opt,name=int_val,json=intVal,proto3" json:"int_val,omitempty"`
+	IsInt         bool                   `protobuf:"varint,3,opt,name=is_int,json=isInt,proto3" json:"is_int,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerbValue) Reset() {
+	*x = VerbValue{}
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerbValue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerbValue) ProtoMessage() {}
+
+func (x *VerbValue) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerbValue.ProtoReflect.Descriptor instead.
+func (*VerbValue) Descriptor() ([]byte, []int) {
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *VerbValue) GetStr() string {
+	if x != nil {
+		return x.Str
+	}
+	return ""
+}
+
+func (x *VerbValue) GetIntVal() int64 {
+	if x != nil {
+		return x.IntVal
+	}
+	return 0
+}
+
+func (x *VerbValue) GetIsInt() bool {
+	if x != nil {
+		return x.IsInt
+	}
+	return false
+}
+
+type ExtractVerbResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []*VerbValue           `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	Ok            bool                   `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtractVerbResponse) Reset() {
+	*x = ExtractVerbResponse{}
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtractVerbResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtractVerbResponse) ProtoMessage() {}
+
+func (x *ExtractVerbResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtractVerbResponse.ProtoReflect.Descriptor instead.
+func (*ExtractVerbResponse) Descriptor() ([]byte, []int) {
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ExtractVerbResponse) GetValues() []*VerbValue {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *ExtractVerbResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+type VerbsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerbsRequest) Reset() {
+	*x = VerbsRequest{}
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerbsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerbsRequest) ProtoMessage() {}
+
+func (x *VerbsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerbsRequest.ProtoReflect.Descriptor instead.
+func (*VerbsRequest) Descriptor() ([]byte, []int) {
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{17}
+}
+
+// VerbsResponse is a plugin's advertised extract: verb names, queried once at
+// load time — the same role RequiresResponse plays for LinkPlugin
+// capabilities. Core uses this list for FX.9's generic-only enforcement
+// (rejecting any name that names a framework) before wiring anything into
+// internal/patterns' verb dispatch.
+type VerbsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Names         []string               `protobuf:"bytes,1,rep,name=names,proto3" json:"names,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerbsResponse) Reset() {
+	*x = VerbsResponse{}
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerbsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerbsResponse) ProtoMessage() {}
+
+func (x *VerbsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerbsResponse.ProtoReflect.Descriptor instead.
+func (*VerbsResponse) Descriptor() ([]byte, []int) {
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *VerbsResponse) GetNames() []string {
+	if x != nil {
+		return x.Names
+	}
+	return nil
+}
+
 type BulkResolveRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Files         []string               `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
@@ -925,7 +1290,7 @@ type BulkResolveRequest struct {
 
 func (x *BulkResolveRequest) Reset() {
 	*x = BulkResolveRequest{}
-	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[13]
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -937,7 +1302,7 @@ func (x *BulkResolveRequest) String() string {
 func (*BulkResolveRequest) ProtoMessage() {}
 
 func (x *BulkResolveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[13]
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -950,7 +1315,7 @@ func (x *BulkResolveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BulkResolveRequest.ProtoReflect.Descriptor instead.
 func (*BulkResolveRequest) Descriptor() ([]byte, []int) {
-	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{13}
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *BulkResolveRequest) GetFiles() []string {
@@ -976,7 +1341,7 @@ type Scope struct {
 
 func (x *Scope) Reset() {
 	*x = Scope{}
-	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[14]
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -988,7 +1353,7 @@ func (x *Scope) String() string {
 func (*Scope) ProtoMessage() {}
 
 func (x *Scope) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[14]
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1001,7 +1366,7 @@ func (x *Scope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Scope.ProtoReflect.Descriptor instead.
 func (*Scope) Descriptor() ([]byte, []int) {
-	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{14}
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Scope) GetKind() string {
@@ -1034,7 +1399,7 @@ type BulkResolveResponse struct {
 
 func (x *BulkResolveResponse) Reset() {
 	*x = BulkResolveResponse{}
-	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[15]
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1046,7 +1411,7 @@ func (x *BulkResolveResponse) String() string {
 func (*BulkResolveResponse) ProtoMessage() {}
 
 func (x *BulkResolveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[15]
+	mi := &file_sdk_linkplugin_proto_linkplugin_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1059,7 +1424,7 @@ func (x *BulkResolveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BulkResolveResponse.ProtoReflect.Descriptor instead.
 func (*BulkResolveResponse) Descriptor() ([]byte, []int) {
-	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{15}
+	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BulkResolveResponse) GetScopes() map[string]*Scope {
@@ -1159,7 +1524,30 @@ const file_sdk_linkplugin_proto_linkplugin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
 	"\x05value\x18\x02 \x01(\v2\x12.linkplugin.ResultR\x05value:\x028\x01\"?\n" +
 	"\x11ReconcileResponse\x12*\n" +
-	"\x06result\x18\x01 \x01(\v2\x12.linkplugin.ResultR\x06result\"*\n" +
+	"\x06result\x18\x01 \x01(\v2\x12.linkplugin.ResultR\x06result\"o\n" +
+	"\vVerbAstNode\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"start_line\x18\x03 \x01(\x03R\tstartLine\x12\x19\n" +
+	"\bend_line\x18\x04 \x01(\x03R\aendLine\"\xcc\x01\n" +
+	"\x12ExtractVerbRequest\x12\x12\n" +
+	"\x04verb\x18\x01 \x01(\tR\x04verb\x12\x10\n" +
+	"\x03arg\x18\x02 \x01(\tR\x03arg\x12+\n" +
+	"\x04node\x18\x03 \x01(\v2\x17.linkplugin.VerbAstNodeR\x04node\x125\n" +
+	"\tancestors\x18\x04 \x03(\v2\x17.linkplugin.VerbAstNodeR\tancestors\x12\x12\n" +
+	"\x04file\x18\x05 \x01(\tR\x04file\x12\x18\n" +
+	"\agrammar\x18\x06 \x01(\tR\agrammar\"M\n" +
+	"\tVerbValue\x12\x10\n" +
+	"\x03str\x18\x01 \x01(\tR\x03str\x12\x17\n" +
+	"\aint_val\x18\x02 \x01(\x03R\x06intVal\x12\x15\n" +
+	"\x06is_int\x18\x03 \x01(\bR\x05isInt\"T\n" +
+	"\x13ExtractVerbResponse\x12-\n" +
+	"\x06values\x18\x01 \x03(\v2\x15.linkplugin.VerbValueR\x06values\x12\x0e\n" +
+	"\x02ok\x18\x02 \x01(\bR\x02ok\"\x0e\n" +
+	"\fVerbsRequest\"%\n" +
+	"\rVerbsResponse\x12\x14\n" +
+	"\x05names\x18\x01 \x03(\tR\x05names\"*\n" +
 	"\x12BulkResolveRequest\x12\x14\n" +
 	"\x05files\x18\x01 \x03(\tR\x05files\"A\n" +
 	"\x05Scope\x12\x12\n" +
@@ -1176,7 +1564,10 @@ const file_sdk_linkplugin_proto_linkplugin_proto_rawDesc = "" +
 	"\tHandshake\x12\x1c.linkplugin.HandshakeRequest\x1a\x1d.linkplugin.HandshakeResponse\x12E\n" +
 	"\bRequires\x12\x1b.linkplugin.RequiresRequest\x1a\x1c.linkplugin.RequiresResponse\x129\n" +
 	"\x04Link\x12\x17.linkplugin.LinkRequest\x1a\x18.linkplugin.LinkResponse\x12H\n" +
-	"\tReconcile\x12\x1c.linkplugin.ReconcileRequest\x1a\x1d.linkplugin.ReconcileResponse2\x98\x02\n" +
+	"\tReconcile\x12\x1c.linkplugin.ReconcileRequest\x1a\x1d.linkplugin.ReconcileResponse2\x9c\x01\n" +
+	"\fVerbProvider\x12<\n" +
+	"\x05Verbs\x12\x18.linkplugin.VerbsRequest\x1a\x19.linkplugin.VerbsResponse\x12N\n" +
+	"\vExtractVerb\x12\x1e.linkplugin.ExtractVerbRequest\x1a\x1f.linkplugin.ExtractVerbResponse2\x98\x02\n" +
 	"\fCapabilities\x12Y\n" +
 	"\x16ContainmentBulkResolve\x12\x1e.linkplugin.BulkResolveRequest\x1a\x1f.linkplugin.BulkResolveResponse\x12T\n" +
 	"\x11SymbolBulkResolve\x12\x1e.linkplugin.BulkResolveRequest\x1a\x1f.linkplugin.BulkResolveResponse\x12W\n" +
@@ -1194,7 +1585,7 @@ func file_sdk_linkplugin_proto_linkplugin_proto_rawDescGZIP() []byte {
 	return file_sdk_linkplugin_proto_linkplugin_proto_rawDescData
 }
 
-var file_sdk_linkplugin_proto_linkplugin_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_sdk_linkplugin_proto_linkplugin_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_sdk_linkplugin_proto_linkplugin_proto_goTypes = []any{
 	(*Node)(nil),                // 0: linkplugin.Node
 	(*SourceRef)(nil),           // 1: linkplugin.SourceRef
@@ -1209,49 +1600,62 @@ var file_sdk_linkplugin_proto_linkplugin_proto_goTypes = []any{
 	(*LinkResponse)(nil),        // 10: linkplugin.LinkResponse
 	(*ReconcileRequest)(nil),    // 11: linkplugin.ReconcileRequest
 	(*ReconcileResponse)(nil),   // 12: linkplugin.ReconcileResponse
-	(*BulkResolveRequest)(nil),  // 13: linkplugin.BulkResolveRequest
-	(*Scope)(nil),               // 14: linkplugin.Scope
-	(*BulkResolveResponse)(nil), // 15: linkplugin.BulkResolveResponse
-	nil,                         // 16: linkplugin.Node.MetaEntry
-	nil,                         // 17: linkplugin.Edge.MetaEntry
-	nil,                         // 18: linkplugin.ReconcileRequest.ComponentResultsEntry
-	nil,                         // 19: linkplugin.ReconcileRequest.AllResultsEntry
-	nil,                         // 20: linkplugin.BulkResolveResponse.ScopesEntry
+	(*VerbAstNode)(nil),         // 13: linkplugin.VerbAstNode
+	(*ExtractVerbRequest)(nil),  // 14: linkplugin.ExtractVerbRequest
+	(*VerbValue)(nil),           // 15: linkplugin.VerbValue
+	(*ExtractVerbResponse)(nil), // 16: linkplugin.ExtractVerbResponse
+	(*VerbsRequest)(nil),        // 17: linkplugin.VerbsRequest
+	(*VerbsResponse)(nil),       // 18: linkplugin.VerbsResponse
+	(*BulkResolveRequest)(nil),  // 19: linkplugin.BulkResolveRequest
+	(*Scope)(nil),               // 20: linkplugin.Scope
+	(*BulkResolveResponse)(nil), // 21: linkplugin.BulkResolveResponse
+	nil,                         // 22: linkplugin.Node.MetaEntry
+	nil,                         // 23: linkplugin.Edge.MetaEntry
+	nil,                         // 24: linkplugin.ReconcileRequest.ComponentResultsEntry
+	nil,                         // 25: linkplugin.ReconcileRequest.AllResultsEntry
+	nil,                         // 26: linkplugin.BulkResolveResponse.ScopesEntry
 }
 var file_sdk_linkplugin_proto_linkplugin_proto_depIdxs = []int32{
-	16, // 0: linkplugin.Node.meta:type_name -> linkplugin.Node.MetaEntry
-	17, // 1: linkplugin.Edge.meta:type_name -> linkplugin.Edge.MetaEntry
+	22, // 0: linkplugin.Node.meta:type_name -> linkplugin.Node.MetaEntry
+	23, // 1: linkplugin.Edge.meta:type_name -> linkplugin.Edge.MetaEntry
 	1,  // 2: linkplugin.Edge.sources:type_name -> linkplugin.SourceRef
 	2,  // 3: linkplugin.Result.edges:type_name -> linkplugin.Edge
 	3,  // 4: linkplugin.Result.unresolved:type_name -> linkplugin.UnresolvedRef
 	0,  // 5: linkplugin.LinkRequest.nodes:type_name -> linkplugin.Node
 	4,  // 6: linkplugin.LinkResponse.result:type_name -> linkplugin.Result
-	18, // 7: linkplugin.ReconcileRequest.component_results:type_name -> linkplugin.ReconcileRequest.ComponentResultsEntry
-	19, // 8: linkplugin.ReconcileRequest.all_results:type_name -> linkplugin.ReconcileRequest.AllResultsEntry
+	24, // 7: linkplugin.ReconcileRequest.component_results:type_name -> linkplugin.ReconcileRequest.ComponentResultsEntry
+	25, // 8: linkplugin.ReconcileRequest.all_results:type_name -> linkplugin.ReconcileRequest.AllResultsEntry
 	4,  // 9: linkplugin.ReconcileResponse.result:type_name -> linkplugin.Result
-	20, // 10: linkplugin.BulkResolveResponse.scopes:type_name -> linkplugin.BulkResolveResponse.ScopesEntry
-	4,  // 11: linkplugin.ReconcileRequest.ComponentResultsEntry.value:type_name -> linkplugin.Result
-	4,  // 12: linkplugin.ReconcileRequest.AllResultsEntry.value:type_name -> linkplugin.Result
-	14, // 13: linkplugin.BulkResolveResponse.ScopesEntry.value:type_name -> linkplugin.Scope
-	5,  // 14: linkplugin.LinkPlugin.Handshake:input_type -> linkplugin.HandshakeRequest
-	7,  // 15: linkplugin.LinkPlugin.Requires:input_type -> linkplugin.RequiresRequest
-	9,  // 16: linkplugin.LinkPlugin.Link:input_type -> linkplugin.LinkRequest
-	11, // 17: linkplugin.LinkPlugin.Reconcile:input_type -> linkplugin.ReconcileRequest
-	13, // 18: linkplugin.Capabilities.ContainmentBulkResolve:input_type -> linkplugin.BulkResolveRequest
-	13, // 19: linkplugin.Capabilities.SymbolBulkResolve:input_type -> linkplugin.BulkResolveRequest
-	13, // 20: linkplugin.Capabilities.KeyLedgerBulkResolve:input_type -> linkplugin.BulkResolveRequest
-	6,  // 21: linkplugin.LinkPlugin.Handshake:output_type -> linkplugin.HandshakeResponse
-	8,  // 22: linkplugin.LinkPlugin.Requires:output_type -> linkplugin.RequiresResponse
-	10, // 23: linkplugin.LinkPlugin.Link:output_type -> linkplugin.LinkResponse
-	12, // 24: linkplugin.LinkPlugin.Reconcile:output_type -> linkplugin.ReconcileResponse
-	15, // 25: linkplugin.Capabilities.ContainmentBulkResolve:output_type -> linkplugin.BulkResolveResponse
-	15, // 26: linkplugin.Capabilities.SymbolBulkResolve:output_type -> linkplugin.BulkResolveResponse
-	15, // 27: linkplugin.Capabilities.KeyLedgerBulkResolve:output_type -> linkplugin.BulkResolveResponse
-	21, // [21:28] is the sub-list for method output_type
-	14, // [14:21] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	13, // 10: linkplugin.ExtractVerbRequest.node:type_name -> linkplugin.VerbAstNode
+	13, // 11: linkplugin.ExtractVerbRequest.ancestors:type_name -> linkplugin.VerbAstNode
+	15, // 12: linkplugin.ExtractVerbResponse.values:type_name -> linkplugin.VerbValue
+	26, // 13: linkplugin.BulkResolveResponse.scopes:type_name -> linkplugin.BulkResolveResponse.ScopesEntry
+	4,  // 14: linkplugin.ReconcileRequest.ComponentResultsEntry.value:type_name -> linkplugin.Result
+	4,  // 15: linkplugin.ReconcileRequest.AllResultsEntry.value:type_name -> linkplugin.Result
+	20, // 16: linkplugin.BulkResolveResponse.ScopesEntry.value:type_name -> linkplugin.Scope
+	5,  // 17: linkplugin.LinkPlugin.Handshake:input_type -> linkplugin.HandshakeRequest
+	7,  // 18: linkplugin.LinkPlugin.Requires:input_type -> linkplugin.RequiresRequest
+	9,  // 19: linkplugin.LinkPlugin.Link:input_type -> linkplugin.LinkRequest
+	11, // 20: linkplugin.LinkPlugin.Reconcile:input_type -> linkplugin.ReconcileRequest
+	17, // 21: linkplugin.VerbProvider.Verbs:input_type -> linkplugin.VerbsRequest
+	14, // 22: linkplugin.VerbProvider.ExtractVerb:input_type -> linkplugin.ExtractVerbRequest
+	19, // 23: linkplugin.Capabilities.ContainmentBulkResolve:input_type -> linkplugin.BulkResolveRequest
+	19, // 24: linkplugin.Capabilities.SymbolBulkResolve:input_type -> linkplugin.BulkResolveRequest
+	19, // 25: linkplugin.Capabilities.KeyLedgerBulkResolve:input_type -> linkplugin.BulkResolveRequest
+	6,  // 26: linkplugin.LinkPlugin.Handshake:output_type -> linkplugin.HandshakeResponse
+	8,  // 27: linkplugin.LinkPlugin.Requires:output_type -> linkplugin.RequiresResponse
+	10, // 28: linkplugin.LinkPlugin.Link:output_type -> linkplugin.LinkResponse
+	12, // 29: linkplugin.LinkPlugin.Reconcile:output_type -> linkplugin.ReconcileResponse
+	18, // 30: linkplugin.VerbProvider.Verbs:output_type -> linkplugin.VerbsResponse
+	16, // 31: linkplugin.VerbProvider.ExtractVerb:output_type -> linkplugin.ExtractVerbResponse
+	21, // 32: linkplugin.Capabilities.ContainmentBulkResolve:output_type -> linkplugin.BulkResolveResponse
+	21, // 33: linkplugin.Capabilities.SymbolBulkResolve:output_type -> linkplugin.BulkResolveResponse
+	21, // 34: linkplugin.Capabilities.KeyLedgerBulkResolve:output_type -> linkplugin.BulkResolveResponse
+	26, // [26:35] is the sub-list for method output_type
+	17, // [17:26] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_sdk_linkplugin_proto_linkplugin_proto_init() }
@@ -1265,9 +1669,9 @@ func file_sdk_linkplugin_proto_linkplugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sdk_linkplugin_proto_linkplugin_proto_rawDesc), len(file_sdk_linkplugin_proto_linkplugin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   27,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_sdk_linkplugin_proto_linkplugin_proto_goTypes,
 		DependencyIndexes: file_sdk_linkplugin_proto_linkplugin_proto_depIdxs,

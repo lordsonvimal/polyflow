@@ -37,6 +37,12 @@ type Component struct {
 	Patterns       string   `yaml:"patterns"`
 	Requires       []string `yaml:"requires"`
 	ConcurrentSafe bool     `yaml:"concurrent_safe"`
+	// ProvidesVerbs (FX.9) names the extract: verbs this component's plugin
+	// advertises via its VerbProvider.Verbs() RPC. Declared in manifest.yaml
+	// so the loader knows to launch the subprocess eagerly (before any
+	// pattern matching runs, unlike a Link component's lazy launch) — a verb
+	// must be registered before internal/patterns' matcher can ever call it.
+	ProvidesVerbs []string `yaml:"provides_verbs"`
 }
 
 // Manifest is one plugin's manifest.yaml.
