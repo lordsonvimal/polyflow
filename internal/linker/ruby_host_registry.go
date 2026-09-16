@@ -28,6 +28,26 @@ type rubyHostInfo struct {
 // between definitions keeps the env var and loses only the path — the host is
 // still unambiguous, just the route is not.
 func buildRubyHostRegistry(files []string) map[string]rubyHostInfo {
+	// Sort for deterministic first-writer-wins on identical env, stable output.
+	sorted := filterRubyFiles(files)
+	sort.Strings(sorted)
+	// Parse once; keep the ASTs for the L.1 delegate pass below.
+	asts := mapParallel(sorted, parseRubyFileAST)
+	defer func() {
+		for _, fa := range asts {
+			if fa != nil {
+				fa.release()
+			}
+		}
+	}()
+	return buildRubyHostRegistryFromASTs(asts)
+}
+
+// buildRubyHostRegistryFromASTs is buildRubyHostRegistry's ASTs-already-parsed
+// twin — callers that need the same files' ASTs for their own purposes (e.g.
+// ruby_polymorphic_path.go) parse once and pass the result here instead of
+// paying for a second parse+scan of every file. Caller owns release.
+func buildRubyHostRegistryFromASTs(asts []*rubyFileAST) map[string]rubyHostInfo {
 	type entry struct {
 		info         rubyHostInfo
 		conflict     bool
@@ -64,19 +84,6 @@ func buildRubyHostRegistry(files []string) map[string]rubyHostInfo {
 		}
 		return out
 	}
-
-	// Sort for deterministic first-writer-wins on identical env, stable output.
-	sorted := filterRubyFiles(files)
-	sort.Strings(sorted)
-	// Parse once; keep the ASTs for the L.1 delegate pass below.
-	asts := mapParallel(sorted, parseRubyFileAST)
-	defer func() {
-		for _, fa := range asts {
-			if fa != nil {
-				fa.release()
-			}
-		}
-	}()
 
 	// Pass 1: direct host methods + attr-exposed env-derived host names.
 	for _, fa := range asts {
@@ -125,6 +132,34 @@ type rubyFileAST struct {
 	currentMethodGuard *sitter.Node
 	// symInlineActive bounds envSymAccessor to a single inline (no re-entry).
 	symInlineActive bool
+
+	// XM.21: scan() replaces what used to be up to 7 independent full-tree
+	// walks per file (fileNameEnv, fileNamePath, symbolArrayConsts, attrNames'
+	// own walk, delegateHostNames, plus ruby_polymorphic_path.go's stringConsts
+	// and delegatedNames — all matching against the same "assignment"/
+	// "call"/"command" node shapes) with one walk that buffers the raw
+	// matches; every one of those methods now post-processes a buffer instead
+	// of re-walking fa.root, and is memoized so calling it twice (as
+	// hostMethodsWith's two-pass registry build does for delegating files) is
+	// a map read, not a second walk.
+	scanned         bool
+	varAssigns      []rubyAsn // identifier/instance_variable assignments
+	constAssigns    []rubyAsn // constant assignments
+	attrCalls       []*sitter.Node
+	delegateCalls   []*sitter.Node
+	bareCallsByName map[string][]*sitter.Node
+
+	nameEnvCache      map[string]string
+	namePathCache     map[string]string
+	symConstsCache    map[string][]string
+	stringConstsCache map[string]string
+	attrNamesCache    map[string]bool
+}
+
+// rubyAsn is one `name = rhs`-shaped assignment found by scan().
+type rubyAsn struct {
+	name string
+	rhs  *sitter.Node
 }
 
 func parseRubyFileAST(file string) *rubyFileAST {
@@ -135,6 +170,56 @@ func parseRubyFileAST(file string) *rubyFileAST {
 	fa := &rubyFileAST{src: src, root: root, release: release}
 	fa.collectMethods()
 	return fa
+}
+
+// scan is fa's single top-level pass over its own AST, replacing the several
+// independent full-tree walks the methods below used to each run on their
+// own. Idempotent and memoized: called lazily by every method that needs its
+// buffers, at most once per file.
+func (fa *rubyFileAST) scan() {
+	if fa.scanned {
+		return
+	}
+	fa.scanned = true
+	fa.bareCallsByName = map[string][]*sitter.Node{}
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		switch n.Type() {
+		case "assignment":
+			left := n.ChildByFieldName("left")
+			right := n.ChildByFieldName("right")
+			if left != nil && right != nil {
+				switch left.Type() {
+				case "identifier", "instance_variable":
+					name := strings.TrimPrefix(left.Content(fa.src), "@")
+					fa.varAssigns = append(fa.varAssigns, rubyAsn{name, right})
+				case "constant":
+					fa.constAssigns = append(fa.constAssigns, rubyAsn{left.Content(fa.src), right})
+				}
+			}
+		case "call", "command", "method_call":
+			mn := n.ChildByFieldName("method")
+			if mn == nil {
+				break
+			}
+			name := mn.Content(fa.src)
+			if n.Type() != "method_call" {
+				switch name {
+				case "attr_reader", "attr_accessor", "attr_writer":
+					fa.attrCalls = append(fa.attrCalls, n)
+				case "delegate":
+					fa.delegateCalls = append(fa.delegateCalls, n)
+				}
+			}
+			if n.ChildByFieldName("receiver") == nil {
+				fa.bareCallsByName[name] = append(fa.bareCallsByName[name], n)
+			}
+		}
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(fa.root)
 }
 
 func (fa *rubyFileAST) collectMethods() {
@@ -205,10 +290,19 @@ func (fa *rubyFileAST) hostMethods() map[string]rubyHostInfo {
 // been resolved elsewhere.
 func (fa *rubyFileAST) hostMethodsWith(overlay map[string]string) map[string]rubyHostInfo {
 	nameEnv := fa.fileNameEnv()
-	for k, v := range overlay {
-		if _, ok := nameEnv[k]; !ok {
-			nameEnv[k] = v
+	if len(overlay) > 0 {
+		// fileNameEnv is memoized — copy before merging the overlay so the
+		// cache isn't mutated by a delegating file's second (overlay) pass.
+		merged := make(map[string]string, len(nameEnv)+len(overlay))
+		for k, v := range nameEnv {
+			merged[k] = v
 		}
+		for k, v := range overlay {
+			if _, ok := merged[k]; !ok {
+				merged[k] = v
+			}
+		}
+		nameEnv = merged
 	}
 	namePath := fa.fileNamePath()
 	out := make(map[string]rubyHostInfo)
@@ -251,78 +345,67 @@ func (fa *rubyFileAST) hostMethodsWith(overlay map[string]string) map[string]rub
 // `attr_writer` call in the file, resolving a `*CONST` splat against a same-file
 // `CONST = %i[…]` / `%w[…]` symbol-array literal.
 func (fa *rubyFileAST) attrNames() map[string]bool {
+	if fa.attrNamesCache != nil {
+		return fa.attrNamesCache
+	}
+	fa.scan()
 	consts := fa.symbolArrayConsts()
 	out := make(map[string]bool)
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "call" || n.Type() == "command" {
-			if mn := n.ChildByFieldName("method"); mn != nil {
-				switch mn.Content(fa.src) {
-				case "attr_reader", "attr_accessor", "attr_writer":
-					if args := n.ChildByFieldName("arguments"); args != nil {
-						for i := 0; i < int(args.NamedChildCount()); i++ {
-							c := args.NamedChild(i)
-							if c.Type() == "splat_argument" {
-								if cc := c.NamedChild(0); cc != nil && cc.Type() == "constant" {
-									for _, s := range consts[cc.Content(fa.src)] {
-										out[s] = true
-									}
-								}
-								continue
-							}
-							if s := rubySymbolNodeName(c, fa.src); s != "" {
-								out[s] = true
-							}
-						}
+	for _, n := range fa.attrCalls {
+		args := n.ChildByFieldName("arguments")
+		if args == nil {
+			continue
+		}
+		for i := 0; i < int(args.NamedChildCount()); i++ {
+			c := args.NamedChild(i)
+			if c.Type() == "splat_argument" {
+				if cc := c.NamedChild(0); cc != nil && cc.Type() == "constant" {
+					for _, s := range consts[cc.Content(fa.src)] {
+						out[s] = true
 					}
 				}
+				continue
+			}
+			if s := rubySymbolNodeName(c, fa.src); s != "" {
+				out[s] = true
 			}
 		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
 	}
-	walk(fa.root)
+	fa.attrNamesCache = out
 	return out
 }
 
 // symbolArrayConsts maps a same-file `CONST = %i[a b c]` (optionally `.freeze`d)
 // to its member names.
 func (fa *rubyFileAST) symbolArrayConsts() map[string][]string {
+	if fa.symConstsCache != nil {
+		return fa.symConstsCache
+	}
+	fa.scan()
 	out := make(map[string][]string)
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "assignment" {
-			left := n.ChildByFieldName("left")
-			right := n.ChildByFieldName("right")
-			if left != nil && right != nil && left.Type() == "constant" {
-				// Peel a trailing `.freeze`.
-				r := right
-				if r.Type() == "call" {
-					if mn := r.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "freeze" {
-						if rc := r.ChildByFieldName("receiver"); rc != nil {
-							r = rc
-						} else if r.NamedChildCount() > 0 {
-							r = r.NamedChild(0)
-						}
-					}
-				}
-				if r.Type() == "symbol_array" || r.Type() == "string_array" {
-					var names []string
-					for i := 0; i < int(r.NamedChildCount()); i++ {
-						if s := rubySymbolNodeName(r.NamedChild(i), fa.src); s != "" {
-							names = append(names, s)
-						}
-					}
-					out[left.Content(fa.src)] = names
+	for _, a := range fa.constAssigns {
+		// Peel a trailing `.freeze`.
+		r := a.rhs
+		if r.Type() == "call" {
+			if mn := r.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "freeze" {
+				if rc := r.ChildByFieldName("receiver"); rc != nil {
+					r = rc
+				} else if r.NamedChildCount() > 0 {
+					r = r.NamedChild(0)
 				}
 			}
 		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+		if r.Type() == "symbol_array" || r.Type() == "string_array" {
+			var names []string
+			for i := 0; i < int(r.NamedChildCount()); i++ {
+				if s := rubySymbolNodeName(r.NamedChild(i), fa.src); s != "" {
+					names = append(names, s)
+				}
+			}
+			out[a.name] = names
 		}
 	}
-	walk(fa.root)
+	fa.symConstsCache = out
 	return out
 }
 
@@ -331,38 +414,32 @@ func (fa *rubyFileAST) symbolArrayConsts() map[string][]string {
 // needed: the two-pass registry looks it up against every service file's
 // resolved host methods.
 func (fa *rubyFileAST) delegateHostNames() []string {
+	fa.scan()
 	var out []string
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "call" || n.Type() == "command" {
-			if mn := n.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "delegate" {
-				if args := n.ChildByFieldName("arguments"); args != nil {
-					hasTo := false
-					var names []string
-					for i := 0; i < int(args.NamedChildCount()); i++ {
-						c := args.NamedChild(i)
-						if c.Type() == "pair" {
-							if k := c.ChildByFieldName("key"); k != nil &&
-								strings.TrimSuffix(k.Content(fa.src), ":") == "to" {
-								hasTo = true
-							}
-							continue
-						}
-						if s := rubySymbolNodeName(c, fa.src); s != "" && hostishName(s) {
-							names = append(names, s)
-						}
-					}
-					if hasTo {
-						out = append(out, names...)
-					}
+	for _, n := range fa.delegateCalls {
+		args := n.ChildByFieldName("arguments")
+		if args == nil {
+			continue
+		}
+		hasTo := false
+		var names []string
+		for i := 0; i < int(args.NamedChildCount()); i++ {
+			c := args.NamedChild(i)
+			if c.Type() == "pair" {
+				if k := c.ChildByFieldName("key"); k != nil &&
+					strings.TrimSuffix(k.Content(fa.src), ":") == "to" {
+					hasTo = true
 				}
+				continue
+			}
+			if s := rubySymbolNodeName(c, fa.src); s != "" && hostishName(s) {
+				names = append(names, s)
 			}
 		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+		if hasTo {
+			out = append(out, names...)
 		}
 	}
-	walk(fa.root)
 	return out
 }
 
@@ -397,32 +474,21 @@ func rubySymbolNodeName(n *sitter.Node, src []byte) string {
 // A name assigned twice with different right-hand sides is dropped rather than
 // guessed — this map feeds route text, and a wrong path is a fabricated edge.
 func (fa *rubyFileAST) fileNamePath() map[string]string {
+	if fa.namePathCache != nil {
+		return fa.namePathCache
+	}
+	fa.scan()
 	uniq := make(map[string]*sitter.Node)
 	conflict := make(map[string]bool)
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "assignment" {
-			left := n.ChildByFieldName("left")
-			right := n.ChildByFieldName("right")
-			if left != nil && right != nil {
-				switch left.Type() {
-				case "identifier", "instance_variable":
-					name := strings.TrimPrefix(left.Content(fa.src), "@")
-					if prev, ok := uniq[name]; ok {
-						if prev.Content(fa.src) != right.Content(fa.src) {
-							conflict[name] = true
-						}
-					} else {
-						uniq[name] = right
-					}
-				}
+	for _, a := range fa.varAssigns {
+		if prev, ok := uniq[a.name]; ok {
+			if prev.Content(fa.src) != a.rhs.Content(fa.src) {
+				conflict[a.name] = true
 			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+		} else {
+			uniq[a.name] = a.rhs
 		}
 	}
-	walk(fa.root)
 
 	names := make([]string, 0, len(uniq))
 	for name := range uniq {
@@ -448,6 +514,7 @@ func (fa *rubyFileAST) fileNamePath() map[string]string {
 	for name := range conflict {
 		delete(namePath, name)
 	}
+	fa.namePathCache = namePath
 	return namePath
 }
 
@@ -538,35 +605,16 @@ func lastNamedChild(n *sitter.Node) *sitter.Node {
 // (transitively, same-file) assigned from. Keyed by bare name (no leading @) so
 // an attr_accessor reference resolves to its backing ivar's env.
 func (fa *rubyFileAST) fileNameEnv() map[string]string {
-	type asn struct {
-		name string
-		rhs  *sitter.Node
+	if fa.nameEnvCache != nil {
+		return fa.nameEnvCache
 	}
-	var assigns []asn
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "assignment" {
-			left := n.ChildByFieldName("left")
-			right := n.ChildByFieldName("right")
-			if left != nil && right != nil {
-				switch left.Type() {
-				case "identifier", "instance_variable":
-					assigns = append(assigns, asn{strings.TrimPrefix(left.Content(fa.src), "@"), right})
-				}
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
-	}
-	walk(fa.root)
-
+	fa.scan()
 	nameEnv := make(map[string]string)
 	// Fixpoint: direct ENV first, then propagate through references. Bounded to
 	// a few rounds — real config chains are 1–2 hops (@host→@base_url→method).
 	for round := 0; round < 4; round++ {
 		changedAny := false
-		for _, a := range assigns {
+		for _, a := range fa.varAssigns {
 			if _, done := nameEnv[a.name]; done {
 				continue
 			}
@@ -579,6 +627,7 @@ func (fa *rubyFileAST) fileNameEnv() map[string]string {
 			break
 		}
 	}
+	fa.nameEnvCache = nameEnv
 	return nameEnv
 }
 
@@ -808,22 +857,8 @@ func (fa *rubyFileAST) bareCallsTo(name string) []*sitter.Node {
 	if name == "" {
 		return nil
 	}
-	var out []*sitter.Node
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		switch n.Type() {
-		case "call", "command", "method_call":
-			mn := n.ChildByFieldName("method")
-			if mn != nil && mn.Content(fa.src) == name && n.ChildByFieldName("receiver") == nil {
-				out = append(out, n)
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
-		}
-	}
-	walk(fa.root)
-	return out
+	fa.scan()
+	return fa.bareCallsByName[name]
 }
 
 // ── small helpers ───────────────────────────────────────────────────────────

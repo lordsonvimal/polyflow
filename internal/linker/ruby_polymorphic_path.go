@@ -102,9 +102,12 @@ func ResolveRubyPolymorphicPathSites(nodes []graph.Node, serviceFiles map[string
 		if len(files) == 0 {
 			continue
 		}
-		reg := buildRubyHostRegistry(files)
-
+		// XM.21: parse once and feed the same ASTs to both the host registry
+		// build and this pass's own per-file lookups below — buildRubyHostRegistry
+		// used to re-parse+re-scan every file independently here.
 		fas := mapParallel(files, parseRubyFileAST)
+		reg := buildRubyHostRegistryFromASTs(fas)
+
 		pathOf := map[*rubyFileAST]string{}
 		byPath := map[string]*rubyFileAST{}
 		delegators := map[string][]*rubyFileAST{}
@@ -370,79 +373,67 @@ func (fa *rubyFileAST) sinkURLParam(line int, m *rubyMethodInfo) string {
 // its value. A constant assigned a non-string, or assigned more than once, is
 // omitted rather than guessed.
 func (fa *rubyFileAST) stringConsts() map[string]string {
+	if fa.stringConstsCache != nil {
+		return fa.stringConstsCache
+	}
+	fa.scan()
 	out := map[string]string{}
 	bad := map[string]bool{}
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "assignment" {
-			left := n.ChildByFieldName("left")
-			right := n.ChildByFieldName("right")
-			if left != nil && right != nil && left.Type() == "constant" {
-				name := left.Content(fa.src)
-				r := right
-				if r.Type() == "call" {
-					if mn := r.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "freeze" {
-						if rc := r.ChildByFieldName("receiver"); rc != nil {
-							r = rc
-						}
-					}
-				}
-				if s, ok := rubyPlainString(r, fa.src); ok && !bad[name] {
-					if _, dup := out[name]; dup {
-						delete(out, name)
-						bad[name] = true
-					} else {
-						out[name] = s
-					}
-				} else {
-					delete(out, name)
-					bad[name] = true
+	for _, a := range fa.constAssigns {
+		name := a.name
+		r := a.rhs
+		if r.Type() == "call" {
+			if mn := r.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "freeze" {
+				if rc := r.ChildByFieldName("receiver"); rc != nil {
+					r = rc
 				}
 			}
 		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+		if s, ok := rubyPlainString(r, fa.src); ok && !bad[name] {
+			if _, dup := out[name]; dup {
+				delete(out, name)
+				bad[name] = true
+			} else {
+				out[name] = s
+			}
+		} else {
+			delete(out, name)
+			bad[name] = true
 		}
 	}
-	walk(fa.root)
+	fa.stringConstsCache = out
 	return out
 }
 
 // delegatedNames returns every method name this file forwards with a bare
 // `delegate :a, :b, …, to: :target` (requires the `to:` pair).
 func (fa *rubyFileAST) delegatedNames() []string {
+	fa.scan()
 	var out []string
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n.Type() == "call" || n.Type() == "command" {
-			if mn := n.ChildByFieldName("method"); mn != nil && mn.Content(fa.src) == "delegate" {
-				if args := n.ChildByFieldName("arguments"); args != nil {
-					hasTo := false
-					var names []string
-					for i := 0; i < int(args.NamedChildCount()); i++ {
-						c := args.NamedChild(i)
-						if c.Type() == "pair" {
-							if k := c.ChildByFieldName("key"); k != nil &&
-								strings.TrimSuffix(k.Content(fa.src), ":") == "to" {
-								hasTo = true
-							}
-							continue
-						}
-						if s := rubySymbolNodeName(c, fa.src); s != "" {
-							names = append(names, s)
-						}
-					}
-					if hasTo {
-						out = append(out, names...)
-					}
+	for _, n := range fa.delegateCalls {
+		args := n.ChildByFieldName("arguments")
+		if args == nil {
+			continue
+		}
+		hasTo := false
+		var names []string
+		for i := 0; i < int(args.NamedChildCount()); i++ {
+			c := args.NamedChild(i)
+			if c.Type() == "pair" {
+				if k := c.ChildByFieldName("key"); k != nil &&
+					strings.TrimSuffix(k.Content(fa.src), ":") == "to" {
+					hasTo = true
 				}
+				continue
+			}
+			if s := rubySymbolNodeName(c, fa.src); s != "" {
+				names = append(names, s)
 			}
 		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			walk(n.NamedChild(i))
+		if hasTo {
+			out = append(out, names...)
 		}
 	}
-	walk(fa.root)
 	return out
 }
 
