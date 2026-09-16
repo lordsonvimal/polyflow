@@ -35,11 +35,27 @@ import (
 // resolution) for output nobody read: real cost measured on cedar's real
 // corpus at ~15.4s of the ~25.8s this pass took (js_mobx 4.60s, ruby_http_hosts
 // 4.52s, js_client_routes 4.36s, js_hoc 1.96s), 100% wasted.
+//
+// XM.26: schema_url_link_props/schema_url_link_sweep have the exact same
+// shape (their own dedicated per-service pipeline.Run loop earlier in
+// buildLinkPasses — link_passes.go's "schema_url_link_props" and
+// "schema_url_links" passes — run at the specific ordering slot relative to
+// js_local_urls that hub_schema_url_link.go's doc comment requires) but were
+// never added here, so they matched reg.Active(sf.deps) and ran a second,
+// fully-wasted time in this loop: schema_url_link_sweep emits only
+// res.Patches, which this loop doesn't even read, so that framework's second
+// run was pure waste with no partial effect; schema_url_link_props emits
+// mint nodes/edges that land here as no-op duplicates (svcOf gate below,
+// same-ID edge upsert) — also pure waste. Measured on cedar: this loop's
+// schema_url_link_props entry alone was 1.85s of PF_FACTPIPE_PROFILE's
+// per-framework breakdown.
 var dedicatedPassFrameworks = map[string]bool{
-	"js_hoc":           true,
-	"js_client_routes": true,
-	"js_mobx":          true,
-	"ruby_http_hosts":  true,
+	"js_hoc":                true,
+	"js_client_routes":      true,
+	"js_mobx":               true,
+	"ruby_http_hosts":       true,
+	"schema_url_link_props": true,
+	"schema_url_link_sweep": true,
 }
 
 func runFactpipeFrameworks(st *linkPipelineState) error {
