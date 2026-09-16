@@ -1,11 +1,7 @@
 package factpipe
 
 import (
-	"os"
-	"sync"
-
 	sitter "github.com/smacker/go-tree-sitter"
-	"golang.org/x/sync/singleflight"
 )
 
 // XM.14 (docs/factpipe-cross-framework-matching-plan.md): rdReadAndParseRuby
@@ -27,22 +23,19 @@ import (
 // freshness guarantee the old (path, size, mtime) key gave, without a
 // second cache to keep in sync.
 //
-// The Ruby cache below still needs its own (path, size, mtime) key: Ruby has
-// no equivalent shared-package cache to fold into, and rdReadAndParseRuby's
-// tree needs an explicit Close() a shared jsast-style cache doesn't have to
-// deal with (see rubyParseCache's doc comment below).
-type fileCacheKey struct {
-	size  int64
-	mtime int64
-}
-
-func statCacheKey(file string) (fileCacheKey, bool) {
-	fi, err := os.Stat(file)
-	if err != nil {
-		return fileCacheKey{}, false
-	}
-	return fileCacheKey{size: fi.Size(), mtime: fi.ModTime().UnixNano()}, true
-}
+// XM.19 (2026-09-16) did the same for Ruby: rdReadAndParseRuby (hub_rails_
+// devise.go) used to go through this file's own rubyParseCache/rubyParseSF,
+// independent of internal/linker's ruby_tree_cache.go — the same
+// duplication XM.17 fixed for JS, just not caught at the time because
+// internal/rubyast didn't exist yet either. rdReadAndParseRuby now calls
+// internal/rubyast.Parse directly, sharing internal/linker's cache.
+//
+// WarmParseTree stays here: internal/factpipe/pipeline.go (the shared
+// cross-framework tree-sitter matcher, XM.5) calls it directly and cannot
+// import internal/jsast/internal/rubyast's cache owners without pulling in
+// their Enable/DisableCache lifecycle, which pipeline.go doesn't manage —
+// it warms whatever *sitter.Node it's just parsed itself, independent of
+// which cache (if any) owns the tree.
 
 // WarmParseTree touches every node in root exactly once, single-threaded,
 // immediately after parsing and before a cached tree/root is ever handed to
@@ -71,80 +64,4 @@ func WarmParseTree(root *sitter.Node) {
 		}
 	}
 	walk(root)
-}
-
-// rubyParseCache memoizes rdReadAndParseRuby. Unlike the JS path, a Ruby
-// *sitter.Tree needs an explicit tree.Close() once nothing references its
-// root anymore (rdReadAndParseRuby's own release func) — this cache takes
-// over that ownership: a cached tree is never closed by its caller (they get
-// a no-op release), only by this cache itself, when a fresher parse replaces
-// a stale entry (the file changed on disk between two `serve` reindexes).
-type rubyParseEntry struct {
-	key  fileCacheKey
-	src  []byte
-	root *sitter.Node
-	tree *sitter.Tree
-	ok   bool
-}
-
-var (
-	rubyParseMu    sync.Mutex
-	rubyParseCache = map[string]*rubyParseEntry{}
-	// rubyParseSF (XM.5) dedupes concurrent first-touches of the same file.
-	// jsast.Parse (internal/jsast, XM.17) has no singleflight equivalent —
-	// two frameworks racing a cold JS file can both parse it once before
-	// either's result is cached, which is a bounded perf cost (loses the
-	// race, not correctness: JS's *sitter.Node has no Close to double-free).
-	// Ruby's rubyParseSF is load-bearing in a way that tolerance isn't: two
-	// frameworks racing on a cold cache would each parse+store
-	// independently, and the *second* store's "close the entry I'm
-	// replacing" line would tree.Close() the *first* parse's tree while the
-	// first framework might still be actively navigating the very Go *Node
-	// objects backed by that now-freed C tree — a use-after-close, not
-	// merely a lost update.
-	rubyParseSF singleflight.Group
-)
-
-func cachedParseRuby(file string, parse func(string) ([]byte, *sitter.Node, *sitter.Tree, bool)) (src []byte, root *sitter.Node, release func(), ok bool) {
-	key, statOK := statCacheKey(file)
-	if statOK {
-		rubyParseMu.Lock()
-		if e, found := rubyParseCache[file]; found && e.key == key {
-			rubyParseMu.Unlock()
-			return e.src, e.root, func() {}, e.ok
-		}
-		rubyParseMu.Unlock()
-	}
-
-	if !statOK {
-		// Couldn't stat (race, or the file vanished between the caller
-		// resolving this path and us reaching it) — don't cache or dedupe
-		// via singleflight: a shared tree handed to more than one caller
-		// here would hand out more than one caller-owned release(), and the
-		// first Close() would leave every other holder with a use-after-
-		// close. This path can never be validated as fresh later anyway, so
-		// each caller parses (and owns/closes) its own independent tree,
-		// exactly as rdReadAndParseRuby always did before this cache
-		// existed.
-		src, root, tree, ok := parse(file)
-		if tree != nil {
-			return src, root, func() { tree.Close() }, ok
-		}
-		return src, root, func() {}, ok
-	}
-
-	v, _, _ := rubyParseSF.Do(file, func() (any, error) {
-		src, root, tree, ok := parse(file)
-		WarmParseTree(root)
-		rubyParseMu.Lock()
-		if old, found := rubyParseCache[file]; found && old.tree != nil {
-			old.tree.Close()
-		}
-		e := &rubyParseEntry{key: key, src: src, root: root, tree: tree, ok: ok}
-		rubyParseCache[file] = e
-		rubyParseMu.Unlock()
-		return e, nil
-	})
-	e := v.(*rubyParseEntry)
-	return e.src, e.root, func() {}, e.ok
 }

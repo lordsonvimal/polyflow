@@ -1,18 +1,16 @@
 package factpipe
 
 import (
-	"context"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	rubysitter "github.com/smacker/go-tree-sitter/ruby"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/railsinflect"
+	"github.com/lordsonvimal/polyflow/internal/rubyast"
 )
 
 // hub_rails_devise.go is the "rails_devise" hub provider (see hub.go) — the
@@ -332,20 +330,11 @@ func rdSymbolList(n *sitter.Node, src []byte) []string {
 
 // rdReadAndParseRuby reads file off disk and parses it with the ruby
 // tree-sitter grammar. release must be called once done with root.
+//
+// XM.19 (docs/factpipe-cross-framework-matching-plan.md): delegates to
+// rubyast.Parse, the cache internal/linker's hand-written passes already
+// share, instead of a second, independent cache — every .rb file in the
+// link-pass phase now parses once, not once per cache.
 func rdReadAndParseRuby(file string) (src []byte, root *sitter.Node, release func(), ok bool) {
-	return cachedParseRuby(file, rdReadAndParseRubyUncached)
-}
-
-func rdReadAndParseRubyUncached(file string) (src []byte, root *sitter.Node, tree *sitter.Tree, ok bool) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil, nil, nil, false
-	}
-	p := sitter.NewParser()
-	p.SetLanguage(rubysitter.GetLanguage())
-	tree, err = p.ParseCtx(context.Background(), nil, data)
-	if err != nil || tree == nil {
-		return nil, nil, nil, false
-	}
-	return data, tree.RootNode(), tree, true
+	return rubyast.Parse(file)
 }
