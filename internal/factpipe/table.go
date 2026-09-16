@@ -51,6 +51,12 @@ type CompiledTable struct{ spec TableSpec }
 // Relation is the derived relation this table block produces.
 func (t CompiledTable) Relation() string { return t.spec.Relation }
 
+// Against is the base predicate an artifact-backed table block reads out of
+// the fact set to corroborate its leaves (collectKnown) — "" for a
+// declarative (rows:) block, which reads nothing (XM.2,
+// docs/factpipe-cross-framework-matching-plan.md's keep-set audit).
+func (t CompiledTable) Against() string { return t.spec.Against }
+
 // CompileTableSpecs validates already-decoded specs (the pipeline path).
 func CompileTableSpecs(specs []TableSpec) ([]CompiledTable, error) {
 	out := make([]CompiledTable, 0, len(specs))

@@ -410,12 +410,25 @@ func Run(fws []*Framework, files []ParsedFile, graphSoFar graph.Snapshot, stats 
 		st.Extract += sharedElapsed
 	}
 
+	// XM.2: index base once by predicate instead of linear-scanning it once
+	// per framework — turns O(frameworks x base) into O(base + frameworks x
+	// keep-set-size).
+	baseIndex := indexByPred(base)
+
 	var res Result
 	seenNode := map[string]bool{}
 	for _, fw := range fws {
 		fset := factpipe.NewFactSet()
-		for _, f := range base.All() {
-			fset.Add(f)
+		keep := frameworkKeepSet(fw)
+		preds := make([]string, 0, len(keep))
+		for p := range keep {
+			preds = append(preds, p)
+		}
+		sort.Strings(preds)
+		for _, p := range preds {
+			for _, f := range baseIndex[p] {
+				fset.Add(f)
+			}
 		}
 		t0 := time.Now()
 		if err := applyMatches(fw, matchesByFw[fw.Name], fset); err != nil {
@@ -700,6 +713,61 @@ func extractFramework(fw *Framework, files []ParsedFile, dst factpipe.FactSet, r
 		}
 	}
 	return nil
+}
+
+// indexByPred groups a FactSet's facts by predicate, once per Run call
+// (XM.2, docs/factpipe-cross-framework-matching-plan.md) — frameworkKeepSet's
+// filter then costs O(keep-set size) per framework to apply instead of a
+// fresh O(len(base)) linear scan each time, for the same base scanned
+// ~25-33 times regardless.
+func indexByPred(fs factpipe.FactSet) map[string][]factpipe.Fact {
+	idx := map[string][]factpipe.Fact{}
+	for _, f := range fs.All() {
+		idx[f.Pred] = append(idx[f.Pred], f)
+	}
+	return idx
+}
+
+// frameworkKeepSet is the audited (XM.2) set of base predicates a framework
+// can actually consume out of the copied base FactSet — NOT just
+// fw.Rules.BaseRelations() (the rules' own input). ApplyResolves/ApplyConfig/
+// ApplyTable each read pre-existing facts out of fset between the base copy
+// and factRelations, via the predicate named in the framework's own
+// resolve:/config:/table: block (CompiledResolve.From/CompiledConfig.From/
+// CompiledTable.Against — the latter only for an artifact-backed block;
+// Against() is "" for a declarative rows: block, which reads nothing).
+// ApplyDerive always reads exactly "node_meta" — CompileDeriveSpecs enforces
+// every derive: block's `from` is literally "node_meta", so no per-spec
+// accessor is needed. ApplyHub reads no fset facts at all (only
+// nodes/files/svcPath/links/schema, passed to it directly by Run, never
+// through fset) so it contributes nothing here — audited by reading
+// internal/factpipe/hub.go's ApplyHub, which never calls dst.All().
+//
+// A predicate missing here starves that Apply* stage silently (no error, no
+// panic — a relation the stage would have populated stays empty), the exact
+// failure mode this plan's own Risks section warns about; the regression
+// guard is TestFrameworkKeepSetCoversApplyStageReads plus cedar/orion 0/0
+// diff, not code review.
+func frameworkKeepSet(fw *Framework) map[string]bool {
+	keep := make(map[string]bool)
+	for _, rel := range fw.Rules.BaseRelations() {
+		keep[rel] = true
+	}
+	for _, r := range fw.Resolves {
+		keep[r.From()] = true
+	}
+	for _, c := range fw.Configs {
+		keep[c.From()] = true
+	}
+	for _, t := range fw.Tables {
+		if against := t.Against(); against != "" {
+			keep[against] = true
+		}
+	}
+	if len(fw.Derives) > 0 {
+		keep["node_meta"] = true
+	}
+	return keep
 }
 
 // factRelations groups a FactSet into the datalog base, one relation per
