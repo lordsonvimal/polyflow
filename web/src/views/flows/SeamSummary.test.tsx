@@ -15,6 +15,7 @@ function fakeFetch(routes: Record<string, unknown>) {
 
 describe("SeamSummary", () => {
   let container: HTMLElement;
+  let dispose: (() => void) | undefined;
 
   beforeEach(() => {
     scopeStore.reset();
@@ -22,7 +23,11 @@ describe("SeamSummary", () => {
     document.body.appendChild(container);
   });
 
-  afterEach(() => container.remove());
+  afterEach(() => {
+    dispose?.();
+    dispose = undefined;
+    container.remove();
+  });
 
   it("renders channel key, verification state, evidence sources and producer/consumer counts", async () => {
     (globalThis as any).fetch = fakeFetch({
@@ -38,7 +43,7 @@ describe("SeamSummary", () => {
         ],
       },
     });
-    render(() => <SeamSummary edgeId="e1" />, container);
+    dispose = render(() => <SeamSummary edgeId="e1" />, container);
 
     await vi.waitFor(() => {
       const el = container.querySelector('[data-testid="seam-summary"]') as HTMLElement;
@@ -60,7 +65,7 @@ describe("SeamSummary", () => {
         consumers: [{ node: { id: "b" }, chain: [] }],
       },
     });
-    render(() => <SeamSummary edgeId="e2" />, container);
+    dispose = render(() => <SeamSummary edgeId="e2" />, container);
 
     await vi.waitFor(() => {
       expect(container.querySelector('[data-testid="seam-summary-no-closure"]')).toBeTruthy();
@@ -71,7 +76,7 @@ describe("SeamSummary", () => {
     (globalThis as any).fetch = fakeFetch({
       "/api/seam/e3": { channel: "x", expanded: true, producers: [], consumers: [] },
     });
-    render(() => <SeamSummary edgeId="e3" />, container);
+    dispose = render(() => <SeamSummary edgeId="e3" />, container);
 
     const btn = await vi.waitFor(() => {
       const b = container.querySelector('[data-testid="seam-summary-isolate"]') as HTMLElement;

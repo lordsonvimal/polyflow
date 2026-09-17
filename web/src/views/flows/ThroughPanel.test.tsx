@@ -37,6 +37,7 @@ function body(truncated = false) {
 
 describe("ThroughPanel", () => {
   let container: HTMLElement;
+  let dispose: (() => void) | undefined;
 
   beforeEach(() => {
     scopeStore.reset();
@@ -45,11 +46,15 @@ describe("ThroughPanel", () => {
     document.body.appendChild(container);
   });
 
-  afterEach(() => container.remove());
+  afterEach(() => {
+    dispose?.();
+    dispose = undefined;
+    container.remove();
+  });
 
   it("renders one row per entrypoint group, with hop count/services/verification badge", async () => {
     (globalThis as any).fetch = fakeFetch({ "/api/flows/through/target?limit=20": body() });
-    render(() => <ThroughPanel nodeId="target" />, container);
+    dispose = render(() => <ThroughPanel nodeId="target" />, container);
 
     const rows = await vi.waitFor(() => {
       const r = container.querySelectorAll('[data-testid="through-panel-row"]');
@@ -70,7 +75,7 @@ describe("ThroughPanel", () => {
 
   it("hover pre-highlights the group's member ids and clears on mouse-leave, without a layout call", async () => {
     (globalThis as any).fetch = fakeFetch({ "/api/flows/through/target?limit=20": body() });
-    render(() => <ThroughPanel nodeId="target" />, container);
+    dispose = render(() => <ThroughPanel nodeId="target" />, container);
 
     const row = await vi.waitFor(() => {
       const r = container.querySelector('[data-testid="through-panel-row"]');
@@ -87,7 +92,7 @@ describe("ThroughPanel", () => {
 
   it("clicking a row isolates that entrypoint's flow as a lane", async () => {
     (globalThis as any).fetch = fakeFetch({ "/api/flows/through/target?limit=20": body() });
-    render(() => <ThroughPanel nodeId="target" />, container);
+    dispose = render(() => <ThroughPanel nodeId="target" />, container);
 
     const row = await vi.waitFor(() => {
       const r = container.querySelector('[data-testid="through-panel-row"]');
@@ -104,7 +109,7 @@ describe("ThroughPanel", () => {
 
   it("renders the honest empty state when no flows pass through the node", async () => {
     (globalThis as any).fetch = fakeFetch({ "/api/flows/through/lonely?limit=20": { flows: [], truncated: false } });
-    render(() => <ThroughPanel nodeId="lonely" />, container);
+    dispose = render(() => <ThroughPanel nodeId="lonely" />, container);
 
     await vi.waitFor(() => expect(container.querySelector('[data-testid="through-panel-empty"]')).toBeTruthy());
   });

@@ -7,15 +7,22 @@ import { scopeStore } from "../stores/scope";
 
 describe("FlowsView tab bar", () => {
   let container: HTMLElement;
+  let dispose: (() => void) | undefined;
 
   beforeEach(() => {
-    (globalThis as any).fetch = vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ active: [], sessions: [] }) } as Response));
+    (globalThis as any).fetch = vi.fn((url: string) => {
+      const body = url.includes("/api/flows/entrypoints")
+        ? { entrypoints: [], skipped: [] }
+        : { active: [], sessions: [] };
+      return Promise.resolve({ ok: true, json: async () => body } as Response);
+    });
     runtimeViewStore.setTab("catalog");
     container = document.createElement("div");
     document.body.appendChild(container);
   });
 
   afterEach(() => {
+    dispose?.();
     captureStore.stopPolling();
     captureStore.reset();
     runtimeViewStore.setTab("catalog");
@@ -25,7 +32,7 @@ describe("FlowsView tab bar", () => {
   });
 
   it("defaults to Catalog and switches to the Runtime tab on click", async () => {
-    render(() => <FlowsView />, container);
+    dispose = render(() => <FlowsView />, container);
 
     expect(container.querySelector('[data-testid="flows-tab-catalog"]')?.className).toContain("bg-neutral-800");
     expect(container.querySelector('[data-testid="runtime-tab"]')).toBeFalsy();

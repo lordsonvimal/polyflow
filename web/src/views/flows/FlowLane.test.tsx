@@ -27,6 +27,7 @@ function throughBody(truncated: boolean) {
 
 describe("FlowLane", () => {
   let container: HTMLElement;
+  let dispose: (() => void) | undefined;
 
   beforeEach(() => {
     scopeStore.reset();
@@ -34,12 +35,16 @@ describe("FlowLane", () => {
     document.body.appendChild(container);
   });
 
-  afterEach(() => container.remove());
+  afterEach(() => {
+    dispose?.();
+    dispose = undefined;
+    container.remove();
+  });
 
   it("renders the entrypoint → terminus chip from the resolved chain", async () => {
     (globalThis as any).fetch = fakeFetch({ "/api/flows/through/leaf?limit=20": throughBody(false) });
     scopeStore.push({ kind: "flow", flow: { kind: "through", nodeId: "leaf", entrypointId: "root" } });
-    render(() => <FlowLane />, container);
+    dispose = render(() => <FlowLane />, container);
 
     await vi.waitFor(() => expect(container.textContent).toContain("POST /orders → publish"));
   });
@@ -51,7 +56,7 @@ describe("FlowLane", () => {
     });
     (globalThis as any).fetch = fetchMock;
     scopeStore.push({ kind: "flow", flow: { kind: "through", nodeId: "leaf", entrypointId: "root" } });
-    render(() => <FlowLane />, container);
+    dispose = render(() => <FlowLane />, container);
 
     const cap = await vi.waitFor(() => {
       const el = container.querySelector('[data-testid="flow-truncation-cap"]');
@@ -71,7 +76,7 @@ describe("FlowLane", () => {
     (globalThis as any).fetch = fakeFetch({ "/api/flows/through/leaf?limit=20": throughBody(false) });
     scopeStore.push({ kind: "service", service: "rails-svc" });
     scopeStore.push({ kind: "flow", flow: { kind: "through", nodeId: "leaf", entrypointId: "root" } });
-    render(() => <FlowLane />, container);
+    dispose = render(() => <FlowLane />, container);
 
     await vi.waitFor(() => expect(container.textContent).toContain("Flow:"));
 
@@ -86,7 +91,7 @@ describe("FlowLane", () => {
       "/api/flows/paths?from=a&to=b&k=20": { paths: [], reachable: false },
     });
     scopeStore.push({ kind: "flow", flow: { kind: "path", from: "a", to: "b", index: 0 } });
-    render(() => <FlowLane />, container);
+    dispose = render(() => <FlowLane />, container);
 
     await vi.waitFor(() => expect(container.textContent).toContain("No static path"));
   });

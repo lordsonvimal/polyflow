@@ -25,7 +25,13 @@ describe("DetailHost", () => {
     dispose = render(() => <DetailHost />, container);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Several tests trigger a child resource fetch (ThroughPanel,
+    // SeamSummary, GroupSummary) and assert synchronously without waiting
+    // for it to settle. Flush the pending mock-fetch promise chain before
+    // disposing, so it can't reject after the owner is torn down and surface
+    // as an unhandled rejection misattributed to whatever test runs next.
+    await new Promise((r) => setTimeout(r, 0));
     dispose?.();
     container.remove();
     scopeStore.reset();
