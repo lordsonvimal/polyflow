@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createResource, createSignal, onMount } from "solid-js";
 import { toolCallsStore, type ToolCallFilters, type ToolCallRow } from "../../stores/toolcalls";
+import { settingsStore, MIN_RETENTION, MAX_RETENTION } from "../../stores/settings";
 import { apiFetch } from "../../lib/apiFetch";
 import { downloadText } from "../../lib/export";
 import { notificationsStore } from "../../stores/notifications";
@@ -257,6 +258,65 @@ function ToolCallRowView(props: { row: ToolCallRow; q: string; expanded: boolean
   );
 }
 
+// RetentionControl edits the tool_call_retention cap (internal/ops/store.go's
+// MinRetention..MaxRetention) via settingsStore's GET/PUT /api/settings —
+// the backend has enforced this cap since it shipped, but no UI ever
+// exposed it, so it always sat at its (undocumented, code-only) default.
+function RetentionControl() {
+  const [draft, setDraft] = createSignal("");
+  const [fieldError, setFieldError] = createSignal("");
+  const [dirty, setDirty] = createSignal(false);
+
+  onMount(() => settingsStore.load());
+
+  const current = createMemo(() => settingsStore.toolCallRetention());
+  const displayed = createMemo(() => (dirty() ? draft() : String(current() ?? "")));
+
+  function onInput(v: string): void {
+    setDraft(v);
+    setDirty(true);
+    setFieldError("");
+  }
+
+  async function commit(): Promise<void> {
+    if (!dirty()) return;
+    const n = Number(draft());
+    if (!Number.isInteger(n) || n < MIN_RETENTION || n > MAX_RETENTION) {
+      setFieldError(`must be an integer between ${MIN_RETENTION} and ${MAX_RETENTION}`);
+      return;
+    }
+    const err = await settingsStore.setRetention(n);
+    if (err) {
+      setFieldError(err);
+      return;
+    }
+    setDirty(false);
+  }
+
+  return (
+    <span class="flex items-center gap-1 text-neutral-400" title="max tool calls retained in the log before the oldest are evicted">
+      <span>Retain</span>
+      <input
+        data-testid="toolcalls-retention-input"
+        class="w-16 bg-neutral-800 rounded px-1 py-0.5 text-neutral-200"
+        value={displayed()}
+        disabled={settingsStore.loading() || settingsStore.saving()}
+        onInput={(e) => onInput(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+      />
+      <span>calls</span>
+      <Show when={fieldError()}>
+        <span data-testid="toolcalls-retention-error" class="text-red-400">
+          {fieldError()}
+        </span>
+      </Show>
+    </span>
+  );
+}
+
 export default function ToolCallsTab() {
   const [expandedId, setExpandedId] = createSignal<number | null>(null);
   const [confirmingClear, setConfirmingClear] = createSignal(false);
@@ -374,6 +434,7 @@ export default function ToolCallsTab() {
         <span data-testid="toolcalls-count-summary" class="text-neutral-500 tabular-nums">
           {countSummary()}
         </span>
+        <RetentionControl />
         <button data-testid="toolcalls-download" class="text-neutral-400 hover:text-white ml-auto" onClick={toolCallsStore.downloadFiltered}>
           Download
         </button>
