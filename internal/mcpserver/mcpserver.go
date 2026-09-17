@@ -537,7 +537,7 @@ func resolveNode(ctx context.Context, store Store, idx *graph.AdjacencyIndex, qu
 // Within-service ambiguity (candidates all in one service — a genuinely
 // different symbol, not a shared contract name) is left untouched; only
 // cross-service duplication is auto-merged.
-func resolveAllServiceRoots(ctx context.Context, store Store, idx *graph.AdjacencyIndex, query, targetType, targetService string, root *graph.Node, candidates []graph.TargetCandidate) []*graph.Node {
+func resolveAllServiceRoots(ctx context.Context, store Store, idx *graph.AdjacencyIndex, searcher *semantic.Searcher, query, targetType, targetService string, root *graph.Node, candidates []graph.TargetCandidate) []*graph.Node {
 	if targetService != "" || len(candidates) <= 1 {
 		return []*graph.Node{root}
 	}
@@ -548,7 +548,7 @@ func resolveAllServiceRoots(ctx context.Context, store Store, idx *graph.Adjacen
 			continue
 		}
 		seenService[c.Service] = true
-		r, _, _, err := resolveNode(ctx, store, idx, query, c.Service, targetType)
+		r, _, _, err := resolveFlowTarget(ctx, store, idx, searcher, query, c.Service, targetType)
 		if err == nil && r != nil {
 			roots = append(roots, r)
 		}
@@ -700,7 +700,6 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, fmt.Errorf("provide exactly one of target or files")
 	}
 	store, idx, searcher := s.snapshot()
-	_ = searcher
 
 	// Files mode: rank the files related to the seed file(s).
 	if len(in.Files) > 0 {
@@ -737,7 +736,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		return nil, nil, err
 	}
 
-	root, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveFlowTarget(ctx, store, idx, searcher, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -806,7 +805,6 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 
 	store, idx, searcher := s.snapshot()
-	_ = searcher
 	unresolved, err := store.ListUnresolvedRefs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -827,11 +825,11 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 		return jsonResult(out)
 	}
 
-	root, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Target, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveFlowTarget(ctx, store, idx, searcher, in.Target, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
-	roots := resolveAllServiceRoots(ctx, store, idx, in.Target, in.TargetType, in.TargetService, root, candidates)
+	roots := resolveAllServiceRoots(ctx, store, idx, searcher, in.Target, in.TargetType, in.TargetService, root, candidates)
 	opts := impact.Options{
 		Depth:          depth,
 		Service:        in.Service,
@@ -912,8 +910,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 	}
 
 	store, idx, searcher := s.snapshot()
-	_ = searcher
-	root, candidates, exactMatch, err := resolveNode(ctx, store, idx, in.Root, in.TargetService, in.TargetType)
+	root, candidates, exactMatch, err := resolveFlowTarget(ctx, store, idx, searcher, in.Root, in.TargetService, in.TargetType)
 	if err != nil {
 		return nil, nil, err
 	}
