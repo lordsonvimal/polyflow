@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS edges (
 
 CREATE INDEX IF NOT EXISTS idx_nodes_service    ON nodes(service);
 CREATE INDEX IF NOT EXISTS idx_nodes_type       ON nodes(type);
-CREATE INDEX IF NOT EXISTS idx_nodes_file       ON nodes(file);
 CREATE INDEX IF NOT EXISTS idx_edges_from       ON edges("from");
 CREATE INDEX IF NOT EXISTS idx_edges_to         ON edges("to");
 CREATE INDEX IF NOT EXISTS idx_edges_type       ON edges(type);
@@ -346,15 +345,16 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 			}
 		}
 	}
-	// idx_edges_method/idx_edges_path were dropped from Schema: no query
-	// filters on either column (only idx_edges_confidence is used, by
-	// ListEdgesByConfidence), so they cost write-time btree maintenance and
-	// file size for zero read benefit. DROP INDEX IF EXISTS is a no-op on a
-	// DB that never had them (including every fresh CREATE, since Schema no
-	// longer creates them).
-	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_edges_method; DROP INDEX IF EXISTS idx_edges_path;`); err != nil {
+	// idx_edges_method/idx_edges_path/idx_nodes_file were dropped from Schema:
+	// no query filters on any of the three columns (only idx_edges_confidence,
+	// idx_nodes_type, and idx_nodes_service are used — the last two by
+	// ListNodesByType), so they cost write-time btree maintenance and file
+	// size for zero read benefit. DROP INDEX IF EXISTS is a no-op on a DB that
+	// never had them (including every fresh CREATE, since Schema no longer
+	// creates them).
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_edges_method; DROP INDEX IF EXISTS idx_edges_path; DROP INDEX IF EXISTS idx_nodes_file;`); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("drop unused edge indexes: %w", err)
+		return nil, fmt.Errorf("drop unused indexes: %w", err)
 	}
 	if err := migrateUnresolvedRefsWithoutRowID(db); err != nil {
 		db.Close()
