@@ -1037,6 +1037,19 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		} else {
 			_ = s.PruneUnresolvedHistory(ctx, 50)
 		}
+		// A --full rebuild's tmp DB churns pages during the build (FTS5
+		// delete+insert per re-upserted node, ON CONFLICT overwrites) before
+		// ever being renamed into place, so VACUUM here reclaims that
+		// build-time free space in the one case (a full rebuild) big enough to
+		// be worth its cost — VACUUM rewrites the whole file and briefly needs
+		// ~2x its size on disk, so it's not run on every incremental index.
+		if opts.Full {
+			if _, vErr := s.DB().ExecContext(ctx, `VACUUM;`); vErr != nil {
+				fmt.Fprintf(logw, "  Warning: vacuum: %v\n", vErr)
+			} else {
+				clk.mark("vacuum")
+			}
+		}
 		s.Close()
 	} else {
 		fmt.Fprintf(logw, "  Warning: open graph for stats: %v\n", err)
