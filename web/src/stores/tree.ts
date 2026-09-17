@@ -120,6 +120,11 @@ export interface ServiceEntry {
   unresolved?: UnresolvedRef[];
   loading: boolean;
   error?: string;
+  // Set alongside `error` — lets loadService back off from re-issuing a
+  // request that just failed instead of refiring on every reveal() of a
+  // node whose service can't currently be loaded (e.g. removed from the
+  // workspace).
+  errorAt?: number;
 }
 
 // One flattened, virtualization-ready tree row.
@@ -222,10 +227,18 @@ async function fetchUnresolved(service: string): Promise<UnresolvedRef[]> {
   return out;
 }
 
+// How long loadService backs off from re-issuing a request after it just
+// failed, so a hot path like reveal() (called on every selection change)
+// doesn't refire a doomed request every time. Short enough that a real
+// transient failure (server restart, brief network blip) heals on the next
+// interaction rather than sticking around for the rest of the session.
+const LOAD_ERROR_BACKOFF_MS = 15000;
+
 async function loadService(service: string, force = false): Promise<void> {
   const existing = entryFor(service);
   if (!force && (existing.tree || existing.loading)) return;
-  patchEntry(service, { loading: true, error: undefined });
+  if (!force && existing.error && Date.now() - (existing.errorAt ?? 0) < LOAD_ERROR_BACKOFF_MS) return;
+  patchEntry(service, { loading: true, error: undefined, errorAt: undefined });
   try {
     const [tree, unresolved] = await Promise.all([
       apiFetchJSON<ApiTreeResult>(`/api/tree?service=${encodeURIComponent(service)}`),
@@ -233,7 +246,7 @@ async function loadService(service: string, force = false): Promise<void> {
     ]);
     patchEntry(service, { tree, index: buildIndex(service, tree.tree), unresolved, loading: false });
   } catch (err) {
-    patchEntry(service, { loading: false, error: err instanceof Error ? err.message : String(err) });
+    patchEntry(service, { loading: false, error: err instanceof Error ? err.message : String(err), errorAt: Date.now() });
   }
 }
 
@@ -300,9 +313,9 @@ async function reveal(nodeId: string): Promise<void> {
   // contract engine's "unresolved"/"unresolved:<svc>" node (no per-file
   // location) fail this, and treating their first segment as a service
   // name sends a doomed /api/tree + /api/unresolved request for a service
-  // that doesn't exist — and, since loadService's re-entry guard only
-  // blocks while a request is in flight (not after it fails), every
-  // subsequent reveal() of that same id refires the same failing request.
+  // that doesn't exist. This is still a real request for a node whose
+  // service was later removed from the workspace — loadService's own
+  // LOAD_ERROR_BACKOFF_MS covers that case by backing off after a failure.
   if (nodeId.split(":").length < 5) return;
   const service = serviceOfNodeId(nodeId);
   if (!service) return;
