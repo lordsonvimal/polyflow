@@ -14,8 +14,23 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Schema is the SQLite DDL for the polyflow graph database.
+// TargetPageSize is the page size new graph DBs are created with, and the
+// size migratePageSize rebuilds older DBs to. Must match the literal in
+// Schema's `PRAGMA page_size` line below.
+//
+// The default 4096 badly fits the embeddings table: its rows average ~1.4KB
+// (mostly the fixed-size vector BLOB), so only 2 fit per 4096-byte page,
+// stranding ~28% of every page — not fragmentation VACUUM can fix, just a
+// row-size/page-size mismatch. At 16384 the same rows pack ~11/page, cutting
+// that table's waste from ~26% to ~1-3% (measured on a real 307MB graph.db).
+const TargetPageSize = 16384
+
+// Schema is the SQLite DDL for the polyflow graph database. PRAGMA page_size
+// must precede PRAGMA journal_mode=WAL: SQLite silently ignores page_size
+// changes once a database is in WAL mode, so on a brand-new (never-WAL) file
+// this only takes effect if it runs first.
 const Schema = `
+PRAGMA page_size=16384;
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
