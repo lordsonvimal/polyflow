@@ -42,6 +42,9 @@ func runFlows(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 && flowsSession != "" {
 		return fmt.Errorf("flows: provide either a file argument or --session, not both")
 	}
+	if err := validateFormat(flowsFormat, "json", "text"); err != nil {
+		return err
+	}
 
 	var spans []trace_ingest.Span
 	var err error

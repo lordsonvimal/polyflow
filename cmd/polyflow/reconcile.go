@@ -43,6 +43,9 @@ func init() {
 }
 
 func runReconcile(cmd *cobra.Command, args []string) error {
+	if err := validateFormat(reconcileFormat, "json", "text"); err != nil {
+		return err
+	}
 	store, err := openStore()
 	if err != nil {
 		return err

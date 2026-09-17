@@ -30,6 +30,9 @@ func init() {
 }
 
 func runExplain(cmd *cobra.Command, args []string) error {
+	if err := validateFormat(explainFormat, "json", "text"); err != nil {
+		return err
+	}
 	store, err := openStore()
 	if err != nil {
 		return err

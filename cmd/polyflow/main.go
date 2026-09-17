@@ -55,6 +55,18 @@ import (
 	yieldpkg "github.com/lordsonvimal/polyflow/internal/yield"
 )
 
+// validateFormat rejects an unrecognized --format value instead of letting a
+// typo silently fall through to a command's text-output default — every
+// format-taking command should call this rather than switching on == "json".
+func validateFormat(format string, allowed ...string) error {
+	for _, a := range allowed {
+		if format == a {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown format: %s (use: %s)", format, strings.Join(allowed, ", "))
+}
+
 func main() {
 	err := rootCmd.Execute()
 	opsFinalize(err)
@@ -68,6 +80,13 @@ var rootCmd = &cobra.Command{
 	Use:     meta.Name,
 	Short:   meta.Description,
 	Version: meta.Version,
+	// Every subcommand's RunE error is printed once, by main() below. Without
+	// these, cobra additionally prints "Error: <msg>" itself and dumps the
+	// full flag/usage block to stderr on every runtime failure (missing
+	// index, bad node ID, ...), not just flag-parsing mistakes — burying the
+	// actual error under noise and printing it twice.
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
 // fleetFlag picks which fleet's bridge.db (GR.3) to stitch into query
@@ -1861,8 +1880,8 @@ func runTrace(cmd *cobra.Command, args []string) error {
 	if traceDirection != "forward" && traceDirection != "backward" && traceDirection != "both" {
 		return fmt.Errorf("unknown direction: %s (use: forward, backward, both)", traceDirection)
 	}
-	if traceFormat != "json" && traceFormat != "text" && traceFormat != "chain" {
-		return fmt.Errorf("unknown format: %s (use: json, text, chain)", traceFormat)
+	if err := validateFormat(traceFormat, "json", "text", "chain"); err != nil {
+		return err
 	}
 
 	store, err := openStore()
@@ -2064,6 +2083,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	if impactDiff {
 		return runImpactDiff()
 	}
+	if err := validateFormat(impactFormat, "json", "text"); err != nil {
+		return err
+	}
 
 	store, err := openStore()
 	if err != nil {
@@ -2195,6 +2217,9 @@ var deadcodeCmd = &cobra.Command{
 }
 
 func runDeadcode(cmd *cobra.Command, args []string) error {
+	if err := validateFormat(deadcodeFormat, "json", "text"); err != nil {
+		return err
+	}
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -2400,6 +2425,9 @@ func printImpactText(out *impact.Result) error {
 // reindexes incrementally (the diff's line numbers must match the graph),
 // maps git diff hunks to nodes, and reports the union blast radius.
 func runImpactDiff() error {
+	if err := validateFormat(impactFormat, "json", "text", "github-comment"); err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	cfg, err := workspace.Load(meta.ConfigFile)
