@@ -177,18 +177,7 @@ func (w *BatchWriter) FlushEdges(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("marshal edge %s sources: %w", e.ID, err)
 			}
-			confidence := e.Confidence
-			if confidence == "" {
-				confidence = e.Meta["confidence"]
-			}
-			method := e.Method
-			if method == "" {
-				method = e.Meta["method"]
-			}
-			path := e.Path
-			if path == "" {
-				path = e.Meta["path"]
-			}
+			confidence, method, path := edgeColumns(e)
 			if _, err = upsert.ExecContext(ctx,
 				e.ID, e.From, e.To, string(e.Type), e.Label, metaJSON,
 				confidence, method, path, sourcesJSON, e.VerificationState, e.VerifiedGranularity); err != nil {

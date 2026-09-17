@@ -369,6 +369,11 @@ func NewBuildStore(dsn string) (*SQLiteStore, error) {
 	return s, nil
 }
 
+// UpsertNode writes a single node. It does not participate in ftsJournal (see
+// SQLiteStore.ftsJournal) — it always deletes-then-inserts into nodes_fts via
+// upsertFTS, unlike BatchWriter.FlushNodes' journaled fast path. Fine for its
+// current callers (single-row/test use), but a caller adding this to a hot
+// bulk path on a build store should use BatchWriter instead.
 func (s *SQLiteStore) UpsertNode(ctx context.Context, n *Node) error {
 	metaJSON, err := marshalMeta(n.Meta)
 	if err != nil {
@@ -404,6 +409,28 @@ func (s *SQLiteStore) upsertFTS(ctx context.Context, n *Node) error {
 	return nil
 }
 
+// edgeColumns resolves the confidence/method/path values to persist for an
+// edge, falling back to the equivalent Meta key when the dedicated field is
+// unset. UpsertEdge and BatchWriter.FlushEdges must derive these identically —
+// they once diverged (the batch path's INSERT dropped the columns entirely,
+// silently losing every batch-indexed edge's confidence level), so both call
+// this instead of keeping their own copy.
+func edgeColumns(e *Edge) (confidence, method, path string) {
+	confidence = e.Confidence
+	if confidence == "" {
+		confidence = e.Meta["confidence"]
+	}
+	method = e.Method
+	if method == "" {
+		method = e.Meta["method"]
+	}
+	path = e.Path
+	if path == "" {
+		path = e.Meta["path"]
+	}
+	return confidence, method, path
+}
+
 func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
 	metaJSON, err := marshalMeta(e.Meta)
 	if err != nil {
@@ -413,18 +440,7 @@ func (s *SQLiteStore) UpsertEdge(ctx context.Context, e *Edge) error {
 	if err != nil {
 		return fmt.Errorf("marshal edge sources: %w", err)
 	}
-	confidence := e.Confidence
-	if confidence == "" {
-		confidence = e.Meta["confidence"]
-	}
-	method := e.Method
-	if method == "" {
-		method = e.Meta["method"]
-	}
-	path := e.Path
-	if path == "" {
-		path = e.Meta["path"]
-	}
+	confidence, method, path := edgeColumns(e)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO edges (id, "from", "to", type, label, meta, confidence, method, path, sources_json, verification_state, verified_granularity)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
