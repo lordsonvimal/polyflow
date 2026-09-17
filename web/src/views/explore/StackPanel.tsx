@@ -171,6 +171,10 @@ export default function StackPanel() {
 
   const totals = createMemo(() => computeTotals(treeStore.services()));
   const channelSummary = createMemo(() => {
+    // Reading crossGraph() rethrows its error (so an <ErrorBoundary> up the
+    // tree could catch it) — there isn't one here, so this has to check
+    // .error first or the rethrow surfaces as an unhandled rejection.
+    if (crossGraph.error) return [];
     const g = crossGraph();
     if (!g) return [];
     return crossServiceChannelCounts(g.nodes, g.edges);

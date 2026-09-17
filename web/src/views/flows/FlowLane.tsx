@@ -5,7 +5,7 @@ import { createResource, createMemo, createSignal, createEffect, onMount, onClea
 // @ts-ignore — no bundled types for cytoscape
 import cytoscape from "cytoscape";
 
-import { scopeStore, Scope } from "../../stores/scope";
+import { scopeStore } from "../../stores/scope";
 import { resolveFlow, computeFlowLaneLayout, FlowResolution, SEAM_CHANNEL_PREFIX } from "../canvas/scopes/flow";
 import { wireCytoscape, handleIntent, Intent } from "../../interaction/gestures";
 import { selectionStore } from "../../stores/selection";
@@ -133,7 +133,15 @@ function toElements(res: FlowResolution): any[] {
 }
 
 export default function FlowLane() {
-  const scope = createMemo(() => scopeStore.stack().at(-1) as Extract<Scope, { kind: "flow" }> | undefined);
+  // A cast here instead of a runtime check would let a transient
+  // non-"flow" top-of-stack (e.g. this component briefly still mounted the
+  // tick a pop() lands on a "service" scope, outside its normal <Show
+  // when={scope().kind === "flow"}> gate in CanvasHost) slip an
+  // undefined `flow` into the resource below and crash resolveFlow.
+  const scope = createMemo(() => {
+    const top = scopeStore.stack().at(-1);
+    return top?.kind === "flow" ? top : undefined;
+  });
   const [throughLimit, setThroughLimit] = createSignal(20);
 
   // Reset the depth override whenever the flow ref itself changes (not on a

@@ -10,6 +10,11 @@ import { scopeStore } from "../../stores/scope";
 
 export default function SeamSummary(props: { edgeId: string }) {
   const [resolution] = createResource(() => props.edgeId, (id) => fetchSeam(id));
+  // Reading resolution() rethrows its error (so an <ErrorBoundary> up the
+  // tree could catch it) — there isn't one here, so every read must be
+  // guarded by !resolution.error or the rethrow surfaces as an unhandled
+  // rejection instead of the "Failed to load seam." message below.
+  const safeResolution = () => (resolution.error ? undefined : resolution());
 
   function isolate() {
     scopeStore.push({ kind: "flow", flow: { kind: "seam", edgeId: props.edgeId } });
@@ -23,7 +28,7 @@ export default function SeamSummary(props: { edgeId: string }) {
       <Show when={resolution.error}>
         <div class="text-xs text-neutral-400">Failed to load seam.</div>
       </Show>
-      <Show when={resolution()}>
+      <Show when={safeResolution()}>
         {(seam) => (
           <div class="text-xs text-neutral-300 space-y-1">
             <div class="text-neutral-200 truncate" title={seam().channel}>

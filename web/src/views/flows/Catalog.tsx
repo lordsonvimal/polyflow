@@ -112,8 +112,13 @@ export default function Catalog() {
   const [sortKey, setSortKey] = createSignal<SortKey>("service");
   const [showSkippedDetail, setShowSkippedDetail] = createSignal(false);
 
-  const kinds = createMemo(() => [...new Set((resolution()?.items ?? []).map((i) => i.kind))].sort());
-  const rows = createMemo(() => filterAndSort(resolution()?.items ?? [], query(), kindFilter(), sortKey()));
+  // Reading resolution() rethrows its error (so an <ErrorBoundary> up the
+  // tree could catch it) — there isn't one here, so every read must be
+  // guarded by !resolution.error or the rethrow surfaces as an unhandled
+  // rejection instead of the "Failed to load entrypoints." message below.
+  const safeResolution = () => (resolution.error ? undefined : resolution());
+  const kinds = createMemo(() => [...new Set((safeResolution()?.items ?? []).map((i) => i.kind))].sort());
+  const rows = createMemo(() => filterAndSort(safeResolution()?.items ?? [], query(), kindFilter(), sortKey()));
 
   let scrollerRef: HTMLDivElement | undefined;
   const [scrollTop, setScrollTop] = createSignal(0);
@@ -128,7 +133,7 @@ export default function Catalog() {
   const win = createMemo(() => computeWindow(scrollTop(), viewportHeight(), ROW_HEIGHT, rows().length));
   const visibleRows = createMemo(() => rows().slice(win().start, win().end));
 
-  const totalSkipped = createMemo(() => (resolution()?.skipped ?? []).reduce((n, s) => n + s.count, 0));
+  const totalSkipped = createMemo(() => (safeResolution()?.skipped ?? []).reduce((n, s) => n + s.count, 0));
 
   function open(item: EntrypointItem) {
     scopeStore.push({ kind: "flow", flow: { kind: "through", nodeId: item.nodeId, entrypointId: item.nodeId } });
@@ -186,7 +191,11 @@ export default function Catalog() {
         <div class="p-4 text-neutral-400">Loading entrypoints…</div>
       </Show>
 
-      <Show when={!resolution.loading && rows().length === 0}>
+      <Show when={resolution.error}>
+        <div class="p-4 text-neutral-400">Failed to load entrypoints.</div>
+      </Show>
+
+      <Show when={!resolution.loading && !resolution.error && rows().length === 0}>
         <div class="p-4 text-neutral-400" data-testid="catalog-empty">
           No entrypoints match.
         </div>
@@ -225,7 +234,7 @@ export default function Catalog() {
           </button>
           <Show when={showSkippedDetail()}>
             <ul class="mt-1" data-testid="catalog-skipped-detail">
-              <For each={resolution()?.skipped ?? []}>
+              <For each={safeResolution()?.skipped ?? []}>
                 {(s) => <li>{s.count} {s.type}</li>}
               </For>
             </ul>

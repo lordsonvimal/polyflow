@@ -71,7 +71,13 @@ export default function ThroughPanel(props: { nodeId: string }) {
     },
   );
 
-  const groups = createMemo(() => (resolution() ? groupByEntrypoint(resolution()!) : []));
+  // Reading resolution() rethrows its error (so an <ErrorBoundary> up the
+  // tree could catch it) — there isn't one here, so every read must be
+  // guarded by !resolution.error or the rethrow surfaces as an unhandled
+  // rejection instead of the "Failed to load flows through here." message
+  // below.
+  const safeResolution = () => (resolution.error ? undefined : resolution());
+  const groups = createMemo(() => (safeResolution() ? groupByEntrypoint(safeResolution()!) : []));
 
   function memberIds(group: ThroughGroup): string[] {
     const ids = new Set<string>();
@@ -125,7 +131,7 @@ export default function ThroughPanel(props: { nodeId: string }) {
           }}
         </For>
       </ul>
-      <Show when={resolution()?.truncated}>
+      <Show when={safeResolution()?.truncated}>
         <div class="text-[10px] text-neutral-500 mt-1">more entrypoints exist past the fetch limit</div>
       </Show>
     </div>

@@ -54,8 +54,14 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
     (ids) => resolveGroup({ kind: "group", nodeIds: ids }),
   );
 
-  const nodes = createMemo(() => data()?.nodes ?? []);
-  const edges = createMemo(() => data()?.edges ?? []);
+  // Reading a createResource accessor rethrows its error (so an
+  // <ErrorBoundary> up the tree could catch it) — there isn't one here, so
+  // every read of data() must be guarded by !data.error or the rethrow
+  // surfaces as an unhandled rejection instead of the "Failed to load
+  // group." message below.
+  const safeData = createMemo(() => (data.error ? undefined : data()));
+  const nodes = createMemo(() => safeData()?.nodes ?? []);
+  const edges = createMemo(() => safeData()?.edges ?? []);
   const showMatrix = createMemo(() => nodes().length > 0 && nodes().length <= MATRIX_MAX_NODES);
 
   return (
@@ -66,7 +72,7 @@ export default function GroupSummary(props: { nodeIds: string[] }) {
       <Show when={data.error}>
         <div class="text-xs text-neutral-400">Failed to load group.</div>
       </Show>
-      <Show when={data()}>
+      <Show when={safeData()}>
         <div class="text-xs text-neutral-300 space-y-2">
           <div class="text-neutral-200">
             {nodes().length} node{nodes().length === 1 ? "" : "s"} · {edges().length} edge{edges().length === 1 ? "" : "s"}
