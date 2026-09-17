@@ -393,7 +393,11 @@ func matchProducer(
 		edgeConfidence = capConfidence(edgeConfidence, prod.Meta["confidence_ceiling"])
 
 		for _, hit := range eligible {
-			edgeMeta := map[string]string{"confidence": edgeConfidence}
+			// edgeConfidence goes on the edge's dedicated Confidence field
+			// below, not into edgeMeta — nothing reads it back from Meta, and
+			// duplicating it here would just double its storage in every
+			// contract-engine edge's meta JSON blob for no reader.
+			edgeMeta := map[string]string{}
 			for k, v := range matchMeta {
 				edgeMeta[k] = v
 			}

@@ -223,7 +223,6 @@ func TestAMQPExchangeOnlyTier_StampsPartial(t *testing.T) {
 	require.Len(t, edges, 1, "exactly one edge — no earlier tier may also fire")
 	assert.Equal(t, "b:channel:container_events/container.#", edges[0].To)
 	assert.Equal(t, graph.ConfidencePartial, edges[0].Confidence)
-	assert.Equal(t, graph.ConfidencePartial, edges[0].Meta["confidence"])
 }
 
 // J.1 negative: exchange_only must not join two concrete, differing routing keys
