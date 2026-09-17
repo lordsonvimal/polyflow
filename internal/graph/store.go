@@ -1,10 +1,13 @@
 package graph
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -50,8 +53,6 @@ CREATE INDEX IF NOT EXISTS idx_edges_from       ON edges("from");
 CREATE INDEX IF NOT EXISTS idx_edges_to         ON edges("to");
 CREATE INDEX IF NOT EXISTS idx_edges_type       ON edges(type);
 CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence);
-CREATE INDEX IF NOT EXISTS idx_edges_method     ON edges(method);
-CREATE INDEX IF NOT EXISTS idx_edges_path       ON edges(path);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, label, file, service, qualified);
 
@@ -83,6 +84,9 @@ CREATE TABLE IF NOT EXISTS file_hashes (
 
 -- References the indexer saw but could not resolve to a node: the graph's
 -- blind-spot ledger, reported by "polyflow status".
+-- WITHOUT ROWID: the 5-column PK is the natural clustering key and a rowid
+-- table would otherwise store the row twice — once by rowid, once again in
+-- the PK's autoindex (measured: the autoindex was larger than the table).
 CREATE TABLE IF NOT EXISTS unresolved_refs (
 	service TEXT NOT NULL,
 	file    TEXT NOT NULL,
@@ -91,7 +95,7 @@ CREATE TABLE IF NOT EXISTS unresolved_refs (
 	kind    TEXT NOT NULL,
 	targets TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (service, file, line, name, kind)
-);
+) WITHOUT ROWID;
 
 -- Whole-service semantic (go/packages) results, keyed by a fingerprint of
 -- all the service's file hashes.
@@ -342,7 +346,65 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 			}
 		}
 	}
+	// idx_edges_method/idx_edges_path were dropped from Schema: no query
+	// filters on either column (only idx_edges_confidence is used, by
+	// ListEdgesByConfidence), so they cost write-time btree maintenance and
+	// file size for zero read benefit. DROP INDEX IF EXISTS is a no-op on a
+	// DB that never had them (including every fresh CREATE, since Schema no
+	// longer creates them).
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_edges_method; DROP INDEX IF EXISTS idx_edges_path;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("drop unused edge indexes: %w", err)
+	}
+	if err := migrateUnresolvedRefsWithoutRowID(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &SQLiteStore{db: db}, nil
+}
+
+// migrateUnresolvedRefsWithoutRowID rebuilds unresolved_refs as WITHOUT ROWID
+// for DBs created before that was added to Schema (see the schema comment on
+// unresolved_refs for why). SQLite has no ALTER TABLE for this, so an
+// existing rowid table is rebuilt: copy rows into a WITHOUT ROWID table under
+// a temp name, drop the old table, rename. A no-op once migrated.
+func migrateUnresolvedRefsWithoutRowID(db *sql.DB) error {
+	var createSQL string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='unresolved_refs'`).Scan(&createSQL)
+	if err == sql.ErrNoRows {
+		return nil // Schema hasn't run yet in this codepath (shouldn't happen)
+	}
+	if err != nil {
+		return fmt.Errorf("check unresolved_refs schema: %w", err)
+	}
+	if strings.Contains(strings.ToUpper(createSQL), "WITHOUT ROWID") {
+		return nil // already migrated (or created fresh by current Schema)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin unresolved_refs migration: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, stmt := range []string{
+		`CREATE TABLE unresolved_refs_migrating (
+			service TEXT NOT NULL,
+			file    TEXT NOT NULL,
+			line    INTEGER NOT NULL,
+			name    TEXT NOT NULL,
+			kind    TEXT NOT NULL,
+			targets TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (service, file, line, name, kind)
+		) WITHOUT ROWID`,
+		`INSERT INTO unresolved_refs_migrating (service, file, line, name, kind, targets)
+			SELECT service, file, line, name, kind, targets FROM unresolved_refs`,
+		`DROP TABLE unresolved_refs`,
+		`ALTER TABLE unresolved_refs_migrating RENAME TO unresolved_refs`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate unresolved_refs to WITHOUT ROWID: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // isDuplicateColumn reports whether err is a SQLite "duplicate column name" error.
@@ -760,8 +822,55 @@ func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error
 	return out, rows.Err()
 }
 
+// gzipText compresses a JSON string for storage in a file_hashes blob column.
+// Plain JSON compresses 3-4x, and these columns are write-once-read-whole
+// cache blobs (never queried), so there's no cost to paying the codec on
+// every access.
+func gzipText(s string) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte(s)); err != nil {
+		return nil, fmt.Errorf("gzip write: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return nil, fmt.Errorf("gzip close: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// gunzipText decompresses a file_hashes blob column. Rows written before
+// compression was added hold plain JSON (no gzip magic header), so those are
+// passed through unchanged rather than requiring a migration.
+func gunzipText(b []byte) (string, error) {
+	if len(b) < 2 || b[0] != 0x1f || b[1] != 0x8b {
+		return string(b), nil
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return "", fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gr.Close()
+	out, err := io.ReadAll(gr)
+	if err != nil {
+		return "", fmt.Errorf("gzip read: %w", err)
+	}
+	return string(out), nil
+}
+
 func (s *SQLiteStore) UpsertFileHash(ctx context.Context, fh *FileHash) error {
-	_, err := s.db.ExecContext(ctx, `
+	nodesGz, err := gzipText(fh.NodesJSON)
+	if err != nil {
+		return fmt.Errorf("compress nodes_json %s: %w", fh.FilePath, err)
+	}
+	edgesGz, err := gzipText(fh.EdgesJSON)
+	if err != nil {
+		return fmt.Errorf("compress edges_json %s: %w", fh.FilePath, err)
+	}
+	unresolvedGz, err := gzipText(orEmptyList(fh.UnresolvedJSON))
+	if err != nil {
+		return fmt.Errorf("compress unresolved_json %s: %w", fh.FilePath, err)
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO file_hashes (file_path, service, content_hash, indexed_at, nodes_json, edges_json, unresolved_json, errored)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(file_path) DO UPDATE SET
@@ -769,7 +878,7 @@ func (s *SQLiteStore) UpsertFileHash(ctx context.Context, fh *FileHash) error {
 			indexed_at=excluded.indexed_at, nodes_json=excluded.nodes_json,
 			edges_json=excluded.edges_json, unresolved_json=excluded.unresolved_json,
 			errored=excluded.errored`,
-		fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, orEmptyList(fh.UnresolvedJSON), boolToInt(fh.Errored))
+		fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, nodesGz, edgesGz, unresolvedGz, boolToInt(fh.Errored))
 	if err != nil {
 		return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
 	}
@@ -797,8 +906,20 @@ func (s *SQLiteStore) UpsertFileHashes(ctx context.Context, fhs []*FileHash) err
 		}
 		defer stmt.Close()
 		for _, fh := range fhs {
+			nodesGz, err := gzipText(fh.NodesJSON)
+			if err != nil {
+				return fmt.Errorf("compress nodes_json %s: %w", fh.FilePath, err)
+			}
+			edgesGz, err := gzipText(fh.EdgesJSON)
+			if err != nil {
+				return fmt.Errorf("compress edges_json %s: %w", fh.FilePath, err)
+			}
+			unresolvedGz, err := gzipText(orEmptyList(fh.UnresolvedJSON))
+			if err != nil {
+				return fmt.Errorf("compress unresolved_json %s: %w", fh.FilePath, err)
+			}
 			if _, err := stmt.ExecContext(ctx,
-				fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, fh.NodesJSON, fh.EdgesJSON, orEmptyList(fh.UnresolvedJSON), boolToInt(fh.Errored)); err != nil {
+				fh.FilePath, fh.Service, fh.ContentHash, fh.IndexedAt, nodesGz, edgesGz, unresolvedGz, boolToInt(fh.Errored)); err != nil {
 				return fmt.Errorf("upsert file hash %s: %w", fh.FilePath, err)
 			}
 		}
@@ -818,8 +939,18 @@ func (s *SQLiteStore) ListFileHashes(ctx context.Context) (map[string]*FileHash,
 	for rows.Next() {
 		var fh FileHash
 		var errored int
-		if err := rows.Scan(&fh.FilePath, &fh.Service, &fh.ContentHash, &fh.IndexedAt, &fh.NodesJSON, &fh.EdgesJSON, &fh.UnresolvedJSON, &errored); err != nil {
+		var nodesGz, edgesGz, unresolvedGz []byte
+		if err := rows.Scan(&fh.FilePath, &fh.Service, &fh.ContentHash, &fh.IndexedAt, &nodesGz, &edgesGz, &unresolvedGz, &errored); err != nil {
 			return nil, fmt.Errorf("scan file hash row: %w", err)
+		}
+		if fh.NodesJSON, err = gunzipText(nodesGz); err != nil {
+			return nil, fmt.Errorf("decompress nodes_json %s: %w", fh.FilePath, err)
+		}
+		if fh.EdgesJSON, err = gunzipText(edgesGz); err != nil {
+			return nil, fmt.Errorf("decompress edges_json %s: %w", fh.FilePath, err)
+		}
+		if fh.UnresolvedJSON, err = gunzipText(unresolvedGz); err != nil {
+			return nil, fmt.Errorf("decompress unresolved_json %s: %w", fh.FilePath, err)
 		}
 		fh.Errored = errored != 0
 		out[fh.FilePath] = &fh
