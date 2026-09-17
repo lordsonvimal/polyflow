@@ -15,7 +15,7 @@ import (
 )
 
 // TargetPageSize is the page size new graph DBs are created with, and the
-// size migratePageSize rebuilds older DBs to. Must match the literal in
+// size migratePageSizeIfNeeded rebuilds older DBs to. Must match the literal in
 // Schema's `PRAGMA page_size` line below.
 //
 // The default 4096 badly fits the embeddings table: its rows average ~1.4KB
@@ -375,6 +375,15 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		db.Close()
 		return nil, err
 	}
+	// Runs last: it's the heaviest of these migrations (a full VACUUM
+	// rewrite), so let the lighter schema fixes above land first. A no-op
+	// (single PRAGMA read) on every DB already at TargetPageSize, which
+	// includes every freshly created one — Schema's own `PRAGMA page_size`
+	// already set that on the file before this call.
+	if err := migratePageSizeIfNeeded(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -420,6 +429,35 @@ func migrateUnresolvedRefsWithoutRowID(db *sql.DB) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// migratePageSizeIfNeeded rebuilds db at TargetPageSize if it's still on an
+// older page size. A DB created before TargetPageSize was raised to 16384
+// (see the doc comment on TargetPageSize for why) needs this: SQLite only
+// applies a page_size change on the next VACUUM, and refuses the change
+// outright while in WAL mode (silently, no error) — so journal_mode must drop
+// to DELETE first and switch back to WAL after. This fully rewrites the file,
+// same cost as a page-size-preserving VACUUM plus the journal-mode round
+// trip.
+func migratePageSizeIfNeeded(db *sql.DB) error {
+	var pageSize int
+	if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+		return fmt.Errorf("read page_size: %w", err)
+	}
+	if pageSize >= TargetPageSize {
+		return nil
+	}
+	for _, stmt := range []string{
+		`PRAGMA journal_mode=DELETE`,
+		fmt.Sprintf(`PRAGMA page_size=%d`, TargetPageSize),
+		`VACUUM`,
+		`PRAGMA journal_mode=WAL`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate page size (%s): %w", stmt, err)
+		}
+	}
+	return nil
 }
 
 // isDuplicateColumn reports whether err is a SQLite "duplicate column name" error.
@@ -837,11 +875,21 @@ func (s *SQLiteStore) ListParseErrors(ctx context.Context) ([]*ParseError, error
 	return out, rows.Err()
 }
 
+// gzipMinSize is the minimum input length worth paying gzip's ~20-byte
+// header/footer overhead for. Most files have no unresolved refs, so
+// unresolved_json is usually the literal "[]" — compressing that would grow
+// the column, not shrink it. Below this size, store the raw bytes; gunzipText
+// already distinguishes compressed from plain data via the magic-byte check.
+const gzipMinSize = 64
+
 // gzipText compresses a JSON string for storage in a file_hashes blob column.
 // Plain JSON compresses 3-4x, and these columns are write-once-read-whole
 // cache blobs (never queried), so there's no cost to paying the codec on
 // every access.
 func gzipText(s string) ([]byte, error) {
+	if len(s) < gzipMinSize {
+		return []byte(s), nil
+	}
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	if _, err := gw.Write([]byte(s)); err != nil {

@@ -1050,23 +1050,12 @@ func Run(ctx context.Context, opts Options) (*Stats, error) {
 		// nothing to clean up. So check first: if reclaimable space is a
 		// negligible fraction of the file, the rewrite would spend its full
 		// cost to reclaim almost nothing, and skipping is strictly better.
+		// graph.NewSQLiteStore already migrated s (opened above) to
+		// graph.TargetPageSize if it was still on an older page size, so
+		// nothing further to do for that here — just the ordinary
+		// waste-driven VACUUM.
 		if opts.Full {
-			// A DB created before graph.TargetPageSize was raised to 16384
-			// needs its own rebuild-to-new-page-size pass — a plain VACUUM
-			// doesn't change page size. This one-time migration already
-			// rewrites the whole file, so it fully subsumes the ordinary
-			// waste-driven VACUUM below; only fall through to that check once
-			// the page size is current.
-			pageSize, psErr := currentPageSize(ctx, s.DB())
-			if psErr != nil {
-				fmt.Fprintf(logw, "  Warning: check page size: %v\n", psErr)
-			} else if pageSize < graph.TargetPageSize {
-				if mErr := migratePageSize(ctx, s.DB(), graph.TargetPageSize); mErr != nil {
-					fmt.Fprintf(logw, "  Warning: migrate page size: %v\n", mErr)
-				} else {
-					clk.mark("page-size migration")
-				}
-			} else if needsVacuum, vErr := dbNeedsVacuum(ctx, s.DB()); vErr != nil {
+			if needsVacuum, vErr := dbNeedsVacuum(ctx, s.DB()); vErr != nil {
 				fmt.Fprintf(logw, "  Warning: check vacuum need: %v\n", vErr)
 			} else if needsVacuum {
 				if _, vErr := s.DB().ExecContext(ctx, `VACUUM;`); vErr != nil {
@@ -1113,34 +1102,6 @@ func dbNeedsVacuum(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, nil
 	}
 	return float64(unusedBytes.Int64)/float64(totalBytes.Int64) >= vacuumWasteThreshold, nil
-}
-
-// currentPageSize reads db's page size.
-func currentPageSize(ctx context.Context, db *sql.DB) (int, error) {
-	var pageSize int
-	if err := db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
-		return 0, fmt.Errorf("read page_size: %w", err)
-	}
-	return pageSize, nil
-}
-
-// migratePageSize rebuilds db at targetPageSize. SQLite only applies a
-// page_size change on the next VACUUM, and refuses the change outright while
-// in WAL mode (silently, no error) — so journal_mode must drop to DELETE
-// first and switch back to WAL after. This fully rewrites the file, same
-// cost as a page-size-preserving VACUUM plus the journal-mode round trip.
-func migratePageSize(ctx context.Context, db *sql.DB, targetPageSize int) error {
-	for _, stmt := range []string{
-		`PRAGMA journal_mode=DELETE`,
-		fmt.Sprintf(`PRAGMA page_size=%d`, targetPageSize),
-		`VACUUM`,
-		`PRAGMA journal_mode=WAL`,
-	} {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("migrate page size (%s): %w", stmt, err)
-		}
-	}
-	return nil
 }
 
 // patternsFingerprint hashes the contents of every pattern YAML (built-in
