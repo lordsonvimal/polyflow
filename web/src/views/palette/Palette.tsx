@@ -8,6 +8,7 @@ import { treeStore } from "../../stores/tree";
 import { parseQuery, parseNodeCard, toggleKindChip, KIND_FILTERS, type ParsedQuery } from "./query";
 import { formatLocation, displayLabel } from "../../lib/location";
 import { linkExplorerStore } from "../../stores/linkExplorer";
+import { apiFetchJSON, ApiError } from "../../lib/apiFetch";
 
 const DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 8;
@@ -49,15 +50,7 @@ async function fetchSymbols(parsed: ParsedQuery, fleetScope: boolean): Promise<S
   if (parsed.chips.service) params.set("service", parsed.chips.service);
   else if (fleetScope) params.set("service", "*");
   try {
-    const r = await fetch(`/api/graph/search?${params}`);
-    if (!r.ok) {
-      // A 400 here is almost always an unknown `service:` chip — the server
-      // now rejects it (and lists the valid members) instead of silently
-      // returning workspace-local results.
-      const err = await r.json().catch(() => null);
-      return { entries: [], note: "", advisory: err?.error ?? "" };
-    }
-    const data = await r.json();
+    const data = await apiFetchJSON<any>(`/api/graph/search?${params}`);
     const note: string = Array.isArray(data) ? "" : (data.semantic ?? "");
     const advisory: string = Array.isArray(data) ? "" : (data.note ?? "");
     let out: SymbolEntry[];
@@ -101,7 +94,18 @@ async function fetchSymbols(parsed: ParsedQuery, fleetScope: boolean): Promise<S
     }
     if (parsed.chips.service) out = out.filter(s => s.service === parsed.chips.service);
     return { entries: out.slice(0, RESULT_LIMIT), note, advisory };
-  } catch {
+  } catch (err) {
+    // A 400 here is almost always an unknown `service:` chip — the server
+    // rejects it (and lists the valid members) instead of silently
+    // returning workspace-local results.
+    if (err instanceof ApiError && err.status === 400) {
+      try {
+        const body = JSON.parse(err.body);
+        return { entries: [], note: "", advisory: body?.error ?? "" };
+      } catch {
+        // fall through to the generic empty result below
+      }
+    }
     return { entries: [], note: "", advisory: "" };
   }
 }
@@ -110,9 +114,7 @@ async function fetchFiles(parsed: ParsedQuery): Promise<FileEntry[]> {
   const params = new URLSearchParams({ limit: String(RESULT_LIMIT) });
   if (parsed.text) params.set("q", parsed.text);
   try {
-    const r = await fetch(`/api/files?${params}`);
-    if (!r.ok) return [];
-    const data = await r.json();
+    const data = await apiFetchJSON<any>(`/api/files?${params}`);
     let out: FileEntry[] = (data.files ?? []).map((f: any) => ({ file: f.file, service: f.service }));
     if (parsed.chips.service) out = out.filter(f => f.service === parsed.chips.service);
     return out.slice(0, RESULT_LIMIT);
