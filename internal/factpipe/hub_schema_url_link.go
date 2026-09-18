@@ -15,6 +15,8 @@ import (
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/schemaurl"
+	"github.com/lordsonvimal/polyflow/internal/valuegraph"
+	"github.com/lordsonvimal/polyflow/internal/valuegraphfacts"
 )
 
 // hub_schema_url_link.go registers TWO hub providers — "schema_url_link_props"
@@ -91,7 +93,7 @@ func schemaURLLinkSweepHub(nodes []graph.Node, files []string, svcPath string, _
 	if svc == "" || resolver == nil {
 		return nil
 	}
-	out := sulSchemaPatchFacts(nodes, svc, resolver)
+	out := sulSchemaPatchFacts(nodes, files, svc, resolver)
 	out = append(out, sulSchemaEntityPinFacts(svc, resolver)...)
 	return out
 }
@@ -200,12 +202,29 @@ func sulServiceOf(nodes []graph.Node) string {
 // sulSchemaPatchFacts sweeps every JS/TS http_client the matcher left
 // dynamic, resolving its URL expression through resolver — ported from
 // internal/linker/schema_url_link.go's ResolveSchemaURLs.
-func sulSchemaPatchFacts(nodes []graph.Node, svc string, resolver *schemaurl.Resolver) []Fact {
+//
+// Tier RC.5 (MS.3 kind 2, docs/js-declarative-composition-cluster-plan.md)
+// added the second pass below: a site resolver.ResolveURLExpr ledgers as
+// schema_entity_unresolved because its receiver is `this.props.<Prop>` (the
+// entity lives on whichever component rendered <Prop> as a JSX attribute,
+// not in this function's own local pins) gets ONE more try — a
+// cross-component join, batched into a single valuegraphfacts.Resolve call
+// per hub invocation (RC.3's perf caution: never call it once per site).
+func sulSchemaPatchFacts(nodes []graph.Node, files []string, svc string, resolver *schemaurl.Resolver) []Fact {
 	if resolver == nil {
 		return nil
 	}
 	var out []Fact
 	fileCache := map[string]*sulParsedFile{}
+
+	type propsCandidate struct {
+		node *graph.Node
+		raw  string
+		key  string
+	}
+	var propsCands []propsCandidate
+	var propsSites []valuegraphfacts.Site
+
 	for i := range nodes {
 		n := &nodes[i]
 		raw, ok := sulSchemaURLCandidate(n)
@@ -226,28 +245,145 @@ func sulSchemaPatchFacts(nodes []graph.Node, svc string, resolver *schemaurl.Res
 		}
 		fn := jsast.EnclosingFunction(expr)
 		hit, ok, kind := resolver.ResolveURLExpr(expr, fn, jf.src, svc)
+		if ok {
+			out = append(out, sulSchemaPatchFact(n, svc, hit))
+			continue
+		}
+		if kind == ledgerSchemaEntityUnresolvedCompat {
+			if _, key, propNode, isPropsRead := resolver.PropsKeyRead(expr, fn, jf.src); isPropsRead {
+				propsCands = append(propsCands, propsCandidate{node: n, raw: raw, key: key})
+				propsSites = append(propsSites, valuegraphfacts.Site{File: n.File, Expr: propNode})
+				continue
+			}
+		}
 		if kind != "" {
 			out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, raw, kind))
 			continue
 		}
-		if !ok {
-			continue
+	}
+
+	if len(propsSites) > 0 {
+		cross := valuegraphfacts.BuildComponentIndex(nodes, svc)
+		spec := jpxValuegraphSpec()
+		jsFiles := sulJSFileList(files)
+		results := valuegraphfacts.Resolve(spec, jsFiles, cross, propsSites,
+			valuegraph.Options{MaxUnionWidth: jpxVGPropMaxStrings, MaxFiles: len(jsFiles) + 8})
+		for i, c := range propsCands {
+			n := c.node
+			entity, ambiguous := spkProducerEntity(results[i].Value, resolver, svc)
+			if entity == "" {
+				kind := "schema_entity_unresolved"
+				if ambiguous {
+					kind = "schema_entity_ambiguous"
+				}
+				out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, kind))
+				continue
+			}
+			e, found := resolver.Lookup(svc, entity, c.key)
+			if !found {
+				out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, "schema_entity_unresolved"))
+				continue
+			}
+			verb := strings.ToUpper(n.Meta["method"])
+			if verb == "" {
+				out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, "schema_entity_unresolved"))
+				continue
+			}
+			out = append(out, sulSchemaPatchFact(n, svc, schemaurl.Hit{
+				Path: e.Path, Entity: entity, Key: c.key, RawURL: e.Raw, File: resolver.TableFile(svc),
+			}))
 		}
-		verb := strings.ToUpper(n.Meta["method"])
-		if verb == "" {
-			out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, raw, "schema_entity_unresolved"))
-			continue
-		}
-		out = append(out, Fact{
-			Pred: sulSchemaPatchPred,
-			Args: []Atom{
-				Node(n.ID), Str(verb + " " + hit.Path), Str(hit.Path), Str("schema_asset"),
-				Str(hit.File), Str(hit.Entity), Str(hit.Key), Str(hit.RawURL),
-			},
-			Origin: Origin{Kind: OriginPrimitive, File: n.File, Line: n.Line, Pattern: sulSchemaPatchPred},
-		})
 	}
 	return out
+}
+
+// ledgerSchemaEntityUnresolvedCompat is the exact ledger-kind string
+// resolver.ResolveURLExpr uses for an unpinned receiver — re-declared here
+// (rather than exporting schemaurl's unexported constant) because it is
+// also the ONE kind RC.5's cross-component fallback below may still turn
+// into a resolved patch; every other ledger kind ResolveURLExpr returns
+// (schema_entity_ambiguous, schema_key_ambiguous) means something a
+// cross-component join cannot help with (the ambiguity is already at the
+// SAME-function level), so those still ledger immediately, unchanged.
+const ledgerSchemaEntityUnresolvedCompat = "schema_entity_unresolved"
+
+func sulSchemaPatchFact(n *graph.Node, svc string, hit schemaurl.Hit) Fact {
+	verb := strings.ToUpper(n.Meta["method"])
+	return Fact{
+		Pred: sulSchemaPatchPred,
+		Args: []Atom{
+			Node(n.ID), Str(verb + " " + hit.Path), Str(hit.Path), Str("schema_asset"),
+			Str(hit.File), Str(hit.Entity), Str(hit.Key), Str(hit.RawURL),
+		},
+		Origin: Origin{Kind: OriginPrimitive, File: n.File, Line: n.Line, Pattern: sulSchemaPatchPred},
+	}
+}
+
+// sulJSFileList filters files to the same non-test JS/TS, cwd-relativized,
+// deduplicated, sorted set every crossing-aware hub in this cluster needs
+// for a valuegraphfacts.Resolve call — the same filter jpxHub
+// (hub_js_prop_crossings.go) builds inline; kept as a small duplicate here
+// rather than threading a shared helper through both hubs' unrelated
+// registration lifecycles, same precedent as sulParsedFile/jsHostFile.
+func sulJSFileList(files []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, abs := range files {
+		if !jsast.IsJSFile(abs) {
+			continue
+		}
+		rel := sulRelativize(abs)
+		if seen[rel] || jsast.IsTestFile(rel) {
+			continue
+		}
+		seen[rel] = true
+		out = append(out, rel)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// spkProducerEntity (Tier RC.5) collects the entity every "jsx_attribute"
+// producer alternative in v pins to, via resolver.PinEntity re-located by
+// the crossing's own (file, line, text) provenance — the same re-locate
+// idiom jpxSchemaProducerFallback (hub_js_prop_crossings.go) uses, applied
+// to entity-pinning instead of URL-resolution. Zero producers or producers
+// that pin to more than one distinct entity both report entity=="";
+// ambiguous distinguishes "found nothing" from "found conflicting answers".
+func spkProducerEntity(v valuegraph.Value, resolver *schemaurl.Resolver, svc string) (entity string, ambiguous bool) {
+	seen := map[string]bool{}
+	sawConflict := false
+	for _, alt := range v.Alternatives() {
+		if alt.Src.Reason != jpxCrossPropURL {
+			continue
+		}
+		jf := sulParseHostFile(alt.Src.File)
+		if jf == nil {
+			continue
+		}
+		expr := jf.exprAtLine(alt.Src.Line, alt.Src.Text)
+		if expr == nil {
+			continue
+		}
+		fn := jsast.EnclosingFunction(expr)
+		e, amb := resolver.PinEntity(svc, expr, fn, jf.src)
+		if amb {
+			sawConflict = true
+			continue
+		}
+		if e != "" {
+			seen[e] = true
+		}
+	}
+	switch len(seen) {
+	case 0:
+		return "", sawConflict
+	case 1:
+		for e := range seen {
+			return e, false
+		}
+	}
+	return "", true
 }
 
 func sulSchemaURLCandidate(n *graph.Node) (raw string, ok bool) {

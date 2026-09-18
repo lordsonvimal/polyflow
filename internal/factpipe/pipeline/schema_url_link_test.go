@@ -531,3 +531,148 @@ func TestSUL_SchemaSweep_ResolvesWorkedExample(t *testing.T) {
 		t.Errorf("patch label = %q", p.Label)
 	}
 }
+
+// TestSUL_SchemaSweep_CrossComponentPropResolves is Tier RC.5 (MS.3 kind 2,
+// docs/js-declarative-composition-cluster-plan.md): CreateModal reads
+// `this.props.schema.reorder` directly — no local pin, no URL-only prop to
+// cross the way kind 1 (TestSUL_SchemaSweep_ResolvesWorkedExample's sibling
+// in js_prop_crossings_test.go) does. Parent renders
+// `<CreateModal schema={resources.widget} />`; resolver.ResolveURLExpr alone
+// cannot pin "schema" to an entity (it is a prop name, not a local
+// binding), so the sweep hub's new cross-component fallback must resolve it
+// through the same "jsx_attribute" crossing rule UB.2 uses, then pin the
+// PRODUCER's attribute value and look the (entity, key) up in the SAME
+// table.
+func TestSUL_SchemaSweep_CrossComponentPropResolves(t *testing.T) {
+	t.Parallel()
+	// >=5 corroborated paths, the discovery gate's default threshold
+	// (internal/schemaurl/table.go's defaultMinCorroboratedPaths) — the
+	// same reason TestSUL_SchemaSweep_ResolvesWorkedExample's fixture above
+	// carries 3 entities x 2 keys rather than just "widget".
+	const widgetJSON = `{
+  "resources": {
+    "widget":  { "endpoint": "/api/widgets", "reorder": "/api/widgets/:id/reorder" },
+    "gadget":  { "endpoint": "/api/gadgets", "reorder": "/api/gadgets/:id/reorder" },
+    "sprocket":{ "endpoint": "/api/sprockets", "update": "/api/sprockets/{id}" }
+  }
+}`
+	const parentSrc = `import CreateModal from "./CreateModal";
+class Parent extends React.Component {
+  render() {
+    return <CreateModal schema={resources.widget} />;
+  }
+}
+export default Parent;
+`
+	const childSrc = `class CreateModal extends React.Component {
+  save() {
+    fetch(this.props.schema.reorder);
+  }
+}
+export default CreateModal;
+`
+	paths, files := sulWriteFixture(t, map[string]string{
+		"config/resources.json": widgetJSON,
+		"Parent.jsx":            parentSrc,
+		"CreateModal.jsx":       childSrc,
+	})
+	handlerNodes := []graph.Node{
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets/:id/reorder"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets"}},
+		{ID: "h4", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets/:id/reorder"}},
+		{ID: "h5", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets"}},
+		{ID: "h6", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets/{id}"}},
+	}
+	owner := graph.Node{
+		ID: "owner", Type: graph.NodeTypeClass, Label: "CreateModal", Service: "svc",
+		File: paths["CreateModal.jsx"], Line: 1, Language: "javascript",
+	}
+	client := sulSchemaClient(paths["CreateModal.jsx"], 3, "GET", `this.props.schema.reorder`)
+	nodes := append(append([]graph.Node{owner}, handlerNodes...), client)
+
+	res := sulRunSweep(t, nodes, files)
+	if len(res.Unresolved) != 0 {
+		t.Fatalf("unexpected unresolved: %+v", res.Unresolved)
+	}
+	if len(res.Patches) != 1 {
+		t.Fatalf("patches = %d, want 1: %+v", len(res.Patches), res.Patches)
+	}
+	p := res.Patches[0]
+	if p.ID != "c" {
+		t.Errorf("patch ID = %q, want c", p.ID)
+	}
+	if p.Meta["url"] != "/api/widgets/*/reorder" {
+		t.Errorf("patch url = %q", p.Meta["url"])
+	}
+	if p.Meta["schema_entity"] != "widget" || p.Meta["schema_key"] != "reorder" {
+		t.Errorf("patch provenance = %+v", p.Meta)
+	}
+	if p.Label != "GET /api/widgets/*/reorder" {
+		t.Errorf("patch label = %q", p.Label)
+	}
+}
+
+// TestSUL_SchemaSweep_CrossComponentPropAmbiguousLedgers is the same shape
+// as above, but TWO parents render CreateModal with a DIFFERENT entity
+// pinned to `schema` — the join cannot pick one, so RC.5 must ledger
+// schema_entity_ambiguous rather than guessing.
+func TestSUL_SchemaSweep_CrossComponentPropAmbiguousLedgers(t *testing.T) {
+	t.Parallel()
+	const widgetJSON = `{
+  "resources": {
+    "widget":  { "endpoint": "/api/widgets", "reorder": "/api/widgets/:id/reorder" },
+    "gadget":  { "endpoint": "/api/gadgets", "reorder": "/api/gadgets/:id/reorder" },
+    "sprocket":{ "endpoint": "/api/sprockets", "update": "/api/sprockets/{id}" }
+  }
+}`
+	const parentASrc = `class ParentA extends React.Component {
+  render() {
+    return <CreateModal schema={resources.widget} />;
+  }
+}
+export default ParentA;
+`
+	const parentBSrc = `class ParentB extends React.Component {
+  render() {
+    return <CreateModal schema={resources.gadget} />;
+  }
+}
+export default ParentB;
+`
+	const childSrc = `class CreateModal extends React.Component {
+  save() {
+    fetch(this.props.schema.reorder);
+  }
+}
+export default CreateModal;
+`
+	paths, files := sulWriteFixture(t, map[string]string{
+		"config/resources.json": widgetJSON,
+		"ParentA.jsx":           parentASrc,
+		"ParentB.jsx":           parentBSrc,
+		"CreateModal.jsx":       childSrc,
+	})
+	handlerNodes := []graph.Node{
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets/:id/reorder"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets"}},
+		{ID: "h4", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets/:id/reorder"}},
+		{ID: "h5", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets"}},
+		{ID: "h6", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets/{id}"}},
+	}
+	owner := graph.Node{
+		ID: "owner", Type: graph.NodeTypeClass, Label: "CreateModal", Service: "svc",
+		File: paths["CreateModal.jsx"], Line: 1, Language: "javascript",
+	}
+	client := sulSchemaClient(paths["CreateModal.jsx"], 3, "GET", `this.props.schema.reorder`)
+	nodes := append(append([]graph.Node{owner}, handlerNodes...), client)
+
+	res := sulRunSweep(t, nodes, files)
+	if len(res.Patches) != 0 {
+		t.Fatalf("expected no patch on an ambiguous producer entity: %+v", res.Patches)
+	}
+	if len(res.Unresolved) != 1 || res.Unresolved[0].Kind != "schema_entity_ambiguous" {
+		t.Fatalf("unresolved = %+v, want one schema_entity_ambiguous", res.Unresolved)
+	}
+}

@@ -193,6 +193,111 @@ func (r *Resolver) EntityPins(svc string) []EntityPin {
 	return out
 }
 
+// PropsKeyRead reports whether expr — after the same options-object/local-
+// binding unwrap and `.replace(placeholder, …)` strip ResolveURLExpr applies
+// internally — is exactly `this.props.<Prop>.<Key>` (or the bracket-string
+// equivalent): a read this resolver cannot pin on its own, because the
+// entity lives on whichever component rendered <Prop> as a JSX attribute,
+// not in svc's function-local pins. Tier RC.5 (MS.3 kind 2,
+// docs/js-declarative-composition-cluster-plan.md) uses this to find sites
+// that need a cross-component join before calling PinEntity on the
+// PRODUCER's attribute value; every other shape ResolveURLExpr already
+// covers reports ok=false here, so a caller cannot double-resolve a site.
+//
+// consumerNode is the `this.props.<Prop>` member expression itself, not the
+// bare property name — internal/valuegraph/javascript.yaml's jsx_attribute
+// crossing rule's consumer pattern (`roots: [this.props, props]`) matches
+// against that whole shape, the same node a caller must hand
+// valuegraphfacts.Resolve as the Site's Expr.
+func (r *Resolver) PropsKeyRead(expr, fn *sitter.Node, src []byte) (prop, key string, consumerNode *sitter.Node, ok bool) {
+	if r == nil || expr == nil {
+		return "", "", nil, false
+	}
+	expr = schemaUnwrapValue(expr, fn, src, 0)
+	if expr == nil {
+		return "", "", nil, false
+	}
+	base, poisoned := schemaStripReplace(expr, src)
+	if poisoned || base == nil {
+		return "", "", nil, false
+	}
+	recv, k := schemaSplitKeyRead(base, src)
+	if recv == nil || k == "" || recv.Type() != "member_expression" {
+		return "", "", nil, false
+	}
+	obj := recv.ChildByFieldName("object")
+	propNode := recv.ChildByFieldName("property")
+	if obj == nil || propNode == nil || propNode.Type() != "property_identifier" {
+		return "", "", nil, false
+	}
+	if obj.Type() != "member_expression" {
+		return "", "", nil, false
+	}
+	innerObj := obj.ChildByFieldName("object")
+	innerProp := obj.ChildByFieldName("property")
+	if innerObj == nil || innerProp == nil || innerObj.Type() != "this" || innerProp.Content(src) != "props" {
+		return "", "", nil, false
+	}
+	return propNode.Content(src), k, recv, true
+}
+
+// PinEntity pins expr to an entity name using svc's discovered table's own
+// vocabulary — the same logic ResolveURLExpr uses internally on a
+// same-function receiver, exposed so a caller (RC.5) can apply it to a
+// PRODUCER's JSX attribute value instead. fn is the enclosing function of
+// expr (nil is fine — schemaFunctionPins returns no pins, same as a bare
+// literal-ending expression). ambiguous is true when expr is a bound name
+// that resolved to two different entities in fn — same "lost track"
+// semantics as ResolveURLExpr's ledgerSchemaEntityAmbiguous.
+func (r *Resolver) PinEntity(svc string, expr, fn *sitter.Node, src []byte) (entity string, ambiguous bool) {
+	if r == nil || expr == nil {
+		return "", false
+	}
+	tbl := r.tables[svc]
+	if tbl == nil {
+		return "", false
+	}
+	pins, amb := schemaFunctionPins(fn, src, tbl)
+	e := schemaPinExprEntity(expr, src, tbl, pins, 0)
+	if e == "" {
+		if nm := schemaIdentName(expr, src); nm != "" && amb[nm] {
+			return "", true
+		}
+		return "", false
+	}
+	return e, false
+}
+
+// TableFile returns the discovered schema asset's path for svc — the same
+// value EntityPins/Lookup's Hit already carry per row, exposed bare so a
+// caller building its own Hit from a Lookup (RC.5) can stamp the same
+// provenance without re-deriving it.
+func (r *Resolver) TableFile(svc string) string {
+	if r == nil {
+		return ""
+	}
+	tbl := r.tables[svc]
+	if tbl == nil {
+		return ""
+	}
+	return tbl.File
+}
+
+// Lookup answers svc's table for (entity, key) -> path — the same lookup
+// ResolveURLExpr performs internally, exposed so a caller (RC.5) that pinned
+// an entity through a different path (a cross-component join, not a
+// same-function receiver) can still resolve through the SAME table.
+func (r *Resolver) Lookup(svc, entity, key string) (Entry, bool) {
+	if r == nil {
+		return Entry{}, false
+	}
+	tbl := r.tables[svc]
+	if tbl == nil {
+		return Entry{}, false
+	}
+	return tbl.Lookup(entity, key)
+}
+
 // ResolveURLExpr tries to resolve expr — a URL argument, or the value of an
 // options object's url key — at a call site in service svc, with fn the
 // enclosing function. ok is true with a hit when it resolved; ledgerKind is
