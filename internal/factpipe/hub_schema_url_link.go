@@ -834,8 +834,19 @@ func sulEmitPropClientReqs(mintSeen map[string]bool, fnByLabel map[string]string
 
 // ── SPA.5: dynamic URL-builder functions ────────────────────────────────────
 
+// sulBuilderMaxDepth caps how many builder-calls-builder hops
+// sulDynamicURLBuilder/sulSynthURLBuilderShapes will chase
+// (`getDataURL(type) -> Foo.dataURL(routerParams, type) -> shapes`). Cedar's
+// deepest genuine case is 2; enough headroom to not be the reason a real
+// chain fails without inviting runaway recursion on a cycle.
+const sulBuilderMaxDepth = 4
+
 func sulDynamicURLBuilder(urlNode *sitter.Node, fn *sitter.Node, src []byte, defs map[string]sulFnDef, w contract.KeyWalker) (shapes []string, fnName, kind string) {
-	if urlNode == nil {
+	return sulDynamicURLBuilderDepth(urlNode, fn, src, defs, w, 0)
+}
+
+func sulDynamicURLBuilderDepth(urlNode *sitter.Node, fn *sitter.Node, src []byte, defs map[string]sulFnDef, w contract.KeyWalker, depth int) (shapes []string, fnName, kind string) {
+	if urlNode == nil || depth > sulBuilderMaxDepth {
 		return nil, "", ""
 	}
 	if urlNode.Type() != "call_expression" {
@@ -882,7 +893,7 @@ func sulDynamicURLBuilder(urlNode *sitter.Node, fn *sitter.Node, src []byte, def
 	if !ok {
 		return nil, name, "dynamic_url_builder"
 	}
-	sh, ok := sulSynthURLBuilderShapes(w, def.node, def.src)
+	sh, ok := sulSynthURLBuilderShapes(w, def.node, def.src, defs, depth)
 	if !ok || len(sh) == 0 {
 		return nil, name, "dynamic_url_builder"
 	}
@@ -892,7 +903,7 @@ func sulDynamicURLBuilder(urlNode *sitter.Node, fn *sitter.Node, src []byte, def
 	return sh, name, "shapes"
 }
 
-func sulSynthURLBuilderShapes(w contract.KeyWalker, fn *sitter.Node, src []byte) ([]string, bool) {
+func sulSynthURLBuilderShapes(w contract.KeyWalker, fn *sitter.Node, src []byte, defs map[string]sulFnDef, depth int) ([]string, bool) {
 	body := fn.ChildByFieldName("body")
 	if body == nil {
 		return nil, false
@@ -936,6 +947,12 @@ func sulSynthURLBuilderShapes(w contract.KeyWalker, fn *sitter.Node, src []byte)
 		var cands []string
 		if paths, _, ok := jsast.ResolveLocalURLBinding(r, fn, src); ok {
 			cands = paths
+		} else if sh, _, kind := sulDynamicURLBuilderDepth(r, fn, src, defs, w, depth+1); kind == "shapes" {
+			// The return itself calls another builder
+			// (`getDataURL = type => Foo.dataURL(routerParams, type)`) —
+			// resolve that one hop deeper rather than stopping at "opaque
+			// call_expression", capped by sulBuilderMaxDepth.
+			cands = sh
 		} else {
 			var dyn bool
 			cands, dyn = sulWalkerKey(w, r, src)
