@@ -66,12 +66,24 @@ type Value struct {
 	Parts  []Value // KindConcat (ordered) / KindUnion (deduped, sorted by String())
 	Origin Origin  // KindOpaque only
 
-	// Src records the site the value was fetched from when the engine crossed
-	// a file boundary to find it (VG.4): the crossing's kind, and the producer's
-	// file and line. It is metadata — String, dedup and enumeration all ignore
-	// it — and it exists because a caller that mints one node per resolved
-	// alternative has to be able to say which site each one came from.
+	// Src records the NEAREST site the value was fetched from when the engine
+	// crossed a file boundary to find it (VG.4): the crossing's kind, and the
+	// producer's file and line. It is metadata — String, dedup and enumeration
+	// all ignore it — and it exists because a caller that mints one node per
+	// resolved alternative has to be able to say which site each one came
+	// from. First-write-wins: the innermost (closest to the literal) crossing
+	// a value passed through owns it.
 	Src Origin
+
+	// Crossings records EVERY crossing hop a value passed through, in the
+	// order withSrc wrapped them — innermost (closest to the literal) first.
+	// Unlike Src, nothing overwrites or skips an entry here: a value that
+	// resolves through a reverse crossing whose target then itself resolves
+	// through a forward crossing carries both, even though Src (the nearest
+	// site) only ever names the forward one. A caller asking "did this value
+	// pass through crossing kind K at all" needs this, not Src — see
+	// CrossedVia.
+	Crossings []Origin
 }
 
 // DefaultMaxStrings caps Strings when its max argument is 0.
@@ -144,14 +156,20 @@ func Union(parts ...Value) Value {
 		}
 		flat = append(flat, p)
 	}
-	seen := make(map[string]bool, len(flat))
+	seen := make(map[string]int, len(flat)) // key -> index in out
 	out := make([]Value, 0, len(flat))
 	for _, p := range flat {
 		k := p.String()
-		if seen[k] {
+		if i, dup := seen[k]; dup {
+			// A content-identical duplicate still carries its own crossing
+			// provenance — keep it rather than silently dropping evidence
+			// that this value ALSO passed through whatever crossing minted
+			// the duplicate (CrossedVia needs every hop, not just the
+			// first-seen one's).
+			out[i].Crossings = mergeCrossings(out[i].Crossings, p.Crossings)
 			continue
 		}
-		seen[k] = true
+		seen[k] = len(out)
 		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
@@ -304,6 +322,36 @@ func (v Value) hasLiteral() bool {
 // each alternative still knows which site produced it after any amount of
 // flattening — which is what lets a caller mint one node per alternative and
 // name the producer of each.
+// mergeCrossings unions two crossing chains, deduplicated by (Reason, File,
+// Line), preserving a's order and appending b's new entries after — used by
+// Union's dedup so a content-identical duplicate's crossing provenance is
+// kept rather than discarded.
+func mergeCrossings(a, b []Origin) []Origin {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[Origin]bool, len(a)+len(b))
+	out := make([]Origin, 0, len(a)+len(b))
+	for _, o := range a {
+		if !seen[o] {
+			seen[o] = true
+			out = append(out, o)
+		}
+	}
+	for _, o := range b {
+		if !seen[o] {
+			seen[o] = true
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// Crossings is stamped unconditionally, every time a value passes through a
+// crossing — unlike Src (first-write-wins), so a value that resolves through
+// two different crossing kinds in sequence (a reverse crossing whose target
+// itself resolves through a forward one, say) keeps both on its record even
+// though only the nearest owns Src.
 func withSrc(v Value, o Origin) Value {
 	if v.Kind == KindUnion {
 		parts := make([]Value, len(v.Parts))
@@ -316,7 +364,24 @@ func withSrc(v Value, o Origin) Value {
 	if v.Src == (Origin{}) {
 		v.Src = o
 	}
+	v.Crossings = append(append([]Origin(nil), v.Crossings...), o)
 	return v
+}
+
+// CrossedVia reports whether v passed through a crossing of kind (a
+// CrossRule.Kind, an arbitrary tag the binding spec defines) anywhere along
+// its resolution, and the Origin of the nearest such hop. A caller deciding
+// whether a resolved alternative belongs to ITS crossing pass needs this,
+// not Src — Src only ever names the innermost crossing a value passed
+// through, which is a different (and often different-kind) hop when a value
+// chains through more than one.
+func (v Value) CrossedVia(kind string) (Origin, bool) {
+	for _, o := range v.Crossings {
+		if o.Reason == kind {
+			return o, true
+		}
+	}
+	return Origin{}, false
 }
 
 // Alternatives returns the top-level alternatives of a Value: the parts of a

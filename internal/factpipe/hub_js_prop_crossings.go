@@ -625,7 +625,12 @@ func jpxPropProducers(v valuegraph.Value, kind string, resolver *schemaurl.Resol
 	var order []*site
 	byKey := map[string]*site{}
 	for _, alt := range v.Alternatives() {
-		if alt.Src.Reason != kind {
+		// CrossedVia, not alt.Src.Reason == kind: a value that chains through
+		// two different crossing kinds (a reverse crossing whose target then
+		// itself resolves through a forward one) only ever has Src name the
+		// nearest — the fix that closed the RC.6 "reverse crossing looks
+		// unwired" gap (docs/js-declarative-composition-cluster-plan.md).
+		if _, ok := alt.CrossedVia(kind); !ok {
 			continue
 		}
 		key := fmt.Sprintf("%s\x00%d", alt.Src.File, alt.Src.Line)

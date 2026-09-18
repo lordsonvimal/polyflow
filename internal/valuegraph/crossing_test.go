@@ -222,6 +222,59 @@ func TestCrossReverseReportsArity(t *testing.T) {
 	}
 }
 
+// The real-world gap this test guards: a transport function does not have to
+// cross straight to its caller. Parent hands postToServer to Wrapper, which
+// never calls it — it just re-forwards the SAME prop, unqualified, to Leaf,
+// which both calls it AND separately receives its URL argument through an
+// ordinary forward crossing from Wrapper. The reverse crossing finds this
+// (crossReverse does not require same-file, only same-file-when-qualified —
+// Wrapper's bare re-forward is not qualified), but the resolved value's
+// nearest Src ends up naming the LAST hop it passed through — the forward
+// jsx_attribute from Wrapper to Leaf — not the reverse jsx_attribute_callback
+// that made the whole chain reachable. A caller gating on Src.Reason ==
+// "jsx_attribute_callback" alone would see "jsx_attribute" and reject a value
+// that in fact only resolved because the reverse crossing fired first.
+func TestCrossReverseThroughAPassThroughWrapper(t *testing.T) {
+	fs := &fakeSource{
+		src: map[string]string{
+			"Parent.tsx": `export default class Parent extends React.Component {
+  postToServer = (transport, data, updateURL) => go(updateURL);
+  render() { return <Wrapper postToServer={this.postToServer} />; }
+}`,
+			"Wrapper.tsx": `export default class Wrapper extends React.Component {
+  render() {
+    const { postToServer } = this.props;
+    return <Leaf postToServer={postToServer} updateURL="/api/things/9" />;
+  }
+}`,
+			"Leaf.tsx": `export default class Leaf extends React.Component {
+  save(data) {
+    const { updateURL } = this.props;
+    this.props.postToServer(this.props.transport, data, updateURL);
+  }
+}`,
+		},
+		owners: map[string][]string{
+			"Parent.tsx": {"Parent"}, "Wrapper.tsx": {"Wrapper"}, "Leaf.tsx": {"Leaf"},
+		},
+	}
+
+	v := resolveCrossProbe(t, fs, "Parent.tsx")
+	got := mustStrings(t, v)
+	if len(got) != 1 || got[0] != "/api/things/9" {
+		t.Fatalf("strings = %v, want [/api/things/9]", got)
+	}
+	if v.Src.Reason != "jsx_attribute" {
+		t.Fatalf("Src.Reason = %q, want the nearer forward hop (jsx_attribute) — this assertion documents the trap, not the fix", v.Src.Reason)
+	}
+	if _, ok := v.CrossedVia("jsx_attribute_callback"); !ok {
+		t.Fatalf("CrossedVia(jsx_attribute_callback) = false, want true: the value chained through the reverse crossing at Wrapper even though Src no longer names it")
+	}
+	if _, ok := v.CrossedVia("jsx_attribute"); !ok {
+		t.Fatalf("CrossedVia(jsx_attribute) = false, want true: the nearer forward hop at Leaf")
+	}
+}
+
 // An engine whose FileSource is not a CrossSource has no crossings at all. The
 // shipped intraprocedural callers depend on this: it is what keeps VG.3's
 // resolution from silently acquiring VG.4's reach.

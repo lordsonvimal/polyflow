@@ -337,7 +337,10 @@ func spkProducerEntity(v valuegraph.Value, resolver *schemaurl.Resolver, svc str
 	seen := map[string]bool{}
 	sawConflict := false
 	for _, alt := range v.Alternatives() {
-		if alt.Src.Reason != jpxCrossPropURL {
+		// CrossedVia, not alt.Src.Reason == jpxCrossPropURL: a value chained
+		// through a second crossing after this one only has Src name the
+		// nearer hop (Tier RC.6, docs/js-declarative-composition-cluster-plan.md).
+		if _, ok := alt.CrossedVia(jpxCrossPropURL); !ok {
 			continue
 		}
 		jf := sulParseHostFile(alt.Src.File)
