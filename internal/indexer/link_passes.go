@@ -1270,7 +1270,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// for producer values, and retracts the ledger rows it resolved.
 		{"js_prop_urls", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			puNodes, puEdges, puLedger, retract := linker.LinkJSPropURLs(st.allNodes, st.allUnresolved, svcFiles)
+			puNodes, puEdges, puLedger, retract := linker.LinkJSPropURLs(st.allNodes, st.allUnresolved, svcFiles, st.schemaURLResolver)
 			if len(retract) > 0 {
 				filtered := st.allUnresolved[:0]
 				for _, u := range st.allUnresolved {
@@ -1314,7 +1314,7 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 		// at the parent's transport call. Retracts the rows it resolved.
 		{"js_prop_transport", scopeSameServiceOnly, func() error {
 			svcFiles := st.svcFilesOf()
-			ptNodes, ptEdges, ptLedger, retract := linker.LinkJSPropTransport(st.allNodes, st.allUnresolved, svcFiles)
+			ptNodes, ptEdges, ptLedger, retract := linker.LinkJSPropTransport(st.allNodes, st.allUnresolved, svcFiles, st.schemaURLResolver)
 			if len(retract) > 0 {
 				filtered := st.allUnresolved[:0]
 				for _, u := range st.allUnresolved {

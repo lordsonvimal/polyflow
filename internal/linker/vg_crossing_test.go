@@ -227,7 +227,7 @@ func vgPropSetup(t *testing.T, c vgPropCase) (nodes []graph.Node, ledger []graph
 // consumes the ledger UB.2 has already thinned — and records what they minted
 // plus the blind-spot rows that survived.
 func vgCaptureProps(nodes []graph.Node, ledger []graph.UnresolvedRef, files map[string][]string) *vgbaseline.Baseline {
-	urlNodes, _, _, retractA := LinkJSPropURLs(nodes, ledger, files)
+	urlNodes, _, _, retractA := LinkJSPropURLs(nodes, ledger, files, nil)
 
 	var thinned []graph.UnresolvedRef
 	for _, r := range ledger {
@@ -235,7 +235,7 @@ func vgCaptureProps(nodes []graph.Node, ledger []graph.UnresolvedRef, files map[
 			thinned = append(thinned, r)
 		}
 	}
-	transportNodes, _, _, retractB := LinkJSPropTransport(nodes, thinned, files)
+	transportNodes, _, _, retractB := LinkJSPropTransport(nodes, thinned, files, nil)
 
 	b := &vgbaseline.Baseline{Corpus: "fixture"}
 	for _, n := range append(append([]graph.Node(nil), urlNodes...), transportNodes...) {
@@ -307,7 +307,7 @@ func TestVGPropCrossingFixtures(t *testing.T) {
 // be wrong in the same way.
 func TestVGPropCrossingMintsOneNodePerURL(t *testing.T) {
 	nodes, ledger, files := vgPropSetup(t, vgPropFixtures["prop-url-three-sites"])
-	got, _, out, retract := LinkJSPropURLs(nodes, ledger, files)
+	got, _, out, retract := LinkJSPropURLs(nodes, ledger, files, nil)
 
 	if len(out) != 0 {
 		t.Fatalf("unexpected ledger: %+v", out)
@@ -343,9 +343,9 @@ func TestVGPropCrossingProvenanceNamesTheCrossing(t *testing.T) {
 		"prop-transport-worked-example": vgPropTransportRule,
 	} {
 		nodes, ledger, files := vgPropSetup(t, vgPropFixtures[name])
-		minted, _, _, _ := LinkJSPropURLs(nodes, ledger, files)
+		minted, _, _, _ := LinkJSPropURLs(nodes, ledger, files, nil)
 		if want == vgPropTransportRule {
-			minted, _, _, _ = LinkJSPropTransport(nodes, ledger, files)
+			minted, _, _, _ = LinkJSPropTransport(nodes, ledger, files, nil)
 		}
 		if len(minted) == 0 {
 			t.Fatalf("%s minted nothing", name)
@@ -394,7 +394,7 @@ func TestVGPropCrossingTwoHops(t *testing.T) {
 	}
 	nodes, ledger, files := vgPropSetup(t, c)
 
-	got, _, _, retract := LinkJSPropURLs(nodes, ledger, files)
+	got, _, _, retract := LinkJSPropURLs(nodes, ledger, files, nil)
 	if len(got) != 1 || got[0].Meta["url"] != "/api/deep" {
 		t.Fatalf("two-hop crossing = %v, want [/api/deep]", urlSet(got))
 	}

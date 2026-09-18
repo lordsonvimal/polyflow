@@ -58,7 +58,7 @@ func TestLinkJSPropURLs_WorkedExample(t *testing.T) {
 	}
 	files := map[string][]string{"svc": {consumer, p["WidgetPane.jsx"], p["GadgetPane.jsx"]}}
 
-	nodes, edges, out, retract := LinkJSPropURLs(propURLConsumerNodes(consumer), ledger, files)
+	nodes, edges, out, retract := LinkJSPropURLs(propURLConsumerNodes(consumer), ledger, files, nil)
 
 	if len(out) != 0 {
 		t.Fatalf("unexpected ledger: %+v", out)
@@ -105,7 +105,7 @@ func TestLinkJSPropURLs_UnresolvableProducerDoesNotAbstain(t *testing.T) {
 	}
 	files := map[string][]string{"svc": {consumer, p["WidgetPane.jsx"], p["SchemaPane.jsx"]}}
 
-	nodes, _, out, retract := LinkJSPropURLs(propURLConsumerNodes(consumer), ledger, files)
+	nodes, _, out, retract := LinkJSPropURLs(propURLConsumerNodes(consumer), ledger, files, nil)
 
 	if len(nodes) != 1 || nodes[0].Meta["url"] != "/api/widgets/*/usage" {
 		t.Fatalf("nodes = %v", urlSet(nodes))
@@ -160,7 +160,7 @@ func TestLinkJSPropURLs_ComponentCollision(t *testing.T) {
 	}
 	files := map[string][]string{"svc": {a, b, p["Producers.jsx"]}}
 
-	got, _, _, retract := LinkJSPropURLs(nodes, ledger, files)
+	got, _, _, retract := LinkJSPropURLs(nodes, ledger, files, nil)
 
 	if len(got) != 1 || got[0].File != a || got[0].Meta["url"] != "/api/widgets" {
 		t.Fatalf("nodes = %+v", got)
@@ -183,7 +183,7 @@ func TestLinkJSPropURLs_HighFanoutLedgers(t *testing.T) {
 	ledger := []graph.UnresolvedRef{{Service: "svc", File: consumer, Line: 4, Kind: "prop_client_dynamic_url"}}
 	files := map[string][]string{"svc": {consumer, p["Producers.jsx"]}}
 
-	nodes, _, out, retract := LinkJSPropURLs(propURLConsumerNodes(consumer), ledger, files)
+	nodes, _, out, retract := LinkJSPropURLs(propURLConsumerNodes(consumer), ledger, files, nil)
 	if len(nodes) != 0 {
 		t.Fatalf("want no nodes above the cap, got %d", len(nodes))
 	}

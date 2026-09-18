@@ -51,7 +51,7 @@ func TestLinkJSPropTransport_WorkedExample(t *testing.T) {
 	}
 	files := map[string][]string{"svc": {parent, child}}
 
-	nodes, edges, out, retract := LinkJSPropTransport(propTransportNodes(parent, child), ledger, files)
+	nodes, edges, out, retract := LinkJSPropTransport(propTransportNodes(parent, child), ledger, files, nil)
 
 	if len(out) != 0 {
 		t.Fatalf("unexpected ledger: %+v", out)
@@ -101,7 +101,7 @@ func TestLinkJSPropTransport_UnresolvableArgLedgers(t *testing.T) {
 	ledger := []graph.UnresolvedRef{{Service: "svc", File: parent, Line: 3, Kind: "prop_client_dynamic_url"}}
 	files := map[string][]string{"svc": {parent, child}}
 
-	nodes, _, out, retract := LinkJSPropTransport(propTransportNodes(parent, child), ledger, files)
+	nodes, _, out, retract := LinkJSPropTransport(propTransportNodes(parent, child), ledger, files, nil)
 
 	if len(nodes) != 1 || nodes[0].Meta["url"] != "/api/schedules/save" {
 		t.Fatalf("nodes = %+v", nodes)
@@ -139,7 +139,7 @@ func TestLinkJSPropTransport_LocalBindingArg(t *testing.T) {
 	ledger := []graph.UnresolvedRef{{Service: "svc", File: parent, Line: 3, Kind: "prop_client_dynamic_url"}}
 	files := map[string][]string{"svc": {parent, child}}
 
-	nodes, _, out, _ := LinkJSPropTransport(propTransportNodes(parent, child), ledger, files)
+	nodes, _, out, _ := LinkJSPropTransport(propTransportNodes(parent, child), ledger, files, nil)
 	if len(nodes) != 1 || nodes[0].Meta["url"] != "/api/schedules/*/publish" {
 		t.Fatalf("nodes = %+v, ledger = %+v", nodes, out)
 	}
@@ -165,7 +165,7 @@ func TestLinkJSPropTransport_SkipsNonParamURL(t *testing.T) {
 
 	nodes, _, out, retract := LinkJSPropTransport(
 		[]graph.Node{{ID: "svc:w:class:Widget", Type: graph.NodeTypeClass, Label: "Widget", Service: "svc", File: f, Line: 1, Language: "javascript"}},
-		ledger, files)
+		ledger, files, nil)
 	if len(nodes) != 0 || len(out) != 0 || len(retract) != 0 {
 		t.Fatalf("expected no action, got nodes=%+v out=%+v retract=%v", nodes, out, retract)
 	}

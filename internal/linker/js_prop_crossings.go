@@ -6,6 +6,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/schemaurl"
 	"github.com/lordsonvimal/polyflow/internal/valuegraph"
 )
 
@@ -30,6 +31,18 @@ import (
 // passes. The tier prose for each — what UB.2 and UB.3 are for, and why one
 // node per URL rather than one node with many edges — stays in js_prop_urls.go
 // and js_prop_transport.go alongside the recognition helpers they still own.
+//
+// MS.3 (partial): a producer value the engine leaves opaque because it reads
+// a discovered data asset (a member-expression key read off a pinned entity,
+// or a call to a learnt accessor function) is recovered by
+// valuegraph_adapter.go's vgSchemaProducerFallback, through the same generic
+// schemaurl.Resolver the non-crossing schema passes use — see
+// vgPropReadSite. This closes the URL-crosses-a-prop shape of MS.3. It does
+// NOT close the shape where the *entity-bearing schema object itself*
+// crosses a prop into a component that reads a key straight off it (no
+// separate URL-only prop) — that still needs a crossing-capable engine
+// inside internal/factpipe's schema_url_link_sweep hub, which has no such
+// engine today (docs/schema-driven-url-resolution-plan.md MS.3 status).
 
 // LinkJSPropURLs is the Tier UB.2 pass: for each blind-spot ledger row, resolve
 // the prop the transport reads its URL from through the forward crossing, and
@@ -39,7 +52,7 @@ import (
 // their enclosing functions, the prop_url_* ledger, and the set of
 // prop_client_dynamic_url sites that resolved (keyed by PropURLRetractKey) so
 // the caller can retract them.
-func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
+func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string, resolver *schemaurl.Resolver) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
 	retract = map[string]bool{}
 	rows := propClientDynamicRows(ledger)
 	if len(rows) == 0 {
@@ -73,7 +86,7 @@ func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFil
 			continue
 		}
 
-		producers := vgPropProducers(eng.Resolve(vgPropQuery(p, row.File, urlNode)), vgCrossPropURL)
+		producers := vgPropProducers(eng.Resolve(vgPropQuery(p, row.File, urlNode)), vgCrossPropURL, resolver, row.Service)
 		if len(producers) == 0 {
 			// No render site names this prop on any component this file
 			// defines. There is nothing to say about the site that the
@@ -82,6 +95,7 @@ func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFil
 		}
 
 		pathProv := map[string]string{}
+		schemaMeta := map[string]map[string]string{}
 		for _, pr := range producers {
 			// An unresolvable producer ledgers whether or not its siblings
 			// resolved — suppressing it would hide a real render site behind
@@ -100,6 +114,9 @@ func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFil
 			for _, path := range pr.paths {
 				if _, seen := pathProv[path]; !seen {
 					pathProv[path] = fmt.Sprintf("%s:%d", pr.file, pr.line)
+				}
+				if pr.schemaMeta != nil {
+					schemaMeta[path] = pr.schemaMeta
 				}
 			}
 		}
@@ -122,6 +139,19 @@ func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFil
 				continue
 			}
 			minted[id] = true
+			meta := map[string]string{
+				"pattern":  "prop_url",
+				"spa":      "prop_url",
+				"method":   verb,
+				"url":      path,
+				"prop":     prop,
+				"producer": pathProv[path],
+				"vg_layer": vgLayer,
+				"vg_rule":  vgPropURLRule,
+			}
+			for k, v := range schemaMeta[path] {
+				meta[k] = v
+			}
 			newNodes = append(newNodes, graph.Node{
 				ID:       id,
 				Type:     graph.NodeTypeHTTPClient,
@@ -130,16 +160,7 @@ func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFil
 				File:     row.File,
 				Line:     row.Line,
 				Language: "javascript",
-				Meta: map[string]string{
-					"pattern":  "prop_url",
-					"spa":      "prop_url",
-					"method":   verb,
-					"url":      path,
-					"prop":     prop,
-					"producer": pathProv[path],
-					"vg_layer": vgLayer,
-					"vg_rule":  vgPropURLRule,
-				},
+				Meta:     meta,
 			})
 			if fnID := sc.fnBySvcLabel[row.Service+"\x00"+fnLabel]; fnID != "" && fnID != id {
 				edges = append(edges, graph.Edge{
@@ -165,7 +186,7 @@ func LinkJSPropURLs(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFil
 // It returns the synthetic http_client nodes, the `calls` edges wiring them to
 // the wrapper function, the prop_transport_* ledger, and the resolved
 // prop_client_dynamic_url sites for the caller to retract.
-func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
+func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, serviceFiles map[string][]string, resolver *schemaurl.Resolver) (newNodes []graph.Node, edges []graph.Edge, out []graph.UnresolvedRef, retract map[string]bool) {
 	retract = map[string]bool{}
 	rows := propClientDynamicRows(ledger)
 	if len(rows) == 0 {
@@ -206,12 +227,13 @@ func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, servi
 			continue
 		}
 
-		producers := vgPropProducers(eng.Resolve(vgPropQuery(p, row.File, urlNode)), vgCrossPropTransport)
+		producers := vgPropProducers(eng.Resolve(vgPropQuery(p, row.File, urlNode)), vgCrossPropTransport, resolver, row.Service)
 		if len(producers) == 0 {
 			continue
 		}
 
 		pathProv := map[string]string{}
+		schemaMeta := map[string]map[string]string{}
 		var caller string
 		for _, pr := range producers {
 			site := fmt.Sprintf("%s:%d", pr.file, pr.line)
@@ -229,6 +251,9 @@ func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, servi
 			for _, path := range pr.paths {
 				if _, seen := pathProv[path]; !seen {
 					pathProv[path] = site
+				}
+				if pr.schemaMeta != nil {
+					schemaMeta[path] = pr.schemaMeta
 				}
 				if caller == "" || site < caller {
 					caller = site
@@ -254,6 +279,20 @@ func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, servi
 				continue
 			}
 			minted[id] = true
+			meta := map[string]string{
+				"pattern":  "prop_transport",
+				"spa":      "prop_transport",
+				"method":   verb,
+				"url":      path,
+				"via":      sym,
+				"caller":   caller,
+				"producer": pathProv[path],
+				"vg_layer": vgLayer,
+				"vg_rule":  vgPropTransportRule,
+			}
+			for k, v := range schemaMeta[path] {
+				meta[k] = v
+			}
 			newNodes = append(newNodes, graph.Node{
 				ID:       id,
 				Type:     graph.NodeTypeHTTPClient,
@@ -262,17 +301,7 @@ func LinkJSPropTransport(nodes []graph.Node, ledger []graph.UnresolvedRef, servi
 				File:     row.File,
 				Line:     row.Line,
 				Language: "javascript",
-				Meta: map[string]string{
-					"pattern":  "prop_transport",
-					"spa":      "prop_transport",
-					"method":   verb,
-					"url":      path,
-					"via":      sym,
-					"caller":   caller,
-					"producer": pathProv[path],
-					"vg_layer": vgLayer,
-					"vg_rule":  vgPropTransportRule,
-				},
+				Meta:     meta,
 			})
 			if fnID != "" && fnID != id {
 				edges = append(edges, graph.Edge{

@@ -9,7 +9,9 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
+	"github.com/lordsonvimal/polyflow/internal/jsast"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/schemaurl"
 	"github.com/lordsonvimal/polyflow/internal/valuegraph"
 )
 
@@ -250,6 +252,18 @@ type vgPropProducer struct {
 	line  int
 	paths []string
 	fail  string // "" when paths resolved; otherwise the ledger's kind
+
+	// schemaMeta is set when paths[0] came from a schema-asset resolution
+	// rather than a literal/binding read — MS.3
+	// (docs/schema-driven-url-resolution-plan.md): the producer expression
+	// itself reads a discovered data asset (a member-expression key read off
+	// a pinned entity, or a call to a learnt accessor function), which the
+	// value engine correctly reports as opaque (member/call are `opaque` in
+	// javascript.yaml — that is not this pass's shape to resolve) and this
+	// pass recovers through the same generic schemaurl.Resolver the
+	// non-crossing schema passes already use, keyed on the crossing's own
+	// (file, line, text) provenance. nil for every other producer.
+	schemaMeta map[string]string
 }
 
 // vgPropProducers splits a resolved value into what each producer site
@@ -265,7 +279,7 @@ type vgPropProducer struct {
 // such a site all-or-nothing: one unreadable arm poisons it, because three of
 // four flows presented as complete is worse than a ledger row. That policy is
 // the caller's and it is applied here, not in the engine.
-func vgPropProducers(v valuegraph.Value, kind string) []vgPropProducer {
+func vgPropProducers(v valuegraph.Value, kind string, resolver *schemaurl.Resolver, svc string) []vgPropProducer {
 	type site struct {
 		file string
 		line int
@@ -290,7 +304,7 @@ func vgPropProducers(v valuegraph.Value, kind string) []vgPropProducer {
 
 	out := make([]vgPropProducer, 0, len(order))
 	for _, s := range order {
-		out = append(out, vgPropReadSite(s.file, s.line, s.text, s.alts))
+		out = append(out, vgPropReadSite(s.file, s.line, s.text, s.alts, resolver, svc))
 	}
 	return out
 }
@@ -304,7 +318,7 @@ func vgPropProducers(v valuegraph.Value, kind string) []vgPropProducer {
 // have disagreed about query strings since UB.2 shipped; reproducing that
 // disagreement is what makes this a differential change rather than a
 // recall change wearing one's clothes. VG.5 reports it.
-func vgPropReadSite(file string, line int, text string, alts []valuegraph.Value) vgPropProducer {
+func vgPropReadSite(file string, line int, text string, alts []valuegraph.Value, resolver *schemaurl.Resolver, svc string) vgPropProducer {
 	p := vgPropProducer{file: file, line: line}
 	if vgIsQuotedLiteral(text) {
 		if u, ok := resolveJSPropURL(text); ok {
@@ -318,7 +332,17 @@ func vgPropReadSite(file string, line int, text string, alts []valuegraph.Value)
 	for _, alt := range alts {
 		strs, ok := alt.Strings(vgPropMaxStrings)
 		if !ok {
-			return vgPropProducer{file: file, line: line, fail: vgPropFailKind(alt)}
+			failKind := vgPropFailKind(alt)
+			if failKind == "member_expression" || failKind == "builder_call" {
+				if hit, hok := vgSchemaProducerFallback(resolver, svc, file, line, text); hok {
+					return vgPropProducer{
+						file: file, line: line,
+						paths:      []string{hit.Path},
+						schemaMeta: schemaurl.MintMeta(hit),
+					}
+				}
+			}
+			return vgPropProducer{file: file, line: line, fail: failKind}
 		}
 		for _, s := range strs {
 			if !isLocalURLPath(s) {
@@ -376,6 +400,63 @@ func vgPropFailKind(v valuegraph.Value) string {
 	default:
 		return r
 	}
+}
+
+// vgSchemaProducerFallback is MS.3: a crossed prop's producer value that the
+// value engine correctly left opaque (a member-expression key read is a
+// member expression, a learnt accessor call is a call — both `opaque` in
+// javascript.yaml, on purpose, since the engine has no policy vocabulary) may
+// still be a read of a discovered data asset. It re-locates the producer
+// expression by the crossing's own (file, line, text) provenance — the same
+// line-window text match hub_schema_url_link.go's sulParsedFile.exprAtLine
+// and js_http_hosts.go's jsHostFile use for the identical need, duplicated
+// again here per that precedent rather than threaded through a shared
+// package for three small, self-contained callers — and hands it to the same
+// generic schemaurl.Resolver the non-crossing schema-URL passes already use.
+// No new resolution logic: this only supplies the resolver an expression node
+// it could not otherwise reach.
+func vgSchemaProducerFallback(resolver *schemaurl.Resolver, svc, file string, line int, text string) (schemaurl.Hit, bool) {
+	if resolver == nil || text == "" {
+		return schemaurl.Hit{}, false
+	}
+	src, root, ok := (jsEngineFileSource{}).Parse(file)
+	if !ok || root == nil {
+		return schemaurl.Hit{}, false
+	}
+	expr := vgExprAtLine(root, src, line, text)
+	if expr == nil {
+		return schemaurl.Hit{}, false
+	}
+	fn := jsast.EnclosingFunction(expr)
+	hit, hok, _ := resolver.ResolveURLExpr(expr, fn, src, svc)
+	return hit, hok
+}
+
+const vgSchemaLineSlack = 6
+
+// vgExprAtLine finds the first node at or after line, within a small slack
+// window, whose source text matches text exactly.
+func vgExprAtLine(root *sitter.Node, src []byte, line int, text string) *sitter.Node {
+	var found *sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if found != nil || n == nil {
+			return
+		}
+		row := int(n.StartPoint().Row) + 1
+		if row > line+vgSchemaLineSlack {
+			return
+		}
+		if row >= line && n.Content(src) == text {
+			found = n
+			return
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(root)
+	return found
 }
 
 // resolveLocalURLBindingVG is the engine-backed implementation of
