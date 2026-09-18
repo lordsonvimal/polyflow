@@ -49,6 +49,16 @@ import (
 // internal/indexer/link_passes.go's still-live "schema_url_tables" pass, not
 // by this hub. Both hubs here recompute their own resolver from the same
 // inputs rather than sharing state across pipeline.Run calls.
+//
+// Tier RC.4 (docs/js-declarative-composition-cluster-plan.md) added
+// sulSchemaEntityPinFacts to the sweep hub: the resolver's whole discovered
+// (entity, key) -> path table, dumped as sul_schema_entity_pin facts
+// alongside the existing patch/ledger facts. Purely additive — no existing
+// mint/patch/edge/ledger row changes shape or content. No emit: relation
+// consumes this predicate yet (nothing needs to); it exists so a future
+// framework that also lists "schema_url_link_sweep" in its own hub: list
+// (RC.5, MS.3 kind 2) can join a resolved prop value against a known pin by
+// predicate name, without re-building or re-walking the resolver's table.
 func init() {
 	RegisterHub("schema_url_link_props", schemaURLLinkPropsHub)
 	RegisterHub("schema_url_link_sweep", schemaURLLinkSweepHub)
@@ -60,6 +70,12 @@ const (
 	sulPropClientLedgerPred = "sul_prop_client_ledger" // (Service, File, Line, Name, Kind)
 	sulSchemaPatchPred      = "sul_schema_patch"       // (ID, Label, URL, URLOrigin, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw)
 	sulSchemaLedgerPred     = "sul_schema_ledger"      // (Service, File, Line, Name, Kind)
+	// sulSchemaEntityPinPred (Tier RC.4) is the resolver's whole discovered
+	// table, dumped once per service — not a per-site resolution decision,
+	// so it carries no ledger/patch branch of its own. It exists so a future
+	// consumer (RC.5, MS.3 kind 2) can join a resolved prop value against a
+	// known (entity, key) pin without re-building or re-walking the asset.
+	sulSchemaEntityPinPred = "sul_schema_entity_pin" // (Entity, Key, Path)
 )
 
 func schemaURLLinkPropsHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
@@ -75,7 +91,28 @@ func schemaURLLinkSweepHub(nodes []graph.Node, files []string, svcPath string, _
 	if svc == "" || resolver == nil {
 		return nil
 	}
-	return sulSchemaPatchFacts(nodes, svc, resolver)
+	out := sulSchemaPatchFacts(nodes, svc, resolver)
+	out = append(out, sulSchemaEntityPinFacts(svc, resolver)...)
+	return out
+}
+
+// sulSchemaEntityPinFacts (Tier RC.4) dumps resolver's whole discovered
+// table for svc as facts, once per service — not a re-derivation, the same
+// schemaurl.Resolver every other fact in this file already resolved through.
+func sulSchemaEntityPinFacts(svc string, resolver *schemaurl.Resolver) []Fact {
+	pins := resolver.EntityPins(svc)
+	if len(pins) == 0 {
+		return nil
+	}
+	out := make([]Fact, 0, len(pins))
+	for _, p := range pins {
+		out = append(out, Fact{
+			Pred:   sulSchemaEntityPinPred,
+			Args:   []Atom{Str(p.Entity), Str(p.Key), Str(p.Path)},
+			Origin: Origin{Kind: OriginPrimitive, File: p.File, Pattern: sulSchemaEntityPinPred},
+		})
+	}
+	return out
 }
 
 // sulBuildResolver builds the per-service schemaurl.Resolver every hub in

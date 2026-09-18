@@ -155,6 +155,44 @@ func (r *Resolver) LearntAccessorCount() int {
 	return n
 }
 
+// EntityPin is one (entity, key) -> path row from a service's discovered
+// schema asset table — the same rows Lookup queries against, exposed so a
+// caller (Tier RC.4, docs/js-declarative-composition-cluster-plan.md) can
+// dump the whole table as facts instead of resolving one expression at a
+// time.
+type EntityPin struct {
+	Entity string
+	Key    string
+	Path   string
+	File   string // the discovered asset, relative to cwd
+}
+
+// EntityPins returns every (entity, key) -> path row for svc's discovered
+// table, sorted by (Entity, Key) for determinism. Returns nil if r or svc's
+// table is nil.
+func (r *Resolver) EntityPins(svc string) []EntityPin {
+	if r == nil {
+		return nil
+	}
+	tbl := r.tables[svc]
+	if tbl == nil {
+		return nil
+	}
+	var out []EntityPin
+	for entity, keys := range tbl.ByEntity {
+		for key, e := range keys {
+			out = append(out, EntityPin{Entity: entity, Key: key, Path: e.Path, File: tbl.File})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Entity != out[j].Entity {
+			return out[i].Entity < out[j].Entity
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
 // ResolveURLExpr tries to resolve expr — a URL argument, or the value of an
 // options object's url key — at a call site in service svc, with fn the
 // enclosing function. ok is true with a hit when it resolved; ledgerKind is
