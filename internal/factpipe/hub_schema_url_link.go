@@ -220,10 +220,10 @@ func sulSchemaPatchFacts(nodes []graph.Node, files []string, svc string, resolve
 	type propsCandidate struct {
 		node *graph.Node
 		raw  string
-		key  string
 	}
 	var propsCands []propsCandidate
 	var propsSites []valuegraphfacts.Site
+	var propsPending []schemaurl.PendingSite
 
 	for i := range nodes {
 		n := &nodes[i]
@@ -250,9 +250,10 @@ func sulSchemaPatchFacts(nodes []graph.Node, files []string, svc string, resolve
 			continue
 		}
 		if kind == ledgerSchemaEntityUnresolvedCompat {
-			if _, key, propNode, isPropsRead := resolver.PropsKeyRead(expr, fn, jf.src); isPropsRead {
-				propsCands = append(propsCands, propsCandidate{node: n, raw: raw, key: key})
-				propsSites = append(propsSites, valuegraphfacts.Site{File: n.File, Expr: propNode})
+			if site, isPropsRead := resolver.UnpinnedProducerSite(svc, expr, fn, jf.src); isPropsRead {
+				propsCands = append(propsCands, propsCandidate{node: n, raw: raw})
+				propsSites = append(propsSites, valuegraphfacts.Site{File: n.File, Expr: site.Consumer})
+				propsPending = append(propsPending, site)
 				continue
 			}
 		}
@@ -262,37 +263,19 @@ func sulSchemaPatchFacts(nodes []graph.Node, files []string, svc string, resolve
 		}
 	}
 
-	if len(propsSites) > 0 {
-		cross := valuegraphfacts.BuildComponentIndex(nodes, svc)
-		spec := jpxValuegraphSpec()
-		jsFiles := sulJSFileList(files)
-		results := valuegraphfacts.Resolve(spec, jsFiles, cross, propsSites,
-			valuegraph.Options{MaxUnionWidth: jpxVGPropMaxStrings, MaxFiles: len(jsFiles) + 8})
-		for i, c := range propsCands {
-			n := c.node
-			entity, ambiguous := spkProducerEntity(results[i].Value, resolver, svc)
-			if entity == "" {
-				kind := "schema_entity_unresolved"
-				if ambiguous {
-					kind = "schema_entity_ambiguous"
-				}
-				out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, kind))
-				continue
-			}
-			e, found := resolver.Lookup(svc, entity, c.key)
-			if !found {
-				out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, "schema_entity_unresolved"))
-				continue
-			}
-			verb := strings.ToUpper(n.Meta["method"])
-			if verb == "" {
-				out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, "schema_entity_unresolved"))
-				continue
-			}
-			out = append(out, sulSchemaPatchFact(n, svc, schemaurl.Hit{
-				Path: e.Path, Entity: entity, Key: c.key, RawURL: e.Raw, File: resolver.TableFile(svc),
-			}))
+	for i, res := range spkBatchResolveProducerEntities(nodes, files, svc, resolver, propsSites, propsPending) {
+		n := propsCands[i].node
+		c := propsCands[i]
+		if !res.Ok {
+			out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, res.LedgerKind))
+			continue
 		}
+		verb := strings.ToUpper(n.Meta["method"])
+		if verb == "" {
+			out = append(out, sulLedgerFact(sulSchemaLedgerPred, svc, n.File, n.Line, c.raw, "schema_entity_unresolved"))
+			continue
+		}
+		out = append(out, sulSchemaPatchFact(n, svc, res.Hit))
 	}
 	return out
 }
@@ -384,6 +367,62 @@ func spkProducerEntity(v valuegraph.Value, resolver *schemaurl.Resolver, svc str
 		}
 	}
 	return "", true
+}
+
+// spkResolvedSite is one pending site's cross-component join result: either
+// a resolved Hit, or a ledger kind to fall back to (schema_entity_unresolved
+// / schema_entity_ambiguous / schema_key_ambiguous — the same three kinds
+// ResolveURLExpr itself can return, never a guess).
+type spkResolvedSite struct {
+	Hit        schemaurl.Hit
+	Ok         bool
+	LedgerKind string
+}
+
+// spkBatchResolveProducerEntities resolves EVERY site in sites in ONE
+// valuegraphfacts.Resolve call (RC.3's perf caution: never call it once per
+// site — batching every candidate into a single call per hub invocation is
+// what keeps this from repeating the 12.6x regression that caution guards
+// against), then pins each result's producer entity (spkProducerEntity) and
+// finishes pending[i] (schemaurl.Resolver.FinishPendingSite) through the
+// SAME resolver table. Shared by both callers in this file
+// (sulSchemaPatchFacts's existing-node sweep and sulPropClientFacts's SPA.4
+// mint pass) — both hit the identical unpinned-receiver shape, just from
+// different candidate sources. sites[i] and pending[i] describe the same
+// site; len(sites)==len(pending) is the caller's responsibility. Returns
+// nil without building a ComponentIndex when sites is empty, so a service
+// with no such candidates pays nothing extra.
+func spkBatchResolveProducerEntities(nodes []graph.Node, files []string, svc string, resolver *schemaurl.Resolver, sites []valuegraphfacts.Site, pending []schemaurl.PendingSite) []spkResolvedSite {
+	if len(sites) == 0 {
+		return nil
+	}
+	cross := valuegraphfacts.BuildComponentIndex(nodes, svc)
+	spec := jpxValuegraphSpec()
+	jsFiles := sulJSFileList(files)
+	results := valuegraphfacts.Resolve(spec, jsFiles, cross, sites,
+		valuegraph.Options{MaxUnionWidth: jpxVGPropMaxStrings, MaxFiles: len(jsFiles) + 8})
+	out := make([]spkResolvedSite, len(sites))
+	for i := range sites {
+		entity, ambiguous := spkProducerEntity(results[i].Value, resolver, svc)
+		if entity == "" {
+			kind := "schema_entity_unresolved"
+			if ambiguous {
+				kind = "schema_entity_ambiguous"
+			}
+			out[i] = spkResolvedSite{LedgerKind: kind}
+			continue
+		}
+		hit, ok, kind := resolver.FinishPendingSite(svc, pending[i], entity)
+		if !ok {
+			if kind == "" {
+				kind = "schema_entity_unresolved"
+			}
+			out[i] = spkResolvedSite{LedgerKind: kind}
+			continue
+		}
+		out[i] = spkResolvedSite{Hit: hit, Ok: true}
+	}
+	return out
 }
 
 func sulSchemaURLCandidate(n *graph.Node) (raw string, ok bool) {
@@ -573,6 +612,23 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 
 	var out []Fact
 	mintSeen := map[string]bool{}
+
+	// Tier RC.5: a call site's URL argument that resolver.ResolveURLExpr
+	// ledgers as schema_entity_unresolved because its receiver is
+	// `this.props.<Prop>` (or a name destructured from it) gets ONE more
+	// try — a cross-component join, batched into a single
+	// spkBatchResolveProducerEntities call AFTER every file is walked
+	// (RC.3's perf caution: never call valuegraphfacts.Resolve once per
+	// site).
+	type spkPending struct {
+		rel, fn, verb string
+		line          int
+		verbKnown     bool
+	}
+	var pending []spkPending
+	var pendingSites []valuegraphfacts.Site
+	var pendingSpec []schemaurl.PendingSite
+
 	for _, pf := range pfiles {
 		if len(specs) == 0 {
 			continue
@@ -629,29 +685,34 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 
 					cands, dyn := sulWalkerKey(walker, urlNode, pf.src)
 
-					type mintReq struct {
-						path         string
-						cands        []string
-						localBinding bool
-						schemaMeta   map[string]string
-					}
-					var reqs []mintReq
+					var reqs []sulPropClientMintReq
+					deferred := false
 
 					if !dyn && len(cands) > 0 &&
 						(strings.HasPrefix(cands[0], "/") || strings.HasPrefix(cands[0], "*")) {
-						reqs = append(reqs, mintReq{path: cands[0], cands: cands})
+						reqs = append(reqs, sulPropClientMintReq{path: cands[0], cands: cands})
 					} else if shapes, fname, kind := sulDynamicURLBuilder(urlNode, pf.src, fnDefs, walker); kind == "shapes" {
 						for _, sh := range shapes {
-							reqs = append(reqs, mintReq{path: sh, cands: []string{sh}})
+							reqs = append(reqs, sulPropClientMintReq{path: sh, cands: []string{sh}})
 						}
 					} else if paths, reason, ok := jsast.ResolveLocalURLBinding(urlNode, jsast.EnclosingFunction(n), pf.src); ok {
 						for _, p := range paths {
-							reqs = append(reqs, mintReq{path: p, cands: []string{p}, localBinding: true})
+							reqs = append(reqs, sulPropClientMintReq{path: p, cands: []string{p}, localBinding: true})
 						}
 					} else if hit, hok, hkind := resolver.ResolveURLExpr(urlNode, jsast.EnclosingFunction(n), pf.src, svc); hok || hkind != "" {
-						if hok && verbKnown {
-							reqs = append(reqs, mintReq{path: hit.Path, cands: []string{hit.Path}, schemaMeta: schemaurl.MintMeta(hit)})
-						} else {
+						switch {
+						case hok && verbKnown:
+							reqs = append(reqs, sulPropClientMintReq{path: hit.Path, cands: []string{hit.Path}, schemaMeta: schemaurl.MintMeta(hit)})
+						case !hok && hkind == ledgerSchemaEntityUnresolvedCompat:
+							if site, isPropsRead := resolver.UnpinnedProducerSite(svc, urlNode, jsast.EnclosingFunction(n), pf.src); isPropsRead {
+								deferred = true
+								pending = append(pending, spkPending{rel: pf.rel, fn: fn, verb: verb, line: line, verbKnown: verbKnown})
+								pendingSites = append(pendingSites, valuegraphfacts.Site{File: pf.rel, Expr: site.Consumer})
+								pendingSpec = append(pendingSpec, site)
+							} else {
+								out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, pf.rel, line, "(schema)", hkind))
+							}
+						default:
 							kk := hkind
 							if kk == "" {
 								kk = "schema_entity_unresolved"
@@ -672,48 +733,8 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 						out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, pf.rel, line, name, k))
 					}
 
-					for ri, req := range reqs {
-						id := fmt.Sprintf("%s:%s:http_client:prop_client:%d", svc, pf.rel, line)
-						if len(reqs) > 1 {
-							id = fmt.Sprintf("%s:%d", id, ri)
-						}
-						if mintSeen[id] {
-							continue
-						}
-						mintSeen[id] = true
-						keyCandidates := ""
-						if len(req.cands) > 1 {
-							keyCandidates = contract.MarshalKeyCandidates(req.cands)
-						}
-						urlOrigin, branchIndex := "", ""
-						if req.localBinding {
-							urlOrigin = "local_binding"
-							branchIndex = strconv.Itoa(ri)
-						}
-						schemaFile, schemaEntity, schemaKey, schemaRaw := "", "", "", ""
-						if req.schemaMeta != nil {
-							urlOrigin = req.schemaMeta["url_origin"]
-							schemaFile = req.schemaMeta["schema_file"]
-							schemaEntity = req.schemaMeta["schema_entity"]
-							schemaKey = req.schemaMeta["schema_key"]
-							schemaRaw = req.schemaMeta["schema_url_raw"]
-						}
-						out = append(out, Fact{
-							Pred: sulPropClientMintPred,
-							Args: []Atom{
-								Node(id), Str(svc), Str(pf.rel), Int(int64(line)), Str(verb + " " + req.path),
-								Str(verb), Str(req.path), Str(keyCandidates), Str(urlOrigin), Str(branchIndex),
-								Str(schemaFile), Str(schemaEntity), Str(schemaKey), Str(schemaRaw),
-							},
-							Origin: Origin{Kind: OriginPrimitive, File: pf.rel, Line: line, Pattern: sulPropClientMintPred},
-						})
-						if fnID := fnByLabel[fn]; fnID != "" && fnID != id {
-							out = append(out, Fact{
-								Pred:   sulPropClientEdgePred,
-								Args:   []Atom{Node(fnID), Node(id)},
-								Origin: Origin{Kind: OriginPrimitive, File: pf.rel, Line: line, Pattern: sulPropClientEdgePred},
-							})
-						}
+					if !deferred {
+						out = append(out, sulEmitPropClientReqs(mintSeen, fnByLabel, svc, pf.rel, line, fn, verb, reqs)...)
 					}
 				}
 			}
@@ -722,6 +743,83 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 			}
 		}
 		walk(pf.root, "(module)", propsNames)
+	}
+
+	for i, res := range spkBatchResolveProducerEntities(nodes, files, svc, resolver, pendingSites, pendingSpec) {
+		p := pending[i]
+		if !res.Ok {
+			out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, p.rel, p.line, "(schema)", res.LedgerKind))
+			continue
+		}
+		if !p.verbKnown {
+			out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, p.rel, p.line, "(schema)", "schema_entity_unresolved"))
+			continue
+		}
+		reqs := []sulPropClientMintReq{{path: res.Hit.Path, cands: []string{res.Hit.Path}, schemaMeta: schemaurl.MintMeta(res.Hit)}}
+		out = append(out, sulEmitPropClientReqs(mintSeen, fnByLabel, svc, p.rel, p.line, p.fn, p.verb, reqs)...)
+	}
+	return out
+}
+
+// sulPropClientMintReq is one candidate mint site's path — one call site can
+// fan out to several (a switch-returns URL builder, a fanned-out local
+// binding), hence a slice per call site rather than a single value.
+type sulPropClientMintReq struct {
+	path         string
+	cands        []string
+	localBinding bool
+	schemaMeta   map[string]string
+}
+
+// sulEmitPropClientReqs turns reqs (one call site's candidate mint paths)
+// into mint + calls-edge Facts, deduplicated against mintSeen — the same
+// emission sulPropClientFacts's walk used to build inline, extracted so
+// RC.5's deferred cross-component branch (resolved in a batch AFTER the
+// walk finishes) can call it too.
+func sulEmitPropClientReqs(mintSeen map[string]bool, fnByLabel map[string]string, svc, rel string, line int, fn, verb string, reqs []sulPropClientMintReq) []Fact {
+	var out []Fact
+	for ri, req := range reqs {
+		id := fmt.Sprintf("%s:%s:http_client:prop_client:%d", svc, rel, line)
+		if len(reqs) > 1 {
+			id = fmt.Sprintf("%s:%d", id, ri)
+		}
+		if mintSeen[id] {
+			continue
+		}
+		mintSeen[id] = true
+		keyCandidates := ""
+		if len(req.cands) > 1 {
+			keyCandidates = contract.MarshalKeyCandidates(req.cands)
+		}
+		urlOrigin, branchIndex := "", ""
+		if req.localBinding {
+			urlOrigin = "local_binding"
+			branchIndex = strconv.Itoa(ri)
+		}
+		schemaFile, schemaEntity, schemaKey, schemaRaw := "", "", "", ""
+		if req.schemaMeta != nil {
+			urlOrigin = req.schemaMeta["url_origin"]
+			schemaFile = req.schemaMeta["schema_file"]
+			schemaEntity = req.schemaMeta["schema_entity"]
+			schemaKey = req.schemaMeta["schema_key"]
+			schemaRaw = req.schemaMeta["schema_url_raw"]
+		}
+		out = append(out, Fact{
+			Pred: sulPropClientMintPred,
+			Args: []Atom{
+				Node(id), Str(svc), Str(rel), Int(int64(line)), Str(verb + " " + req.path),
+				Str(verb), Str(req.path), Str(keyCandidates), Str(urlOrigin), Str(branchIndex),
+				Str(schemaFile), Str(schemaEntity), Str(schemaKey), Str(schemaRaw),
+			},
+			Origin: Origin{Kind: OriginPrimitive, File: rel, Line: line, Pattern: sulPropClientMintPred},
+		})
+		if fnID := fnByLabel[fn]; fnID != "" && fnID != id {
+			out = append(out, Fact{
+				Pred:   sulPropClientEdgePred,
+				Args:   []Atom{Node(fnID), Node(id)},
+				Origin: Origin{Kind: OriginPrimitive, File: rel, Line: line, Pattern: sulPropClientEdgePred},
+			})
+		}
 	}
 	return out
 }

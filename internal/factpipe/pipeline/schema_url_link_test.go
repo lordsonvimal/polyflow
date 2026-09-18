@@ -613,6 +613,78 @@ export default CreateModal;
 	}
 }
 
+// TestSUL_SchemaSweep_CrossComponentPropDestructuredResolves is the same
+// shape as TestSUL_SchemaSweep_CrossComponentPropResolves, but the child
+// destructures `schema` out of `this.props` first instead of reading
+// `this.props.schema.<key>` directly — cedar's actual 5
+// schema_entity_unresolved sites are ALL this shape, not the direct member
+// chain (a gap the first version of RC.5 missed: PropsKeyRead originally
+// required the receiver to be a `this.props.<Prop>` member expression, and
+// a destructured local is a bare identifier). Confirmed against the real
+// corpus after this fixture: 0-diff before the fix, 5 sites recovered
+// after — see docs/js-declarative-composition-cluster-plan.md's RC.5
+// section.
+func TestSUL_SchemaSweep_CrossComponentPropDestructuredResolves(t *testing.T) {
+	t.Parallel()
+	const widgetJSON = `{
+  "resources": {
+    "widget":  { "endpoint": "/api/widgets", "reorder": "/api/widgets/:id/reorder" },
+    "gadget":  { "endpoint": "/api/gadgets", "reorder": "/api/gadgets/:id/reorder" },
+    "sprocket":{ "endpoint": "/api/sprockets", "update": "/api/sprockets/{id}" }
+  }
+}`
+	const parentSrc = `import CreateModal from "./CreateModal";
+class Parent extends React.Component {
+  render() {
+    return <CreateModal schema={resources.widget} />;
+  }
+}
+export default Parent;
+`
+	const childSrc = `class CreateModal extends React.Component {
+  save() {
+    const { schema } = this.props;
+    fetch(schema.reorder);
+  }
+}
+export default CreateModal;
+`
+	paths, files := sulWriteFixture(t, map[string]string{
+		"config/resources.json": widgetJSON,
+		"Parent.jsx":            parentSrc,
+		"CreateModal.jsx":       childSrc,
+	})
+	handlerNodes := []graph.Node{
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets/:id/reorder"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets"}},
+		{ID: "h4", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets/:id/reorder"}},
+		{ID: "h5", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets"}},
+		{ID: "h6", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets/{id}"}},
+	}
+	owner := graph.Node{
+		ID: "owner", Type: graph.NodeTypeClass, Label: "CreateModal", Service: "svc",
+		File: paths["CreateModal.jsx"], Line: 1, Language: "javascript",
+	}
+	client := sulSchemaClient(paths["CreateModal.jsx"], 4, "GET", `schema.reorder`)
+	nodes := append(append([]graph.Node{owner}, handlerNodes...), client)
+
+	res := sulRunSweep(t, nodes, files)
+	if len(res.Unresolved) != 0 {
+		t.Fatalf("unexpected unresolved: %+v", res.Unresolved)
+	}
+	if len(res.Patches) != 1 {
+		t.Fatalf("patches = %d, want 1: %+v", len(res.Patches), res.Patches)
+	}
+	p := res.Patches[0]
+	if p.Meta["url"] != "/api/widgets/*/reorder" {
+		t.Errorf("patch url = %q", p.Meta["url"])
+	}
+	if p.Meta["schema_entity"] != "widget" || p.Meta["schema_key"] != "reorder" {
+		t.Errorf("patch provenance = %+v", p.Meta)
+	}
+}
+
 // TestSUL_SchemaSweep_CrossComponentPropAmbiguousLedgers is the same shape
 // as above, but TWO parents render CreateModal with a DIFFERENT entity
 // pinned to `schema` — the join cannot pick one, so RC.5 must ledger
@@ -674,5 +746,84 @@ export default CreateModal;
 	}
 	if len(res.Unresolved) != 1 || res.Unresolved[0].Kind != "schema_entity_ambiguous" {
 		t.Fatalf("unresolved = %+v, want one schema_entity_ambiguous", res.Unresolved)
+	}
+}
+
+// TestSUL_PropClient_CrossComponentAccessorResolves is Tier RC.5's SECOND
+// real shape, found only after measuring against the real corpus this tier
+// targets: cedar's actual 5 schema_entity_unresolved sites are ALL an
+// ACCESSOR CALL whose schema argument is destructured from props
+// (`Validation.getDeleteURL(schema, urlData)`, `schema` from
+// `const { schema } = this.props`), not the direct member-chain shape
+// TestSUL_SchemaSweep_CrossComponentProp*Resolves above cover. That shape
+// lives in the OTHER framework (schema_url_link_props / SPA.4's
+// sulPropClientFacts, ResolveURLExpr's resolveAccessorCall branch), not the
+// sweep. A first version of this fix only touched the sweep and measured
+// ZERO change against cedar — this test is the regression guard for that.
+func TestSUL_PropClient_CrossComponentAccessorResolves(t *testing.T) {
+	t.Parallel()
+	const widgetJSON = `{
+  "resources": {
+    "widget":  { "endpoint": "/api/widgets", "reorder": "/api/widgets/:id/reorder" },
+    "gadget":  { "endpoint": "/api/gadgets", "reorder": "/api/gadgets/:id/reorder" },
+    "sprocket":{ "endpoint": "/api/sprockets", "update": "/api/sprockets/{id}" }
+  }
+}`
+	const accessorSrc = `function getCreateURL(schema, extra) {
+  return schema.reorder;
+}
+`
+	const parentSrc = `class Parent extends React.Component {
+  render() {
+    return <T schema={resources.widget} />;
+  }
+}
+export default Parent;
+`
+	const childSrc = `import ComponentWithAjaxStatus from "../common/ComponentWithAjaxStatus";
+class T extends React.Component {
+  load() {
+    const { schema } = this.props;
+    this.props.ajaxStatus.get("loading", getCreateURL(schema, {}));
+  }
+}
+export default ComponentWithAjaxStatus(T);
+`
+	paths, files := sulWriteFixture(t, map[string]string{
+		"common/ComponentWithAjaxStatus.jsx": sulAjaxStatusHOC,
+		"config/resources.json":              widgetJSON,
+		"Accessor.jsx":                       accessorSrc,
+		"Parent.jsx":                         parentSrc,
+		"grids/T.jsx":                        childSrc,
+	})
+	handlerNodes := []graph.Node{
+		{ID: "h1", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets"}},
+		{ID: "h2", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/widgets/:id/reorder"}},
+		{ID: "h3", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets"}},
+		{ID: "h4", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/gadgets/:id/reorder"}},
+		{ID: "h5", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets"}},
+		{ID: "h6", Type: graph.NodeTypeHTTPHandler, Service: "svc", Meta: map[string]string{"path": "/api/sprockets/{id}"}},
+	}
+	owner := graph.Node{
+		ID: "owner", Type: graph.NodeTypeClass, Label: "T", Service: "svc",
+		File: paths["grids/T.jsx"], Line: 1, Language: "javascript",
+	}
+	nodes := append([]graph.Node{owner}, handlerNodes...)
+
+	res := sulRun(t, nodes, files)
+	if len(res.Unresolved) != 0 {
+		t.Fatalf("unexpected ledger: %+v", res.Unresolved)
+	}
+	if got := sulURLsOf(res.Nodes); len(got) != 1 || got[0] != "/api/widgets/*/reorder" {
+		t.Fatalf("urls = %v, want [/api/widgets/*/reorder]", got)
+	}
+	var hc *graph.Node
+	for i := range res.Nodes {
+		if res.Nodes[i].Type == graph.NodeTypeHTTPClient {
+			hc = &res.Nodes[i]
+		}
+	}
+	if hc.Meta["schema_entity"] != "widget" || hc.Meta["schema_key"] != "reorder" {
+		t.Errorf("mint provenance = %+v", hc.Meta)
 	}
 }

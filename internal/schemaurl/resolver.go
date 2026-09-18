@@ -156,7 +156,7 @@ func (r *Resolver) LearntAccessorCount() int {
 }
 
 // EntityPin is one (entity, key) -> path row from a service's discovered
-// schema asset table — the same rows Lookup queries against, exposed so a
+// schema asset table — the same rows Table.Lookup queries against, exposed so a
 // caller (Tier RC.4, docs/js-declarative-composition-cluster-plan.md) can
 // dump the whole table as facts instead of resolving one expression at a
 // time.
@@ -193,52 +193,165 @@ func (r *Resolver) EntityPins(svc string) []EntityPin {
 	return out
 }
 
-// PropsKeyRead reports whether expr — after the same options-object/local-
-// binding unwrap and `.replace(placeholder, …)` strip ResolveURLExpr applies
-// internally — is exactly `this.props.<Prop>.<Key>` (or the bracket-string
-// equivalent): a read this resolver cannot pin on its own, because the
-// entity lives on whichever component rendered <Prop> as a JSX attribute,
-// not in svc's function-local pins. Tier RC.5 (MS.3 kind 2,
-// docs/js-declarative-composition-cluster-plan.md) uses this to find sites
-// that need a cross-component join before calling PinEntity on the
-// PRODUCER's attribute value; every other shape ResolveURLExpr already
-// covers reports ok=false here, so a caller cannot double-resolve a site.
+// PendingSite is a site UnpinnedProducerSite found — a schema_entity_unresolved
+// receiver this resolver could not pin locally, but whose shape says the
+// entity lives on whichever component crossed it in as a prop. Consumer is
+// what a caller hands valuegraphfacts.Resolve as the Site's Expr; exactly
+// one of Key/Accessor is set, and FinishPendingSite dispatches on which.
+type PendingSite struct {
+	Consumer *sitter.Node
+	Key      string // direct key read: <recv>.<Key>
+	Accessor string // accessor call: <Accessor>(<recv>, …) — may read several keys
+}
+
+// UnpinnedProducerSite reports whether expr — after the same
+// options-object/local-binding unwrap and `.replace(placeholder, …)` strip
+// ResolveURLExpr applies internally — is a read this resolver already
+// tried and could not pin (a caller calls this only after ResolveURLExpr
+// returned ledgerKind == "schema_entity_unresolved"), in a shape whose
+// receiver names a prop rather than a local: the entity lives on whichever
+// component crossed that prop in as a JSX attribute, not in svc's
+// function-local pins. Two call shapes reduce to the same receiver check,
+// mirrored from ResolveURLExpr/resolveAccessorCall's own dispatch:
 //
-// consumerNode is the `this.props.<Prop>` member expression itself, not the
-// bare property name — internal/valuegraph/javascript.yaml's jsx_attribute
-// crossing rule's consumer pattern (`roots: [this.props, props]`) matches
-// against that whole shape, the same node a caller must hand
-// valuegraphfacts.Resolve as the Site's Expr.
-func (r *Resolver) PropsKeyRead(expr, fn *sitter.Node, src []byte) (prop, key string, consumerNode *sitter.Node, ok bool) {
+//  1. a direct key read, `<recv>.<Key>` / `<recv>["<Key>"]`;
+//  2. an accessor call, `<Accessor>(<recv>, …)`, when <Accessor> is a
+//     function this resolver already learnt (MS.2a) — <recv> occupies the
+//     accessor's own learnt schema-parameter position, and the accessor may
+//     read several keys off it (a fallback chain), so FinishPendingSite
+//     re-runs the SAME "collapse to one path, or ambiguous" policy
+//     resolveAccessorCall applies once entity is known.
+//
+// Either way <recv> qualifies as a Consumer only if it is:
+//   - the whole `this.props.<Prop>` member expression (kind 2's direct
+//     shape) — internal/valuegraph/javascript.yaml's jsx_attribute crossing
+//     rule's consumer pattern (`roots: [this.props, props]`) matches that
+//     shape directly; or
+//   - a bare identifier — the crossing rule ALSO declares
+//     `destructure: true`, so handing the engine the identifier's own
+//     reference site (not a synthesized `this.props.X` node, which does not
+//     exist in this shape's source) is enough: the engine's ordinary
+//     intraprocedural binding-follow walks it back to a
+//     `const { x } = this.props`/`= props` declaration and recognizes the
+//     crossing from there — the same thing UB.2's own consumer-site
+//     extraction (hub_js_prop_crossings.go's jpxPropURLConsumerPropNode)
+//     already hands it for a destructured URL-only prop. A bare identifier
+//     that is NOT actually a props destructure (an unrelated local or
+//     parameter, or a call's return value) is harmless to pass through
+//     here too — the engine simply finds no crossing alternatives for it,
+//     same as "found nothing" with no fallback at all.
+//
+// Every other receiver shape (a member chain not rooted at `this.props`, a
+// call result, a subscript) reports ok=false.
+func (r *Resolver) UnpinnedProducerSite(svc string, expr, fn *sitter.Node, src []byte) (site PendingSite, ok bool) {
 	if r == nil || expr == nil {
-		return "", "", nil, false
+		return PendingSite{}, false
 	}
 	expr = schemaUnwrapValue(expr, fn, src, 0)
 	if expr == nil {
-		return "", "", nil, false
+		return PendingSite{}, false
 	}
 	base, poisoned := schemaStripReplace(expr, src)
 	if poisoned || base == nil {
-		return "", "", nil, false
+		return PendingSite{}, false
 	}
-	recv, k := schemaSplitKeyRead(base, src)
-	if recv == nil || k == "" || recv.Type() != "member_expression" {
-		return "", "", nil, false
+
+	if recv, key := schemaSplitKeyRead(base, src); recv != nil && key != "" {
+		if consumer := propsConsumer(recv, src); consumer != nil {
+			return PendingSite{Consumer: consumer, Key: key}, true
+		}
+		return PendingSite{}, false
+	}
+
+	if base.Type() != "call_expression" {
+		return PendingSite{}, false
+	}
+	name := calleeName(base, src)
+	acc, isAcc := r.accessors[svc][name]
+	if !isAcc {
+		return PendingSite{}, false
+	}
+	args := base.ChildByFieldName("arguments")
+	if args == nil || acc.param >= int(args.NamedChildCount()) {
+		return PendingSite{}, false
+	}
+	if consumer := propsConsumer(args.NamedChild(acc.param), src); consumer != nil {
+		return PendingSite{Consumer: consumer, Accessor: name}, true
+	}
+	return PendingSite{}, false
+}
+
+// propsConsumer returns recv itself when it qualifies as a props-crossing
+// receiver (a bare identifier, or the whole `this.props.<Prop>` member
+// expression) — nil otherwise.
+func propsConsumer(recv *sitter.Node, src []byte) *sitter.Node {
+	if recv == nil {
+		return nil
+	}
+	if recv.Type() == "identifier" {
+		return recv
+	}
+	if recv.Type() != "member_expression" {
+		return nil
 	}
 	obj := recv.ChildByFieldName("object")
 	propNode := recv.ChildByFieldName("property")
 	if obj == nil || propNode == nil || propNode.Type() != "property_identifier" {
-		return "", "", nil, false
+		return nil
 	}
 	if obj.Type() != "member_expression" {
-		return "", "", nil, false
+		return nil
 	}
 	innerObj := obj.ChildByFieldName("object")
 	innerProp := obj.ChildByFieldName("property")
 	if innerObj == nil || innerProp == nil || innerObj.Type() != "this" || innerProp.Content(src) != "props" {
-		return "", "", nil, false
+		return nil
 	}
-	return propNode.Content(src), k, recv, true
+	return recv
+}
+
+// FinishPendingSite completes a PendingSite once a caller has pinned entity
+// through a path other than ResolveURLExpr's own same-function pinning
+// (RC.5's cross-component join) — a direct key read is one Lookup; an
+// accessor call re-runs resolveAccessorCall's OWN "collapse the accessor's
+// learnt key set to one path, or report ambiguous" policy, since an
+// accessor may read several keys off its schema parameter (a fallback
+// chain) and the site's actual key isn't known until that collapse runs.
+func (r *Resolver) FinishPendingSite(svc string, site PendingSite, entity string) (hit Hit, ok bool, ledgerKind string) {
+	if r == nil {
+		return Hit{}, false, ""
+	}
+	tbl := r.tables[svc]
+	if tbl == nil {
+		return Hit{}, false, ""
+	}
+	if site.Accessor != "" {
+		acc, isAcc := r.accessors[svc][site.Accessor]
+		if !isAcc {
+			return Hit{}, false, ""
+		}
+		var chosen Entry
+		paths := map[string]bool{}
+		for _, k := range acc.keys {
+			if e, found := tbl.Lookup(entity, k); found {
+				paths[e.Path] = true
+				chosen = e
+			}
+		}
+		switch len(paths) {
+		case 0:
+			return Hit{}, false, ""
+		case 1:
+			return Hit{Path: chosen.Path, Entity: entity, Key: chosen.Key, RawURL: chosen.Raw, File: tbl.File}, true, ""
+		default:
+			return Hit{}, false, ledgerSchemaKeyAmbiguous
+		}
+	}
+	e, found := tbl.Lookup(entity, site.Key)
+	if !found {
+		return Hit{}, false, ""
+	}
+	return Hit{Path: e.Path, Entity: entity, Key: site.Key, RawURL: e.Raw, File: tbl.File}, true, ""
 }
 
 // PinEntity pins expr to an entity name using svc's discovered table's own
@@ -266,36 +379,6 @@ func (r *Resolver) PinEntity(svc string, expr, fn *sitter.Node, src []byte) (ent
 		return "", false
 	}
 	return e, false
-}
-
-// TableFile returns the discovered schema asset's path for svc — the same
-// value EntityPins/Lookup's Hit already carry per row, exposed bare so a
-// caller building its own Hit from a Lookup (RC.5) can stamp the same
-// provenance without re-deriving it.
-func (r *Resolver) TableFile(svc string) string {
-	if r == nil {
-		return ""
-	}
-	tbl := r.tables[svc]
-	if tbl == nil {
-		return ""
-	}
-	return tbl.File
-}
-
-// Lookup answers svc's table for (entity, key) -> path — the same lookup
-// ResolveURLExpr performs internally, exposed so a caller (RC.5) that pinned
-// an entity through a different path (a cross-component join, not a
-// same-function receiver) can still resolve through the SAME table.
-func (r *Resolver) Lookup(svc, entity, key string) (Entry, bool) {
-	if r == nil {
-		return Entry{}, false
-	}
-	tbl := r.tables[svc]
-	if tbl == nil {
-		return Entry{}, false
-	}
-	return tbl.Lookup(entity, key)
 }
 
 // ResolveURLExpr tries to resolve expr — a URL argument, or the value of an
