@@ -537,7 +537,7 @@ func sulIndexFnDefs(root *sitter.Node, src []byte, emit func(name string, fn *si
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
 		switch n.Type() {
-		case "function_declaration", "generator_function_declaration":
+		case "function_declaration", "generator_function_declaration", "method_definition":
 			if nm := n.ChildByFieldName("name"); nm != nil {
 				emit(nm.Content(src), n)
 			}
@@ -691,7 +691,7 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 					if !dyn && len(cands) > 0 &&
 						(strings.HasPrefix(cands[0], "/") || strings.HasPrefix(cands[0], "*")) {
 						reqs = append(reqs, sulPropClientMintReq{path: cands[0], cands: cands})
-					} else if shapes, fname, kind := sulDynamicURLBuilder(urlNode, pf.src, fnDefs, walker); kind == "shapes" {
+					} else if shapes, fname, kind := sulDynamicURLBuilder(urlNode, jsast.EnclosingFunction(n), pf.src, fnDefs, walker); kind == "shapes" {
 						for _, sh := range shapes {
 							reqs = append(reqs, sulPropClientMintReq{path: sh, cands: []string{sh}})
 						}
@@ -826,15 +826,50 @@ func sulEmitPropClientReqs(mintSeen map[string]bool, fnByLabel map[string]string
 
 // ── SPA.5: dynamic URL-builder functions ────────────────────────────────────
 
-func sulDynamicURLBuilder(urlNode *sitter.Node, src []byte, defs map[string]sulFnDef, w contract.KeyWalker) (shapes []string, fnName, kind string) {
-	if urlNode == nil || urlNode.Type() != "call_expression" {
+func sulDynamicURLBuilder(urlNode *sitter.Node, fn *sitter.Node, src []byte, defs map[string]sulFnDef, w contract.KeyWalker) (shapes []string, fnName, kind string) {
+	if urlNode == nil {
 		return nil, "", ""
+	}
+	if urlNode.Type() != "call_expression" {
+		// The call site's URL argument may be a local variable holding a
+		// builder call's result (`const url = this.dataURL(...); get(url)`)
+		// rather than the call written inline. Unwrap exactly one hop: only
+		// when the name resolves to a SINGLE local assignment in fn, so this
+		// stays a strict subset of what jsast.LocalAssignments already
+		// considers safe to backtrack — multiple assignments are left to the
+		// jsast.ResolveLocalURLBinding fallback that already handles branches.
+		ident := jsast.LocalIdentName(urlNode, src)
+		if ident == "" || fn == nil {
+			return nil, "", ""
+		}
+		rhs := jsast.LocalAssignments(fn, urlNode.StartByte(), src, ident)
+		if len(rhs) != 1 || rhs[0].Type() != "call_expression" {
+			return nil, "", ""
+		}
+		urlNode = rhs[0]
 	}
 	callee := urlNode.ChildByFieldName("function")
-	if callee == nil || callee.Type() != "identifier" {
+	if callee == nil {
 		return nil, "", ""
 	}
-	name := callee.Content(src)
+	var name string
+	switch callee.Type() {
+	case "identifier":
+		name = callee.Content(src)
+	case "member_expression":
+		// A method call: `this.dataURL(...)`, `Foo.dataURL(...)`, or an
+		// accessor chain like `Foo.WrappedComponent.dataURL(...)`. Only the
+		// trailing property name matters — sulIndexFnDefs keys builder
+		// candidates by name alone, the same "no receiver tracking" contract
+		// bare-identifier calls already have here.
+		prop := callee.ChildByFieldName("property")
+		if prop == nil || prop.Type() != "property_identifier" {
+			return nil, "", ""
+		}
+		name = prop.Content(src)
+	default:
+		return nil, "", ""
+	}
 	def, ok := defs[name]
 	if !ok {
 		return nil, name, "dynamic_url_builder"
@@ -881,9 +916,24 @@ func sulSynthURLBuilderShapes(w contract.KeyWalker, fn *sitter.Node, src []byte)
 	}
 	set := make(map[string]bool)
 	for _, r := range rets {
-		cands, dyn := sulWalkerKey(w, r, src)
-		if dyn || len(cands) == 0 {
-			return nil, false
+		// A return expression that is a bare local (`return url;`, the
+		// variable reassigned across if-blocks earlier in the body) isn't a
+		// structural key sulWalkerKey can read off the AST node itself — it
+		// needs backtracking through the function's own local assignments,
+		// which is exactly what jsast.ResolveLocalURLBinding already does
+		// for Tier UL call sites. fn is this builder's own function node, so
+		// it doubles as the enclosing scope to backtrack within. Falls back
+		// to sulWalkerKey (a direct literal/template return, no local to
+		// backtrack) when the engine can't resolve it.
+		var cands []string
+		if paths, _, ok := jsast.ResolveLocalURLBinding(r, fn, src); ok {
+			cands = paths
+		} else {
+			var dyn bool
+			cands, dyn = sulWalkerKey(w, r, src)
+			if dyn || len(cands) == 0 {
+				return nil, false
+			}
 		}
 		for _, c := range cands {
 			if !strings.HasPrefix(c, "/") && !strings.HasPrefix(c, "*") {
