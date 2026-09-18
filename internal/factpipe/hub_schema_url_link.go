@@ -575,11 +575,11 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 	walker := contract.KeyWalkerFor("javascript")
 
 	specs := map[string]sulPropClientSpec{}
-	fnDefs := map[string]sulFnDef{}
 	type parsedFile struct {
-		rel  string
-		src  []byte
-		root *sitter.Node
+		rel    string
+		src    []byte
+		root   *sitter.Node
+		fnDefs map[string]sulFnDef
 	}
 	var pfiles []parsedFile
 	seen := map[string]bool{}
@@ -596,12 +596,20 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 		if !ok {
 			continue
 		}
-		pfiles = append(pfiles, parsedFile{rel: rel, src: src, root: root})
+		// fnDefs is scoped to THIS file, not shared across files: a builder
+		// like `static dataURL(...)` is a per-component method name reused
+		// across many unrelated TopLevel components, each with its own body.
+		// A cross-file map keyed by name alone would pick whichever file's
+		// definition happened to be indexed first and silently mint every
+		// other component's call site with THAT file's URL — wrong data
+		// that looks resolved, worse than an honest ledger entry.
+		fnDefs := map[string]sulFnDef{}
 		sulIndexFnDefs(root, src, func(name string, fn *sitter.Node) {
 			if _, exists := fnDefs[name]; !exists {
 				fnDefs[name] = sulFnDef{node: fn, src: src}
 			}
 		})
+		pfiles = append(pfiles, parsedFile{rel: rel, src: src, root: root, fnDefs: fnDefs})
 		if spec, ok := sulDetectPropClientSpec(root, src); ok {
 			specs[spec.InjectedProp] = spec
 		}
@@ -691,7 +699,7 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 					if !dyn && len(cands) > 0 &&
 						(strings.HasPrefix(cands[0], "/") || strings.HasPrefix(cands[0], "*")) {
 						reqs = append(reqs, sulPropClientMintReq{path: cands[0], cands: cands})
-					} else if shapes, fname, kind := sulDynamicURLBuilder(urlNode, jsast.EnclosingFunction(n), pf.src, fnDefs, walker); kind == "shapes" {
+					} else if shapes, fname, kind := sulDynamicURLBuilder(urlNode, jsast.EnclosingFunction(n), pf.src, pf.fnDefs, walker); kind == "shapes" {
 						for _, sh := range shapes {
 							reqs = append(reqs, sulPropClientMintReq{path: sh, cands: []string{sh}})
 						}
