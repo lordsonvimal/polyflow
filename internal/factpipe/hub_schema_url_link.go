@@ -1178,14 +1178,23 @@ func sulPropClientCallSite(call *sitter.Node, src []byte, specs map[string]sulPr
 				}
 			}
 		}
-		urlNode = jsast.ObjectKeyValue(optsObj, src, method.URLOptKey)
-		if urlNode == nil {
-			return miss()
-		}
-		for _, k := range []string{"type", "method"} {
-			if vn := jsast.ObjectKeyValue(optsObj, src, k); vn != nil && vn.Type() == "string" {
-				siteVerb = strings.ToUpper(strings.Trim(vn.Content(src), `"'`))
+		if optsObj.Type() == "object" {
+			urlNode = jsast.ObjectKeyValue(optsObj, src, method.URLOptKey)
+			if urlNode == nil {
+				return miss()
 			}
+			for _, k := range []string{"type", "method"} {
+				if vn := jsast.ObjectKeyValue(optsObj, src, k); vn != nil && vn.Type() == "string" {
+					siteVerb = strings.ToUpper(strings.Trim(vn.Content(src), `"'`))
+				}
+			}
+		} else {
+			// jQuery's $.ajax(request) argument is polymorphic: an object
+			// carries request.url, but a bare string/template IS the url.
+			// Cedar's ajaxStatus wrapper forwards this arg unchanged, so a
+			// call site passing a literal URL here (ajaxStatus.ajax(msg,
+			// "/api/x", opts)) is not missing a url argument — it is one.
+			urlNode = optsObj
 		}
 	}
 	line := int(call.StartPoint().Row) + 1
