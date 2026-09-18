@@ -1,0 +1,84 @@
+# Tier RC.2 (docs/js-declarative-composition-cluster-plan.md) — replaces
+# internal/linker/js_local_url.go's ResolveJSLocalURLs. The resolution
+# itself (jsast.ResolveLocalURLBinding, backed by internal/valuegraph's
+# spec-driven engine) was already generic before this migration; this file
+# only makes the driver+emit wiring declarative. All real per-site work
+# (locate the expression, call the resolver, decide patch vs mint vs
+# ledger) stays in the "js_local_url" hub (internal/factpipe/hub_js_local_url.go)
+# — same shape as schema_url_link_sweep, its sibling in the same pipeline.
+language: javascript
+version: "1"
+
+hub:
+  - name: js_local_url
+
+emit:
+  # A single resolved path (or a multi-path site's first branch) is written
+  # onto the existing node in place — never a second node at the same site.
+  - relation: jul_patch_rel
+    columns: [ID, URL, Label, BranchIndex]
+    patch:
+      id: { arg: ID }
+      label: { arg: Label }
+      delete_meta: [key_dynamic, key_dynamic_raw, key_candidates]
+      meta:
+        url: { arg: URL }
+        url_origin: local_binding
+        branch_index: { arg: BranchIndex }
+        vg_layer: L2
+        vg_rule: "valuegraph/javascript#local_binding"
+
+  # Tier MS.1/MS.2: the binding was not a literal but a read of a
+  # discovered data asset — resolved through the same schemaurl.Resolver
+  # schema_url_link_sweep uses.
+  - relation: jul_patch_schema_rel
+    columns: [ID, URL, Label, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw]
+    patch:
+      id: { arg: ID }
+      label: { arg: Label }
+      delete_meta: [key_dynamic, key_dynamic_raw, key_candidates]
+      meta:
+        url: { arg: URL }
+        url_origin: schema_asset
+        schema_file: { arg: SchemaFile }
+        schema_entity: { arg: SchemaEntity }
+        schema_key: { arg: SchemaKey }
+        schema_url_raw: { arg: SchemaURLRaw }
+
+  # A multi-path site's remaining branches (index >= 1) each get their own
+  # http_client node — never one node with several outbound edges (the
+  # fan-out invariant Tier UL exists to preserve).
+  - relation: jul_mint_rel
+    columns: [ID, ParentID, BranchIndex, URL, Label, Method, Service, File, Line, Language]
+    mint:
+      node: http_client
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Service }
+      file: { arg: File }
+      line: { arg: Line }
+      language: { arg: Language }
+      meta:
+        url: { arg: URL }
+        method: { arg: Method }
+        url_origin: local_binding
+        branch_index: { arg: BranchIndex }
+        vg_layer: L2
+        vg_rule: "valuegraph/javascript#local_binding"
+
+  - relation: jul_ledger_rel
+    columns: [Service, File, Line, Name, Kind]
+    # A dummy self-edge to satisfy "emit needs an edge/mint/.../patch" —
+    # unresolved.when below is unconditionally true, so this edge never
+    # actually builds; every row redirects straight to the ledger. Same
+    # idiom as schema_url_link_sweep.yaml/js_client_routes.yaml's ledger-only
+    # relations.
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: Name }
+        kind: { arg: Kind }

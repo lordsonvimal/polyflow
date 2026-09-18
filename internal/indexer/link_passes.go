@@ -1201,7 +1201,8 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				if len(svcNodes) == 0 {
 					continue
 				}
-				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				absSvcPath, _ := filepath.Abs(sf.svc.Path)
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files, ServicePath: absSvcPath})
 				if err != nil {
 					return fmt.Errorf("schema_url_link_props: service %s: %w", sf.svc.Name, err)
 				}
@@ -1226,39 +1227,85 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return nil
 		}},
-		// Tier UL: read the URL of every JS/TS http_client the matcher left
-		// dynamic, by backtracking its URL expression to the assignments in the
-		// enclosing function. Runs after js_prop_clients (so a prop-client node
-		// minted there is a candidate too) and before js_http_hosts and Tier CB,
-		// so a path recovered here still gets its host and base-URL treatment.
+		// Tier UL (Tier RC.2, docs/js-declarative-composition-cluster-plan.md):
+		// read the URL of every JS/TS http_client the matcher left dynamic, by
+		// backtracking its URL expression to the assignments in the enclosing
+		// function. Runs after js_prop_clients (so a prop-client node minted
+		// there is a candidate too) and before js_http_hosts and Tier CB, so a
+		// path recovered here still gets its host and base-URL treatment. A
+		// dedicated per-service pipeline.Run call, not factpipe_frameworks,
+		// matching schema_url_links' own convention (and for the same
+		// ordering reason).
 		{"js_local_urls", scopeSameServiceOnly, func() error {
-			changed, added, ulLedger := linker.ResolveJSLocalURLs(st.allNodes, st.schemaURLResolver)
-			st.allUnresolved = append(st.allUnresolved, ulLedger...)
-			if len(changed) == 0 && len(added) == 0 {
-				return nil
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("js_local_url: load registry: %w", err)
 			}
-			// changed nodes are rewritten in place — re-persisting upserts them
-			// rather than adding a second node at the same site.
-			for i := range changed {
-				n := changed[i]
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
-				}
+			fw := reg.ByName("js_local_url")
+			if fw == nil {
+				return fmt.Errorf("js_local_url: framework not embedded")
 			}
 			byID := make(map[string]int, len(st.allNodes))
 			for i := range st.allNodes {
 				byID[st.allNodes[i].ID] = i
 			}
-			for i := range added {
-				n := added[i]
-				if _, exists := byID[n.ID]; exists {
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				for i := range st.allNodes {
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
+				}
+				if len(svcNodes) == 0 {
 					continue
 				}
-				if err := st.bw.AddNode(st.ctx, &n); err != nil {
-					return err
+				absSvcPath, _ := filepath.Abs(sf.svc.Path)
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files, ServicePath: absSvcPath})
+				if err != nil {
+					return fmt.Errorf("js_local_url: service %s: %w", sf.svc.Name, err)
 				}
-				st.allNodes = append(st.allNodes, n)
-				byID[n.ID] = len(st.allNodes) - 1
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
+				// Patches rewrite the origin node in place — a second node at
+				// the same site would give the contract engine two producers.
+				for _, p := range res.Patches {
+					idx, ok := byID[p.ID]
+					if !ok {
+						continue
+					}
+					n := st.allNodes[idx]
+					m := make(map[string]string, len(n.Meta)+len(p.Meta))
+					for k, v := range n.Meta {
+						m[k] = v
+					}
+					for _, k := range p.DeleteMeta {
+						delete(m, k)
+					}
+					for k, v := range p.Meta {
+						m[k] = v
+					}
+					n.Meta = m
+					if p.Label != "" {
+						n.Label = p.Label
+					}
+					st.allNodes[idx] = n
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+				}
+				// Nodes are the mint: block's output — one additional
+				// http_client per branch past the first, never a second edge
+				// on the origin node (the fan-out invariant Tier UL exists
+				// to preserve).
+				for _, n := range res.Nodes {
+					if _, exists := byID[n.ID]; exists {
+						continue
+					}
+					if err := st.bw.AddNode(st.ctx, &n); err != nil {
+						return err
+					}
+					st.allNodes = append(st.allNodes, n)
+					byID[n.ID] = len(st.allNodes) - 1
+				}
 			}
 			return st.bw.Flush(st.ctx)
 		}},
@@ -2185,7 +2232,8 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				if len(svcNodes) == 0 {
 					continue
 				}
-				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files})
+				absSvcPath, _ := filepath.Abs(sf.svc.Path)
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{Nodes: svcNodes, Files: sf.files, ServicePath: absSvcPath})
 				if err != nil {
 					return fmt.Errorf("schema_url_link_sweep: service %s: %w", sf.svc.Name, err)
 				}

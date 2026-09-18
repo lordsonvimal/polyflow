@@ -1,0 +1,15 @@
+% Tier RC.2 — pure pass-through. All real resolution happens in the
+% "js_local_url" hub (internal/factpipe/hub_js_local_url.go); these rules
+% only republish its already-resolved facts under the emit relations' names.
+
+jul_patch_rel(ID, URL, Label, BranchIndex) :-
+    jul_patch(ID, URL, Label, BranchIndex).
+
+jul_patch_schema_rel(ID, URL, Label, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw) :-
+    jul_patch_schema(ID, URL, Label, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw).
+
+jul_mint_rel(ID, ParentID, BranchIndex, URL, Label, Method, Service, File, Line, Language) :-
+    jul_mint(ID, ParentID, BranchIndex, URL, Label, Method, Service, File, Line, Language).
+
+jul_ledger_rel(Service, File, Line, Name, Kind) :-
+    jul_ledger(Service, File, Line, Name, Kind).

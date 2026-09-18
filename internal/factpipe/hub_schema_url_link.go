@@ -62,28 +62,43 @@ const (
 	sulSchemaLedgerPred     = "sul_schema_ledger"      // (Service, File, Line, Name, Kind)
 )
 
-func schemaURLLinkPropsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
-	svc, resolver := sulBuildResolver(nodes, files, schema)
+func schemaURLLinkPropsHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
+	svc, resolver := sulBuildResolver(nodes, files, svcPath, schema)
 	if svc == "" {
 		return nil
 	}
 	return sulPropClientFacts(nodes, files, svc, resolver)
 }
 
-func schemaURLLinkSweepHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
-	svc, resolver := sulBuildResolver(nodes, files, schema)
+func schemaURLLinkSweepHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
+	svc, resolver := sulBuildResolver(nodes, files, svcPath, schema)
 	if svc == "" || resolver == nil {
 		return nil
 	}
 	return sulSchemaPatchFacts(nodes, svc, resolver)
 }
 
-// sulBuildResolver builds the per-service schemaurl.Resolver both hubs need,
-// from the same handler-corroboration inputs the retired "schema_url_tables"
-// pass computed (internal/indexer/link_passes.go's still-live copy, used for
-// ResolveJSLocalURLs, does the same computation independently — a hub cannot
-// share Go state across pipeline.Run calls).
-func sulBuildResolver(nodes []graph.Node, files []string, schema graph.SchemaConfig) (svc string, resolver *schemaurl.Resolver) {
+// sulBuildResolver builds the per-service schemaurl.Resolver every hub in
+// this cluster needs (this file's two, plus hub_js_local_url.go's), from the
+// same handler-corroboration inputs the retired "schema_url_tables" pass
+// computed. A hub cannot share Go state across pipeline.Run calls, so this
+// rebuilds independently every call.
+//
+// MS.0 discovery needs to SEE the schema asset file itself (a .json/.yaml
+// checked-in config, not source) — `files` (a HubProvider's own parameter,
+// internal/indexer/link_passes.go's `sf.files`) is the parser-recognized
+// subset walkService built, which deliberately excludes exactly these
+// assets (internal/indexer/indexer.go's walkService: "if parser.ForFile(path)
+// != nil { files = append(...) }, else unparsed[key]++"). Without svcPath,
+// this resolver can only ever see zero assets — a real regression Tier RC.2
+// caught (docs/js-declarative-composition-cluster-plan.md): js_local_urls
+// used to resolve these sites through a WIDE resolver built once via
+// walkAllFiles (internal/indexer/link_passes.go's "schema_url_tables" pass),
+// which silently masked this hub's own narrower one never having discovered
+// anything on a fresh run. svcPath (walked here, same exclusions as
+// internal/indexer's walkAllFiles: dotfiles/node_modules/vendor/dist/build)
+// fixes it for every caller, not just the one that exposed it.
+func sulBuildResolver(nodes []graph.Node, files []string, svcPath string, schema graph.SchemaConfig) (svc string, resolver *schemaurl.Resolver) {
 	svc = sulServiceOf(nodes)
 	if svc == "" {
 		return "", nil
@@ -98,9 +113,40 @@ func sulBuildResolver(nodes []graph.Node, files []string, schema graph.SchemaCon
 			handlerPaths[norm] = true
 		}
 	}
-	serviceFiles := map[string][]string{svc: files}
+	allFiles := files
+	if svcPath != "" {
+		allFiles = sulWalkAllFiles(svcPath)
+	}
+	serviceFiles := map[string][]string{svc: allFiles}
 	tables, _ := schemaurl.LoadTables(serviceFiles, map[string]map[string]bool{svc: handlerPaths}, schemaurl.Config(schema))
 	return svc, schemaurl.NewResolver(tables, serviceFiles)
+}
+
+// sulWalkAllFiles returns every regular file under root, no parser-recognition
+// filtering — mirrors internal/indexer/indexer.go's walkAllFiles, ported
+// rather than shared (internal/factpipe cannot import internal/indexer).
+func sulWalkAllFiles(root string) []string {
+	var files []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != root {
+				switch d.Name() {
+				case ".git", "node_modules", "vendor", "dist", "build", ".next", ".nuxt", ".svelte-kit":
+					return filepath.SkipDir
+				}
+				if strings.HasPrefix(d.Name(), ".") {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		files = append(files, p)
+		return nil
+	})
+	return files
 }
 
 func sulServiceOf(nodes []graph.Node) string {
