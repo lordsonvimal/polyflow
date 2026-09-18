@@ -74,7 +74,7 @@ const (
 	rvLedgerPred        = "rv_ledger"         // (Service, File, Line, Name, Kind)
 )
 
-func railsViewsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func railsViewsHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	fileNodeID := map[string]string{} // svc\x00file -> id
 	haveService := map[string]bool{}
 	for i := range nodes {

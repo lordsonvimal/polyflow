@@ -1,0 +1,22 @@
+% Tier RC.3 — pure pass-through. All real resolution happens in the
+% "js_prop_crossings" hub (internal/factpipe/hub_js_prop_crossings.go); these
+% rules only republish its already-resolved facts under the emit relations'
+% names.
+
+jpx_url_mint_rel(ID, Service, File, Line, Label, Method, URL, Prop, Producer, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw, RetractKey) :-
+    jpx_url_mint(ID, Service, File, Line, Label, Method, URL, Prop, Producer, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw, RetractKey).
+
+jpx_url_edge_rel(FnID, ID) :-
+    jpx_url_edge(FnID, ID).
+
+jpx_url_ledger_rel(Service, File, Line, Name, Kind, Targets) :-
+    jpx_url_ledger(Service, File, Line, Name, Kind, Targets).
+
+jpx_transport_mint_rel(ID, Service, File, Line, Label, Method, URL, Via, Caller, Producer, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw, RetractKey) :-
+    jpx_transport_mint(ID, Service, File, Line, Label, Method, URL, Via, Caller, Producer, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw, RetractKey).
+
+jpx_transport_edge_rel(FnID, ID) :-
+    jpx_transport_edge(FnID, ID).
+
+jpx_transport_ledger_rel(Service, File, Line, Name, Kind, Targets) :-
+    jpx_transport_ledger(Service, File, Line, Name, Kind, Targets).

@@ -77,7 +77,7 @@ const (
 	frUnresolvedPred  = "fr_unresolved"   // (Svc, File, Name)
 )
 
-func fileRoutesHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func fileRoutesHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	if len(nodes) == 0 || svcPath == "" {
 		return nil
 	}

@@ -140,7 +140,7 @@ func profileFrameworkLoopOnly(t *testing.T, db, root, lang, fwName, tag string) 
 		factpipe.ApplyResolves(fw.Resolves, snap.Files, fset)
 		factpipe.ApplyConfig(fw.Configs, snap.ServicePath, fset)
 		factpipe.ApplyTable(fw.Tables, snap.ServicePath, fset)
-		factpipe.ApplyHub(fw.Hubs, snap.Nodes, snap.Files, snap.ServicePath, snap.Links, snap.Schema, fset)
+		factpipe.ApplyHub(fw.Hubs, snap.Nodes, snap.Files, snap.ServicePath, snap.Links, snap.Schema, snap.Unresolved, fset)
 		factpipe.ApplyDerive(fw.Derives, fset)
 
 		fr := factRelations(fw, fset)

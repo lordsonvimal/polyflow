@@ -55,7 +55,14 @@ import (
 // corroboration-gate config, a workspace-level input a hub cannot derive
 // from nodes/files/svcPath. Zero value unless the caller sets Snapshot.Schema;
 // every hub before this one ignores it.
-type HubProvider func(nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, schema graph.SchemaConfig) []Fact
+//
+// unresolved (Tier RC.3, added for js_prop_crossings) is
+// graph.Snapshot.Unresolved verbatim — the ledger rows an earlier pass in the
+// same service's link phase left behind (e.g. js_prop_clients'
+// prop_client_dynamic_url rows), which a hub cannot derive from nodes/files
+// because a ledger row is not a graph node. Nil unless the caller sets
+// Snapshot.Unresolved; every hub before this one ignores it.
+type HubProvider func(nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, schema graph.SchemaConfig, unresolved []graph.UnresolvedRef) []Fact
 
 var hubRegistry = map[string]HubProvider{}
 
@@ -100,13 +107,13 @@ func CompileHubSpecs(specs []HubSpec) ([]CompiledHub, error) {
 // framework declares no hub block, so every framework that doesn't need this
 // mechanism pays nothing for it — the same inert-by-default shape as
 // ApplyConfig / ApplyTable.
-func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, schema graph.SchemaConfig, dst FactSet) {
+func ApplyHub(hs []CompiledHub, nodes []graph.Node, files []string, svcPath string, links []graph.LinkHint, schema graph.SchemaConfig, unresolved []graph.UnresolvedRef, dst FactSet) {
 	for _, h := range hs {
 		fn := hubRegistry[h.Name()]
 		if fn == nil {
 			continue
 		}
-		for _, f := range fn(nodes, files, svcPath, links, schema) {
+		for _, f := range fn(nodes, files, svcPath, links, schema, unresolved) {
 			dst.Add(f)
 		}
 	}

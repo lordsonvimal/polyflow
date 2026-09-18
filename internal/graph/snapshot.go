@@ -56,6 +56,13 @@ type Snapshot struct {
 	// Links. Zero value means every threshold falls back to its tested
 	// default (see SchemaConfig).
 	Schema SchemaConfig
+
+	// Unresolved (Tier RC.3, added for js_prop_crossings) is the ledger rows
+	// an earlier link-phase pass already produced for this service — a
+	// HubProvider cannot derive these from Nodes/Files because a ledger row
+	// (e.g. js_prop_clients' prop_client_dynamic_url) is not a graph node.
+	// May be nil, in which case a hub that reads it simply sees no rows.
+	Unresolved []UnresolvedRef
 }
 
 // SchemaConfig mirrors workspace.SchemaConfig's fields — see Snapshot.Schema.

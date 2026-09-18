@@ -33,7 +33,7 @@ const (
 	jhgCeilingPred  = "js_http_grade_ceiling"  // (ID) — only when no ceiling was set yet
 )
 
-func jsHTTPGradeHub(nodes []graph.Node, _ []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func jsHTTPGradeHub(nodes []graph.Node, _ []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	var out []Fact
 	for i := range nodes {
 		n := &nodes[i]

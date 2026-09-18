@@ -62,7 +62,7 @@ const (
 	sulSchemaLedgerPred     = "sul_schema_ledger"      // (Service, File, Line, Name, Kind)
 )
 
-func schemaURLLinkPropsHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
+func schemaURLLinkPropsHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	svc, resolver := sulBuildResolver(nodes, files, svcPath, schema)
 	if svc == "" {
 		return nil
@@ -70,7 +70,7 @@ func schemaURLLinkPropsHub(nodes []graph.Node, files []string, svcPath string, _
 	return sulPropClientFacts(nodes, files, svc, resolver)
 }
 
-func schemaURLLinkSweepHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
+func schemaURLLinkSweepHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	svc, resolver := sulBuildResolver(nodes, files, svcPath, schema)
 	if svc == "" || resolver == nil {
 		return nil

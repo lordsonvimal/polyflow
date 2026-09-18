@@ -41,7 +41,7 @@ type hintRule struct {
 	envVar  string // non-empty: bare env-var name from a value-less hint (J.2a)
 }
 
-func hintsHub(nodes []graph.Node, _ []string, _ string, links []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func hintsHub(nodes []graph.Node, _ []string, _ string, links []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	// No early return on empty links: the literal-host gate (below) still
 	// fires unconditionally on every lit-host node with no claiming hint,
 	// defaulting it to key_dynamic="true" even when the fleet has zero

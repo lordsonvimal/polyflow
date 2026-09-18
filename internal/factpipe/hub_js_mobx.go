@@ -70,7 +70,7 @@ type jsmMint struct {
 	line, endLine                 int
 }
 
-func jsMobxSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func jsMobxSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	declsByFile := make(map[string][]jsmLineNode)
 	declIndex := make(map[string]map[string]string)
 	fileNodeID := make(map[string]string)

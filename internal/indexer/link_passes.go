@@ -1309,33 +1309,58 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
-		// Tier UB.2: the URL crosses a JSX prop — parent computes the endpoint,
-		// child requests it. Consumes js_prop_clients' prop_client_dynamic_url
-		// ledger, indexes every JSX attribute value in the service, and joins on
-		// (component, prop name), minting one http_client per distinct resolved
-		// URL. Runs after js_local_urls so its local-binding walk is available
-		// for producer values, and retracts the ledger rows it resolved.
-		{"js_prop_urls", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			puNodes, puEdges, puLedger, retract := linker.LinkJSPropURLs(st.allNodes, st.allUnresolved, svcFiles, st.schemaURLResolver)
-			if len(retract) > 0 {
-				filtered := st.allUnresolved[:0]
-				for _, u := range st.allUnresolved {
-					if u.Kind == "prop_client_dynamic_url" && retract[linker.PropURLRetractKey(u.File, u.Line)] {
-						continue
-					}
-					filtered = append(filtered, u)
-				}
-				st.allUnresolved = filtered
+		// Tier UB.2/UB.3 (Tier RC.3, docs/js-declarative-composition-cluster-plan.md):
+		// the URL crosses a JSX prop (parent computes the endpoint, child
+		// requests it) and its mirror, the transport function crosses a JSX
+		// prop (parent owns the wrapper, child supplies the argument). Both
+		// consume js_prop_clients' prop_client_dynamic_url ledger and resolve
+		// it through the "js_prop_crossings" hub's two sequential passes
+		// (UB.2-then-UB.3 in one Go call, not two indexer steps — a row UB.2
+		// resolves is retracted before UB.3 ever sees it). Runs after
+		// js_local_urls so its local-binding walk is available for producer
+		// values. A dedicated per-service pipeline.Run call, matching
+		// schema_url_link_props/js_local_urls' own convention.
+		{"js_prop_crossings", scopeSameServiceOnly, func() error {
+			reg, err := pipeline.LoadEmbedded()
+			if err != nil {
+				return fmt.Errorf("js_prop_crossings: load registry: %w", err)
 			}
-			st.allUnresolved = append(st.allUnresolved, puLedger...)
-			if len(puNodes) > 0 {
-				byID := make(map[string]int, len(st.allNodes))
+			fw := reg.ByName("js_prop_crossings")
+			if fw == nil {
+				return fmt.Errorf("js_prop_crossings: framework not embedded")
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			var allResolved []string
+			for _, sf := range st.allSvcFiles {
+				var svcNodes []graph.Node
+				var svcUnresolved []graph.UnresolvedRef
 				for i := range st.allNodes {
-					byID[st.allNodes[i].ID] = i
+					if st.allNodes[i].Service == sf.svc.Name {
+						svcNodes = append(svcNodes, st.allNodes[i])
+					}
 				}
-				for i := range puNodes {
-					n := puNodes[i]
+				for _, u := range st.allUnresolved {
+					if u.Service == sf.svc.Name {
+						svcUnresolved = append(svcUnresolved, u)
+					}
+				}
+				if len(svcNodes) == 0 || len(svcUnresolved) == 0 {
+					continue
+				}
+				absSvcPath, _ := filepath.Abs(sf.svc.Path)
+				res, err := pipeline.Run([]*pipeline.Framework{fw}, nil, graph.Snapshot{
+					Nodes: svcNodes, Files: sf.files, ServicePath: absSvcPath, Unresolved: svcUnresolved,
+				})
+				if err != nil {
+					return fmt.Errorf("js_prop_crossings: service %s: %w", sf.svc.Name, err)
+				}
+				st.allUnresolved = append(st.allUnresolved, res.Unresolved...)
+				allResolved = append(allResolved, res.Resolved...)
+				for i := range res.Nodes {
+					n := res.Nodes[i]
 					if _, exists := byID[n.ID]; exists {
 						continue
 					}
@@ -1348,52 +1373,26 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 				if err := st.bw.Flush(st.ctx); err != nil {
 					return err
 				}
+				if err := st.writeEdges(res.Edges); err != nil {
+					return err
+				}
 			}
-			return st.writeEdges(puEdges)
-		}},
-		// Tier UB.3: the transport function crosses a JSX prop — parent owns the
-		// wrapper, child supplies the URL argument. Consumes the same
-		// prop_client_dynamic_url ledger (already thinned by js_prop_urls),
-		// restricted to rows whose URL argument is a parameter of the wrapper.
-		// Indexes every JSX attribute whose value hands over a local function,
-		// joins on the referenced symbol, reads the argument at the child's
-		// props.<prop>(…) call sites, and mints one http_client per distinct URL
-		// at the parent's transport call. Retracts the rows it resolved.
-		{"js_prop_transport", scopeSameServiceOnly, func() error {
-			svcFiles := st.svcFilesOf()
-			ptNodes, ptEdges, ptLedger, retract := linker.LinkJSPropTransport(st.allNodes, st.allUnresolved, svcFiles, st.schemaURLResolver)
-			if len(retract) > 0 {
+			if len(allResolved) > 0 {
+				resolved := make(map[string]bool, len(allResolved))
+				for _, r := range allResolved {
+					resolved[r] = true
+				}
 				filtered := st.allUnresolved[:0]
 				for _, u := range st.allUnresolved {
-					if u.Kind == "prop_client_dynamic_url" && retract[linker.PropURLRetractKey(u.File, u.Line)] {
+					if u.Kind == "prop_client_dynamic_url" &&
+						resolved[u.Service+"\x00"+u.File+"\x00"+strconv.Itoa(u.Line)] {
 						continue
 					}
 					filtered = append(filtered, u)
 				}
 				st.allUnresolved = filtered
 			}
-			st.allUnresolved = append(st.allUnresolved, ptLedger...)
-			if len(ptNodes) > 0 {
-				byID := make(map[string]int, len(st.allNodes))
-				for i := range st.allNodes {
-					byID[st.allNodes[i].ID] = i
-				}
-				for i := range ptNodes {
-					n := ptNodes[i]
-					if _, exists := byID[n.ID]; exists {
-						continue
-					}
-					if err := st.bw.AddNode(st.ctx, &n); err != nil {
-						return err
-					}
-					st.allNodes = append(st.allNodes, n)
-					byID[n.ID] = len(st.allNodes) - 1
-				}
-				if err := st.bw.Flush(st.ctx); err != nil {
-					return err
-				}
-			}
-			return st.writeEdges(ptEdges)
+			return nil
 		}},
 		// Tier JH: the JS/TS analogue of the two passes above. Neither traces a
 		// JS/TS client at all, so this is the only source of Meta["env_var"] /

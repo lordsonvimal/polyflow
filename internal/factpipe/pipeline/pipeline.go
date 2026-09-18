@@ -594,7 +594,7 @@ func runFramework(fw *Framework, matches []patterns.MatchResult, baseIndex map[s
 	factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 	factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 	factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
-	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, fset)
+	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, graphSoFar.Unresolved, fset)
 	factpipe.ApplyDerive(fw.Derives, fset)
 
 	fr := factRelationsWithBase(fw, fset, baseFactCount, preds, baseTuples)
@@ -1049,7 +1049,7 @@ func (fw *Framework) EvalOnce(files []ParsedFile, graphSoFar graph.Snapshot, ext
 	factpipe.ApplyResolves(fw.Resolves, graphSoFar.Files, fset)
 	factpipe.ApplyConfig(fw.Configs, graphSoFar.ServicePath, fset)
 	factpipe.ApplyTable(fw.Tables, graphSoFar.ServicePath, fset)
-	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, fset)
+	factpipe.ApplyHub(fw.Hubs, graphSoFar.Nodes, graphSoFar.Files, graphSoFar.ServicePath, graphSoFar.Links, graphSoFar.Schema, graphSoFar.Unresolved, fset)
 	factpipe.ApplyDerive(fw.Derives, fset)
 	fr := factRelations(fw, fset)
 	fr.Goals = append(append([]string(nil), fr.Goals...), extraGoals...)

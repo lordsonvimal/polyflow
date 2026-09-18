@@ -42,7 +42,7 @@ const (
 	julLineSlack         = 6
 )
 
-func julHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig) []Fact {
+func julHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, schema graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	svc, resolver := sulBuildResolver(nodes, files, svcPath, schema)
 	if svc == "" {
 		return nil

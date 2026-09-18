@@ -46,7 +46,7 @@ const (
 	stylesheetUnresolvedPred = "stylesheet_unresolved" // (Svc, File, Line, Spec)
 )
 
-func stylesheetImportsSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func stylesheetImportsSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	fileNodeID := make(map[string]string) // svc\x00file -> id
 	haveService := make(map[string]bool)
 	svc := ""

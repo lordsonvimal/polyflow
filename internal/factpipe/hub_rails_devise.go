@@ -53,7 +53,7 @@ var rdModuleForScope = map[string]string{
 
 const rdRouteMintPred = "rd_route_mint" // (ID, Label, Svc, File, Line, EndLine, Path, Method, Action, Resource)
 
-func railsDeviseHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func railsDeviseHub(nodes []graph.Node, files []string, svcPath string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	if len(nodes) == 0 {
 		return nil
 	}

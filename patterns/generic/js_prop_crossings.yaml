@@ -1,0 +1,130 @@
+# Tier RC.3 (docs/js-declarative-composition-cluster-plan.md) — replaces
+# internal/linker/js_prop_urls.go's LinkJSPropURLs (Tier UB.2) and
+# internal/linker/js_prop_transport.go's LinkJSPropTransport (Tier UB.3).
+# Both consume the same prop_client_dynamic_url ledger row and resolve it
+# through the two mirror crossing rules internal/valuegraph/javascript.yaml
+# already declares — RC.1's valuegraphfacts.Resolve + ComponentIndex is what
+# makes the join generic; real per-expression recognition (which call is a
+# transport, which argument is the URL, which name is a parameter) and the
+# per-producer failure/fan-out policy stay hand-written Go inside the
+# "js_prop_crossings" hub (internal/factpipe/hub_js_prop_crossings.go) — the
+# same "hub carries the whole algorithm" shape as schema_url_link_props.
+#
+# NO `patterns:`/`facts:` block — hub-only. `language: generic` shields it
+# from the shared `factpipe_frameworks` per-service loop; it's called via a
+# dedicated `pipeline.Run` instead (the config_baseurl/rails_devise/
+# schema_url_link_props convention), once per service, needing the FULL
+# service node/file list and the service's already-thinned unresolved ledger
+# (Snapshot.Unresolved, Tier RC.3's new hub input).
+language: generic
+version: "1"
+
+hub:
+  - name: js_prop_crossings
+
+emit:
+  - relation: jpx_url_mint_rel
+    columns: [ID, Service, File, Line, Label, Method, URL, Prop, Producer, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw, RetractKey]
+    mint:
+      node: http_client
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Service }
+      file: { arg: File }
+      line: { arg: Line }
+      language: javascript
+      meta:
+        pattern: prop_url
+        spa: prop_url
+        method: { arg: Method }
+        url: { arg: URL }
+        prop: { arg: Prop }
+        producer: { arg: Producer }
+        vg_layer: L2
+        vg_rule: "valuegraph/javascript#jsx_attribute"
+        schema_file: { arg: SchemaFile }
+        schema_entity: { arg: SchemaEntity }
+        schema_key: { arg: SchemaKey }
+        schema_url_raw: { arg: SchemaURLRaw }
+    resolved:
+      service: { arg: Service }
+      name: { arg: RetractKey }
+
+  - relation: jpx_url_edge_rel
+    columns: [FnID, ID]
+    edge:
+      from: { arg: FnID }
+      to: { arg: ID }
+      type: calls
+    meta:
+      spa: prop_url
+    confidence:
+      - else: inferred
+
+  - relation: jpx_url_ledger_rel
+    columns: [Service, File, Line, Name, Kind, Targets]
+    # A dummy self-edge to satisfy "emit needs an edge/mint/.../patch" —
+    # unresolved.when below is unconditionally true, so this edge never
+    # actually builds. Same idiom as js_local_url.yaml/schema_url_link_props.yaml.
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: Name }
+        kind: { arg: Kind }
+        targets: { arg: Targets }
+
+  - relation: jpx_transport_mint_rel
+    columns: [ID, Service, File, Line, Label, Method, URL, Via, Caller, Producer, SchemaFile, SchemaEntity, SchemaKey, SchemaURLRaw, RetractKey]
+    mint:
+      node: http_client
+      id: { arg: ID }
+      label: { arg: Label }
+      service: { arg: Service }
+      file: { arg: File }
+      line: { arg: Line }
+      language: javascript
+      meta:
+        pattern: prop_transport
+        spa: prop_transport
+        method: { arg: Method }
+        url: { arg: URL }
+        via: { arg: Via }
+        caller: { arg: Caller }
+        producer: { arg: Producer }
+        vg_layer: L2
+        vg_rule: "valuegraph/javascript#jsx_attribute_callback"
+        schema_file: { arg: SchemaFile }
+        schema_entity: { arg: SchemaEntity }
+        schema_key: { arg: SchemaKey }
+        schema_url_raw: { arg: SchemaURLRaw }
+    resolved:
+      service: { arg: Service }
+      name: { arg: RetractKey }
+
+  - relation: jpx_transport_edge_rel
+    columns: [FnID, ID]
+    edge:
+      from: { arg: FnID }
+      to: { arg: ID }
+      type: calls
+    meta:
+      spa: prop_transport
+    confidence:
+      - else: inferred
+
+  - relation: jpx_transport_ledger_rel
+    columns: [Service, File, Line, Name, Kind, Targets]
+    edge: { from: { arg: Service }, to: { arg: Service }, type: calls }
+    unresolved:
+      when: "1 == 1"
+      ref:
+        service: { arg: Service }
+        file: { arg: File }
+        line: { arg: Line }
+        name: { arg: Name }
+        kind: { arg: Kind }
+        targets: { arg: Targets }

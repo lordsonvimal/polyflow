@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -89,7 +90,7 @@ func TestCaptureVGBaseline(t *testing.T) {
 			continue
 		}
 		ledger = append(ledger, vgbaseline.LedgerRecord{
-			Key:     PropURLRetractKey(r.File, r.Line),
+			Key:     r.File + "\x00" + strconv.Itoa(r.Line),
 			Service: r.Service,
 			File:    r.File,
 			Line:    r.Line,

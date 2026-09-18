@@ -75,7 +75,7 @@ var jhcAppHOCDenylist = map[string]bool{
 	"require": true, "import": true,
 }
 
-func jsHOCSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig) []Fact {
+func jsHOCSitesHub(nodes []graph.Node, files []string, _ string, _ []graph.LinkHint, _ graph.SchemaConfig, _ []graph.UnresolvedRef) []Fact {
 	nodeIdx := make(map[string]bool, len(nodes))
 	varByFileLabel := make(map[string]string)
 	declByFileLabel := make(map[string]string)
