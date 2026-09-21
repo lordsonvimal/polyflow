@@ -42,7 +42,7 @@ func ResolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (
 	if name == "" {
 		// Not a binding to backtrack: a literal, template or concatenation
 		// written straight at the call site. Resolve it in place.
-		return resolveOneLocalURLExpr(eng, expr, fn, src)
+		return resolveOneLocalURLExpr(eng, expr, fn, src, "", 0)
 	}
 
 	if ModuleScopeReassign(fn, src, name) {
@@ -59,7 +59,12 @@ func ResolveLocalURLBinding(urlExpr *sitter.Node, fn *sitter.Node, src []byte) (
 		seen = make(map[string]bool, len(rhs))
 	)
 	for _, r := range rhs {
-		got, _, rok := resolveOneLocalURLExpr(eng, r, fn, src)
+		// r is one of name's own assignments — tell the engine so a self-
+		// reference inside it (`url = `${url}&x``, reassigned across
+		// several conditionals) resolves against what name was strictly
+		// before r, instead of naively offering r back to itself as a
+		// second answer alongside its own fold. See Query.SelfName.
+		got, _, rok := resolveOneLocalURLExpr(eng, r, fn, src, name, r.StartByte())
 		if !rok {
 			return nil, LedgerLocalURLUnresolved, false
 		}
@@ -146,7 +151,12 @@ func (s jsEngineFileSource) Parse(file string) ([]byte, *sitter.Node, bool) {
 // positionally, so the ternary is split here and each arm resolved on its
 // own — consequence before alternative — rather than handed to the engine
 // whole.
-func resolveOneLocalURLExpr(eng *valuegraph.Engine, n *sitter.Node, fn *sitter.Node, src []byte) (paths []string, reason string, ok bool) {
+//
+// selfName/selfAsOf are non-empty/non-zero when n is itself one of name's
+// own assignments, backtracked by the caller rather than found by the
+// engine — see Query.SelfName. Zero them for a plain expression (the
+// name=="" case in ResolveLocalURLBinding) where the concept does not apply.
+func resolveOneLocalURLExpr(eng *valuegraph.Engine, n *sitter.Node, fn *sitter.Node, src []byte, selfName string, selfAsOf uint32) (paths []string, reason string, ok bool) {
 	if n == nil {
 		return nil, LedgerLocalURLUnresolved, false
 	}
@@ -155,7 +165,7 @@ func resolveOneLocalURLExpr(eng *valuegraph.Engine, n *sitter.Node, fn *sitter.N
 		seen = make(map[string]bool)
 	)
 	for _, alt := range localURLExprAlternatives(n) {
-		v := eng.Resolve(valuegraph.Query{Src: src, Root: fn, Expr: alt, Scope: fn})
+		v := eng.Resolve(valuegraph.Query{Src: src, Root: fn, Expr: alt, Scope: fn, SelfName: selfName, SelfAsOf: selfAsOf})
 		got, vok := v.Strings(0)
 		if !vok {
 			return nil, vgLedgerReason(v), false

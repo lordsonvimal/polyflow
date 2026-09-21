@@ -57,6 +57,22 @@ type Query struct {
 	Root  *sitter.Node
 	Expr  *sitter.Node // the expression to resolve
 	Scope *sitter.Node // enclosing function; nil means "infer from Expr"
+
+	// SelfName/SelfAsOf tell the engine that Expr IS itself a value bound to
+	// SelfName — a caller that already found Expr by backtracking SelfName's
+	// own assignments (rather than asking the engine to find it), and is now
+	// resolving that one assignment standalone. Without this, a self-
+	// reference inside Expr (`url = `${url}&x``, Expr being that
+	// right-hand side) looks, from the engine's own entry point, exactly
+	// like an ordinary unrelated read of "url" — bindingsIn has no way to
+	// know Expr is the very candidate already in hand, so it offers Expr
+	// back to itself as one of two answers instead of excluding it. Setting
+	// these seeds the same selfName/selfAsOf state lookup's own candidate
+	// loop sets internally, so resolving Expr's self-reference correctly
+	// excludes Expr and answers "what was SelfName before Expr" — see
+	// resolveSymbol. Leave zero for an ordinary query.
+	SelfName string
+	SelfAsOf uint32
 }
 
 // Engine resolves expressions against one language's binding spec.
@@ -129,6 +145,8 @@ func (e *Engine) Resolve(q Query) Value {
 		opened:   map[string]parsedFile{},
 		visiting: map[cycleKey]bool{},
 		crossed:  map[string]bool{},
+		selfName: q.SelfName,
+		selfAsOf: q.SelfAsOf,
 	}
 
 	if c.src == nil {
@@ -173,6 +191,21 @@ type ctx struct {
 	opened   map[string]parsedFile
 	visiting map[cycleKey]bool
 	crossed  map[string]bool
+
+	// selfName/selfAsOf are ambient state, valid only while resolving one
+	// binding candidate's own right-hand side (set by lookup's candidate
+	// loop, restored by its defer). A resolveSymbol call for exactly this
+	// name, reached without an intervening resolveSymbol call for any OTHER
+	// name, is that candidate's own self-reference — `url = `${url}&x`` — and
+	// is resolved as of selfAsOf (the candidate's own start byte: "what was
+	// this name before THIS assignment") rather than at the literal token's
+	// real position, which is what a normal read of the name would use. A
+	// name reached indirectly, through a different name's own candidate in
+	// between, does NOT match (selfName no longer equals it by then), so an
+	// actual alias cycle (`a = b; b = a`) is untouched by this and still hits
+	// the ordinary cycle guard below.
+	selfName string
+	selfAsOf uint32
 }
 
 // inFile returns the same call, reading a different file. The budgets, the
@@ -318,6 +351,16 @@ func (c *ctx) resolveSymbol(name string, at *sitter.Node, scope *sitter.Node, de
 		return Opaque(c.originOf(at, ReasonNoBinding))
 	}
 	use := at.StartByte()
+	// selfRef: this call is resolving the same name as the binding candidate
+	// currently being resolved by our nearest enclosing lookup() frame — a
+	// direct self-reference (`url = `${url}&x``), not an alias mediated
+	// through some other name. Answered as of that candidate's own start
+	// (selfAsOf): "what was this name before THIS assignment", a strictly
+	// narrower and always-answerable question, never the same one twice.
+	selfRef := c.selfName != "" && c.selfName == name
+	if selfRef {
+		use = c.selfAsOf
+	}
 	mk := memoKey{file: c.file, scope: scope.StartByte(), symbol: name, use: use}
 	c.e.mu.Lock()
 	cached, hit := c.e.memo[mk]
@@ -331,7 +374,22 @@ func (c *ctx) resolveSymbol(name string, at *sitter.Node, scope *sitter.Node, de
 		c.visiting = map[cycleKey]bool{}
 	}
 	if c.visiting[ck] {
-		return Opaque(c.originOf(at, ReasonCycle))
+		if !selfRef {
+			// An alias cycle (`a = b; b = a`) or a genuine repeat visit —
+			// neither of which selfRef's position-narrowing applies to.
+			return Opaque(c.originOf(at, ReasonCycle))
+		}
+		// Already marked by the enclosing frame this call is nested inside;
+		// leave it marked (do not double-set/double-delete) and proceed with
+		// the narrowed use computed above. use < the position that set the
+		// mark (selfAsOf is always a strictly earlier byte than whatever
+		// candidate produced it), so recursion through repeated self-
+		// reference strictly shrinks and must terminate.
+		out := c.lookup(name, at, scope, use, depth)
+		c.e.mu.Lock()
+		c.e.memo[mk] = out
+		c.e.mu.Unlock()
+		return out
 	}
 	c.visiting[ck] = true
 	defer delete(c.visiting, ck)
@@ -354,8 +412,15 @@ func (c *ctx) lookup(name string, at *sitter.Node, scope *sitter.Node, use uint3
 			for _, r := range rhs {
 				// The hop is what MaxDepth counts, and each bound value is read
 				// as of its own position: `let a = b` may only see a `b` written
-				// above it, not one written below.
-				vals = append(vals, c.resolveNode(r, cur, depth+1))
+				// above it, not one written below. selfName/selfAsOf mark r as
+				// name's own candidate for the span of resolving it, so a
+				// direct self-reference inside r resolves against r's own start
+				// rather than tripping the cycle guard — see resolveSymbol.
+				prevName, prevAsOf := c.selfName, c.selfAsOf
+				c.selfName, c.selfAsOf = name, r.StartByte()
+				v := c.resolveNode(r, cur, depth+1)
+				c.selfName, c.selfAsOf = prevName, prevAsOf
+				vals = append(vals, v)
 			}
 			return c.capUnion(at, Union(vals...))
 		}
