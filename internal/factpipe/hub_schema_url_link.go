@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -640,6 +641,18 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 	var pendingSites []valuegraphfacts.Site
 	var pendingSpec []schemaurl.PendingSite
 
+	// RC.7 follow-up #3: a `StringUtils.replaceSymbols(<crossable>, {…})`
+	// call site — see sulTemplateSymbolsArg. Batched the same way and for
+	// the same reason as the RC.5 pending above: one valuegraphfacts.Resolve
+	// call for every such site found across the whole walk, not one per site.
+	type sulTemplatePending struct {
+		rel, fn, verb string
+		line          int
+		verbKnown     bool
+	}
+	var templatePending []sulTemplatePending
+	var templateSites []valuegraphfacts.Site
+
 	for _, pf := range pfiles {
 		if len(specs) == 0 {
 			continue
@@ -710,6 +723,10 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 						for _, p := range paths {
 							reqs = append(reqs, sulPropClientMintReq{path: p, cands: []string{p}, localBinding: true})
 						}
+					} else if template, isTemplateCall := sulTemplateSymbolsArg(urlNode, jsast.EnclosingFunction(n), pf.src); isTemplateCall {
+						deferred = true
+						templatePending = append(templatePending, sulTemplatePending{rel: pf.rel, fn: fn, verb: verb, line: line, verbKnown: verbKnown})
+						templateSites = append(templateSites, valuegraphfacts.Site{File: pf.rel, Expr: template, Scope: jsast.EnclosingFunction(n)})
 					} else if hit, hok, hkind := resolver.ResolveURLExpr(urlNode, jsast.EnclosingFunction(n), pf.src, svc); hok || hkind != "" {
 						switch {
 						case hok && verbKnown:
@@ -768,6 +785,43 @@ func sulPropClientFacts(nodes []graph.Node, files []string, svc string, resolver
 		}
 		reqs := []sulPropClientMintReq{{path: res.Hit.Path, cands: []string{res.Hit.Path}, schemaMeta: schemaurl.MintMeta(res.Hit)}}
 		out = append(out, sulEmitPropClientReqs(mintSeen, fnByLabel, svc, p.rel, p.line, p.fn, p.verb, reqs)...)
+	}
+
+	if len(templateSites) > 0 {
+		cross := valuegraphfacts.BuildComponentIndex(nodes, svc)
+		jsFiles := sulJSFileList(files)
+		results := valuegraphfacts.Resolve(jpxValuegraphSpec(), jsFiles, cross, templateSites,
+			valuegraph.Options{MaxUnionWidth: jpxVGPropMaxStrings, MaxFiles: len(jsFiles) + 8})
+		for i, res := range results {
+			p := templatePending[i]
+			got, ok := res.Value.Strings(0)
+			if !ok || len(got) == 0 {
+				out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, p.rel, p.line, "(dynamic)", "prop_client_dynamic_url"))
+				continue
+			}
+			if !p.verbKnown {
+				out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, p.rel, p.line, "(dynamic)", "prop_client_dynamic_url"))
+				continue
+			}
+			seen := map[string]bool{}
+			var reqs []sulPropClientMintReq
+			for _, s := range got {
+				shape := sulTemplateSymbolsShape(s)
+				if !sulIsLocalURLPath(shape) {
+					continue
+				}
+				if seen[shape] {
+					continue
+				}
+				seen[shape] = true
+				reqs = append(reqs, sulPropClientMintReq{path: shape, cands: []string{shape}})
+			}
+			if len(reqs) == 0 {
+				out = append(out, sulLedgerFact(sulPropClientLedgerPred, svc, p.rel, p.line, "(dynamic)", "prop_client_dynamic_url"))
+				continue
+			}
+			out = append(out, sulEmitPropClientReqs(mintSeen, fnByLabel, svc, p.rel, p.line, p.fn, p.verb, reqs)...)
+		}
 	}
 	return out
 }
@@ -984,6 +1038,89 @@ func sulWalkerKey(w contract.KeyWalker, node *sitter.Node, src []byte) ([]string
 	}
 	cands, dyn := w.WalkKey(node, src, func(string) (string, bool) { return "", false })
 	return cands, dyn
+}
+
+// ── RC.7 follow-up #3: cedar's own template-substitution helper ─────────────
+//
+// `StringUtils.replaceSymbols(template, { id: … })` is cedar's own idiom for
+// building a URL from a crossed prop: `template` is usually
+// `this.props.urlRecipe` (or a name destructured from it), a literal string
+// carrying `${id}`-shaped holes as plain text (JSX string attributes don't
+// interpolate, so the holes survive as characters, not template
+// substitutions). `sulDynamicURLBuilder` already tries this call shape and
+// fails — it looks up `defs["replaceSymbols"]` in THIS file only, and
+// `replaceSymbols` lives in a shared StringUtils module, never this one.
+// This is a distinct, narrower idiom: don't open the callee's body (there is
+// nothing there to read — it's a generic utility), resolve the FIRST
+// argument instead — which may itself need UB.2's forward `jsx_attribute`
+// crossing, already live — and turn its `${…}` holes into `*`.
+//
+// sulTemplateSymbolsFn is the callee name this idiom matches. Narrowed to
+// this one name (not "any `.replaceSymbols(...)` call") so an unrelated
+// method of the same name elsewhere never misfires into this path.
+const sulTemplateSymbolsFn = "replaceSymbols"
+
+// sulTemplateSymbolsArg recognises `<Receiver>.replaceSymbols(template, ...)`
+// — possibly one hop behind a local variable, `const URI = StringUtils
+// .replaceSymbols(urlRecipe, {...}); ajax(..., URI)` — and returns template,
+// the expression to resolve (through crossing) for the URL's shape.
+func sulTemplateSymbolsArg(urlNode *sitter.Node, fn *sitter.Node, src []byte) (template *sitter.Node, ok bool) {
+	if urlNode == nil {
+		return nil, false
+	}
+	call := urlNode
+	if call.Type() != "call_expression" {
+		ident := jsast.LocalIdentName(call, src)
+		if ident == "" || fn == nil {
+			return nil, false
+		}
+		rhs := jsast.LocalAssignments(fn, call.StartByte(), src, ident)
+		if len(rhs) != 1 || rhs[0].Type() != "call_expression" {
+			return nil, false
+		}
+		call = rhs[0]
+	}
+	callee := call.ChildByFieldName("function")
+	if callee == nil || callee.Type() != "member_expression" {
+		return nil, false
+	}
+	prop := callee.ChildByFieldName("property")
+	if prop == nil || prop.Type() != "property_identifier" || prop.Content(src) != sulTemplateSymbolsFn {
+		return nil, false
+	}
+	args := call.ChildByFieldName("arguments")
+	if args == nil || args.NamedChildCount() == 0 {
+		return nil, false
+	}
+	return args.NamedChild(0), true
+}
+
+// sulTemplateSymbolsHoleRe matches a `${...}` hole in a resolved string —
+// literal text, not a JS template substitution (see the package comment
+// above): the producer is typically a plain JSX string attribute.
+var sulTemplateSymbolsHoleRe = regexp.MustCompile(`\$\{[^}]*\}`)
+
+// sulTemplateSymbolsShape turns a resolved `urlRecipe`-style string into a
+// request-path shape by replacing every `${...}` hole with "*" — the same
+// normalisation contract.KeyWalker already applies to a genuine JS template
+// literal's substitutions, reused here because StringUtils.replaceSymbols'
+// own substitution mechanism plays the identical role.
+func sulTemplateSymbolsShape(s string) string {
+	return sulTemplateSymbolsHoleRe.ReplaceAllString(s, "*")
+}
+
+// sulIsLocalURLPath reports whether p is a request path worth minting: "/"-
+// or "*"-rooted, and carrying at least one literal (non-"*", non-"/")
+// character — same contract as jsast's unexported isLocalURLPath. A bare
+// "*" (one crossed producer this hub can't statically pin, e.g. a JSX
+// `urlRecipe={url}` with url itself unresolved) is not a shape, it's "any
+// route" — abstain rather than mint a wildcard a route matcher would treat
+// as matching everything.
+func sulIsLocalURLPath(p string) bool {
+	if len(p) == 0 || (p[0] != '/' && p[0] != '*') {
+		return false
+	}
+	return strings.ContainsFunc(p, func(r rune) bool { return r != '*' && r != '/' })
 }
 
 // ── call-site recognition ───────────────────────────────────────────────────
