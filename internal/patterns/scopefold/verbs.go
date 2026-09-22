@@ -64,6 +64,17 @@ func applyOneVerb(step, val string) string {
 			return val[i+1:]
 		}
 		return ""
+	case "path_helper_name":
+		// Rails' auto-name for a string-literal route: strip quotes and
+		// slashes, then underscore-join whatever segments remain — "" for
+		// anything with a dynamic segment, since Rails generates no helper
+		// for those (pathHelperName's rule, generalized off one capture
+		// instead of a whole nameScope + literal pair).
+		lit := segment(val)
+		if lit == "" || strings.Contains(lit, ":") || strings.Contains(lit, "*") {
+			return ""
+		}
+		return strings.ReplaceAll(lit, "/", "_")
 	case "inflect":
 		switch arg {
 		case "singularize":

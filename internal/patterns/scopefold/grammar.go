@@ -124,6 +124,17 @@ type EmitArg struct {
 	// enclosing scope's stack push.
 	AppendList []EmitArg `yaml:"append_list"`
 
+	// Prepend inserts zero or more further computed segments (each its own
+	// EmitArg, evaluated the same as AppendList's) at the FRONT of the
+	// composed segment list, before Compose — the mirror image of AppendList,
+	// needed because Rails' two route-naming conventions disagree on which
+	// side the qualifier goes: `sync_user` (a member action prefixes the
+	// resource base) versus `study_deliverables` (a nested resource's own
+	// collection name suffixes its parent's). One EmitArg can only build one
+	// of those shapes; needing both was the reason to add a second, distinct
+	// field rather than reversing AppendList's order for everyone.
+	Prepend []EmitArg `yaml:"prepend"`
+
 	// Capture + Extract read one capture off the match directly, through a
 	// "|"-chained verb pipeline (e.g. "segment|upcase").
 	Capture string `yaml:"capture"`
@@ -141,6 +152,25 @@ type EmitArg struct {
 	// is a Stack pushed by the member/collection scopes and read with
 	// Compose: "top".
 	Fallback *EmitArg `yaml:"fallback"`
+
+	// Switch dispatches to one of several EmitArg templates by the resolved
+	// value of On — Rails' verbRouteHelperName reads a route's on:/lexical
+	// scope and names it completely differently depending on whether that
+	// value is "member", "collection", or neither; a chain of Fallbacks
+	// cannot express a 3-way branch because Fallback only asks "is this
+	// empty", never "what is this".
+	Switch *SwitchSpec `yaml:"switch"`
+}
+
+// SwitchSpec is EmitArg's 3-or-more-way branch: On is evaluated first (using
+// only its own Capture/Stack/Fallback — On's own Switch, if any, is honored
+// too, letting cases nest), and its resolved value selects a case from Cases
+// by exact string match, falling back to Default when nothing matches (or to
+// "" when Default is nil).
+type SwitchSpec struct {
+	On      EmitArg            `yaml:"on"`
+	Cases   map[string]EmitArg `yaml:"cases"`
+	Default *EmitArg           `yaml:"default"`
 }
 
 // Contribution is how a ScopeSpec extracts the one segment it pushes onto a
@@ -196,4 +226,12 @@ type ExpandRow struct {
 	// pushes MemberSegment onto the path stack before Suffix).
 	Member bool   `yaml:"member"`
 	Suffix string `yaml:"suffix"`
+
+	// Emit overrides the ExpandTable's own Emit for this row alone — Rails'
+	// seven implicit REST routes share a path/method shape but not a name
+	// shape (index/create name off the collection, new/edit prefix the
+	// singular with their own action, show/update/destroy name off the bare
+	// singular), so the table needs a per-row override rather than one
+	// formula every row bends to fit.
+	Emit *EmitSpec `yaml:"emit"`
 }

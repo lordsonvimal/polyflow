@@ -7,30 +7,71 @@ import (
 )
 
 // railsRouteGrammar is Tier SF Phase 2 (docs/scope-fold-engine-plan.md): the
-// path/module/method/action composition slice of Rails' routes.rb grammar,
-// expressed as a scopefold.Grammar instead of ruby_route_paths.go's
-// hand-written recursion. Deliberately scoped to what's provably correct
-// today (parity-tested against the same inline fixtures
-// TestComposeRailsRoutePaths_NestedNamespaceAndMemberCollection and
-// TestComposeRailsRoutePaths_InlineOnMemberCollection already exercise) —
-// route-name synthesis (nameScope), controller:/to:/devise_for overrides,
-// root, and the bare-verb-in-resources synthesis stay on
-// ruby_route_paths.go's plate until a later increment covers them the same
-// way. Not yet wired into composeRailsRoutePaths; buildRailsMatches +
-// railsRouteGrammar exist to be Fold-ed and diffed against it, not to
-// replace it.
+// path/module/method/action/route-name composition slice of Rails' routes.rb
+// grammar, expressed as a scopefold.Grammar instead of ruby_route_paths.go's
+// hand-written recursion. Parity-tested against the same fixtures
+// ruby_route_paths_test.go and ruby_route_names_test.go already exercise —
+// controller:/to:/devise_for overrides (controller_module/action/resource
+// Meta, not path/method/name) and the `root` route (no ground truth to
+// parity-test against — composeRailsRoutePaths does not handle it either)
+// stay out of this increment; see this file's per-construct comments for
+// exactly what each one covers. Not yet wired into composeRailsRoutePaths;
+// buildRailsMatches + railsRouteGrammar exist to be Fold-ed and diffed
+// against it, not to replace it.
 func railsRouteGrammar() *scopefold.Grammar {
-	// pending_nest is Rails' single-generation nesting parameter
+	// pending_nest is Rails' single-generation URL nesting parameter
 	// (resources :folders scoping its children under :folder_id): resources
-	// contributes it for its direct children, any scope-type child (not
-	// member/collection/a verb leaf) absorbs it as the first segment of its
-	// own path push, and every scope type — including the one that set it —
-	// resets it afterward, so it never reaches a grandchild uninvited. See
-	// grammar.go's Resets doc comment.
+	// contributes it for its direct children, any scope-type child absorbs
+	// it as the first segment of its own path push, and every scope type —
+	// including the one that set it — resets it afterward. See grammar.go's
+	// Resets doc comment.
 	pendingNestFirst := scopefold.Contribution{Stack: "pending_nest"}
 
+	// pendingSingularFirst is nameScope's parallel single-generation value
+	// for route *names*: the enclosing resource's singular form, flattened
+	// into the "name" stack by whichever scope-type construct is entered
+	// next (namespace/scope/resources/resource), and never by member/
+	// collection (which read it directly instead — see memberBase/
+	// collectionBase's ports below).
+	pendingSingularFirst := scopefold.Contribution{Stack: "res_singular"}
+
+	// asOrLiteralName resolves the qualifier verbRouteHelperName's member/
+	// collection/default branches all share: an explicit `as:` keyword, or
+	// else the route's own literal-derived name — a bare action symbol for
+	// member/collection routes ("segment" strips its leading ":"), a literal
+	// path for http_verb_route ("path_helper_name" additionally rejects a
+	// dynamic segment and underscore-joins a multi-segment literal, per
+	// pathHelperName's own rule).
+	asOrLiteralName := func(literalFrom, extract string) scopefold.EmitArg {
+		return scopefold.EmitArg{
+			Capture: "as_kw",
+			Fallback: &scopefold.EmitArg{
+				Capture: literalFrom, Extract: extract,
+			},
+		}
+	}
+
+	// memberHelper/collectionHelper build qualifyVerbName's shape (action-or-as
+	// PREFIXED to the enclosing resource's singular/collection base) for
+	// member_verb_route/collection_verb_route and their inline siblings,
+	// which all carry an "action" capture.
+	memberHelper := scopefold.EmitArg{
+		Stack: "name", Compose: "helper_name",
+		AppendList: []scopefold.EmitArg{{Stack: "res_singular", Compose: "top"}},
+		Prepend:    []scopefold.EmitArg{asOrLiteralName("action", "segment")},
+	}
+	collectionHelper := scopefold.EmitArg{
+		Stack: "name", Compose: "helper_name",
+		AppendList: []scopefold.EmitArg{{Stack: "res_collection", Compose: "top"}},
+		Prepend:    []scopefold.EmitArg{asOrLiteralName("action", "segment")},
+	}
+
+	verbLeafArgs := func(pathArgs scopefold.EmitArg, helper scopefold.EmitArg) []scopefold.EmitArg {
+		return []scopefold.EmitArg{pathArgs, {Capture: "method", Extract: "upcase"}, helper}
+	}
+
 	return &scopefold.Grammar{
-		Stacks: []string{"path", "module", "on_scope", "pending_nest"},
+		Stacks: []string{"path", "module", "name", "on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
 		Scopes: []scopefold.ScopeSpec{
 			{
 				Match:   "namespace",
@@ -38,13 +79,15 @@ func railsRouteGrammar() *scopefold.Grammar {
 				Contributes: map[string][]scopefold.Contribution{
 					"path":   {pendingNestFirst, {Capture: "seg", Extract: "segment"}},
 					"module": {{Capture: "seg", Extract: "segment"}},
+					"name":   {pendingSingularFirst, {Capture: "seg", Extract: "segment"}},
 				},
-				Resets: []string{"on_scope", "pending_nest"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
 			},
 			{
 				// scope's path comes from an explicit path: keyword, or else
-				// the positional argument (scopeSegments' documented
-				// precedence); module only from module:.
+				// the positional argument; module only from module:; name
+				// only from as: (scopeSegments'/nameScope's own documented
+				// precedence — none of the three subsets agree).
 				Match:   "scope",
 				Recurse: "block",
 				Contributes: map[string][]scopefold.Contribution{
@@ -53,36 +96,74 @@ func railsRouteGrammar() *scopefold.Grammar {
 						Fallback: &scopefold.Contribution{Capture: "pos", Extract: "segment"},
 					}},
 					"module": {{Capture: "module_kw", Extract: "segment"}},
+					"name":   {pendingSingularFirst, {Capture: "as_kw", Extract: "segment"}},
 				},
-				Resets: []string{"on_scope", "pending_nest"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
 			},
 			{
 				// resources scopes its own segment under any pending_nest it
-				// inherited, then sets a fresh one for its own direct
-				// children — module is deliberately NOT pushed here:
-				// composeAndStamp's controller_module note is that
-				// resources/resource never contribute to it, only
-				// namespace/scope do.
+				// inherited, then sets a fresh nesting id AND fresh singular/
+				// plural/collection naming values for its own direct
+				// children — module is deliberately NOT pushed (resources/
+				// resource never contribute to controller_module, only
+				// namespace/scope do), and neither is the resource's own
+				// name segment (nameScope folds a resource's *own* identity
+				// in only at the point something reads it — a child scope's
+				// pendingSingularFirst, or this same frame's own Expand/
+				// member/collection naming — never by pushing it onto
+				// "name" directly, or a plain verb route sitting beside a
+				// nested resources block would wrongly inherit it).
 				Match:   "resources",
 				Recurse: "block",
+				Expand:  "rest_actions_plural",
 				Contributes: map[string][]scopefold.Contribution{
 					"path": {pendingNestFirst, {Capture: "seg", Extract: "segment"}},
 					"pending_nest": {{
 						Capture: "seg", Extract: "segment|inflect:singularize|suffix_id|colon_prefix",
 					}},
+					"name": {pendingSingularFirst},
+					"res_singular": {{
+						Capture: "res_as", Extract: "segment|inflect:singularize",
+						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment|inflect:singularize"},
+					}},
+					"res_plural": {{
+						Capture: "res_as", Extract: "segment",
+						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment"},
+					}},
+					"res_collection": {{
+						Capture: "res_as", Extract: "segment|inflect:collection_name",
+						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment|inflect:collection_name"},
+					}},
 				},
-				Resets: []string{"on_scope", "pending_nest"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
 			},
 			{
 				// A singleton resource has no member id, so it never sets a
-				// fresh pending_nest for its children — only absorbs one it
-				// inherited, same as resources.
+				// fresh pending_nest — only absorbs one it inherited, same
+				// as resources. Its singular/plural/collection all equal
+				// its own declared name (or `as:`) verbatim: no inflection,
+				// no `_index` disambiguation — SingletonResource overrides
+				// collection_name back to the singular in real Rails.
 				Match:   "resource",
 				Recurse: "block",
+				Expand:  "rest_actions_singular",
 				Contributes: map[string][]scopefold.Contribution{
 					"path": {pendingNestFirst, {Capture: "seg", Extract: "segment"}},
+					"name": {pendingSingularFirst},
+					"res_singular": {{
+						Capture: "res_as", Extract: "segment",
+						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment"},
+					}},
+					"res_plural": {{
+						Capture: "res_as", Extract: "segment",
+						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment"},
+					}},
+					"res_collection": {{
+						Capture: "res_as", Extract: "segment",
+						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment"},
+					}},
 				},
-				Resets: []string{"on_scope", "pending_nest"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
 			},
 			{
 				Match:   "member",
@@ -107,58 +188,171 @@ func railsRouteGrammar() *scopefold.Grammar {
 				Match: "http_verb_route",
 				Emit: scopefold.EmitSpec{
 					Pred: "rails_route",
-					Args: []scopefold.EmitArg{
-						{Stack: "path", Compose: "join_segments", AppendCapture: "path", AppendExtract: "segment"},
-						{Capture: "method", Extract: "upcase"},
-					},
+					Args: verbLeafArgs(
+						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendCapture: "path", AppendExtract: "segment"},
+						scopefold.EmitArg{Switch: &scopefold.SwitchSpec{
+							On: scopefold.EmitArg{
+								Capture:  "on_kw",
+								Fallback: &scopefold.EmitArg{Stack: "on_scope", Compose: "top"},
+							},
+							Cases: map[string]scopefold.EmitArg{
+								"member": {
+									Stack: "name", Compose: "helper_name",
+									AppendList: []scopefold.EmitArg{{Stack: "res_singular", Compose: "top"}},
+									Prepend:    []scopefold.EmitArg{asOrLiteralName("path", "path_helper_name")},
+								},
+								"collection": {
+									Stack: "name", Compose: "helper_name",
+									AppendList: []scopefold.EmitArg{{Stack: "res_collection", Compose: "top"}},
+									Prepend:    []scopefold.EmitArg{asOrLiteralName("path", "path_helper_name")},
+								},
+							},
+							Default: &scopefold.EmitArg{
+								Stack: "name", Compose: "helper_name",
+								AppendList: []scopefold.EmitArg{
+									{Stack: "res_singular", Compose: "top"},
+									asOrLiteralName("path", "path_helper_name"),
+								},
+							},
+						}},
+					),
 				},
 			},
 			{
 				Match: "member_verb_route",
 				Emit: scopefold.EmitSpec{
 					Pred: "rails_route",
-					Args: []scopefold.EmitArg{
-						{Stack: "path", Compose: "join_segments", AppendCapture: "action", AppendExtract: "segment"},
-						{Capture: "method", Extract: "upcase"},
-					},
+					Args: verbLeafArgs(
+						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendCapture: "action", AppendExtract: "segment"},
+						memberHelper,
+					),
 				},
 			},
 			{
 				Match: "collection_verb_route",
 				Emit: scopefold.EmitSpec{
 					Pred: "rails_route",
-					Args: []scopefold.EmitArg{
-						{Stack: "path", Compose: "join_segments", AppendCapture: "action", AppendExtract: "segment"},
-						{Capture: "method", Extract: "upcase"},
-					},
+					Args: verbLeafArgs(
+						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendCapture: "action", AppendExtract: "segment"},
+						collectionHelper,
+					),
 				},
 			},
 			{
 				Match: "member_verb_route_inline",
 				Emit: scopefold.EmitSpec{
 					Pred: "rails_route",
-					Args: []scopefold.EmitArg{
-						{Stack: "path", Compose: "join_segments", AppendList: []scopefold.EmitArg{
+					Args: verbLeafArgs(
+						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendList: []scopefold.EmitArg{
 							{Literal: ":id"},
 							{Capture: "action", Extract: "segment"},
 						}},
-						{Capture: "method", Extract: "upcase"},
-					},
+						memberHelper,
+					),
 				},
 			},
 			{
 				Match: "collection_verb_route_inline",
 				Emit: scopefold.EmitSpec{
 					Pred: "rails_route",
-					Args: []scopefold.EmitArg{
-						{Stack: "path", Compose: "join_segments", AppendList: []scopefold.EmitArg{
+					Args: verbLeafArgs(
+						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendList: []scopefold.EmitArg{
 							{Capture: "action", Extract: "segment"},
 						}},
-						{Capture: "method", Extract: "upcase"},
-					},
+						collectionHelper,
+					),
+				},
+			},
+			{
+				// A bare `post :add_details` directly inside a `resources`
+				// block (no member/collection wrapper, no on: keyword) is a
+				// member route by Rails convention — same path shape as
+				// member_verb_route_inline, but named as base_action
+				// (resourceScopedHelperName's SUFFIX order) rather than
+				// action_base (qualifyVerbName's PREFIX order used by the
+				// on:/lexical forms), so it needs its own leaf rather than
+				// reusing member_verb_route_inline's Emit.
+				Match: "resource_scoped_verb",
+				Emit: scopefold.EmitSpec{
+					Pred: "rails_route",
+					Args: verbLeafArgs(
+						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendList: []scopefold.EmitArg{
+							{Literal: ":id"},
+							{Capture: "action", Extract: "segment"},
+						}},
+						scopefold.EmitArg{
+							Stack: "name", Compose: "helper_name",
+							AppendList: []scopefold.EmitArg{
+								{Stack: "res_singular", Compose: "top"},
+								asOrLiteralName("action", "segment"),
+							},
+						},
+					),
 				},
 			},
 		},
+		ExpandTables: map[string]scopefold.ExpandTable{
+			"rest_actions_plural":   restActionsTable(true),
+			"rest_actions_singular": restActionsTable(false),
+		},
+	}
+}
+
+// restActionsTable builds ExpandTables["rest_actions_plural"/"_singular"]:
+// the CRUD routes a bare `resources`/`resource` declaration implies with no
+// verb call of its own — emitRESTRoutes' Go loop over pluralRESTActions,
+// generalized onto scopefold's existing table-driven Expand mechanism (no
+// new engine primitive beyond ExpandRow.Emit, which this is the first user
+// of: index/create name off the collection, new/edit prefix their own action
+// onto the singular, show/update/destroy name off the bare singular — one
+// shared Emit cannot express all three shapes, so each row supplies its own).
+//
+// plural distinguishes `resources` (index exists, :id inserted for member
+// rows) from `resource` (no index — a singleton is never listed — and never
+// an :id, since there is only ever one).
+func restActionsTable(plural bool) scopefold.ExpandTable {
+	base := scopefold.EmitArg{Stack: "name", Compose: "helper_name",
+		AppendList: []scopefold.EmitArg{{Stack: "res_singular", Compose: "top"}}}
+	collectionBase := scopefold.EmitArg{Stack: "name", Compose: "helper_name",
+		AppendList: []scopefold.EmitArg{{Stack: "res_collection", Compose: "top"}}}
+	prefixed := func(prefix string) scopefold.EmitArg {
+		a := base
+		a.Prepend = []scopefold.EmitArg{{Literal: prefix}}
+		return a
+	}
+	emit := func(helper scopefold.EmitArg) *scopefold.EmitSpec {
+		return &scopefold.EmitSpec{
+			Pred: "rails_route",
+			Args: []scopefold.EmitArg{
+				{Stack: "path", Compose: "join_segments"},
+				{Row: "method"},
+				helper,
+			},
+		}
+	}
+
+	rows := []scopefold.ExpandRow{}
+	if plural {
+		rows = append(rows, scopefold.ExpandRow{Name: "index", Method: "GET", Emit: emit(collectionBase)})
+	}
+	rows = append(rows,
+		// create shares index's name (restHelperName's own rule) for both
+		// resources and resource — a singleton still has a create action,
+		// only never an index to list it.
+		scopefold.ExpandRow{Name: "create", Method: "POST", Emit: emit(collectionBase)},
+		scopefold.ExpandRow{Name: "new", Method: "GET", Suffix: "new", Emit: emit(prefixed("new"))},
+		scopefold.ExpandRow{Name: "edit", Method: "GET", Member: plural, Suffix: "edit", Emit: emit(prefixed("edit"))},
+		scopefold.ExpandRow{Name: "show", Method: "GET", Member: plural, Emit: emit(base)},
+		scopefold.ExpandRow{Name: "update", Method: "PATCH", Member: plural, Emit: emit(base)},
+		scopefold.ExpandRow{Name: "update", Method: "PUT", Member: plural, Emit: emit(base)},
+		scopefold.ExpandRow{Name: "destroy", Method: "DELETE", Member: plural, Emit: emit(base)},
+	)
+
+	return scopefold.ExpandTable{
+		Emit:           *emit(base),
+		FilterKeywords: []string{"only", "except"},
+		Rows:           rows,
+		MemberSegment:  ":id",
 	}
 }
 
@@ -169,22 +363,13 @@ var railsVerbMethods = map[string]bool{
 }
 
 // buildRailsMatches walks a routes.rb AST once and produces the
-// []scopefold.Match railsRouteGrammar dispatches on — the boundary adapter
-// internal/patterns/scopefold/match.go's own doc comment anticipates: reusing
+// []scopefold.Match railsRouteGrammar dispatches on, reusing
 // ruby_route_paths.go's/ruby_route_names.go's existing keywordSegment/
-// firstPositionalSegment helpers to populate captures, never re-implementing
-// AST navigation scope-fold-side.
-//
-// This performs its own small lexical walk (tracking only "are we directly
-// inside a member/collection block's own body") purely to classify each verb
-// call into the right leaf pattern name — the same classification
-// http_verb_route/member_verb_route/collection_verb_route's distinct
-// tree-sitter query *shapes* already encode declaratively; a single
-// recursive-descent walk is the natural way to answer "what AST shape is
-// this call nested in" without matching a fresh query per shape.
+// firstPositionalSegment helpers to populate captures rather than
+// reimplementing AST navigation scope-fold-side.
 func buildRailsMatches(root *sitter.Node, file string, src []byte) []scopefold.Match {
 	b := &railsMatchBuilder{file: file, src: src}
-	b.walk(root, "")
+	b.walk(root, "", "")
 	return b.out
 }
 
@@ -194,13 +379,19 @@ type railsMatchBuilder struct {
 	out  []scopefold.Match
 }
 
-func (b *railsMatchBuilder) walk(n *sitter.Node, onScope string) {
+// walk mirrors routeWalker.walk's dispatch. pendingNest tracks the same
+// single-generation value ruby_route_paths.go's nestParam does — non-""
+// only for a call sitting directly in a plural resources/resource block's
+// own body (every intervening construct resets or clears it before
+// recursing) — used here only to classify a bare `post :action` as
+// resource_scoped_verb.
+func (b *railsMatchBuilder) walk(n *sitter.Node, onScope, pendingNest string) {
 	if n == nil {
 		return
 	}
 	if n.Type() != "call" {
 		for i := 0; i < int(n.ChildCount()); i++ {
-			b.walk(n.Child(i), onScope)
+			b.walk(n.Child(i), onScope, pendingNest)
 		}
 		return
 	}
@@ -216,41 +407,53 @@ func (b *railsMatchBuilder) walk(n *sitter.Node, onScope string) {
 	case "namespace", "scope", "resources", "resource":
 		b.emitScope(n, method, line)
 		if block != nil {
-			b.walk(blockBody(block), "")
+			// nextPending marks whether *this* construct's own direct
+			// children see a pending member id — only a plural `resources`
+			// sets one (nestingParam's plural gate; a singleton has no
+			// member id to scope a bare verb under).
+			nextPending := ""
+			if method == "resources" {
+				nextPending = "x"
+			}
+			b.walk(blockBody(block), "", nextPending)
 		}
 		return
 	case "member":
 		if block != nil {
 			b.emitBare(n, "member", line)
-			b.walk(blockBody(block), "member")
+			b.walk(blockBody(block), "member", "")
 		}
 		return
 	case "collection":
 		if block != nil {
 			b.emitBare(n, "collection", line)
-			b.walk(blockBody(block), "collection")
+			b.walk(blockBody(block), "collection", "")
 		}
 		return
 	}
 
 	if railsVerbMethods[method] {
-		b.emitVerb(n, method, line, onScope)
+		b.emitVerb(n, method, line, onScope, pendingNest)
 	}
 	if block != nil {
-		b.walk(blockBody(block), onScope)
+		b.walk(blockBody(block), onScope, pendingNest)
 	}
 }
 
 func (b *railsMatchBuilder) emitScope(call *sitter.Node, method string, line int) {
 	seg, _ := firstPositionalSegment(call, b.src)
 	caps := map[string]string{"seg": seg}
-	if method == "scope" {
+	switch method {
+	case "scope":
 		// pos re-derives the same positional segment under a name
 		// scopeSegments' own precedence expects: an explicit path: wins,
 		// falling back to the positional argument.
 		caps["pos"] = seg
 		caps["path_kw"] = keywordSegment(call, b.src, "path")
 		caps["module_kw"] = keywordSegment(call, b.src, "module")
+		caps["as_kw"] = keywordSegment(call, b.src, "as")
+	case "resources", "resource":
+		caps["res_as"] = keywordSegment(call, b.src, "as")
 	}
 	b.out = append(b.out, scopefold.Match{PatternName: method, File: b.file, Line: line, Captures: caps})
 }
@@ -259,7 +462,7 @@ func (b *railsMatchBuilder) emitBare(call *sitter.Node, method string, line int)
 	b.out = append(b.out, scopefold.Match{PatternName: method, File: b.file, Line: line})
 }
 
-func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int, onScope string) {
+func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int, onScope, pendingNest string) {
 	args := call.ChildByFieldName("arguments")
 	if args == nil {
 		return
@@ -276,8 +479,9 @@ func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int,
 		return
 	}
 
-	caps := map[string]string{"method": method}
+	caps := map[string]string{"method": method, "as_kw": keywordSegment(call, b.src, "as")}
 	on := keywordSegment(call, b.src, "on")
+	caps["on_kw"] = on
 
 	switch first.Type() {
 	case "string":
@@ -294,10 +498,11 @@ func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int,
 			b.out = append(b.out, scopefold.Match{PatternName: "member_verb_route", File: b.file, Line: line, Captures: caps})
 		case onScope == "collection":
 			b.out = append(b.out, scopefold.Match{PatternName: "collection_verb_route", File: b.file, Line: line, Captures: caps})
-			// A bare `post :action` directly in a resources block (no
-			// member/collection wrapper, no on:) is resource_scoped_verb —
-			// not yet covered by this grammar; left unmatched rather than
-			// misclassified.
+		case pendingNest != "":
+			// A bare verb directly in a resources/resource block, wrapped
+			// in neither member nor collection and carrying no on: — Rails
+			// still treats it as a member action (resourceScopedHelperName).
+			b.out = append(b.out, scopefold.Match{PatternName: "resource_scoped_verb", File: b.file, Line: line, Captures: caps})
 		}
 	}
 }

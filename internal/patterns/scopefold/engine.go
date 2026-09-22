@@ -65,9 +65,16 @@ func (s stacks) reset(name string) stacks {
 // as it would for an ordinary patterns: pass; this package owns none of
 // that.
 func Fold(root *sitter.Node, matches []Match, g *Grammar) []factpipe.Fact {
-	byLine := make(map[int]*Match, len(matches))
+	// byLine holds every match declared on a given source line, in the order
+	// they were produced — almost always one, but a one-line brace block
+	// (`member { get "download" }`) puts a scope match and its leaf's match
+	// on the identical line, and a bare *Match keyed by line alone would let
+	// the second clobber the first. walk pops matches off the front of each
+	// line's queue as it visits call nodes in AST order, which is the same
+	// outer-before-inner order the caller's own walk produced them in.
+	byLine := make(map[int][]*Match, len(matches))
 	for i := range matches {
-		byLine[matches[i].Line] = &matches[i]
+		byLine[matches[i].Line] = append(byLine[matches[i].Line], &matches[i])
 	}
 	scopes := make(map[string]*ScopeSpec, len(g.Scopes))
 	for i := range g.Scopes {
@@ -94,7 +101,7 @@ func Fold(root *sitter.Node, matches []Match, g *Grammar) []factpipe.Fact {
 
 type folder struct {
 	grammar   *Grammar
-	byLine    map[int]*Match
+	byLine    map[int][]*Match
 	scopes    map[string]*ScopeSpec
 	leaves    map[string]*LeafSpec
 	callTypes []string
@@ -121,11 +128,13 @@ func (f *folder) walk(n *sitter.Node, st stacks) {
 	}
 
 	line := int(n.StartPoint().Row) + 1
-	m := f.byLine[line]
-	if m == nil {
+	queue := f.byLine[line]
+	if len(queue) == 0 {
 		f.walkChildren(n, st)
 		return
 	}
+	m := queue[0]
+	f.byLine[line] = queue[1:]
 
 	if scope, ok := f.scopes[m.PatternName]; ok {
 		f.foldScope(n, scope, m, st)
@@ -215,6 +224,16 @@ func (f *folder) evalArg(a EmitArg, m *Match, st stacks, row *ExpandRow) factpip
 }
 
 func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) factpipe.Atom {
+	if a.Switch != nil {
+		key := f.evalArg(a.Switch.On, m, st, row).Value()
+		if branch, ok := a.Switch.Cases[key]; ok {
+			return f.evalArg(branch, m, st, row)
+		}
+		if a.Switch.Default != nil {
+			return f.evalArg(*a.Switch.Default, m, st, row)
+		}
+		return factpipe.Str("")
+	}
 	if a.Row != "" && row != nil {
 		switch a.Row {
 		case "name":
@@ -235,6 +254,11 @@ func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) 
 				segs = append(append([]string{}, segs...), seg)
 			}
 		}
+		for i := len(a.Prepend) - 1; i >= 0; i-- {
+			if seg := f.evalArg(a.Prepend[i], m, st, row).Value(); seg != "" {
+				segs = append([]string{seg}, segs...)
+			}
+		}
 		switch a.Compose {
 		case "join_segments":
 			return factpipe.Str(joinSegments(segs))
@@ -253,7 +277,10 @@ func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) 
 		return factpipe.Str(joinSegments(segs))
 	}
 	if a.Capture != "" {
-		return factpipe.Str(applyVerb(a.Extract, m.Captures[a.Capture]))
+		if raw := m.Captures[a.Capture]; raw != "" {
+			return factpipe.Str(applyVerb(a.Extract, raw))
+		}
+		return factpipe.Str("")
 	}
 	return factpipe.Str(a.Literal)
 }
@@ -295,18 +322,22 @@ func (f *folder) expand(tableName string, m *Match, st stacks) {
 		}
 		seen[key] = true
 
-		args := make([]factpipe.Atom, 0, len(table.Emit.Args))
-		for _, a := range table.Emit.Args {
+		spec := table.Emit
+		if row.Emit != nil {
+			spec = *row.Emit
+		}
+		args := make([]factpipe.Atom, 0, len(spec.Args))
+		for _, a := range spec.Args {
 			args = append(args, f.evalArg(a, m, rowStacks, &row))
 		}
 		f.out = append(f.out, factpipe.Fact{
-			Pred: table.Emit.Pred,
+			Pred: spec.Pred,
 			Args: args,
 			Origin: factpipe.Origin{
 				Kind:    factpipe.OriginPrimitive,
 				File:    m.File,
 				Line:    m.Line,
-				Pattern: table.Emit.Pred,
+				Pattern: spec.Pred,
 			},
 		})
 	}
@@ -320,8 +351,10 @@ func contributionValue(c Contribution, m *Match, st stacks) string {
 		return c.Literal
 	}
 	if c.Capture != "" {
-		if v := applyVerb(c.Extract, m.Captures[c.Capture]); v != "" {
-			return v
+		if raw := m.Captures[c.Capture]; raw != "" {
+			if v := applyVerb(c.Extract, raw); v != "" {
+				return v
+			}
 		}
 	}
 	if c.Stack != "" {
