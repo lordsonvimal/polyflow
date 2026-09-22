@@ -248,13 +248,19 @@ func New(store Store, idx *graph.AdjacencyIndex, version string, staleAfter time
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search",
 		Description: "Search the indexed code graph for nodes (functions, methods, variables, " +
-			"HTTP handlers, …), flow chains, or doc chunks matching a query. Query may be " +
-			"natural language. Leads with the matching nodes, each carrying an inline source " +
-			"snippet — so one call shows you the code, no separate read needed. A flows hit's " +
-			"entry node is the starting point for trace. Use this to find the exact node before " +
-			"calling context, impact, or trace. Searches the current workspace by " +
-			"default; pass service='*' to search the whole fleet, or service='<member>' " +
-			"to scope to one fleet member.",
+			"HTTP handlers, …), flow chains, or doc chunks matching a query. Pass a symbol name, " +
+			"identifier fragment, or short keyword phrase — NOT a full question or the user's " +
+			"prompt verbatim. A free-text question ('why is the build failing when X') rarely " +
+			"anchors to a real symbol: it triggers a 'no strong match' result that's deliberately " +
+			"trimmed to a handful of low-confidence guesses, which wastes the call. For an " +
+			"'understand X' / 'why does X happen' / 'how does X flow' question, call investigate " +
+			"instead — it resolves the target and assembles context in one call, which is what " +
+			"search's own weak-match path is telling you to do when it fires. Leads with the " +
+			"matching nodes, each carrying an inline source snippet — so one call shows you the " +
+			"code, no separate read needed. A flows hit's entry node is the starting point for " +
+			"trace. Use this to find the exact node before calling context, impact, or trace. " +
+			"Searches the current workspace by default; pass service='*' to search the whole " +
+			"fleet, or service='<member>' to scope to one fleet member.",
 	}, auditTool(s, "search", s.search))
 
 	mcp.AddTool(srv, &mcp.Tool{

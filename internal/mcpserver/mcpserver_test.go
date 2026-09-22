@@ -924,8 +924,12 @@ func TestSearchTool_HybridRoundTrip(t *testing.T) {
 	assert.NotEmpty(t, resp.Semantic, "nil embedder must produce semantic degradation note")
 }
 
-// TestSearchTool_HybridDescription verifies the search tool description mentions
-// natural language and flows (S.2 requirement).
+// TestSearchTool_HybridDescription verifies the search tool description
+// mentions flows (S.2 requirement) and steers callers toward a short
+// symbol/keyword query and away from pasting a full question — a free-text
+// prompt hits the weak-anchor path (see weakFlowCap/weakDocCap in
+// internal/semantic/search.go) and returns noise, which is what pushed
+// agents to write polyflow off and fall back to grep.
 func TestSearchTool_HybridDescription(t *testing.T) {
 	store, idx := fixture()
 	cs := connect(t, store, idx)
@@ -933,10 +937,12 @@ func TestSearchTool_HybridDescription(t *testing.T) {
 	require.NoError(t, err)
 	for _, tool := range tools.Tools {
 		if tool.Name == "search" {
-			assert.Contains(t, tool.Description, "natural language",
-				"search tool description must mention natural language")
 			assert.Contains(t, tool.Description, "flows",
 				"search tool description must mention flows")
+			assert.Contains(t, tool.Description, "NOT a full question",
+				"search tool description must steer away from full-question/prompt-style queries")
+			assert.Contains(t, tool.Description, "investigate",
+				"search tool description must redirect 'understand X' questions to investigate")
 			return
 		}
 	}
