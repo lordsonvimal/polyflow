@@ -12,6 +12,7 @@ import (
 
 	"github.com/lordsonvimal/polyflow/internal/graph"
 	"github.com/lordsonvimal/polyflow/internal/patterns"
+	"github.com/lordsonvimal/polyflow/internal/patterns/scopefold"
 	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
@@ -65,7 +66,82 @@ func composeRailsRoutePaths(file, service string, src []byte, nodes []graph.Node
 		seen:    map[string]bool{},
 	}
 	w.walk(tree.RootNode(), nil, nil, nameScope{}, "", false, "")
+
+	// Tier SF (docs/scope-fold-engine-plan.md): `root` has no hand-written
+	// equivalent above — routeWalker.walk never had a "root" case, so it was
+	// invisible to this pass entirely. railsRouteGrammar covers every
+	// construct routeWalker does (parity-tested in
+	// rails_route_grammar_test.go), so re-running it here and keeping only
+	// the facts routeWalker did NOT already stamp/synthesize isolates
+	// exactly the root routes, with no need to special-case which grammar
+	// construct produced a given fact.
+	w.synthesizeUncoveredRoutes(tree.RootNode(), byLine)
 	return w.out
+}
+
+// synthesizeUncoveredRoutes runs railsRouteGrammar's Fold over the same
+// tree w.walk already traversed and appends any rails_route fact whose
+// "METHOD path" key is not already accounted for — either stamped in place
+// on a byLine node (an explicit verb call) or already in w.seen (a route
+// routeWalker's own emitRESTRoutes/emitDeviseRoutes/emitResourceScopedVerb
+// synthesized). Everything else routeWalker covers agrees with the grammar
+// by construction (proven by rails_route_grammar_test.go's parity suite);
+// only `root` has no routeWalker coverage to agree with, so this is the
+// pass that adds it.
+func (w *routeWalker) synthesizeUncoveredRoutes(root *sitter.Node, byLine map[int]*graph.Node) {
+	stamped := map[string]bool{}
+	for _, n := range byLine {
+		if n.Meta["method"] != "" && n.Meta["path"] != "" {
+			stamped[n.Meta["method"]+" "+n.Meta["path"]] = true
+		}
+	}
+
+	matches := buildRailsMatches(root, w.file, w.src)
+	facts := scopefold.Fold(root, matches, railsRouteGrammar())
+	for _, f := range facts {
+		if f.Pred != "rails_route" || len(f.Args) != 8 {
+			continue
+		}
+		path, method := f.Args[0].Value(), f.Args[1].Value()
+		if path == "" || method == "" {
+			continue
+		}
+		key := method + " " + path
+		if stamped[key] || w.seen[key] {
+			continue
+		}
+		w.seen[key] = true
+
+		meta := map[string]string{
+			"pattern":           "root_route",
+			"path":              path,
+			"full_path":         path,
+			"method":            method,
+			"route_helper":      f.Args[2].Value(),
+			"controller_module": f.Args[3].Value(),
+			"resource":          f.Args[4].Value(),
+			"action":            f.Args[5].Value(),
+		}
+		if rs := f.Args[6].Value(); rs != "" {
+			meta["resource_style"] = rs
+		}
+		if f.Args[7].Value() != "" {
+			meta["controller_explicit"] = "true"
+		}
+
+		line := f.Origin.Line
+		w.out = append(w.out, graph.Node{
+			ID:       w.service + ":" + w.file + ":" + string(graph.NodeTypeHTTPHandler) + ":" + key + ":" + strconv.Itoa(line),
+			Type:     graph.NodeTypeHTTPHandler,
+			Label:    key,
+			Service:  w.service,
+			File:     w.file,
+			Line:     line,
+			EndLine:  line,
+			Language: "ruby",
+			Meta:     meta,
+		})
+	}
 }
 
 // routeWalker threads the traversal state that walkRoutes used to pass as

@@ -664,6 +664,22 @@ func (b *railsMatchBuilder) emitScope(call *sitter.Node, method string, line int
 	case "resources", "resource":
 		caps["res_as"] = keywordSegment(call, b.src, "as")
 		caps["ctrl_kw"] = keywordSegment(call, b.src, "controller")
+		// only:/except: capture must exist (even as "") whenever the
+		// keyword itself is present — restActionsTable's FilterKeywords
+		// relies on scopefold's filterSet distinguishing an absent only:
+		// from an explicitly empty one (`only: []` means "generate
+		// nothing", not "no filter"), which only works if the capture key
+		// is set at all. keywordSegment can't be reused here: only:/
+		// except: take a bare symbol OR an array/%i[] of them, and
+		// keywordSegment's literalSegment only resolves the former —
+		// symbolNames (already shared by restActionFilters) flattens
+		// either shape into scopefold's comma-separated capture string.
+		if v := keywordValueNode(call, b.src, "only"); v != nil {
+			caps["only"] = strings.Join(symbolNames(v, b.src), ",")
+		}
+		if v := keywordValueNode(call, b.src, "except"); v != nil {
+			caps["except"] = strings.Join(symbolNames(v, b.src), ",")
+		}
 	}
 	b.out = append(b.out, scopefold.Match{PatternName: method, File: b.file, Line: line, Captures: caps})
 }

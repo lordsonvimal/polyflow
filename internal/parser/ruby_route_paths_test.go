@@ -857,6 +857,70 @@ end
 // singular resource block redefines the controller module, which ends the
 // enclosing singleton's claim on where the controller lives. Carrying the
 // style past it would have the resolver pluralize the namespace segment.
+// TestComposeRailsRoutePaths_RootRoute is Tier SF Phase 2e's wiring test:
+// composeRailsRoutePaths itself (not railsRouteGrammar's own standalone
+// parity suite) must now synthesize root — routeWalker's hand-written walk
+// never had a "root" case at all, so this route only exists in the output
+// via synthesizeUncoveredRoutes' Fold pass.
+func TestComposeRailsRoutePaths_RootRoute(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  root "pages#home"
+  namespace :api do
+    root "dashboard#show"
+  end
+end
+`)
+	roots := routeNode(nodes, "root_route")
+	require.Len(t, roots, 2, "nodes: %+v", nodes)
+
+	byPath := map[string]*graph.Node{}
+	for _, n := range roots {
+		byPath[n.Meta["path"]] = n
+	}
+
+	top, ok := byPath["/"]
+	require.True(t, ok, "missing top-level root route")
+	require.Equal(t, "GET", top.Meta["method"])
+	require.Equal(t, "root", top.Meta["route_helper"])
+	require.Equal(t, "pages", top.Meta["resource"])
+	require.Equal(t, "home", top.Meta["action"])
+	require.Equal(t, "", top.Meta["controller_module"])
+	require.Equal(t, "GET /", top.Label)
+
+	api, ok := byPath["/api"]
+	require.True(t, ok, "missing namespaced root route")
+	require.Equal(t, "api_root", api.Meta["route_helper"])
+	require.Equal(t, "dashboard", api.Meta["resource"])
+	require.Equal(t, "show", api.Meta["action"])
+	require.Equal(t, "api", api.Meta["controller_module"])
+}
+
+// TestComposeRailsRoutePaths_RootDoesNotDuplicateExplicitRoutes confirms
+// synthesizeUncoveredRoutes' dedup: an ordinary explicit verb route already
+// stamped in place by routeWalker must not also appear as a root_route (or
+// any other) synthesized node.
+func TestComposeRailsRoutePaths_RootDoesNotDuplicateExplicitRoutes(t *testing.T) {
+	t.Parallel()
+	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
+  get "pages/home"
+  resources :users
+end
+`)
+	require.Empty(t, routeNode(nodes, "root_route"), "nodes: %+v", nodes)
+
+	seen := map[string]int{}
+	for _, n := range nodes {
+		if n.Type != graph.NodeTypeHTTPHandler {
+			continue
+		}
+		seen[n.Meta["method"]+" "+n.Meta["path"]]++
+	}
+	for key, count := range seen {
+		require.Equal(t, 1, count, "route %q appeared %d times", key, count)
+	}
+}
+
 func TestRESTResourceRoutes_NamespaceResetsResourceStyle(t *testing.T) {
 	t.Parallel()
 	nodes := parseRubyRoutes(t, `Rails.application.routes.draw do
