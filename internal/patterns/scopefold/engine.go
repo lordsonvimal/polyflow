@@ -150,23 +150,28 @@ func (f *folder) foldScope(n *sitter.Node, scope *ScopeSpec, m *Match, st stacks
 	for _, name := range scope.Resets {
 		next = next.reset(name)
 	}
-	for stackName, c := range scope.Contributes {
-		val := c.Literal
-		if val == "" && c.Capture != "" {
-			val = applyVerb(c.Extract, m.Captures[c.Capture])
+	for stackName, cs := range scope.Contributes {
+		for _, c := range cs {
+			// Read against st (the parent's pre-scope state), never next —
+			// a Contribution.Stack read must see what the enclosing scope
+			// had, not this scope's own in-progress pushes, and reading a
+			// frozen st also makes push order across different target
+			// stacks irrelevant (map iteration order can't matter).
+			val := contributionValue(c, m, st)
+			if val == "" {
+				// A contribution this match cannot supply adds nothing
+				// rather than inventing a segment — the same "a scope whose
+				// contribution cannot be read must contribute nothing, since
+				// inventing a segment shifts every route beneath it"
+				// discipline internal/parser/ruby_route_paths.go's
+				// scopeSegments documents.
+				continue
+			}
+			next = next.push(stackName, val)
 		}
-		if val == "" {
-			// A contribution this match cannot supply adds nothing rather
-			// than inventing a segment — the same "a scope whose
-			// contribution cannot be read must contribute nothing, since
-			// inventing a segment shifts every route beneath it" discipline
-			// internal/parser/ruby_route_paths.go's scopeSegments documents.
-			continue
-		}
-		next = next.push(stackName, val)
 	}
 	if scope.NestParam != nil {
-		if val := applyVerb(scope.NestParam.Extract, m.Captures[scope.NestParam.Capture]); val != "" {
+		if val := contributionValue(*scope.NestParam, m, st); val != "" {
 			next = next.push("path", val)
 		}
 	}
@@ -189,7 +194,7 @@ func (f *folder) foldScope(n *sitter.Node, scope *ScopeSpec, m *Match, st stacks
 func (f *folder) emit(spec EmitSpec, m *Match, st stacks) {
 	args := make([]factpipe.Atom, 0, len(spec.Args))
 	for _, a := range spec.Args {
-		args = append(args, f.evalArg(a, m, st))
+		args = append(args, f.evalArg(a, m, st, nil))
 	}
 	f.out = append(f.out, factpipe.Fact{
 		Pred: spec.Pred,
@@ -203,15 +208,26 @@ func (f *folder) emit(spec EmitSpec, m *Match, st stacks) {
 	})
 }
 
-func (f *folder) evalArg(a EmitArg, m *Match, st stacks) factpipe.Atom {
-	val := f.evalArgPrimary(a, m, st)
+// row is non-nil only while evaluating an ExpandTable's Emit — it lets
+// EmitArg.Row read the current synthesized row's own Name/Method, the one
+// source of truth an expand-table row has that no stack or capture carries.
+func (f *folder) evalArg(a EmitArg, m *Match, st stacks, row *ExpandRow) factpipe.Atom {
+	val := f.evalArgPrimary(a, m, st, row)
 	if val.Value() == "" && a.Fallback != nil {
-		return f.evalArg(*a.Fallback, m, st)
+		return f.evalArg(*a.Fallback, m, st, row)
 	}
 	return val
 }
 
-func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks) factpipe.Atom {
+func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) factpipe.Atom {
+	if a.Row != "" && row != nil {
+		switch a.Row {
+		case "name":
+			return factpipe.Str(row.Name)
+		case "method":
+			return factpipe.Str(row.Method)
+		}
+	}
 	if a.Stack != "" {
 		segs := st[a.Stack]
 		if a.AppendCapture != "" {
@@ -244,17 +260,22 @@ func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks) factpipe.Atom {
 
 // expand runs one table-driven implicit-construct synthesis: every row not
 // filtered out by the scope match's only:/except:-shaped captures composes
-// its own fact, the same way a leaf would, generalizing
-// internal/parser/ruby_route_paths.go's emitRESTRoutes off a hardcoded Go
-// table onto grammar data.
+// its own fact via table.Emit, the same mechanism a leaf's own Emit uses,
+// generalizing internal/parser/ruby_route_paths.go's emitRESTRoutes off a
+// hardcoded Go table onto grammar data.
 func (f *folder) expand(tableName string, m *Match, st stacks) {
 	table, ok := f.grammar.ExpandTables[tableName]
 	if !ok {
 		return
 	}
+	memberSeg := table.MemberSegment
+	if memberSeg == "" {
+		memberSeg = "*"
+	}
 	only, hasOnly, except := filterSet(m, table.FilterKeywords)
 	seen := map[string]bool{}
-	for _, row := range table.Rows {
+	for i := range table.Rows {
+		row := table.Rows[i]
 		if hasOnly && !only[row.Name] {
 			continue
 		}
@@ -263,33 +284,55 @@ func (f *folder) expand(tableName string, m *Match, st stacks) {
 		}
 		rowStacks := st
 		if row.Member {
-			rowStacks = rowStacks.push("path", "*")
+			rowStacks = rowStacks.push("path", memberSeg)
 		}
 		if row.Suffix != "" {
 			rowStacks = rowStacks.push("path", row.Suffix)
 		}
-		path := joinSegments(rowStacks["path"])
-		key := row.Method + " " + path
+		key := row.Method + " " + joinSegments(rowStacks["path"])
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
+
+		args := make([]factpipe.Atom, 0, len(table.Emit.Args))
+		for _, a := range table.Emit.Args {
+			args = append(args, f.evalArg(a, m, rowStacks, &row))
+		}
 		f.out = append(f.out, factpipe.Fact{
-			Pred: table.Pred,
-			Args: []factpipe.Atom{
-				factpipe.Str(path),
-				factpipe.Str(strings.Join(rowStacks["module"], "/")),
-				factpipe.Str(row.Method),
-				factpipe.Str(row.Name),
-			},
+			Pred: table.Emit.Pred,
+			Args: args,
 			Origin: factpipe.Origin{
 				Kind:    factpipe.OriginPrimitive,
 				File:    m.File,
 				Line:    m.Line,
-				Pattern: table.Pred,
+				Pattern: table.Emit.Pred,
 			},
 		})
 	}
+}
+
+// contributionValue resolves a Contribution's value: Literal, else a Capture
+// (through its verb pipeline), else another stack's current top, else its
+// Fallback recursively — the first of these that is non-empty wins.
+func contributionValue(c Contribution, m *Match, st stacks) string {
+	if c.Literal != "" {
+		return c.Literal
+	}
+	if c.Capture != "" {
+		if v := applyVerb(c.Extract, m.Captures[c.Capture]); v != "" {
+			return v
+		}
+	}
+	if c.Stack != "" {
+		if segs := st[c.Stack]; len(segs) > 0 {
+			return segs[len(segs)-1]
+		}
+	}
+	if c.Fallback != nil {
+		return contributionValue(*c.Fallback, m, st)
+	}
+	return ""
 }
 
 // filterSet reads only:/except:-shaped keyword captures off a scope match:

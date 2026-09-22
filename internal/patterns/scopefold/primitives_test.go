@@ -45,8 +45,8 @@ end
 			{
 				Match:   "flagged_scope",
 				Recurse: "block",
-				Contributes: map[string]Contribution{
-					"flag": {Literal: "on"},
+				Contributes: map[string][]Contribution{
+					"flag": {{Literal: "on"}},
 				},
 			},
 			{
@@ -111,8 +111,8 @@ end
 			{
 				Match:   "member_scope",
 				Recurse: "block",
-				Contributes: map[string]Contribution{
-					"on_scope": {Literal: "member"},
+				Contributes: map[string][]Contribution{
+					"on_scope": {{Literal: "member"}},
 				},
 			},
 		},
@@ -179,5 +179,135 @@ func TestVerbs_SlashAndCollisionName(t *testing.T) {
 		if got := applyOneVerb(c.verb, c.in); got != c.want {
 			t.Errorf("applyOneVerb(%q, %q) = %q, want %q", c.verb, c.in, got, c.want)
 		}
+	}
+}
+
+// TestFold_ContributionStackFlattening proves Contribution.Stack: a nested
+// scope's own name contribution absorbs an enclosing resource's singular
+// form off another stack — nameScope.descend's "any enclosing resource is
+// flattened into parent first" (resources :users do namespace :admin do ...
+// end end names its innermost route user_admin_..., not admin_...).
+func TestFold_ContributionStackFlattening(t *testing.T) {
+	src := `resource_wrap "user" do
+  ns_wrap "admin" do
+    leaf "x" do
+    end
+  end
+end
+`
+	p := sitter.NewParser()
+	p.SetLanguage(rubysitter.GetLanguage())
+	tree, err := p.ParseCtx(context.Background(), nil, []byte(src))
+	if err != nil || tree == nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	g := &Grammar{
+		Stacks: []string{"name", "singular"},
+		Scopes: []ScopeSpec{
+			{
+				Match:   "resource_scope",
+				Recurse: "block",
+				Contributes: map[string][]Contribution{
+					"singular": {{Capture: "seg", Extract: "segment"}},
+				},
+			},
+			{
+				Match:   "ns_scope",
+				Recurse: "block",
+				Resets:  []string{"singular"},
+				Contributes: map[string][]Contribution{
+					// Flatten the enclosing resource's singular in first,
+					// then this scope's own literal segment — two ordered
+					// pushes onto the same stack.
+					"name": {
+						{Stack: "singular"},
+						{Capture: "seg", Extract: "segment"},
+					},
+				},
+			},
+		},
+		Leaves: []LeafSpec{
+			{
+				Match: "leaf_route",
+				Emit: EmitSpec{
+					Pred: "name_seen",
+					Args: []EmitArg{{Stack: "name", Compose: "helper_name"}},
+				},
+			},
+		},
+	}
+
+	matches := []Match{
+		{PatternName: "resource_scope", Line: lineOf(t, src, `resource_wrap "user" do`), Captures: map[string]string{"seg": `"user"`}},
+		{PatternName: "ns_scope", Line: lineOf(t, src, `ns_wrap "admin" do`), Captures: map[string]string{"seg": `"admin"`}},
+		{PatternName: "leaf_route", Line: lineOf(t, src, `leaf "x" do`)},
+	}
+
+	facts := Fold(tree.RootNode(), matches, g)
+	seen := findFacts(facts, "name_seen")
+	if len(seen) != 1 {
+		t.Fatalf("name_seen count = %d, want 1: %+v", len(seen), seen)
+	}
+	if got := factStrs(seen[0])[0]; got != "user_admin" {
+		t.Fatalf("name_seen = %q, want %q", got, "user_admin")
+	}
+}
+
+// TestFold_ExpandTableEmitUsesRowFields proves ExpandTable.Emit: each
+// synthesized row can carry its own name/method plus fields sourced
+// elsewhere (a controller override stack), the shape emitRESTRoutes needs
+// for resource/controller_module/route_helper — not just a fixed
+// path+method pair.
+func TestFold_ExpandTableEmitUsesRowFields(t *testing.T) {
+	src := `resource_wrap "widgets", controller: "things" do
+end
+`
+	p := sitter.NewParser()
+	p.SetLanguage(rubysitter.GetLanguage())
+	tree, err := p.ParseCtx(context.Background(), nil, []byte(src))
+	if err != nil || tree == nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	g := &Grammar{
+		Stacks: []string{"path", "ctrl"},
+		Scopes: []ScopeSpec{
+			{
+				Match: "resource_scope",
+				Contributes: map[string][]Contribution{
+					"path": {{Capture: "seg", Extract: "segment"}},
+					"ctrl": {{Capture: "controller", Extract: "segment", Fallback: &Contribution{Capture: "seg", Extract: "segment"}}},
+				},
+				Expand: "rest_actions",
+			},
+		},
+		ExpandTables: map[string]ExpandTable{
+			"rest_actions": {
+				Emit: EmitSpec{
+					Pred: "rest_route",
+					Args: []EmitArg{
+						{Stack: "path", Compose: "join_segments"},
+						{Row: "name"},
+						{Stack: "ctrl", Compose: "top"},
+					},
+				},
+				Rows: []ExpandRow{{Name: "index", Method: "GET"}},
+			},
+		},
+	}
+
+	matches := []Match{
+		{PatternName: "resource_scope", Line: lineOf(t, src, `resource_wrap "widgets", controller: "things" do`), Captures: map[string]string{"seg": `"widgets"`, "controller": `"things"`}},
+	}
+
+	facts := Fold(tree.RootNode(), matches, g)
+	rows := findFacts(facts, "rest_route")
+	if len(rows) != 1 {
+		t.Fatalf("rest_route count = %d, want 1: %+v", len(rows), rows)
+	}
+	vals := factStrs(rows[0])
+	if vals[0] != "/widgets" || vals[1] != "index" || vals[2] != "things" {
+		t.Fatalf("rest_route = %v, want [/widgets index things]", vals)
 	}
 }

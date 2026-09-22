@@ -56,9 +56,12 @@ type ScopeSpec struct {
 	// its stack pushes but folds no further beneath it.
 	Recurse string `yaml:"recurse"`
 
-	// Contributes maps a declared stack name to how this scope's match
-	// extracts the segment it pushes onto that stack.
-	Contributes map[string]Contribution `yaml:"contributes"`
+	// Contributes maps a declared stack name to the ordered list of segments
+	// this scope's match pushes onto that stack (usually one; Rails'
+	// namespace/scope push two onto its name stack — the enclosing
+	// resource's singular form flattened in first, via a Contribution.Stack
+	// read, then the construct's own literal segment).
+	Contributes map[string][]Contribution `yaml:"contributes"`
 
 	// NestParam additionally pushes onto the "path" stack specifically —
 	// generalizes Rails' nested-resource id parameter
@@ -115,6 +118,11 @@ type EmitArg struct {
 	Capture string `yaml:"capture"`
 	Extract string `yaml:"extract"`
 
+	// Row reads a field ("name" or "method") off the ExpandRow currently
+	// being synthesized — only meaningful inside an ExpandTable's Emit,
+	// nil/ignored for an ordinary LeafSpec's Emit.
+	Row string `yaml:"row"`
+
 	// Fallback is evaluated, and its result used, only when this arg's own
 	// primary source (Capture or Stack) resolves to "". Generalizes Rails'
 	// "read on: from a keyword, or else fall back to the lexically enclosing
@@ -130,16 +138,30 @@ type Contribution struct {
 	// Literal pushes a fixed value regardless of the match's captures — how
 	// the member/collection scopes (which take no arguments of their own)
 	// push a fixed "member"/"collection" token onto an on_scope stack.
-	Literal  string `yaml:"literal"`
-	Capture  string `yaml:"capture"`
-	Extract  string `yaml:"extract"`
-	Optional bool   `yaml:"optional"`
+	Literal string `yaml:"literal"`
+	Capture string `yaml:"capture"`
+	Extract string `yaml:"extract"`
+
+	// Stack reads another named stack's current top (the parent's state,
+	// before this scope's own pushes) and contributes it verbatim —
+	// nameScope's "flatten the enclosing resource's singular form into the
+	// name stack before pushing this construct's own segment" (Rails: a
+	// namespace/scope opened inside `resources :users` names its own
+	// contents user_admin_... not admin_...).
+	Stack string `yaml:"stack"`
+
+	// Fallback is evaluated, and used, only when Literal/Capture/Stack all
+	// resolve to "" — the same combinator as EmitArg.Fallback (Rails' scope
+	// path: an explicit path: keyword wins over the positional argument).
+	Fallback *Contribution `yaml:"fallback"`
 }
 
-// ExpandTable is one table-driven implicit-construct synthesis spec.
+// ExpandTable is one table-driven implicit-construct synthesis spec. Each
+// non-filtered row runs through Emit exactly as a LeafSpec's own match would,
+// with EmitArg.Row available to read the row's own Name/Method and the
+// "path" stack temporarily extended per Member/Suffix.
 type ExpandTable struct {
-	// Pred is the predicate every synthesized row is emitted under.
-	Pred string `yaml:"pred"`
+	Emit EmitSpec `yaml:"emit"`
 
 	// FilterKeywords name captures on the *scope* match (read by convention,
 	// not re-parsed) holding a comma/space-separated symbol list — Rails'
@@ -149,11 +171,10 @@ type ExpandTable struct {
 
 	Rows []ExpandRow `yaml:"rows"`
 
-	// CollisionRule names one of a small fixed registry of
-	// framework-idiosyncratic naming-collision rules (Rails' singular==
-	// plural "_index" suffix is the only one that exists today). Empty means
-	// none apply.
-	CollisionRule string `yaml:"collision_rule"`
+	// MemberSegment is the placeholder pushed onto "path" for a Member row,
+	// before Suffix. Defaults to "*" (Rails' actual token is ":id" — set
+	// explicitly by the Rails grammar; "*" is only the toy-grammar default).
+	MemberSegment string `yaml:"member_segment"`
 }
 
 // ExpandRow is one implicit construct an ExpandTable declares.
@@ -161,7 +182,7 @@ type ExpandRow struct {
 	Name   string `yaml:"name"`
 	Method string `yaml:"method"`
 	// Member marks a row scoped to one member of the collection (Rails:
-	// pushes a path-stack placeholder id segment before Suffix).
+	// pushes MemberSegment onto the path stack before Suffix).
 	Member bool   `yaml:"member"`
 	Suffix string `yaml:"suffix"`
 }

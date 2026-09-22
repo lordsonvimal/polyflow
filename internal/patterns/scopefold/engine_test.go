@@ -61,15 +61,15 @@ func testGrammar() *Grammar {
 			{
 				Match:   "group_scope",
 				Recurse: "block",
-				Contributes: map[string]Contribution{
-					"path": {Capture: "seg", Extract: "segment"},
+				Contributes: map[string][]Contribution{
+					"path": {{Capture: "seg", Extract: "segment"}},
 				},
 			},
 			{
 				Match:   "resource_scope",
 				Recurse: "block",
-				Contributes: map[string]Contribution{
-					"path": {Capture: "seg", Extract: "segment"},
+				Contributes: map[string][]Contribution{
+					"path": {{Capture: "seg", Extract: "segment"}},
 				},
 				Expand: "widget_actions",
 			},
@@ -88,7 +88,13 @@ func testGrammar() *Grammar {
 		},
 		ExpandTables: map[string]ExpandTable{
 			"widget_actions": {
-				Pred:           "widget_route",
+				Emit: EmitSpec{
+					Pred: "widget_route",
+					Args: []EmitArg{
+						{Stack: "path", Compose: "join_segments"},
+						{Row: "method"},
+					},
+				},
 				FilterKeywords: []string{"only", "except"},
 				Rows: []ExpandRow{
 					{Name: "index", Method: "GET"},
@@ -197,7 +203,7 @@ func TestFold_ExpandTableFiltering(t *testing.T) {
 	got := map[string]bool{}
 	for _, w := range widgets {
 		vals := factStrs(w)
-		got[vals[0]+" "+vals[2]] = true
+		got[vals[0]+" "+vals[1]] = true
 	}
 	for k := range want {
 		if !got[k] {
@@ -206,7 +212,7 @@ func TestFold_ExpandTableFiltering(t *testing.T) {
 	}
 	for _, w := range widgets {
 		vals := factStrs(w)
-		if vals[2] == "DELETE" {
+		if vals[1] == "DELETE" {
 			t.Fatalf("destroy row should have been filtered by only:, got %v", vals)
 		}
 	}
