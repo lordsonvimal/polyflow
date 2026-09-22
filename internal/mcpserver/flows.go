@@ -123,7 +123,7 @@ func (s *Server) flows(ctx context.Context, req *mcp.CallToolRequest, in flowsIn
 		flowPaths = filterFlows(flowPaths, in.MinVerification)
 	}
 
-	unresolvedAll, err := store.ListUnresolvedRefs(ctx)
+	unresolvedAll, err := s.unresolvedRefs(ctx, store)
 	if err != nil {
 		return nil, nil, err
 	}

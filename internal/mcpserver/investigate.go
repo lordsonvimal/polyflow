@@ -97,7 +97,7 @@ func (s *Server) investigate(ctx context.Context, req *mcp.CallToolRequest, in i
 
 	ctxRes := pfcontext.Build(idx, root.ID, "debug", investigateContextDepth, false, s.staleAfter, graph.DefaultNoiseInclude("debug"))
 	ctxRes.Trust, _ = graph.LoadTrustStamp(ctx, store)
-	unresolvedAll, err := store.ListUnresolvedRefs(ctx)
+	unresolvedAll, err := s.unresolvedRefs(ctx, store)
 	if err != nil {
 		return nil, nil, err
 	}

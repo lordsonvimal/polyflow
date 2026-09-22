@@ -91,6 +91,17 @@ type Server struct {
 	// tool falls back to store.ListUnresolvedRefs, the single-store
 	// behavior this had before fleet mode existed.
 	fleetUnresolvedRefs []graph.UnresolvedRef
+
+	// unresolvedCacheStore/unresolvedCacheRefs cache the last
+	// store.ListUnresolvedRefs(ctx) result against the store instance it came
+	// from. Seven of the thirteen tools (context, impact, trace, flows,
+	// investigate, explain, deadcode) each need this full-ledger fetch, and
+	// without caching every one of them re-runs the same unbounded table scan
+	// independently — see unresolvedRefs. Invalidated by identity: Reload
+	// swaps in a new store, so the cached pointer no longer matches and the
+	// next call re-fetches once.
+	unresolvedCacheStore Store
+	unresolvedCacheRefs  []graph.UnresolvedRef
 }
 
 // SetSearcher wires a hybrid Searcher. Call after New; safe to call while
@@ -142,6 +153,8 @@ func (s *Server) Reload(store Store, idx *graph.AdjacencyIndex) {
 	s.mu.Lock()
 	s.store = store
 	s.idx = idx
+	s.unresolvedCacheStore = nil
+	s.unresolvedCacheRefs = nil
 	sr := s.searcher
 	s.mu.Unlock()
 	if sr != nil {
@@ -154,6 +167,39 @@ func (s *Server) snapshot() (Store, *graph.AdjacencyIndex, *semantic.Searcher) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.store, s.idx, s.searcher
+}
+
+// unresolvedRefs returns the unresolved-ref ledger relevant to store, from
+// fleetUnresolvedRefs if wired (already a precomputed, session-lifetime
+// value — see SetFleetUnresolvedRefs), otherwise from store.ListUnresolvedRefs
+// cached against that exact store instance. Call this instead of
+// store.ListUnresolvedRefs directly so repeated tool calls within one
+// long-lived session (and multiple tools within a single call, e.g. context's
+// files-mode path) share one fetch instead of each re-running the full,
+// unbounded unresolved_refs table scan.
+func (s *Server) unresolvedRefs(ctx context.Context, store Store) ([]graph.UnresolvedRef, error) {
+	s.mu.RLock()
+	if s.fleetUnresolvedRefs != nil {
+		refs := s.fleetUnresolvedRefs
+		s.mu.RUnlock()
+		return refs, nil
+	}
+	if s.unresolvedCacheStore == store {
+		refs := s.unresolvedCacheRefs
+		s.mu.RUnlock()
+		return refs, nil
+	}
+	s.mu.RUnlock()
+
+	refs, err := store.ListUnresolvedRefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.unresolvedCacheStore = store
+	s.unresolvedCacheRefs = refs
+	s.mu.Unlock()
+	return refs, nil
 }
 
 // fleetSearchersSnapshot returns the fleet-member searcher map wired via
@@ -714,7 +760,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 		if err != nil {
 			return nil, nil, err
 		}
-		unresolved, err := store.ListUnresolvedRefs(ctx)
+		unresolved, err := s.unresolvedRefs(ctx, store)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -746,7 +792,7 @@ func (s *Server) context(ctx context.Context, req *mcp.CallToolRequest, in conte
 	result.Status = graph.AmbiguityStatus(candidates)
 	result.ResolutionNote = graph.ResolutionNote(in.Target, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
-	unresolved, err := store.ListUnresolvedRefs(ctx)
+	unresolved, err := s.unresolvedRefs(ctx, store)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -805,7 +851,7 @@ func (s *Server) impact(ctx context.Context, req *mcp.CallToolRequest, in impact
 	}
 
 	store, idx, searcher := s.snapshot()
-	unresolved, err := store.ListUnresolvedRefs(ctx)
+	unresolved, err := s.unresolvedRefs(ctx, store)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -923,7 +969,7 @@ func (s *Server) trace(ctx context.Context, req *mcp.CallToolRequest, in traceIn
 	result.Status = graph.AmbiguityStatus(candidates)
 	result.ResolutionNote = graph.ResolutionNote(in.Root, exactMatch)
 	result.Trust, _ = graph.LoadTrustStamp(ctx, store)
-	unresolved, err := store.ListUnresolvedRefs(ctx)
+	unresolved, err := s.unresolvedRefs(ctx, store)
 	if err != nil {
 		return nil, nil, err
 	}

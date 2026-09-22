@@ -18,15 +18,9 @@ type deadcodeInput struct {
 
 func (s *Server) deadcode(ctx context.Context, req *mcp.CallToolRequest, in deadcodeInput) (*mcp.CallToolResult, any, error) {
 	store, idx, _ := s.snapshot()
-	s.mu.RLock()
-	unresolved := s.fleetUnresolvedRefs
-	s.mu.RUnlock()
-	if unresolved == nil {
-		var err error
-		unresolved, err = store.ListUnresolvedRefs(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
+	unresolved, err := s.unresolvedRefs(ctx, store)
+	if err != nil {
+		return nil, nil, err
 	}
 	unresolved = graph.DropExternalFrameworkRefs(unresolved, idx)
 	out := deadcode.Build(idx, deadcode.Options{

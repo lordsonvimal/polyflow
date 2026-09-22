@@ -23,13 +23,9 @@ func (s *Server) explain(ctx context.Context, req *mcp.CallToolRequest, in expla
 	}
 	store, idx, _ := s.snapshot()
 
-	ledger := s.fleetUnresolvedRefs
-	if ledger == nil {
-		var err error
-		ledger, err = store.ListUnresolvedRefs(ctx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("list unresolved refs: %w", err)
-		}
+	ledger, err := s.unresolvedRefs(ctx, store)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list unresolved refs: %w", err)
 	}
 
 	ex, ok := graph.ExplainEdge(idx, ledger, in.EdgeID)
