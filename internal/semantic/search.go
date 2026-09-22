@@ -51,6 +51,22 @@ const (
 // the caller asked search to cut.
 const weakNodeCap = 5
 
+// weakFlowCap and weakDocCap bound the flow/doc sections alongside
+// weakNodeCap on the same no-strong-anchor path. Trimmed hard, not zeroed —
+// same reasoning as exactMatchFlowCap/DocCap, a flow or doc chunk can still
+// be the real answer even when no node hit anchored the query. Before this,
+// a free-text/prompt-style query (the common case a natural-language search
+// invites) hit the weak-anchor branch and had its node section capped to 5
+// but its flow/doc sections left at the full `limit` (20 by default) until a
+// later, quality-blind trim — so a query search itself flagged "no strong
+// match" still shipped back up to 5 flows + 3 docs of the same-quality noise
+// with no advisory attached, which is what pushed agents to write the result
+// off as unreliable and fall back to grep.
+const (
+	weakFlowCap = 2
+	weakDocCap  = 1
+)
+
 // ShapeSearchResponse applies the shared search-surface ergonomics used by both
 // the CLI and the MCP tool (IA §2/§3): cap the flow/doc sections so nodes stay
 // visible, and inline a few source lines per node so the first call shows code.
@@ -242,6 +258,7 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 		// whole query — the ranked tail is a lexical guess, not an answer.
 		// Trim it hard and say so rather than paying tokens for red herrings.
 		nodeCap = min(weakNodeCap, limit)
+		flowCap, docCap = min(weakFlowCap, limit), min(weakDocCap, limit)
 		note = "no strong match for \"" + q + "\" — showing closest lexical guesses; " +
 			"try a more specific name, or add kind:/service: to narrow"
 	}

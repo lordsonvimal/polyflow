@@ -1296,17 +1296,32 @@ func runEmbedPass(
 	eclk.mark("embed: flow chains")
 
 	// 3. Doc chunks — markdown files + code doc-comments from service dirs.
+	// workspace.Load resolves every Service.Path to an absolute directory
+	// (internal/workspace/config.go's Load), so svcPaths below is absolute —
+	// walkServiceDocs needs that to actually open the files. Doc entity
+	// File/ID are relativized against cwd afterward, mirroring the same
+	// filepath.Rel(cwd, abs) convention the tree-sitter/SSA parsers already
+	// use for node File fields (e.g. internal/parser/go_variables.go's
+	// relPath closure) — without it, every doc search hit leaked the local
+	// filesystem's absolute path.
 	var svcPaths []semantic.ServicePath
 	if opts.Config != nil {
 		for _, svc := range opts.Config.Services {
-			absPath, err := filepath.Abs(svc.Path)
-			if err != nil {
-				absPath = svc.Path
-			}
-			svcPaths = append(svcPaths, semantic.ServicePath{Path: absPath, Service: svc.Name})
+			svcPaths = append(svcPaths, semantic.ServicePath{Path: svc.Path, Service: svc.Name})
 		}
 	}
 	docEntities := semantic.BuildDocChunks(svcPaths, allNodes)
+	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		for i := range docEntities {
+			if docEntities[i].Type != "doc" {
+				continue
+			}
+			if rel, relErr := filepath.Rel(cwd, docEntities[i].File); relErr == nil && !strings.HasPrefix(rel, "..") {
+				docEntities[i].ID = strings.Replace(docEntities[i].ID, docEntities[i].File, rel, 1)
+				docEntities[i].File = rel
+			}
+		}
+	}
 	eclk.mark("embed: doc chunks")
 
 	// Combine all entities; dedupe by ID (node cards win over chain/doc on
