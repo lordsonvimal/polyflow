@@ -11,14 +11,16 @@ import (
 )
 
 // railsRouteGrammar is Tier SF Phase 2 (docs/scope-fold-engine-plan.md): the
-// path/module/method/action/route-name/controller/devise composition slice
-// of Rails' routes.rb grammar, expressed as a scopefold.Grammar instead of
-// ruby_route_paths.go's hand-written recursion. Parity-tested against the
-// same fixtures ruby_route_paths_test.go and ruby_route_names_test.go
-// already exercise. `devise_for`'s `controllers:` override hash is covered
-// (scopefold.HashExpandSpec, Tier SF Phase 2d) — the `root` route stays out
-// of this increment (no ground truth to parity-test against —
-// composeRailsRoutePaths does not handle it either); see this file's
+// path/module/method/action/route-name/controller/devise/root composition
+// slice of Rails' routes.rb grammar, expressed as a scopefold.Grammar
+// instead of ruby_route_paths.go's hand-written recursion. Parity-tested
+// against the same fixtures ruby_route_paths_test.go and
+// ruby_route_names_test.go already exercise where ground truth exists;
+// `root` (Tier SF Phase 2e) has none — composeRailsRoutePaths never
+// implemented it — so it is instead built directly off Rails' own
+// documented semantics (ActionDispatch::Routing::Mapper#root /
+// match_root_route: path "/", via: :get, as: :root by default, target from
+// a `to:`/positional-string/controller:+action: option). See this file's
 // per-construct comments for exactly what each one covers. Not yet wired
 // into composeRailsRoutePaths; buildRailsMatches + railsRouteGrammar exist
 // to be Fold-ed and diffed against it, not to replace it.
@@ -128,6 +130,34 @@ func railsRouteGrammar() *scopefold.Grammar {
 		{Capture: "to_kw", Extract: "before_hash|after_last_slash"},
 		{Capture: "to_kw", Extract: "after_hash"},
 	}
+
+	// rootArgs is `root`'s own rails_route Args: path is the enclosing
+	// scope's own path with no extra segment appended (match_root_route's
+	// literal "/", scoped the same way any other leaf's path stack read
+	// is), method is always GET (root never takes a via: override in real
+	// Rails), and the helper name is the enclosing scope's own name prefix
+	// with "root" appended — never qualified by res_singular/res_collection,
+	// since root has no member/collection concept of its own to prefix or
+	// suffix. It shares http_verb_route's toTargetTail for the
+	// controller_module/resource/action split (root's target is a
+	// "controller#action" string exactly the same shape `to:` uses there),
+	// and reads resource_style off the stack like any other leaf — a `root`
+	// nested inside a singleton `resource` block still inherits "singular".
+	rootArgs := []scopefold.EmitArg{
+		{Stack: "path", Compose: "join_segments"},
+		{Literal: "GET"},
+		{
+			Stack: "name", Compose: "helper_name",
+			AppendList: []scopefold.EmitArg{
+				{Capture: "as_kw", Fallback: &scopefold.EmitArg{Literal: "root"}},
+			},
+		},
+	}
+	rootArgs = append(rootArgs, toTargetTail...)
+	rootArgs = append(rootArgs,
+		scopefold.EmitArg{Stack: "resource_style", Compose: "top"},
+		scopefold.EmitArg{Literal: ""},
+	)
 
 	return &scopefold.Grammar{
 		Stacks: []string{"path", "module", "name", "on_scope", "pending_nest", "res_singular", "res_plural", "res_collection", "resource_style"},
@@ -417,6 +447,13 @@ func railsRouteGrammar() *scopefold.Grammar {
 					),
 				},
 			},
+			{
+				Match: "root",
+				Emit: scopefold.EmitSpec{
+					Pred: "rails_route",
+					Args: rootArgs,
+				},
+			},
 		},
 		ExpandTables: map[string]scopefold.ExpandTable{
 			"rest_actions_plural":   restActionsTable(true),
@@ -598,6 +635,10 @@ func (b *railsMatchBuilder) walk(n *sitter.Node, onScope, pendingNest string) {
 		// emitDeviseRoutes, no block body to fold into.
 		b.emitDeviseFor(n, line)
 		return
+	case "root":
+		// Never recurses — root takes no block in real Rails routes.rb.
+		b.emitRoot(n, line)
+		return
 	}
 
 	if railsVerbMethods[method] {
@@ -671,6 +712,36 @@ func (b *railsMatchBuilder) emitDeviseFor(call *sitter.Node, line int) {
 		"module_kw":        keywordSegment(call, b.src, "module"),
 	}
 	b.out = append(b.out, scopefold.Match{PatternName: "devise_for", File: b.file, Line: line, Captures: caps})
+}
+
+// emitRoot resolves root's target the same three ways Rails' own #root
+// accepts it: an explicit `to:` keyword, a bare positional string
+// ("root 'pages#home'", sugar for to:), or a `controller:`/`action:` pair
+// (root's Hash-argument form) — first match wins, mirroring Mapper#root's
+// own if/elsif chain. A route with no resolvable target (a bare `root` with
+// nothing, which Rails itself would raise ArgumentError on) emits nothing.
+func (b *railsMatchBuilder) emitRoot(call *sitter.Node, line int) {
+	target := keywordSegment(call, b.src, "to")
+	if target == "" {
+		if seg, ok := firstPositionalSegment(call, b.src); ok {
+			target = seg
+		}
+	}
+	if target == "" {
+		ctrl := keywordSegment(call, b.src, "controller")
+		action := keywordSegment(call, b.src, "action")
+		if ctrl != "" && action != "" {
+			target = ctrl + "#" + action
+		}
+	}
+	if target == "" {
+		return
+	}
+	caps := map[string]string{
+		"to_kw": target,
+		"as_kw": keywordSegment(call, b.src, "as"),
+	}
+	b.out = append(b.out, scopefold.Match{PatternName: "root", File: b.file, Line: line, Captures: caps})
 }
 
 func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int, onScope, pendingNest string) {

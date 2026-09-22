@@ -622,3 +622,127 @@ end
 		t.Error("the non-skipped override must still synthesize")
 	}
 }
+
+// TestScopeFoldRails_RootString parity-tests root's own semantics against
+// Rails' documented Mapper#root/match_root_route behavior directly — no
+// ground truth exists in ruby_route_paths_test.go, since
+// composeRailsRoutePaths never implemented `root` at all (see this file's
+// grammar-file doc comment).
+func TestScopeFoldRails_RootString(t *testing.T) {
+	routes := foldRailsRoutes(t, `Rails.application.routes.draw do
+  root "pages#home"
+end
+`)
+	if !containsRoute(routes, "GET /") {
+		t.Fatalf("root string form must synthesize GET /, got %v", routes)
+	}
+	names := foldRailsRouteNames(t, `Rails.application.routes.draw do
+  root "pages#home"
+end
+`)
+	if got := names["GET /"]; got != "root" {
+		t.Errorf("route_helper = %q, want %q", got, "root")
+	}
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  root "pages#home"
+end
+`)["GET /"]
+	if meta.controllerModule != "" || meta.resource != "pages" || meta.action != "home" {
+		t.Errorf("meta = %+v, want controller_module=\"\" resource=pages action=home", meta)
+	}
+}
+
+func TestScopeFoldRails_RootToKeyword(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  root to: "welcome#index"
+end
+`)["GET /"]
+	if meta.controllerModule != "" || meta.resource != "welcome" || meta.action != "index" {
+		t.Errorf("meta = %+v, want controller_module=\"\" resource=welcome action=index", meta)
+	}
+}
+
+func TestScopeFoldRails_RootControllerActionKeywords(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  root controller: "welcome", action: "index"
+end
+`)["GET /"]
+	if meta.controllerModule != "" || meta.resource != "welcome" || meta.action != "index" {
+		t.Errorf("meta = %+v, want controller_module=\"\" resource=welcome action=index", meta)
+	}
+}
+
+// TestScopeFoldRails_RootAsOverride confirms an explicit as: replaces the
+// default "root" trailing segment while the enclosing scope's own name
+// prefix (empty here) is still honored — mirrors every other leaf's
+// asOrLiteralName precedence.
+func TestScopeFoldRails_RootAsOverride(t *testing.T) {
+	names := foldRailsRouteNames(t, `Rails.application.routes.draw do
+  root "pages#home", as: :home
+end
+`)
+	if got := names["GET /"]; got != "home" {
+		t.Errorf("route_helper = %q, want %q", got, "home")
+	}
+}
+
+// TestScopeFoldRails_RootNestedInNamespace confirms root scoped inside a
+// namespace both prefixes the path AND the helper name — the same "/api"
+// path and "api_root" helper any other route in that namespace would get.
+func TestScopeFoldRails_RootNestedInNamespace(t *testing.T) {
+	routes := foldRailsRoutes(t, `Rails.application.routes.draw do
+  namespace :api do
+    root "dashboard#show"
+  end
+end
+`)
+	if !containsRoute(routes, "GET /api") {
+		t.Fatalf("root inside namespace :api must synthesize GET /api, got %v", routes)
+	}
+	names := foldRailsRouteNames(t, `Rails.application.routes.draw do
+  namespace :api do
+    root "dashboard#show"
+  end
+end
+`)
+	if got := names["GET /api"]; got != "api_root" {
+		t.Errorf("route_helper = %q, want %q", got, "api_root")
+	}
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  namespace :api do
+    root "dashboard#show"
+  end
+end
+`)["GET /api"]
+	if meta.controllerModule != "api" || meta.resource != "dashboard" || meta.action != "show" {
+		t.Errorf("meta = %+v, want controller_module=api resource=dashboard action=show", meta)
+	}
+}
+
+// TestScopeFoldRails_RootInsideSingletonResource confirms a root nested
+// inside a `resource` block still inherits resource_style="singular" off
+// the shared stack, same as any other verb leaf.
+func TestScopeFoldRails_RootInsideSingletonResource(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  resource :session do
+    root "sessions#new"
+  end
+end
+`)["GET /session"]
+	if meta.resourceStyle != "singular" {
+		t.Errorf("resource_style = %q, want %q", meta.resourceStyle, "singular")
+	}
+}
+
+// TestScopeFoldRails_RootWithNoTargetEmitsNothing confirms a malformed bare
+// `root` (no to:/positional/controller+action — Rails itself raises
+// ArgumentError on this) synthesizes no route rather than a garbage one.
+func TestScopeFoldRails_RootWithNoTargetEmitsNothing(t *testing.T) {
+	routes := foldRailsRoutes(t, `Rails.application.routes.draw do
+  root
+end
+`)
+	if containsRoute(routes, "GET /") {
+		t.Errorf("a targetless root must not synthesize a route, got %v", routes)
+	}
+}
