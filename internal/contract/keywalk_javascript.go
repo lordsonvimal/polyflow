@@ -93,6 +93,9 @@ func walkJSExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int) 
 		}
 		return nil, true
 
+	case "call_expression":
+		return walkJSCallExpr(node, src, consts, depth)
+
 	case "member_expression":
 		// H.2: object.property access into a same-file const object literal
 		// (Solid Router's `clientRoutes.home`) — resolved via the compound

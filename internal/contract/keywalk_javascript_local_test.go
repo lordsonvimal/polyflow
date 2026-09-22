@@ -431,3 +431,83 @@ func TestJSTemplate_PathSegmentTernaryStaysWildcard(t *testing.T) {
 	assert.False(t, dynamic)
 	assert.Equal(t, []string{"/app/folders/*/children"}, got)
 }
+
+// TestJSCallExpr_InlinesLocalArrowFunction is the cedar shape (mdr's
+// DashboardRequestsTable.jsx): a same-file helper whose entire body is one
+// template-literal return, called as the URL argument directly. Nothing was
+// reading through the call before this — the walker bailed to key_dynamic
+// the moment it saw a call_expression at all.
+func TestJSCallExpr_InlinesLocalArrowFunction(t *testing.T) {
+	src := "" +
+		"function go(standardId) {\n" +
+		"  const getRequestURL = id => `/collaborate?standard_id=${id}#requests`;\n" +
+		"  $.get(getRequestURL(standardId));\n" +
+		"}\n"
+	got, dynamic := walkURL(t, src, 0)
+
+	assert.False(t, dynamic)
+	assert.Equal(t, []string{"/collaborate?standard_id=*#requests"}, got)
+}
+
+// TestJSCallExpr_InlinesBracedArrowSingleReturn covers the braced-body form
+// (`() => { return ...; }`), not just the concise-body form.
+func TestJSCallExpr_InlinesBracedArrowSingleReturn(t *testing.T) {
+	src := "" +
+		"function go(standardId) {\n" +
+		"  const getRequestURL = (id) => {\n" +
+		"    return `/collaborate?standard_id=${id}#requests`;\n" +
+		"  };\n" +
+		"  $.get(getRequestURL(standardId));\n" +
+		"}\n"
+	got, dynamic := walkURL(t, src, 0)
+
+	assert.False(t, dynamic)
+	assert.Equal(t, []string{"/collaborate?standard_id=*#requests"}, got)
+}
+
+// TestJSCallExpr_MultiStatementBodyStaysDynamic: a helper with any real
+// control flow (more than one statement) must not be guessed at — this is
+// the boundary walkJSCallExpr refuses to cross, not an oversight.
+func TestJSCallExpr_MultiStatementBodyStaysDynamic(t *testing.T) {
+	src := "" +
+		"function go(standardId) {\n" +
+		"  const getRequestURL = id => {\n" +
+		"    console.log(id);\n" +
+		"    return `/collaborate?standard_id=${id}#requests`;\n" +
+		"  };\n" +
+		"  $.get(getRequestURL(standardId));\n" +
+		"}\n"
+	_, dynamic := walkURL(t, src, 0)
+
+	assert.True(t, dynamic)
+}
+
+// TestJSCallExpr_ImportedCalleeStaysDynamic: a call whose callee has no
+// local binding in this file (an import) must not be guessed at either —
+// jsResolveLocalBindingStatus correctly reports "no local binding" rather
+// than resolving across files, and walkJSCallExpr must respect that rather
+// than silently treating "not found" as "try harder".
+func TestJSCallExpr_ImportedCalleeStaysDynamic(t *testing.T) {
+	src := "" +
+		"import { generateURL } from \"./routeMap\";\n" +
+		"function go(standardId) {\n" +
+		"  $.get(generateURL(\"form\", { standardId }));\n" +
+		"}\n"
+	_, dynamic := walkURL(t, src, 0)
+
+	assert.True(t, dynamic)
+}
+
+// TestJSCallExpr_MemberExpressionCalleeStaysDynamic: `obj.method(...)` calls
+// (linkTo.type(...), ClientRoutes.generate_url(...)) are exactly the
+// cross-file case this pass does not attempt — never guess which file
+// `obj`'s methods live in.
+func TestJSCallExpr_MemberExpressionCalleeStaysDynamic(t *testing.T) {
+	src := "" +
+		"function go(standardId, id) {\n" +
+		"  $.get(linkTo.type(\"Form\", standardId, id));\n" +
+		"}\n"
+	_, dynamic := walkURL(t, src, 0)
+
+	assert.True(t, dynamic)
+}

@@ -270,6 +270,73 @@ func JSReceiverIsLocalContainer(use *sitter.Node, src []byte, name string) bool 
 	return false
 }
 
+// walkJSCallExpr resolves a call to a same-file function/arrow whose entire
+// body is a single return of a further-walkable expression, inlining it
+// exactly as if the call site had written the returned expression directly —
+// the `const getRequestURL = (id) => \`/collaborate?standard_id=${id}#requests\`;
+// ... getRequestURL(standard.id)` shape: a local helper wrapping a template
+// literal that nothing was reading through.
+//
+// Cross-file callees (imports) are not attempted: jsResolveLocalBindingStatus
+// only sees the current file's AST, so a call to an imported function
+// (`generateURL(...)`, `linkTo.type(...)`) correctly falls through to
+// dynamic here rather than guessing — resolving those needs cross-file
+// function/import resolution this walker does not have.
+func walkJSCallExpr(node *sitter.Node, src []byte, consts ConstResolver, depth int) ([]string, bool) {
+	callee := node.ChildByFieldName("function")
+	if callee == nil || callee.Type() != "identifier" {
+		// member-expression callees (obj.method(...)) are exactly the
+		// cross-file case above — never guess.
+		return nil, true
+	}
+	name := string(src[callee.StartByte():callee.EndByte()])
+	fn, ambiguous := jsResolveLocalBindingStatus(callee, src, name)
+	if fn == nil || ambiguous || !jsIsFunctionLike(fn) {
+		return nil, true
+	}
+	ret := jsSingleReturnExpr(fn)
+	if ret == nil {
+		return nil, true
+	}
+	return walkJSExpr(ret, src, consts, depth+1)
+}
+
+func jsIsFunctionLike(n *sitter.Node) bool {
+	switch n.Type() {
+	case "arrow_function", "function_expression", "function", "generator_function":
+		return true
+	}
+	return false
+}
+
+// jsSingleReturnExpr returns the sole expression a function-like node's body
+// evaluates to, or nil when the body is anything less mechanical than that.
+// An arrow function's concise (braceless) body is that expression directly;
+// a braced body must contain exactly one statement, a return, or this
+// declines rather than guess which control-flow path the call takes — a
+// function with any real logic (branches, side effects, a switch) is out of
+// scope for this pass, not silently approximated.
+func jsSingleReturnExpr(fn *sitter.Node) *sitter.Node {
+	body := fn.ChildByFieldName("body")
+	if body == nil {
+		return nil
+	}
+	if body.Type() != "statement_block" {
+		return body // arrow function concise body
+	}
+	var stmt *sitter.Node
+	for i := 0; i < int(body.NamedChildCount()); i++ {
+		if stmt != nil {
+			return nil // more than one statement — do not guess which runs
+		}
+		stmt = body.NamedChild(i)
+	}
+	if stmt == nil || stmt.Type() != "return_statement" || stmt.NamedChildCount() == 0 {
+		return nil
+	}
+	return stmt.NamedChild(0)
+}
+
 // jsURLPairKeys are the object keys that hold a request path. Read when a
 // pattern's URL capture binds a whole options object instead of the path.
 var jsURLPairKeys = map[string]bool{"url": true, "path": true, "href": true}
