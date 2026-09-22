@@ -7,17 +7,39 @@ import (
 )
 
 // railsRouteGrammar is Tier SF Phase 2 (docs/scope-fold-engine-plan.md): the
-// path/module/method/action/route-name composition slice of Rails' routes.rb
-// grammar, expressed as a scopefold.Grammar instead of ruby_route_paths.go's
-// hand-written recursion. Parity-tested against the same fixtures
-// ruby_route_paths_test.go and ruby_route_names_test.go already exercise —
-// controller:/to:/devise_for overrides (controller_module/action/resource
-// Meta, not path/method/name) and the `root` route (no ground truth to
-// parity-test against — composeRailsRoutePaths does not handle it either)
-// stay out of this increment; see this file's per-construct comments for
-// exactly what each one covers. Not yet wired into composeRailsRoutePaths;
-// buildRailsMatches + railsRouteGrammar exist to be Fold-ed and diffed
-// against it, not to replace it.
+// path/module/method/action/route-name/controller composition slice of
+// Rails' routes.rb grammar, expressed as a scopefold.Grammar instead of
+// ruby_route_paths.go's hand-written recursion. Parity-tested against the
+// same fixtures ruby_route_paths_test.go and ruby_route_names_test.go
+// already exercise — `devise_for` (a hash-driven synthesis shape ExpandTable
+// cannot express: each entry both selects from a fixed action/path table
+// *and* substitutes into a "%s"-templated path, neither of which is a plain
+// row list) and the `root` route (no ground truth to parity-test against —
+// composeRailsRoutePaths does not handle it either) stay out of this
+// increment; see this file's per-construct comments for exactly what each
+// one covers. Not yet wired into composeRailsRoutePaths; buildRailsMatches +
+// railsRouteGrammar exist to be Fold-ed and diffed against it, not to
+// replace it.
+// controllerModuleArg composes the "module" stack (namespace/scope's own
+// nesting) plus, when capture is non-"", an extra module segment split out
+// of it via extract — the shared shape both resources'/resource's
+// controller: override and http_verb_route's to: target use to contribute
+// nesting beyond what namespace/scope already pushed ("admin/db_status#index"
+// contributes "admin" on top of the enclosing module stack, the same way
+// emitDeviseRoutes' controllers: override hash splits a namespaced basename).
+// A "" capture is resource_scoped_verb's/member_verb_route's/etc. own case:
+// no override exists for these leaf shapes, so it reads the module stack
+// alone.
+func controllerModuleArg(capture, extract string) scopefold.EmitArg {
+	if capture == "" {
+		return scopefold.EmitArg{Stack: "module", Compose: "join"}
+	}
+	return scopefold.EmitArg{
+		Stack: "module", Compose: "join",
+		AppendList: []scopefold.EmitArg{{Capture: capture, Extract: extract}},
+	}
+}
+
 func railsRouteGrammar() *scopefold.Grammar {
 	// pending_nest is Rails' single-generation URL nesting parameter
 	// (resources :folders scoping its children under :folder_id): resources
@@ -66,12 +88,47 @@ func railsRouteGrammar() *scopefold.Grammar {
 		Prepend:    []scopefold.EmitArg{asOrLiteralName("action", "segment")},
 	}
 
-	verbLeafArgs := func(pathArgs scopefold.EmitArg, helper scopefold.EmitArg) []scopefold.EmitArg {
-		return []scopefold.EmitArg{pathArgs, {Capture: "method", Extract: "upcase"}, helper}
+	// unmoduledLeafArgs is the [controller_module, resource, action] tail
+	// every verb-leaf shape composeAndStamp does NOT populate from a `to:`
+	// target carries: controller_module is still the plain module stack
+	// (Rails resolves the controller from the URL/resource elsewhere), but
+	// resource/action stay empty — a fact this walker does not have, not an
+	// invented one.
+	unmoduledLeafArgs := []scopefold.EmitArg{
+		controllerModuleArg("", ""),
+		{Literal: ""},
+		{Literal: ""},
+	}
+
+	verbLeafArgs := func(pathArgs, helper scopefold.EmitArg, ctrlTail []scopefold.EmitArg) []scopefold.EmitArg {
+		args := []scopefold.EmitArg{pathArgs, {Capture: "method", Extract: "upcase"}, helper}
+		args = append(args, ctrlTail...)
+		// resource_style: "singular" inside a `resource` block, "" everywhere
+		// else — composeAndStamp only ever stamps the singular case, since
+		// "plural" is emitRESTRoutes' own statement about routes it minted,
+		// not something an explicit verb call claims for itself.
+		args = append(args, scopefold.EmitArg{Stack: "resource_style", Compose: "top"})
+		// controller_explicit: never set by an explicit verb call in the Go
+		// ground truth — only emitRESTRoutes' own controller: reading sets it.
+		args = append(args, scopefold.EmitArg{Literal: ""})
+		return args
+	}
+
+	// toTargetTail is http_verb_route's controller_module/resource/action
+	// triple, read off an explicit `to: "controller#action"` target — the
+	// one leaf shape composeAndStamp lets decouple the URL from the
+	// controller name (an admin/db_status#index target both names an action
+	// and contributes extra module nesting beyond the enclosing namespace/
+	// scope stack, the same "namespace/basename" split emitDeviseRoutes'
+	// controllers: override and resources' controller: override both use).
+	toTargetTail := []scopefold.EmitArg{
+		controllerModuleArg("to_kw", "before_hash|before_last_slash"),
+		{Capture: "to_kw", Extract: "before_hash|after_last_slash"},
+		{Capture: "to_kw", Extract: "after_hash"},
 	}
 
 	return &scopefold.Grammar{
-		Stacks: []string{"path", "module", "name", "on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
+		Stacks: []string{"path", "module", "name", "on_scope", "pending_nest", "res_singular", "res_plural", "res_collection", "resource_style"},
 		Scopes: []scopefold.ScopeSpec{
 			{
 				Match:   "namespace",
@@ -81,7 +138,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 					"module": {{Capture: "seg", Extract: "segment"}},
 					"name":   {pendingSingularFirst, {Capture: "seg", Extract: "segment"}},
 				},
-				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection", "resource_style"},
 			},
 			{
 				// scope's path comes from an explicit path: keyword, or else
@@ -98,7 +155,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 					"module": {{Capture: "module_kw", Extract: "segment"}},
 					"name":   {pendingSingularFirst, {Capture: "as_kw", Extract: "segment"}},
 				},
-				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection", "resource_style"},
 			},
 			{
 				// resources scopes its own segment under any pending_nest it
@@ -135,7 +192,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment|inflect:collection_name"},
 					}},
 				},
-				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection", "resource_style"},
 			},
 			{
 				// A singleton resource has no member id, so it never sets a
@@ -162,8 +219,15 @@ func railsRouteGrammar() *scopefold.Grammar {
 						Capture: "res_as", Extract: "segment",
 						Fallback: &scopefold.Contribution{Capture: "seg", Extract: "segment"},
 					}},
+					// A singleton is the one construct that marks resource_style
+					// for its own verb-route children (composeAndStamp's `if
+					// singular` branch) — resources deliberately contributes
+					// nothing here, since "plural" is emitRESTRoutes' own
+					// statement about routes it minted, not one an explicit verb
+					// call inside a `resources` block claims for itself.
+					"resource_style": {{Literal: "singular"}},
 				},
-				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection"},
+				Resets: []string{"on_scope", "pending_nest", "res_singular", "res_plural", "res_collection", "resource_style"},
 			},
 			{
 				Match:   "member",
@@ -215,6 +279,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 								},
 							},
 						}},
+						toTargetTail,
 					),
 				},
 			},
@@ -225,6 +290,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 					Args: verbLeafArgs(
 						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendCapture: "action", AppendExtract: "segment"},
 						memberHelper,
+						unmoduledLeafArgs,
 					),
 				},
 			},
@@ -235,6 +301,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 					Args: verbLeafArgs(
 						scopefold.EmitArg{Stack: "path", Compose: "join_segments", AppendCapture: "action", AppendExtract: "segment"},
 						collectionHelper,
+						unmoduledLeafArgs,
 					),
 				},
 			},
@@ -248,6 +315,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 							{Capture: "action", Extract: "segment"},
 						}},
 						memberHelper,
+						unmoduledLeafArgs,
 					),
 				},
 			},
@@ -260,6 +328,7 @@ func railsRouteGrammar() *scopefold.Grammar {
 							{Capture: "action", Extract: "segment"},
 						}},
 						collectionHelper,
+						unmoduledLeafArgs,
 					),
 				},
 			},
@@ -271,7 +340,12 @@ func railsRouteGrammar() *scopefold.Grammar {
 				// (resourceScopedHelperName's SUFFIX order) rather than
 				// action_base (qualifyVerbName's PREFIX order used by the
 				// on:/lexical forms), so it needs its own leaf rather than
-				// reusing member_verb_route_inline's Emit.
+				// reusing member_verb_route_inline's Emit. Its resource/action
+				// tail also diverges from every other leaf's: Go's
+				// emitResourceScopedVerb reads Meta["resource"] off
+				// names.plural (res_plural), not off any controller: override
+				// — a bare verb inside `resources`, unlike the block's own
+				// implicit CRUD, never honours controller: at all.
 				Match: "resource_scoped_verb",
 				Emit: scopefold.EmitSpec{
 					Pred: "rails_route",
@@ -286,6 +360,11 @@ func railsRouteGrammar() *scopefold.Grammar {
 								{Stack: "res_singular", Compose: "top"},
 								asOrLiteralName("action", "segment"),
 							},
+						},
+						[]scopefold.EmitArg{
+							controllerModuleArg("", ""),
+							{Stack: "res_plural", Compose: "top"},
+							{Capture: "action", Extract: "segment"},
 						},
 					),
 				},
@@ -320,6 +399,20 @@ func restActionsTable(plural bool) scopefold.ExpandTable {
 		a.Prepend = []scopefold.EmitArg{{Literal: prefix}}
 		return a
 	}
+	style := "plural"
+	if !plural {
+		style = "singular"
+	}
+	// resource/controller_module read the scope match's own "ctrl_kw"
+	// capture (emitRESTRoutes' ctrlSeg/ctrlMod, split the same
+	// "namespace/basename" way emitDeviseRoutes' controllers: override and
+	// http_verb_route's to: target both split it) — absent controller:, the
+	// resource falls back to the declaration's own raw segment, unmodified
+	// by any inflection (emitRESTRoutes' seg parameter, not singularName).
+	resourceArg := scopefold.EmitArg{
+		Capture: "ctrl_kw", Extract: "after_last_slash",
+		Fallback: &scopefold.EmitArg{Capture: "seg"},
+	}
 	emit := func(helper scopefold.EmitArg) *scopefold.EmitSpec {
 		return &scopefold.EmitSpec{
 			Pred: "rails_route",
@@ -327,6 +420,11 @@ func restActionsTable(plural bool) scopefold.ExpandTable {
 				{Stack: "path", Compose: "join_segments"},
 				{Row: "method"},
 				helper,
+				controllerModuleArg("ctrl_kw", "before_last_slash"),
+				resourceArg,
+				{Row: "name"},
+				{Literal: style},
+				{Capture: "ctrl_kw", Extract: "flag"},
 			},
 		}
 	}
@@ -454,6 +552,7 @@ func (b *railsMatchBuilder) emitScope(call *sitter.Node, method string, line int
 		caps["as_kw"] = keywordSegment(call, b.src, "as")
 	case "resources", "resource":
 		caps["res_as"] = keywordSegment(call, b.src, "as")
+		caps["ctrl_kw"] = keywordSegment(call, b.src, "controller")
 	}
 	b.out = append(b.out, scopefold.Match{PatternName: method, File: b.file, Line: line, Captures: caps})
 }
@@ -486,6 +585,10 @@ func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int,
 	switch first.Type() {
 	case "string":
 		caps["path"] = string(b.src[first.StartByte():first.EndByte()])
+		// to: only decouples the controller from the URL for the string-literal
+		// form (composeAndStamp gates its whole to: block on pattern ==
+		// "http_verb_route") — the symbol-argument forms below never read it.
+		caps["to_kw"] = keywordSegment(call, b.src, "to")
 		b.out = append(b.out, scopefold.Match{PatternName: "http_verb_route", File: b.file, Line: line, Captures: caps})
 	case "simple_symbol":
 		caps["action"] = string(b.src[first.StartByte():first.EndByte()])

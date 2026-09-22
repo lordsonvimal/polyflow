@@ -262,6 +262,10 @@ func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) 
 		switch a.Compose {
 		case "join_segments":
 			return factpipe.Str(joinSegments(segs))
+		case "join":
+			// Slash-joined with no leading "/" — a Ruby module nesting path
+			// ("users/sessions"), as opposed to join_segments' absolute URL.
+			return factpipe.Str(strings.Join(segs, "/"))
 		case "helper_name":
 			return factpipe.Str(strings.Join(segs, "_"))
 		case "top":

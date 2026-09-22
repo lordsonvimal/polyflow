@@ -107,7 +107,8 @@ type EmitArg struct {
 	Literal string `yaml:"literal"`
 
 	// Stack + Compose read a threaded stack ("join_segments": "/a/b/c";
-	// "helper_name": "a_b_c"). AppendCapture/AppendExtract optionally append
+	// "join": "a/b/c", no leading slash — a module-nesting path rather than
+	// a URL; "helper_name": "a_b_c"). AppendCapture/AppendExtract optionally append
 	// one more segment — the leaf's own path/action text — before composing,
 	// the same way a Rails verb route's own literal path segment joins onto
 	// its enclosing scopes' accumulated prefix.

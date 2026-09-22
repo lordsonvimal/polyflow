@@ -70,6 +70,45 @@ func foldRailsRouteNames(t *testing.T, src string) map[string]string {
 	return out
 }
 
+// railsRouteMeta is the rails_route Fact's controller/action tail (Args[3:8]),
+// parallel to graph.Node.Meta's controller_module/resource/action/
+// resource_style/controller_explicit fields.
+type railsRouteMeta struct {
+	controllerModule   string
+	resource           string
+	action             string
+	resourceStyle      string
+	controllerExplicit string
+}
+
+// foldRailsRouteMeta is foldRailsRoutes'/foldRailsRouteNames' controller/
+// action-carrying twin, for the controller:/to: override parity tests below.
+func foldRailsRouteMeta(t *testing.T, src string) map[string]railsRouteMeta {
+	t.Helper()
+	p := sitter.NewParser()
+	p.SetLanguage(rubysitter.GetLanguage())
+	tree, err := p.ParseCtx(context.Background(), nil, []byte(src))
+	if err != nil || tree == nil {
+		t.Fatalf("parse: %v", err)
+	}
+	matches := buildRailsMatches(tree.RootNode(), "config/routes.rb", []byte(src))
+	facts := scopefold.Fold(tree.RootNode(), matches, railsRouteGrammar())
+	out := map[string]railsRouteMeta{}
+	for _, f := range facts {
+		if f.Pred != "rails_route" {
+			continue
+		}
+		out[f.Args[1].Value()+" "+f.Args[0].Value()] = railsRouteMeta{
+			controllerModule:   f.Args[3].Value(),
+			resource:           f.Args[4].Value(),
+			action:             f.Args[5].Value(),
+			resourceStyle:      f.Args[6].Value(),
+			controllerExplicit: f.Args[7].Value(),
+		}
+	}
+	return out
+}
+
 // TestScopeFoldRails_RouteNames parity-tests railsRouteGrammar's route_helper
 // composition against ruby_route_names_test.go's fixtures (nameScope's own
 // ground truth) — nested resources singularization, member-vs-collection
@@ -335,5 +374,156 @@ end
 	routes := foldRailsRoutes(t, src)
 	if !containsRoute(routes, "GET /app/audit_logs") {
 		t.Errorf("missing route %q, got %v", "GET /app/audit_logs", routes)
+	}
+}
+
+// TestScopeFoldRails_ExplicitToTarget parity-tests
+// TestHTTPVerbRouteExplicitToTarget (ruby_route_paths_test.go): an explicit
+// `to: "controller#action"` target decouples the resource/action from the
+// URL, and a namespaced controller ("admin/db_status") contributes extra
+// module nesting on top of whatever namespace/scope already pushed.
+func TestScopeFoldRails_ExplicitToTarget(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  post "queue_compute_dependencies", to: "lyra_job_items#queue_compute_dependencies"
+  get "/x", to: "admin/db_status#index"
+  namespace :api do
+    get "/y", to: "admin/db_status#index"
+  end
+end
+`)
+	cases := []struct {
+		key    string
+		action string
+		res    string
+		mod    string
+	}{
+		{"POST /queue_compute_dependencies", "queue_compute_dependencies", "lyra_job_items", ""},
+		{"GET /x", "index", "db_status", "admin"},
+		{"GET /api/y", "index", "db_status", "api/admin"},
+	}
+	for _, tc := range cases {
+		got, ok := meta[tc.key]
+		if !ok {
+			t.Errorf("%s: missing (all: %v)", tc.key, meta)
+			continue
+		}
+		if got.action != tc.action || got.resource != tc.res || got.controllerModule != tc.mod {
+			t.Errorf("%s: action=%q resource=%q controller_module=%q, want action=%q resource=%q controller_module=%q",
+				tc.key, got.action, got.resource, got.controllerModule, tc.action, tc.res, tc.mod)
+		}
+	}
+}
+
+// TestScopeFoldRails_ResourceStyleRecorded parity-tests
+// TestRESTResourceRoutes_ResourceStyleRecorded: a singleton's implicit
+// actions are stamped "singular", a plural resource's "plural", and neither
+// carries controller_explicit absent a controller: option.
+func TestScopeFoldRails_ResourceStyleRecorded(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  resource :session, only: [:create, :destroy]
+  resources :widgets, only: [:index]
+end
+`)
+	if got := meta["POST /session"].resourceStyle; got != "singular" {
+		t.Errorf("POST /session resource_style = %q, want singular", got)
+	}
+	if got := meta["GET /widgets"].resourceStyle; got != "plural" {
+		t.Errorf("GET /widgets resource_style = %q, want plural", got)
+	}
+	if got := meta["POST /session"].controllerExplicit; got != "" {
+		t.Errorf("POST /session controller_explicit = %q, want empty", got)
+	}
+}
+
+// TestScopeFoldRails_ExplicitControllerOption parity-tests
+// TestRESTResourceRoutes_ExplicitControllerOption: `controller:` renames the
+// controller outright without touching the URL.
+func TestScopeFoldRails_ExplicitControllerOption(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  resources :studies, controller: "containers", only: [:index]
+end
+`)
+	got := meta["GET /studies"]
+	if got.resource != "containers" {
+		t.Errorf("resource = %q, want containers", got.resource)
+	}
+	if got.controllerExplicit != "true" {
+		t.Errorf("controller_explicit = %q, want true", got.controllerExplicit)
+	}
+}
+
+// TestScopeFoldRails_NamespacedControllerOption parity-tests
+// TestRESTResourceRoutes_NamespacedControllerOption: a namespaced controller:
+// value ("admin/dashboards") splits into extra module nesting the same way
+// an explicit to: target does.
+func TestScopeFoldRails_NamespacedControllerOption(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  resource :dashboard, controller: "admin/dashboards", only: [:show]
+end
+`)
+	got := meta["GET /dashboard"]
+	if got.resource != "dashboards" {
+		t.Errorf("resource = %q, want dashboards", got.resource)
+	}
+	if got.controllerModule != "admin" {
+		t.Errorf("controller_module = %q, want admin", got.controllerModule)
+	}
+}
+
+// TestScopeFoldRails_VerbRouteInsideSingularResource parity-tests
+// TestRESTResourceRoutes_VerbRouteInsideSingularResource: a member/collection
+// verb route nested in a singular `resource` block inherits "singular", the
+// same style its enclosing resource's own implicit actions carry — but a
+// bare top-level verb route stays unmarked, since it has no enclosing
+// resource to claim a style from. resource_scoped_verb's own resource/
+// controller_module (a bare verb inside `resources`) never honours
+// controller:, unlike the block's own implicit CRUD.
+func TestScopeFoldRails_VerbRouteInsideSingularResource(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  resource :home, only: [] do
+    collection do
+      get :pusher_script
+    end
+  end
+  resources :widgets, only: [] do
+    collection do
+      get :bulk_edit
+    end
+  end
+  get "app_info", to: "homes#app_info"
+end
+`)
+	if got := meta["GET /home/pusher_script"].resourceStyle; got != "singular" {
+		t.Errorf("GET /home/pusher_script resource_style = %q, want singular", got)
+	}
+	if got := meta["GET /widgets/bulk_edit"].resourceStyle; got != "" {
+		t.Errorf("GET /widgets/bulk_edit resource_style = %q, want empty", got)
+	}
+	if got := meta["GET /app_info"].resourceStyle; got != "" {
+		t.Errorf("GET /app_info resource_style = %q, want empty", got)
+	}
+}
+
+// TestScopeFoldRails_ResourceScopedVerbIgnoresControllerOption parity-tests
+// TestComposeRailsRoutePaths_BareVerbInResourcesBlock's controller_module/
+// resource assertions: a bare verb directly in a `resources` block reads its
+// resource off res_plural, not off any controller: override on the block.
+func TestScopeFoldRails_ResourceScopedVerbIgnoresControllerOption(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  namespace :client_api do
+    namespace :v1 do
+      resources :lros do
+        post :add_details
+      end
+    end
+  end
+end
+`)
+	got := meta["POST /client_api/v1/lros/:id/add_details"]
+	if got.controllerModule != "client_api/v1" {
+		t.Errorf("controller_module = %q, want client_api/v1", got.controllerModule)
+	}
+	if got.resource != "lros" {
+		t.Errorf("resource = %q, want lros", got.resource)
 	}
 }

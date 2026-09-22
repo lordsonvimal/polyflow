@@ -64,6 +64,15 @@ func applyOneVerb(step, val string) string {
 			return val[i+1:]
 		}
 		return ""
+	case "flag":
+		// "true" when the raw capture was present at all, "" otherwise — the
+		// controller: / controllers: override's own explicitness bit
+		// (ctrlExplicit), which is a fact about whether the keyword was
+		// written, not about any value it produced.
+		if val != "" {
+			return "true"
+		}
+		return ""
 	case "path_helper_name":
 		// Rails' auto-name for a string-literal route: strip quotes and
 		// slashes, then underscore-join whatever segments remain — "" for
