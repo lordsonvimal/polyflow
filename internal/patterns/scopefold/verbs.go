@@ -35,6 +35,11 @@ func applyOneVerb(step, val string) string {
 		return strings.ToUpper(val)
 	case "suffix_id":
 		return val + "_id"
+	case "colon_prefix":
+		if val == "" {
+			return ""
+		}
+		return ":" + val
 	case "before_last_slash":
 		// The module-prefix half of a namespaced override value ("users/
 		// sessions" -> "users") — a generic split, not Rails-specific;

@@ -63,12 +63,6 @@ type ScopeSpec struct {
 	// read, then the construct's own literal segment).
 	Contributes map[string][]Contribution `yaml:"contributes"`
 
-	// NestParam additionally pushes onto the "path" stack specifically —
-	// generalizes Rails' nested-resource id parameter
-	// (resources :folders implicitly scoping everything declared inside it
-	// under /folders/:folder_id, not just /folders).
-	NestParam *Contribution `yaml:"nest_param"`
-
 	// Expand names an ExpandTables entry: table-driven synthesis of the
 	// implicit child constructs this scope declares (run with this scope's
 	// own OWN contributed stacks, before recursing into any explicit body).
@@ -79,6 +73,15 @@ type ScopeSpec struct {
 	// generalizes Rails' namespace/scope ending the enclosing resource's
 	// naming claim (singular/onScope reset to their zero value) without
 	// ending its path/module claim (which simply isn't in Resets).
+	//
+	// There is deliberately no dedicated "nest param" field: Rails'
+	// resources :folders scoping its children under :folder_id is a
+	// single-generation pending value — set for direct children, read (via
+	// Contribution.Stack) only by a child that is itself a scope-opening
+	// construct, and discarded by every scope (including the one that set
+	// it, for its own use) via Resets. Contributes + Resets on an ordinary
+	// named stack already expresses this; a special field would duplicate
+	// it under different rules.
 	Resets []string `yaml:"resets"`
 }
 
@@ -112,6 +115,14 @@ type EmitArg struct {
 	Compose       string `yaml:"compose"`
 	AppendCapture string `yaml:"append_capture"`
 	AppendExtract string `yaml:"append_extract"`
+
+	// AppendList appends zero or more further computed segments (each
+	// evaluated the same as any EmitArg, typically Literal or Capture) after
+	// AppendCapture and before Compose — Rails' bare `get :action, on:
+	// :member` inline form pushes both a literal ":id" placeholder AND the
+	// action segment, in that order, neither of which came from an
+	// enclosing scope's stack push.
+	AppendList []EmitArg `yaml:"append_list"`
 
 	// Capture + Extract read one capture off the match directly, through a
 	// "|"-chained verb pipeline (e.g. "segment|upcase").

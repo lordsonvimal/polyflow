@@ -170,11 +170,6 @@ func (f *folder) foldScope(n *sitter.Node, scope *ScopeSpec, m *Match, st stacks
 			next = next.push(stackName, val)
 		}
 	}
-	if scope.NestParam != nil {
-		if val := contributionValue(*scope.NestParam, m, st); val != "" {
-			next = next.push("path", val)
-		}
-	}
 	if scope.Expand != "" {
 		f.expand(scope.Expand, m, next)
 	}
@@ -232,6 +227,11 @@ func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) 
 		segs := st[a.Stack]
 		if a.AppendCapture != "" {
 			if seg := applyVerb(a.AppendExtract, m.Captures[a.AppendCapture]); seg != "" {
+				segs = append(append([]string{}, segs...), seg)
+			}
+		}
+		for _, ap := range a.AppendList {
+			if seg := f.evalArg(ap, m, st, row).Value(); seg != "" {
 				segs = append(append([]string{}, segs...), seg)
 			}
 		}
