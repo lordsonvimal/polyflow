@@ -1,25 +1,27 @@
 package parser
 
 import (
+	"sort"
+	"strings"
+
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/lordsonvimal/polyflow/internal/patterns/scopefold"
+	"github.com/lordsonvimal/polyflow/internal/railsinflect"
 )
 
 // railsRouteGrammar is Tier SF Phase 2 (docs/scope-fold-engine-plan.md): the
-// path/module/method/action/route-name/controller composition slice of
-// Rails' routes.rb grammar, expressed as a scopefold.Grammar instead of
+// path/module/method/action/route-name/controller/devise composition slice
+// of Rails' routes.rb grammar, expressed as a scopefold.Grammar instead of
 // ruby_route_paths.go's hand-written recursion. Parity-tested against the
 // same fixtures ruby_route_paths_test.go and ruby_route_names_test.go
-// already exercise — `devise_for` (a hash-driven synthesis shape ExpandTable
-// cannot express: each entry both selects from a fixed action/path table
-// *and* substitutes into a "%s"-templated path, neither of which is a plain
-// row list) and the `root` route (no ground truth to parity-test against —
-// composeRailsRoutePaths does not handle it either) stay out of this
-// increment; see this file's per-construct comments for exactly what each
-// one covers. Not yet wired into composeRailsRoutePaths; buildRailsMatches +
-// railsRouteGrammar exist to be Fold-ed and diffed against it, not to
-// replace it.
+// already exercise. `devise_for`'s `controllers:` override hash is covered
+// (scopefold.HashExpandSpec, Tier SF Phase 2d) — the `root` route stays out
+// of this increment (no ground truth to parity-test against —
+// composeRailsRoutePaths does not handle it either); see this file's
+// per-construct comments for exactly what each one covers. Not yet wired
+// into composeRailsRoutePaths; buildRailsMatches + railsRouteGrammar exist
+// to be Fold-ed and diffed against it, not to replace it.
 // controllerModuleArg composes the "module" stack (namespace/scope's own
 // nesting) plus, when capture is non-"", an extra module segment split out
 // of it via extract — the shared shape both resources'/resource's
@@ -246,6 +248,52 @@ func railsRouteGrammar() *scopefold.Grammar {
 				},
 				Resets: []string{"pending_nest"},
 			},
+			{
+				// devise_for never recurses (Go's own walk returns
+				// immediately after emitDeviseRoutes, no block body) and
+				// contributes nothing to any stack itself — only its own
+				// controllers: hash, resolved entirely inside HashExpand.
+				Match: "devise_for",
+				HashExpand: &scopefold.HashExpandSpec{
+					Entries:  "controllers_hash",
+					Skip:     "skip_kw",
+					ScopeArg: "seg",
+					Rows:     deviseHashRows(),
+					Emit: scopefold.EmitSpec{
+						Pred: "rails_route",
+						Args: []scopefold.EmitArg{
+							{Row: "path"},
+							{Row: "method"},
+							// devise_route never carries a route_helper in
+							// the Go ground truth (Devise's own path/url
+							// helpers are a fixed Rails convention, not
+							// something emitDeviseRoutes derives or stamps).
+							{Literal: ""},
+							scopefold.EmitArg{
+								Stack: "module", Compose: "join",
+								AppendList: []scopefold.EmitArg{
+									// devise_for's own module: keyword, read
+									// before any per-entry namespaced-basename
+									// nesting — emitDeviseRoutes' own order
+									// (scopeMod := mod, then optionally
+									// appendSeg(mod, module:), then the
+									// per-entry split on top of THAT).
+									{Capture: "module_kw"},
+									{Row: "entry_value", Extract: "before_last_slash"},
+								},
+							},
+							{Row: "entry_value", Extract: "after_last_slash"},
+							{Row: "name"},
+							// resource_style/controller_explicit: emitDeviseRoutes
+							// never stamps either — CR (resource_style) and the
+							// controller: reading (controller_explicit) are both
+							// resources'/resource's own concerns, not devise_for's.
+							{Literal: ""},
+							{Literal: ""},
+						},
+					},
+				},
+			},
 		},
 		Leaves: []scopefold.LeafSpec{
 			{
@@ -454,6 +502,23 @@ func restActionsTable(plural bool) scopefold.ExpandTable {
 	}
 }
 
+// deviseHashRows converts railsinflect.DeviseScopeActions — Devise's own
+// fixed per-scope action/path table, already shared with DV.2
+// (internal/linker/rails_devise.go) — into HashExpandSpec.Rows' shape: one
+// fixed Go map, generalized onto grammar data exactly the way
+// restActionsTable already generalized pluralRESTActions.
+func deviseHashRows() map[string][]scopefold.HashExpandRow {
+	out := make(map[string][]scopefold.HashExpandRow, len(railsinflect.DeviseScopeActions))
+	for scope, actions := range railsinflect.DeviseScopeActions {
+		rows := make([]scopefold.HashExpandRow, len(actions))
+		for i, a := range actions {
+			rows[i] = scopefold.HashExpandRow{Name: a.Name, Method: a.Method, PathTemplate: a.Path}
+		}
+		out[scope] = rows
+	}
+	return out
+}
+
 // railsVerbMethods are the Rails route-verb method names composeRailsRoutePaths's
 // own walk switches on.
 var railsVerbMethods = map[string]bool{
@@ -528,6 +593,11 @@ func (b *railsMatchBuilder) walk(n *sitter.Node, onScope, pendingNest string) {
 			b.walk(blockBody(block), "collection", "")
 		}
 		return
+	case "devise_for":
+		// Never recurses — Go's own walk returns right after
+		// emitDeviseRoutes, no block body to fold into.
+		b.emitDeviseFor(n, line)
+		return
 	}
 
 	if railsVerbMethods[method] {
@@ -559,6 +629,48 @@ func (b *railsMatchBuilder) emitScope(call *sitter.Node, method string, line int
 
 func (b *railsMatchBuilder) emitBare(call *sitter.Node, method string, line int) {
 	b.out = append(b.out, scopefold.Match{PatternName: method, File: b.file, Line: line})
+}
+
+// emitDeviseFor flattens a devise_for call's controllers:/skip: hashes into
+// the "key1=value1;key2=value2" / "key1,key2" capture shapes
+// scopefold.HashExpandSpec's own generic parsing expects — reusing
+// ruby_route_paths.go's deviseControllersHash/deviseSkipSet AST walks
+// directly rather than re-deriving them, the same "buildRailsMatches owns
+// Ruby-specific extraction, scopefold stays AST-agnostic" split every other
+// capture in this file already follows.
+func (b *railsMatchBuilder) emitDeviseFor(call *sitter.Node, line int) {
+	seg, ok := firstPositionalSegment(call, b.src)
+	if !ok {
+		return
+	}
+	controllers := deviseControllersHash(call, b.src)
+	if len(controllers) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(controllers))
+	for k := range controllers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k+"="+controllers[k])
+	}
+
+	skip := deviseSkipSet(call, b.src)
+	skipNames := make([]string, 0, len(skip))
+	for s := range skip {
+		skipNames = append(skipNames, s)
+	}
+	sort.Strings(skipNames)
+
+	caps := map[string]string{
+		"seg":              seg,
+		"controllers_hash": strings.Join(pairs, ";"),
+		"skip_kw":          strings.Join(skipNames, ","),
+		"module_kw":        keywordSegment(call, b.src, "module"),
+	}
+	b.out = append(b.out, scopefold.Match{PatternName: "devise_for", File: b.file, Line: line, Captures: caps})
 }
 
 func (b *railsMatchBuilder) emitVerb(call *sitter.Node, method string, line int, onScope, pendingNest string) {

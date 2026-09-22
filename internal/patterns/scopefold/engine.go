@@ -1,6 +1,7 @@
 package scopefold
 
 import (
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -182,6 +183,9 @@ func (f *folder) foldScope(n *sitter.Node, scope *ScopeSpec, m *Match, st stacks
 	if scope.Expand != "" {
 		f.expand(scope.Expand, m, next)
 	}
+	if scope.HashExpand != nil {
+		f.hashExpand(scope.HashExpand, m, next)
+	}
 	if scope.Recurse == "" {
 		return
 	}
@@ -235,12 +239,23 @@ func (f *folder) evalArgPrimary(a EmitArg, m *Match, st stacks, row *ExpandRow) 
 		return factpipe.Str("")
 	}
 	if a.Row != "" && row != nil {
+		var raw string
 		switch a.Row {
 		case "name":
-			return factpipe.Str(row.Name)
+			raw = row.Name
 		case "method":
-			return factpipe.Str(row.Method)
+			raw = row.Method
+		case "path":
+			raw = row.Path
+		case "entry_key":
+			raw = row.EntryKey
+		case "entry_value":
+			raw = row.EntryValue
 		}
+		if raw == "" {
+			return factpipe.Str("")
+		}
+		return factpipe.Str(applyVerb(a.Extract, raw))
 	}
 	if a.Stack != "" {
 		segs := st[a.Stack]
@@ -345,6 +360,96 @@ func (f *folder) expand(tableName string, m *Match, st stacks) {
 			},
 		})
 	}
+}
+
+// hashExpand runs one HashExpandSpec: parses the scope match's own Entries
+// capture into key/value pairs (generalizing internal/parser/
+// ruby_route_paths.go's emitDeviseRoutes off a hardcoded Go loop over its
+// deviseControllersHash result onto grammar data, the same way expand
+// already generalized emitRESTRoutes), and for each key present and not in
+// Skip, emits one Fact per spec.Rows[key] row with "%s" already substituted.
+//
+// Sorted key iteration (not map order) for determinism, the same discipline
+// emitDeviseRoutes' own `sort.Strings(scopes)` documents; a fresh per-call
+// seen set (not expand's — a distinct table) drops any row two entries
+// would otherwise both emit (e.g. two override keys sharing one method+path).
+func (f *folder) hashExpand(spec *HashExpandSpec, m *Match, st stacks) {
+	entries := parseHashEntries(m.Captures[spec.Entries])
+	if len(entries) == 0 {
+		return
+	}
+	skip := map[string]bool{}
+	for _, s := range splitNames(m.Captures[spec.Skip]) {
+		skip[s] = true
+	}
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	scopeArg := m.Captures[spec.ScopeArg]
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if skip[key] {
+			continue
+		}
+		rows, ok := spec.Rows[key]
+		if !ok {
+			continue
+		}
+		value := entries[key]
+		for _, r := range rows {
+			row := ExpandRow{
+				Name:       r.Name,
+				Method:     r.Method,
+				Path:       strings.Replace(r.PathTemplate, "%s", scopeArg, 1),
+				EntryKey:   key,
+				EntryValue: value,
+			}
+			seenKey := row.Method + " " + row.Path
+			if seen[seenKey] {
+				continue
+			}
+			seen[seenKey] = true
+
+			args := make([]factpipe.Atom, 0, len(spec.Emit.Args))
+			for _, a := range spec.Emit.Args {
+				args = append(args, f.evalArg(a, m, st, &row))
+			}
+			f.out = append(f.out, factpipe.Fact{
+				Pred: spec.Emit.Pred,
+				Args: args,
+				Origin: factpipe.Origin{
+					Kind:    factpipe.OriginPrimitive,
+					File:    m.File,
+					Line:    m.Line,
+					Pattern: spec.Emit.Pred,
+				},
+			})
+		}
+	}
+}
+
+// parseHashEntries parses a flattened "key1=value1;key2=value2" capture into
+// a map — the generic half of hash-driven synthesis; the real hash-literal
+// AST parsing (hash-rocket vs. colon syntax) is the Match builder's job.
+func parseHashEntries(raw string) map[string]string {
+	out := map[string]string{}
+	if raw == "" {
+		return out
+	}
+	for _, pair := range strings.Split(raw, ";") {
+		if pair == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok || k == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // contributionValue resolves a Contribution's value: Literal, else a Capture

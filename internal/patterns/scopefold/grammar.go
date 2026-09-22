@@ -68,6 +68,16 @@ type ScopeSpec struct {
 	// own OWN contributed stacks, before recursing into any explicit body).
 	Expand string `yaml:"expand"`
 
+	// HashExpand is Expand's hash-driven twin, for a shape ExpandTable's
+	// fixed Rows list cannot express — Rails' devise_for controllers: {
+	// sessions: "sessions", ... } is the reference case: which action/path
+	// routes synthesize depends on which scope names the hash mentions at
+	// THIS call site, not a table known at grammar-authoring time. Run the
+	// same place Expand is (this scope's own contributed stacks, before any
+	// recursion), and — unlike Expand — independent of it; a scope can carry
+	// either, both, or neither.
+	HashExpand *HashExpandSpec `yaml:"hash_expand"`
+
 	// Resets names stacks to clear (to empty, not to the parent's value)
 	// before this scope's own Contributes run and before recursing —
 	// generalizes Rails' namespace/scope ending the enclosing resource's
@@ -141,9 +151,12 @@ type EmitArg struct {
 	Capture string `yaml:"capture"`
 	Extract string `yaml:"extract"`
 
-	// Row reads a field ("name" or "method") off the ExpandRow currently
-	// being synthesized — only meaningful inside an ExpandTable's Emit,
-	// nil/ignored for an ordinary LeafSpec's Emit.
+	// Row reads a field ("name", "method", "path", "entry_key", or
+	// "entry_value" — the last three populated only by HashExpand's own
+	// synthesized rows, "" for an ordinary ExpandTable row) off the
+	// ExpandRow currently being synthesized, through the same Extract verb
+	// pipeline Capture uses — only meaningful inside an ExpandTable's or
+	// HashExpandSpec's Emit, nil/ignored for an ordinary LeafSpec's Emit.
 	Row string `yaml:"row"`
 
 	// Fallback is evaluated, and its result used, only when this arg's own
@@ -235,4 +248,54 @@ type ExpandRow struct {
 	// singular), so the table needs a per-row override rather than one
 	// formula every row bends to fit.
 	Emit *EmitSpec `yaml:"emit"`
+
+	// Path, EntryKey, EntryValue are populated only by hashExpand's own
+	// synthesized rows (readable via EmitArg{Row: "path"/"entry_key"/
+	// "entry_value"}) — an ordinary ExpandTable row leaves them "". Kept on
+	// the shared ExpandRow type rather than a parallel struct so EmitArg.Row
+	// needs only one reader, not two.
+	Path, EntryKey, EntryValue string
+}
+
+// HashExpandSpec is Expand's hash-driven twin — see ScopeSpec.HashExpand.
+type HashExpandSpec struct {
+	// Entries names the match capture holding the parsed hash, flattened by
+	// whatever built the Match as "key1=value1;key2=value2" (this package
+	// stays AST-agnostic — parsing the real hash literal, hash-rocket vs.
+	// colon syntax and all, is the caller's job, same as every other
+	// capture).
+	Entries string `yaml:"entries"`
+
+	// Skip names a capture holding a comma/space-separated (optionally
+	// "%i[...]"-wrapped) list of keys to drop even when present in Entries —
+	// parsed with the same splitNames logic ExpandTable's only:/except:
+	// FilterKeywords already use.
+	Skip string `yaml:"skip"`
+
+	// ScopeArg names the match capture substituted for "%s" in each row's
+	// PathTemplate — Rails: devise_for's own positional scope argument
+	// (":users"), shared by every row of every entry, since Devise names its
+	// routes off the *mapping's* scope, not the individual override.
+	ScopeArg string `yaml:"scope_arg"`
+
+	// Rows maps one Entries key to the fixed action/method/path-template
+	// rows it contributes when present and unskipped — Devise's own
+	// per-scope action table (railsinflect.DeviseScopeActions), generalized
+	// off one fixed Go map onto grammar data.
+	Rows map[string][]HashExpandRow `yaml:"rows"`
+
+	Emit EmitSpec `yaml:"emit"`
+}
+
+// HashExpandRow is one literal action/method/path a HashExpandSpec entry key
+// contributes.
+type HashExpandRow struct {
+	Name   string `yaml:"name"`
+	Method string `yaml:"method"`
+	// PathTemplate is a literal path with "%s" standing in for
+	// HashExpandSpec.ScopeArg's resolved value — Devise names its own routes
+	// independent of any enclosing scope/namespace prefix or REST
+	// member/collection shape, so this is substituted directly rather than
+	// composed through the "path" stack the way every other leaf's path is.
+	PathTemplate string `yaml:"path_template"`
 }

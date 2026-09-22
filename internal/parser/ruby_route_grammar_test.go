@@ -527,3 +527,98 @@ end
 		t.Errorf("resource = %q, want lros", got.resource)
 	}
 }
+
+// TestScopeFoldRails_DeviseForControllersOverride parity-tests
+// TestDeviseForControllersOverride (ruby_route_paths_test.go): devise_for's
+// controllers: hash, resolved entirely through scopefold.HashExpandSpec
+// against railsinflect.DeviseScopeActions — including two scopes
+// (invitations, password_expired) that are not core Devise but are named
+// directly in the override hash.
+func TestScopeFoldRails_DeviseForControllersOverride(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  devise_for :users, controllers: {
+    invitations: "invitations", passwords: "passwords",
+    registrations: "registrations", password_expired: "password_expired",
+    sessions: "sessions"
+  }
+end
+`)
+
+	sessionsCreate, ok := meta["POST /users/sign_in"]
+	if !ok {
+		t.Fatalf("missing sessions create route, got %v", meta)
+	}
+	if sessionsCreate.resource != "sessions" || sessionsCreate.action != "create" || sessionsCreate.controllerModule != "" {
+		t.Errorf("sessions create = %+v, want resource=sessions action=create controller_module=\"\"", sessionsCreate)
+	}
+
+	if got := meta["DELETE /users/sign_out"].action; got != "destroy" {
+		t.Errorf("sessions destroy action = %q, want destroy", got)
+	}
+
+	regUpdate, ok := meta["PATCH /users"]
+	if !ok {
+		t.Fatalf("missing registrations update route, got %v", meta)
+	}
+	if regUpdate.resource != "registrations" || regUpdate.action != "update" {
+		t.Errorf("registrations update = %+v, want resource=registrations action=update", regUpdate)
+	}
+
+	if got := meta["GET /users/password/new"].resource; got != "passwords" {
+		t.Errorf("passwords new resource = %q, want passwords", got)
+	}
+
+	if _, ok := meta["GET /users/invitation/new"]; !ok {
+		t.Error("invitations override must still route despite not being core Devise")
+	}
+	if _, ok := meta["GET /users/password_expired/edit"]; !ok {
+		t.Error("password_expired override must still route despite not being core Devise")
+	}
+}
+
+// TestScopeFoldRails_DeviseForNoControllersHashSynthesizesNothing parity-tests
+// TestDeviseForNoControllersHashSynthesizesNothing: skip: with no
+// controllers: hash at all synthesizes zero routes.
+func TestScopeFoldRails_DeviseForNoControllersHashSynthesizesNothing(t *testing.T) {
+	routes := foldRailsRoutes(t, `Rails.application.routes.draw do
+  devise_for :users, skip: [:sessions], path: ""
+end
+`)
+	if len(routes) != 0 {
+		t.Errorf("expected zero routes, got %v", routes)
+	}
+}
+
+// TestScopeFoldRails_DeviseForNamespacedControllerBasename parity-tests
+// TestDeviseForNamespacedControllerBasename: a controllers: value embedding
+// its own namespace ("users/sessions") splits into extra module nesting the
+// same way an explicit to: target does.
+func TestScopeFoldRails_DeviseForNamespacedControllerBasename(t *testing.T) {
+	meta := foldRailsRouteMeta(t, `Rails.application.routes.draw do
+  devise_for :users, controllers: { sessions: "users/sessions" }
+end
+`)
+	got, ok := meta["POST /users/sign_in"]
+	if !ok {
+		t.Fatalf("missing sessions create route, got %v", meta)
+	}
+	if got.resource != "sessions" || got.controllerModule != "users" {
+		t.Errorf("got %+v, want resource=sessions controller_module=users", got)
+	}
+}
+
+// TestScopeFoldRails_DeviseForSkipDropsOverriddenScope parity-tests
+// TestDeviseForSkipDropsOverriddenScope: skip: removes a scope even when
+// it's also named in controllers:.
+func TestScopeFoldRails_DeviseForSkipDropsOverriddenScope(t *testing.T) {
+	routes := foldRailsRoutes(t, `Rails.application.routes.draw do
+  devise_for :users, skip: [:sessions], controllers: { sessions: "sessions", passwords: "passwords" }
+end
+`)
+	if containsRoute(routes, "POST /users/sign_in") {
+		t.Error("skip: must drop the sessions scope even though it's also overridden")
+	}
+	if !containsRoute(routes, "GET /users/password/new") {
+		t.Error("the non-skipped override must still synthesize")
+	}
+}
