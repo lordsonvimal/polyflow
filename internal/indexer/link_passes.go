@@ -1760,6 +1760,31 @@ func buildLinkPasses(st *linkPipelineState) []namedPass {
 			}
 			return st.bw.Flush(st.ctx)
 		}},
+		// Same shape, a switch instead of a table: a call to a function or
+		// object-literal method whose whole body is a switch on one of its
+		// own parameters, each case returning a further-walkable expression.
+		// Patches existing key_dynamic nodes in place; mints nothing new.
+		{"js_switch_dispatch_calls", scopeSameServiceOnly, func() error {
+			svcFiles := st.svcFilesOf()
+			patched := linker.LinkJSSwitchDispatchCalls(st.allNodes, svcFiles)
+			if len(patched) == 0 {
+				return nil
+			}
+			byID := make(map[string]int, len(st.allNodes))
+			for i := range st.allNodes {
+				byID[st.allNodes[i].ID] = i
+			}
+			for _, n := range patched {
+				if idx, ok := byID[n.ID]; ok {
+					st.allNodes[idx] = n
+				}
+				nn := n
+				if err := st.bw.AddNode(st.ctx, &nn); err != nil {
+					return err
+				}
+			}
+			return st.bw.Flush(st.ctx)
+		}},
 		// Tier FX (2026-09-15) — declarative stylesheet_imports, replacing
 		// linker.LinkStylesheetImports. Its own dedicated pipeline.Run call,
 		// once per service (the FX.8.8/8.10 convention — the hub's svc
