@@ -261,6 +261,18 @@ func (sr *Searcher) Search(ctx context.Context, q string, limit int) (Response, 
 		flowCap, docCap = min(weakFlowCap, limit), min(weakDocCap, limit)
 		note = "no strong match for \"" + q + "\" — showing closest lexical guesses; " +
 			"try a more specific name, or add kind:/service: to narrow"
+	case !hasNodeHit(fused):
+		// No node hit at all means hasStrongNodeAnchor never runs (it only ever
+		// inspects node entries) and the switch above falls through, leaving
+		// flowCap/docCap at the full, uncapped `limit`. A query that only landed
+		// flow/doc hits is exactly as unanchored as one with a weak node hit —
+		// cap it the same way instead of shipping up to `limit` flows/docs of
+		// unflagged lexical noise.
+		flowCap, docCap = min(weakFlowCap, limit), min(weakDocCap, limit)
+		if len(fused) > 0 {
+			note = "no node match for \"" + q + "\" — showing closest flow/doc guesses; " +
+				"try a more specific name, or add kind:/service: to narrow"
+		}
 	}
 
 	resp := Response{Semantic: semanticNote, Note: note}

@@ -196,6 +196,43 @@ func TestSearch_IdentifierQueryWeakWhenOnlyLexicalCousins(t *testing.T) {
 	}
 }
 
+// TestSearch_FlowOnlyWeakResultsTrimmedAndNoted: a query with zero node hits
+// (only flow/doc hits) never reaches hasStrongNodeAnchor — it only inspects
+// node entries — so it must not fall through to the full, uncapped limit.
+// Flow/doc sections should trim to weakFlowCap/weakDocCap and carry a Note,
+// same as the node-hit weak path.
+func TestSearch_FlowOnlyWeakResultsTrimmedAndNoted(t *testing.T) {
+	db := openTestDB(t)
+	sem := NewStore(db)
+
+	for i := 0; i < 5; i++ {
+		seedEntity(t, db, Entity{
+			ID:      fmt.Sprintf("chain:route:POST /widgets%d:%x", i, i),
+			Type:    "flow",
+			Text:    fmt.Sprintf("widgetChain%d http_handler widgets purchase", i),
+			NodeID:  fmt.Sprintf("route:POST /widgets%d", i),
+			Members: []string{fmt.Sprintf("route:POST /widgets%d", i)},
+			File:    "api.go",
+			Line:    i + 1,
+		}, nil)
+	}
+
+	sr := NewSearcher(sem, nil, nil)
+	resp, err := sr.Search(context.Background(), "widgetChain", 20)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(resp.Nodes) != 0 {
+		t.Fatalf("expected no node hits, got %+v", resp.Nodes)
+	}
+	if len(resp.Flows) > weakFlowCap {
+		t.Errorf("flow-only weak results should cap at %d, got %d", weakFlowCap, len(resp.Flows))
+	}
+	if resp.Note == "" {
+		t.Error("flow-only weak results should carry a Note advisory")
+	}
+}
+
 func TestScopedSearch_UnknownServiceErrors(t *testing.T) {
 	db := openTestDB(t)
 	seedNode(t, db, &graph.Node{
